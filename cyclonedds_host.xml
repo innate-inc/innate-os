@@ -1,0 +1,14 @@
+<!-- cyclonedds_host.xml -->
+<CycloneDDS>
+  <Domain id="0">
+    <!-- <General>
+      <NetworkInterfaceAddress>0.0.0.0</NetworkInterfaceAddress>
+    </General> -->
+    <Discovery>
+      <Peers>
+        <!-- Usually we leave this empty if we rely on the container's unicast.
+             If you want full two-way unicast, add <Peer address="CONTAINER_IP"/>. -->
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

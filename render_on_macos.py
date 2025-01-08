@@ -18,6 +18,7 @@ def main():
             camera_pos=(3.5, 0.0, 2.5),
             camera_lookat=(0.0, 0.0, 0.5),
             camera_fov=40,
+            res=(1920, 1080),
         ),
         show_viewer=args.vis,
         rigid_options=gs.options.RigidOptions(
@@ -29,9 +30,20 @@ def main():
     ########################## entities ##########################
     plane = scene.add_entity(gs.morphs.Plane())
 
+    replica_scene = scene.add_entity(
+        gs.morphs.Mesh(
+            file="ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",  # Adjust path as needed
+            fixed=True,  # Keep the environment static
+            euler=(90, 0, 0),
+            pos=(0, 0, -0.1),
+            convexify=False,
+            collision=False,
+        )
+    )
+
     # Load your TurtleBot3 URDF
     r0 = scene.add_entity(
-        gs.morphs.URDF(file="urdf/turtlebot3_burger.urdf"),
+        gs.morphs.URDF(file="urdf/turtlebot3_burger.urdf", pos=(0, 0, 0)),
     )
 
     ########################## build ##########################
