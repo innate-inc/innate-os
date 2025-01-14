@@ -1,0 +1,15 @@
+# Constants for type enum
+uint8 RING=0
+uint8 ALL=1
+
+# Request
+uint8 r      # Red value (0-255)
+uint8 g      # Green value (0-255)
+uint8 b      # Blue value (0-255)
+uint8 type   # Type of light command (RING=0, ALL=1)
+uint32 interval_ms  # Time interval for animations in milliseconds
+
+---
+# Response
+bool success   # Whether the command was executed successfully
+string message # Status message
