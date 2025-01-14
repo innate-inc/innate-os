@@ -3,6 +3,7 @@
 import rclpy
 from rclpy.node import Node
 import serial
+from maurice_bringup.battery import BatteryManager
 
 class UartNode(Node):
     def __init__(self):
@@ -11,6 +12,9 @@ class UartNode(Node):
         # Initialize parameters and serial connection
         self.uart_params = self.get_params()
         self.setup_uart()
+        
+        # Initialize battery manager
+        self.battery_manager = BatteryManager(num_cells=3)
 
         # Create a timer for reading UART data (converting frequency to period)
         read_period = 1.0 / self.uart_params['read_frequency']

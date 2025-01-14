@@ -31,14 +31,14 @@ endif()
 
 # Install Python modules
 install(DIRECTORY
-  src/
+  maurice_bringup/
   DESTINATION lib/${PROJECT_NAME}
   PATTERN "*.py"
 )
 
 # Install Python scripts (if you have executable Python files)
 install(PROGRAMS
-  src/uart.py
+  maurice_bringup/uart.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
