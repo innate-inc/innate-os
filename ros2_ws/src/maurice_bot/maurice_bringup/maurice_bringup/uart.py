@@ -126,6 +126,42 @@ class UartManager(Node):
         self.cmd_angular_velocity = omega
         self.get_logger().debug(f'Set speed command: v={v} m/s, omega={omega} rad/s')
 
+    def set_light_command(
+        self,
+        r: int,
+        g: int,
+        b: int,
+        interval: int = 0,
+        effect: str = 'blink'
+    ) -> None:
+        """Set the LED light colors and behavior.
+        
+        Args:
+            r (int): Red component (0-255)
+            g (int): Green component (0-255)
+            b (int): Blue component (0-255)
+            interval (int): Effect interval in milliseconds
+            effect (str): 'blink' or 'rotate' for different light effects
+        """
+        try:
+            # Validate and convert inputs to integers
+            r = int(max(0, min(255, int(r))))
+            g = int(max(0, min(255, int(g))))
+            b = int(max(0, min(255, int(b))))
+            interval = int(max(0, int(interval)))
+            
+            # Determine command type based on effect
+            cmd_type = 'R' if effect.lower() == 'rotate' else 'C'
+            
+            command = f"{cmd_type},{r:d},{g:d},{b:d},{interval:d}\n"
+            self.ser.write(command.encode('utf-8'))
+            self.get_logger().debug(
+                f'Set light command: type={cmd_type}, RGB=({r},{g},{b}), '
+                f'interval={interval}ms'
+            )
+        except Exception as e:
+            self.get_logger().error(f'Error sending light command: {str(e)}')
+
     def __del__(self):
         if hasattr(self, 'ser'):
             self.ser.close()
