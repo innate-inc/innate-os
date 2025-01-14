@@ -16,6 +16,9 @@ class Bringup(Node):
         self.battery_manager = BatteryManager(num_cells=params['battery']['num_cells'])
         self.uart_manager = UartManager(self, **params['uart'])
 
+        # Setup ROS2 services and topics
+        self._setup_services_and_topics()
+
     def _get_parameters(self):
         """Declare and get all node parameters."""
         # Declare parameters
@@ -54,6 +57,35 @@ class Bringup(Node):
                 'critical_percentage': self.get_parameter('battery.critical_percentage').value,
             }
         }
+
+    def _setup_services_and_topics(self):
+        """Setup all ROS2 services and topics for the node."""
+        # TODO: Add service and topic initialization here
+        pass
+
+    def _handle_light_command(self, request, response):
+        """Handle incoming light control requests."""
+        try:
+            # Convert the type enum to light_type string
+            light_type = 'ring' if request.type == request.RING else 'all'
+            
+            # Forward the command to the UART manager
+            self.uart_manager.set_light_command(
+                r=request.r,
+                g=request.g,
+                b=request.b,
+                interval=request.interval_ms,
+                light_type=light_type
+            )
+            
+            response.success = True
+            response.message = "Light command executed successfully"
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Error executing light command: {str(e)}"
+        
+        return response
 
 def main(args=None):
     rclpy.init(args=args)

@@ -132,7 +132,7 @@ class UartManager(Node):
         g: int,
         b: int,
         interval: int = 0,
-        effect: str = 'blink'
+        light_type: str = 'all'
     ) -> None:
         """Set the LED light colors and behavior.
         
@@ -141,7 +141,7 @@ class UartManager(Node):
             g (int): Green component (0-255)
             b (int): Blue component (0-255)
             interval (int): Effect interval in milliseconds
-            effect (str): 'blink' or 'rotate' for different light effects
+            light_type (str): 'ring' (rotating) or 'all' (all LEDs)
         """
         try:
             # Validate and convert inputs to integers
@@ -150,8 +150,8 @@ class UartManager(Node):
             b = int(max(0, min(255, int(b))))
             interval = int(max(0, int(interval)))
             
-            # Determine command type based on effect
-            cmd_type = 'R' if effect.lower() == 'rotate' else 'C'
+            # Determine command type based on light_type
+            cmd_type = 'R' if light_type.lower() == 'ring' else 'C'
             
             command = f"{cmd_type},{r:d},{g:d},{b:d},{interval:d}\n"
             self.ser.write(command.encode('utf-8'))
