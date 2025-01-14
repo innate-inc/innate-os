@@ -1,0 +1,11 @@
+/bringup_uart:
+  ros__parameters:
+    uart:
+      baud_rate: 115200
+      port: "/dev/ttyTHS0"
+      data_bits: 8
+      parity: "none"
+      stop_bits: 1
+      timeout: 0.1  # Read timeout in seconds
+      read_frequency: 30.0  # Read frequency in Hz
+      write_frequency: 30.0  # Write frequency in Hz
