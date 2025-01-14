@@ -13,3 +13,5 @@
       num_cells: 6  # Number of LiPo cells
       warning_percentage: 20  # Percentage at which to trigger a warning
       critical_percentage: 10  # Percentage at which to trigger a critical alert
+    ros_topics:
+      odom_frequency: 10.0  # Frequency of the odom topic in Hz

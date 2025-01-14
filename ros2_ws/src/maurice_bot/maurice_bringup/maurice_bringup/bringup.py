@@ -4,6 +4,9 @@ import rclpy
 from rclpy.node import Node
 from maurice_bringup.uart import UartManager
 from maurice_bringup.battery import BatteryManager
+from geometry_msgs.msg import Twist, Odometry
+from maurice_bringup.srv import LightCommand
+from tf2_ros import TransformBroadcaster
 
 class Bringup(Node):
     def __init__(self):
@@ -36,6 +39,7 @@ class Bringup(Node):
                 ('battery.num_cells', 6),
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
+                ('ros_topics.odom_frequency', 10.0),
             ]
         )
 
@@ -55,13 +59,50 @@ class Bringup(Node):
                 'num_cells': self.get_parameter('battery.num_cells').value,
                 'warning_percentage': self.get_parameter('battery.warning_percentage').value,
                 'critical_percentage': self.get_parameter('battery.critical_percentage').value,
+            },
+            'ros_topics': {
+                'odom_frequency': self.get_parameter('ros_topics.odom_frequency').value,
             }
         }
 
     def _setup_services_and_topics(self):
         """Setup all ROS2 services and topics for the node."""
-        # TODO: Add service and topic initialization here
-        pass
+        # Create subscription to cmd_vel topic
+        self.cmd_vel_sub = self.create_subscription(
+            Twist,
+            '/cmd_vel',
+            self._cmd_vel_callback,
+            10  # QoS profile depth
+        )
+        
+        # Add the light command service
+        self.light_srv = self.create_service(
+            LightCommand,  # Service type
+            '/light_command',  # Service name
+            self._handle_light_command  # Callback function
+        )
+
+        # Create odometry publisher
+        self.odom_pub = self.create_publisher(
+            Odometry,
+            '/odom',
+            10  # QoS profile depth
+        )
+        
+        # Initialize the transform broadcaster
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+        # Create timer for odometry and transform updates
+        odom_period = 1.0 / self.params['ros_topics']['odom_frequency']
+        self.odom_timer = self.create_timer(odom_period, self._publish_odometry)
+
+    def _cmd_vel_callback(self, msg: Twist):
+        """Handle incoming velocity commands."""
+        # Forward the linear.x and angular.z velocities to the UART manager
+        self.uart_manager.set_speed_command(
+            v=msg.linear.x,
+            omega=msg.angular.z
+        )
 
     def _handle_light_command(self, request, response):
         """Handle incoming light control requests."""
@@ -86,6 +127,27 @@ class Bringup(Node):
             response.message = f"Error executing light command: {str(e)}"
         
         return response
+
+    def _publish_odometry(self):
+        """Publish odometry data and transform from UART readings."""
+        transform = self.uart_manager.current_transform
+        
+        # Broadcast the transform
+        self.tf_broadcaster.sendTransform(transform)
+        
+        # Create and publish odometry message
+        odom = Odometry()
+        odom.header = transform.header
+        odom.child_frame_id = transform.child_frame_id
+        
+        # Copy pose from transform
+        odom.pose.pose.position.x = transform.transform.translation.x
+        odom.pose.pose.position.y = transform.transform.translation.y
+        odom.pose.pose.position.z = transform.transform.translation.z
+        odom.pose.pose.orientation = transform.transform.rotation
+        
+        # Publish the odometry message
+        self.odom_pub.publish(odom)
 
 def main(args=None):
     rclpy.init(args=args)

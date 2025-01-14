@@ -21,7 +21,7 @@ class UartManager(Node):
         
         # Add new instance variables
         self.battery_voltage = 0.0
-        self.tf_broadcaster = TransformBroadcaster(node)
+        self.current_transform = TransformStamped()  # Store transform as class variable
         
         # Add new instance variables for speed commands
         self.cmd_linear_velocity = 0.0
@@ -79,26 +79,22 @@ class UartManager(Node):
                     # Store battery voltage
                     self.battery_voltage = battery_voltage
                     
-                    # Create transform message
-                    t = TransformStamped()
-                    t.header.stamp = self.node.get_clock().now().to_msg()
-                    t.header.frame_id = 'odom'
-                    t.child_frame_id = 'base_link'
+                    # Update transform message
+                    self.current_transform.header.stamp = self.node.get_clock().now().to_msg()
+                    self.current_transform.header.frame_id = 'odom'
+                    self.current_transform.child_frame_id = 'base_link'
                     
                     # Set translation
-                    t.transform.translation.x = x_pos
-                    t.transform.translation.y = y_pos
-                    t.transform.translation.z = 0.0
+                    self.current_transform.transform.translation.x = x_pos
+                    self.current_transform.transform.translation.y = y_pos
+                    self.current_transform.transform.translation.z = 0.0
                     
                     # Convert heading to quaternion
                     heading_rad = math.radians(heading_deg)
-                    t.transform.rotation.x = 0.0
-                    t.transform.rotation.y = 0.0
-                    t.transform.rotation.z = math.sin(heading_rad / 2.0)
-                    t.transform.rotation.w = math.cos(heading_rad / 2.0)
-                    
-                    # Broadcast the transform
-                    self.tf_broadcaster.sendTransform(t)
+                    self.current_transform.transform.rotation.x = 0.0
+                    self.current_transform.transform.rotation.y = 0.0
+                    self.current_transform.transform.rotation.z = math.sin(heading_rad / 2.0)
+                    self.current_transform.transform.rotation.w = math.cos(heading_rad / 2.0)
                     
                     self.get_logger().debug(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
                 else:
