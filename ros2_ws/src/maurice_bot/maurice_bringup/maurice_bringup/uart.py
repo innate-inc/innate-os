@@ -13,9 +13,6 @@ class UartNode(Node):
         self.uart_params = self.get_params()
         self.setup_uart()
         
-        # Initialize battery manager
-        self.battery_manager = BatteryManager(num_cells=3)
-
         # Create a timer for reading UART data (converting frequency to period)
         read_period = 1.0 / self.uart_params['read_frequency']
         self.timer = self.create_timer(read_period, self.uart_callback)
@@ -81,17 +78,3 @@ class UartNode(Node):
         if hasattr(self, 'ser'):
             self.ser.close()
 
-def main(args=None):
-    rclpy.init(args=args)
-    uart_node = UartNode()
-    
-    try:
-        rclpy.spin(uart_node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        uart_node.destroy_node()
-        rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()
