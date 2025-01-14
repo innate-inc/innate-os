@@ -29,4 +29,17 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+# Install Python modules
+install(DIRECTORY
+  src/
+  DESTINATION lib/${PROJECT_NAME}
+  PATTERN "*.py"
+)
+
+# Install Python scripts (if you have executable Python files)
+install(PROGRAMS
+  src/uart.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
