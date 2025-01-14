@@ -3,48 +3,49 @@
 import rclpy
 from rclpy.node import Node
 import serial
-from maurice_bringup.battery import BatteryManager
+from geometry_msgs.msg import TransformStamped
+from tf2_ros import TransformBroadcaster
+import math
 
-class UartNode(Node):
-    def __init__(self):
-        super().__init__('bringup_uart')
+class UartManager(Node):
+    def __init__(self, node, 
+                 port='/dev/ttyTHS0',
+                 read_frequency=30.0,
+                 write_frequency=30.0,
+                 baud_rate=115200,
+                 data_bits=8,
+                 parity='none',
+                 stop_bits=1,
+                 timeout=0.1):
+        self.node = node
         
-        # Initialize parameters and serial connection
-        self.uart_params = self.get_params()
+        # Add new instance variables
+        self.battery_voltage = 0.0
+        self.tf_broadcaster = TransformBroadcaster(node)
+        
+        # Add new instance variables for speed commands
+        self.cmd_linear_velocity = 0.0
+        self.cmd_angular_velocity = 0.0
+        
+        # Store parameters directly
+        self.uart_params = {
+            'port': port,
+            'read_frequency': read_frequency,
+            'write_frequency': write_frequency,
+            'baud_rate': baud_rate,
+            'data_bits': data_bits,
+            'parity': parity,
+            'stop_bits': stop_bits,
+            'timeout': timeout
+        }
+        
         self.setup_uart()
         
-        # Create a timer for reading UART data (converting frequency to period)
+        # Create separate timers for reading and writing
         read_period = 1.0 / self.uart_params['read_frequency']
-        self.timer = self.create_timer(read_period, self.uart_callback)
-
-    def get_params(self):
-        """Declare and get all parameters."""
-        # Declare parameters
-        self.declare_parameters(
-            namespace='uart',
-            parameters=[
-                ('port', '/dev/ttyTHS0'),
-                ('baud_rate', 115200),
-                ('data_bits', 8),
-                ('parity', 'none'),
-                ('stop_bits', 1),
-                ('timeout', 0.1),
-                ('read_frequency', 30.0),
-                ('write_frequency', 30.0)
-            ]
-        )
-
-        # Get and return parameters as dictionary
-        return {
-            'port': self.get_parameter('uart.port').value,
-            'baud_rate': self.get_parameter('uart.baud_rate').value,
-            'data_bits': self.get_parameter('uart.data_bits').value,
-            'parity': self.get_parameter('uart.parity').value,
-            'stop_bits': self.get_parameter('uart.stop_bits').value,
-            'timeout': self.get_parameter('uart.timeout').value,
-            'read_frequency': self.get_parameter('uart.read_frequency').value,
-            'write_frequency': self.get_parameter('uart.write_frequency').value
-        }
+        write_period = 1.0 / self.uart_params['write_frequency']
+        self.read_timer = self.node.create_timer(read_period, self.read_callback)
+        self.write_timer = self.node.create_timer(write_period, self.write_callback)
 
     def setup_uart(self):
         """Initialize the serial connection with the configured parameters."""
@@ -65,14 +66,65 @@ class UartNode(Node):
             self.get_logger().error(f'Failed to open serial port: {str(e)}')
             raise
 
-    def uart_callback(self):
+    def read_callback(self):
+        """Callback for reading data from UART"""
         if self.ser.in_waiting:
             try:
                 data = self.ser.readline().decode('utf-8').strip()
-                self.get_logger().info(f'Received: {data}')
-                # Add your data processing logic here
+                # Parse the comma-separated values
+                values = data.split(',')
+                if len(values) >= 4:
+                    x_pos, y_pos, heading_deg, battery_voltage = map(float, values[:4])
+                    
+                    # Store battery voltage
+                    self.battery_voltage = battery_voltage
+                    
+                    # Create transform message
+                    t = TransformStamped()
+                    t.header.stamp = self.node.get_clock().now().to_msg()
+                    t.header.frame_id = 'odom'
+                    t.child_frame_id = 'base_link'
+                    
+                    # Set translation
+                    t.transform.translation.x = x_pos
+                    t.transform.translation.y = y_pos
+                    t.transform.translation.z = 0.0
+                    
+                    # Convert heading to quaternion
+                    heading_rad = math.radians(heading_deg)
+                    t.transform.rotation.x = 0.0
+                    t.transform.rotation.y = 0.0
+                    t.transform.rotation.z = math.sin(heading_rad / 2.0)
+                    t.transform.rotation.w = math.cos(heading_rad / 2.0)
+                    
+                    # Broadcast the transform
+                    self.tf_broadcaster.sendTransform(t)
+                    
+                    self.get_logger().debug(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
+                else:
+                    self.get_logger().warning('Received incomplete data from serial port')
+                    
             except Exception as e:
                 self.get_logger().error(f'Error reading from serial port: {str(e)}')
+
+    def write_callback(self):
+        """Callback for writing data to UART"""
+        try:
+            command = f"S,{self.cmd_linear_velocity:.3f},{self.cmd_angular_velocity:.3f}\n"
+            self.ser.write(command.encode('utf-8'))
+        except Exception as e:
+            self.get_logger().error(f'Error writing to serial port: {str(e)}')
+
+    def set_speed_command(self, v, omega):
+        """Set the desired linear and angular velocities.
+        
+        Args:
+            v (float): Linear velocity in m/s
+            omega (float): Angular velocity in rad/s
+        """
+        self.cmd_linear_velocity = v
+        self.cmd_angular_velocity = omega
+        self.get_logger().debug(f'Set speed command: v={v} m/s, omega={omega} rad/s')
 
     def __del__(self):
         if hasattr(self, 'ser'):
