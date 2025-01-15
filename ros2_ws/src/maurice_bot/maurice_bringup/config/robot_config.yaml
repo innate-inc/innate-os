@@ -2,7 +2,7 @@
   ros__parameters:
     uart:
       baud_rate: 115200
-      port: "/dev/ttyTHS0"
+      port: "/dev/ttyTHS1"
       data_bits: 8
       parity: "none"
       stop_bits: 1
