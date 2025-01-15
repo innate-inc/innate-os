@@ -13,5 +13,8 @@
       num_cells: 6  # Number of LiPo cells
       warning_percentage: 20  # Percentage at which to trigger a warning
       critical_percentage: 10  # Percentage at which to trigger a critical alert
+    motion_control:
+      max_speed: 0.5  # Maximum speed in m/s
+      max_angular_speed: 2.5  # Maximum angular speed in rad/s
     ros_topics:
       odom_frequency: 10.0  # Frequency of the odom topic in Hz
