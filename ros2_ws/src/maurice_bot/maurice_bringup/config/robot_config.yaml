@@ -14,7 +14,7 @@
       warning_percentage: 20
       critical_percentage: 10
     motion_control:
-      max_speed: 2
+      max_speed: 2.0
       max_angular_speed: 2.5
     ros_topics:
       odom_frequency: 10.0
