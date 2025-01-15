@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 
 import rclpy
-from rclpy.node import Node
 import serial
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 import math
 
-class UartManager(Node):
+class UartManager():
     def __init__(self, node, 
                  port='/dev/ttyTHS0',
                  read_frequency=30.0,
@@ -18,6 +17,7 @@ class UartManager(Node):
                  stop_bits=1,
                  timeout=0.1):
         self.node = node
+        self.logger = self.node.get_logger()  # Store logger reference
         
         # Add new instance variables
         self.battery_voltage = 0.0
@@ -58,12 +58,12 @@ class UartManager(Node):
                 stopbits=self.uart_params['stop_bits'],
                 timeout=self.uart_params['timeout']
             )
-            self.get_logger().info(
+            self.logger.info(
                 f"Connected to {self.uart_params['port']} at "
                 f"{self.uart_params['baud_rate']} baud"
             )
         except serial.SerialException as e:
-            self.get_logger().error(f'Failed to open serial port: {str(e)}')
+            self.logger.error(f'Failed to open serial port: {str(e)}')
             raise
 
     def read_callback(self):
@@ -96,12 +96,12 @@ class UartManager(Node):
                     self.current_transform.transform.rotation.z = math.sin(heading_rad / 2.0)
                     self.current_transform.transform.rotation.w = math.cos(heading_rad / 2.0)
                     
-                    self.get_logger().debug(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
+                    self.logger.debug(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
                 else:
-                    self.get_logger().warning('Received incomplete data from serial port')
+                    self.logger.warning('Received incomplete data from serial port')
                     
             except Exception as e:
-                self.get_logger().error(f'Error reading from serial port: {str(e)}')
+                self.logger.error(f'Error reading from serial port: {str(e)}')
 
     def write_callback(self):
         """Callback for writing data to UART"""
@@ -109,7 +109,7 @@ class UartManager(Node):
             command = f"S,{self.cmd_linear_velocity:.3f},{self.cmd_angular_velocity:.3f}\n"
             self.ser.write(command.encode('utf-8'))
         except Exception as e:
-            self.get_logger().error(f'Error writing to serial port: {str(e)}')
+            self.logger.error(f'Error writing to serial port: {str(e)}')
 
     def set_speed_command(self, v, omega):
         """Set the desired linear and angular velocities.
@@ -120,7 +120,7 @@ class UartManager(Node):
         """
         self.cmd_linear_velocity = v
         self.cmd_angular_velocity = omega
-        self.get_logger().debug(f'Set speed command: v={v} m/s, omega={omega} rad/s')
+        self.logger.debug(f'Set speed command: v={v} m/s, omega={omega} rad/s')
 
     def set_light_command(
         self,
@@ -151,12 +151,12 @@ class UartManager(Node):
             
             command = f"{cmd_type},{r:d},{g:d},{b:d},{interval:d}\n"
             self.ser.write(command.encode('utf-8'))
-            self.get_logger().debug(
+            self.logger.debug(
                 f'Set light command: type={cmd_type}, RGB=({r},{g},{b}), '
                 f'interval={interval}ms'
             )
         except Exception as e:
-            self.get_logger().error(f'Error sending light command: {str(e)}')
+            self.logger.error(f'Error sending light command: {str(e)}')
 
     def __del__(self):
         if hasattr(self, 'ser'):

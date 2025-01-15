@@ -9,6 +9,13 @@ class JoystickController(Node):
     def __init__(self):
         super().__init__('joystick_controller')
         
+        # Declare and get parameters
+        self.declare_parameter('motion_control.max_speed', 2.0)
+        self.declare_parameter('motion_control.max_angular_speed', 2.5)
+        
+        self.max_speed = self.get_parameter('motion_control.max_speed').value
+        self.max_angular_speed = self.get_parameter('motion_control.max_angular_speed').value
+        
         # Parameters for joystick axes
         self.forward_axis = 1  # Left stick Y
         self.turn_axis = 0     # Left stick X
@@ -50,13 +57,13 @@ class JoystickController(Node):
         pygame.event.pump()
         
         # Read and scale joystick values
-        forward = -self.joystick.get_axis(self.forward_axis)  # Negative to invert axis
-        turn = -self.joystick.get_axis(self.turn_axis)       # Negative to invert axis
+        forward = -self.joystick.get_axis(self.forward_axis)
+        turn = -self.joystick.get_axis(self.turn_axis)
         
         # Create and publish Twist message
         msg = Twist()
-        msg.linear.x = self.shape_input(forward, max_val=0.5)   # Max 0.5 m/s
-        msg.angular.z = self.shape_input(turn, max_val=2.5)     # Max 2.5 rad/s
+        msg.linear.x = self.shape_input(forward, max_val=self.max_speed)
+        msg.angular.z = self.shape_input(turn, max_val=self.max_angular_speed)
         self.twist_pub.publish(msg)
 
 def main(args=None):

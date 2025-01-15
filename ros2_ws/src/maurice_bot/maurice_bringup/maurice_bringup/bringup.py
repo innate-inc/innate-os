@@ -6,7 +6,7 @@ from maurice_bringup.uart import UartManager
 from maurice_bringup.battery import BatteryManager
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from maurice_bringup.srv import LightCommand
+from maurice_msgs.srv import LightCommand
 from tf2_ros import TransformBroadcaster
 
 class Bringup(Node):
@@ -14,11 +14,11 @@ class Bringup(Node):
         super().__init__('bringup')
         
         # Get parameters and initialize managers
-        params = self._get_parameters()
+        self.params = self._get_parameters()
         
         # Initialize managers
-        self.battery_manager = BatteryManager(num_cells=params['battery']['num_cells'])
-        self.uart_manager = UartManager(self, **params['uart'])
+        self.battery_manager = BatteryManager(num_cells=self.params['battery']['num_cells'])
+        self.uart_manager = UartManager(self, **self.params['uart'])
 
         # Setup ROS2 services and topics
         self._setup_services_and_topics()
@@ -29,7 +29,7 @@ class Bringup(Node):
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('uart.port', '/dev/ttyTHS0'),
+                ('uart.port', '/dev/ttyTHS1'),
                 ('uart.baud_rate', 115200),
                 ('uart.data_bits', 8),
                 ('uart.parity', 'none'),
@@ -41,7 +41,7 @@ class Bringup(Node):
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
                 ('ros_topics.odom_frequency', 10.0),
-                ('motion_control.max_speed', 0.5),
+                ('motion_control.max_speed', 2.5),
                 ('motion_control.max_angular_speed', 2.5),
             ]
         )
