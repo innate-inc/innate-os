@@ -40,6 +40,8 @@ class Bringup(Node):
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
                 ('ros_topics.odom_frequency', 10.0),
+                ('motion_control.max_speed', 0.5),
+                ('motion_control.max_angular_speed', 2.5),
             ]
         )
 
@@ -59,6 +61,10 @@ class Bringup(Node):
                 'num_cells': self.get_parameter('battery.num_cells').value,
                 'warning_percentage': self.get_parameter('battery.warning_percentage').value,
                 'critical_percentage': self.get_parameter('battery.critical_percentage').value,
+            },
+            'motion_control': {
+                'max_speed': self.get_parameter('motion_control.max_speed').value,
+                'max_angular_speed': self.get_parameter('motion_control.max_angular_speed').value,
             },
             'ros_topics': {
                 'odom_frequency': self.get_parameter('ros_topics.odom_frequency').value,
@@ -98,10 +104,16 @@ class Bringup(Node):
 
     def _cmd_vel_callback(self, msg: Twist):
         """Handle incoming velocity commands."""
-        # Forward the linear.x and angular.z velocities to the UART manager
+        # Apply speed limits
+        limited_linear = max(min(msg.linear.x, self.params['motion_control']['max_speed']), 
+                            -self.params['motion_control']['max_speed'])
+        limited_angular = max(min(msg.angular.z, self.params['motion_control']['max_angular_speed']), 
+                             -self.params['motion_control']['max_angular_speed'])
+        
+        # Forward the limited velocities to the UART manager
         self.uart_manager.set_speed_command(
-            v=msg.linear.x,
-            omega=msg.angular.z
+            v=limited_linear,
+            omega=limited_angular
         )
 
     def _handle_light_command(self, request, response):
