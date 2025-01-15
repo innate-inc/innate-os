@@ -45,7 +45,7 @@ class JoystickController(Node):
         self.button_4_previous = False
         
         # Create light command service client
-        self.light_client = self.create_client(LightCommand, 'light-command')
+        self.light_client = self.create_client(LightCommand, '/light_command')
         while not self.light_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Light command service not available, waiting...')
         
