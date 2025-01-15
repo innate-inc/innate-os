@@ -99,9 +99,13 @@ class UartManager():
                     self.logger.debug(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
                 else:
                     self.logger.warning('Received incomplete data from serial port')
+                    self.ser.close()
+                    self.setup_uart()
                     
             except Exception as e:
                 self.logger.error(f'Error reading from serial port: {str(e)}')
+                self.ser.close()
+                self.setup_uart()
 
     def write_callback(self):
         """Callback for writing data to UART"""

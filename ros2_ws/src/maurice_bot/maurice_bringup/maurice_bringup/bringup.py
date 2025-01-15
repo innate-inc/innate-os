@@ -108,7 +108,7 @@ class Bringup(Node):
         # Apply speed limits
         limited_linear = max(min(msg.linear.x, self.params['motion_control']['max_speed']), 
                             -self.params['motion_control']['max_speed'])
-        limited_angular = max(min(msg.angular.z, self.params['motion_control']['max_angular_speed']), 
+        limited_angular = max(min(-msg.angular.z, self.params['motion_control']['max_angular_speed']), 
                              -self.params['motion_control']['max_angular_speed'])
         
         # Forward the limited velocities to the UART manager
