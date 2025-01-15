@@ -38,7 +38,9 @@ install(DIRECTORY
 
 # Install Python scripts (if you have executable Python files)
 install(PROGRAMS
-  maurice_bringup/uart.py
+  maurice_bringup/bringup.py
+  maurice_bringup/joystick.py
+  maurice_bringup/keyboard.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
