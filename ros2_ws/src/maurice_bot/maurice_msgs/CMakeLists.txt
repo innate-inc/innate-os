@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(maurice_bringup)
+project(maurice_msgs)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -7,16 +7,14 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
-find_package(action_msgs REQUIRED)
-find_package(tf2 REQUIRED)
-find_package(tf2_ros REQUIRED)
-find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(action_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+find_package(unique_identifier_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 if(BUILD_TESTING)
@@ -31,18 +29,18 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-# Install Python modules
-ament_python_install_package(${PROJECT_NAME}
-  PACKAGE_DIR maurice_bringup
+rosidl_generate_interfaces(${PROJECT_NAME}
+  # Add your message files here
+  "srv/LightCommand.srv"
+  DEPENDENCIES
+    std_msgs
+    std_srvs
+    geometry_msgs
+    sensor_msgs
+    nav_msgs
+    action_msgs
+    builtin_interfaces
+    unique_identifier_msgs
 )
-
-# Install Python executables
-install(PROGRAMS
-  maurice_bringup/bringup.py
-  maurice_bringup/joystick.py
-  maurice_bringup/keyboard.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-
 
 ament_package()

@@ -10,13 +10,17 @@ class KeyboardController(Node):
     def __init__(self):
         super().__init__('keyboard_controller')
         
+        # Declare and get parameters
+        self.declare_parameter('motion_control.max_speed', 2.0)
+        self.declare_parameter('motion_control.max_angular_speed', 2.5)
+        
         # Initialize speed and turn rate
         self.current_speed = 0.0
         self.current_turn = 0.0
         self.speed_increment = 0.02
         self.turn_increment = 0.1
-        self.max_speed = 0.5      # Max 0.5 m/s
-        self.max_turn = 2.5       # Max 2.5 rad/s
+        self.max_speed = self.get_parameter('motion_control.max_speed').value
+        self.max_turn = self.get_parameter('motion_control.max_angular_speed').value
         
         # Publisher for velocity commands
         self.twist_pub = self.create_publisher(Twist, '/cmd_vel', 10)
