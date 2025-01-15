@@ -66,3 +66,6 @@ ENV/
 weights/
 checkpoints/
 runs/
+
+# DDS configuration file
+dds/super_client_configuration.xml
