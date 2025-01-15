@@ -7,6 +7,7 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -30,13 +31,11 @@ if(BUILD_TESTING)
 endif()
 
 # Install Python modules
-install(DIRECTORY
-  maurice_bringup/
-  DESTINATION lib/${PROJECT_NAME}
-  PATTERN "*.py"
+ament_python_install_package(${PROJECT_NAME}
+  PACKAGE_DIR maurice_bringup
 )
 
-# Install Python scripts (if you have executable Python files)
+# Install Python executables
 install(PROGRAMS
   maurice_bringup/bringup.py
   maurice_bringup/joystick.py
