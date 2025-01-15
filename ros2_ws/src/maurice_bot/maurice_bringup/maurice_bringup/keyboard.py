@@ -2,7 +2,6 @@
 
 import rclpy
 from rclpy.node import Node
-import pygame
 from geometry_msgs.msg import Twist
 
 class KeyboardController(Node):
@@ -17,10 +16,6 @@ class KeyboardController(Node):
         self.max_speed = 0.5      # Max 0.5 m/s
         self.max_turn = 2.5       # Max 2.5 rad/s
         
-        # Initialize pygame for keyboard input
-        pygame.init()
-        pygame.display.set_mode((100, 100))  # Small window to capture keyboard events
-        
         # Publisher for velocity commands
         self.twist_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         
@@ -28,34 +23,45 @@ class KeyboardController(Node):
         self.create_timer(0.1, self.timer_callback)
         
         self.get_logger().info('Keyboard Controller initialized')
+        self.get_logger().info("""
+Control Instructions:
+    w: increase forward speed
+    x: increase backward speed
+    a: turn left
+    d: turn right
+    s: stop
+    q: quit
+        """)
     
     def timer_callback(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
+        try:
+            key = input().lower().strip()
+            
+            # Update speed and turn rate based on key presses
+            if key == 'w':  # increase speed
+                self.current_speed = min(self.current_speed + self.speed_increment, self.max_speed)
+            elif key == 'x':  # decrease speed
+                self.current_speed = max(self.current_speed - self.speed_increment, -self.max_speed)
+            elif key == 'a':  # turn left
+                self.current_turn = min(self.current_turn + self.turn_increment, self.max_turn)
+            elif key == 'd':  # turn right
+                self.current_turn = max(self.current_turn - self.turn_increment, -self.max_turn)
+            elif key == 's':  # stop everything
+                self.current_speed = 0.0
+                self.current_turn = 0.0
+            elif key == 'q':  # quit
+                self.destroy_node()
+                rclpy.shutdown()
                 return
-        
-        # Get pressed keys
-        keys = pygame.key.get_pressed()
-        
-        # Update speed and turn rate based on key presses
-        if keys[pygame.K_w]:  # W - increase speed
-            self.current_speed = min(self.current_speed + self.speed_increment, self.max_speed)
-        if keys[pygame.K_x]:  # X - decrease speed
-            self.current_speed = max(self.current_speed - self.speed_increment, -self.max_speed)
-        if keys[pygame.K_a]:  # A - turn left
-            self.current_turn = min(self.current_turn + self.turn_increment, self.max_turn)
-        if keys[pygame.K_d]:  # D - turn right
-            self.current_turn = max(self.current_turn - self.turn_increment, -self.max_turn)
-        if keys[pygame.K_s]:  # S - stop everything
-            self.current_speed = 0.0
-            self.current_turn = 0.0
-        
-        # Create and publish Twist message
-        msg = Twist()
-        msg.linear.x = self.current_speed
-        msg.angular.z = self.current_turn
-        self.twist_pub.publish(msg)
+            
+            # Create and publish Twist message
+            msg = Twist()
+            msg.linear.x = self.current_speed
+            msg.angular.z = self.current_turn
+            self.twist_pub.publish(msg)
+            
+        except EOFError:
+            pass
 
 def main(args=None):
     rclpy.init(args=args)
