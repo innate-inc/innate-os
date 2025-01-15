@@ -1,5 +1,5 @@
 #!/bin/zsh
-alias discovery="/home/vignesh/maurice-prod/dds/discovery.zsh"
+alias discovery="~/maurice-prod/dds/discovery.zsh"
 
 
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
