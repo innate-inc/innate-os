@@ -4,7 +4,8 @@ import rclpy
 from rclpy.node import Node
 from maurice_bringup.uart import UartManager
 from maurice_bringup.battery import BatteryManager
-from geometry_msgs.msg import Twist, Odometry
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from maurice_bringup.srv import LightCommand
 from tf2_ros import TransformBroadcaster
 
