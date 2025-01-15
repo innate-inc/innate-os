@@ -8,6 +8,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from maurice_msgs.srv import LightCommand
 from tf2_ros import TransformBroadcaster
+from sensor_msgs.msg import BatteryState
 
 class Bringup(Node):
     def __init__(self):
@@ -103,6 +104,13 @@ class Bringup(Node):
         odom_period = 1.0 / self.params['ros_topics']['odom_frequency']
         self.odom_timer = self.create_timer(odom_period, self._publish_odometry)
 
+        # Create battery state publisher
+        self.battery_pub = self.create_publisher(
+            BatteryState,
+            '/battery_state',
+            10  # QoS profile depth
+        )
+
     def _cmd_vel_callback(self, msg: Twist):
         """Handle incoming velocity commands."""
         # Apply speed limits
@@ -142,7 +150,7 @@ class Bringup(Node):
         return response
 
     def _publish_odometry(self):
-        """Publish odometry data and transform from UART readings."""
+        """Publish odometry data, transform, and battery state from UART readings."""
         transform = self.uart_manager.current_transform
         
         # Broadcast the transform
@@ -161,6 +169,32 @@ class Bringup(Node):
         
         # Publish the odometry message
         self.odom_pub.publish(odom)
+
+        # Publish battery state
+        voltage = self.uart_manager.battery_voltage
+        percentage = self.battery_manager.get_percentage(voltage)
+        
+        # Check battery levels and take appropriate action
+        if percentage < self.params['battery']['critical_percentage'] / 100.0:
+            self.get_logger().error(f'Battery critically low ({percentage:.1%})! Shutting down...')
+            rclpy.shutdown()
+        elif percentage < self.params['battery']['warning_percentage'] / 100.0:
+            self.get_logger().warn(f'Battery low ({percentage:.1%})! Please charge soon.')
+        
+        msg = BatteryState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.voltage = voltage
+        msg.percentage = percentage
+        msg.present = True
+        msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
+        msg.power_supply_health = (
+            BatteryState.POWER_SUPPLY_HEALTH_GOOD if percentage > self.params['battery']['critical_percentage'] / 100.0
+            else BatteryState.POWER_SUPPLY_HEALTH_CRITICAL
+        )
+        msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LIPO
+        msg.cell_voltage = [voltage / self.params['battery']['num_cells']] * self.params['battery']['num_cells']
+        
+        self.battery_pub.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
