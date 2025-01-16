@@ -10,7 +10,7 @@
       read_frequency: 30.0
       write_frequency: 30.0
     battery:
-      num_cells: 6
+      num_cells: 3
       warning_percentage: 20
       critical_percentage: 10
     motion_control:
