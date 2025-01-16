@@ -95,7 +95,7 @@ class UartManager():
                     self.current_transform.transform.rotation.y = 0.0
                     self.current_transform.transform.rotation.z = math.sin(heading_rad / 2.0)
                     self.current_transform.transform.rotation.w = math.cos(heading_rad / 2.0)
-                    print(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
+                    #print(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
                     self.logger.debug(f'Processed pose: x={x_pos}, y={y_pos}, heading={heading_deg}°, battery={battery_voltage}V')
                 else:
                     self.logger.warning('Received incomplete data from serial port')
