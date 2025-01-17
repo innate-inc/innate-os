@@ -80,7 +80,7 @@ def main():
         pos=(0, 0, 0),  # Will be updated each frame
         lookat=(1, 0, 0),
         fov=60,
-        GUI=True,
+        # GUI=True,
     )
 
     ########################## build ##########################
@@ -131,7 +131,7 @@ def run_sim(scene, enable_vis, robot, left_idx, right_idx, robot_camera):
         robot.control_dofs_velocity([2.0, 2.0], [left_idx, right_idx])
 
         # Get camera renders including depth
-        rgb, depth = robot_camera.render()
+        rgb, depth, segmentation, normal = robot_camera.render(depth=True)
         if i % 100 == 0:
             print(f"Depth range: {depth.min():.3f} to {depth.max():.3f}")
 
