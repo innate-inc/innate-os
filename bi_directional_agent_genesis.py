@@ -150,7 +150,17 @@ class SimulationNode:
             except queue.Full:
                 pass
 
-            self.scene.step()
+            try:
+                self.scene.step()
+            except Exception as e:
+                if "Viewer closed" in str(e):
+                    print("Viewer closed, stopping simulation.")
+                    self.shared_queues.exit_event.set()
+                    break
+                else:
+                    print(f"Error in SimulationNode: {e}")
+                    self.shared_queues.exit_event.set()
+                    break
 
             # Print FPS occasionally
             t_now = time.time()
@@ -225,7 +235,7 @@ def main():
 
     try:
         # Keep main thread alive until user interrupts
-        while True:
+        while not shared_queues.exit_event.is_set():
             time.sleep(1.0)
     except KeyboardInterrupt:
         print("Keyboard interrupt, shutting down...")
