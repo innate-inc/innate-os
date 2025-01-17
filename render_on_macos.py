@@ -1,4 +1,5 @@
 import argparse
+import cv2
 import numpy as np
 
 import genesis as gs
@@ -134,6 +135,12 @@ def run_sim(scene, enable_vis, robot, left_idx, right_idx, robot_camera):
         rgb, depth, segmentation, normal = robot_camera.render(depth=True)
         if i % 100 == 0:
             print(f"Depth range: {depth.min():.3f} to {depth.max():.3f}")
+            # Output the RGB and depth to files
+            # For the depth, we need to normalize it to 0-255
+            depth_normalized = (depth - depth.min()) / (depth.max() - depth.min())
+            depth_normalized = (depth_normalized * 255).astype(np.uint8)
+            cv2.imwrite(f"rgb_{i}.png", rgb)
+            cv2.imwrite(f"depth_{i}.png", depth_normalized)
 
         # Step the simulation
         scene.step()
