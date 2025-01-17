@@ -117,7 +117,6 @@ class SimulationNode:
         print("SimulationNode started.")
 
         while not self.shared_queues.exit_event.is_set():
-            print("SimulationNode running.")
             step_count += 1
 
             camera_link = self.robot.get_link("camera_link")
@@ -169,8 +168,8 @@ class SimulationNode:
                 print(f"{fps:.2f} FPS")
 
                 # Save the RGB and depth images to files
-                cv2.imwrite(f"rgb_{step_count}.png", rgb)
-                cv2.imwrite(f"depth_{step_count}.png", depth)
+                # cv2.imwrite(f"rgb_{step_count}.png", rgb)
+                # cv2.imwrite(f"depth_{step_count}.png", depth)
 
             t_prev = t_now
 
@@ -192,7 +191,6 @@ def agent_loop(shared_queues):
     while not shared_queues.exit_event.is_set():
         try:
             rgb, depth = shared_queues.sim_to_agent.get(timeout=0.1)
-            print(f"Agent got an image: {rgb.shape}")
             # Example: Always go forward at 2.0
             new_command = [2.0, 2.0]
             try:
