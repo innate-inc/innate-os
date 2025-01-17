@@ -3,6 +3,7 @@ services:
   ros2_container:
     build: .
     container_name: ros2_container
+    network_mode: host
     environment:
       # Force CycloneDDS
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp

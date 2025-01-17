@@ -1,0 +1,21 @@
+<CycloneDDS>
+  <Domain id="0">
+    <General>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <Peers>
+        <!-- Because the container's internal 7400 is mapped to host 7500 -->
+        <Peer address="127.0.0.1:7500"/>
+      </Peers>
+      <!-- Prevent port collisions by giving the host participant index 0 -->
+      <ParticipantIndex>0</ParticipantIndex>
+    </Discovery>
+    <Ports>
+      <!-- The host side uses 7400.. for its own DDS traffic -->
+      <Base>7400</Base>
+      <OpenSplice>false</OpenSplice>
+      <TryNextPorts>10</TryNextPorts>
+    </Ports>
+  </Domain>
+</CycloneDDS>

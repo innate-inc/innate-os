@@ -1,0 +1,12 @@
+<profiles>
+  <participant profile_name="default">
+    <rtps>
+      <builtin>
+        <logging>
+          <logLevel>INFO</logLevel>
+          <category>ALL</category>
+        </logging>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>
