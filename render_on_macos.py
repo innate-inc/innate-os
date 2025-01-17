@@ -1,6 +1,34 @@
 import argparse
+import numpy as np
 
 import genesis as gs
+
+
+def quaternion_to_matrix(q):
+    """
+    Convert a quaternion q = (w, x, y, z) into a 3x3 rotation matrix.
+    """
+    w, x, y, z = q.cpu().numpy()
+    # Precompute squares
+    ww, xx, yy, zz = w * w, x * x, y * y, z * z
+
+    # Rotation matrix, assuming q is normalized
+    R = np.array(
+        [
+            [ww + xx - yy - zz, 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), ww - xx + yy - zz, 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), ww - xx - yy + zz],
+        ],
+    )
+    return R
+
+
+def rotate_vector(vec, quat):
+    """
+    Rotate a 3D vector `vec` by a quaternion `quat` = (w, x, y, z).
+    """
+    R = quaternion_to_matrix(quat)
+    return R.dot(vec)
 
 
 def main():
@@ -32,8 +60,8 @@ def main():
 
     replica_scene = scene.add_entity(
         gs.morphs.Mesh(
-            file="ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",  # Adjust path as needed
-            fixed=True,  # Keep the environment static
+            file="ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
+            fixed=True,
             euler=(90, 0, 0),
             pos=(0, 0, -0.1),
             convexify=False,
@@ -46,52 +74,78 @@ def main():
         gs.morphs.URDF(file="urdf/turtlebot3_burger.urdf", pos=(0, 0, 0)),
     )
 
+    # Add robot camera
+    robot_camera = scene.add_camera(
+        res=(640, 480),
+        pos=(0, 0, 0),  # Will be updated each frame
+        lookat=(1, 0, 0),
+        fov=60,
+        GUI=True,
+    )
+
     ########################## build ##########################
     scene.build()
 
-    # ------------------------------------------------------------
-    # NEW CODE: Identify the wheel joints and set gains
-    # ------------------------------------------------------------
+    # Identify wheel joints
     left_idx = r0.get_joint("wheel_left_joint").dof_idx_local
     right_idx = r0.get_joint("wheel_right_joint").dof_idx_local
 
-    # For velocity control, we usually set 'Kv' (velocity gain)
-    # (You can also set Kp if you prefer or if your wheels are in a PD control mode)
+    # Set gains for velocity control
     r0.set_dofs_kv([1.0, 1.0], [left_idx, right_idx])
-    # r0.set_dofs_kp([0.0, 0.0], [left_idx, right_idx])  # Typically 0 if purely velocity-based
-    # ------------------------------------------------------------
 
-    # We'll pass the robot and joint indices into run_sim so we can command them there
+    # Run the main loop in another thread
     gs.tools.run_in_another_thread(
-        fn=run_sim, args=(scene, args.vis, r0, left_idx, right_idx)
+        fn=run_sim, args=(scene, args.vis, r0, left_idx, right_idx, robot_camera)
     )
     if args.vis:
         scene.viewer.start()
 
 
-def run_sim(scene, enable_vis, robot, left_idx, right_idx):
+def run_sim(scene, enable_vis, robot, left_idx, right_idx, robot_camera):
     from time import time
 
     t_prev = time()
+
+    # We'll define a "forward" vector for the camera in local coordinates:
+    local_forward = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+
     i = 0
     while True:
         i += 1
 
-        # ------------------------------------------------------------
-        # NEW CODE: Command some constant forward velocity on each wheel
-        # ------------------------------------------------------------
+        # Get the camera link's world position/orientation
+        camera_link = robot.get_link("camera_link")
+        camera_pos = camera_link.get_pos()  # (x, y, z)
+        camera_quat = camera_link.get_quat()  # (w, x, y, z)
+
+        # Compute a look-direction by rotating local_forward by the camera's quat
+        look_dir = rotate_vector(local_forward, camera_quat)
+
+        # Construct the lookat point = camera_pos + look_dir
+        lookat = camera_pos.cpu().numpy() + look_dir
+
+        # Update the robot camera's pose
+        robot_camera.set_pose(pos=camera_pos.cpu().numpy(), lookat=lookat)
+
+        # Command forward velocity on each wheel
         robot.control_dofs_velocity([2.0, 2.0], [left_idx, right_idx])
-        # The wheels will rotate with velocity ~2 rad/s each step, moving the robot forward.
-        # Adjust up/down to see faster/slower movement.
-        # ------------------------------------------------------------
+
+        # Get camera renders including depth
+        rgb, depth = robot_camera.render()
+        if i % 100 == 0:
+            print(f"Depth range: {depth.min():.3f} to {depth.max():.3f}")
 
         # Step the simulation
         scene.step()
 
+        # Print FPS
         t_now = time()
         fps = 1.0 / (t_now - t_prev)
         print(f"{fps:.2f} FPS")
         t_prev = t_now
+
+        if i > 100:
+            break
 
     if enable_vis:
         scene.viewer.stop()
