@@ -1,0 +1,31 @@
+<profiles>
+  <participant profile_name="unicast_participant">
+    <rtps>
+      <builtin>
+        <avoid_builtin_multicast>true</avoid_builtin_multicast>
+        <initialPeersList>
+          <locator>
+            <udpv4>
+              <address>127.0.0.1</address>
+              <port>7410</port>
+            </udpv4>
+          </locator>
+        </initialPeersList>
+        <metatrafficUnicastLocatorList>
+          <locator>
+            <udpv4>
+              <address>0.0.0.0</address>
+              <port>7410</port>
+            </udpv4>
+          </locator>
+        </metatrafficUnicastLocatorList>
+      </builtin>
+      <port>
+        <portBase>7400</portBase>
+        <!-- Use capital ID here -->
+        <domainIDGain>1</domainIDGain>
+        <participantIDGain>1</participantIDGain>
+      </port>
+    </rtps>
+  </participant>
+</profiles>

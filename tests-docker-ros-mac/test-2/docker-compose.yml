@@ -1,0 +1,20 @@
+version: "3"
+services:
+  ros2_node:
+    image: my_ros2_image
+    container_name: ros2_node
+    # If you built from a Dockerfile in the same folder:
+    # build: .
+    ports:
+      - "7400:7400/udp"
+      - "7401:7401/udp"
+      - "7410:7410/udp"
+      - "7411:7411/udp"
+    # or for a range:
+    # ports:
+    #  - "7400-7410:7400-7410/udp"
+    environment:
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/my_config/fastdds_config.xml
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    volumes:
+      - ./fastdds_config.xml:/my_config/fastdds_config.xml
