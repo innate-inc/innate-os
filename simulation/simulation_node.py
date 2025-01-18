@@ -1,3 +1,4 @@
+import queue
 import time
 import numpy as np
 import genesis as gs
@@ -94,11 +95,11 @@ class SimulationNode:
             )
 
             # Option B: Read velocity commands from the agent (uncomment to enable):
-            # try:
-            #     cmd = self.shared_queues.agent_to_sim.get_nowait()
-            #     self.robot.control_dofs_velocity(cmd, [self.left_idx, self.right_idx])
-            # except queue.Empty:
-            #     pass
+            try:
+                cmd = self.shared_queues.agent_to_sim.get_nowait()
+                self.robot.control_dofs_velocity(cmd, [self.left_idx, self.right_idx])
+            except queue.Empty:
+                pass
 
             # Render camera
             rgb, depth, seg, normal = self.robot_camera.render(depth=True)
