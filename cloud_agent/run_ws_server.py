@@ -16,14 +16,16 @@ async def echo_handler(websocket):
             now = time.time()
             if now - last_cmd_time > cmd_interval:
                 last_cmd_time = now
-                # Randomly choose left or right
-                import random
 
-                vel_left = 2.0
-                vel_right = 2.0
-                # Random variation
-                vel_left += random.uniform(-1.0, 1.0)
-                vel_right += random.uniform(-1.0, 1.0)
+                # Use time to alternate between left and right
+                turn_left = int(time.time() / cmd_interval) % 2 == 0
+
+                if turn_left:
+                    vel_left = 10.0
+                    vel_right = 0.0
+                else:
+                    vel_left = 0.0
+                    vel_right = 10.0
 
                 msg = {"cmd": "set_velocity", "values": [vel_left, vel_right]}
                 await websocket.send(json.dumps(msg))
