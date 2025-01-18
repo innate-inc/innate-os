@@ -6,7 +6,7 @@ import genesis as gs
 
 from shared_queues import SharedQueues
 from simulation.simulation_node import SimulationNode
-from agent.agent_node import agent_loop
+from agent.agent_node_ws import run_agent_async
 
 
 def main():
@@ -22,11 +22,8 @@ def main():
     # Initialize the simulation node
     sim_node = SimulationNode(shared_queues, enable_vis=args.vis)
 
-    # Start the agent loop in a separate thread
-    agent_thread = threading.Thread(
-        target=agent_loop, args=(shared_queues,), daemon=True
-    )
-    agent_thread.start()
+    # Use the async version of the agent instead of threading
+    agent_thread = run_agent_async(shared_queues, server_uri="ws://localhost:8765")
 
     # Run the simulation node in another thread (Genesis convenience)
     gs.tools.run_in_another_thread(fn=sim_node.run, args=())
