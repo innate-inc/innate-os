@@ -129,8 +129,8 @@ class SimulationNode:
                 print(f"{fps:.2f} FPS")
 
                 # (Optional) Save the RGB and depth images to files
-                # cv2.imwrite(f"rgb_{step_count}.png", rgb)
-                # cv2.imwrite(f"depth_{step_count}.png", depth)
+                cv2.imwrite(f"rgb_{step_count}.png", rgb)
+                cv2.imwrite(f"depth_{step_count}.png", depth)
 
             t_prev = t_now
 
