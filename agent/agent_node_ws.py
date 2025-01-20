@@ -9,7 +9,9 @@ import websockets
 import threading
 
 
-def run_agent_async(shared_queues, server_uri="ws://localhost:8765"):
+def run_agent_async(
+    shared_queues, server_uri="ws://localhost:8765/?token=MY_HARDCODED_TOKEN"
+):
     """
     Helper that runs the async agent loop in an asyncio event loop on a separate thread.
     """
