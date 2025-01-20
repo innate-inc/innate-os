@@ -30,8 +30,9 @@ async def agent_loop_ws(shared_queues, server_uri="ws://localhost:8765"):
     """
     Example agent loop that:
     1. Connects to a WebSocket server at `server_uri`.
-    2. Sends an image (rgb) to the server periodically.
-    3. Receives velocity commands from the server and updates the simulation.
+    2. Sends an authentication token immediately after connection.
+    3. Sends an image (rgb) to the server periodically.
+    4. Receives velocity commands from the server and updates the simulation.
 
     :param shared_queues: The SharedQueues instance for exchanging data with the simulation.
     :param server_uri: The WebSocket URI to connect to (ws://host:port).
@@ -47,6 +48,9 @@ async def agent_loop_ws(shared_queues, server_uri="ws://localhost:8765"):
         # Connect to the WebSocket server
         async with websockets.connect(server_uri) as websocket:
             print(f"Connected to WebSocket server at {server_uri}")
+
+            # Send authentication token immediately after connection
+            await websocket.send("MY_HARDCODED_TOKEN")
 
             while not shared_queues.exit_event.is_set():
                 # 1) Grab latest frame from sim_to_agent queue
@@ -65,8 +69,8 @@ async def agent_loop_ws(shared_queues, server_uri="ws://localhost:8765"):
                         last_send_time = now
                         await send_image_over_ws(websocket, rgb)
 
-                # 3) Check if there’s a new message from the server
-                #    Use a short timeout so we don’t block forever.
+                # 3) Check if there's a new message from the server
+                #    Use a short timeout so we don't block forever.
                 await asyncio.sleep(0.01)
                 try:
                     message = await asyncio.wait_for(websocket.recv(), timeout=0.01)
