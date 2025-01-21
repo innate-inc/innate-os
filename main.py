@@ -6,13 +6,19 @@ import genesis as gs
 
 from shared_queues import SharedQueues
 from simulation.simulation_node import SimulationNode
-from agent.agent_node_ws import run_agent_async
+from agent.agent_websocket_bridge import run_agent_async
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-v", "--vis", action="store_true", default=False, help="Enable visualization"
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        default=False,
+        help="Connect to local agent server instead of cloud",
     )
     args = parser.parse_args()
 
@@ -25,7 +31,11 @@ def main():
     # Use the async version of the agent instead of threading
     agent_thread = run_agent_async(
         shared_queues,
-        server_uri="wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
+        server_uri=(
+            "ws://localhost:8765"
+            if args.local_agent
+            else "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
+        ),
     )
 
     # Run the simulation node in another thread (Genesis convenience)
