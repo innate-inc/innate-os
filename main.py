@@ -4,9 +4,9 @@ import threading
 
 import genesis as gs
 
-from shared_queues import SharedQueues
-from simulation.simulation_node import SimulationNode
-from agent.agent_websocket_bridge import run_agent_async
+from src.shared_queues import SharedQueues
+from src.simulation.simulation_node import SimulationNode
+from src.agent.agent_websocket_bridge import run_agent_async
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
         shared_queues,
         server_uri=(
             "ws://localhost:8765"
-            if args.local_agent
+            if args.local
             else "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
         ),
     )
