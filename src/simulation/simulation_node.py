@@ -107,8 +107,17 @@ class SimulationNode:
             # Publish observation
             try:
                 self.shared_queues.sim_to_agent.put_nowait((rgb, depth))
-            except:
-                pass  # queue.Full is possible
+            except queue.Full:
+                pass
+
+            # For the web server:
+            try:
+                # Keep only the latest frame in sim_to_web, so empty it first if needed
+                if not self.shared_queues.sim_to_web.empty():
+                    _ = self.shared_queues.sim_to_web.get_nowait()
+                self.shared_queues.sim_to_web.put_nowait(rgb)
+            except queue.Full:
+                pass
 
             # Step the physics
             try:
