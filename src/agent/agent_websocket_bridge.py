@@ -63,6 +63,11 @@ async def agent_loop_ws(shared_queues, server_uri="ws://localhost:8765"):
                     # Server just acknowledged the image
                     print("Client received 'well_received'")
 
+                elif msg_type == "vision_agent_output":
+                    # Server is sending vision agent results
+                    print(f"Client received vision_agent_output: {data.get('payload')}")
+                    # You can process the vision agent output here if needed
+
                 elif msg_type == "action_to_do":
                     # Server is telling us the action to do
                     print("Client received 'action_to_do'")
@@ -77,9 +82,6 @@ async def agent_loop_ws(shared_queues, server_uri="ws://localhost:8765"):
                             shared_queues.agent_to_sim.put_nowait(current_command)
                         except queue.Full:
                             print("agent_to_sim queue is full. Dropping command.")
-
-                    # Once action is done or applied, we just loop around and wait
-                    # for the next "ready_for_image".
 
                 else:
                     print(f"Client received an unknown type: {msg_type}")
