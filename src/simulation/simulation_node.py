@@ -4,8 +4,8 @@ import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
 
-from simulation.utils import quaternion_to_matrix, rotate_vector
-from shared_queues import SharedQueues
+from src.simulation.utils import quaternion_to_matrix, rotate_vector
+from src.shared_queues import SharedQueues
 
 
 class SimulationNode:
@@ -37,7 +37,7 @@ class SimulationNode:
         # Add environment
         replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
-                file="ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
+                file="data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
                 fixed=True,
                 euler=(90, 0, 0),
                 pos=(0, 0, -0.1),
@@ -48,7 +48,7 @@ class SimulationNode:
 
         # Add robot
         self.robot = self.scene.add_entity(
-            gs.morphs.URDF(file="urdf/turtlebot3_burger.urdf", pos=(0, 0, 0))
+            gs.morphs.URDF(file="data/urdf/turtlebot3_burger.urdf", pos=(0, 0, 0))
         )
 
         # Add robot camera
