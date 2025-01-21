@@ -12,7 +12,7 @@ from agent.agent_node_ws import run_agent_async
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-v", "--vis", action="store_true", default=True, help="Enable visualization"
+        "-v", "--vis", action="store_true", default=False, help="Enable visualization"
     )
     args = parser.parse_args()
 
@@ -23,7 +23,10 @@ def main():
     sim_node = SimulationNode(shared_queues, enable_vis=args.vis)
 
     # Use the async version of the agent instead of threading
-    agent_thread = run_agent_async(shared_queues, server_uri="ws://localhost:8765")
+    agent_thread = run_agent_async(
+        shared_queues,
+        server_uri="wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
+    )
 
     # Run the simulation node in another thread (Genesis convenience)
     gs.tools.run_in_another_thread(fn=sim_node.run, args=())
