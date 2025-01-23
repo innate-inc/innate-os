@@ -31,8 +31,8 @@ def main():
     # Use the async version of the agent instead of threading
     agent_thread = run_agent_async(
         shared_queues,
-        server_uri=(
-            "ws://localhost:8765"
+        rosbridge_uri=(
+            "ws://localhost:9090"
             if args.local
             else "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
         ),

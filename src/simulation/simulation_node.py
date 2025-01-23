@@ -4,12 +4,13 @@ import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
 
+from src.agent.types import ImageMsg
 from src.simulation.utils import quaternion_to_matrix, rotate_vector
 from src.shared_queues import SharedQueues
 
 
 class SimulationNode:
-    def __init__(self, shared_queues, enable_vis=True):
+    def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
 
@@ -106,7 +107,7 @@ class SimulationNode:
 
             # Publish observation
             try:
-                self.shared_queues.sim_to_agent.put_nowait((rgb, depth))
+                self.shared_queues.sim_to_agent.put_nowait(ImageMsg(rgb, depth))
             except queue.Full:
                 pass
 
@@ -115,7 +116,7 @@ class SimulationNode:
                 # Keep only the latest frame in sim_to_web, so empty it first if needed
                 if not self.shared_queues.sim_to_web.empty():
                     _ = self.shared_queues.sim_to_web.get_nowait()
-                self.shared_queues.sim_to_web.put_nowait(rgb)
+                self.shared_queues.sim_to_web.put_nowait(ImageMsg(rgb, None))
             except queue.Full:
                 pass
 
