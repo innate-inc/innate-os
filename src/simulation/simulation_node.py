@@ -67,6 +67,21 @@ class SimulationNode:
         self.right_idx = self.robot.get_joint("wheel_right_joint").dof_idx_local
         self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
 
+        # Add robot parameters for differential drive
+        self.wheel_radius = 0.033  # meters (from URDF)
+        self.wheel_separation = 0.160  # meters (from URDF)
+
+    def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
+        """Convert linear and angular velocity to left and right wheel velocities."""
+        # Convert m/s and rad/s to wheel velocities (rad/s)
+        left_vel = (
+            linear_vel - (angular_vel * self.wheel_separation / 2.0)
+        ) / self.wheel_radius
+        right_vel = (
+            linear_vel + (angular_vel * self.wheel_separation / 2.0)
+        ) / self.wheel_radius
+        return left_vel, right_vel
+
     def run(self):
         """
         Main simulation loop.
@@ -95,10 +110,23 @@ class SimulationNode:
                 [2.0, 2.0], [self.left_idx, self.right_idx]
             )
 
-            # Option B: Read velocity commands from the agent (uncomment to enable):
+            # Option B: Read velocity commands from the agent
             try:
                 cmd = self.shared_queues.agent_to_sim.get_nowait()
-                self.robot.control_dofs_velocity(cmd, [self.left_idx, self.right_idx])
+                # Assuming cmd is (linear_vel, angular_vel)
+                linear_vel, angular_vel = cmd
+                left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
+                    linear_vel, angular_vel
+                )
+                print(
+                    f"Received cmd_vel: linear={linear_vel:.2f} m/s, angular={angular_vel:.2f} rad/s"
+                )
+                print(
+                    f"Wheel velocities: left={left_vel:.2f} rad/s, right={right_vel:.2f} rad/s"
+                )
+                self.robot.control_dofs_velocity(
+                    [left_vel, right_vel], [self.left_idx, self.right_idx]
+                )
             except queue.Empty:
                 pass
 
