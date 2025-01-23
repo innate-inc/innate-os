@@ -89,7 +89,7 @@ class BrainClientNode(Node):
           - Waits for commands from the server (e.g. "ready_for_image")
           - Publishes velocity commands from "action_to_do"
         """
-        self.get_logger().info(f"[BrainClient] Connecting to {server_uri} ...")
+        self.get_logger().debug(f"[BrainClient] Connecting to {server_uri} ...")
 
         try:
             async with websockets.connect(server_uri) as websocket:
@@ -97,7 +97,7 @@ class BrainClientNode(Node):
 
                 # 1) Send authentication token immediately
                 await websocket.send(token)
-                self.get_logger().info("[BrainClient] Token sent")
+                self.get_logger().debug("[BrainClient] Token sent")
 
                 # 2) Main loop
                 while rclpy.ok() and not self.exit_event.is_set():
@@ -123,7 +123,7 @@ class BrainClientNode(Node):
                     msg_type = data.get("type", "")
 
                     if msg_type == "ready_for_image":
-                        self.get_logger().info(
+                        self.get_logger().debug(
                             "[BrainClient] Received 'ready_for_image'"
                         )
                         # Send the latest image
@@ -138,11 +138,13 @@ class BrainClientNode(Node):
                             )
 
                     elif msg_type == "well_received":
-                        self.get_logger().info("[BrainClient] Received 'well_received'")
+                        self.get_logger().debug(
+                            "[BrainClient] Received 'well_received'"
+                        )
 
                     elif msg_type == "vision_agent_output":
                         # Could do something with data["payload"]
-                        self.get_logger().info(
+                        self.get_logger().debug(
                             f"[BrainClient] vision_agent_output: {data.get('payload')}"
                         )
 
@@ -150,7 +152,7 @@ class BrainClientNode(Node):
                         cmd = data.get("cmd")
                         values = data.get("values", [0.0, 0.0])
                         if cmd == "set_velocity":
-                            self.get_logger().info(
+                            self.get_logger().debug(
                                 f"[BrainClient] Applying velocity: {values}"
                             )
                             # Publish to /cmd_vel
@@ -160,7 +162,7 @@ class BrainClientNode(Node):
                             self.cmd_vel_pub.publish(twist)
 
                     else:
-                        self.get_logger().info(
+                        self.get_logger().debug(
                             f"[BrainClient] Unknown message type: {msg_type}"
                         )
 
@@ -186,7 +188,7 @@ class BrainClientNode(Node):
 
         msg = {"type": "image", "image_b64": b64_img}
         await websocket.send(json.dumps(msg))
-        self.get_logger().info("[BrainClient] Sent image to server.")
+        self.get_logger().debug("[BrainClient] Sent image to server.")
 
     def destroy_node(self):
         # Called when shutting down

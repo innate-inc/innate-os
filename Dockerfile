@@ -11,22 +11,38 @@ FROM ros:humble-ros-base
 #    - tmux for your discovery script
 #    - Python libraries you need (numpy, serial, pygame)
 #    - fastdds CLI tools
+# ... existing code ...
+
+# 1a. Install base system packages
 RUN apt-get update && apt-get install -y \
     zsh \
     git \
     curl \
+    tmux
+
+# 1b. Install ROS-related packages
+RUN apt-get install -y \
     python3-colcon-common-extensions \
-    tmux \
+    ros-humble-fastrtps \
+    ros-humble-rosbridge-suite \
+    ros-humble-launch-xml \
+    ros-humble-cv-bridge
+
+# 1c. Install Python packages and pip
+RUN apt-get install -y \
+    python3-pip \
     python3-numpy \
     python3-serial \
     python3-pygame \
     python3-opencv \
     python3-websockets \
-    ros-humble-fastrtps \
-    ros-humble-rosbridge-suite \
-    ros-humble-launch-xml \
-    ros-humble-cv-bridge \
     && rm -rf /var/lib/apt/lists/*
+
+
+# 1d. Install updated python packages
+RUN pip install --upgrade \
+    websockets \
+    opencv-python
 
 # 2. Install oh-my-zsh (for root, since containers typically run as root unless changed)
 #    The official install script tries to prompt, so we run it in a way that doesn't hang.
@@ -77,5 +93,5 @@ source /root/maurice-prod/dds/setup_dds.zsh\n\
 ' >> /root/.zshrc
 
 # 8. When the container starts with no command, we just run zsh (login shell).
-#    You’ll drop into an interactive oh-my-zsh environment with everything set up.
+#    You'll drop into an interactive oh-my-zsh environment with everything set up.
 CMD ["zsh", "-l"]
