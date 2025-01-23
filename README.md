@@ -32,5 +32,11 @@ tmux a
 Then run the simulation in a new tmux pane:
 
 ```bash
-ros2 launch maurice_sim_bringup sim_bringup.launch.py
+ros2 launch maurice_sim_bringup sim_rosbridge.launch.py
+```
+
+Then run the brain client in a new tmux pane:
+
+```bash
+ros2 launch brain_client brain_client.launch.py
 ```

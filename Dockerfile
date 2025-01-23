@@ -20,9 +20,12 @@ RUN apt-get update && apt-get install -y \
     python3-numpy \
     python3-serial \
     python3-pygame \
+    python3-opencv \
+    python3-websockets \
     ros-humble-fastrtps \
     ros-humble-rosbridge-suite \
     ros-humble-launch-xml \
+    ros-humble-cv-bridge \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Install oh-my-zsh (for root, since containers typically run as root unless changed)
