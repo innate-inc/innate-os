@@ -1,127 +1,222 @@
+#!/usr/bin/env python3
+
 import asyncio
-import json
 import base64
+import json
+import queue
+import threading
 import time
+import websockets
+
 import cv2
 import numpy as np
-import websockets
-import threading
-import queue
+from src.agent.types import ImageMsg, VelocityCmd, CommentMsg
 
 
-async def agent_loop_ws(shared_queues, server_uri="ws://localhost:8765"):
-    print("AgentNode (WebSocket) started.")
+#
+# Rosbridge Utility Methods
+#
+def rosbridge_subscribe(topic: str, msg_type: str) -> dict:
+    """
+    Build a JSON message to tell rosbridge: "subscribe to a given topic"
+    E.g.:
+        {
+          "op": "subscribe",
+          "topic": "/cmd_vel",
+          "type": "geometry_msgs/msg/Twist"
+        }
+    """
+    return {"op": "subscribe", "topic": topic, "type": msg_type}
 
+
+def rosbridge_publish(topic: str, msg_dict: dict) -> dict:
+    """
+    Build a JSON message to publish to `topic` with `msg_dict` content.
+    E.g.:
+        {
+          "op": "publish",
+          "topic": "/camera/color/image_raw",
+          "msg": {...}
+        }
+    """
+    return {"op": "publish", "topic": topic, "msg": msg_dict}
+
+
+#
+# Primary async task that connects to rosbridge and does two-way communication
+#
+async def rosbridge_loop(shared_queues, rosbridge_uri: str):
+    """
+    Connect to rosbridge at rosbridge_uri (e.g., ws://localhost:9090), then:
+      - Subscribe to /cmd_vel (geometry_msgs/msg/Twist)
+      - Subscribe to /comment_bell (std_msgs/msg/String)
+      - Periodically publish images from `shared_queues.sim_to_agent`.
+      - Forward any received velocity commands into `shared_queues.agent_to_sim`.
+    """
+    print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
     try:
-        # Connect to the WebSocket server
-        async with websockets.connect(server_uri) as websocket:
-            print(f"Connected to WebSocket server at {server_uri}")
+        async with websockets.connect(rosbridge_uri) as ws:
+            print(f"[ROSBridge] Connected to {rosbridge_uri}")
 
-            # 1) Send authentication token immediately after connection
-            await websocket.send("MY_HARDCODED_TOKEN")
-            print("Client -> Server: token sent")
+            # Subscribe to /cmd_vel (geometry_msgs/msg/Twist)
+            sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
+            await ws.send(json.dumps(sub_cmd_vel))
 
-            # Default velocity if no command arrives
-            current_command = [0.0, 0.0]
+            # Subscribe to /comment_bell (std_msgs/msg/String) if desired
+            sub_comment = rosbridge_subscribe("/comment_bell", "std_msgs/msg/String")
+            await ws.send(json.dumps(sub_comment))
 
-            # MAIN LOOP: wait for messages from the server and respond accordingly
+            # Main loop
             while not shared_queues.exit_event.is_set():
+                # 1) Publish images if available
                 try:
-                    # Wait for a message from the server
-                    incoming_msg = await websocket.recv()
+                    # Non-blocking or short-timeout get
+                    img_msg = shared_queues.sim_to_agent.get_nowait()
+                    if isinstance(img_msg, ImageMsg):
+                        # Publish the image to rosbridge as sensor_msgs/Image
+                        await publish_rgb_image(ws, img_msg.rgb_frame)
+                        # Potentially also publish depth image if desired
+                        # e.g., await publish_depth_image(ws, img_msg.depth_frame)
+                except queue.Empty:
+                    pass
+
+                # 2) Process inbound rosbridge messages
+                #    We do a non-blocking read (with small timeout)
+                #    If there's no data, we skip
+                try:
+                    incoming_raw = await asyncio.wait_for(ws.recv(), timeout=0.01)
+                except asyncio.TimeoutError:
+                    # Normal: no message
+                    await asyncio.sleep(0.01)
+                    continue
                 except websockets.exceptions.ConnectionClosed:
-                    print("Server closed the connection.")
+                    print("[ROSBridge] Connection closed.")
                     break
 
-                data = {}
+                # Parse inbound
                 try:
-                    data = json.loads(incoming_msg)
+                    inbound_data = json.loads(incoming_raw)
                 except json.JSONDecodeError:
-                    print("Received non-JSON data from server. Ignoring.")
+                    # Not valid JSON
                     continue
 
-                msg_type = data.get("type")
+                # We only care about "op" = "publish"
+                if inbound_data.get("op") == "publish":
+                    topic = inbound_data.get("topic", "")
+                    msg = inbound_data.get("msg", {})
 
-                if msg_type == "ready_for_image":
-                    # Server wants an image
-                    print("Client received 'ready_for_image'")
+                    # If it's /cmd_vel, parse the twist and forward to the sim
+                    if topic == "/cmd_vel":
+                        vel_cmd = parse_twist(msg)
+                        if vel_cmd:
+                            # Put into agent_to_sim queue for your sim
+                            try:
+                                shared_queues.agent_to_sim.put_nowait(vel_cmd)
+                            except queue.Full:
+                                print(
+                                    "[ROSBridge] agent_to_sim queue is full. Dropping cmd_vel."
+                                )
 
-                    # Fetch latest frame from sim_to_agent queue (non-blocking or with small timeout)
-                    try:
-                        rgb_frame, depth_frame = shared_queues.sim_to_agent.get(
-                            timeout=0.1
-                        )
-                    except queue.Empty:
-                        # If we don't have a new image, you could either skip or send a placeholder
-                        print("No new image available in queue, sending a placeholder.")
-                        rgb_frame = np.zeros((240, 320, 3), dtype=np.uint8)
-
-                    # Send the image
-                    await send_image_over_ws(websocket, rgb_frame)
-
-                elif msg_type == "well_received":
-                    # Server just acknowledged the image
-                    print("Client received 'well_received'")
-
-                elif msg_type == "vision_agent_output":
-                    # Server is sending vision agent results
-                    print(f"Client received vision_agent_output: {data.get('payload')}")
-                    # You can process the vision agent output here if needed
-
-                elif msg_type == "action_to_do":
-                    # Server is telling us the action to do
-                    print("Client received 'action_to_do'")
-                    cmd = data.get("cmd")
-                    values = data.get("values", [0.0, 0.0])
-                    if cmd == "set_velocity":
-                        current_command = values
-                        print(f"Applying velocity command: {current_command}")
-
-                        # Send the velocity commands to the simulation
+                    # If it's /comment_bell, parse the string data
+                    elif topic == "/comment_bell":
+                        comment = msg.get("data", "")
+                        comment_msg = CommentMsg(text=comment)
+                        # For example, store in agent_to_sim or a separate queue
                         try:
-                            shared_queues.agent_to_sim.put_nowait(current_command)
+                            shared_queues.comment_queue.put_nowait(comment_msg)
                         except queue.Full:
-                            print("agent_to_sim queue is full. Dropping command.")
+                            print(
+                                "[ROSBridge] comment_queue is full. Dropping comment."
+                            )
 
-                else:
-                    print(f"Client received an unknown type: {msg_type}")
-
-                # Small sleep so we don't spin super fast
-                await asyncio.sleep(0.01)
+                # Just short pause so we don't spin the CPU
+                await asyncio.sleep(0.001)
 
     except Exception as e:
-        print(f"WebSocket connection error: {e}")
+        print(f"[ROSBridge] Connection error: {e}")
 
-    print("AgentNode (WebSocket) stopped.")
+    print("[ROSBridge] Stopped rosbridge_loop.")
 
 
-async def send_image_over_ws(websocket, rgb_frame):
+#
+# Helper: Publish an RGB image as sensor_msgs/Image (Base64-encoded data)
+#
+async def publish_rgb_image(
+    websocket, rgb_frame: np.ndarray, topic: str = "/camera/color/image_raw"
+):
     """
-    Encodes the RGB frame as JPEG in memory, then base64-encodes it
-    and sends it via WebSockets as a JSON message.
+    Convert `rgb_frame` (H x W x 3) into a ROS sensor_msgs/Image structure,
+    then send via rosbridge.
     """
-    _, encoded_img = cv2.imencode(".jpg", rgb_frame)
-    b64_img = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
+    if rgb_frame is None:
+        return
 
-    # Create a JSON message
-    message = {
-        "type": "image",
-        "image_b64": b64_img,
+    # Convert to JPEG
+    ret, encoded_jpeg = cv2.imencode(".jpg", rgb_frame)
+    if not ret:
+        print("[ROSBridge] Could not encode image.")
+        return
+
+    b64_img = base64.b64encode(encoded_jpeg.tobytes()).decode("utf-8")
+
+    # Fake a header stamp
+    now = time.time()
+    sec = int(now)
+    nsec = int((now - sec) * 1e9)
+
+    msg = {
+        "header": {
+            "stamp": {"sec": sec, "nanosec": nsec},
+            "frame_id": "camera_color_frame",
+        },
+        "height": rgb_frame.shape[0],
+        "width": rgb_frame.shape[1],
+        "encoding": "jpeg",  # For rosbridge, "jpeg" is often used, or "rgb8"
+        "is_bigendian": 0,
+        "step": len(encoded_jpeg),  # not strictly correct for "jpeg," but works
+        "data": b64_img,
     }
 
-    await websocket.send(json.dumps(message))
-    print("Client -> Server: image sent")
+    outbound = rosbridge_publish(topic, msg)
+    await websocket.send(json.dumps(outbound))
+    # Debug
+    print(f"[ROSBridge] Published image on {topic}")
 
 
-def run_agent_async(shared_queues, server_uri="ws://localhost:8765"):
+#
+# Helper: parse geometry_msgs/Twist from inbound rosbridge JSON
+#
+def parse_twist(msg: dict) -> VelocityCmd | None:
     """
-    Helper that runs the async agent loop in an asyncio event loop on a separate thread.
+    Example geometry_msgs/Twist:
+    {
+      "linear": {"x": 0.1, "y": 0, "z": 0},
+      "angular": {"x": 0, "y": 0, "z": 0.5}
+    }
+    """
+    lin = msg.get("linear", {})
+    ang = msg.get("angular", {})
+    try:
+        vx = float(lin.get("x", 0.0))
+        vz = float(ang.get("z", 0.0))
+        return VelocityCmd(linear_x=vx, angular_z=vz)
+    except (TypeError, ValueError):
+        return None
+
+
+#
+# Main entry point that spawns the rosbridge loop on a separate thread
+#
+def run_agent_async(shared_queues, rosbridge_uri="ws://localhost:9090"):
+    """
+    Launch the asynchronous rosbridge_loop in a dedicated thread.
+    This mimics your 'agent_loop_ws' pattern, but for rosbridge.
     """
     loop = asyncio.new_event_loop()
 
     def _run():
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(agent_loop_ws(shared_queues, server_uri))
+        loop.run_until_complete(rosbridge_loop(shared_queues, rosbridge_uri))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
