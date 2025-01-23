@@ -42,6 +42,7 @@ RUN apt-get install -y \
 # 1d. Install updated python packages
 RUN pip install --upgrade \
     websockets \
+    pydantic \
     opencv-python
 
 # 2. Install oh-my-zsh (for root, since containers typically run as root unless changed)

@@ -5,7 +5,6 @@ from rclpy.node import Node
 
 import asyncio
 import threading
-import time
 import json
 import base64
 
@@ -13,8 +12,9 @@ import cv2
 import numpy as np
 import websockets
 
+from brain_client.message_types import MessageType, TaskType, VisionAgentOutput
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Vector3
 
 # If using CV Bridge to convert sensor_msgs/Image -> OpenCV
 from cv_bridge import CvBridge
@@ -59,12 +59,30 @@ class BrainClientNode(Node):
         self.ws_thread = threading.Thread(target=self.run_async_loop, daemon=True)
         self.ws_thread.start()
 
+    def handle_vision_agent_output(self, payload: VisionAgentOutput):
+        """
+        Handle the vision agent output.
+        """
+        if payload.next_task is not None:
+            self.get_logger().debug(f"[BrainClient] Next task: {payload.next_task}")
+            if payload.next_task.type == TaskType.VELOCITY_CONTROL:
+                # Comes in like {"forward": 1.0, "angle": 2.0 if self.turn_right else -2.0}
+                self.get_logger().debug("[BrainClient] Velocity control task")
+                velocity_dict = json.loads(payload.next_task.description)
+                self.cmd_vel_pub.publish(
+                    Twist(
+                        linear=Vector3(x=velocity_dict["forward"]),
+                        angular=Vector3(z=velocity_dict["angle"]),
+                    )
+                )
+        if payload.stop_current_task:
+            self.get_logger().info("[BrainClient] Stopping current task")
+
     def image_callback(self, msg: Image):
         """
         Store the latest image in memory. We only send it to the cloud
         when the server says "ready_for_image".
         """
-        self.get_logger().info("[BrainClient] Received image")
         # Convert ROS Image -> OpenCV
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -88,7 +106,6 @@ class BrainClientNode(Node):
           - Connects to the cloud WebSocket server
           - Sends an auth token
           - Waits for commands from the server (e.g. "ready_for_image")
-          - Publishes velocity commands from "action_to_do"
         """
         self.get_logger().debug(f"[BrainClient] Connecting to {server_uri} ...")
 
@@ -144,24 +161,21 @@ class BrainClientNode(Node):
                             "[BrainClient] Received 'well_received'"
                         )
 
-                    elif msg_type == "vision_agent_output":
-                        # Could do something with data["payload"]
-                        self.get_logger().debug(
-                            f"[BrainClient] vision_agent_output: {data.get('payload')}"
-                        )
-
-                    elif msg_type == "action_to_do":
-                        cmd = data.get("cmd")
-                        values = data.get("values", [0.0, 0.0])
-                        if cmd == "set_velocity":
+                    elif msg_type == MessageType.VISION_AGENT_OUTPUT.value:
+                        # Parse the payload as a VisionAgentOutput model
+                        try:
+                            # First parse the payload string into a dictionary
+                            payload_dict = json.loads(data.get("payload", "{}"))
+                            payload = VisionAgentOutput.model_validate(payload_dict)
                             self.get_logger().debug(
-                                f"[BrainClient] Applying velocity: {values}"
+                                f"[BrainClient] vision_agent_output: {payload}"
                             )
-                            # Publish to /cmd_vel
-                            twist = Twist()
-                            twist.linear.x = float(values[0])
-                            twist.angular.z = float(values[1])
-                            self.cmd_vel_pub.publish(twist)
+
+                            self.handle_vision_agent_output(payload)
+                        except Exception as e:
+                            self.get_logger().error(
+                                f"Failed to parse vision_agent_output: {e}"
+                            )
 
                     else:
                         self.get_logger().debug(
