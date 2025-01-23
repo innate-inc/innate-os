@@ -5,16 +5,19 @@
 First build the container:
 
 ```bash
-docker build -t maurice-prod:latest .
+docker compose build
 ```
 
 Then run the container:
 
 ```bash
-docker run --rm -it \
-  --net=host \
-  --name maurice_zsh \
-  maurice-prod:latest
+docker compose up -d
+```
+
+And then drop into the container:
+
+```bash
+docker compose exec maurice zsh -l
 ```
 
 Inside the container, first run the discovery service:

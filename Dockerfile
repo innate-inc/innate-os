@@ -58,8 +58,8 @@ RUN chsh -s /usr/bin/zsh root
 RUN sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' /root/.zshrc
 
 # 5. Copy your entire maurice-prod directory (including dds, ros2_ws, etc.)
+RUN mkdir -p /root/maurice-prod/ros2_ws/src
 WORKDIR /root/maurice-prod
-COPY . /root/maurice-prod
 
 # 6. Build your ROS 2 workspace.
 #    We have to source the system setup.zsh for colcon to find ROS packages.
