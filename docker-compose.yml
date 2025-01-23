@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  maurice:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: maurice-dev
+    # Use host networking if you need direct access to hardware, or use your own approach
+    network_mode: host
+
+    volumes:
+      # 1) Mount your local code
+      - ./ros2_ws:/root/maurice-prod/ros2_ws:rw
+      - ./dds:/root/maurice-prod/dds:rw
+
+      # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
+      - ros2_ws_build:/root/maurice-prod/ros2_ws/build
+      - ros2_ws_install:/root/maurice-prod/ros2_ws/install
+      - ros2_ws_log:/root/maurice-prod/ros2_ws/log
+
+    # 2) Or just do a "do-nothing" command so the container doesn't exit
+    command: zsh -l
+
+    # 3) Keep container open for interactive usage
+    tty: true
+    stdin_open: true
+
+volumes:
+  ros2_ws_build:
+  ros2_ws_install:
+  ros2_ws_log:
