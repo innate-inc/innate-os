@@ -153,20 +153,22 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph Maurice Robot
-        D[maurice_bringup node<br>UART Manager, etc.]
-        E[brain_client_node<br>(WebSockets to Cloud)]
-        D -->|publish /camera, /odom| ROS
-        ROS -->|subscribe /cmd_vel| D
+    subgraph "Maurice Robot"
+        A["maurice_bringup\n(UART Manager)"]
+        B["brain_client_node\n(WebSocket Bridge)"]
+        C["ROS Topics\n(/cmd_vel, /odom)"]
+        
+        A -->|publish| C
+        C -->|subscribe| A
+        B -->|publish| C
     end
 
-    subgraph Cloud
-        F[Cloud Agent<br>via websockets]
+    subgraph "Cloud Agent"
+        D["Vision Agent\n(WebSocket API)"]
     end
     
-    E -->|images| F
-    F -->|action_to_do (velocity)| E
-    E -->|publish /cmd_vel| D
+    B -->|"images (base64)"| D
+    D -->|"commands (velocity)"| B
 ```
 
 </details>
