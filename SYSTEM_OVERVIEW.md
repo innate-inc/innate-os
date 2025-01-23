@@ -125,19 +125,23 @@ Below are two conceptual diagrams: one for **simulation**, one for the **real ro
 ```mermaid
 flowchart LR
     subgraph "Simulator"
-        A["Simulator Node\n(/camera, /odom, etc.)"]
+        A["Simulator Node
+        (/camera, /odom, etc.)"]
     end
 
     subgraph "ROS 2 Container"
-        B["maurice_sim_bringup\n(Launch + Nodes)"]
-        C["brain_client_node\n(WebSocket Bridge)"]
+        B["maurice_sim_bringup
+        (Launch + Nodes)"]
+        C["brain_client_node
+        (WebSocket Bridge)"]
         B -->|subscribe| A
         B -->|/cmd_vel| A
         C -->|/cmd_vel| B
     end
     
     subgraph "Cloud Agent"
-        D["Vision Agent\n(WebSocket API)"]
+        D["Vision Agent
+        (WebSocket API)"]
     end
 
     C -->|"images (base64)"| D
@@ -154,9 +158,12 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph "Maurice Robot"
-        A["maurice_bringup\n(UART Manager)"]
-        B["brain_client_node\n(WebSocket Bridge)"]
-        C["ROS Topics\n(/cmd_vel, /odom)"]
+        A["maurice_bringup
+        (UART Manager)"]
+        B["brain_client_node
+        (WebSocket Bridge)"]
+        C["ROS Topics
+        (/cmd_vel, /odom)"]
         
         A -->|publish| C
         C -->|subscribe| A
@@ -164,7 +171,8 @@ flowchart LR
     end
 
     subgraph "Cloud Agent"
-        D["Vision Agent\n(WebSocket API)"]
+        D["Vision Agent
+        (WebSocket API)"]
     end
     
     B -->|"images (base64)"| D
