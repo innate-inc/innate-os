@@ -129,13 +129,7 @@ class BrainClientNode(Node):
                         # Send the latest image
                         if self.last_image is not None:
                             await self.send_image_over_ws(websocket, self.last_image)
-                        else:
-                            self.get_logger().warn(
-                                "No image available yet, sending placeholder."
-                            )
-                            await self.send_image_over_ws(
-                                websocket, np.zeros((240, 320, 3), dtype=np.uint8)
-                            )
+                            self.last_image = None
 
                     elif msg_type == "well_received":
                         self.get_logger().debug(
