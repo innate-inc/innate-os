@@ -64,6 +64,7 @@ class BrainClientNode(Node):
         Store the latest image in memory. We only send it to the cloud
         when the server says "ready_for_image".
         """
+        self.get_logger().info("[BrainClient] Received image")
         # Convert ROS Image -> OpenCV
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -99,8 +100,17 @@ class BrainClientNode(Node):
                 await websocket.send(token)
                 self.get_logger().debug("[BrainClient] Token sent")
 
+                should_send_image = False
+
                 # 2) Main loop
                 while rclpy.ok() and not self.exit_event.is_set():
+
+                    if should_send_image:
+                        if self.last_image is not None:
+                            await self.send_image_over_ws(websocket, self.last_image)
+                            self.last_image = None
+                            should_send_image = False
+
                     try:
                         incoming_msg = await asyncio.wait_for(
                             websocket.recv(), timeout=0.1
@@ -127,9 +137,7 @@ class BrainClientNode(Node):
                             "[BrainClient] Received 'ready_for_image'"
                         )
                         # Send the latest image
-                        if self.last_image is not None:
-                            await self.send_image_over_ws(websocket, self.last_image)
-                            self.last_image = None
+                        should_send_image = True
 
                     elif msg_type == "well_received":
                         self.get_logger().debug(
