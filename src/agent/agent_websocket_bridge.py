@@ -178,18 +178,12 @@ async def publish_rgb_image(
     if rgb_frame is None:
         return
 
-    # Convert to JPEG
-    ret, encoded_jpeg = cv2.imencode(".jpg", rgb_frame)
-    if not ret:
-        print("[ROSBridge] Could not encode image.")
-        return
-
-    b64_img = base64.b64encode(encoded_jpeg.tobytes()).decode("utf-8")
-
     # Fake a header stamp
     now = time.time()
     sec = int(now)
     nsec = int((now - sec) * 1e9)
+
+    raw_data = rgb_frame.tobytes()  # or .flatten().tobytes()
 
     # Build sensor_msgs/Image fields
     msg = {
@@ -199,12 +193,12 @@ async def publish_rgb_image(
         },
         "height": rgb_frame.shape[0],
         "width": rgb_frame.shape[1],
-        "encoding": "jpeg",  # or "rgb8" if you prefer raw data
+        "encoding": "bgr8",
         "is_bigendian": 0,
-        "step": len(
-            encoded_jpeg
-        ),  # For JPEG, "step" is not standard, but acceptable here
-        "data": b64_img,
+        "step": rgb_frame.shape[1] * 3,  # For BGR8, 3 bytes per pixel
+        "data": base64.b64encode(raw_data).decode(
+            "utf-8"
+        ),  # but typically you'd just send raw bytes over rosbridge
     }
 
     outbound = rosbridge_publish(topic, msg)
