@@ -21,7 +21,9 @@ RUN apt-get update && apt-get install -y \
     python3-serial \
     python3-pygame \
     ros-humble-fastrtps \
- && rm -rf /var/lib/apt/lists/*
+    ros-humble-rosbridge-suite \
+    ros-humble-launch-xml \
+    && rm -rf /var/lib/apt/lists/*
 
 # 2. Install oh-my-zsh (for root, since containers typically run as root unless changed)
 #    The official install script tries to prompt, so we run it in a way that doesn't hang.
