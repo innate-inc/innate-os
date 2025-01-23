@@ -145,17 +145,6 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
                                     "[ROSBridge] agent_to_sim queue is full. Dropping cmd_vel."
                                 )
 
-                    # If it's /comment_bell, parse the string data
-                    elif topic == "/comment_bell":
-                        comment_text = msg.get("data", "")
-                        comment_msg = CommentMsg(text=comment_text)
-                        try:
-                            shared_queues.comment_queue.put_nowait(comment_msg)
-                        except queue.Full:
-                            print(
-                                "[ROSBridge] comment_queue is full. Dropping comment."
-                            )
-
                 # Small pause
                 await asyncio.sleep(0.001)
 
@@ -204,7 +193,7 @@ async def publish_rgb_image(
     outbound = rosbridge_publish(topic, msg)
     await websocket.send(json.dumps(outbound))
     # Debug
-    print(f"[ROSBridge] Published image on {topic}")
+    # print(f"[ROSBridge] Published image on {topic}")
 
 
 #
