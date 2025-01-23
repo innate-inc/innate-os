@@ -6,10 +6,11 @@ import json
 import queue
 import threading
 import time
-import websockets
 
 import cv2
 import numpy as np
+import websockets
+
 from src.agent.types import ImageMsg, VelocityCmd, CommentMsg
 
 
@@ -18,8 +19,8 @@ from src.agent.types import ImageMsg, VelocityCmd, CommentMsg
 #
 def rosbridge_subscribe(topic: str, msg_type: str) -> dict:
     """
-    Build a JSON message to tell rosbridge: "subscribe to a given topic"
-    E.g.:
+    Build a JSON message to tell rosbridge: "subscribe to a given topic".
+    Example:
         {
           "op": "subscribe",
           "topic": "/cmd_vel",
@@ -29,10 +30,23 @@ def rosbridge_subscribe(topic: str, msg_type: str) -> dict:
     return {"op": "subscribe", "topic": topic, "type": msg_type}
 
 
+def rosbridge_advertise(topic: str, msg_type: str) -> dict:
+    """
+    Build a JSON message to advertise a topic for publishing.
+    Example:
+        {
+          "op": "advertise",
+          "topic": "/camera/color/image_raw",
+          "type": "sensor_msgs/msg/Image"
+        }
+    """
+    return {"op": "advertise", "topic": topic, "type": msg_type}
+
+
 def rosbridge_publish(topic: str, msg_dict: dict) -> dict:
     """
     Build a JSON message to publish to `topic` with `msg_dict` content.
-    E.g.:
+    Example:
         {
           "op": "publish",
           "topic": "/camera/color/image_raw",
@@ -50,6 +64,7 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
     Connect to rosbridge at rosbridge_uri (e.g., ws://localhost:9090), then:
       - Subscribe to /cmd_vel (geometry_msgs/msg/Twist)
       - Subscribe to /comment_bell (std_msgs/msg/String)
+      - Advertise /camera/color/image_raw (sensor_msgs/msg/Image)
       - Periodically publish images from `shared_queues.sim_to_agent`.
       - Forward any received velocity commands into `shared_queues.agent_to_sim`.
     """
@@ -58,35 +73,49 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
         async with websockets.connect(rosbridge_uri) as ws:
             print(f"[ROSBridge] Connected to {rosbridge_uri}")
 
-            # Subscribe to /cmd_vel (geometry_msgs/msg/Twist)
+            #
+            # 1. Advertise any topics we intend to publish
+            #
+            # For example, we'll publish color images on /camera/color/image_raw
+            advertise_color_image = rosbridge_advertise(
+                "/camera/color/image_raw", "sensor_msgs/msg/Image"
+            )
+            await ws.send(json.dumps(advertise_color_image))
+            print("[ROSBridge] Advertised /camera/color/image_raw")
+
+            #
+            # 2. Subscribe to /cmd_vel (geometry_msgs/msg/Twist)
+            #
             sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
             await ws.send(json.dumps(sub_cmd_vel))
+            print("[ROSBridge] Subscribed to /cmd_vel")
 
-            # Subscribe to /comment_bell (std_msgs/msg/String) if desired
+            #
+            # 3. Subscribe to /comment_bell (std_msgs/msg/String) if desired
+            #
             sub_comment = rosbridge_subscribe("/comment_bell", "std_msgs/msg/String")
             await ws.send(json.dumps(sub_comment))
+            print("[ROSBridge] Subscribed to /comment_bell")
 
+            #
             # Main loop
+            #
             while not shared_queues.exit_event.is_set():
-                # 1) Publish images if available
+                # a) Publish images if available
                 try:
-                    # Non-blocking or short-timeout get
                     img_msg = shared_queues.sim_to_agent.get_nowait()
                     if isinstance(img_msg, ImageMsg):
-                        # Publish the image to rosbridge as sensor_msgs/Image
                         await publish_rgb_image(ws, img_msg.rgb_frame)
                         # Potentially also publish depth image if desired
                         # e.g., await publish_depth_image(ws, img_msg.depth_frame)
                 except queue.Empty:
                     pass
 
-                # 2) Process inbound rosbridge messages
-                #    We do a non-blocking read (with small timeout)
-                #    If there's no data, we skip
+                # b) Process inbound rosbridge messages
                 try:
                     incoming_raw = await asyncio.wait_for(ws.recv(), timeout=0.01)
                 except asyncio.TimeoutError:
-                    # Normal: no message
+                    # No message this cycle
                     await asyncio.sleep(0.01)
                     continue
                 except websockets.exceptions.ConnectionClosed:
@@ -109,7 +138,6 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
                     if topic == "/cmd_vel":
                         vel_cmd = parse_twist(msg)
                         if vel_cmd:
-                            # Put into agent_to_sim queue for your sim
                             try:
                                 shared_queues.agent_to_sim.put_nowait(vel_cmd)
                             except queue.Full:
@@ -119,9 +147,8 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
 
                     # If it's /comment_bell, parse the string data
                     elif topic == "/comment_bell":
-                        comment = msg.get("data", "")
-                        comment_msg = CommentMsg(text=comment)
-                        # For example, store in agent_to_sim or a separate queue
+                        comment_text = msg.get("data", "")
+                        comment_msg = CommentMsg(text=comment_text)
                         try:
                             shared_queues.comment_queue.put_nowait(comment_msg)
                         except queue.Full:
@@ -129,7 +156,7 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
                                 "[ROSBridge] comment_queue is full. Dropping comment."
                             )
 
-                # Just short pause so we don't spin the CPU
+                # Small pause
                 await asyncio.sleep(0.001)
 
     except Exception as e:
@@ -164,6 +191,7 @@ async def publish_rgb_image(
     sec = int(now)
     nsec = int((now - sec) * 1e9)
 
+    # Build sensor_msgs/Image fields
     msg = {
         "header": {
             "stamp": {"sec": sec, "nanosec": nsec},
@@ -171,9 +199,11 @@ async def publish_rgb_image(
         },
         "height": rgb_frame.shape[0],
         "width": rgb_frame.shape[1],
-        "encoding": "jpeg",  # For rosbridge, "jpeg" is often used, or "rgb8"
+        "encoding": "jpeg",  # or "rgb8" if you prefer raw data
         "is_bigendian": 0,
-        "step": len(encoded_jpeg),  # not strictly correct for "jpeg," but works
+        "step": len(
+            encoded_jpeg
+        ),  # For JPEG, "step" is not standard, but acceptable here
         "data": b64_img,
     }
 
