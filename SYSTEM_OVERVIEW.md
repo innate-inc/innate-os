@@ -1,4 +1,3 @@
-
 # Maurice Robot System Documentation
 
 This repository contains the code, configuration, and documentation for the Maurice robot system. The system can run in two modes:
@@ -50,7 +49,7 @@ Below is a brief description of each major piece. In the repository, these are l
 ### Maurice Robot / Simulation
 
 - **Maurice Robot**: A physical platform running ROS 2 (e.g. on a Jetson or SBC). Publishes topics like `/odom`, `/battery_state`, and receives `/cmd_vel`.  
-- **Simulation**: A software environment mimicking the robot’s sensors (camera, LiDAR, etc.) and actuators. Publishes the same ROS 2 topics so that the rest of the system thinks it’s dealing with a real robot.
+- **Simulation**: A software environment mimicking the robot's sensors (camera, LiDAR, etc.) and actuators. Publishes the same ROS 2 topics so that the rest of the system thinks it's dealing with a real robot.
 
 ### ROS 2 Nodes & Packages
 
@@ -86,7 +85,7 @@ Below is a summary of the main ROS 2 topics and services used. They are standard
 
 | Topic/Service            | Type                              | Description                                                            |
 |--------------------------|------------------------------------|------------------------------------------------------------------------|
-| `/odom`                  | `nav_msgs/msg/Odometry`           | Robot’s odometry data                                                  |
+| `/odom`                  | `nav_msgs/msg/Odometry`           | Robot's odometry data                                                  |
 | `/camera/color/image_raw`| `sensor_msgs/msg/Image`           | RGB camera feed from either real or simulated source                   |
 | `/cmd_vel`               | `geometry_msgs/msg/Twist`         | Velocity commands to drive the robot                                  |
 | `/battery_state`         | `sensor_msgs/msg/BatteryState`    | Battery information                                                    |
@@ -125,22 +124,24 @@ Below are two conceptual diagrams: one for **simulation**, one for the **real ro
 
 ```mermaid
 flowchart LR
-    subgraph Simulator
-        A[Sim Node<br>(Publishes /camera, /odom, etc.)]
+    subgraph "Simulator"
+        A["Simulator Node\n(/camera, /odom, etc.)"]
     end
 
-    subgraph Docker Container or Host
-        B[ros2 launch maurice_sim_bringup]
-        B -->|subscribe /camera,/odom| A
-        B -->|publish /cmd_vel| A
+    subgraph "ROS 2 Container"
+        B["maurice_sim_bringup\n(Launch + Nodes)"]
+        C["brain_client_node\n(WebSocket Bridge)"]
+        B -->|subscribe| A
+        B -->|/cmd_vel| A
+        C -->|/cmd_vel| B
     end
     
-    subgraph Cloud
-        C[Cloud Agent<br>via websockets]
+    subgraph "Cloud Agent"
+        D["Vision Agent\n(WebSocket API)"]
     end
 
-    B -->|publish images| C
-    C -->|commands set_velocity| B
+    C -->|"images (base64)"| D
+    D -->|"commands (velocity)"| C
 ```
 
 </details>
