@@ -26,7 +26,8 @@ RUN apt-get install -y \
     ros-humble-fastrtps \
     ros-humble-rosbridge-suite \
     ros-humble-launch-xml \
-    ros-humble-cv-bridge
+    ros-humble-cv-bridge \
+    ros-humble-rtabmap-ros
 
 # 1c. Install Python packages and pip
 RUN apt-get install -y \
