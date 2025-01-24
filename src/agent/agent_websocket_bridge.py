@@ -7,11 +7,10 @@ import queue
 import threading
 import time
 
-import cv2
 import numpy as np
 import websockets
 
-from src.agent.types import ImageMsg, VelocityCmd, CommentMsg
+from src.agent.types import CameraInfoMsg, ImageMsg, VelocityCmd
 
 
 #
@@ -63,9 +62,8 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
     """
     Connect to rosbridge at rosbridge_uri (e.g., ws://localhost:9090), then:
       - Subscribe to /cmd_vel (geometry_msgs/msg/Twist)
-      - Subscribe to /comment_bell (std_msgs/msg/String)
       - Advertise /camera/color/image_raw (sensor_msgs/msg/Image)
-      - Periodically publish images from `shared_queues.sim_to_agent`.
+      - Periodically publish images and camera info from `shared_queues.sim_to_agent`.
       - Forward any received velocity commands into `shared_queues.agent_to_sim`.
     """
     print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
@@ -80,8 +78,21 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
             advertise_color_image = rosbridge_advertise(
                 "/camera/color/image_raw", "sensor_msgs/msg/Image"
             )
+
             await ws.send(json.dumps(advertise_color_image))
             print("[ROSBridge] Advertised /camera/color/image_raw")
+
+            advertise_depth_image = rosbridge_advertise(
+                "/camera/depth/image_raw", "sensor_msgs/msg/Image"
+            )
+            await ws.send(json.dumps(advertise_depth_image))
+            print("[ROSBridge] Advertised /camera/depth/image_raw")
+
+            advertise_camera_info = rosbridge_advertise(
+                "/camera/color/camera_info", "sensor_msgs/msg/CameraInfo"
+            )
+            await ws.send(json.dumps(advertise_camera_info))
+            print("[ROSBridge] Advertised /camera/color/camera_info")
 
             #
             # 2. Subscribe to /cmd_vel (geometry_msgs/msg/Twist)
@@ -89,13 +100,6 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
             sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
             await ws.send(json.dumps(sub_cmd_vel))
             print("[ROSBridge] Subscribed to /cmd_vel")
-
-            #
-            # 3. Subscribe to /comment_bell (std_msgs/msg/String) if desired
-            #
-            sub_comment = rosbridge_subscribe("/comment_bell", "std_msgs/msg/String")
-            await ws.send(json.dumps(sub_comment))
-            print("[ROSBridge] Subscribed to /comment_bell")
 
             #
             # Main loop
@@ -106,8 +110,14 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
                     img_msg = shared_queues.sim_to_agent.get_nowait()
                     if isinstance(img_msg, ImageMsg):
                         await publish_rgb_image(ws, img_msg.rgb_frame)
-                        # Potentially also publish depth image if desired
-                        # e.g., await publish_depth_image(ws, img_msg.depth_frame)
+                        await publish_depth_image(ws, img_msg.depth_frame)
+                except queue.Empty:
+                    pass
+
+                try:
+                    camera_info_msg = shared_queues.sim_to_agent_info.get_nowait()
+                    if isinstance(camera_info_msg, CameraInfoMsg):
+                        await publish_camera_info(ws, camera_info_msg)
                 except queue.Empty:
                     pass
 
@@ -194,6 +204,77 @@ async def publish_rgb_image(
     await websocket.send(json.dumps(outbound))
     # Debug
     # print(f"[ROSBridge] Published image on {topic}")
+
+
+async def publish_depth_image(
+    websocket, depth_frame: np.ndarray, topic="/camera/depth/image_raw"
+):
+    """
+    depth_frame: a 2D numpy array (H x W) with dtype=np.uint16 or np.float32
+                 representing the depth in mm or meters.
+    """
+    if depth_frame is None:
+        return
+
+    now = time.time()
+    sec = int(now)
+    nsec = int((now - sec) * 1e9)
+
+    # Convert to bytes
+    raw_data = (
+        depth_frame.tobytes()
+    )  # If dtype=np.uint16 => 2 bytes/pixel; if float32 => 4 bytes/pixel
+
+    height, width = depth_frame.shape[:2]
+
+    encoding = "16UC1"  # or "32FC1" if using float32
+    bytes_per_pixel = 2  # or 4 if float32
+
+    msg = {
+        "header": {
+            "stamp": {"sec": sec, "nanosec": nsec},
+            "frame_id": "camera_depth_frame",
+        },
+        "height": height,
+        "width": width,
+        "encoding": encoding,
+        "is_bigendian": 0,
+        "step": width * bytes_per_pixel,
+        "data": base64.b64encode(raw_data).decode("utf-8"),
+    }
+
+    outbound = rosbridge_publish(topic, msg)
+    await websocket.send(json.dumps(outbound))
+
+
+async def publish_camera_info(ws, ci: CameraInfoMsg, topic="/camera/color/camera_info"):
+    """
+    Convert our CameraInfoMsg into sensor_msgs/CameraInfo fields, then publish via rosbridge.
+    """
+    now = time.time()
+    sec = int(now)
+    nsec = int((now - sec) * 1e9)
+
+    # Minimal sensor_msgs/CameraInfo
+    msg = {
+        "header": {
+            "stamp": {"sec": sec, "nanosec": nsec},
+            "frame_id": ci.frame_id,
+        },
+        "height": ci.height,
+        "width": ci.width,
+        "distortion_model": ci.distortion_model,
+        "d": ci.D if ci.D else [0.0, 0.0, 0.0, 0.0, 0.0],
+        "k": [ci.fx, 0.0, ci.cx, 0.0, ci.fy, ci.cy, 0.0, 0.0, 1.0],
+        "r": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "p": [ci.fx, 0.0, ci.cx, 0.0, 0.0, ci.fy, ci.cy, 0.0, 0.0, 0.0, 1.0, 0.0],
+        "binning_x": 1,
+        "binning_y": 1,
+        # ... more fields if you like, but these are the main ones
+    }
+
+    outbound = rosbridge_publish(topic, msg)
+    await ws.send(json.dumps(outbound))
 
 
 #
