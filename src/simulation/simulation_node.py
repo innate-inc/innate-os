@@ -4,7 +4,7 @@ import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
 
-from src.agent.types import ImageMsg
+from src.agent.types import ImageMsg, CameraInfoMsg
 from src.simulation.utils import quaternion_to_matrix, rotate_vector
 from src.shared_queues import SharedQueues
 
@@ -58,6 +58,30 @@ class SimulationNode:
             pos=(0, 0, 0),
             lookat=(1, 0, 0),
             fov=60,
+        )
+
+        # Example intrinsics calculation (approx) for a 640×480 camera + 60° HFOV
+        # fx = fy = width/(2*tan(HFOV/2)) => 640/(2*tan(30°)) => ~554.256
+        # principal point (cx, cy) = (320, 240)
+        # no distortion
+        self.fx = 554.256
+        self.fy = 554.256
+        self.cx = 320.0
+        self.cy = 240.0
+        self.width = 640
+        self.height = 480
+
+        # We'll create a single camera info message for color. Depth might share same intrinsics if aligned.
+        self.color_camera_info = CameraInfoMsg(
+            width=self.width,
+            height=self.height,
+            fx=self.fx,
+            fy=self.fy,
+            cx=self.cx,
+            cy=self.cy,
+            frame_id="camera_color_frame",  # or "camera_link"
+            distortion_model="plumb_bob",
+            D=[0.0, 0.0, 0.0, 0.0, 0.0],
         )
 
         self.scene.build()
@@ -136,6 +160,12 @@ class SimulationNode:
             # Publish observation
             try:
                 self.shared_queues.sim_to_agent.put_nowait(ImageMsg(rgb, depth))
+            except queue.Full:
+                pass
+
+            ### NEW ### Also publish camera info
+            try:
+                self.shared_queues.sim_to_agent.put_nowait(self.color_camera_info)
             except queue.Full:
                 pass
 
