@@ -107,17 +107,12 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
             while not shared_queues.exit_event.is_set():
                 # a) Publish images if available
                 try:
-                    img_msg = shared_queues.sim_to_agent.get_nowait()
-                    if isinstance(img_msg, ImageMsg):
-                        await publish_rgb_image(ws, img_msg.rgb_frame)
-                        await publish_depth_image(ws, img_msg.depth_frame)
-                except queue.Empty:
-                    pass
-
-                try:
-                    camera_info_msg = shared_queues.sim_to_agent_info.get_nowait()
-                    if isinstance(camera_info_msg, CameraInfoMsg):
-                        await publish_camera_info(ws, camera_info_msg)
+                    msg = shared_queues.sim_to_agent.get_nowait()
+                    if isinstance(msg, ImageMsg):
+                        await publish_rgb_image(ws, msg.rgb_frame)
+                        await publish_depth_image(ws, msg.depth_frame)
+                    elif isinstance(msg, CameraInfoMsg):
+                        await publish_camera_info(ws, msg)
                 except queue.Empty:
                     pass
 
