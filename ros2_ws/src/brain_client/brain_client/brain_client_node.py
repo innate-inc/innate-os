@@ -13,11 +13,11 @@ import numpy as np
 import websockets
 
 from brain_client.message_types import MessageType, TaskType, VisionAgentOutput
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist, Vector3
 
-# If using CV Bridge to convert sensor_msgs/Image -> OpenCV
-from cv_bridge import CvBridge
+# We don't need cv_bridge anymore since we're handling compressed images
+# from cv_bridge import CvBridge
 
 
 class BrainClientNode(Node):
@@ -27,7 +27,7 @@ class BrainClientNode(Node):
         # Declare parameters
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
-        self.declare_parameter("image_topic", "/camera/color/image_raw")
+        self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
 
         # Read parameter values
@@ -44,11 +44,10 @@ class BrainClientNode(Node):
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
 
-        # Subscribe to the image topic
-        self.bridge = CvBridge()
+        # Subscribe to the compressed image topic
         self.last_image = None
         self.image_sub = self.create_subscription(
-            Image, self.image_topic, self.image_callback, 10
+            CompressedImage, self.image_topic, self.image_callback, 10
         )
 
         # Publisher for cmd_vel
@@ -78,17 +77,18 @@ class BrainClientNode(Node):
         if payload.stop_current_task:
             self.get_logger().info("[BrainClient] Stopping current task")
 
-    def image_callback(self, msg: Image):
+    def image_callback(self, msg: CompressedImage):
         """
-        Store the latest image in memory. We only send it to the cloud
+        Store the latest compressed image in memory. We only send it to the cloud
         when the server says "ready_for_image".
         """
-        # Convert ROS Image -> OpenCV
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            # Convert compressed image data to OpenCV format
+            np_arr = np.frombuffer(msg.data, np.uint8)
+            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             self.last_image = cv_image
         except Exception as e:
-            self.get_logger().error(f"Failed to convert image: {e}")
+            self.get_logger().error(f"Failed to decode compressed image: {e}")
 
     def run_async_loop(self):
         """
