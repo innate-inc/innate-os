@@ -5,7 +5,7 @@ import genesis as gs
 import cv2  # for potential image saving/processing
 
 from src.simulation.stl_slicing import slice_stl
-from src.agent.types import ImageMsg, CameraInfoMsg
+from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd
 from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
@@ -70,16 +70,25 @@ class SimulationNode:
         min_percent = 0  # floor level
         max_percent = ((slice_height_max - min_height) / total_height) * 100
 
-        # Export slices within the 0-20cm range
+        # Export slices within the 0-20cm range and use the min value as the occupancy grid
+        occupancy_grid = None
         num_slices = 10  # adjust this for more or fewer slices
         for percent in np.linspace(min_percent, max_percent, num_slices):
-            slice_stl(
+            array_at_height = slice_stl(
                 stl_path="data/replica_scene.stl",
                 height_percent=percent,
                 output_path=f"replica_scene_sliced_{percent:.1f}.png",
+                pixel_size=0.05,
             )
+            if occupancy_grid is None:
+                occupancy_grid = array_at_height
+            else:
+                occupancy_grid = np.minimum(
+                    occupancy_grid, array_at_height, dtype=np.uint8
+                )
 
-        exit()
+        # Export the occupancy grid as a PNG
+        cv2.imwrite("occupancy_grid.png", occupancy_grid)
 
         # Add robot
         self.robot = self.scene.add_entity(
@@ -105,18 +114,13 @@ class SimulationNode:
         self.width = 640
         self.height = 480
 
-        # We'll create a single camera info message for color. Depth might share same intrinsics if aligned.
-        self.color_camera_info = CameraInfoMsg(
-            width=self.width,
-            height=self.height,
-            fx=self.fx,
-            fy=self.fy,
-            cx=self.cx,
-            cy=self.cy,
-            frame_id="camera_color_frame",  # or "camera_link"
-            distortion_model="plumb_bob",
-            D=[0.0, 0.0, 0.0, 0.0, 0.0],
-        )
+        self.map_width = 400
+        self.map_height = 400
+        self.map_resolution = 0.05
+
+        # Also store last time we published map or last step_count
+        self.map_publish_interval = 5  # steps
+        self.last_map_publish_step = 0
 
         self.scene.build()
 
@@ -128,6 +132,8 @@ class SimulationNode:
         # Add robot parameters for differential drive
         self.wheel_radius = 0.033  # meters (from URDF)
         self.wheel_separation = 0.160  # meters (from URDF)
+
+        print("SimulationNode initialized.")
 
     def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
         """Convert linear and angular velocity to left and right wheel velocities."""
@@ -141,103 +147,101 @@ class SimulationNode:
         return left_vel, right_vel
 
     def run(self):
-        """
-        Main simulation loop.
-        Publishes camera data to agent, reads velocity commands from agent.
-        """
-        local_forward = np.array([1.0, 0.0, 0.0])
-        t_prev = time.time()
         step_count = 0
-
-        print("SimulationNode started.")
-
         while not self.shared_queues.exit_event.is_set():
             step_count += 1
 
-            # Update the camera pose to follow the robot's camera link
-            camera_link = self.robot.get_link("camera_link")
-            camera_pos = camera_link.get_pos()
-            camera_quat = camera_link.get_quat()
-
-            look_dir = rotate_vector(local_forward, camera_quat)
-            lookat = camera_pos.cpu().numpy() + look_dir
-            self.robot_camera.set_pose(pos=camera_pos.cpu().numpy(), lookat=lookat)
-
-            # Option A: Hard-coded velocity commands (always forward):
-            self.robot.control_dofs_velocity(
-                [2.0, 2.0], [self.left_idx, self.right_idx]
-            )
-
-            # Option B: Read velocity commands from the agent
-            try:
-                cmd = self.shared_queues.agent_to_sim.get_nowait()
-                # Assuming cmd is (linear_vel, angular_vel)
-                linear_vel, angular_vel = cmd
-                left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
-                    linear_vel, angular_vel
-                )
-                print(
-                    f"Received cmd_vel: linear={linear_vel:.2f} m/s, angular={angular_vel:.2f} rad/s"
-                )
-                print(
-                    f"Wheel velocities: left={left_vel:.2f} rad/s, right={right_vel:.2f} rad/s"
-                )
-                self.robot.control_dofs_velocity(
-                    [left_vel, right_vel], [self.left_idx, self.right_idx]
-                )
-            except queue.Empty:
-                pass
-
-            # Render camera
-            rgb, depth, seg, normal = self.robot_camera.render(depth=True)
-
-            # Publish observation
-            try:
-                self.shared_queues.sim_to_agent.put_nowait(ImageMsg(rgb, depth))
-            except queue.Full:
-                pass
-
-            ### NEW ### Also publish camera info
-            try:
-                self.shared_queues.sim_to_agent.put_nowait(self.color_camera_info)
-            except queue.Full:
-                pass
-
-            # For the web server:
-            try:
-                # Keep only the latest frame in sim_to_web, so empty it first if needed
-                if not self.shared_queues.sim_to_web.empty():
-                    _ = self.shared_queues.sim_to_web.get_nowait()
-                self.shared_queues.sim_to_web.put_nowait(ImageMsg(rgb, None))
-            except queue.Full:
-                pass
-
-            # Step the physics
+            # --- (A) Step the physics
             try:
                 self.scene.step()
             except Exception as e:
-                if "Viewer closed" in str(e):
-                    print("Viewer closed, stopping simulation.")
-                    self.shared_queues.exit_event.set()
-                    break
-                else:
-                    print(f"Error in SimulationNode: {e}")
-                    self.shared_queues.exit_event.set()
-                    break
+                print("Error stepping scene:", e)
+                self.shared_queues.exit_event.set()
+                break
 
-            # Print FPS occasionally
-            t_now = time.time()
-            if step_count % 20 == 0:
-                fps = 1.0 / (t_now - t_prev)
-                print(f"{fps:.2f} FPS")
+            # --- (B) Gather robot pose, velocity
+            pos = self.robot.get_pos().cpu().numpy()  # [px, py, pz]
+            quat = self.robot.get_quat().cpu().numpy()  # [ox, oy, oz, ow]
+            lin_vel = self.robot.get_vel().cpu().numpy()  # [vx, vy, vz]
+            ang_vel = self.robot.get_angular_vel().cpu().numpy()  # [wx, wy, wz]
 
-                # (Optional) Save the RGB and depth images to files
-                # cv2.imwrite(f"rgb_{step_count}.png", rgb)
-                # cv2.imwrite(f"depth_{step_count}.png", depth)
+            # --- (C) Render camera
+            rgb, depth, seg, normal = self.robot_camera.render(depth=True)
 
-            t_prev = t_now
+            # --- (D) Build a single RobotStateMsg that includes
+            #          images + camera info + odometry
+            state_msg = RobotStateMsg(
+                # camera data
+                rgb_frame=rgb,
+                depth_frame=depth,
+                # camera intrinsics
+                width=self.width,
+                height=self.height,
+                fx=self.fx,
+                fy=self.fy,
+                cx=self.cx,
+                cy=self.cy,
+                frame_id="camera_color_frame",
+                distortion_model="plumb_bob",
+                D=[0.0, 0.0, 0.0, 0.0, 0.0],
+                # odometry: pose
+                px=pos[0],
+                py=pos[1],
+                pz=pos[2],
+                ox=quat[0],
+                oy=quat[1],
+                oz=quat[2],
+                ow=quat[3],
+                # odometry: velocity
+                vx=lin_vel[0],
+                vy=lin_vel[1],
+                vz=lin_vel[2],
+                wx=ang_vel[0],
+                wy=ang_vel[1],
+                wz=ang_vel[2],
+            )
 
-        # Cleanup if needed
+            # Publish the unified RobotStateMsg to the bridge
+            try:
+                self.shared_queues.sim_to_agent.put_nowait(state_msg)
+            except queue.Full:
+                pass
+
+            # --- (E) Occasionally publish the map
+            if (step_count - self.last_map_publish_step) >= self.map_publish_interval:
+                # Build OccupancyGridMsg
+                # Suppose self.occupancy_grid is shape=(map_height, map_width), int8
+                og_msg = OccupancyGridMsg(
+                    width=self.map_width,
+                    height=self.map_height,
+                    resolution=self.map_resolution,
+                    origin_x=0.0,
+                    origin_y=0.0,
+                    origin_z=0.0,
+                    origin_yaw=0.0,
+                    data=self.occupancy_grid,  # The np.ndarray
+                    frame_id="map",
+                )
+                try:
+                    self.shared_queues.sim_to_agent.put_nowait(og_msg)
+                except queue.Full:
+                    pass
+                self.last_map_publish_step = step_count
+
+            # --- (F) Optionally handle velocity commands from agent -> sim
+            try:
+                cmd = self.shared_queues.agent_to_sim.get_nowait()
+                if isinstance(cmd, VelocityCmd):
+                    # convert to wheel velocities or whatever
+                    # self.robot.control_dofs_velocity(...)
+                    pass
+            except queue.Empty:
+                pass
+
+            # small sleep or continue
+            # time.sleep(0.01)
+
+        # Cleanup
         if self.enable_vis:
             self.scene.viewer.stop()
         print("SimulationNode stopped.")
