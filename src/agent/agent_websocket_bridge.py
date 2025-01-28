@@ -8,6 +8,7 @@ import threading
 import time
 import traceback
 
+import cv2
 import numpy as np
 import websockets
 
@@ -19,14 +20,10 @@ from src.agent.types import (
 
 
 def np_encoder(obj):
-    """
-    JSON serializer that converts numpy.* types to native Python types.
-    """
+    """JSON serializer that converts numpy.* types to native Python types."""
     if isinstance(obj, np.generic):
-        # convert np.float32, np.int32, etc. to Python float or int
         return obj.item()
     if isinstance(obj, np.ndarray):
-        # convert array to list
         return obj.tolist()
     raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
@@ -35,135 +32,139 @@ def np_encoder(obj):
 # Rosbridge Utility Methods
 #
 def rosbridge_subscribe(topic: str, msg_type: str) -> dict:
-    """
-    Build a JSON message to tell rosbridge: "subscribe to a given topic".
-    Example:
-        {
-          "op": "subscribe",
-          "topic": "/cmd_vel",
-          "type": "geometry_msgs/msg/Twist"
-        }
-    """
     return {"op": "subscribe", "topic": topic, "type": msg_type}
 
 
 def rosbridge_advertise(topic: str, msg_type: str) -> dict:
-    """
-    Build a JSON message to advertise a topic for publishing.
-    Example:
-        {
-          "op": "advertise",
-          "topic": "/camera/color/image_raw",
-          "type": "sensor_msgs/msg/Image"
-        }
-    """
     return {"op": "advertise", "topic": topic, "type": msg_type}
 
 
 def rosbridge_publish(topic: str, msg_dict: dict) -> dict:
-    """
-    Build a JSON message to publish to `topic` with `msg_dict` content.
-    Example:
-        {
-          "op": "publish",
-          "topic": "/camera/color/image_raw",
-          "msg": {...}
-        }
-    """
     return {"op": "publish", "topic": topic, "msg": msg_dict}
 
 
-#
-# Main rosbridge loop
-#
+async def inbound_loop(ws, shared_queues):
+    """
+    Continuously receive inbound messages on the WebSocket (e.g. /cmd_vel)
+    and push them to shared_queues.agent_to_sim.
+    """
+    print("[ROSBridge] inbound_loop started.")
+    while not shared_queues.exit_event.is_set():
+        try:
+            # Wait for incoming message
+            inbound_raw = await asyncio.wait_for(ws.recv(), timeout=0.01)
+        except asyncio.TimeoutError:
+            # No message arrived in that time slice
+            await asyncio.sleep(0.001)
+            continue
+        except websockets.exceptions.ConnectionClosed:
+            print("[ROSBridge] Connection closed in inbound_loop.")
+            break
+
+        print(f"Received inbound message: {inbound_raw}")
+        # parse inbound JSON
+        try:
+            inbound_data = json.loads(inbound_raw)
+        except json.JSONDecodeError:
+            continue
+
+        # If inbound data is a published message, might be /cmd_vel
+        if inbound_data.get("op") == "publish":
+            topic = inbound_data.get("topic", "")
+            msg_data = inbound_data.get("msg", {})
+            if topic == "/cmd_vel":
+                print(f"Received /cmd_vel message: {msg_data}")
+                vel_cmd = parse_twist(msg_data)
+                if vel_cmd:
+                    try:
+                        shared_queues.agent_to_sim.put_nowait(vel_cmd)
+                    except queue.Full:
+                        pass
+
+        await asyncio.sleep(0.0001)
+
+    print("[ROSBridge] inbound_loop stopped.")
+
+
+async def outbound_loop(ws, shared_queues):
+    """
+    Continuously process messages from sim_to_agent and publish them
+    to rosbridge (camera images, odometry, map, etc.).
+    """
+    print("[ROSBridge] outbound_loop started.")
+
+    # First, advertise topics once
+    adv_color = rosbridge_advertise(
+        "/camera/color/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
+    )
+    adv_depth = rosbridge_advertise("/camera/depth/image_raw", "sensor_msgs/msg/Image")
+    adv_cinfo = rosbridge_advertise(
+        "/camera/color/camera_info", "sensor_msgs/msg/CameraInfo"
+    )
+    adv_odom = rosbridge_advertise("/odom", "nav_msgs/msg/Odometry")
+    adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
+
+    await ws.send(json.dumps(adv_color))
+    await ws.send(json.dumps(adv_depth))
+    await ws.send(json.dumps(adv_cinfo))
+    await ws.send(json.dumps(adv_odom))
+    await ws.send(json.dumps(adv_map))
+
+    print(
+        "[ROSBridge] Advertised /camera/color/image_raw/compressed, /camera/depth/image_raw, /camera/color/camera_info, /odom, /map"
+    )
+
+    # Also subscribe to /cmd_vel
+    sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
+    await ws.send(json.dumps(sub_cmd_vel))
+    print("[ROSBridge] Subscribed to /cmd_vel")
+
+    while not shared_queues.exit_event.is_set():
+        # a) Check if there's a message from the sim
+        try:
+            msg = shared_queues.sim_to_agent.get_nowait()
+        except queue.Empty:
+            # no messages to publish right now
+            await asyncio.sleep(0.001)
+            continue
+
+        # We have a message
+        if isinstance(msg, RobotStateMsg):
+            await publish_robot_state(ws, msg)
+        elif isinstance(msg, OccupancyGridMsg):
+            await publish_occupancy_grid(ws, msg)
+        else:
+            # unknown or unhandled
+            pass
+
+        await asyncio.sleep(0.0001)
+
+    print("[ROSBridge] outbound_loop stopped.")
+
+
 async def rosbridge_loop(shared_queues, rosbridge_uri: str):
+    """
+    High-level function that connects to rosbridge and starts
+    two concurrent tasks: inbound_loop & outbound_loop.
+    """
     print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
     try:
         async with websockets.connect(rosbridge_uri) as ws:
             print(f"[ROSBridge] Connected to {rosbridge_uri}")
 
-            # 1) Advertise topics
-            adv_color = rosbridge_advertise(
-                "/camera/color/image_raw", "sensor_msgs/msg/Image"
+            # Run inbound & outbound in parallel
+            tasks = []
+            tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
+            tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
+
+            # Wait for both tasks to complete (they'll stop when exit_event is set or ws closes)
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
             )
-            adv_depth = rosbridge_advertise(
-                "/camera/depth/image_raw", "sensor_msgs/msg/Image"
-            )
-            adv_cinfo = rosbridge_advertise(
-                "/camera/color/camera_info", "sensor_msgs/msg/CameraInfo"
-            )
-            adv_odom = rosbridge_advertise("/odom", "nav_msgs/msg/Odometry")
-            adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
-
-            await ws.send(json.dumps(adv_color))
-            await ws.send(json.dumps(adv_depth))
-            await ws.send(json.dumps(adv_cinfo))
-            await ws.send(json.dumps(adv_odom))
-            await ws.send(json.dumps(adv_map))
-
-            print(
-                "[ROSBridge] Advertised /camera/color/image_raw, /camera/depth/image_raw, /camera/color/camera_info, /odom, /map"
-            )
-
-            # 2) Subscribe to /cmd_vel
-            sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
-            await ws.send(json.dumps(sub_cmd_vel))
-            print("[ROSBridge] Subscribed to /cmd_vel")
-
-            # 3) Main loop: forward sim->agent data, handle inbound
-            while not shared_queues.exit_event.is_set():
-                # a) Check if there's a message from the sim
-                try:
-                    msg = shared_queues.sim_to_agent.get_nowait()
-
-                    if isinstance(msg, RobotStateMsg):
-                        await publish_robot_state(ws, msg)
-
-                    elif isinstance(msg, OccupancyGridMsg):
-                        await publish_occupancy_grid(ws, msg)
-
-                    else:
-                        # Unknown or unhandled message
-                        pass
-
-                except queue.Empty:
-                    pass
-
-                # b) Check inbound from rosbridge (cmd_vel, etc.)
-                try:
-                    inbound_raw = await asyncio.wait_for(ws.recv(), timeout=0.01)
-                except asyncio.TimeoutError:
-                    await asyncio.sleep(0.01)
-                    continue
-                except websockets.exceptions.ConnectionClosed:
-                    print("[ROSBridge] Connection closed.")
-                    break
-
-                # parse inbound JSON
-                try:
-                    inbound_data = json.loads(inbound_raw)
-                except json.JSONDecodeError:
-                    continue
-
-                # If inbound data is a published message, might be /cmd_vel
-                if inbound_data.get("op") == "publish":
-                    topic = inbound_data.get("topic", "")
-                    msg_data = inbound_data.get("msg", {})
-                    if topic == "/cmd_vel":
-                        print(f"Received /cmd_vel message: {msg_data}")
-                        vel_cmd = parse_twist(msg_data)
-                        if vel_cmd:
-                            try:
-                                shared_queues.agent_to_sim.put_nowait(vel_cmd)
-                            except queue.Full:
-                                pass
-
-                # tiny sleep
-                await asyncio.sleep(0.001)
-
+            for task in pending:
+                task.cancel()
     except Exception as e:
         print(f"[ROSBridge] Connection error: {e}")
-        # Print stack trace
         print(f"Stack trace: {traceback.format_exc()}")
 
     print("[ROSBridge] Stopped rosbridge_loop.")
@@ -181,23 +182,30 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
     sec = int(now)
     nsec = int((now - sec) * 1e9)
 
-    # 1) Color image
+    # If you want to keep publishing the occupancy grid, odometry, etc. as usual, no changes needed there.
+
+    # -- 1) COMPRESS COLOR IMAGE --
     if rsm.rgb_frame is not None:
-        color_data = rsm.rgb_frame.tobytes()  # BGR or RGB?
-        color_msg = {
-            "header": {
-                "stamp": {"sec": sec, "nanosec": nsec},
-                "frame_id": rsm.frame_id,
-            },
-            "height": rsm.rgb_frame.shape[0],
-            "width": rsm.rgb_frame.shape[1],
-            "encoding": "bgr8",  # or "rgb8" if your data is in that format
-            "is_bigendian": 0,
-            "step": rsm.rgb_frame.shape[1] * 3,
-            "data": base64.b64encode(color_data).decode("utf-8"),
-        }
-        outbound = rosbridge_publish("/camera/color/image_raw", color_msg)
-        await ws.send(json.dumps(outbound))
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]  # 70% quality
+        ret, encoded_img = cv2.imencode(".jpg", rsm.rgb_frame, encode_params)
+
+        if ret:
+            jpg_bytes = encoded_img.tobytes()
+            base64_jpg = base64.b64encode(jpg_bytes).decode("utf-8")
+
+            # Build a sensor_msgs/CompressedImage message
+            compressed_msg = {
+                "header": {
+                    "stamp": {"sec": sec, "nanosec": nsec},
+                    "frame_id": rsm.frame_id,
+                },
+                "format": "jpeg",  # official field in CompressedImage
+                "data": base64_jpg,  # base64-encoded JPEG data
+            }
+            outbound = rosbridge_publish(
+                "/camera/color/image_raw/compressed", compressed_msg
+            )
+            await ws.send(json.dumps(outbound))
 
     # 2) Depth image
     if rsm.depth_frame is not None:
@@ -245,37 +253,20 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
     odom_msg = {
         "header": {
             "stamp": {"sec": sec, "nanosec": nsec},
-            "frame_id": "odom",  # or "map", depending on your TF tree
+            "frame_id": "odom",
         },
-        "child_frame_id": "base_link",  # typical
+        "child_frame_id": "base_link",
         "pose": {
             "pose": {
-                "position": {
-                    "x": rsm.px,
-                    "y": rsm.py,
-                    "z": rsm.pz,
-                },
-                "orientation": {
-                    "x": rsm.ox,
-                    "y": rsm.oy,
-                    "z": rsm.oz,
-                    "w": rsm.ow,
-                },
+                "position": {"x": rsm.px, "y": rsm.py, "z": rsm.pz},
+                "orientation": {"x": rsm.ox, "y": rsm.oy, "z": rsm.oz, "w": rsm.ow},
             },
             "covariance": [0.0] * 36,
         },
         "twist": {
             "twist": {
-                "linear": {
-                    "x": rsm.vx,
-                    "y": rsm.vy,
-                    "z": rsm.vz,
-                },
-                "angular": {
-                    "x": rsm.wx,
-                    "y": rsm.wy,
-                    "z": rsm.wz,
-                },
+                "linear": {"x": rsm.vx, "y": rsm.vy, "z": rsm.vz},
+                "angular": {"x": rsm.wx, "y": rsm.wy, "z": rsm.wz},
             },
             "covariance": [0.0] * 36,
         },
@@ -292,16 +283,13 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
     sec = int(now)
     nsec = int((now - sec) * 1e9)
 
-    # Flatten data if 2D
     if len(og.data.shape) == 2:
         flat_data = og.data.flatten()
     else:
         flat_data = og.data
 
-    # Convert to Python list for JSON
     grid_list = flat_data.tolist()
 
-    # Convert yaw -> quaternion for origin
     import math
 
     half_yaw = og.origin_yaw * 0.5
@@ -343,13 +331,6 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
 # Helper: parse geometry_msgs/Twist from inbound rosbridge JSON
 #
 def parse_twist(msg: dict) -> VelocityCmd | None:
-    """
-    Example geometry_msgs/Twist:
-    {
-      "linear": {"x": 0.1, "y": 0, "z": 0},
-      "angular": {"x": 0, "y": 0, "z": 0.5}
-    }
-    """
     lin = msg.get("linear", {})
     ang = msg.get("angular", {})
     try:
@@ -360,13 +341,9 @@ def parse_twist(msg: dict) -> VelocityCmd | None:
         return None
 
 
-#
-# Main entry point that spawns the rosbridge loop on a separate thread
-#
 def run_agent_async(shared_queues, rosbridge_uri="ws://localhost:9090"):
     """
     Launch the asynchronous rosbridge_loop in a dedicated thread.
-    This mimics your 'agent_loop_ws' pattern, but for rosbridge.
     """
     loop = asyncio.new_event_loop()
 
