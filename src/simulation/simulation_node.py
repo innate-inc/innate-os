@@ -129,10 +129,10 @@ class SimulationNode:
 
     def _init_map_params(self):
         """Initialize mapping parameters"""
-        self.map_width = 400
-        self.map_height = 400
+        self.map_width = self.occupancy_grid.shape[1]
+        self.map_height = self.occupancy_grid.shape[0]
         self.map_resolution = 0.05
-        self.map_publish_interval = 5
+        self.map_publish_interval = 10
         self.last_map_publish_step = 0
 
     def init_movement(self):
