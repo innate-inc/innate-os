@@ -164,20 +164,25 @@ class SimulationNode:
                 break
 
             # --- (B) Gather robot pose, velocity
-            pos = self.robot.get_pos().cpu().numpy()  # [px, py, pz]
-            quat = self.robot.get_quat().cpu().numpy()  # [ox, oy, oz, ow]
-            lin_vel = self.robot.get_vel().cpu().numpy()  # [vx, vy, vz]
-            ang_vel = self.robot.get_ang().cpu().numpy()  # [wx, wy, wz]
+            pos = self.robot.get_pos().cpu().numpy()
+            quat = self.robot.get_quat().cpu().numpy()
+            lin_vel = self.robot.get_vel().cpu().numpy()
+            ang_vel = self.robot.get_ang().cpu().numpy()
 
-            # --- (C) Render camera
-            rgb, depth, seg, normal = self.robot_camera.render(depth=True)
+            # --- (C) Render camera only every 3rd frame
+            if step_count % 3 == 0:
+                rgb, depth, seg, normal = self.robot_camera.render(depth=True)
+                rgb_to_send = rgb
+                depth_to_send = depth
+            else:
+                rgb_to_send = None
+                depth_to_send = None
 
-            # --- (D) Build a single RobotStateMsg that includes
-            #          images + camera info + odometry
+            # --- (D) Build RobotStateMsg
             state_msg = RobotStateMsg(
                 # camera data
-                rgb_frame=rgb,
-                depth_frame=depth,
+                rgb_frame=rgb_to_send,
+                depth_frame=depth_to_send,
                 # camera intrinsics
                 width=self.width,
                 height=self.height,
