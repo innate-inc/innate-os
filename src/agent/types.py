@@ -1,20 +1,24 @@
+# intypes.py
+
 from typing import NamedTuple
 import numpy as np
 
 
-#
-# Typed “interfaces” for messages we put in or get out of queues
-#
-class ImageMsg(NamedTuple):
-    """Simulation -> Agent: an RGB (and optionally depth) frame."""
+class RobotStateMsg(NamedTuple):
+    """
+    A single 'snapshot' of the robot's current sensor data & odometry.
 
+    - rgb_frame, depth_frame: camera images (numpy arrays)
+    - width, height, fx, fy, cx, cy, etc.: camera intrinsics
+    - px,py,pz + ox,oy,oz,ow: robot pose in the world (position + quaternion)
+    - vx,vy,vz + wx,wy,wz: robot linear and angular velocities
+    """
+
+    # --- camera images ---
     rgb_frame: np.ndarray
     depth_frame: np.ndarray | None
 
-
-class CameraInfoMsg(NamedTuple):
-    """Simulation -> Agent: camera info (intrinsics, distortion params, etc.)"""
-
+    # --- camera intrinsics ---
     width: int
     height: int
     fx: float
@@ -22,11 +26,42 @@ class CameraInfoMsg(NamedTuple):
     cx: float
     cy: float
     frame_id: str = "camera_color_frame"
-    # If you want to store depth intrinsics separately or do a single set,
-    # you can add more fields or define a second message for depth.
-    # Distortion model & coefficients if needed
     distortion_model: str = "plumb_bob"
-    D: list[float] = None  # e.g., [0, 0, 0, 0, 0]
+    D: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # --- odometry: pose in world ---
+    px: float = 0.0
+    py: float = 0.0
+    pz: float = 0.0
+    ox: float = 0.0
+    oy: float = 0.0
+    oz: float = 0.0
+    ow: float = 1.0
+
+    # --- odometry: velocities ---
+    vx: float = 0.0
+    vy: float = 0.0
+    vz: float = 0.0
+    wx: float = 0.0
+    wy: float = 0.0
+    wz: float = 0.0
+
+
+class OccupancyGridMsg(NamedTuple):
+    """
+    A map/occupancy grid, published only every N steps or seconds.
+    Typically: 0=free, 100=occupied, -1=unknown in data.
+    """
+
+    width: int
+    height: int
+    resolution: float  # meters per cell
+    origin_x: float
+    origin_y: float
+    origin_z: float
+    origin_yaw: float
+    data: np.ndarray  # 2D or 1D array of int8 in [-1..100]
+    frame_id: str = "map"
 
 
 class VelocityCmd(NamedTuple):
@@ -34,9 +69,3 @@ class VelocityCmd(NamedTuple):
 
     linear_x: float
     angular_z: float
-
-
-class CommentMsg(NamedTuple):
-    """A textual comment or note from /comment_bell."""
-
-    text: str
