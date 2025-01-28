@@ -13,7 +13,7 @@ class SharedQueues:
     """
 
     def __init__(self):
-        self.sim_to_agent = queue.Queue(maxsize=1)
-        self.agent_to_sim = queue.Queue(maxsize=1)
-        self.sim_to_web = queue.Queue(maxsize=1)  # <--- NEW
+        self.sim_to_agent = queue.Queue(maxsize=10)
+        self.agent_to_sim = queue.Queue(maxsize=10)
+        self.sim_to_web = queue.Queue(maxsize=10)  # <--- NEW
         self.exit_event = threading.Event()
