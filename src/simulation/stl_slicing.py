@@ -1,8 +1,9 @@
 from stl import mesh
 from PIL import Image, ImageDraw
+import numpy as np
 
 
-def slice_stl(stl_path, height_percent, output_path, image_size=(800, 800)):
+def slice_stl(stl_path, height_percent, output_path, pixel_size=0.05):
     """
     Create a 2D PNG slice of an STL file at a specified height.
 
@@ -10,7 +11,10 @@ def slice_stl(stl_path, height_percent, output_path, image_size=(800, 800)):
         stl_path (str): Path to the input STL file
         height_percent (float): Height at which to slice, as percentage (0-100) of model height
         output_path (str): Path for the output PNG file
-        image_size (tuple): Size of the output image in pixels (width, height)
+        pixel_size (float): Size of each pixel in meters
+
+    Returns:
+        numpy.ndarray: The slice image as a numpy array
     """
     # Load the STL file
     model = mesh.Mesh.from_file(stl_path)
@@ -25,6 +29,9 @@ def slice_stl(stl_path, height_percent, output_path, image_size=(800, 800)):
 
     # Calculate slice height
     height = min_z + (max_z - min_z) * (height_percent / 100.0)
+
+    # Define image_size on both axes so that each pixel is 5cm, knowing that max_x and co are in meters
+    image_size = (int((max_x - min_x) / pixel_size), int((max_y - min_y) / pixel_size))
 
     # Create a new image with white background
     img = Image.new("RGB", image_size, "white")
@@ -65,5 +72,8 @@ def slice_stl(stl_path, height_percent, output_path, image_size=(800, 800)):
             draw.line(points, fill="black", width=2)
 
     # Save the image
-    img.save(output_path)
-    print(f"Slice saved to {output_path}")
+    # img.save(output_path)
+    # print(f"Slice saved to {output_path}")
+
+    # Convert to numpy array and return
+    return np.array(img, dtype=np.uint8)
