@@ -4,8 +4,9 @@ import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
 
+from src.simulation.stl_slicing import slice_stl
 from src.agent.types import ImageMsg, CameraInfoMsg
-from src.simulation.utils import quaternion_to_matrix, rotate_vector
+from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
@@ -46,6 +47,39 @@ class SimulationNode:
                 collision=False,
             )
         )
+
+        stl_replica_scene = self.scene.add_entity(
+            gs.morphs.Mesh(file="data/replica_scene.stl")
+        )
+
+        # Get the mesh data to determine room dimensions
+        mesh = gs.Mesh.from_morph_surface(stl_replica_scene.morph)[0]._mesh
+        vertices = np.array(mesh.vertices)
+
+        # Get the height bounds (z-axis after 90-degree rotation)
+        min_height = np.min(vertices[:, 2])
+        max_height = np.max(vertices[:, 2])
+        print(f"Room height bounds: {min_height:.2f}m to {max_height:.2f}m")
+
+        # Define the slice range (0-20cm from floor)
+        slice_height_min = min_height  # floor level
+        slice_height_max = min_height + 0.20  # 20cm above floor
+
+        # Calculate percentage equivalents for the slice_stl function
+        total_height = max_height - min_height
+        min_percent = 0  # floor level
+        max_percent = ((slice_height_max - min_height) / total_height) * 100
+
+        # Export slices within the 0-20cm range
+        num_slices = 10  # adjust this for more or fewer slices
+        for percent in np.linspace(min_percent, max_percent, num_slices):
+            slice_stl(
+                stl_path="data/replica_scene.stl",
+                height_percent=percent,
+                output_path=f"replica_scene_sliced_{percent:.1f}.png",
+            )
+
+        exit()
 
         # Add robot
         self.robot = self.scene.add_entity(

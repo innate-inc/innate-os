@@ -4,3 +4,6 @@ venv/
 data/Replica*
 
 .DS_Store
+
+*.png
+*.stl
