@@ -66,33 +66,25 @@ class SimulationNode:
             )
         )
 
-        stl_replica_scene = self.scene.add_entity(
-            gs.morphs.Mesh(file="data/replica_scene.stl")
-        )
+        # Export as STL
+        file_path = "data/replica_scene.stl"
 
-        self._process_occupancy_grid(stl_replica_scene)
+        self._process_occupancy_grid(file_path)
 
-    def _process_occupancy_grid(self, stl_entity):
+    def _process_occupancy_grid(self, file_path):
         """Process the STL mesh to create occupancy grid"""
         # Get the mesh data
-        mesh = gs.Mesh.from_morph_surface(stl_entity.morph)[0]._mesh
-        vertices = np.array(mesh.vertices)
-
-        # Calculate height bounds and slicing parameters
-        min_height = np.min(vertices[:, 2])
-        max_height = np.max(vertices[:, 2])
-        slice_height_max = min_height + 0.20  # 20cm above floor
-        total_height = max_height - min_height
-        max_percent = ((slice_height_max - min_height) / total_height) * 100
+        slice_height_min = 0
+        slice_height_max = slice_height_min + 0.20  # 20cm above floor
 
         # Generate occupancy grid from slices
         self.occupancy_grid = None
         num_slices = 10
-        for percent in np.linspace(0, max_percent, num_slices):
+        for height in np.linspace(slice_height_min, slice_height_max, num_slices):
             array_at_height = slice_stl(
                 stl_path="data/replica_scene.stl",
-                height_percent=percent,
-                output_path=f"replica_scene_sliced_{percent:.1f}.png",
+                height=height,
+                output_path=f"replica_scene_sliced_{height:.1f}.png",
                 pixel_size=0.05,
             )
             if self.occupancy_grid is None:
@@ -175,7 +167,7 @@ class SimulationNode:
             pos = self.robot.get_pos().cpu().numpy()  # [px, py, pz]
             quat = self.robot.get_quat().cpu().numpy()  # [ox, oy, oz, ow]
             lin_vel = self.robot.get_vel().cpu().numpy()  # [vx, vy, vz]
-            ang_vel = self.robot.get_angular_vel().cpu().numpy()  # [wx, wy, wz]
+            ang_vel = self.robot.get_ang().cpu().numpy()  # [wx, wy, wz]
 
             # --- (C) Render camera
             rgb, depth, seg, normal = self.robot_camera.render(depth=True)
@@ -245,8 +237,17 @@ class SimulationNode:
                 cmd = self.shared_queues.agent_to_sim.get_nowait()
                 if isinstance(cmd, VelocityCmd):
                     # convert to wheel velocities or whatever
-                    # self.robot.control_dofs_velocity(...)
-                    pass
+                    linear_vel = cmd.linear_x
+                    angular_vel = cmd.angular_z
+                    left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
+                        linear_vel, angular_vel
+                    )
+                    print(f"Received velocity command: {cmd}")
+                    print(f"Setting wheel velocities: {left_vel}, {right_vel}")
+                    self.robot.control_dofs_velocity(
+                        [left_vel, right_vel], [self.left_idx, self.right_idx]
+                    )
+
             except queue.Empty:
                 pass
 
