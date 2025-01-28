@@ -224,8 +224,8 @@ class SimulationNode:
                     width=self.map_width,
                     height=self.map_height,
                     resolution=self.map_resolution,
-                    origin_x=0.0,
-                    origin_y=0.0,
+                    origin_x=-self.map_width * self.map_resolution / 2.0,
+                    origin_y=-self.map_height * self.map_resolution / 2.0,
                     origin_z=0.0,
                     origin_yaw=0.0,
                     data=self.occupancy_grid,  # The np.ndarray

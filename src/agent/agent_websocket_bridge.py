@@ -330,12 +330,6 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
         "data": flat_data.tolist(),
     }
 
-    # Print the first 10 values in the data field
-    print(f"First 10 values in the data field: {flat_data[:10]}")
-
-    map_msg_no_data = {k: v for k, v in map_msg.items() if k != "data"}
-    print(f"Publishing OccupancyGridMsg without the data field: {map_msg_no_data}")
-
     outbound = rosbridge_publish("/map", map_msg)
     await ws.send(json.dumps(outbound))
 
