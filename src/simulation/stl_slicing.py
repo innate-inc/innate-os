@@ -3,13 +3,13 @@ from PIL import Image, ImageDraw
 import numpy as np
 
 
-def slice_stl(stl_path, height_percent, output_path, pixel_size=0.05):
+def slice_stl(stl_path, height, output_path, pixel_size=0.05):
     """
     Create a 2D PNG slice of an STL file at a specified height.
 
     Args:
         stl_path (str): Path to the input STL file
-        height_percent (float): Height at which to slice, as percentage (0-100) of model height
+        height (float): Height at which to slice, in meters
         output_path (str): Path for the output PNG file
         pixel_size (float): Size of each pixel in meters
 
@@ -27,8 +27,11 @@ def slice_stl(stl_path, height_percent, output_path, pixel_size=0.05):
     min_y = model.y.min()
     max_y = model.y.max()
 
-    # Calculate slice height
-    height = min_z + (max_z - min_z) * (height_percent / 100.0)
+    # Remove percentage calculation and use height directly
+    if height < min_z or height > max_z:
+        raise ValueError(
+            f"Height {height}m is outside model bounds ({min_z}m to {max_z}m)"
+        )
 
     # Define image_size on both axes so that each pixel is 5cm, knowing that max_x and co are in meters
     image_size = (int((max_x - min_x) / pixel_size), int((max_y - min_y) / pixel_size))
