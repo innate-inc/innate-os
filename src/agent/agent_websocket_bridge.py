@@ -6,6 +6,7 @@ import json
 import queue
 import threading
 import time
+import traceback
 
 import numpy as np
 import websockets
@@ -15,6 +16,19 @@ from src.agent.types import (
     RobotStateMsg,
     VelocityCmd,
 )
+
+
+def np_encoder(obj):
+    """
+    JSON serializer that converts numpy.* types to native Python types.
+    """
+    if isinstance(obj, np.generic):
+        # convert np.float32, np.int32, etc. to Python float or int
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        # convert array to list
+        return obj.tolist()
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
 
 #
@@ -136,6 +150,7 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
                     topic = inbound_data.get("topic", "")
                     msg_data = inbound_data.get("msg", {})
                     if topic == "/cmd_vel":
+                        print(f"Received /cmd_vel message: {msg_data}")
                         vel_cmd = parse_twist(msg_data)
                         if vel_cmd:
                             try:
@@ -148,6 +163,8 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
 
     except Exception as e:
         print(f"[ROSBridge] Connection error: {e}")
+        # Print stack trace
+        print(f"Stack trace: {traceback.format_exc()}")
 
     print("[ROSBridge] Stopped rosbridge_loop.")
 
@@ -264,7 +281,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
         },
     }
     outbound = rosbridge_publish("/odom", odom_msg)
-    await ws.send(json.dumps(outbound))
+    await ws.send(json.dumps(outbound, default=np_encoder))
 
 
 #
