@@ -36,8 +36,8 @@ def slice_stl(stl_path, height, output_path, pixel_size=0.05):
     # Define image_size on both axes so that each pixel is 5cm, knowing that max_x and co are in meters
     image_size = (int((max_x - min_x) / pixel_size), int((max_y - min_y) / pixel_size))
 
-    # Create a new image with white background
-    img = Image.new("RGB", image_size, "white")
+    # Create a new image with black background (instead of white)
+    img = Image.new("RGB", image_size, "black")
     draw = ImageDraw.Draw(img)
 
     # Scale factors to fit the model in the image
@@ -72,7 +72,7 @@ def slice_stl(stl_path, height, output_path, pixel_size=0.05):
 
         # Draw line if we found two intersection points
         if len(points) == 2:
-            draw.line(points, fill="black", width=2)
+            draw.line(points, fill="white", width=2)
 
     # Save the image
     # img.save(output_path)
