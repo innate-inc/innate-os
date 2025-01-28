@@ -15,9 +15,26 @@ class SimulationNode:
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
 
-        # Initialize Genesis, build scene, etc.
+        # Initialize core components
+        self._init_genesis()
+        self._init_scene()
+        self._init_environment()
+        self._init_robot()
+        self._init_camera()
+        self._init_map_params()
+
+        self.scene.build()
+
+        self.init_movement()
+
+        print("SimulationNode initialized.")
+
+    def _init_genesis(self):
+        """Initialize Genesis backend"""
         gs.init(backend=gs.gpu)
 
+    def _init_scene(self):
+        """Initialize the main simulation scene"""
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions(),
             viewer_options=gs.options.ViewerOptions(
@@ -32,11 +49,12 @@ class SimulationNode:
                 gravity=(0.0, 0.0, -10.0),
             ),
         )
-
         # Add ground plane
-        plane = self.scene.add_entity(gs.morphs.Plane())
+        self.scene.add_entity(gs.morphs.Plane())
 
-        # Add environment
+    def _init_environment(self):
+        """Initialize the environment meshes and process occupancy grid"""
+        # Add environment meshes
         replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
                 file="data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
@@ -52,50 +70,56 @@ class SimulationNode:
             gs.morphs.Mesh(file="data/replica_scene.stl")
         )
 
-        # Get the mesh data to determine room dimensions
-        mesh = gs.Mesh.from_morph_surface(stl_replica_scene.morph)[0]._mesh
+        self._process_occupancy_grid(stl_replica_scene)
+
+    def _process_occupancy_grid(self, stl_entity):
+        """Process the STL mesh to create occupancy grid"""
+        # Get the mesh data
+        mesh = gs.Mesh.from_morph_surface(stl_entity.morph)[0]._mesh
         vertices = np.array(mesh.vertices)
 
-        # Get the height bounds (z-axis after 90-degree rotation)
+        # Calculate height bounds and slicing parameters
         min_height = np.min(vertices[:, 2])
         max_height = np.max(vertices[:, 2])
-        print(f"Room height bounds: {min_height:.2f}m to {max_height:.2f}m")
-
-        # Define the slice range (0-20cm from floor)
-        slice_height_min = min_height  # floor level
         slice_height_max = min_height + 0.20  # 20cm above floor
-
-        # Calculate percentage equivalents for the slice_stl function
         total_height = max_height - min_height
-        min_percent = 0  # floor level
         max_percent = ((slice_height_max - min_height) / total_height) * 100
 
-        # Export slices within the 0-20cm range and use the min value as the occupancy grid
-        occupancy_grid = None
-        num_slices = 10  # adjust this for more or fewer slices
-        for percent in np.linspace(min_percent, max_percent, num_slices):
+        # Generate occupancy grid from slices
+        self.occupancy_grid = None
+        num_slices = 10
+        for percent in np.linspace(0, max_percent, num_slices):
             array_at_height = slice_stl(
                 stl_path="data/replica_scene.stl",
                 height_percent=percent,
                 output_path=f"replica_scene_sliced_{percent:.1f}.png",
                 pixel_size=0.05,
             )
-            if occupancy_grid is None:
-                occupancy_grid = array_at_height
+            if self.occupancy_grid is None:
+                self.occupancy_grid = array_at_height
             else:
-                occupancy_grid = np.minimum(
-                    occupancy_grid, array_at_height, dtype=np.uint8
+                self.occupancy_grid = np.minimum(
+                    self.occupancy_grid, array_at_height, dtype=np.uint8
                 )
 
-        # Export the occupancy grid as a PNG
-        cv2.imwrite("occupancy_grid.png", occupancy_grid)
+        cv2.imwrite("occupancy_grid.png", self.occupancy_grid)
 
-        # Add robot
+    def _init_robot(self):
+        """Initialize robot and its parameters"""
         self.robot = self.scene.add_entity(
             gs.morphs.URDF(file="data/urdf/turtlebot3_burger.urdf", pos=(0, 0, 0))
         )
 
-        # Add robot camera
+        # Set up wheel joints
+        self.left_idx = self.robot.get_joint("wheel_left_joint").dof_idx_local
+        self.right_idx = self.robot.get_joint("wheel_right_joint").dof_idx_local
+
+        # Robot parameters
+        self.wheel_radius = 0.033  # meters
+        self.wheel_separation = 0.160  # meters
+
+    def _init_camera(self):
+        """Initialize robot camera and its parameters"""
         self.robot_camera = self.scene.add_camera(
             res=(640, 480),
             pos=(0, 0, 0),
@@ -103,37 +127,25 @@ class SimulationNode:
             fov=60,
         )
 
-        # Example intrinsics calculation (approx) for a 640×480 camera + 60° HFOV
-        # fx = fy = width/(2*tan(HFOV/2)) => 640/(2*tan(30°)) => ~554.256
-        # principal point (cx, cy) = (320, 240)
-        # no distortion
+        # Camera intrinsics
+        self.width = 640
+        self.height = 480
         self.fx = 554.256
         self.fy = 554.256
         self.cx = 320.0
         self.cy = 240.0
-        self.width = 640
-        self.height = 480
 
+    def _init_map_params(self):
+        """Initialize mapping parameters"""
         self.map_width = 400
         self.map_height = 400
         self.map_resolution = 0.05
-
-        # Also store last time we published map or last step_count
-        self.map_publish_interval = 5  # steps
+        self.map_publish_interval = 5
         self.last_map_publish_step = 0
 
-        self.scene.build()
-
-        # Identify joint indices for wheels
-        self.left_idx = self.robot.get_joint("wheel_left_joint").dof_idx_local
-        self.right_idx = self.robot.get_joint("wheel_right_joint").dof_idx_local
+    def init_movement(self):
+        """Initialize robot movement"""
         self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
-
-        # Add robot parameters for differential drive
-        self.wheel_radius = 0.033  # meters (from URDF)
-        self.wheel_separation = 0.160  # meters (from URDF)
-
-        print("SimulationNode initialized.")
 
     def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
         """Convert linear and angular velocity to left and right wheel velocities."""
