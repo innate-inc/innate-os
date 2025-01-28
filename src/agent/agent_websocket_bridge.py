@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import math
 import queue
 import threading
 import time
@@ -255,7 +256,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
             "stamp": {"sec": sec, "nanosec": nsec},
             "frame_id": "odom",
         },
-        "child_frame_id": "base_link",
+        "child_frame_id": "base_footprint",
         "pose": {
             "pose": {
                 "position": {"x": rsm.px, "y": rsm.py, "z": rsm.pz},
@@ -275,23 +276,29 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
     await ws.send(json.dumps(outbound, default=np_encoder))
 
 
-#
-# Publish OccupancyGridMsg => /map (nav_msgs/OccupancyGrid)
-#
 async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
     now = time.time()
     sec = int(now)
     nsec = int((now - sec) * 1e9)
 
-    if len(og.data.shape) == 2:
-        flat_data = og.data.flatten()
+    data_3d = og.data
+
+    # Convert 3D (H,W,3) to grayscale if needed:
+    # but let's assume you've already made it 2D
+    if len(data_3d.shape) == 3:
+        # E.g. average across last dimension:
+        data_3d = np.mean(data_3d, axis=-1).astype(np.uint8)
+
+    # Now 'data_3d' should be shape (H,W).
+    # CLAMP to [-1..100], cast to int8
+    data_clamped = np.clip(data_3d, -1, 100).astype(np.int8)
+
+    if len(data_clamped.shape) == 2:
+        flat_data = data_clamped.flatten()
     else:
-        flat_data = og.data
+        flat_data = data_clamped
 
-    grid_list = flat_data.tolist()
-
-    import math
-
+    # Convert yaw -> quaternion
     half_yaw = og.origin_yaw * 0.5
     qz = math.sin(half_yaw)
     qw = math.cos(half_yaw)
@@ -320,8 +327,14 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
                 },
             },
         },
-        "data": grid_list,
+        "data": flat_data.tolist(),
     }
+
+    # Print the first 10 values in the data field
+    print(f"First 10 values in the data field: {flat_data[:10]}")
+
+    map_msg_no_data = {k: v for k, v in map_msg.items() if k != "data"}
+    print(f"Publishing OccupancyGridMsg without the data field: {map_msg_no_data}")
 
     outbound = rosbridge_publish("/map", map_msg)
     await ws.send(json.dumps(outbound))
