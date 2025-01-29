@@ -7,10 +7,10 @@ import os
 
 def generate_launch_description():
     # Get the package share directory
-    pkg_dir = get_package_share_directory('maurice_bringup')
+    pkg_dir = get_package_share_directory('maurice_control')
     
     # Path to the config file
-    config_file = os.path.join(pkg_dir, 'config', 'robot_config.yaml')
+    config_file = os.path.join(pkg_dir, 'config', 'motion_control.yaml')
     
     # Create the joystick node
     joystick_node = Node(
