@@ -14,6 +14,13 @@ class Bringup(Node):
     def __init__(self):
         super().__init__('bringup')
         
+        # Add debug parameter
+        self.declare_parameter('debug', False)
+        self.debug = self.get_parameter('debug').value
+        
+        if self.debug:
+            self.get_logger().info('Initializing Bringup node in debug mode')
+        
         # Get parameters and initialize managers
         self.params = self._get_parameters()
         
@@ -26,6 +33,9 @@ class Bringup(Node):
 
     def _get_parameters(self):
         """Declare and get all node parameters."""
+        if self.debug:
+            self.get_logger().debug('Getting node parameters')
+        
         # Declare parameters
         self.declare_parameters(
             namespace='',
@@ -48,7 +58,7 @@ class Bringup(Node):
         )
 
         # Return all parameters in a structured dictionary
-        return {
+        params = {
             'uart': {
                 'port': self.get_parameter('uart.port').value,
                 'baud_rate': self.get_parameter('uart.baud_rate').value,
@@ -72,9 +82,16 @@ class Bringup(Node):
                 'odom_frequency': self.get_parameter('ros_topics.odom_frequency').value,
             }
         }
+        
+        if self.debug:
+            self.get_logger().debug(f'Retrieved parameters: {str(params)}')
+        return params
 
     def _setup_services_and_topics(self):
         """Setup all ROS2 services and topics for the node."""
+        if self.debug:
+            self.get_logger().debug('Setting up ROS2 services and topics')
+        
         # Create subscription to cmd_vel topic
         self.cmd_vel_sub = self.create_subscription(
             Twist,
@@ -110,6 +127,9 @@ class Bringup(Node):
             '/battery_state',
             10  # QoS profile depth
         )
+        
+        if self.debug:
+            self.get_logger().debug('Finished setting up ROS2 services and topics')
 
     def _cmd_vel_callback(self, msg: Twist):
         """Handle incoming velocity commands."""
@@ -119,6 +139,9 @@ class Bringup(Node):
         limited_angular = max(min(-msg.angular.z, self.params['motion_control']['max_angular_speed']), 
                              -self.params['motion_control']['max_angular_speed'])
         
+        if self.debug:
+            self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
+        
         # Forward the limited velocities to the UART manager
         self.uart_manager.set_speed_command(
             v=limited_linear,
@@ -127,6 +150,9 @@ class Bringup(Node):
 
     def _handle_light_command(self, request, response):
         """Handle incoming light control requests."""
+        if self.debug:
+            self.get_logger().debug(f'Received light command: r={request.r}, g={request.g}, b={request.b}')
+        
         try:
             # Convert the type enum to light_type string
             light_type = 'ring' if request.type == request.RING else 'all'
@@ -147,6 +173,8 @@ class Bringup(Node):
             response.success = False
             response.message = f"Error executing light command: {str(e)}"
         
+        if self.debug:
+            self.get_logger().debug(f'Light command response: {response.success}, {response.message}')
         return response
 
     def _publish_odometry(self):

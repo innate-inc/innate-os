@@ -15,9 +15,15 @@ class UartManager():
                  data_bits=8,
                  parity='none',
                  stop_bits=1,
-                 timeout=0.1):
+                 timeout=0.1,
+                 debug=False):
         self.node = node
         self.logger = self.node.get_logger()  # Store logger reference
+        self.debug = debug  # Store debug flag
+        
+        # If debug is enabled, set logger level to DEBUG
+        if self.debug:
+            self.logger.set_level(rclpy.logging.LoggingSeverity.DEBUG)
         
         # Add new instance variables
         self.battery_voltage = 0.0
@@ -71,6 +77,8 @@ class UartManager():
         if self.ser.in_waiting:
             try:
                 data = self.ser.readline().decode('utf-8').strip()
+                if self.debug:
+                    self.logger.debug(f'Raw data received: {data}')
                 # Parse the comma-separated values
                 values = data.split(',')
                 if len(values) >= 4:
@@ -111,6 +119,8 @@ class UartManager():
         """Callback for writing data to UART"""
         try:
             command = f"S,{self.cmd_linear_velocity:.3f},{self.cmd_angular_velocity:.3f}\n"
+            if self.debug:
+                self.logger.debug(f'Sending command: {command.strip()}')
             self.ser.write(command.encode('utf-8'))
         except Exception as e:
             self.logger.error(f'Error writing to serial port: {str(e)}')
