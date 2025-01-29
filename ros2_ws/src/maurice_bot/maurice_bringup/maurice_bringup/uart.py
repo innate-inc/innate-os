@@ -121,6 +121,7 @@ class UartManager():
             command = f"S,{self.cmd_linear_velocity:.3f},{self.cmd_angular_velocity:.3f}\n"
             if self.debug:
                 self.logger.debug(f'Sending command: {command.strip()}')
+            self.logger.info(f'Sending command: {command.strip()}')
             self.ser.write(command.encode('utf-8'))
         except Exception as e:
             self.logger.error(f'Error writing to serial port: {str(e)}')
@@ -134,7 +135,7 @@ class UartManager():
         """
         self.cmd_linear_velocity = v
         self.cmd_angular_velocity = omega
-        self.logger.debug(f'Set speed command: v={v} m/s, omega={omega} rad/s')
+        self.logger.info(f'Set speed command: v={v} m/s, omega={omega} rad/s')
 
     def set_light_command(
         self,
