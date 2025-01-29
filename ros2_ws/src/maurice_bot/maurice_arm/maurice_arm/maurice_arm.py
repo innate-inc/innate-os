@@ -26,6 +26,10 @@ class MauriceArmNode(Node):
         servo_ids = self.get_parameter('servo_ids').value
         control_frequency = self.get_parameter('control_frequency').value
         
+        # Store joint limits as class attributes
+        self.joint_limits_lower = self.get_parameter('joint_limits_lower').value
+        self.joint_limits_upper = self.get_parameter('joint_limits_upper').value
+
         # Initialize Dynamixel interface
         dynamixel = Dynamixel.Config(
             baudrate=baud_rate,
@@ -56,8 +60,11 @@ class MauriceArmNode(Node):
         self.joint_state_msg = JointState()
         self.joint_state_msg.name = [f'joint_{i}' for i in range(1, 7)]  # 6 joints
 
+        # Initialize latest command
+        self.latest_command = None
+
     def timer_callback(self):
-        """Publish current joint states"""
+        """Publish current joint states and write latest command if available"""
         try:
             # Read current positions and velocities
             positions = self.robot.read_position()
@@ -73,18 +80,26 @@ class MauriceArmNode(Node):
             
             # Publish
             self.state_pub.publish(self.joint_state_msg)
+
+            # Write latest command if available
+            if self.latest_command is not None:
+                self.robot.write_position(self.latest_command)
+                self.latest_command = None
             
         except Exception as e:
             self.get_logger().error(f'Error in timer callback: {str(e)}')
 
     def command_callback(self, msg: Float64MultiArray):
-        """Handle incoming position commands"""
+        """Store incoming position commands after checking joint limits"""
         try:
+            # Check if command is within joint limits
+            for i, pos in enumerate(msg.data):
+                if pos < self.joint_limits_lower[i] or pos > self.joint_limits_upper[i]:
+                    self.get_logger().warn(f'Joint {i+1} command {pos:.3f} exceeds limits [{self.joint_limits_lower[i]:.3f}, {self.joint_limits_upper[i]:.3f}]')
+                    return  # Exit without updating latest_command if any joint exceeds limits
+
             # Convert positions from radians to Dynamixel units and cast to integers
-            positions = [int((pos * 4096/(2*np.pi)) + 2048) for pos in msg.data]
-            
-            # Send positions to the robot
-            self.robot.write_position(positions)
+            self.latest_command = [int((pos * 4096/(2*np.pi)) + 2048) for pos in msg.data]
                 
         except Exception as e:
             self.get_logger().error(f'Error in command callback: {str(e)}')
