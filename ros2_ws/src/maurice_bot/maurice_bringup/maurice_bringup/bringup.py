@@ -139,7 +139,7 @@ class Bringup(Node):
         
         if self.debug:
             self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
-        
+        self.get_logger().info(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
         # Forward the limited velocities to the UART manager
         self.uart_manager.set_speed_command(
             v=limited_linear,
@@ -224,7 +224,7 @@ class Bringup(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Bringup(debug=True)
+    node = Bringup(debug=False)
     rclpy.spin(node)
     rclpy.shutdown()
 
