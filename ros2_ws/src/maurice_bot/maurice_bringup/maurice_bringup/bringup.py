@@ -11,13 +11,11 @@ from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import BatteryState
 
 class Bringup(Node):
-    def __init__(self):
+    def __init__(self, debug=False):
         super().__init__('bringup')
         
         # Add debug parameter
-        self.declare_parameter('debug', False)
-        self.debug = self.get_parameter('debug').value
-        
+        self.debug = debug
         if self.debug:
             self.get_logger().info('Initializing Bringup node in debug mode')
         
