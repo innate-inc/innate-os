@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from maurice_arm_pkg.dynamixel import Dynamixel
-from maurice_arm_pkg.robot import Robot
+from maurice_arm.dynamixel import Dynamixel
+from maurice_arm.robot import Robot
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 import numpy as np

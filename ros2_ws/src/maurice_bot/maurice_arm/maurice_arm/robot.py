@@ -1,5 +1,5 @@
 import numpy as np
-from dynamixel import Dynamixel, OperatingMode, ReadAttribute
+from maurice_arm.dynamixel import Dynamixel, OperatingMode, ReadAttribute
 import time
 from dynamixel_sdk import (
     GroupSyncRead,
