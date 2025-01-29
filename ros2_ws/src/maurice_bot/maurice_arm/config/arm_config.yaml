@@ -2,8 +2,8 @@ maurice_arm:
   ros__parameters:
     device_name: "/dev/ttyACM0"
     baud_rate: 1000000
-    joint_limits_lower: [-3.14159, -1.57079, -2.35619, -1.57079, -3.14159, 0.0]
-    joint_limits_upper: [3.14159, 1.57079, 2.35619, 1.57079, 3.14159, 0.085]
+    joint_limits_lower: [-3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159]
+    joint_limits_upper: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159]
     servo_ids: [1, 2, 3, 4, 5, 6]
     joint_velocity_limits: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159]  # rad/s
     control_frequency: 100.0

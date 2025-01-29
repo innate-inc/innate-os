@@ -96,7 +96,7 @@ class MauriceArmNode(Node):
 
             # Write latest command if available
             if self.latest_command is not None:
-                self.robot.write_position(self.latest_command)
+                self.robot.set_goal_pos(self.latest_command)
                 self.latest_command = None
             
         except Exception as e:
