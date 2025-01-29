@@ -1,16 +1,16 @@
-# main_server.py
-
 import argparse
 import time
 import threading
-import queue
 import cv2
 import platform
+import os
 
 import genesis as gs
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse, Response
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from src.shared_queues import SharedQueues
 from src.simulation.simulation_node import SimulationNode
@@ -21,26 +21,40 @@ from src.agent.agent_websocket_bridge import run_agent_async
 # FASTAPI APP
 # -------------------------------------------------------------------------
 app = FastAPI()
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or a more restrictive list
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount the React build directory
+frontend_build_path = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+app.mount(
+    "/static",
+    StaticFiles(directory=frontend_build_path),
+    name="static",
+)
+
+# -------------------------------------------------------------------------
+# SHARED QUEUES
+# -------------------------------------------------------------------------
 SHARED_QUEUES: SharedQueues = None  # we'll populate this later
 
 
+# -------------------------------------------------------------------------
+# FASTAPI ROUTES
+# -------------------------------------------------------------------------
 @app.get("/")
-def index():
-    """Simple HTML page showing the MJPEG video feed in an <img> tag."""
-    html_content = """
-    <html>
-      <head>
-        <title>Simulation Viewer</title>
-      </head>
-      <body>
-        <h1>Simulation MJPEG Feed</h1>
-        <img src="/video_feed" style="width:640px; height:auto; border:1px solid #ccc;" />
-        <img src="/video_feed_chase" style="width:640px; height:auto; border:1px solid #ccc;" />
-        <p>Open this page in multiple tabs if you like. Press Ctrl+C in the server console to stop.</p>
-      </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+def serve_react_app():
+    """Serves the React frontend index.html"""
+    index_path = os.path.join(frontend_build_path, "index.html")
+    with open(index_path, "r") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 @app.get("/video_feed")
