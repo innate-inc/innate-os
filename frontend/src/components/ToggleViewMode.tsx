@@ -15,11 +15,11 @@ const ToggleWrapper = styled.div`
   margin-top: 20px;
   display: inline-block;
   position: relative;
-  width: 300px;
+  width: 380px;
   background: #e5e5ea;
+  border: 1px solid #c7c7cc;
   border-radius: 25px;
   overflow: hidden;
-  box-shadow: inset 0 0 1px rgba(0, 0, 0, 0.25);
 `;
 
 const Indicator = styled.div<{ index: number }>`
@@ -31,7 +31,7 @@ const Indicator = styled.div<{ index: number }>`
   transform: translateX(${(props) => props.index * 100}%);
   background: #ffffff;
   border-radius: 25px;
-  box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: transform 0.3s ease;
 `;
 
@@ -47,8 +47,8 @@ const ToggleButton = styled.button<{ active?: boolean }>`
   background: transparent;
   border: none;
   color: ${(props) => (props.active ? "#007aff" : "#8e8e93")};
-  font-size: 14px;
-  padding: 8px 0;
+  font-size: 16px;
+  padding: 6px 0;
   cursor: pointer;
   border-radius: 25px;
 
