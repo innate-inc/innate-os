@@ -139,7 +139,7 @@ class Bringup(Node):
         
         if self.debug:
             self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
-        self.get_logger().info(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
+        #self.get_logger().info(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
         # Forward the limited velocities to the UART manager
         self.uart_manager.set_speed_command(
             v=limited_linear,
@@ -203,7 +203,7 @@ class Bringup(Node):
         # Check battery levels and take appropriate action
         if percentage < self.params['battery']['critical_percentage'] / 100.0:
             self.get_logger().error(f'Battery critically low ({percentage:.1%})! Shutting down...')
-            rclpy.shutdown()
+            #rclpy.shutdown()
         elif percentage < self.params['battery']['warning_percentage'] / 100.0:
             self.get_logger().warn(f'Battery low ({percentage:.1%})! Please charge soon.')
         
@@ -215,7 +215,7 @@ class Bringup(Node):
         msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
         msg.power_supply_health = (
             BatteryState.POWER_SUPPLY_HEALTH_GOOD if percentage > self.params['battery']['critical_percentage'] / 100.0
-            else BatteryState.POWER_SUPPLY_HEALTH_CRITICAL
+            else BatteryState.POWER_SUPPLY_HEALTH_DEAD
         )
         msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LIPO
         msg.cell_voltage = [voltage / self.params['battery']['num_cells']] * self.params['battery']['num_cells']
