@@ -19,7 +19,7 @@ export default function App() {
 
   return (
     <Container className="App">
-      <h1>My Simulation Viewer</h1>
+      <h1>Innate Sim</h1>
 
       {/* Display the main & secondary images */}
       <ImageDisplay viewMode={viewMode} />
