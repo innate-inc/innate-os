@@ -5,6 +5,7 @@ import time
 import threading
 import queue
 import cv2
+import platform
 
 import genesis as gs
 import uvicorn
@@ -109,8 +110,11 @@ def main():
     uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
     uvicorn_thread.start()
 
-    # 5) Launch simulation run() in its own thread
-    gs.tools.run_in_another_thread(fn=sim_node.run, args=())
+    # 5) Launch simulation run() in its own thread (macOS) or directly (other platforms)
+    if platform.system() == "Darwin":  # macOS
+        gs.tools.run_in_another_thread(fn=sim_node.run, args=())
+    else:
+        sim_node.run()  # run directly on non-macOS platforms
 
     # 6) If visualization is requested, do the viewer in the MAIN thread
     #    Because typically rendering loops want to run in main. So we'll block here
