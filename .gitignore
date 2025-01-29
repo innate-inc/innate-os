@@ -1,1 +1,9 @@
 venv/
+*.pyc
+
+data/Replica*
+
+.DS_Store
+
+*.png
+*.stl
