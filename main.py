@@ -1,6 +1,6 @@
 import argparse
 import time
-import threading
+import platform
 
 import genesis as gs
 
@@ -39,7 +39,10 @@ def main():
     )
 
     # Run the simulation node in another thread (Genesis convenience)
-    gs.tools.run_in_another_thread(fn=sim_node.run, args=())
+    if platform.system() == "Darwin":  # macOS
+        gs.tools.run_in_another_thread(fn=sim_node.run, args=())
+    else:
+        sim_node.run()  # run directly on non-macOS platforms
 
     # If visualization is requested, we drive the viewer in the main thread
     if args.vis:
