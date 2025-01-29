@@ -14,7 +14,7 @@ def generate_launch_description():
                     {
                         "websocket_uri": "ws://localhost:8765",  # default
                         "token": "MY_HARDCODED_TOKEN",
-                        "image_topic": "/camera/color/image_raw",  # from your simulation
+                        "image_topic": "/camera/color/image_raw/compressed",  # Updated to compressed
                         "cmd_vel_topic": "/cmd_vel",
                     }
                 ],
