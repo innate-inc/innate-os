@@ -12,12 +12,13 @@ find_package(ament_cmake_python REQUIRED)
 find_package(maurice_msgs REQUIRED)
 
 # Install Python modules
-install(DIRECTORY maurice_control_pkg
-  DESTINATION lib/${PROJECT_NAME}
-  PATTERN "*.py"
-)
+ament_python_install_package(${PROJECT_NAME})
 
-install(FILES __init__.py
+# Install Python executables
+install(PROGRAMS
+  maurice_control/keyboard.py
+  maurice_control/joystick.py
+  maurice_control/leader.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

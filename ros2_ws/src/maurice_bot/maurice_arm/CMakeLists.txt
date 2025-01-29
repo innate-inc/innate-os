@@ -16,7 +16,7 @@ install(DIRECTORY maurice_arm
   PATTERN "*.py"
 )
 
-install(FILES __init__.py
+install(FILES maurice_arm/__init__.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
