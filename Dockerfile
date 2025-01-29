@@ -26,7 +26,10 @@ RUN apt-get install -y \
     ros-humble-fastrtps \
     ros-humble-rosbridge-suite \
     ros-humble-launch-xml \
-    ros-humble-cv-bridge
+    ros-humble-cv-bridge \
+    ros-humble-navigation2 \
+    ros-humble-nav2-bringup
+
 
 # 1c. Install Python packages and pip
 RUN apt-get install -y \
@@ -35,9 +38,7 @@ RUN apt-get install -y \
     python3-serial \
     python3-pygame \
     python3-opencv \
-    python3-websockets \
-    && rm -rf /var/lib/apt/lists/*
-
+    python3-websockets
 
 # 1d. Install updated python packages
 RUN pip install --upgrade \

@@ -9,6 +9,17 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Install Python modules
+ament_python_install_package(${PROJECT_NAME}
+  PACKAGE_DIR maurice_sim_bringup
+)
+
+# Install Python executables
+install(PROGRAMS
+  maurice_sim_bringup/odom_tf_broadcaster.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
