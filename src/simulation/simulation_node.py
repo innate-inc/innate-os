@@ -170,6 +170,12 @@ class SimulationNode:
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
                 rgb_to_send = rgb
                 depth_to_send = depth
+
+                # Also publish RGB frame to web queue
+                try:
+                    self.shared_queues.sim_to_web.put_nowait(rgb)
+                except queue.Full:
+                    pass
             else:
                 rgb_to_send = None
                 depth_to_send = None
