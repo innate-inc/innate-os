@@ -7,16 +7,20 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(rclpy REQUIRED)
 find_package(ament_cmake_python REQUIRED)
+find_package(rclpy REQUIRED)
 
-# Install Python modules
-ament_python_install_package(${PROJECT_NAME})
-
-# Install Python executables
-install(PROGRAMS
+# Install all Python files to the same directory
+install(FILES
+  maurice_arm/__init__.py
   maurice_arm/dynamixel.py
   maurice_arm/robot.py
+  maurice_arm/maurice_arm.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Make maurice_arm.py executable
+install(PROGRAMS
   maurice_arm/maurice_arm.py
   DESTINATION lib/${PROJECT_NAME}
 )

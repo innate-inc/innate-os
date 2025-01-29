@@ -1,5 +1,7 @@
+#!/usr/bin/env python3
+
 import numpy as np
-from maurice_arm.dynamixel import Dynamixel, OperatingMode, ReadAttribute
+from dynamixel import Dynamixel, OperatingMode, ReadAttribute
 import time
 from dynamixel_sdk import (
     GroupSyncRead,
