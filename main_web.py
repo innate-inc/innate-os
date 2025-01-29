@@ -51,11 +51,11 @@ def video_feed():
     )
 
 
-@app.route("/video_feed_chase")
+@app.get("/video_feed_chase")
 def video_feed_chase():
     """Video streaming route for the chase camera."""
     return StreamingResponse(
-        mjpeg_generator("chase"), mimetype="multipart/x-mixed-replace; boundary=frame"
+        mjpeg_generator("chase"), media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
 
@@ -67,10 +67,10 @@ def mjpeg_generator(camera_name="first_person"):
             time.sleep(0.1)
             continue
 
-        frames_dict = SHARED_QUEUES.sim_to_web.get()  # block until frames are available
-        frame = frames_dict.get(camera_name)
+        frame = SHARED_QUEUES.latest_frames.get(camera_name)
 
         if frame is None:
+            time.sleep(0.01)
             continue
 
         success, encoded_image = cv2.imencode(".jpg", frame)
@@ -80,6 +80,18 @@ def mjpeg_generator(camera_name="first_person"):
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + encoded_image.tobytes() + b"\r\n"
         )
+
+
+def frame_collector(shared_queues: SharedQueues):
+    """Continuously read from sim_to_web and store the frames in latest_frames."""
+    while not shared_queues.exit_event.is_set():
+        frames_dict = shared_queues.sim_to_web.get()  # blocks until new frames
+        if frames_dict is None:
+            # In case you ever put a sentinel in the queue
+            break
+        # Overwrite the dictionary with the newly arrived frames
+        for cam_name, frame in frames_dict.items():
+            shared_queues.latest_frames[cam_name] = frame
 
 
 # -------------------------------------------------------------------------
@@ -100,6 +112,12 @@ def main():
     # 1) Create shared queues
     global SHARED_QUEUES
     SHARED_QUEUES = SharedQueues()
+
+    # 1b) Start the background collector
+    collector_thread = threading.Thread(
+        target=frame_collector, args=(SHARED_QUEUES,), daemon=True
+    )
+    collector_thread.start()
 
     # 2) Start the simulation node
     sim_node = SimulationNode(SHARED_QUEUES, enable_vis=args.vis)
