@@ -43,7 +43,7 @@ class LeaderArmNode(Node):
             # Read current positions and velocities
             positions = self.robot.read_position()
             velocities = self.robot.read_velocity()
-            
+            positions=np.array(positions)+np.array([-1024,1024,0,-1024,-1024,0])
             # Convert to radians (positions are in range [0, 4096])
             positions_rad = [(pos - 2048) * (2 * np.pi / 4096) for pos in positions]
             velocities_rad = [vel * (2 * np.pi / 4096) for vel in velocities]
@@ -63,14 +63,6 @@ class LeaderArmNode(Node):
             
         except Exception as e:
             self.get_logger().error(f'Error in timer callback: {str(e)}')
-
-    def command_callback(self, msg):
-        try:
-            # Convert commands from radians to dynamixel units [0, 4096]
-            positions = [(cmd * 4096/(2 * np.pi)) + 2048 for cmd in msg.data]
-            self.robot.set_goal_pos(positions)
-        except Exception as e:
-            self.get_logger().error(f'Error in command callback: {str(e)}')
 
 def main(args=None):
     rclpy.init(args=args)
