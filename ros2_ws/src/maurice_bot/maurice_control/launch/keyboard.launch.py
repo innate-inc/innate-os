@@ -12,7 +12,7 @@ def generate_launch_description():
     
     # Create keyboard controller node
     keyboard_node = Node(
-        package='maurice_bringup',
+        package='maurice_control',
         executable='keyboard.py',
         name='keyboard_controller',
         parameters=[config_file],

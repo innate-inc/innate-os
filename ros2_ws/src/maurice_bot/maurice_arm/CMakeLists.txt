@@ -11,7 +11,7 @@ find_package(rclpy REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 
 # Install Python modules
-install(DIRECTORY maurice_arm_pkg
+install(DIRECTORY maurice_arm
   DESTINATION lib/${PROJECT_NAME}
   PATTERN "*.py"
 )

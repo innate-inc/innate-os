@@ -14,7 +14,7 @@ def generate_launch_description():
     
     # Create the joystick node
     joystick_node = Node(
-        package='maurice_bringup',
+        package='maurice_control',
         executable='joystick.py',
         name='joystick_controller',
         parameters=[config_file],
