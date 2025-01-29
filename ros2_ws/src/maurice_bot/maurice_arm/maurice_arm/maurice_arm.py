@@ -4,10 +4,12 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
-from dynamixel import Dynamixel
-from robot import Robot
 import numpy as np
 import time
+
+# Direct imports since files are in same directory
+from dynamixel import Dynamixel
+from robot import Robot
 
 
 class MauriceArmNode(Node):
@@ -79,6 +81,11 @@ class MauriceArmNode(Node):
             # Convert positions from Dynamixel units to radians
             positions = [(pos - 2048) * (2 * np.pi / 4096) for pos in positions]
             
+            # Convert velocities from Dynamixel units to radians per second
+            # Dynamixel velocity units are in 0.229 rev/min
+            # Convert to rad/s: (0.229 rev/min) * (2π rad/rev) * (1 min/60 sec)
+            velocities = [float(vel) * 2 * np.pi / 4096 for vel in velocities]
+            
             # Update message
             self.joint_state_msg.header.stamp = self.get_clock().now().to_msg()
             self.joint_state_msg.position = positions
@@ -109,3 +116,13 @@ class MauriceArmNode(Node):
                 
         except Exception as e:
             self.get_logger().error(f'Error in command callback: {str(e)}')
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = MauriceArmNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
