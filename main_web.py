@@ -10,7 +10,7 @@ import platform
 import genesis as gs
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, Response
 
 from src.shared_queues import SharedQueues
 from src.simulation.simulation_node import SimulationNode
@@ -35,6 +35,7 @@ def index():
       <body>
         <h1>Simulation MJPEG Feed</h1>
         <img src="/video_feed" style="width:640px; height:auto; border:1px solid #ccc;" />
+        <img src="/video_feed_chase" style="width:640px; height:auto; border:1px solid #ccc;" />
         <p>Open this page in multiple tabs if you like. Press Ctrl+C in the server console to stop.</p>
       </body>
     </html>
@@ -50,14 +51,28 @@ def video_feed():
     )
 
 
-def mjpeg_generator():
+@app.route("/video_feed_chase")
+def video_feed_chase():
+    """Video streaming route for the chase camera."""
+    return StreamingResponse(
+        mjpeg_generator("chase"), mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+def mjpeg_generator(camera_name="first_person"):
     """Continuously yields frames from SHARED_QUEUES.sim_to_web as JPEG."""
     global SHARED_QUEUES
     while True:
         if SHARED_QUEUES is None:
             time.sleep(0.1)
             continue
-        frame = SHARED_QUEUES.sim_to_web.get()  # block until a frame is available
+
+        frames_dict = SHARED_QUEUES.sim_to_web.get()  # block until frames are available
+        frame = frames_dict.get(camera_name)
+
+        if frame is None:
+            continue
+
         success, encoded_image = cv2.imencode(".jpg", frame)
         if not success:
             continue

@@ -107,7 +107,8 @@ class SimulationNode:
         self.wheel_separation = 0.160  # meters
 
     def _init_camera(self):
-        """Initialize robot camera and its parameters"""
+        """Initialize robot camera and chase camera"""
+        # Original robot camera
         self.robot_camera = self.scene.add_camera(
             res=(640, 480),
             pos=(0, 0, 0),
@@ -115,7 +116,15 @@ class SimulationNode:
             fov=60,
         )
 
-        # Camera intrinsics
+        # Add chase camera
+        self.chase_camera = self.scene.add_camera(
+            res=(640, 480),
+            pos=(0, -2.0, 2.0),  # 2m behind, 2m up
+            lookat=(0, 0, 0),  # Will be updated to track robot
+            fov=60,
+        )
+
+        # Camera intrinsics (for the robot camera)
         self.width = 640
         self.height = 480
         self.fx = 554.256
@@ -165,15 +174,43 @@ class SimulationNode:
             lin_vel = self.robot.get_vel().cpu().numpy()
             ang_vel = self.robot.get_ang().cpu().numpy()
 
-            # --- (C) Render camera only every 3rd frame
+            # --- (C) Render cameras only every 3rd frame
             if step_count % 10 == 0:
+                # Get robot position and orientation
+                robot_pos = self.robot.get_pos().cpu().numpy()
+                robot_quat = self.robot.get_quat().cpu().numpy()  # [x, y, z, w]
+
+                # Calculate yaw angle from quaternion (rotation around Z axis)
+                # Convert quaternion to euler angles (we only need yaw)
+                siny_cosp = 2 * (
+                    robot_quat[3] * robot_quat[2] + robot_quat[0] * robot_quat[1]
+                )
+                cosy_cosp = 1 - 2 * (
+                    robot_quat[1] * robot_quat[1] + robot_quat[2] * robot_quat[2]
+                )
+                yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+                # Calculate camera offset position (initially [-2.0, 0.0, 2.0] in robot's frame)
+                # Rotate this offset by the robot's yaw angle
+                offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
+                rotated_offset = rotate_vector(offset, yaw)
+
+                # Update chase camera position to follow robot
+                chase_pos = robot_pos + rotated_offset
+                self.chase_camera.set_pos(chase_pos)
+                self.chase_camera.look_at(robot_pos)  # Look at robot
+
+                # Render both cameras
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
+                chase_rgb, _, _, _ = self.chase_camera.render()
+
                 rgb_to_send = rgb
                 depth_to_send = depth
 
-                # Also publish RGB frame to web queue
+                # Publish both camera views to web queue
                 try:
-                    self.shared_queues.sim_to_web.put_nowait(rgb)
+                    camera_views = {"first_person": rgb, "chase": chase_rgb}
+                    self.shared_queues.sim_to_web.put_nowait(camera_views)
                 except queue.Full:
                     pass
             else:
