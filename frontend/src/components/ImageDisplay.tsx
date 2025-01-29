@@ -2,7 +2,6 @@
  * Defines a component that displays two images,
  * choosing which is the main vs secondary feed based on the viewMode.
  */
-import React from "react";
 import {
   PreviewContainer,
   MainImage,

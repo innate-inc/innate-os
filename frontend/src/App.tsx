@@ -1,7 +1,7 @@
 /**
  * Our main App component. It uses ImageDisplay, ToggleViewMode, and a placeholder Chat component.
  */
-import React, { useState } from "react";
+import { useState } from "react";
 import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
