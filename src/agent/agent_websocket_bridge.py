@@ -62,7 +62,6 @@ async def inbound_loop(ws, shared_queues):
             print("[ROSBridge] Connection closed in inbound_loop.")
             break
 
-        print(f"Received inbound message: {inbound_raw}")
         # parse inbound JSON
         try:
             inbound_data = json.loads(inbound_raw)
@@ -74,7 +73,6 @@ async def inbound_loop(ws, shared_queues):
             topic = inbound_data.get("topic", "")
             msg_data = inbound_data.get("msg", {})
             if topic == "/cmd_vel":
-                print(f"Received /cmd_vel message: {msg_data}")
                 vel_cmd = parse_twist(msg_data)
                 if vel_cmd:
                     try:
@@ -248,7 +246,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
         "binning_y": 1,
     }
     outbound = rosbridge_publish("/camera/color/camera_info", ci_msg)
-    await ws.send(json.dumps(outbound))
+    # await ws.send(json.dumps(outbound)) # Not necessary for now
 
     # 4) Odometry => /odom (nav_msgs/Odometry)
     odom_msg = {

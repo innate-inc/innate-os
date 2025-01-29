@@ -36,7 +36,7 @@ class SimulationNode:
     def _init_scene(self):
         """Initialize the main simulation scene"""
         self.scene = gs.Scene(
-            sim_options=gs.options.SimOptions(),
+            sim_options=gs.options.SimOptions(dt=0.1, substeps=10),
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(3.5, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
@@ -44,10 +44,6 @@ class SimulationNode:
                 res=(1280, 720),
             ),
             show_viewer=self.enable_vis,
-            rigid_options=gs.options.RigidOptions(
-                dt=0.01,
-                gravity=(0.0, 0.0, -10.0),
-            ),
         )
         # Add ground plane
         self.scene.add_entity(gs.morphs.Plane())
@@ -170,7 +166,7 @@ class SimulationNode:
             ang_vel = self.robot.get_ang().cpu().numpy()
 
             # --- (C) Render camera only every 3rd frame
-            if step_count % 3 == 0:
+            if step_count % 10 == 0:
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
                 rgb_to_send = rgb
                 depth_to_send = depth
@@ -247,8 +243,7 @@ class SimulationNode:
                     left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
                         linear_vel, angular_vel
                     )
-                    print(f"Received velocity command: {cmd}")
-                    print(f"Setting wheel velocities: {left_vel}, {right_vel}")
+
                     self.robot.control_dofs_velocity(
                         [left_vel, right_vel], [self.left_idx, self.right_idx]
                     )
