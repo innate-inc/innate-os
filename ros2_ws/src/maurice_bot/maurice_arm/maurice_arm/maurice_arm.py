@@ -7,6 +7,7 @@ from std_msgs.msg import Float64MultiArray
 from dynamixel import Dynamixel
 from robot import Robot
 import numpy as np
+import time
 
 
 class MauriceArmNode(Node):
@@ -38,6 +39,11 @@ class MauriceArmNode(Node):
         
         # Initialize robot interface with servo IDs from parameters
         self.robot = Robot(dynamixel=dynamixel, servo_ids=servo_ids)
+        
+        # Wait 3 seconds then enable torque
+        time.sleep(3.0)
+        self.get_logger().info('Enabling torque on all motors')
+        self.robot._enable_torque()
         
         # Create publishers and subscribers
         self.state_pub = self.create_publisher(

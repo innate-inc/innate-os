@@ -1,6 +1,6 @@
 maurice_arm:
   ros__parameters:
-    device_name: "/dev/arm"
+    device_name: "/dev/ttyACM0"
     baud_rate: 1000000
     joint_limits_lower: [-3.14159, -1.57079, -2.35619, -1.57079, -3.14159, 0.0]
     joint_limits_upper: [3.14159, 1.57079, 2.35619, 1.57079, 3.14159, 0.085]
