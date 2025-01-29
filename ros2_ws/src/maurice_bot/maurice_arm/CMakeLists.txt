@@ -11,12 +11,13 @@ find_package(rclpy REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 
 # Install Python modules
-install(DIRECTORY maurice_arm
-  DESTINATION lib/${PROJECT_NAME}
-  PATTERN "*.py"
-)
+ament_python_install_package(${PROJECT_NAME})
 
-install(FILES maurice_arm/__init__.py
+# Install Python executables
+install(PROGRAMS
+  maurice_arm/dynamixel.py
+  maurice_arm/robot.py
+  maurice_arm/maurice_arm.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
