@@ -7,9 +7,15 @@ import genesis as gs
 def quaternion_to_matrix(q):
     """
     Convert a quaternion to a 3x3 rotation matrix.
-    q is assumed to be a PyTorch CPU tensor or a similar 4-element object: (w, x, y, z).
+    q can be either a PyTorch tensor or numpy array/numeric type: (w, x, y, z).
     """
-    w, x, y, z = q.cpu().numpy()
+    # Handle PyTorch tensor input
+    if hasattr(q, "cpu"):
+        w, x, y, z = q.cpu().numpy()
+    # Handle numpy array or numeric input
+    else:
+        w, x, y, z = q
+
     ww, xx_, yy, zz = w * w, x * x, y * y, z * z
     R = np.array(
         [
