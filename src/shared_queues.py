@@ -18,4 +18,5 @@ class SharedQueues:
         self.sim_to_web = queue.Queue(
             maxsize=10
         )  # Will now contain dicts of named images
+        self.latest_frames = {}
         self.exit_event = threading.Event()

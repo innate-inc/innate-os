@@ -156,18 +156,10 @@ class SimulationNode:
         return left_vel, right_vel
 
     def run(self):
+        local_forward = np.array([1.0, 0.0, 0.0])
         step_count = 0
+
         while not self.shared_queues.exit_event.is_set():
-            step_count += 1
-
-            # --- (A) Step the physics
-            try:
-                self.scene.step()
-            except Exception as e:
-                print("Error stepping scene:", e)
-                self.shared_queues.exit_event.set()
-                break
-
             # --- (B) Gather robot pose, velocity
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
@@ -176,29 +168,25 @@ class SimulationNode:
 
             # --- (C) Render cameras only every 3rd frame
             if step_count % 10 == 0:
+                camera_link = self.robot.get_link("camera_link")
+                camera_pos = camera_link.get_pos()
+                camera_quat = camera_link.get_quat()
+                look_dir = rotate_vector(local_forward, camera_quat)
+                lookat = camera_pos.cpu().numpy() + look_dir
+                self.robot_camera.set_pose(pos=camera_pos.cpu().numpy(), lookat=lookat)
+
                 # Get robot position and orientation
                 robot_pos = self.robot.get_pos().cpu().numpy()
                 robot_quat = self.robot.get_quat().cpu().numpy()  # [x, y, z, w]
 
-                # Calculate yaw angle from quaternion (rotation around Z axis)
-                # Convert quaternion to euler angles (we only need yaw)
-                siny_cosp = 2 * (
-                    robot_quat[3] * robot_quat[2] + robot_quat[0] * robot_quat[1]
-                )
-                cosy_cosp = 1 - 2 * (
-                    robot_quat[1] * robot_quat[1] + robot_quat[2] * robot_quat[2]
-                )
-                yaw = np.arctan2(siny_cosp, cosy_cosp)
-
                 # Calculate camera offset position (initially [-2.0, 0.0, 2.0] in robot's frame)
                 # Rotate this offset by the robot's yaw angle
                 offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
-                rotated_offset = rotate_vector(offset, yaw)
+                rotated_offset = rotate_vector(offset, robot_quat)
 
                 # Update chase camera position to follow robot
                 chase_pos = robot_pos + rotated_offset
-                self.chase_camera.set_pos(chase_pos)
-                self.chase_camera.look_at(robot_pos)  # Look at robot
+                self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
 
                 # Render both cameras
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
@@ -294,8 +282,19 @@ class SimulationNode:
             except queue.Empty:
                 pass
 
-            # small sleep or continue
-            # time.sleep(0.01)
+            # --- (G) Step the physics
+            try:
+                self.scene.step()
+                step_count += 1
+            except Exception as e:
+                if "Viewer closed" in str(e):
+                    print("Viewer closed, stopping simulation.")
+                    self.shared_queues.exit_event.set()
+                    break
+                else:
+                    print(f"Error in SimulationNode: {e}")
+                    self.shared_queues.exit_event.set()
+                    break
 
         # Cleanup
         if self.enable_vis:
