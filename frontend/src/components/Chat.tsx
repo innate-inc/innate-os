@@ -1,7 +1,7 @@
 /**
  * A Chat component replicating the style you requested.
  */
-import React, { useState } from "react";
+import { useState } from "react";
 import styled from "styled-components";
 // Example icon from react-icons (feel free to use your own icon or an SVG):
 import { IoSend } from "react-icons/io5";
