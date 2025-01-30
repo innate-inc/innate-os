@@ -1,7 +1,3 @@
-/**
- * Shared styled components for image display
- */
-
 import styled from "styled-components";
 
 export const HEIGHT_IMAGE_DISPLAY = 600;
@@ -15,6 +11,12 @@ export const PreviewContainer = styled.div`
   height: ${HEIGHT_IMAGE_DISPLAY}px;
   margin: 0 auto;
   overflow: hidden;
+
+  /* On small screens, fill the viewport width and auto-adjust height. */
+  @media (max-width: 768px) {
+    width: 100%;
+    height: auto;
+  }
 `;
 
 /**
@@ -56,6 +58,15 @@ export const MainImage = styled.img<{ viewMode: string }>`
         return "";
     }
   }}
+
+  /* On narrower screens, the main image occupies the full width. */
+  @media (max-width: 768px) {
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: auto;
+    position: relative;
+  }
 `;
 
 /**
@@ -80,7 +91,7 @@ export const SecondaryImage = styled.img<{ viewMode: string }>`
           /* small chase camera pinned bottom-right of the large front camera */
           width: 240px;
           height: 180px;
-          left: calc((1280px - 800px) / 2 + 800px - 240px); 
+          left: calc((1280px - 800px) / 2 + 800px - 240px);
           top: calc((${HEIGHT_IMAGE_DISPLAY}px - 600px) / 2 + 600px - 180px);
         `;
       case "chaseFocus":
@@ -95,4 +106,34 @@ export const SecondaryImage = styled.img<{ viewMode: string }>`
         return "";
     }
   }}
+
+  /* On narrower screens:
+     - If the user is in frontFocus or chaseFocus, 
+       keep a pinned corner effect by absolute-positioning 
+       within the container (which is relative).
+     - If sideBySide isn't even shown on mobile, you can skip 
+       or handle it differently. */
+  @media (max-width: 768px) {
+    ${({ viewMode }) => {
+      if (viewMode === "frontFocus" || viewMode === "chaseFocus") {
+        return `
+          width: 30vw;  /* or whatever ratio you prefer */
+          height: auto;
+          right: 8px;
+          bottom: 8px;
+          left: auto;   /* override default left */
+          top: auto;    /* override default top */
+          position: absolute;
+        `;
+      } else {
+        /* If leftover sideBySide or default, then do a stacked approach */
+        return `
+          position: static; 
+          width: 100%;
+          height: auto;
+          margin: 0 auto;
+        `;
+      }
+    }}
+  }
 `;
