@@ -39,8 +39,6 @@ ament_python_install_package(${PROJECT_NAME}
 # Install Python executables
 install(PROGRAMS
   maurice_bringup/bringup.py
-  maurice_bringup/joystick.py
-  maurice_bringup/keyboard.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

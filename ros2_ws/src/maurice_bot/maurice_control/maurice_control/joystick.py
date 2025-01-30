@@ -59,7 +59,7 @@ class JoystickController(Node):
         else:
             self.get_logger().warn('No joystick found!')
     
-    def shape_input(self, x, max_val=1.0, deadzone=0.05):
+    def shape_input(self, x, max_val=1.0, deadzone=0.3):
         # Apply deadzone and basic scaling
         if abs(x) < deadzone:
             return 0.0
