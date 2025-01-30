@@ -1,7 +1,3 @@
-/**
- * Defines a component that displays two images,
- * choosing which is the main vs secondary feed based on the viewMode.
- */
 import {
   PreviewContainer,
   MainImage,
@@ -13,19 +9,19 @@ type ImageDisplayProps = {
 };
 
 export function ImageDisplay({ viewMode }: ImageDisplayProps) {
-  // Decide which feed is main vs secondary.
-  // You can customize the URLs or pass them in via props if needed.
-  let mainSrc = "http://localhost:8000/video_feed";
-  let subSrc = "http://localhost:8000/video_feed_chase";
+  // Grab IP from environment, use a fallback if missing
+  const ip = import.meta.env.VITE_SIM_IP ?? "localhost";
+
+  let mainSrc = `http://${ip}:8000/video_feed`;
+  let subSrc = `http://${ip}:8000/video_feed_chase`;
 
   if (viewMode === "chaseFocus") {
-    mainSrc = "http://localhost:8000/video_feed_chase";
-    subSrc = "http://localhost:8000/video_feed";
+    mainSrc = `http://${ip}:8000/video_feed_chase`;
+    subSrc = `http://${ip}:8000/video_feed`;
   } else if (viewMode === "frontFocus") {
-    mainSrc = "http://localhost:8000/video_feed";
-    subSrc = "http://localhost:8000/video_feed_chase";
+    mainSrc = `http://${ip}:8000/video_feed`;
+    subSrc = `http://${ip}:8000/video_feed_chase`;
   }
-  // sideBySide => The front camera is main, chase is sub
 
   return (
     <PreviewContainer>
