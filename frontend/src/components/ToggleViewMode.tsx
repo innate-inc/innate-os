@@ -3,6 +3,7 @@
  */
 import React from "react";
 import styled from "styled-components";
+import { isMobile } from "react-device-detect";
 
 type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus";
 
@@ -15,7 +16,7 @@ const ToggleWrapper = styled.div`
   margin-top: 20px;
   display: inline-block;
   position: relative;
-  width: 380px;
+  width: calc(min(380px, 100%));
   background: #e5e5ea;
   border: 1px solid #c7c7cc;
   border-radius: 25px;
@@ -27,11 +28,11 @@ const ToggleWrapper = styled.div`
   }
 `;
 
-const Indicator = styled.div<{ index: number }>`
+const Indicator = styled.div<{ index: number; maxIndex: number }>`
   position: absolute;
   top: 0;
   left: 0;
-  width: calc(100% / 3);
+  width: calc(100% / ${({ maxIndex }) => maxIndex});
   height: 100%;
   transform: translateX(${(props) => props.index * 100}%);
   background: #ffffff;
@@ -75,17 +76,30 @@ const ToggleButton = styled.button<{ active?: boolean }>`
 `;
 
 export function ToggleViewMode({ viewMode, setViewMode }: Props) {
-  const modes: ViewMode[] = ["sideBySide", "frontFocus", "chaseFocus"];
+  // Only show all modes on desktop. On mobile, remove "sideBySide".
+  const desktopModes: ViewMode[] = ["sideBySide", "frontFocus", "chaseFocus"];
+  const mobileModes: ViewMode[] = ["frontFocus", "chaseFocus"];
+  const modes: ViewMode[] = isMobile ? mobileModes : desktopModes;
+
+  // Convert the current mode into an index, default to 0 if not found
+  const currentIndex =
+    modes.indexOf(viewMode) >= 0 ? modes.indexOf(viewMode) : 0;
+
+  // Ensure that if a user is on mobile and currently has "sideBySide",
+  // we switch them to a mobile-supported mode (e.g. "frontFocus").
+  if (isMobile && viewMode === "sideBySide") {
+    setViewMode("frontFocus");
+  }
+
   const labels: Record<ViewMode, string> = {
     sideBySide: "Side By Side",
     frontFocus: "Front Focus",
     chaseFocus: "Chase Focus",
   };
-  const currentIndex = modes.indexOf(viewMode);
 
   return (
     <ToggleWrapper>
-      <Indicator index={currentIndex} />
+      <Indicator index={currentIndex} maxIndex={modes.length} />
       <ButtonRow>
         {modes.map((mode) => (
           <ToggleButton

@@ -7,12 +7,17 @@ import styled from "styled-components";
 import { IoSend } from "react-icons/io5";
 
 const ChatContainer = styled.div`
-  /* Fill all available space from the parent ChatSection */
+  /* Default desktop width */
   width: 800px;
   height: 100%;
   display: flex;
   flex-direction: column;
   align-self: center;
+
+  /* On screens below 768px, take the full width */
+  @media (max-width: 768px) {
+    width: 100%;
+  }
 `;
 
 const MessagesWrapper = styled.div`
