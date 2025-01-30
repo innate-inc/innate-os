@@ -20,6 +20,11 @@ const ToggleWrapper = styled.div`
   border: 1px solid #c7c7cc;
   border-radius: 25px;
   overflow: hidden;
+
+  @media (prefers-color-scheme: dark) {
+    background: #333;
+    border-color: #444;
+  }
 `;
 
 const Indicator = styled.div<{ index: number }>`
@@ -33,6 +38,10 @@ const Indicator = styled.div<{ index: number }>`
   border-radius: 25px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: transform 0.3s ease;
+
+  @media (prefers-color-scheme: dark) {
+    background: #666;
+  }
 `;
 
 const ButtonRow = styled.div`
@@ -58,6 +67,10 @@ const ToggleButton = styled.button<{ active?: boolean }>`
 
   &:focus {
     outline: none;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    color: ${(props) => (props.active ? "#4c9aff" : "#bbb")};
   }
 `;
 
