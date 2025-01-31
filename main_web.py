@@ -16,6 +16,9 @@ from src.shared_queues import SharedQueues
 from src.simulation.simulation_node import SimulationNode
 from src.agent.agent_websocket_bridge import run_agent_async
 
+# Import your new router
+from src.routes.chat_api import router as chat_api_router
+
 
 # -------------------------------------------------------------------------
 # FASTAPI APP
@@ -39,6 +42,9 @@ app.mount(
     name="static",
 )
 
+# Mount the new router
+app.include_router(chat_api_router)
+
 # -------------------------------------------------------------------------
 # SHARED QUEUES
 # -------------------------------------------------------------------------
@@ -48,15 +54,6 @@ SHARED_QUEUES: SharedQueues = None  # we'll populate this later
 # -------------------------------------------------------------------------
 # FASTAPI ROUTES
 # -------------------------------------------------------------------------
-@app.get("/")
-def serve_react_app():
-    """Serves the React frontend index.html"""
-    index_path = os.path.join(frontend_build_path, "index.html")
-    with open(index_path, "r") as f:
-        html_content = f.read()
-    return HTMLResponse(content=html_content, status_code=200)
-
-
 @app.get("/video_feed")
 def video_feed():
     """Returns a multipart/x-mixed-replace streaming response of JPEG frames."""

@@ -93,34 +93,70 @@ const SendButton = styled.button`
 
 interface Message {
   text: string;
-  sender: "user" | "robot";
+  sender: "user" | "robot" | string; // or strict union if you prefer
 }
 
 export function Chat() {
-  // Sample messages; you'll determine how to handle them in a real scenario.
-  const [messages, setMessages] = useState<Message[]>([
-    { text: "Hello", sender: "robot" },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    // Automatically scroll to the bottom when messages change
+    // Open a WebSocket connection to /ws/chat (adjust host if needed)
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${protocol}://localhost:8000/ws/chat`;
+    const socket = new WebSocket(wsUrl);
+    wsRef.current = socket;
+
+    socket.onopen = () => {
+      console.log("Connected to chat websocket");
+    };
+
+    socket.onmessage = (event) => {
+      // We expect JSON objects containing {sender, text}
+      try {
+        const data = JSON.parse(event.data);
+        if (data.sender && data.text) {
+          setMessages((prev) => [
+            ...prev,
+            { sender: data.sender, text: data.text },
+          ]);
+        }
+      } catch (err) {
+        console.error("Invalid message received:", event.data);
+      }
+    };
+
+    socket.onclose = () => {
+      console.log("Chat websocket closed");
+      wsRef.current = null;
+    };
+
+    socket.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+
+    return () => {
+      // Cleanup
+      socket.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    // Scroll container to bottom whenever messages change
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const handleSend = () => {
     const cleanDraft = draft.trim();
-    if (cleanDraft) {
-      // For user messages:
-      setMessages((prev) => [...prev, { text: cleanDraft, sender: "user" }]);
-      setDraft("");
+    if (!cleanDraft || !wsRef.current) return;
 
-      // Optionally, simulate a robot response:
-      // setTimeout(() => {
-      //   setMessages((prev) => [...prev, { text: "Hello from the robot!", sender: "robot" }]);
-      // }, 1000);
-    }
+    // Send the draft message to the server via WebSocket
+    wsRef.current.send(cleanDraft);
+
+    // Clear the input
+    setDraft("");
   };
 
   return (
