@@ -119,7 +119,7 @@ def main():
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Use local agent server (ws://localhost:8765).",
+        help="Use local agent server (ws://localhost:9090).",
     )
     args = parser.parse_args()
 
@@ -140,7 +140,7 @@ def main():
     agent_thread = run_agent_async(
         SHARED_QUEUES,
         rosbridge_uri=(
-            "ws://localhost:8765"
+            "ws://localhost:9090"
             if args.local
             else "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
         ),
