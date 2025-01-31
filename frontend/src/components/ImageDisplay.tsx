@@ -10,18 +10,17 @@ type ImageDisplayProps = {
 
 export function ImageDisplay({ viewMode }: ImageDisplayProps) {
   // Grab IP from environment, use a fallback if missing
-  const ip = import.meta.env.VITE_SIM_IP ?? "localhost";
-  const useSSL = import.meta.env.VITE_USE_SSL ?? false;
+  const baseUrl = import.meta.env.VITE_BASE_URL ?? "http://localhost:8000";
 
-  let mainSrc = `http${useSSL ? "s" : ""}://${ip}:8000/video_feed`;
-  let subSrc = `http${useSSL ? "s" : ""}://${ip}:8000/video_feed_chase`;
+  let mainSrc = baseUrl + "/video_feed";
+  let subSrc = baseUrl + "/video_feed_chase";
 
   if (viewMode === "chaseFocus") {
-    mainSrc = `http${useSSL ? "s" : ""}://${ip}:8000/video_feed_chase`;
-    subSrc = `http${useSSL ? "s" : ""}://${ip}:8000/video_feed`;
+    mainSrc = baseUrl + "/video_feed_chase";
+    subSrc = baseUrl + "/video_feed";
   } else if (viewMode === "frontFocus") {
-    mainSrc = `http${useSSL ? "s" : ""}://${ip}:8000/video_feed`;
-    subSrc = `http${useSSL ? "s" : ""}://${ip}:8000/video_feed_chase`;
+    mainSrc = baseUrl + "/video_feed";
+    subSrc = baseUrl + "/video_feed_chase";
   }
 
   return (
