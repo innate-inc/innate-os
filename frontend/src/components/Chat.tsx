@@ -103,7 +103,15 @@ export function Chat() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    // Open a WebSocket connection to /ws/chat (adjust host if needed)
+    // If there's a socket and it's not fully closed, skip making a new one.
+    if (
+      wsRef.current &&
+      wsRef.current.readyState !== WebSocket.CLOSED &&
+      wsRef.current.readyState !== WebSocket.CLOSING
+    ) {
+      return;
+    }
+
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${protocol}://localhost:8000/ws/chat`;
     const socket = new WebSocket(wsUrl);
@@ -114,7 +122,6 @@ export function Chat() {
     };
 
     socket.onmessage = (event) => {
-      // We expect JSON objects containing {sender, text}
       try {
         const data = JSON.parse(event.data);
         if (data.sender && data.text) {
@@ -130,7 +137,6 @@ export function Chat() {
 
     socket.onclose = () => {
       console.log("Chat websocket closed");
-      wsRef.current = null;
     };
 
     socket.onerror = (error) => {
@@ -138,13 +144,11 @@ export function Chat() {
     };
 
     return () => {
-      // Cleanup
       socket.close();
     };
   }, []);
 
   useEffect(() => {
-    // Scroll container to bottom whenever messages change
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -177,7 +181,6 @@ export function Chat() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            // Send on Enter
             if (e.key === "Enter") {
               e.preventDefault();
               handleSend();
