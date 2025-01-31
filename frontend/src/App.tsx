@@ -17,6 +17,7 @@ const Container = styled.div`
   overflow: hidden;
   text-align: center;
   padding: 1rem;
+  position: relative;
 `;
 
 const TopSection = styled.div`
@@ -30,6 +31,18 @@ const ChatSection = styled.div`
   flex-direction: column;
 `;
 
+const VersionBadge = styled.div`
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  margin: 8px;
+  font-size: 12px;
+  opacity: 0.7;
+  @media (prefers-color-scheme: dark) {
+    color: #fff;
+  }
+`;
+
 export default function App() {
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
@@ -38,13 +51,16 @@ export default function App() {
   return (
     <Container className="App">
       <TopSection>
-        <Title>Innate Robot Operator</Title>
+        <Title>Innate Simulator</Title>
         <ImageDisplay viewMode={viewMode} />
         <ToggleViewMode viewMode={viewMode} setViewMode={setViewMode} />
       </TopSection>
       <ChatSection>
         <Chat />
       </ChatSection>
+      <VersionBadge>
+        v{__APP_VERSION__} - c.{__COMMIT_HASH__}
+      </VersionBadge>
     </Container>
   );
 }
