@@ -31,7 +31,7 @@ class SimulationNode:
 
     def _init_genesis(self):
         """Initialize Genesis backend"""
-        gs.init(backend=gs.gpu, show_FPS=False)
+        gs.init(backend=gs.gpu)
 
     def _init_scene(self):
         """Initialize the main simulation scene"""
@@ -43,6 +43,7 @@ class SimulationNode:
                 camera_fov=40,
                 res=(1280, 720),
             ),
+            show_FPS=False,
             show_viewer=self.enable_vis,
         )
         # Add ground plane
