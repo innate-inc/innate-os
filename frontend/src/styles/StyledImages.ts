@@ -1,27 +1,45 @@
 import styled from "styled-components";
 
-export const HEIGHT_IMAGE_DISPLAY = 600;
-
 /**
- * A fixed-size container for our "canvas" (1280×800).
+ * Instead of a hard-coded 600, let's define an aspect ratio for 1280×600.
  */
 export const PreviewContainer = styled.div`
   position: relative;
-  width: 1280px;
-  height: ${HEIGHT_IMAGE_DISPLAY}px;
+  /* Make it full-width but max at 1280px. */
+  width: 60vw;
+  max-width: 1280px;
   margin: 0 auto;
+  /* Use the aspect-ratio property so that the height scales fluidly
+     together with the width. */
+  aspect-ratio: 1280 / 600;
   overflow: hidden;
 
-  /* On small screens, fill the viewport width and auto-adjust height. */
+  /* Or, if you need to support older browsers that don't have aspect-ratio,
+     you could do something like:
+     
+     &::before {
+       content: "";
+       display: block;
+       padding-bottom: calc(600 / 1280 * 100%);
+     }
+  */
+
+  /* If you want to further handle especially tall/small screens, you could
+     clamp the max-height or do a "vh-based" approach:
+     max-height: 80vh;
+     height: 80vh;
+  */
+
   @media (max-width: 768px) {
-    width: 100%;
-    height: auto;
+    /* On small screens, we keep it flexible, or further reduce height if desired. */
+    max-width: 100%;
+    /* You might remove or alter aspect-ratio if smaller screens need a different approach. */
   }
 `;
 
 /**
- * One "Main" <img>, kept in the DOM at all times.
- * We transition all numeric properties for smooth moves.
+ * For demonstration: The MainImage uses percentages so that it
+ * scales automatically with the container's size.
  */
 export const MainImage = styled.img<{ viewMode: string }>`
   position: absolute;
@@ -32,45 +50,59 @@ export const MainImage = styled.img<{ viewMode: string }>`
     switch (viewMode) {
       case "sideBySide":
         return `
-          /* half the container (640×480), centered vertically */
+          /* Fill half the container's width, then center vertically if desired. */
           left: 0;
-          top: calc((${HEIGHT_IMAGE_DISPLAY}px - 480px) / 2);
-          width: 640px;
-          height: ${(HEIGHT_IMAGE_DISPLAY * 480) / 640}px;
+          top: 0;
+          width: 50%;
+          height: 100%;
+          object-fit: cover;
         `;
       case "frontFocus":
         return `
-          /* frontFocus => front camera is large, 800×600, centered */
-          left: calc((1280px - 800px) / 2);
-          top: calc((${HEIGHT_IMAGE_DISPLAY}px - 600px) / 2);
-          width: 800px;
-          height: ${HEIGHT_IMAGE_DISPLAY}px;
+          /* Large front camera: 800×600 ratio roughly equals 4:3, but we can
+             do a percentage-based approach to keep it flexible. For example,
+             62.5% of container width is "800/1280=0.625". */
+          left: 50%;
+          top: 50%;
+          transform: translate(-50%, -50%);
+          width: 62.5%;
+          height: auto; /* or 75% if you want 800/600 ratio, etc. */
+          object-fit: cover;
         `;
       case "chaseFocus":
         return `
-          /* chaseFocus => chase camera is large, 800×600 centered */
-          left: calc((1280px - 800px) / 2);
-          top: calc((${HEIGHT_IMAGE_DISPLAY}px - 600px) / 2);
-          width: 800px;
-          height: ${HEIGHT_IMAGE_DISPLAY}px;
+          /* Similarly, large chase camera. Same approach as frontFocus. */
+          left: 50%;
+          top: 50%;
+          transform: translate(-50%, -50%);
+          width: 62.5%;
+          height: auto;
+          object-fit: cover;
         `;
       default:
-        return "";
+        return `
+          /* fallback if needed */
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        `;
     }
   }}
 
-  /* On narrower screens, the main image occupies the full width. */
   @media (max-width: 768px) {
+    /* On smaller screens, we might just go full width or do more
+       "stacking" at this point. */
+    position: relative;
     left: 0;
     top: 0;
+    transform: none;
     width: 100%;
     height: auto;
-    position: relative;
   }
 `;
 
 /**
- * One "Secondary" <img>, also kept always in the DOM.
+ * Similarly, the SecondaryImage uses percentages and pinned corners if needed.
  */
 export const SecondaryImage = styled.img<{ viewMode: string }>`
   position: absolute;
@@ -81,54 +113,58 @@ export const SecondaryImage = styled.img<{ viewMode: string }>`
     switch (viewMode) {
       case "sideBySide":
         return `
-          left: 640px;
-          top: calc((${HEIGHT_IMAGE_DISPLAY}px - 480px) / 2);
-          width: 640px;
-          height: ${(HEIGHT_IMAGE_DISPLAY * 480) / 640}px;
+          /* Fill the right half of the container. */
+          left: 50%;
+          top: 0;
+          width: 50%;
+          height: 100%;
+          object-fit: cover;
         `;
       case "frontFocus":
         return `
-          /* small chase camera pinned bottom-right of the large front camera */
-          width: 240px;
-          height: 180px;
-          left: calc((1280px - 800px) / 2 + 800px - 240px);
-          top: calc((${HEIGHT_IMAGE_DISPLAY}px - 600px) / 2 + 600px - 180px);
+          /* Smaller chase camera pinned corner. We can pick a percentage
+             of the container's width for consistency. Example: 20%. */
+          width: 20%;
+          height: auto;
+          right: 0; /* or calculate a pinned offset */
+          bottom: 0;
+          object-fit: cover;
         `;
       case "chaseFocus":
         return `
-          /* small front camera pinned bottom-right of the large chase camera */
-          width: 240px;
-          height: 180px;
-          left: calc((1280px - 800px) / 2 + 800px - 240px);
-          top: calc((${HEIGHT_IMAGE_DISPLAY}px - 600px) / 2 + 600px - 180px);
+          /* Smaller front camera pinned corner. */
+          width: 20%;
+          height: auto;
+          right: 0;
+          bottom: 0;
+          object-fit: cover;
         `;
       default:
-        return "";
+        return `
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        `;
     }
   }}
 
-  /* On narrower screens:
-     - If the user is in frontFocus or chaseFocus, 
-       keep a pinned corner effect by absolute-positioning 
-       within the container (which is relative).
-     - If sideBySide isn't even shown on mobile, you can skip 
-       or handle it differently. */
   @media (max-width: 768px) {
     ${({ viewMode }) => {
       if (viewMode === "frontFocus" || viewMode === "chaseFocus") {
         return `
-          width: 30vw;  /* or whatever ratio you prefer */
+          /* Keep pinned corner effect, just scale the width if desired */
+          width: 30vw;
           height: auto;
           right: 8px;
           bottom: 8px;
-          left: auto;   /* override default left */
-          top: auto;    /* override default top */
+          left: auto;
+          top: auto;
           position: absolute;
         `;
       } else {
-        /* If leftover sideBySide or default, then do a stacked approach */
+        /* If sideBySide or default, do a stacked approach */
         return `
-          position: static; 
+          position: relative;
           width: 100%;
           height: auto;
           margin: 0 auto;
