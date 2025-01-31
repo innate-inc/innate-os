@@ -31,7 +31,7 @@ class SimulationNode:
 
     def _init_genesis(self):
         """Initialize Genesis backend"""
-        gs.init(backend=gs.gpu)
+        gs.init(backend=gs.gpu, show_FPS=False)
 
     def _init_scene(self):
         """Initialize the main simulation scene"""
