@@ -112,8 +112,7 @@ export function Chat() {
       return;
     }
 
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsUrl = `${protocol}://localhost:8000/ws/chat`;
+    const wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/ws/chat`;
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
 
