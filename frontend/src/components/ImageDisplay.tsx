@@ -10,7 +10,7 @@ type ImageDisplayProps = {
 
 export function ImageDisplay({ viewMode }: ImageDisplayProps) {
   // Grab IP from environment, use a fallback if missing
-  const baseUrl = import.meta.env.VITE_BASE_URL ?? "http://localhost:8000";
+  const baseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
   let mainSrc = baseUrl + "/video_feed";
   let subSrc = baseUrl + "/video_feed_chase";
