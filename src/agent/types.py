@@ -69,3 +69,11 @@ class VelocityCmd(NamedTuple):
 
     linear_x: float
     angular_z: float
+
+
+class ResetRobotCmd:
+    """
+    A simple command telling the simulator to reset the robot's pose to the origin.
+    """
+
+    pass
