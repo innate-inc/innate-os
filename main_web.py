@@ -7,7 +7,7 @@ import os
 
 import genesis as gs
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -103,6 +103,24 @@ def frame_collector(shared_queues: SharedQueues):
         # Overwrite the dictionary with the newly arrived frames
         for cam_name, frame in frames_dict.items():
             shared_queues.latest_frames[cam_name] = frame
+
+
+@app.post("/reset_robot")
+async def reset_robot(request: Request):
+    """
+    Enqueues a reset command to move the robot back to its origin.
+    """
+    global SHARED_QUEUES
+    if SHARED_QUEUES is not None:
+        from src.agent.types import ResetRobotCmd
+
+        try:
+            SHARED_QUEUES.agent_to_sim.put_nowait(ResetRobotCmd())
+        except:
+            return {"status": "queue_full"}
+        return {"status": "reset_enqueued"}
+    else:
+        return {"status": "no_shared_queues"}
 
 
 # -------------------------------------------------------------------------

@@ -63,6 +63,24 @@ export default function App() {
     }
   }
 
+  async function handleResetRobot() {
+    try {
+      const baseUrl =
+        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+
+      const response = await fetch(`${baseUrl}/reset_robot`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      console.log("Reset response:", data);
+      if (data.status === "reset_enqueued") {
+        alert("Robot reset requested!");
+      }
+    } catch (error) {
+      console.error("Error resetting robot:", error);
+    }
+  }
+
   if (!isAuthenticated && import.meta.env.VITE_REQUIRE_AUTH === "true") {
     return (
       <Container>
@@ -96,6 +114,7 @@ export default function App() {
       <VersionBadge>
         v{__APP_VERSION__} - c.{__COMMIT_HASH__}
       </VersionBadge>
+      <button onClick={handleResetRobot}>Reset Robot</button>
     </Container>
   );
 }
