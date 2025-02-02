@@ -54,9 +54,6 @@ class BrainClientNode(Node):
         # Publisher for cmd_vel
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
-        #
-        # [ADDED] Chat-related publishers/subscribers/services
-        #
         self.chat_history = []  # Locally stored chat history
 
         # Subscribe to /chat_in from ROS local side
@@ -86,24 +83,29 @@ class BrainClientNode(Node):
         """
         Called whenever a local /chat_in message is received.
         We'll append it to local chat history (sender = "user")
-        and optionally forward it to the cloud if desired.
+        and bounce it back on /chat_out as a confirmation.
         """
         chat_entry = {
             "sender": "user",
             "text": msg.data,
             "timestamp": time.time(),
         }
-
         self.chat_history.append(chat_entry)
         self.get_logger().info(f"Received chat_in: {chat_entry}")
 
-        # If you would like to forward to the cloud, you can do so here:
-        # In agent_loop_ws, we maintain a reference to the websocket, so you could
-        # store the message and send it once the loop is ready.
-        # For example:
-        # if self.websocket:
-        #     forward_msg = {"type": "chat_in", "text": msg.data}
-        #     await self.websocket.send(json.dumps(forward_msg))
+        # Test: If the incoming chat is "Hi", reply with "It's me Maurice"
+        if msg.data.strip() == "Hi":
+            out_msg = String()
+            out_msg.data = "It's me Maurice"
+            self.chat_history.append(
+                {
+                    "sender": "robot",
+                    "text": "It's me Maurice",
+                    "timestamp": time.time(),
+                }
+            )
+            self.chat_out_pub.publish(out_msg)
+            self.get_logger().info("Published chat_out: It's me Maurice")
 
     def handle_get_chat_history(self, request, response):
         """
@@ -111,6 +113,7 @@ class BrainClientNode(Node):
         This corresponds to myrobot_msgs/srv/GetChatHistory.
         Adjust as needed to match your actual service definition.
         """
+        self.get_logger().info(f"Received get_chat_history request")
         response.history = json.dumps(self.chat_history)
         return response
 
