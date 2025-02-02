@@ -2,22 +2,26 @@
 
 ## Simulation
 
+The below is for running in dev mode, which is the only one that works right now.
+
+Prod would be if we want to run the simulation in a container completely in an elastically scalable cloud environment. Right now we use a VM so dev is better.
+
 First build the container:
 
 ```bash
-docker compose build
+docker compose -f docker-compose.dev.yml build
 ```
 
 Then run the container:
 
 ```bash
-docker compose up -d
+docker compose -f docker-compose.dev.yml up -d
 ```
 
 And then drop into the container:
 
 ```bash
-docker compose exec maurice zsh -l
+docker compose -f docker-compose.dev.yml exec maurice zsh -l
 ```
 
 Inside the container, first run the discovery service:
@@ -25,6 +29,8 @@ Inside the container, first run the discovery service:
 ```bash
 discovery
 ```
+
+VERIFY THAT THE IP ADDRESS IS CORRECT IN SETUP_DDS.ZSH
 
 Then join the tmux session:
 

@@ -7,6 +7,7 @@ import asyncio
 import threading
 import json
 import base64
+import time  # For chat message timestamps
 
 import cv2
 import numpy as np
@@ -16,8 +17,8 @@ from brain_client.message_types import MessageType, TaskType, VisionAgentOutput
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist, Vector3
 
-# We don't need cv_bridge anymore since we're handling compressed images
-# from cv_bridge import CvBridge
+from std_msgs.msg import String
+from brain_messages.srv import GetChatHistory
 
 
 class BrainClientNode(Node):
@@ -53,10 +54,72 @@ class BrainClientNode(Node):
         # Publisher for cmd_vel
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
+        self.chat_history = []  # Locally stored chat history
+
+        # Subscribe to /chat_in from ROS local side
+        self.chat_in_sub = self.create_subscription(
+            String, "/chat_in", self.chat_in_callback, 10
+        )
+
+        # Publisher for /chat_out
+        self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
+
+        # Create a service for retrieving chat history
+        self.get_chat_history_srv = self.create_service(
+            GetChatHistory, "/get_chat_history", self.handle_get_chat_history
+        )
+        #
+        # [END ADDED chat]
+
         # We'll run the asyncio loop in a separate thread.
         self.exit_event = threading.Event()
         self.ws_thread = threading.Thread(target=self.run_async_loop, daemon=True)
         self.ws_thread.start()
+
+    #
+    # [ADDED] Chat callbacks
+    #
+    def chat_in_callback(self, msg: String):
+        """
+        Called whenever a local /chat_in message is received.
+        We'll append it to local chat history (sender = "user")
+        and bounce it back on /chat_out as a confirmation.
+        """
+        chat_entry = {
+            "sender": "user",
+            "text": msg.data,
+            "timestamp": time.time(),
+        }
+        self.chat_history.append(chat_entry)
+        self.get_logger().info(f"Received chat_in: {chat_entry}")
+
+        # Test: If the incoming chat is "Hi", reply with "It's me Maurice"
+        if msg.data.strip() == "Hi":
+            out_msg = String()
+            out_msg.data = "It's me Maurice"
+            self.chat_history.append(
+                {
+                    "sender": "robot",
+                    "text": "It's me Maurice",
+                    "timestamp": time.time(),
+                }
+            )
+            self.chat_out_pub.publish(out_msg)
+            self.get_logger().info("Published chat_out: It's me Maurice")
+
+    def handle_get_chat_history(self, request, response):
+        """
+        Service callback that returns the entire chat history as a JSON string.
+        This corresponds to myrobot_msgs/srv/GetChatHistory.
+        Adjust as needed to match your actual service definition.
+        """
+        self.get_logger().info(f"Received get_chat_history request")
+        response.history = json.dumps(self.chat_history)
+        return response
+
+    #
+    # [END ADDED chat callbacks]
+    #
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         """
@@ -109,8 +172,12 @@ class BrainClientNode(Node):
         """
         self.get_logger().debug(f"[BrainClient] Connecting to {server_uri} ...")
 
+        # We'll store a reference to the websocket if needed for forwarding chat
+        self.websocket = None
+
         try:
             async with websockets.connect(server_uri) as websocket:
+                self.websocket = websocket
                 self.get_logger().info(f"[BrainClient] Connected to {server_uri}")
 
                 # 1) Send authentication token immediately
@@ -177,6 +244,27 @@ class BrainClientNode(Node):
                                 f"Failed to parse vision_agent_output: {e}"
                             )
 
+                    #
+                    # [ADDED] If the server is sending "chat_out", store it locally
+                    #
+                    elif msg_type == "chat_out":
+                        # "text" might be how your server sends the chat content
+                        text = data.get("text", "")
+                        chat_entry = {
+                            "sender": "cloud",
+                            "text": text,
+                            "timestamp": time.time(),
+                        }
+                        self.chat_history.append(chat_entry)
+                        self.get_logger().info(
+                            f"Received chat_out from cloud: {chat_entry}"
+                        )
+
+                        # Publish to /chat_out locally
+                        out_msg = String()
+                        out_msg.data = text
+                        self.chat_out_pub.publish(out_msg)
+
                     else:
                         self.get_logger().debug(
                             f"[BrainClient] Unknown message type: {msg_type}"
@@ -189,6 +277,7 @@ class BrainClientNode(Node):
             self.get_logger().error(f"[BrainClient] WebSocket connection error: {e}")
 
         self.get_logger().info("[BrainClient] Stopped agent_loop_ws.")
+        self.websocket = None
 
     async def send_image_over_ws(self, websocket, cv_image):
         """
