@@ -9,19 +9,19 @@ Prod would be if we want to run the simulation in a container completely in an e
 First build the container:
 
 ```bash
-docker compose build -f docker-compose.dev.yml
+docker compose -f docker-compose.dev.yml build
 ```
 
 Then run the container:
 
 ```bash
-docker compose up -d -f docker-compose.dev.yml
+docker compose -f docker-compose.dev.yml up -d
 ```
 
 And then drop into the container:
 
 ```bash
-docker compose exec maurice-dev zsh -l
+docker compose -f docker-compose.dev.yml exec maurice zsh -l
 ```
 
 Inside the container, first run the discovery service:
@@ -29,6 +29,8 @@ Inside the container, first run the discovery service:
 ```bash
 discovery
 ```
+
+VERIFY THAT THE IP ADDRESS IS CORRECT IN SETUP_DDS.ZSH
 
 Then join the tmux session:
 
