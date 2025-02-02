@@ -18,6 +18,7 @@ from src.agent.types import (
     RobotStateMsg,
     VelocityCmd,
 )
+from src.shared_queues import SharedQueues, ChatMessage
 
 
 def np_encoder(obj):
@@ -155,6 +156,7 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
             tasks = []
             tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
             tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
+            tasks.append(asyncio.create_task(chat_bridge_loop(shared_queues)))
 
             # Wait for both tasks to complete (they'll stop when exit_event is set or ws closes)
             done, pending = await asyncio.wait(
@@ -359,3 +361,29 @@ def run_agent_async(shared_queues, rosbridge_uri="ws://localhost:9090"):
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return t
+
+
+bridge_chat_history = []
+
+
+async def chat_bridge_loop(shared_queues: SharedQueues):
+    """
+    Continuously checks for new messages from the web (via chat_to_bridge)
+    and appends them to 'bridge_chat_history'. Also pushes them into
+    chat_from_bridge if you want to broadcast them further.
+    """
+    print("[ChatBridge] chat_bridge_loop started.")
+    while not shared_queues.exit_event.is_set():
+        try:
+            new_msg: ChatMessage = shared_queues.chat_to_bridge.get_nowait()
+            # Store these messages in local chat history
+            bridge_chat_history.append(new_msg)
+
+            # Optionally push out to 'chat_from_bridge' for broadcast
+            shared_queues.chat_from_bridge.put_nowait(new_msg)
+        except queue.Empty:
+            pass
+
+        await asyncio.sleep(0.01)
+
+    print("[ChatBridge] chat_bridge_loop stopped.")

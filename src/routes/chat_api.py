@@ -2,12 +2,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import os
 import time
+from src.shared_queues import SharedQueues, ChatMessage
+from src.agent import agent_websocket_bridge  # to access bridge_chat_history
 
-# A simple in-memory store for chat messages (in production, store these in a DB)
-CHAT_HISTORY = [
-    {"sender": "robot", "text": "Hello! How can I assist you today?"},
-    {"sender": "user", "text": "Can you look for the teapot?"},
-]
 
 router = APIRouter()
 
@@ -32,25 +29,30 @@ async def chat_websocket(websocket: WebSocket):
     """
     WebSocket endpoint for exchanging chat messages with the frontend.
     - Receives text messages from the client
-    - Broadcasts them back to all connected clients
-    - Sends the current chat log on new connection
+    - Sends them back immediately
+    - Forwards them to agent_websocket_bridge
     """
     await websocket.accept()
 
-    # 1) Upon connection, send the existing history
-    for msg in CHAT_HISTORY:
-        await websocket.send_json({"sender": msg["sender"], "text": msg["text"]})
+    # Retrieve shared queues from the application's state
+    shared_queues: SharedQueues = websocket.app.state.SHARED_QUEUES
 
-    # 2) Now start listening for newly received messages
+    # 1) Upon connection, send the existing chat history from the bridge side
+    for msg in agent_websocket_bridge.bridge_chat_history:
+        await websocket.send_json({"sender": msg.sender, "text": msg.text})
+
     try:
         while True:
+            # 2) Wait for newly received client messages
             data = await websocket.receive_text()
-            # For demonstration, treat all inbound client messages as from "user"
-            new_entry = {"sender": "user", "text": data, "timestamp": time.time()}
-            CHAT_HISTORY.append(new_entry)
-            # Echo it back to the same client (or broadcast it to many if needed)
-            # Here it's just an echo, but you'd typically track all connected clients
+            new_entry = ChatMessage(sender="user", text=data, timestamp=time.time())
+
+            # Push to the queue so the agent_websocket_bridge can store it
+            shared_queues.chat_to_bridge.put_nowait(new_entry)
+
+            # Echo it back directly
             await websocket.send_json({"sender": "user", "text": data})
+
     except WebSocketDisconnect:
-        # The client has disconnected
+        # The client disconnected
         pass
