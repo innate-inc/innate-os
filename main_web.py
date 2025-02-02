@@ -45,6 +45,10 @@ app.mount(
 # Mount the new router
 app.include_router(chat_api_router)
 
+# Initialize a placeholder on the application's state
+# so that downstream routers can retrieve SHARED_QUEUES.
+app.state.SHARED_QUEUES = None
+
 # -------------------------------------------------------------------------
 # SHARED QUEUES
 # -------------------------------------------------------------------------
@@ -141,6 +145,9 @@ def main():
     # 1) Create shared queues
     global SHARED_QUEUES
     SHARED_QUEUES = SharedQueues()
+
+    # Make them available to the entire app
+    app.state.SHARED_QUEUES = SHARED_QUEUES
 
     # 1b) Start the background collector
     collector_thread = threading.Thread(
