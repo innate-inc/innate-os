@@ -2,7 +2,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import os
 import time
-from src.shared_queues import SharedQueues, ChatMessage
+import asyncio
+from src.shared_queues import SharedQueues, ChatMessage, ChatSignal
 from src.agent import agent_websocket_bridge  # to access bridge_chat_history
 
 
@@ -37,22 +38,36 @@ async def chat_websocket(websocket: WebSocket):
     # Retrieve shared queues from the application's state
     shared_queues: SharedQueues = websocket.app.state.SHARED_QUEUES
 
-    # 1) Upon connection, send the existing chat history from the bridge side
-    for msg in agent_websocket_bridge.bridge_chat_history:
-        await websocket.send_json({"sender": msg.sender, "text": msg.text})
+    # 1) Upon connection, signal to the bridge that we're ready to receive messages history
+    shared_queues.chat_to_bridge.put_nowait(
+        ChatSignal(signal="ready", timestamp=time.time())
+    )
 
-    try:
+    # Task A: handle inbound messages from user -> push to chat_to_bridge
+    async def handle_inbound_user():
         while True:
-            # 2) Wait for newly received client messages
             data = await websocket.receive_text()
             new_entry = ChatMessage(sender="user", text=data, timestamp=time.time())
-
-            # Push to the queue so the agent_websocket_bridge can store it
             shared_queues.chat_to_bridge.put_nowait(new_entry)
 
-            # Echo it back directly
-            await websocket.send_json({"sender": "user", "text": data})
+    # Task B: handle outbound messages from chat_from_bridge -> send to WebSocket
+    async def handle_outbound_agent():
+        while True:
+            msg = await asyncio.get_event_loop().run_in_executor(
+                None, shared_queues.chat_from_bridge.get
+            )
+            await websocket.send_json({"sender": msg.sender, "text": msg.text})
 
+    try:
+        # Run both tasks concurrently until WebSocket disconnect or error
+        tasks = [
+            asyncio.create_task(handle_inbound_user()),
+            asyncio.create_task(handle_outbound_agent()),
+        ]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
     except WebSocketDisconnect:
         # The client disconnected
         pass
+    finally:
+        for t in tasks:
+            t.cancel()
