@@ -11,6 +11,11 @@ class ChatMessage(NamedTuple):
     timestamp: float
 
 
+class ChatSignal(NamedTuple):
+    signal: str
+    timestamp: float
+
+
 class SharedQueues:
     """
     Minimal message broker:

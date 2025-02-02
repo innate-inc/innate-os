@@ -18,7 +18,7 @@ from src.agent.types import (
     RobotStateMsg,
     VelocityCmd,
 )
-from src.shared_queues import SharedQueues, ChatMessage
+from src.shared_queues import SharedQueues, ChatMessage, ChatSignal
 
 
 def np_encoder(obj):
@@ -363,24 +363,26 @@ def run_agent_async(shared_queues, rosbridge_uri="ws://localhost:9090"):
     return t
 
 
-bridge_chat_history = []
+bridge_chat_history = [ChatMessage(sender="agent", text="", timestamp=time.time())]
 
 
 async def chat_bridge_loop(shared_queues: SharedQueues):
-    """
-    Continuously checks for new messages from the web (via chat_to_bridge)
-    and appends them to 'bridge_chat_history'. Also pushes them into
-    chat_from_bridge if you want to broadcast them further.
-    """
     print("[ChatBridge] chat_bridge_loop started.")
     while not shared_queues.exit_event.is_set():
         try:
-            new_msg: ChatMessage = shared_queues.chat_to_bridge.get_nowait()
-            # Store these messages in local chat history
-            bridge_chat_history.append(new_msg)
+            item = shared_queues.chat_to_bridge.get_nowait()
 
-            # Optionally push out to 'chat_from_bridge' for broadcast
-            shared_queues.chat_from_bridge.put_nowait(new_msg)
+            if isinstance(item, ChatSignal) and item.signal == "ready":
+                # Send all previous messages in a batch when we receive the "ready" signal
+                for old_msg in bridge_chat_history:
+                    shared_queues.chat_from_bridge.put_nowait(old_msg)
+
+            elif isinstance(item, ChatMessage):
+                # Store the new message in local history
+                bridge_chat_history.append(item)
+                # Optionally broadcast the new message
+                shared_queues.chat_from_bridge.put_nowait(item)
+
         except queue.Empty:
             pass
 
