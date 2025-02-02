@@ -94,6 +94,7 @@ const SendButton = styled.button`
 interface Message {
   text: string;
   sender: "user" | "robot" | string; // or strict union if you prefer
+  timestamp: number;
 }
 
 export function Chat() {
@@ -124,10 +125,29 @@ export function Chat() {
       try {
         const data = JSON.parse(event.data);
         if (data.sender && data.text) {
-          setMessages((prev) => [
-            ...prev,
-            { sender: data.sender, text: data.text },
-          ]);
+          setMessages((prev) => {
+            // Check if an identical message already exists
+            const duplicateExists = prev.some(
+              (m) =>
+                m.sender === data.sender &&
+                m.text === data.text &&
+                m.timestamp === data.timestamp
+            );
+            if (duplicateExists) {
+              return prev;
+            }
+            // Add the new message and sort by timestamp in ascending order
+            const newMessages = [
+              ...prev,
+              {
+                sender: data.sender,
+                text: data.text,
+                timestamp: data.timestamp,
+              },
+            ];
+            newMessages.sort((a, b) => a.timestamp - b.timestamp);
+            return newMessages;
+          });
         }
       } catch (err) {
         console.error("Invalid message received:", event.data);

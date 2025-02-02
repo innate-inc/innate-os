@@ -56,7 +56,13 @@ async def chat_websocket(websocket: WebSocket):
             msg = await asyncio.get_event_loop().run_in_executor(
                 None, shared_queues.chat_from_bridge.get
             )
-            await websocket.send_json({"sender": msg.sender, "text": msg.text})
+            await websocket.send_json(
+                {
+                    "sender": msg.sender,
+                    "text": msg.text,
+                    "timestamp": msg.timestamp,
+                }
+            )
 
     try:
         # Run both tasks concurrently until WebSocket disconnect or error
