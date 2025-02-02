@@ -2,22 +2,26 @@
 
 ## Simulation
 
+The below is for running in dev mode, which is the only one that works right now.
+
+Prod would be if we want to run the simulation in a container completely in an elastically scalable cloud environment. Right now we use a VM so dev is better.
+
 First build the container:
 
 ```bash
-docker compose build
+docker compose build -f docker-compose.dev.yml
 ```
 
 Then run the container:
 
 ```bash
-docker compose up -d
+docker compose up -d -f docker-compose.dev.yml
 ```
 
 And then drop into the container:
 
 ```bash
-docker compose exec maurice zsh -l
+docker compose exec maurice-dev zsh -l
 ```
 
 Inside the container, first run the discovery service:
