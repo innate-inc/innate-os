@@ -45,9 +45,8 @@ def rosbridge_publish(topic: str, msg_dict: dict) -> dict:
     return {"op": "publish", "topic": topic, "msg": msg_dict}
 
 
-# [ADDED] Advertise a service
-def rosbridge_advertise_service(service: str, srv_type: str) -> dict:
-    return {"op": "advertise_service", "service": service, "type": srv_type}
+def rosbridge_call_service(service: str, srv_type: str) -> dict:
+    return {"op": "call_service", "service": service, "type": srv_type}
 
 
 async def inbound_loop(ws, shared_queues):
@@ -76,7 +75,7 @@ async def inbound_loop(ws, shared_queues):
 
         op_type = inbound_data.get("op", "")
 
-        # [ADDED] Check for inbound 'publish' messages (topics)
+        # Process publish messages
         if op_type == "publish":
             topic = inbound_data.get("topic", "")
             msg_data = inbound_data.get("msg", {})
@@ -103,23 +102,42 @@ async def inbound_loop(ws, shared_queues):
                     # Forward to sim
                     shared_queues.chat_from_bridge.put_nowait(chat_msg)
 
-        # [ADDED] Check for inbound service call
-        elif op_type == "call_service":
+        # Process service responses (responses to service calls that we initiated)
+        elif op_type == "service_response":
             service_name = inbound_data.get("service", "")
             if service_name == "/get_chat_history":
-                # Build a response containing the entire chat history
-                # For demonstration, we'll send back an array of text messages
-                # but you can send back separate "sender, text" if you prefer.
-                history_list = []
-                print(f"[ROSBridge] Received chat history: {history_list}")
+                # Extract the history data from the response
+                history_data_raw = inbound_data.get("values", {}).get("history", "")
+                print(
+                    f"[ROSBridge] Chat history service response received: {history_data_raw}"
+                )
 
-                response = {
-                    "op": "service_response",
-                    "service": "/get_chat_history",
-                    "values": {"history": history_list},
-                    "result": True,
-                }
-                await ws.send(json.dumps(response, default=np_encoder))
+                # If history_data is a JSON string, parse it; otherwise assume it's already a list.
+                if isinstance(history_data_raw, str):
+                    try:
+                        history_data = json.loads(history_data_raw)
+                    except json.JSONDecodeError:
+                        print("[ROSBridge] Failed to parse chat history JSON string.")
+                        history_data = []
+                else:
+                    history_data = history_data_raw
+
+                # Iterate through the history and forward each message to the simulation queue.
+                for chat in history_data:
+                    try:
+                        chat_msg = ChatMessage(
+                            sender=chat.get("sender", ""),
+                            text=chat.get("text", ""),
+                            timestamp=chat.get("timestamp", time.time()),
+                        )
+                        try:
+                            shared_queues.chat_from_bridge.put_nowait(chat_msg)
+                        except queue.Full:
+                            print(
+                                "[ROSBridge] chat_from_bridge queue is full; dropping chat message."
+                            )
+                    except Exception as e:
+                        print(f"[ROSBridge] Error processing chat history entry: {e}")
 
         await asyncio.sleep(0.0001)
 
@@ -162,13 +180,6 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(sub_chat_out))
     print("[ROSBridge] Subscribed to /cmd_vel and /chat_out")
 
-    # [ADDED] Advertise a new service: /get_chat_history
-    srv_chat_history = rosbridge_advertise_service(
-        "/get_chat_history", "brain_messages/srv/GetChatHistory"
-    )
-    await ws.send(json.dumps(srv_chat_history))
-    print("[ROSBridge] Advertised service /get_chat_history")
-
     while not shared_queues.exit_event.is_set():
         # a) Check if there's a message from the sim
         try:
@@ -192,6 +203,21 @@ async def outbound_loop(ws, shared_queues):
                 outbound_text = {"data": msg.text}
                 outbound = rosbridge_publish("/chat_in", outbound_text)
                 await ws.send(json.dumps(outbound))
+                # Also, add the chat message to the simulation queue as confirmation
+                try:
+                    shared_queues.chat_from_bridge.put_nowait(msg)
+                except queue.Full:
+                    pass
+
+            elif isinstance(msg, ChatSignal):
+                print(f"[ROSBridge] Publishing chat signal: {msg.signal}")
+                # Check what the signal is
+                if msg.signal == "ready":
+                    # Use the service to get the chat history
+                    srv_chat_history = rosbridge_call_service(
+                        "/get_chat_history", "brain_messages/srv/GetChatHistory"
+                    )
+                    await ws.send(json.dumps(srv_chat_history))
         except queue.Empty:
             # no messages to publish right now
             pass
