@@ -90,18 +90,16 @@ async def inbound_loop(ws, shared_queues):
                     except queue.Full:
                         pass
 
-            # 2) /chat_in
-            elif topic == "/chat_in":
+            # 2) /chat_out
+            elif topic == "/chat_out":
                 # The standard type is likely std_msgs/msg/String => { "data": "<TEXT>" }
                 text = msg_data.get("data", "")
                 if text:
                     chat_msg = ChatMessage(
-                        sender="robot",  # or "user" depending on your usage
+                        sender="robot",
                         text=text,
                         timestamp=time.time(),
                     )
-                    # Add to local bridging history
-                    bridge_chat_history.append(chat_msg)
                     # Forward to sim
                     shared_queues.chat_from_bridge.put_nowait(chat_msg)
 
@@ -113,14 +111,7 @@ async def inbound_loop(ws, shared_queues):
                 # For demonstration, we'll send back an array of text messages
                 # but you can send back separate "sender, text" if you prefer.
                 history_list = []
-                for cm in bridge_chat_history:
-                    history_list.append(
-                        {
-                            "sender": cm.sender,
-                            "text": cm.text,
-                            "timestamp": cm.timestamp,
-                        }
-                    )
+                print(f"[ROSBridge] Received chat history: {history_list}")
 
                 response = {
                     "op": "service_response",
@@ -153,25 +144,23 @@ async def outbound_loop(ws, shared_queues):
     )
     adv_odom = rosbridge_advertise("/odom", "nav_msgs/msg/Odometry")
     adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
-
-    # [ADDED] Advertise chat_out topic
-    adv_chat_out = rosbridge_advertise("/chat_out", "std_msgs/msg/String")
+    adv_chat_in = rosbridge_advertise("/chat_in", "std_msgs/msg/String")
 
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
     await ws.send(json.dumps(adv_cinfo))
     await ws.send(json.dumps(adv_odom))
     await ws.send(json.dumps(adv_map))
-    await ws.send(json.dumps(adv_chat_out))
+    await ws.send(json.dumps(adv_chat_in))
 
-    print("[ROSBridge] Advertised camera-related topics, /odom, /map, and /chat_out")
+    print("[ROSBridge] Advertised camera-related topics, /odom, /map, and /chat_in")
 
-    # Also subscribe to /cmd_vel, /chat_in
+    # Also subscribe to /cmd_vel, /chat_out
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
-    sub_chat_in = rosbridge_subscribe("/chat_in", "std_msgs/msg/String")
+    sub_chat_out = rosbridge_subscribe("/chat_out", "std_msgs/msg/String")
     await ws.send(json.dumps(sub_cmd_vel))
-    await ws.send(json.dumps(sub_chat_in))
-    print("[ROSBridge] Subscribed to /cmd_vel and /chat_in")
+    await ws.send(json.dumps(sub_chat_out))
+    print("[ROSBridge] Subscribed to /cmd_vel and /chat_out")
 
     # [ADDED] Advertise a new service: /get_chat_history
     srv_chat_history = rosbridge_advertise_service(
@@ -199,9 +188,9 @@ async def outbound_loop(ws, shared_queues):
 
             if isinstance(msg, ChatMessage):
                 print(f"[ROSBridge] Publishing chat message: {msg.text}")
-                # Publish to /chat_out
+                # Publish to /chat_in
                 outbound_text = {"data": msg.text}
-                outbound = rosbridge_publish("/chat_out", outbound_text)
+                outbound = rosbridge_publish("/chat_in", outbound_text)
                 await ws.send(json.dumps(outbound))
         except queue.Empty:
             # no messages to publish right now
