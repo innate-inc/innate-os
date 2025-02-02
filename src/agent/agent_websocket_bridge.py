@@ -18,6 +18,7 @@ from src.agent.types import (
     RobotStateMsg,
     VelocityCmd,
 )
+from src.shared_queues import SharedQueues, ChatMessage, ChatSignal
 
 
 def np_encoder(obj):
@@ -44,10 +45,14 @@ def rosbridge_publish(topic: str, msg_dict: dict) -> dict:
     return {"op": "publish", "topic": topic, "msg": msg_dict}
 
 
+def rosbridge_call_service(service: str, srv_type: str) -> dict:
+    return {"op": "call_service", "service": service, "type": srv_type}
+
+
 async def inbound_loop(ws, shared_queues):
     """
-    Continuously receive inbound messages on the WebSocket (e.g. /cmd_vel)
-    and push them to shared_queues.agent_to_sim.
+    Continuously receive inbound messages on the WebSocket (e.g. /cmd_vel, /chat_in, service calls)
+    and push them to shared_queues if needed.
     """
     print("[ROSBridge] inbound_loop started.")
     while not shared_queues.exit_event.is_set():
@@ -68,10 +73,14 @@ async def inbound_loop(ws, shared_queues):
         except json.JSONDecodeError:
             continue
 
-        # If inbound data is a published message, might be /cmd_vel
-        if inbound_data.get("op") == "publish":
+        op_type = inbound_data.get("op", "")
+
+        # Process publish messages
+        if op_type == "publish":
             topic = inbound_data.get("topic", "")
             msg_data = inbound_data.get("msg", {})
+
+            # 1) /cmd_vel
             if topic == "/cmd_vel":
                 vel_cmd = parse_twist(msg_data)
                 if vel_cmd:
@@ -79,6 +88,56 @@ async def inbound_loop(ws, shared_queues):
                         shared_queues.agent_to_sim.put_nowait(vel_cmd)
                     except queue.Full:
                         pass
+
+            # 2) /chat_out
+            elif topic == "/chat_out":
+                # The standard type is likely std_msgs/msg/String => { "data": "<TEXT>" }
+                text = msg_data.get("data", "")
+                if text:
+                    chat_msg = ChatMessage(
+                        sender="robot",
+                        text=text,
+                        timestamp=time.time(),
+                    )
+                    # Forward to sim
+                    shared_queues.chat_from_bridge.put_nowait(chat_msg)
+
+        # Process service responses (responses to service calls that we initiated)
+        elif op_type == "service_response":
+            service_name = inbound_data.get("service", "")
+            if service_name == "/get_chat_history":
+                # Extract the history data from the response
+                history_data_raw = inbound_data.get("values", {}).get("history", "")
+                print(
+                    f"[ROSBridge] Chat history service response received: {history_data_raw}"
+                )
+
+                # If history_data is a JSON string, parse it; otherwise assume it's already a list.
+                if isinstance(history_data_raw, str):
+                    try:
+                        history_data = json.loads(history_data_raw)
+                    except json.JSONDecodeError:
+                        print("[ROSBridge] Failed to parse chat history JSON string.")
+                        history_data = []
+                else:
+                    history_data = history_data_raw
+
+                # Iterate through the history and forward each message to the simulation queue.
+                for chat in history_data:
+                    try:
+                        chat_msg = ChatMessage(
+                            sender=chat.get("sender", ""),
+                            text=chat.get("text", ""),
+                            timestamp=chat.get("timestamp", time.time()),
+                        )
+                        try:
+                            shared_queues.chat_from_bridge.put_nowait(chat_msg)
+                        except queue.Full:
+                            print(
+                                "[ROSBridge] chat_from_bridge queue is full; dropping chat message."
+                            )
+                    except Exception as e:
+                        print(f"[ROSBridge] Error processing chat history entry: {e}")
 
         await asyncio.sleep(0.0001)
 
@@ -89,10 +148,11 @@ async def outbound_loop(ws, shared_queues):
     """
     Continuously process messages from sim_to_agent and publish them
     to rosbridge (camera images, odometry, map, etc.).
+    Also advertise relevant topics/services once at start.
     """
     print("[ROSBridge] outbound_loop started.")
 
-    # First, advertise topics once
+    # First, advertise standard topics once
     adv_color = rosbridge_advertise(
         "/camera/color/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
     )
@@ -102,38 +162,64 @@ async def outbound_loop(ws, shared_queues):
     )
     adv_odom = rosbridge_advertise("/odom", "nav_msgs/msg/Odometry")
     adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
+    adv_chat_in = rosbridge_advertise("/chat_in", "std_msgs/msg/String")
 
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
     await ws.send(json.dumps(adv_cinfo))
     await ws.send(json.dumps(adv_odom))
     await ws.send(json.dumps(adv_map))
+    await ws.send(json.dumps(adv_chat_in))
 
-    print(
-        "[ROSBridge] Advertised /camera/color/image_raw/compressed, /camera/depth/image_raw, /camera/color/camera_info, /odom, /map"
-    )
+    print("[ROSBridge] Advertised camera-related topics, /odom, /map, and /chat_in")
 
-    # Also subscribe to /cmd_vel
+    # Also subscribe to /cmd_vel, /chat_out
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
+    sub_chat_out = rosbridge_subscribe("/chat_out", "std_msgs/msg/String")
     await ws.send(json.dumps(sub_cmd_vel))
-    print("[ROSBridge] Subscribed to /cmd_vel")
+    await ws.send(json.dumps(sub_chat_out))
+    print("[ROSBridge] Subscribed to /cmd_vel and /chat_out")
 
     while not shared_queues.exit_event.is_set():
         # a) Check if there's a message from the sim
         try:
             msg = shared_queues.sim_to_agent.get_nowait()
+
+            # We have a message
+            if isinstance(msg, RobotStateMsg):
+                await publish_robot_state(ws, msg)
+            elif isinstance(msg, OccupancyGridMsg):
+                await publish_occupancy_grid(ws, msg)
         except queue.Empty:
             # no messages to publish right now
-            await asyncio.sleep(0.001)
-            continue
+            pass
 
-        # We have a message
-        if isinstance(msg, RobotStateMsg):
-            await publish_robot_state(ws, msg)
-        elif isinstance(msg, OccupancyGridMsg):
-            await publish_occupancy_grid(ws, msg)
-        else:
-            # unknown or unhandled
+        try:
+            msg = shared_queues.chat_to_bridge.get_nowait()
+
+            if isinstance(msg, ChatMessage):
+                print(f"[ROSBridge] Publishing chat message: {msg.text}")
+                # Publish to /chat_in
+                outbound_text = {"data": msg.text}
+                outbound = rosbridge_publish("/chat_in", outbound_text)
+                await ws.send(json.dumps(outbound))
+                # Also, add the chat message to the simulation queue as confirmation
+                try:
+                    shared_queues.chat_from_bridge.put_nowait(msg)
+                except queue.Full:
+                    pass
+
+            elif isinstance(msg, ChatSignal):
+                print(f"[ROSBridge] Publishing chat signal: {msg.signal}")
+                # Check what the signal is
+                if msg.signal == "ready":
+                    # Use the service to get the chat history
+                    srv_chat_history = rosbridge_call_service(
+                        "/get_chat_history", "brain_messages/srv/GetChatHistory"
+                    )
+                    await ws.send(json.dumps(srv_chat_history))
+        except queue.Empty:
+            # no messages to publish right now
             pass
 
         await asyncio.sleep(0.0001)
@@ -144,7 +230,7 @@ async def outbound_loop(ws, shared_queues):
 async def rosbridge_loop(shared_queues, rosbridge_uri: str):
     """
     High-level function that connects to rosbridge and starts
-    two concurrent tasks: inbound_loop & outbound_loop.
+    two concurrent tasks: inbound_loop & outbound_loop & chat_bridge_loop.
     """
     print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
     try:
@@ -155,8 +241,7 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
             tasks = []
             tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
             tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
-
-            # Wait for both tasks to complete (they'll stop when exit_event is set or ws closes)
+            # Wait for them to complete
             done, pending = await asyncio.wait(
                 tasks, return_when=asyncio.FIRST_COMPLETED
             )
@@ -180,8 +265,6 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
     now = time.time()
     sec = int(now)
     nsec = int((now - sec) * 1e9)
-
-    # If you want to keep publishing the occupancy grid, odometry, etc. as usual, no changes needed there.
 
     # -- 1) COMPRESS COLOR IMAGE --
     if rsm.rgb_frame is not None:
@@ -281,13 +364,9 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
 
     data_3d = og.data
 
-    # Convert 3D (H,W,3) to grayscale if needed:
-    # but let's assume you've already made it 2D
     if len(data_3d.shape) == 3:
-        # E.g. average across last dimension:
         data_3d = np.mean(data_3d, axis=-1).astype(np.uint8)
 
-    # Now 'data_3d' should be shape (H,W).
     # CLAMP to [-1..100], cast to int8
     data_clamped = np.clip(data_3d, -1, 100).astype(np.int8)
 

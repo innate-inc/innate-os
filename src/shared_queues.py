@@ -1,7 +1,19 @@
 # src/shared_queues.py
 
+from typing import NamedTuple
 import threading
 import queue
+
+
+class ChatMessage(NamedTuple):
+    sender: str
+    text: str
+    timestamp: float
+
+
+class ChatSignal(NamedTuple):
+    signal: str
+    timestamp: float
 
 
 class SharedQueues:
@@ -20,3 +32,7 @@ class SharedQueues:
         )  # Will now contain dicts of named images
         self.latest_frames = {}
         self.exit_event = threading.Event()
+
+        # Queues specifically for chat messages
+        self.chat_to_bridge = queue.Queue(maxsize=50)
+        self.chat_from_bridge = queue.Queue(maxsize=50)

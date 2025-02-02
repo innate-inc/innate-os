@@ -1,48 +1,63 @@
-# main_server.py
-
 import argparse
 import time
 import threading
-import queue
 import cv2
 import platform
+import os
 
 import genesis as gs
 import uvicorn
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from src.shared_queues import SharedQueues
 from src.simulation.simulation_node import SimulationNode
 from src.agent.agent_websocket_bridge import run_agent_async
+
+# Import your new router
+from src.routes.chat_api import router as chat_api_router
 
 
 # -------------------------------------------------------------------------
 # FASTAPI APP
 # -------------------------------------------------------------------------
 app = FastAPI()
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or a more restrictive list
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount the React build directory
+frontend_build_path = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+app.mount(
+    "/static",
+    StaticFiles(directory=frontend_build_path),
+    name="static",
+)
+
+# Mount the new router
+app.include_router(chat_api_router)
+
+# Initialize a placeholder on the application's state
+# so that downstream routers can retrieve SHARED_QUEUES.
+app.state.SHARED_QUEUES = None
+
+# -------------------------------------------------------------------------
+# SHARED QUEUES
+# -------------------------------------------------------------------------
 SHARED_QUEUES: SharedQueues = None  # we'll populate this later
 
 
-@app.get("/")
-def index():
-    """Simple HTML page showing the MJPEG video feed in an <img> tag."""
-    html_content = """
-    <html>
-      <head>
-        <title>Simulation Viewer</title>
-      </head>
-      <body>
-        <h1>Simulation MJPEG Feed</h1>
-        <img src="/video_feed" style="width:640px; height:auto; border:1px solid #ccc;" />
-        <img src="/video_feed_chase" style="width:640px; height:auto; border:1px solid #ccc;" />
-        <p>Open this page in multiple tabs if you like. Press Ctrl+C in the server console to stop.</p>
-      </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
-
-
+# -------------------------------------------------------------------------
+# FASTAPI ROUTES
+# -------------------------------------------------------------------------
 @app.get("/video_feed")
 def video_feed():
     """Returns a multipart/x-mixed-replace streaming response of JPEG frames."""
@@ -94,6 +109,24 @@ def frame_collector(shared_queues: SharedQueues):
             shared_queues.latest_frames[cam_name] = frame
 
 
+@app.post("/reset_robot")
+async def reset_robot(request: Request):
+    """
+    Enqueues a reset command to move the robot back to its origin.
+    """
+    global SHARED_QUEUES
+    if SHARED_QUEUES is not None:
+        from src.agent.types import ResetRobotCmd
+
+        try:
+            SHARED_QUEUES.agent_to_sim.put_nowait(ResetRobotCmd())
+        except:
+            return {"status": "queue_full"}
+        return {"status": "reset_enqueued"}
+    else:
+        return {"status": "no_shared_queues"}
+
+
 # -------------------------------------------------------------------------
 # MAIN ENTRY POINT
 # -------------------------------------------------------------------------
@@ -105,13 +138,16 @@ def main():
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Use local agent server (ws://localhost:8765).",
+        help="Use local agent server (ws://localhost:9090).",
     )
     args = parser.parse_args()
 
     # 1) Create shared queues
     global SHARED_QUEUES
     SHARED_QUEUES = SharedQueues()
+
+    # Make them available to the entire app
+    app.state.SHARED_QUEUES = SHARED_QUEUES
 
     # 1b) Start the background collector
     collector_thread = threading.Thread(
@@ -126,7 +162,7 @@ def main():
     agent_thread = run_agent_async(
         SHARED_QUEUES,
         rosbridge_uri=(
-            "ws://localhost:8765"
+            "ws://localhost:9090"
             if args.local
             else "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
         ),

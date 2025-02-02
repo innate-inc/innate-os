@@ -5,7 +5,7 @@ import genesis as gs
 import cv2  # for potential image saving/processing
 
 from src.simulation.stl_slicing import slice_stl
-from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd
+from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd, ResetRobotCmd
 from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
@@ -43,6 +43,7 @@ class SimulationNode:
                 camera_fov=40,
                 res=(1280, 720),
             ),
+            show_FPS=False,
             show_viewer=self.enable_vis,
         )
         # Add ground plane
@@ -278,7 +279,15 @@ class SimulationNode:
                     self.robot.control_dofs_velocity(
                         [left_vel, right_vel], [self.left_idx, self.right_idx]
                     )
-
+                elif isinstance(cmd, ResetRobotCmd):
+                    print("[SimulationNode] Resetting robot pose to origin.")
+                    # Reset the robot's position & orientation
+                    self.robot.set_pos((0, 0, 0))
+                    self.robot.set_quat((0, 0, 0, 1))
+                    # Reset the robot's velocity
+                    self.robot.control_dofs_velocity(
+                        [0.0, 0.0], [self.left_idx, self.right_idx]
+                    )
             except queue.Empty:
                 pass
 
