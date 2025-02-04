@@ -13,7 +13,14 @@ import cv2
 import numpy as np
 import websockets
 
-from brain_client.message_types import MessageType, TaskType, VisionAgentOutput
+from brain_client.message_types import (
+    MessageIn,
+    MessageInType,
+    MessageOut,
+    MessageOutType,
+    TaskType,
+    VisionAgentOutput,
+)
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist, Vector3
 
@@ -76,9 +83,6 @@ class BrainClientNode(Node):
         self.ws_thread = threading.Thread(target=self.run_async_loop, daemon=True)
         self.ws_thread.start()
 
-    #
-    # [ADDED] Chat callbacks
-    #
     def chat_in_callback(self, msg: String):
         """
         Called whenever a local /chat_in message is received.
@@ -93,19 +97,7 @@ class BrainClientNode(Node):
         self.chat_history.append(chat_entry)
         self.get_logger().info(f"Received chat_in: {chat_entry}")
 
-        # Test: If the incoming chat is "Hi", reply with "It's me Maurice"
-        if msg.data.strip() == "Hi":
-            out_msg = String()
-            out_msg.data = "It's me Maurice"
-            self.chat_history.append(
-                {
-                    "sender": "robot",
-                    "text": "It's me Maurice",
-                    "timestamp": time.time(),
-                }
-            )
-            self.chat_out_pub.publish(out_msg)
-            self.get_logger().info("Published chat_out: It's me Maurice")
+        # To fill: Send the chat_in message to the cloud
 
     def handle_get_chat_history(self, request, response):
         """
@@ -113,7 +105,6 @@ class BrainClientNode(Node):
         This corresponds to myrobot_msgs/srv/GetChatHistory.
         Adjust as needed to match your actual service definition.
         """
-        self.get_logger().info(f"Received get_chat_history request")
         response.history = json.dumps(self.chat_history)
         return response
 
@@ -167,7 +158,7 @@ class BrainClientNode(Node):
         """
         Main coroutine that:
           - Connects to the cloud WebSocket server
-          - Sends an auth token
+          - Sends an auth token (now wrapped in MessageIn)
           - Waits for commands from the server (e.g. "ready_for_image")
         """
         self.get_logger().debug(f"[BrainClient] Connecting to {server_uri} ...")
@@ -180,15 +171,14 @@ class BrainClientNode(Node):
                 self.websocket = websocket
                 self.get_logger().info(f"[BrainClient] Connected to {server_uri}")
 
-                # 1) Send authentication token immediately
-                await websocket.send(token)
+                auth_msg = MessageIn(type=MessageInType.AUTH, payload={"token": token})
+                await websocket.send(auth_msg.model_dump_json())
                 self.get_logger().debug("[BrainClient] Token sent")
 
                 should_send_image = False
 
                 # 2) Main loop
                 while rclpy.ok() and not self.exit_event.is_set():
-
                     if should_send_image:
                         if self.last_image is not None:
                             await self.send_image_over_ws(websocket, self.last_image)
@@ -214,41 +204,33 @@ class BrainClientNode(Node):
                         self.get_logger().warn("Received non-JSON data. Ignoring.")
                         continue
 
-                    msg_type = data.get("type", "")
+                    msg = MessageOut.model_validate(data)
+                    msg_type = msg.type
 
-                    if msg_type == "ready_for_image":
+                    if msg_type == MessageOutType.READY_FOR_IMAGE:
                         self.get_logger().debug(
                             "[BrainClient] Received 'ready_for_image'"
                         )
-                        # Send the latest image
                         should_send_image = True
 
-                    elif msg_type == "well_received":
+                    elif msg_type == MessageOutType.WELL_RECEIVED:
                         self.get_logger().debug(
                             "[BrainClient] Received 'well_received'"
                         )
 
-                    elif msg_type == MessageType.VISION_AGENT_OUTPUT.value:
-                        # Parse the payload as a VisionAgentOutput model
+                    elif msg_type == "vision_agent_output":
                         try:
-                            # First parse the payload string into a dictionary
-                            payload_dict = json.loads(data.get("payload", "{}"))
-                            payload = VisionAgentOutput.model_validate(payload_dict)
+                            payload = VisionAgentOutput.model_validate(msg.payload)
                             self.get_logger().debug(
                                 f"[BrainClient] vision_agent_output: {payload}"
                             )
-
                             self.handle_vision_agent_output(payload)
                         except Exception as e:
                             self.get_logger().error(
                                 f"Failed to parse vision_agent_output: {e}"
                             )
 
-                    #
-                    # [ADDED] If the server is sending "chat_out", store it locally
-                    #
                     elif msg_type == "chat_out":
-                        # "text" might be how your server sends the chat content
                         text = data.get("text", "")
                         chat_entry = {
                             "sender": "cloud",
@@ -270,7 +252,6 @@ class BrainClientNode(Node):
                             f"[BrainClient] Unknown message type: {msg_type}"
                         )
 
-                    # short sleep
                     await asyncio.sleep(0.01)
 
         except Exception as e:
@@ -281,8 +262,8 @@ class BrainClientNode(Node):
 
     async def send_image_over_ws(self, websocket, cv_image):
         """
-        Encodes the OpenCV frame as JPEG, base64-encodes it,
-        and sends it via WebSockets as a JSON message.
+        Encodes the OpenCV frame as JPEG, base64-encodes it, and sends it via WebSockets.
+        Now the payload is wrapped in a MessageIn with type IMAGE.
         """
         success, encoded_img = cv2.imencode(".jpg", cv_image)
         if not success:
@@ -291,8 +272,13 @@ class BrainClientNode(Node):
 
         b64_img = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
 
-        msg = {"type": "image", "image_b64": b64_img}
-        await websocket.send(json.dumps(msg))
+        from brain_client.message_types import MessageIn, MessageInType
+
+        msg_obj = MessageIn(
+            type=MessageInType.IMAGE,
+            payload={"image_b64": b64_img},
+        )
+        await websocket.send(msg_obj.model_dump_json())
         self.get_logger().debug("[BrainClient] Sent image to server.")
 
     def destroy_node(self):
