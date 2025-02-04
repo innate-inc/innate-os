@@ -98,6 +98,14 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Received chat_in: {chat_entry}")
 
         # To fill: Send the chat_in message to the cloud
+        if self.websocket is not None:
+            chat_msg = MessageIn(
+                type=MessageInType.CHAT_IN,
+                payload={"text": msg.data},
+            )
+            asyncio.run_coroutine_threadsafe(
+                self.websocket.send(chat_msg.model_dump_json()), self.loop
+            )
 
     def handle_get_chat_history(self, request, response):
         """
@@ -150,6 +158,7 @@ class BrainClientNode(Node):
         and handles the messaging protocol.
         """
         loop = asyncio.new_event_loop()
+        self.loop = loop  # Store reference to the event loop
         asyncio.set_event_loop(loop)
         loop.run_until_complete(self.agent_loop_ws(self.ws_uri, self.token))
         loop.close()
@@ -213,25 +222,17 @@ class BrainClientNode(Node):
                         )
                         should_send_image = True
 
-                    elif msg_type == MessageOutType.WELL_RECEIVED:
-                        self.get_logger().debug(
-                            "[BrainClient] Received 'well_received'"
-                        )
-
-                    elif msg_type == "vision_agent_output":
+                    elif msg_type == MessageOutType.VISION_AGENT_OUTPUT:
                         try:
                             payload = VisionAgentOutput.model_validate(msg.payload)
-                            self.get_logger().debug(
-                                f"[BrainClient] vision_agent_output: {payload}"
-                            )
                             self.handle_vision_agent_output(payload)
                         except Exception as e:
                             self.get_logger().error(
                                 f"Failed to parse vision_agent_output: {e}"
                             )
 
-                    elif msg_type == "chat_out":
-                        text = data.get("text", "")
+                    elif msg_type == MessageOutType.CHAT_OUT:
+                        text = msg.payload.get("text", "")
                         chat_entry = {
                             "sender": "cloud",
                             "text": text,
