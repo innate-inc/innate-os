@@ -138,6 +138,13 @@ class BrainClientNode(Node):
                     angular=Vector3(z=velocity_dict["angle"]),
                 )
                 self.cmd_vel_pub.publish(twist_msg)
+            if payload.next_task.type == TaskType.NAVIGATION_TO_POSITION:
+                self.get_logger().info(
+                    f"[BrainClient] Navigating to position: {payload.next_task.description}"
+                )
+                # TODO: Implement navigation to position
+        else:
+            self.get_logger().info("[BrainClient] No next task")
         if payload.stop_current_task:
             self.get_logger().info("[BrainClient] Stopping current task")
 

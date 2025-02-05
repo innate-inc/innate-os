@@ -8,6 +8,7 @@ from pydantic import BaseModel, field_serializer
 class TaskType(Enum):
     NAVIGATION_IN_SIGHT = "navigation_in_sight"
     NAVIGATION_OUT_OF_SIGHT = "navigation_out_of_sight"
+    NAVIGATION_TO_POSITION = "navigation_to_position"
     ACTION_WITH_ARM = "action_with_arm"
     ASK_FOR_INFORMATION = "ask_for_information"
     VELOCITY_CONTROL = "velocity_control"
