@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>maurice_nav</name>
+  <version>0.0.1</version>
+  <description>ROS 2 navigation module using Nav2 (adapted from a ROS 1 Move Base configuration).</description>
+
+  <maintainer email="your.email@domain.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Build tools -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <!-- Run-time dependencies -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>nav2_simple_commander</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_recoveries</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
