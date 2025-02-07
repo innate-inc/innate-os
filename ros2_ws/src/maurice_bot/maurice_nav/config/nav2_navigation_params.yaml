@@ -112,10 +112,10 @@ controller_server:
       required_movement_radius: 0.5
       movement_time_allowance: 10.0
 
-recoveries_server:
+behavior_server:
   ros__parameters:
     behaviors: ["spin", "backup"]
     spin:
-      plugin: "nav2_recoveries/Spin"
+      plugin: "nav2_behaviors/Spin"
     backup:
-      plugin: "nav2_recoveries/BackUp"
+      plugin: "nav2_behaviors/BackUp"

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-A simple test node that sends a navigation goal using nav2_simple_commander.
+A simple test node that sends a navigation goal using nav2_simple_commander asynchronously.
 """
 
+import asyncio
 import rclpy
-from rclpy.duration import Duration
 from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 
-def main():
+async def async_main():
     rclpy.init()
 
     # Create a BasicNavigator instance to communicate with Nav2.
@@ -31,7 +31,12 @@ def main():
     print("Sending goal pose ...")
     navigator.goToPose(goal_pose)
 
-    # Wait until the result is available
+    # Instead of a blocking call, poll asynchronously for task completion.
+    # (Assuming that BasicNavigator provides a method to check whether the goal has finished.)
+    # If such a method does not exist, you could check for a result in a non-blocking manner.
+    while not navigator.isTaskComplete():
+        await asyncio.sleep(0.1)  # Wait 100ms before checking again
+
     result = navigator.getResult()
 
     if result == TaskResult.SUCCEEDED:
@@ -40,9 +45,10 @@ def main():
         print("Goal was canceled!")
     else:
         print("Goal failed or timed out.")
+        print(result)
 
     rclpy.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(async_main())
