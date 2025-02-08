@@ -68,28 +68,34 @@ class SimulationNode:
         self._process_occupancy_grid(file_path)
 
     def _process_occupancy_grid(self, file_path):
-        """Process the STL mesh to create occupancy grid"""
-        # Get the mesh data
+        """
+        Process the STL mesh to create an occupancy grid.
+        This version also retrieves the mesh bounds so that the map origin can be set
+        based on the actual lower-left corner of the geometry.
+        """
         slice_height_min = 0
-        slice_height_max = slice_height_min + 0.20  # 20cm above floor
-
-        # Generate occupancy grid from slices
-        self.occupancy_grid = None
+        slice_height_max = slice_height_min + 0.20  # 20cm above the floor
         num_slices = 10
+        self.occupancy_grid = None
+        self.grid_bounds = None
+
         for height in np.linspace(slice_height_min, slice_height_max, num_slices):
-            array_at_height = slice_stl(
-                stl_path="data/replica_scene.stl",
+            grid_slice, bounds = slice_stl(
+                stl_path=file_path,
                 height=height,
                 output_path=f"replica_scene_sliced_{height:.1f}.png",
                 pixel_size=0.05,
             )
             if self.occupancy_grid is None:
-                self.occupancy_grid = array_at_height
+                self.occupancy_grid = grid_slice
+                self.grid_bounds = bounds  # record bounds from the first slice
             else:
                 self.occupancy_grid = np.minimum(
-                    self.occupancy_grid, array_at_height, dtype=np.uint8
+                    self.occupancy_grid, grid_slice, dtype=np.uint8
                 )
 
+        # Optionally, if needed, flip the grid along the vertical axis so (0,0) is bottom-left
+        # self.occupancy_grid = np.flipud(self.occupancy_grid)
         cv2.imwrite("occupancy_grid.png", self.occupancy_grid)
 
     def _init_robot(self):
@@ -133,10 +139,15 @@ class SimulationNode:
         self.cy = 240.0
 
     def _init_map_params(self):
-        """Initialize mapping parameters"""
-        self.map_width = self.occupancy_grid.shape[1]
-        self.map_height = self.occupancy_grid.shape[0]
-        self.map_resolution = 0.05
+        """
+        Initialize mapping parameters using the bounds extracted from the STL file.
+        Now, (0,0) of the grid (cell [0, 0]) corresponds to (min_x, min_y) in world coordinates.
+        """
+        self.map_width = self.occupancy_grid.shape[1]  # columns
+        self.map_height = self.occupancy_grid.shape[0]  # rows
+        self.map_resolution = self.grid_bounds["pixel_size"]
+        self.map_origin_x = self.grid_bounds["min_x"]
+        self.map_origin_y = self.grid_bounds["min_y"]
         self.map_publish_interval = 10
         self.last_map_publish_step = 0
 
@@ -245,11 +256,11 @@ class SimulationNode:
                     width=self.map_width,
                     height=self.map_height,
                     resolution=self.map_resolution,
-                    origin_x=-self.map_width * self.map_resolution / 2.0,
-                    origin_y=-self.map_height * self.map_resolution / 2.0,
+                    origin_x=self.map_origin_x,
+                    origin_y=self.map_origin_y,
                     origin_z=0.0,
                     origin_yaw=0.0,
-                    data=self.occupancy_grid,  # The np.ndarray
+                    data=self.occupancy_grid,
                     frame_id="map",
                 )
                 try:
