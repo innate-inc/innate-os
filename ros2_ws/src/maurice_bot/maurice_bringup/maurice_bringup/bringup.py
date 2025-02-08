@@ -147,21 +147,30 @@ class Bringup(Node):
         )
 
     def _handle_light_command(self, request, response):
-        """Handle incoming light control requests."""
+        """
+        Handle incoming light control requests.
+        This version uses the new LED command interface that accepts a numeric mode.
+        The mode should be:
+           0: Off
+           1: Solid
+           2: Blink
+           3: Ring
+        and the remaining fields specify the LED color and the time interval.
+        """
         if self.debug:
-            self.get_logger().debug(f'Received light command: r={request.r}, g={request.g}, b={request.b}')
+            self.get_logger().debug(
+                f"Received light command: mode={request.mode}, r={request.r}, "
+                f"g={request.g}, b={request.b}, interval={request.interval_ms}"
+            )
         
         try:
-            # Convert the type enum to light_type string
-            light_type = 'ring' if request.type == request.RING else 'all'
-            
-            # Forward the command to the UART manager
+            # Use the request.mode field directly
             self.uart_manager.set_light_command(
+                mode=request.mode,
                 r=request.r,
                 g=request.g,
                 b=request.b,
-                interval=request.interval_ms,
-                light_type=light_type
+                interval=request.interval_ms
             )
             
             response.success = True
@@ -172,7 +181,8 @@ class Bringup(Node):
             response.message = f"Error executing light command: {str(e)}"
         
         if self.debug:
-            self.get_logger().debug(f'Light command response: {response.success}, {response.message}')
+            self.get_logger().debug(f"Light command response: {response.success}, {response.message}")
+        
         return response
 
     def _publish_odometry(self):
