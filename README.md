@@ -24,6 +24,12 @@ And then drop into the container:
 docker compose -f docker-compose.dev.yml exec maurice zsh -l
 ```
 
+You can use novnc to connect to rviz2. After launching rviz2 inside the container, you can connect to the instance in your browser:
+
+```bash
+http://localhost:8080/vnc.html
+```
+
 Inside the container, first run the discovery service:
 
 ```bash

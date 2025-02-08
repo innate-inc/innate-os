@@ -1,13 +1,30 @@
 version: "3.8"
 
 services:
+  novnc:
+    image: theasp/novnc:latest
+    environment:
+      # Adjust to your desired screen resolution:
+      - DISPLAY_WIDTH=1600
+      - DISPLAY_HEIGHT=968
+      - RUN_XTERM=no
+    ports:
+      - "8080:8080"
+    networks:
+      - x11
+
   maurice:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: maurice-dev
     # Use host networking if you need direct access to hardware, or use your own approach
-    network_mode: host
+    depends_on:
+      - novnc
+    environment:
+      - DISPLAY=novnc:0.0
+    ports:
+      - "9090:9090"
 
     volumes:
       # 1) Mount your local code
@@ -25,8 +42,13 @@ services:
     # 3) Keep container open for interactive usage
     tty: true
     stdin_open: true
+    networks:
+      - x11
 
 volumes:
   ros2_ws_build:
   ros2_ws_install:
   ros2_ws_log:
+
+networks:
+  x11:
