@@ -13,12 +13,8 @@ import cv2
 import numpy as np
 import websockets
 
-from src.agent.types import (
-    OccupancyGridMsg,
-    RobotStateMsg,
-    VelocityCmd,
-)
-from src.shared_queues import SharedQueues, ChatMessage, ChatSignal
+from src.agent.types import OccupancyGridMsg, RobotStateMsg, VelocityCmd
+from src.shared_queues import ChatMessage, ChatSignal
 
 
 def np_encoder(obj):
@@ -91,7 +87,6 @@ async def inbound_loop(ws, shared_queues):
 
             # 2) /chat_out
             elif topic == "/chat_out":
-                # The standard type is likely std_msgs/msg/String => { "data": "<TEXT>" }
                 text = msg_data.get("data", "")
                 if text:
                     chat_msg = ChatMessage(
@@ -106,11 +101,12 @@ async def inbound_loop(ws, shared_queues):
         elif op_type == "service_response":
             service_name = inbound_data.get("service", "")
             if service_name == "/get_chat_history":
+                # Check if inbound_data result field is True, otherwise the brain is not ready yet
+                if not inbound_data.get("result", False):
+                    continue
+
                 # Extract the history data from the response
                 history_data_raw = inbound_data.get("values", {}).get("history", "")
-                print(
-                    f"[ROSBridge] Chat history service response received: {history_data_raw}"
-                )
 
                 # If history_data is a JSON string, parse it; otherwise assume it's already a list.
                 if isinstance(history_data_raw, str):
@@ -199,10 +195,10 @@ async def outbound_loop(ws, shared_queues):
 
             if isinstance(msg, ChatMessage):
                 print(f"[ROSBridge] Publishing chat message: {msg.text}")
-                # Publish to /chat_in
                 outbound_text = {"data": msg.text}
                 outbound = rosbridge_publish("/chat_in", outbound_text)
                 await ws.send(json.dumps(outbound))
+
                 # Also, add the chat message to the simulation queue as confirmation
                 try:
                     shared_queues.chat_from_bridge.put_nowait(msg)
