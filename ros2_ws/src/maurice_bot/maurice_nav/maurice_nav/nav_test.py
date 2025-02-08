@@ -5,7 +5,7 @@ A simple test node that sends a navigation goal using nav2_simple_commander asyn
 
 import asyncio
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 
@@ -19,7 +19,7 @@ async def async_main():
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = "map"
     goal_pose.header.stamp = navigator.get_clock().now().to_msg()
-    goal_pose.pose.position.x = 1.0
+    goal_pose.pose.position.x = 0.0
     goal_pose.pose.position.y = 0.0
     goal_pose.pose.position.z = 0.0
     # Identity quaternion: no rotation.
@@ -46,6 +46,24 @@ async def async_main():
     else:
         print("Goal failed or timed out.")
         print(result)
+
+    # Option 2: Create your own node and publisher.
+    stop_cmd = Twist()
+    stop_cmd.linear.x = 0.0
+    stop_cmd.angular.z = 0.0
+
+    # Create a new temporary node for publishing.
+    pub_node = rclpy.create_node("stop_command_node")
+    cmd_vel_pub = pub_node.create_publisher(Twist, "cmd_vel", 10)
+
+    # Publish the stop command.
+    cmd_vel_pub.publish(stop_cmd)
+
+    # Spin once to process the publishing event.
+    rclpy.spin_once(pub_node, timeout_sec=0.1)
+
+    # Clean up the publisher node.
+    pub_node.destroy_node()
 
     rclpy.shutdown()
 
