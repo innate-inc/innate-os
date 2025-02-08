@@ -1,5 +1,4 @@
 import queue
-import time
 import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
@@ -167,7 +166,7 @@ class SimulationNode:
             lin_vel = self.robot.get_vel().cpu().numpy()
             ang_vel = self.robot.get_ang().cpu().numpy()
 
-            # --- (C) Render cameras only every 3rd frame
+            # --- (C) Render cameras only every 10th frame (i.e. every 1 sec if dt=0.1)
             if step_count % 10 == 0:
                 camera_link = self.robot.get_link("camera_link")
                 camera_pos = camera_link.get_pos()
@@ -176,16 +175,11 @@ class SimulationNode:
                 lookat = camera_pos.cpu().numpy() + look_dir
                 self.robot_camera.set_pose(pos=camera_pos.cpu().numpy(), lookat=lookat)
 
-                # Get robot position and orientation
+                # Update chase camera to follow robot
                 robot_pos = self.robot.get_pos().cpu().numpy()
-                robot_quat = self.robot.get_quat().cpu().numpy()  # [x, y, z, w]
-
-                # Calculate camera offset position (initially [-2.0, 0.0, 2.0] in robot's frame)
-                # Rotate this offset by the robot's yaw angle
+                robot_quat = self.robot.get_quat().cpu().numpy()
                 offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
                 rotated_offset = rotate_vector(offset, robot_quat)
-
-                # Update chase camera position to follow robot
                 chase_pos = robot_pos + rotated_offset
                 self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
 
@@ -196,7 +190,6 @@ class SimulationNode:
                 rgb_to_send = rgb
                 depth_to_send = depth
 
-                # Publish both camera views to web queue
                 try:
                     camera_views = {"first_person": rgb, "chase": chase_rgb}
                     self.shared_queues.sim_to_web.put_nowait(camera_views)
@@ -225,10 +218,10 @@ class SimulationNode:
                 px=pos[0],
                 py=pos[1],
                 pz=pos[2],
-                ox=quat[0],
-                oy=quat[1],
-                oz=quat[2],
-                ow=quat[3],
+                ox=quat[1],
+                oy=quat[2],
+                oz=quat[3],
+                ow=quat[0],
                 # odometry: velocity
                 vx=lin_vel[0],
                 vy=lin_vel[1],
@@ -265,26 +258,22 @@ class SimulationNode:
                     pass
                 self.last_map_publish_step = step_count
 
-            # --- (F) Optionally handle velocity commands from agent -> sim
+            # --- (F) Handle velocity commands from agent -> sim
             try:
                 cmd = self.shared_queues.agent_to_sim.get_nowait()
                 if isinstance(cmd, VelocityCmd):
-                    # convert to wheel velocities or whatever
                     linear_vel = cmd.linear_x
                     angular_vel = cmd.angular_z
                     left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
                         linear_vel, angular_vel
                     )
-
                     self.robot.control_dofs_velocity(
                         [left_vel, right_vel], [self.left_idx, self.right_idx]
                     )
                 elif isinstance(cmd, ResetRobotCmd):
                     print("[SimulationNode] Resetting robot pose to origin.")
-                    # Reset the robot's position & orientation
                     self.robot.set_pos((0, 0, 0))
                     self.robot.set_quat((0, 0, 0, 1))
-                    # Reset the robot's velocity
                     self.robot.control_dofs_velocity(
                         [0.0, 0.0], [self.left_idx, self.right_idx]
                     )
