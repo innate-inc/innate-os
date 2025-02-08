@@ -404,7 +404,7 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
     }
 
     outbound = rosbridge_publish("/map", map_msg)
-    await ws.send(json.dumps(outbound))
+    await ws.send(json.dumps(outbound, default=np_encoder))
 
 
 #
