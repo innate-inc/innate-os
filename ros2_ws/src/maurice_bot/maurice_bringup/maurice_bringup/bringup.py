@@ -42,10 +42,11 @@ class Bringup(Node):
                 ('uart.port', '/dev/ttyTHS1'),
                 ('uart.baud_rate', 115200),
                 ('uart.timeout', 0.1),
+                ('uart.update_frequency', 30.0),
                 ('battery.num_cells', 6),
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
-                ('ros_topics.odom_frequency', 10.0),
+                ('ros_topics.odom_frequency', 30.0),
                 ('motion_control.max_speed', 2.5),
                 ('motion_control.max_angular_speed', 2.5),
             ]
@@ -57,6 +58,7 @@ class Bringup(Node):
                 'port': self.get_parameter('uart.port').value,
                 'baud_rate': self.get_parameter('uart.baud_rate').value,
                 'timeout': self.get_parameter('uart.timeout').value,
+                'update_frequency': self.get_parameter('uart.update_frequency').value,
             },
             'battery': {
                 'num_cells': self.get_parameter('battery.num_cells').value,
