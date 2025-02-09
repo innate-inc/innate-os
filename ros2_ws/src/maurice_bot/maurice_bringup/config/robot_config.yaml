@@ -11,5 +11,5 @@
       critical_percentage: 10
     motion_control:
       max_speed: 0.4
-      max_angular_speed: 2.5    ros_topics:
+      max_angular_speed: 2.5
       odom_frequency: 30.0
