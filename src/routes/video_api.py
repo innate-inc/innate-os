@@ -21,9 +21,13 @@ def mjpeg_generator(shared_queues, camera_name="first_person"):
             time.sleep(0.01)
             continue
 
+        shared_queues.latest_frames[camera_name] = None
+
         success, encoded_image = cv2.imencode(".jpg", frame)
         if not success:
             continue
+
+        print("Sending one frame of ", camera_name)
 
         yield (
             b"--frame\r\n"
