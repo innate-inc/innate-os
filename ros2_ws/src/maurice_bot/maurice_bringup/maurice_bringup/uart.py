@@ -147,50 +147,98 @@ class UartManager:
 
             time.sleep(1 / self.update_frequency)  # 50Hz loop
 
-    # --- Sliding Window Based Read ---
     def _read_response(self):
         """
-        Accumulates serial data in a buffer and uses a sliding window
-        to search for valid 10-byte packets.
-        A valid packet has:
-         - A SOM marker (0x69 0x69)
-         - 7 bytes of protocol message (response ID + data)
-         - 1 byte CRC (calculated over the 7-byte protocol message)
+        Reads all available bytes from the serial port into self._rx_buffer and processes
+        as many complete packets as possible using an FSM.
+        
+        Packet format:
+          [SOM (2 bytes)] + [protocol (7 bytes: response ID + data)] + [CRC (1 byte)]
+        
+        This version will, once the second SOM is found, check if enough bytes remain in the
+        buffer to read the rest of the packet. If not, it stops processing and leaves the
+        partial packet in self._rx_buffer for later.
         """
         try:
-            # Append any available bytes from the serial port to the buffer.
+            # Append all available bytes into the persistent buffer.
             bytes_available = self.ser.in_waiting
             if bytes_available:
                 self._rx_buffer.extend(self.ser.read(bytes_available))
-            # Process while there are at least 10 bytes in the buffer.
-            while len(self._rx_buffer) >= 10:
-                start_index = self._rx_buffer.find(self.SOM_MARKER)
-                if start_index == -1:
-                    # No SOM marker found; clear the buffer.
-                    self._rx_buffer.clear()
-                    break
-                if len(self._rx_buffer) - start_index < 10:
-                    # Not enough bytes for a full packet; wait for more.
-                    break
-                # Extract a potential packet.
-                packet = self._rx_buffer[start_index : start_index + 10]
-                # Remove the processed bytes from the buffer.
-                del self._rx_buffer[:start_index + 10]
-                # Validate CRC over protocol message (bytes 2-8 of the packet).
-                payload = packet[2:9]  # 7 bytes: [response ID (1) + data (6)]
-                received_crc = packet[9]
-                computed_crc = self._calculate_crc(payload)
-                if computed_crc != received_crc:
-                    self.logger.error(f"CRC Mismatch in sliding window: Expected {computed_crc:02X}, Got {received_crc:02X}")
-                    # Discard one byte and continue scanning.
-                    del self._rx_buffer[0]
-                    continue
-                # Valid packet found; extract response ID and data.
-                msg_id = payload[0]
-                data_field = payload[1:]  # The 6-byte data payload.
-                self._process_response(msg_id, data_field)
+
+            # Define FSM states.
+            WAIT_FOR_FIRST_SOM = 0
+            WAIT_FOR_SECOND_SOM = 1
+            READ_PROTOCOL = 2    # Read 7 bytes: response ID (1) + data (6)
+            READ_CRC = 3         # Read 1 byte CRC
+
+            state = WAIT_FOR_FIRST_SOM
+            packet = bytearray()  # Temporary storage for the current packet
+            index = 0             # Index into self._rx_buffer
+
+            # Process bytes in the buffer.
+            while index < len(self._rx_buffer):
+                if state == WAIT_FOR_FIRST_SOM:
+                    # Look for first SOM byte.
+                    if self._rx_buffer[index] == 0x69:
+                        packet = bytearray([0x69])
+                        state = WAIT_FOR_SECOND_SOM
+                    index += 1
+
+                elif state == WAIT_FOR_SECOND_SOM:
+                    # We expect the next byte to be 0x69.
+                    if self._rx_buffer[index] == 0x69:
+                        packet.append(0x69)
+                        state = READ_PROTOCOL
+                        index += 1
+                    else:
+                        # Not a valid second SOM. Reset and continue searching.
+                        state = WAIT_FOR_FIRST_SOM
+                        packet = bytearray()
+                        index += 1
+
+                elif state == READ_PROTOCOL:
+                    # The protocol portion is 7 bytes.
+                    # (We already have 2 SOM bytes, so we need 7 more bytes.)
+                    bytes_needed = 7 - (len(packet) - 2)  # How many bytes are missing from protocol part.
+                    if (len(self._rx_buffer) - index) >= bytes_needed:
+                        # Enough bytes available: read them all at once.
+                        packet.extend(self._rx_buffer[index:index + bytes_needed])
+                        index += bytes_needed
+                        state = READ_CRC
+                    else:
+                        # Not enough bytes available to complete protocol message.
+                        break
+
+                elif state == READ_CRC:
+                    # Need 1 byte for CRC.
+                    if (len(self._rx_buffer) - index) >= 1:
+                        packet.append(self._rx_buffer[index])
+                        index += 1
+                        # Now the packet should be complete (10 bytes total)
+                        if len(packet) == 10:
+                            protocol_msg = packet[2:9]  # 7-byte protocol message (response ID + data)
+                            computed_crc = self._calculate_crc(protocol_msg)
+                            received_crc = packet[9]
+                            if computed_crc == received_crc:
+                                msg_id = protocol_msg[0]
+                                data_field = protocol_msg[1:]
+                                self._process_response(msg_id, data_field)
+                            else:
+                                self.logger.error(
+                                    f"CRC mismatch in FSM: expected {computed_crc:02X}, got {received_crc:02X}"
+                                )
+                        # Reset state to look for the next packet.
+                        state = WAIT_FOR_FIRST_SOM
+                        packet = bytearray()
+                    else:
+                        # Not enough bytes available to read the CRC.
+                        break
+
+            # Save any leftover (incomplete) data back into _rx_buffer.
+            self._rx_buffer = self._rx_buffer[index:]
         except Exception as e:
-            self.logger.error(f"Error in _read_response (sliding window): {e}")
+            self.logger.error(f"Error in FSM processing: {e}")
+
 
     # --- Processing Responses ---
     def _process_response(self, msg_id: int, data: bytes):
@@ -219,6 +267,7 @@ class UartManager:
             self.current_transform.transform.rotation.w = math.cos(theta_rad / 2.0)
             if self.debug:
                 self.logger.debug(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
+            self.logger.info(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
         elif msg_id == self.RESP_LED:
             try:
                 mode, red, green, blue, interval = struct.unpack(">B B B B H", data)
@@ -234,6 +283,7 @@ class UartManager:
             }
             if self.debug:
                 self.logger.debug(f"LED Status - Mode: {mode}, RGB: ({red},{green},{blue}), Interval: {interval}ms")
+            self.logger.info(f"LED Status - Mode: {mode}, RGB: ({red},{green},{blue}), Interval: {interval}ms")
         elif msg_id == self.RESP_STATUS:
             try:
                 batt, temp, fault, _ = struct.unpack(">H H B B", data)
@@ -245,6 +295,7 @@ class UartManager:
             self.fault_code = fault
             if self.debug:
                 self.logger.debug(f"Status - Battery: {self.battery_voltage}V, Motor Temp: {temp}°C, Fault: {fault}")
+            self.logger.info(f"Status - Battery: {self.battery_voltage}V, Motor Temp: {temp}°C, Fault: {fault}")
         else:
             self.logger.warning(f"Unknown Response ID: {msg_id}")
 
