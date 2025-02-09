@@ -168,7 +168,7 @@ class Bringup(Node):
                 r=request.r,
                 g=request.g,
                 b=request.b,
-                interval=request.interval_ms
+                interval=request.interval
             )
             
             response.success = True
