@@ -166,6 +166,7 @@ class UartManager:
                 new_bytes = self.ser.read(bytes_available)
                 self._rx_buffer.extend(new_bytes)
                 self.logger.info(f"Appended {len(new_bytes)} bytes to RX buffer (total {len(self._rx_buffer)})")
+            self.logger.info(f"Processing RX buffer: {self._rx_buffer.hex(' ')}")
 
             # Define FSM states.
             WAIT_FOR_FIRST_SOM = 0
