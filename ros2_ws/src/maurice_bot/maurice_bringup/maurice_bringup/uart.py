@@ -94,13 +94,13 @@ class UartManager:
         packet = self.SOM_MARKER + protocol_msg + bytes([crc])
         
         # Only log LED commands
-        if cmd_id == self.CMD_LED:
-            self.logger.info(f"Sending LED command: {packet.hex(' ')}")
-            if self.debug:
-                self.logger.debug(f"  SOM: {self.SOM_MARKER.hex(' ')}")
-                self.logger.debug(f"  CMD: {cmd_id:02X}")
-                self.logger.debug(f"  Data: {data.hex(' ')}")
-                self.logger.debug(f"  CRC: {crc:02X}")
+        # if cmd_id == self.CMD_LED:
+        #     self.logger.info(f"Sending LED command: {packet.hex(' ')}")
+        #     if self.debug:
+        #         self.logger.debug(f"  SOM: {self.SOM_MARKER.hex(' ')}")
+        #         self.logger.debug(f"  CMD: {cmd_id:02X}")
+        #         self.logger.debug(f"  Data: {data.hex(' ')}")
+        #         self.logger.debug(f"  CRC: {crc:02X}")
         
         self.ser.write(packet)
 
@@ -133,11 +133,11 @@ class UartManager:
 
             # Send LED command only if a new command is pending
             if self.latest_led is not None:
-                self.logger.info("Sending LED command")
+                # self.logger.info("Sending LED command")
                 self._send_led_command()
                 self._read_response()  # Process LED status feedback
                 self.latest_led = None  # Reset after sending
-                self.logger.info("LED command sent and processed")
+                # self.logger.info("LED command sent and processed")
 
             # Send status request only if one was triggered
             if self.status_requested:
@@ -194,6 +194,10 @@ class UartManager:
 
     # --- Processing Responses ---
     def _process_response(self, msg_id: int, data: bytes):
+        # Add debug logging for received message
+        if self.debug:
+            self.logger.debug(f"Received UART message - ID: 0x{msg_id:02X}, Data: {data.hex(' ')}")
+        
         if msg_id == self.RESP_MOVE:
             try:
                 x, y, theta = struct.unpack(">hhh", data)
@@ -252,7 +256,6 @@ class UartManager:
           omega: angular speed in rad/s (e.g., ±2.56)
         """
         self.latest_speed = (v, omega)
-
     def set_light_command(self, mode: int, r: int, g: int, b: int, interval: int = 1000):
         """
         Sets the LED command.
@@ -260,7 +263,7 @@ class UartManager:
           r, g, b: Color intensities (0-255)
           interval: Time parameter in milliseconds (1-10000) for modes that require an interval.
         """
-        self.logger.info(f"Setting LED command - Mode: {mode}, RGB: ({r},{g},{b}), Interval: {interval}ms")
+        # self.logger.info(f"Setting LED command - Mode: {mode}, RGB: ({r},{g},{b}), Interval: {interval}ms")
         self.latest_led = (mode, interval, r, g, b)
 
     def request_health(self):
