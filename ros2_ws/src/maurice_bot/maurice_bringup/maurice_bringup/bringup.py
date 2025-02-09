@@ -150,6 +150,11 @@ class Bringup(Node):
            3: Ring
         and the remaining fields specify the LED color and the time interval.
         """
+        self.get_logger().info(
+            f"Received light command: mode={request.mode}, r={request.r}, "
+            f"g={request.g}, b={request.b}, interval={request.interval_ms}"
+        )
+        
         if self.debug:
             self.get_logger().debug(
                 f"Received light command: mode={request.mode}, r={request.r}, "
@@ -168,10 +173,12 @@ class Bringup(Node):
             
             response.success = True
             response.message = "Light command executed successfully"
+            self.get_logger().info("Light command executed successfully")
             
         except Exception as e:
             response.success = False
             response.message = f"Error executing light command: {str(e)}"
+            self.get_logger().error(f"Error executing light command: {str(e)}")
         
         if self.debug:
             self.get_logger().debug(f"Light command response: {response.success}, {response.message}")

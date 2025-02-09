@@ -133,9 +133,11 @@ class UartManager:
 
             # Send LED command only if a new command is pending
             if self.latest_led is not None:
+                self.logger.info("Sending LED command")
                 self._send_led_command()
                 self._read_response()  # Process LED status feedback
                 self.latest_led = None  # Reset after sending
+                self.logger.info("LED command sent and processed")
 
             # Send status request only if one was triggered
             if self.status_requested:
@@ -258,6 +260,7 @@ class UartManager:
           r, g, b: Color intensities (0-255)
           interval: Time parameter in milliseconds (1-10000) for modes that require an interval.
         """
+        self.logger.info(f"Setting LED command - Mode: {mode}, RGB: ({r},{g},{b}), Interval: {interval}ms")
         self.latest_led = (mode, interval, r, g, b)
 
     def request_health(self):
