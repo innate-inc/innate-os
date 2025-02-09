@@ -3,6 +3,8 @@ from fastapi.responses import StreamingResponse
 import time
 import cv2
 
+from src.agent.types import ResetRobotCmd
+
 router = APIRouter()
 
 
@@ -26,8 +28,6 @@ def mjpeg_generator(shared_queues, camera_name="first_person"):
         success, encoded_image = cv2.imencode(".jpg", frame)
         if not success:
             continue
-
-        print("Sending one frame of ", camera_name)
 
         yield (
             b"--frame\r\n"
@@ -68,8 +68,6 @@ async def reset_robot(request: Request):
     """
     shared_queues = request.app.state.SHARED_QUEUES
     if shared_queues is not None:
-        from src.agent.types import ResetRobotCmd
-
         try:
             shared_queues.agent_to_sim.put_nowait(ResetRobotCmd())
         except Exception:
