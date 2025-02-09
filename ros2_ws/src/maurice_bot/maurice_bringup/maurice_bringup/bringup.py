@@ -24,6 +24,7 @@ class Bringup(Node):
         
         # Initialize managers
         self.battery_manager = BatteryManager(num_cells=self.params['battery']['num_cells'])
+        # Only pass the required UART parameters: port, baud_rate, and timeout
         self.uart_manager = UartManager(self, **self.params['uart'], debug=self.debug)
 
         # Setup ROS2 services and topics
@@ -34,18 +35,13 @@ class Bringup(Node):
         if self.debug:
             self.get_logger().debug('Getting node parameters')
         
-        # Declare parameters
+        # Declare parameters (only declaring the UART parameters needed for UartManager)
         self.declare_parameters(
             namespace='',
             parameters=[
                 ('uart.port', '/dev/ttyTHS1'),
                 ('uart.baud_rate', 115200),
-                ('uart.data_bits', 8),
-                ('uart.parity', 'none'),
-                ('uart.stop_bits', 1),
                 ('uart.timeout', 0.1),
-                ('uart.read_frequency', 30.0),
-                ('uart.write_frequency', 30.0),
                 ('battery.num_cells', 6),
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
@@ -55,17 +51,12 @@ class Bringup(Node):
             ]
         )
 
-        # Return all parameters in a structured dictionary
+        # Build a structured dictionary with only the parameters needed by UartManager
         params = {
             'uart': {
                 'port': self.get_parameter('uart.port').value,
                 'baud_rate': self.get_parameter('uart.baud_rate').value,
-                'data_bits': self.get_parameter('uart.data_bits').value,
-                'parity': self.get_parameter('uart.parity').value,
-                'stop_bits': self.get_parameter('uart.stop_bits').value,
                 'timeout': self.get_parameter('uart.timeout').value,
-                'read_frequency': self.get_parameter('uart.read_frequency').value,
-                'write_frequency': self.get_parameter('uart.write_frequency').value,
             },
             'battery': {
                 'num_cells': self.get_parameter('battery.num_cells').value,
@@ -139,7 +130,7 @@ class Bringup(Node):
         
         if self.debug:
             self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
-        #self.get_logger().info(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
+        
         # Forward the limited velocities to the UART manager
         self.uart_manager.set_speed_command(
             v=limited_linear,
@@ -212,10 +203,12 @@ class Bringup(Node):
         
         # Check battery levels and take appropriate action
         if percentage < self.params['battery']['critical_percentage'] / 100.0:
-            self.get_logger().error(f'Battery critically low ({percentage:.1%})! Shutting down...')
+            #self.get_logger().error(f'Battery critically low ({percentage:.1%})! Shutting down...')
             #rclpy.shutdown()
+            pass
         elif percentage < self.params['battery']['warning_percentage'] / 100.0:
-            self.get_logger().warn(f'Battery low ({percentage:.1%})! Please charge soon.')
+            #self.get_logger().warn(f'Battery low ({percentage:.1%})! Please charge soon.')
+            pass
         
         msg = BatteryState()
         msg.header.stamp = self.get_clock().now().to_msg()

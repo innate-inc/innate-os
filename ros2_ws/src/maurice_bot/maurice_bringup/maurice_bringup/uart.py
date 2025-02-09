@@ -25,7 +25,7 @@ class UartManager:
     RESP_LED    = 0x82  # LED status feedback
     RESP_STATUS = 0x83  # Health (status) feedback
 
-    def __init__(self, node: Node, port='/dev/ttyTHS0', baud_rate=115200, timeout=0.1, debug=False):
+    def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, debug=False):
         self.node = node
         self.debug = debug
         self.logger = self.node.get_logger()
@@ -91,8 +91,22 @@ class UartManager:
         protocol_msg = bytes([cmd_id]) + data  # 7 bytes: command ID + data
         crc = self._calculate_crc(protocol_msg)
         packet = self.SOM_MARKER + protocol_msg + bytes([crc])
+        
+        # Enhanced debug logging
+        cmd_names = {
+            self.CMD_MOVE: "MOVE",
+            self.CMD_LED: "LED",
+            self.CMD_STATUS: "STATUS"
+        }
+        cmd_name = cmd_names.get(cmd_id, f"UNKNOWN({cmd_id})")
+        self.logger.info(f"Sending {cmd_name} command: {packet.hex(' ')}")
+        
         if self.debug:
-            self.logger.debug(f"Sending packet: {packet.hex(' ')}")
+            self.logger.debug(f"  SOM: {self.SOM_MARKER.hex(' ')}")
+            self.logger.debug(f"  CMD: {cmd_id:02X}")
+            self.logger.debug(f"  Data: {data.hex(' ')}")
+            self.logger.debug(f"  CRC: {crc:02X}")
+        
         self.ser.write(packet)
 
     def _send_speed_command(self):
