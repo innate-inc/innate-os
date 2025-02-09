@@ -93,20 +93,14 @@ class UartManager:
         crc = self._calculate_crc(protocol_msg)
         packet = self.SOM_MARKER + protocol_msg + bytes([crc])
         
-        # Enhanced debug logging
-        cmd_names = {
-            self.CMD_MOVE: "MOVE",
-            self.CMD_LED: "LED",
-            self.CMD_STATUS: "STATUS"
-        }
-        cmd_name = cmd_names.get(cmd_id, f"UNKNOWN({cmd_id})")
-        self.logger.info(f"Sending {cmd_name} command: {packet.hex(' ')}")
-        
-        if self.debug:
-            self.logger.debug(f"  SOM: {self.SOM_MARKER.hex(' ')}")
-            self.logger.debug(f"  CMD: {cmd_id:02X}")
-            self.logger.debug(f"  Data: {data.hex(' ')}")
-            self.logger.debug(f"  CRC: {crc:02X}")
+        # Only log LED commands
+        if cmd_id == self.CMD_LED:
+            self.logger.info(f"Sending LED command: {packet.hex(' ')}")
+            if self.debug:
+                self.logger.debug(f"  SOM: {self.SOM_MARKER.hex(' ')}")
+                self.logger.debug(f"  CMD: {cmd_id:02X}")
+                self.logger.debug(f"  Data: {data.hex(' ')}")
+                self.logger.debug(f"  CRC: {crc:02X}")
         
         self.ser.write(packet)
 
