@@ -29,7 +29,7 @@ class UartManager:
         self.node = node
         self.debug = debug
         self.logger = self.node.get_logger()
-
+        
         # -------------------------
         # Stored command values
         # -------------------------
@@ -64,6 +64,7 @@ class UartManager:
 
         # Start the fixed-rate communication loop at 50Hz in a separate thread
         self.running = True
+        self.update_frequency = update_frequency
         self.comm_thread = threading.Thread(target=self._communication_loop, daemon=True)
         self.comm_thread.start()
 
