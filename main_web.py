@@ -7,8 +7,7 @@ import os
 
 import genesis as gs
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -18,6 +17,8 @@ from src.agent.agent_websocket_bridge import run_agent_async
 
 # Import the new video & reset endpoints router
 from src.routes.video_api import router as video_api_router
+from src.routes.chat_api import router as chat_api_router
+from src.routes.webrtc_api import router as webrtc_api_router
 
 # -------------------------------------------------------------------------
 # FASTAPI APP
@@ -39,11 +40,8 @@ app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
 
 # Include the routers
 app.include_router(video_api_router)
-
-# Include the chat API router (if needed)
-from src.routes.chat_api import router as chat_api_router
-
 app.include_router(chat_api_router)
+app.include_router(webrtc_api_router)
 
 # Initialize a placeholder on the application's state so that downstream routers can retrieve SHARED_QUEUES.
 app.state.SHARED_QUEUES = None
