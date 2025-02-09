@@ -152,13 +152,13 @@ class Bringup(Node):
         """
         self.get_logger().info(
             f"Received light command: mode={request.mode}, r={request.r}, "
-            f"g={request.g}, b={request.b}, interval={request.interval_ms}"
+            f"g={request.g}, b={request.b}, interval={request.interval}"
         )
         
         if self.debug:
             self.get_logger().debug(
                 f"Received light command: mode={request.mode}, r={request.r}, "
-                f"g={request.g}, b={request.b}, interval={request.interval_ms}"
+                f"g={request.g}, b={request.b}, interval={request.interval}"
             )
         
         try:
