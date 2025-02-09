@@ -25,7 +25,7 @@ class UartManager:
     RESP_LED    = 0x82  # LED status feedback
     RESP_STATUS = 0x83  # Health (status) feedback
 
-    def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, debug=False):
+    def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, update_frequency=30.0, debug=False):
         self.node = node
         self.debug = debug
         self.logger = self.node.get_logger()
@@ -148,7 +148,7 @@ class UartManager:
                 self._read_response()  # Process health feedback
                 self.status_requested = False
 
-            time.sleep(1 / 50.0)  # 50Hz loop
+            time.sleep(1 / self.update_frequency)  # 50Hz loop
 
     # --- Sliding Window Based Read ---
     def _read_response(self):
