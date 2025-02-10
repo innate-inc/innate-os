@@ -41,13 +41,13 @@ export const PreviewContainer = styled.div`
  * For demonstration: The MainImage uses percentages so that it
  * scales automatically with the container's size.
  */
-export const MainImage = styled.img<{ viewMode: string }>`
+export const MainImage = styled.img<{ $viewMode: string }>`
   position: absolute;
   transition: all 0.8s ease-in-out;
   z-index: 1; /* behind secondary */
 
-  ${({ viewMode }) => {
-    switch (viewMode) {
+  ${({ $viewMode }) => {
+    switch ($viewMode) {
       case "sideBySide":
         return `
           /* Fill half the container's width, then center vertically if desired. */
@@ -104,13 +104,13 @@ export const MainImage = styled.img<{ viewMode: string }>`
 /**
  * Similarly, the SecondaryImage uses percentages and pinned corners if needed.
  */
-export const SecondaryImage = styled.img<{ viewMode: string }>`
+export const SecondaryImage = styled.img<{ $viewMode: string }>`
   position: absolute;
   transition: all 0.8s ease-in-out;
   z-index: 2; /* above main */
 
-  ${({ viewMode }) => {
-    switch (viewMode) {
+  ${({ $viewMode }) => {
+    switch ($viewMode) {
       case "sideBySide":
         return `
           /* Fill the right half of the container. */
@@ -149,8 +149,8 @@ export const SecondaryImage = styled.img<{ viewMode: string }>`
   }}
 
   @media (max-width: 768px) {
-    ${({ viewMode }) => {
-      if (viewMode === "frontFocus" || viewMode === "chaseFocus") {
+    ${({ $viewMode }) => {
+      if ($viewMode === "frontFocus" || $viewMode === "chaseFocus") {
         return `
           /* Keep pinned corner effect, just scale the width if desired */
           width: 30vw;

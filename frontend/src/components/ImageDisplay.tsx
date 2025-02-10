@@ -27,8 +27,8 @@ export function ImageDisplay({ viewMode }: ImageDisplayProps) {
 
   return (
     <PreviewContainer>
-      <MainImage viewMode={viewMode} src={mainSrc} alt="Main Camera" />
-      <SecondaryImage viewMode={viewMode} src={subSrc} alt="Sub Camera" />
+      <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
+      <SecondaryImage $viewMode={viewMode} src={subSrc} alt="Sub Camera" />
     </PreviewContainer>
   );
 }
