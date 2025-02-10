@@ -28,11 +28,11 @@ const ToggleWrapper = styled.div`
   }
 `;
 
-const Indicator = styled.div<{ index: number; maxIndex: number }>`
+const Indicator = styled.div<{ index: number; $maxIndex: number }>`
   position: absolute;
   top: 0;
   left: 0;
-  width: calc(100% / ${({ maxIndex }) => maxIndex});
+  width: calc(100% / ${({ $maxIndex }) => $maxIndex});
   height: 100%;
   transform: translateX(${(props) => props.index * 100}%);
   background: #ffffff;
@@ -50,13 +50,13 @@ const ButtonRow = styled.div`
   width: 100%;
 `;
 
-const ToggleButton = styled.button<{ active?: boolean }>`
+const ToggleButton = styled.button<{ $active?: boolean }>`
   flex: 1;
   position: relative;
   z-index: 1;
   background: transparent;
   border: none;
-  color: ${(props) => (props.active ? "#007aff" : "#8e8e93")};
+  color: ${(props) => (props.$active ? "#007aff" : "#8e8e93")};
   font-size: 16px;
   padding: 6px 0;
   cursor: pointer;
@@ -71,7 +71,7 @@ const ToggleButton = styled.button<{ active?: boolean }>`
   }
 
   @media (prefers-color-scheme: dark) {
-    color: ${(props) => (props.active ? "#4c9aff" : "#bbb")};
+    color: ${(props) => (props.$active ? "#4c9aff" : "#bbb")};
   }
 `;
 
@@ -99,12 +99,12 @@ export function ToggleViewMode({ viewMode, setViewMode }: Props) {
 
   return (
     <ToggleWrapper>
-      <Indicator index={currentIndex} maxIndex={modes.length} />
+      <Indicator index={currentIndex} $maxIndex={modes.length} />
       <ButtonRow>
         {modes.map((mode) => (
           <ToggleButton
             key={mode}
-            active={viewMode === mode}
+            $active={viewMode === mode}
             onClick={() => setViewMode(mode)}
           >
             {labels[mode]}
