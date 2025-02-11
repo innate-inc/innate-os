@@ -195,6 +195,8 @@ class SimulationNode:
                 self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
 
                 # Render both cameras
+                # BUG: When we are closing the visualizer and these two instructions are the one running they don't finish and the program gets stuck.
+                # Note that I only have it seen on macos, not on linux.
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
                 chase_rgb, _, _, _ = self.chase_camera.render()
 
