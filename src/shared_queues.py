@@ -1,6 +1,6 @@
 # src/shared_queues.py
 
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 import threading
 import queue
 
@@ -9,6 +9,7 @@ class ChatMessage(NamedTuple):
     sender: str
     text: str
     timestamp: float
+    timestamp_put_in_queue: Optional[float]  # Used to check if the message was lost
 
 
 class ChatSignal(NamedTuple):
