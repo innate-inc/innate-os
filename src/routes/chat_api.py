@@ -53,7 +53,11 @@ async def chat_websocket(websocket: WebSocket):
     # Task B: handle outbound messages from chat_from_bridge -> send to WebSocket
     async def handle_outbound_agent():
         while True:
-            msg = shared_queues.chat_from_bridge.get_nowait()
+            # BUG: sometimes one of these messages in the queue will get lost and i can't figure why
+            msg = await asyncio.get_event_loop().run_in_executor(
+                None, shared_queues.chat_from_bridge.get
+            )
+            print(f"[ChatAPI] Sending message: {msg}")
             await websocket.send_json(
                 {
                     "sender": msg.sender,
