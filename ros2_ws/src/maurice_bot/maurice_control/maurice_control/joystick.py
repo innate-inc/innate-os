@@ -19,6 +19,7 @@ class JoystickAxis:
         self.time_constant = time_constant
         self.dt = dt
         self.max_acceleration = max_acceleration
+        self.slow_mode_factor = slow_mode_factor
         self.current_val = 0.0
         self.current_acceleration = 0.0
     def shape_input(self, x, slow_mode: bool):
