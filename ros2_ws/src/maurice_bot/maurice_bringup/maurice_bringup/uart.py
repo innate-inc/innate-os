@@ -93,15 +93,6 @@ class UartManager:
         crc = self._calculate_crc(protocol_msg)
         packet = self.SOM_MARKER + protocol_msg + bytes([crc])
         
-        # Only log LED commands
-        # if cmd_id == self.CMD_LED:
-        #     self.logger.info(f"Sending LED command: {packet.hex(' ')}")
-        #     if self.debug:
-        #         self.logger.debug(f"  SOM: {self.SOM_MARKER.hex(' ')}")
-        #         self.logger.debug(f"  CMD: {cmd_id:02X}")
-        #         self.logger.debug(f"  Data: {data.hex(' ')}")
-        #         self.logger.debug(f"  CRC: {crc:02X}")
-        
         self.ser.write(packet)
 
     def _send_speed_command(self):
@@ -133,11 +124,9 @@ class UartManager:
 
             # Send LED command only if a new command is pending
             if self.latest_led is not None:
-                # self.logger.info("Sending LED command")
                 self._send_led_command()
                 self._read_response()  # Process LED status feedback
                 self.latest_led = None  # Reset after sending
-                # self.logger.info("LED command sent and processed")
 
             # Send status request only if one was triggered
             if self.status_requested:
@@ -165,8 +154,6 @@ class UartManager:
             if bytes_available:
                 new_bytes = self.ser.read(bytes_available)
                 self._rx_buffer.extend(new_bytes)
-                self.logger.info(f"Appended {len(new_bytes)} bytes to RX buffer (total {len(self._rx_buffer)})")
-            self.logger.info(f"Processing RX buffer: {self._rx_buffer.hex(' ')}")
 
             # Define FSM states.
             WAIT_FOR_FIRST_SOM = 0
@@ -183,7 +170,6 @@ class UartManager:
                     if self._rx_buffer[index] == 0x69:
                         packet = bytearray([0x69])
                         state = WAIT_FOR_SECOND_SOM
-                        self.logger.info("Found first SOM byte")
                     index += 1
 
                 elif state == WAIT_FOR_SECOND_SOM:
@@ -192,24 +178,19 @@ class UartManager:
                     if self._rx_buffer[index] == 0x69:
                         packet.append(0x69)
                         state = READ_PROTOCOL
-                        self.logger.info("Found second SOM byte")
                         index += 1
                     else:
-                        self.logger.info("Second SOM not found, resetting FSM")
                         state = WAIT_FOR_FIRST_SOM
                         packet = bytearray()
                         index += 1
 
                 elif state == READ_PROTOCOL:
-                    # Calculate how many protocol bytes (7 total) are needed.
                     bytes_needed = 7 - (len(packet) - 2)
                     if (len(self._rx_buffer) - index) >= bytes_needed:
                         packet.extend(self._rx_buffer[index:index + bytes_needed])
-                        self.logger.info(f"Read {bytes_needed} protocol bytes")
                         index += bytes_needed
                         state = READ_CRC
                     else:
-                        self.logger.info("Not enough protocol bytes; waiting for more data")
                         break
 
                 elif state == READ_CRC:
@@ -224,7 +205,6 @@ class UartManager:
                             if computed_crc == received_crc:
                                 msg_id = protocol_msg[0]
                                 data_field = protocol_msg[1:]
-                                self.logger.info(f"Received valid packet with ID 0x{msg_id:02X}: {data_field.hex(' ')}")
                                 self._process_response(msg_id, data_field)
                             else:
                                 self.logger.info(f"CRC mismatch: expected {computed_crc:02X}, got {received_crc:02X}")
@@ -271,8 +251,6 @@ class UartManager:
             self.current_transform.transform.rotation.w = math.cos(theta_rad / 2.0)
             if self.debug:
                 self.logger.debug(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
-            self.logger.info(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
-            self.logger.info(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
         elif msg_id == self.RESP_LED:
             try:
                 mode, red, green, blue, interval = struct.unpack(">B B B B H", data)
@@ -288,8 +266,6 @@ class UartManager:
             }
             if self.debug:
                 self.logger.debug(f"LED Status - Mode: {mode}, RGB: ({red},{green},{blue}), Interval: {interval}ms")
-            self.logger.info(f"LED Status - Mode: {mode}, RGB: ({red},{green},{blue}), Interval: {interval}ms")
-            self.logger.info(f"LED Status - Mode: {mode}, RGB: ({red},{green},{blue}), Interval: {interval}ms")
         elif msg_id == self.RESP_STATUS:
             try:
                 batt, temp, fault, _ = struct.unpack(">H H B B", data)
@@ -321,7 +297,6 @@ class UartManager:
           r, g, b: Color intensities (0-255)
           interval: Time parameter in milliseconds (1-10000) for modes that require an interval.
         """
-        # self.logger.info(f"Setting LED command - Mode: {mode}, RGB: ({r},{g},{b}), Interval: {interval}ms")
         self.latest_led = (mode, interval, r, g, b)
 
     def request_health(self):
