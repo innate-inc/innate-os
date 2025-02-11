@@ -1,0 +1,23 @@
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    return LaunchDescription(
+        [
+            Node(
+                package="brain_client",
+                executable="brain_client_node.py",
+                name="brain_client_node",
+                output="screen",
+                parameters=[
+                    {
+                        "websocket_uri": "ws://localhost:8765",  # default
+                        "token": "MY_HARDCODED_TOKEN",
+                        "image_topic": "/camera/color/image_raw/compressed",  # Updated to compressed
+                        "cmd_vel_topic": "/cmd_vel",
+                    }
+                ],
+            )
+        ]
+    )

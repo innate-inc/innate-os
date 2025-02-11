@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>maurice_sim_bringup</name>
+  <version>0.1.0</version>
+  <description>Minimal package that starts rosbridge for Maurice simulation.</description>
+  <maintainer email="you@example.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- We only need ament_cmake for building, and rosbridge_server for launching -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- rosbridge_server provides rosbridge_websocket_launch.xml -->
+  <exec_depend>rosbridge_server</exec_depend>
+  <exec_depend>rosbridge_suite</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

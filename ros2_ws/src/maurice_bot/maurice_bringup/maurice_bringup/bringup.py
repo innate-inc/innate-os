@@ -11,53 +11,54 @@ from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import BatteryState
 
 class Bringup(Node):
-    def __init__(self):
+    def __init__(self, debug=False):
         super().__init__('bringup')
+        
+        # Add debug parameter
+        self.debug = debug
+        if self.debug:
+            self.get_logger().info('Initializing Bringup node in debug mode')
         
         # Get parameters and initialize managers
         self.params = self._get_parameters()
         
         # Initialize managers
         self.battery_manager = BatteryManager(num_cells=self.params['battery']['num_cells'])
-        self.uart_manager = UartManager(self, **self.params['uart'])
+        # Only pass the required UART parameters: port, baud_rate, and timeout
+        self.uart_manager = UartManager(self, **self.params['uart'], debug=self.debug)
 
         # Setup ROS2 services and topics
         self._setup_services_and_topics()
 
     def _get_parameters(self):
         """Declare and get all node parameters."""
-        # Declare parameters
+        if self.debug:
+            self.get_logger().debug('Getting node parameters')
+        
+        # Declare parameters (only declaring the UART parameters needed for UartManager)
         self.declare_parameters(
             namespace='',
             parameters=[
                 ('uart.port', '/dev/ttyTHS1'),
                 ('uart.baud_rate', 115200),
-                ('uart.data_bits', 8),
-                ('uart.parity', 'none'),
-                ('uart.stop_bits', 1),
                 ('uart.timeout', 0.1),
-                ('uart.read_frequency', 30.0),
-                ('uart.write_frequency', 30.0),
+                ('uart.update_frequency', 30.0),
                 ('battery.num_cells', 6),
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
-                ('ros_topics.odom_frequency', 10.0),
+                ('ros_topics.odom_frequency', 30.0),
                 ('motion_control.max_speed', 2.5),
                 ('motion_control.max_angular_speed', 2.5),
             ]
         )
 
-        # Return all parameters in a structured dictionary
-        return {
+        # Build a structured dictionary with only the parameters needed by UartManager
+        params = {
             'uart': {
                 'port': self.get_parameter('uart.port').value,
                 'baud_rate': self.get_parameter('uart.baud_rate').value,
-                'data_bits': self.get_parameter('uart.data_bits').value,
-                'parity': self.get_parameter('uart.parity').value,
-                'stop_bits': self.get_parameter('uart.stop_bits').value,
                 'timeout': self.get_parameter('uart.timeout').value,
-                'read_frequency': self.get_parameter('uart.read_frequency').value,
-                'write_frequency': self.get_parameter('uart.write_frequency').value,
+                'update_frequency': self.get_parameter('uart.update_frequency').value,
             },
             'battery': {
                 'num_cells': self.get_parameter('battery.num_cells').value,
@@ -72,9 +73,16 @@ class Bringup(Node):
                 'odom_frequency': self.get_parameter('ros_topics.odom_frequency').value,
             }
         }
+        
+        if self.debug:
+            self.get_logger().debug(f'Retrieved parameters: {str(params)}')
+        return params
 
     def _setup_services_and_topics(self):
         """Setup all ROS2 services and topics for the node."""
+        if self.debug:
+            self.get_logger().debug('Setting up ROS2 services and topics')
+        
         # Create subscription to cmd_vel topic
         self.cmd_vel_sub = self.create_subscription(
             Twist,
@@ -110,6 +118,9 @@ class Bringup(Node):
             '/battery_state',
             10  # QoS profile depth
         )
+        
+        if self.debug:
+            self.get_logger().debug('Finished setting up ROS2 services and topics')
 
     def _cmd_vel_callback(self, msg: Twist):
         """Handle incoming velocity commands."""
@@ -119,6 +130,9 @@ class Bringup(Node):
         limited_angular = max(min(-msg.angular.z, self.params['motion_control']['max_angular_speed']), 
                              -self.params['motion_control']['max_angular_speed'])
         
+        if self.debug:
+            self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
+        
         # Forward the limited velocities to the UART manager
         self.uart_manager.set_speed_command(
             v=limited_linear,
@@ -126,18 +140,35 @@ class Bringup(Node):
         )
 
     def _handle_light_command(self, request, response):
-        """Handle incoming light control requests."""
+        """
+        Handle incoming light control requests.
+        This version uses the new LED command interface that accepts a numeric mode.
+        The mode should be:
+           0: Off
+           1: Solid
+           2: Blink
+           3: Ring
+        and the remaining fields specify the LED color and the time interval.
+        """
+        # self.get_logger().info(
+        #     f"Received light command: mode={request.mode}, r={request.r}, "
+        #     f"g={request.g}, b={request.b}, interval={request.interval}"
+        # )
+        
+        if self.debug:
+            self.get_logger().debug(
+                f"Received light command: mode={request.mode}, r={request.r}, "
+                f"g={request.g}, b={request.b}, interval={request.interval}"
+            )
+        
         try:
-            # Convert the type enum to light_type string
-            light_type = 'ring' if request.type == request.RING else 'all'
-            
-            # Forward the command to the UART manager
+            # Use the request.mode field directly
             self.uart_manager.set_light_command(
+                mode=request.mode,
                 r=request.r,
                 g=request.g,
                 b=request.b,
-                interval=request.interval_ms,
-                light_type=light_type
+                interval=request.interval
             )
             
             response.success = True
@@ -146,6 +177,10 @@ class Bringup(Node):
         except Exception as e:
             response.success = False
             response.message = f"Error executing light command: {str(e)}"
+            self.get_logger().error(f"Error executing light command: {str(e)}")
+        
+        if self.debug:
+            self.get_logger().debug(f"Light command response: {response.success}, {response.message}")
         
         return response
 
@@ -174,13 +209,25 @@ class Bringup(Node):
         voltage = self.uart_manager.battery_voltage
         percentage = self.battery_manager.get_percentage(voltage)
         
+        # Check battery levels and take appropriate action
+        if percentage < self.params['battery']['critical_percentage'] / 100.0:
+            #self.get_logger().error(f'Battery critically low ({percentage:.1%})! Shutting down...')
+            #rclpy.shutdown()
+            pass
+        elif percentage < self.params['battery']['warning_percentage'] / 100.0:
+            #self.get_logger().warn(f'Battery low ({percentage:.1%})! Please charge soon.')
+            pass
+        
         msg = BatteryState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.voltage = voltage
         msg.percentage = percentage
         msg.present = True
         msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
-        msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_GOOD
+        msg.power_supply_health = (
+            BatteryState.POWER_SUPPLY_HEALTH_GOOD if percentage > self.params['battery']['critical_percentage'] / 100.0
+            else BatteryState.POWER_SUPPLY_HEALTH_DEAD
+        )
         msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LIPO
         msg.cell_voltage = [voltage / self.params['battery']['num_cells']] * self.params['battery']['num_cells']
         
@@ -188,7 +235,7 @@ class Bringup(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Bringup()
+    node = Bringup(debug=False)
     rclpy.spin(node)
     rclpy.shutdown()
 

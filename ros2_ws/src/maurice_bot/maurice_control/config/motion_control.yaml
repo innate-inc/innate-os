@@ -1,0 +1,23 @@
+/**:
+  ros__parameters:
+    motion_control:
+      max_speed: 0.4
+      max_angular_speed: 1.0
+      max_acceleration: 0.8
+      max_angular_acceleration: 2.0
+      speed_time_constant: 0.3
+      angular_speed_time_constant: 0.3
+      dt: 0.02
+    joystick:
+      speed_deadzone: 0.3
+      angular_speed_deadzone: 0.3
+      speed_exponent: 2.0
+      angular_speed_exponent: 2.0
+      speed_axis: 1
+      angular_speed_axis: 0
+      slow_mode_button: 5
+      light_mode_button: 4
+      slow_mode_factor: 0.25
+      light_control:
+        blink_interval_ms: 300
+      

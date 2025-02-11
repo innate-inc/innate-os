@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  maurice:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: maurice-prod
+
+    # 2) Or just do a "do-nothing" command so the container doesn't exit
+    command: zsh -l
+
+    # 3) Keep container open for interactive usage
+    tty: true
+    stdin_open: true
