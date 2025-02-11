@@ -53,9 +53,7 @@ async def chat_websocket(websocket: WebSocket):
     # Task B: handle outbound messages from chat_from_bridge -> send to WebSocket
     async def handle_outbound_agent():
         while True:
-            msg = await asyncio.get_event_loop().run_in_executor(
-                None, shared_queues.chat_from_bridge.get
-            )
+            msg = shared_queues.chat_from_bridge.get_nowait()
             await websocket.send_json(
                 {
                     "sender": msg.sender,

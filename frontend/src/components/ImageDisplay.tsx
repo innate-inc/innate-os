@@ -23,8 +23,6 @@ export function ImageDisplay({ viewMode }: ImageDisplayProps) {
     subSrc = baseUrl + "/video_feed_chase";
   }
 
-  console.log("yo");
-
   return (
     <PreviewContainer>
       <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
