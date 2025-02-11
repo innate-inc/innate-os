@@ -20,7 +20,7 @@ def generate_launch_description():
         arguments=[
             "-0.07055", "0.0", "0.16018",  # Translation: X, Y, Z (in meters)
             "0", "0", "0",                # Rotation: roll, pitch, yaw (in radians)
-            "base_link", "laser_frame"     # Parent and child frames
+            "base_link", "base_scan"     # Parent and child frames
         ]
     )
 
