@@ -176,6 +176,7 @@ export function Chat() {
     if (!cleanDraft || !wsRef.current) return;
 
     // Send the draft message to the server via WebSocket
+    console.log("Sending message:", cleanDraft);
     wsRef.current.send(cleanDraft);
 
     // Clear the input
