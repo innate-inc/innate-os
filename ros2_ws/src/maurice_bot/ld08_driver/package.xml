@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ld08_driver</name>
+  <version>1.0.1</version>
+  <description>
+    ROS package for LD08 Lidar.
+    The Lidar sensor sends data to the Host controller for the Simultaneous Localization And Mapping(SLAM).
+  </description>
+  <maintainer email="willson@robotis.com">Will Son</maintainer>
+  <license>Apache 2.0</license>
+  <url type="website">http://wiki.ros.org/ld08_driver</url>
+  <url type="repository">https://github.com/ROBOTIS-GIT/ld08_driver</url>
+  <url type="bugtracker">https://github.com/ROBOTIS-GIT/ld08_driver/issues</url>
+  <author>LD Robot</author>
+  <author>Weyne</author>
+  <author>Will Son</author>
+  <author email="willson@robotis.com">Will Son</author>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
