@@ -240,8 +240,8 @@ class UartManager:
             self.current_transform.header.stamp = now
             self.current_transform.header.frame_id = "odom"
             self.current_transform.child_frame_id = "base_link"
-            self.current_transform.transform.translation.x = x / 100.0
-            self.current_transform.transform.translation.y = y / 100.0
+            self.current_transform.transform.translation.x = x / 1000.0
+            self.current_transform.transform.translation.y = y / 1000.0
             self.current_transform.transform.translation.z = 0.0
             import math
             theta_rad = theta / 100.0
