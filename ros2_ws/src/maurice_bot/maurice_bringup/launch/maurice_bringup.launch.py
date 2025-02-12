@@ -21,8 +21,14 @@ def generate_launch_description():
             os.path.join(pkg_dir, 'launch', 'lidar.launch.py')
         )
     )
+    camera_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_dir, 'launch', 'camera.launch.py')
+        )
+    )
     
     return LaunchDescription([
         bringup_core_launch,
         lidar_launch,
+        camera_launch,
     ])

@@ -43,7 +43,8 @@ class UartManager:
         # -------------------------
         # Stored responses
         # -------------------------
-        self.current_transform = TransformStamped()  # Latest position feedback
+        # Initialize zero transform for odom->base_link using a dedicated method.
+        self.current_transform = self._initialize_transform()
         self.current_led_status = None                # Latest LED status (dictionary)
         self.battery_voltage = 0.0                      # Latest battery voltage
         self.motor_temperature = 0.0                    # Latest motor temperature
@@ -67,6 +68,22 @@ class UartManager:
         self.update_frequency = update_frequency
         self.comm_thread = threading.Thread(target=self._communication_loop, daemon=True)
         self.comm_thread.start()
+
+    def _initialize_transform(self) -> TransformStamped:
+        """
+        Initializes and returns a zero (identity) transform from "odom" to "base_link".
+        """
+        transform = TransformStamped()
+        transform.header.frame_id = "odom"
+        transform.child_frame_id = "base_link"
+        transform.transform.translation.x = 0.0
+        transform.transform.translation.y = 0.0
+        transform.transform.translation.z = 0.0
+        transform.transform.rotation.x = 0.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = 0.0
+        transform.transform.rotation.w = 1.0
+        return transform
 
     # --- CRC Calculation (CRC-8/MAXIM, LSB-first) ---
     def _calculate_crc(self, data: bytes) -> int:
@@ -221,8 +238,6 @@ class UartManager:
             self._rx_buffer = self._rx_buffer[index:]
         except Exception as e:
             self.logger.info(f"Error in _read_response FSM: {e}")
-
-
 
     # --- Processing Responses ---
     def _process_response(self, msg_id: int, data: bytes):
