@@ -93,6 +93,7 @@ async def inbound_loop(ws, shared_queues):
                         sender="robot",
                         text=text,
                         timestamp=time.time(),
+                        timestamp_put_in_queue=time.time(),
                     )
                     # Forward to sim
                     shared_queues.chat_from_bridge.put_nowait(chat_msg)
@@ -129,7 +130,7 @@ async def inbound_loop(ws, shared_queues):
                         )
                         print(f"[ROSBridge] Chat message added to queue: {chat_msg}")
                         try:
-                            shared_queues.chat_from_bridge.put(chat_msg)
+                            shared_queues.chat_from_bridge.put_nowait(chat_msg)
                         except queue.Full:
                             print(
                                 "[ROSBridge] chat_from_bridge queue is full; dropping chat message."
