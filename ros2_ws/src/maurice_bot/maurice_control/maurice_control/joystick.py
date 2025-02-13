@@ -19,6 +19,7 @@ class JoystickAxis:
         self.time_constant = time_constant
         self.dt = dt
         self.max_acceleration = max_acceleration
+        self.slow_mode_factor = slow_mode_factor
         self.current_val = 0.0
         self.current_acceleration = 0.0
     def shape_input(self, x, slow_mode: bool):
@@ -119,7 +120,7 @@ class JoystickController(Node):
     
     
     def send_light_command(self):
-        # Generate random RGB values
+    # Generate random RGB values
         r = random.randint(0, 255)
         g = random.randint(0, 255)
         b = random.randint(0, 255)
@@ -129,17 +130,20 @@ class JoystickController(Node):
         request.g = g
         request.b = b
         
-        # Set parameters based on current mode
-        if self.light_mode == 0:    # Solid all
-            request.type = LightCommand.Request.ALL
-            request.interval_ms = 0
-        elif self.light_mode == 1:  # Blinking all
-            request.type = LightCommand.Request.ALL
-            request.interval_ms = self.blink_interval_ms
-        else:                       # Blinking ring
-            request.type = LightCommand.Request.RING
-            request.interval_ms = self.blink_interval_ms
-            
+        # Map current light mode to the service request
+        if self.light_mode == 0:
+            request.mode = LightCommand.Request.OFF
+            request.interval = 0
+        elif self.light_mode == 1:
+            request.mode = LightCommand.Request.SOLID
+            request.interval = 0
+        elif self.light_mode == 2:
+            request.mode = LightCommand.Request.BLINK
+            request.interval = self.blink_interval_ms
+        elif self.light_mode == 3:
+            request.mode = LightCommand.Request.RING
+            request.interval = self.blink_interval_ms
+        
         self.light_client.call_async(request)
         self.get_logger().info(f'Sent light command: mode={self.light_mode}, RGB=({r},{g},{b})')
     
@@ -159,7 +163,7 @@ class JoystickController(Node):
         # Check button 4 state for light mode
         button_light = self.joystick.get_button(self.light_mode_button)
         if button_light and not self.button_light_previous:
-            self.light_mode = (self.light_mode + 1) % 3
+            self.light_mode = (self.light_mode + 1) % 4
             self.send_light_command()
         self.button_light_previous = button_light
         

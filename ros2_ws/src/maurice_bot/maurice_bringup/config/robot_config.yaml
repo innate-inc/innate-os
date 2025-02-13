@@ -1,14 +1,10 @@
 /**:
   ros__parameters:
     uart:
-      baud_rate: 115200
       port: "/dev/ttyTHS1"
-      data_bits: 8
-      parity: "none"
-      stop_bits: 1
+      baud_rate: 115200
       timeout: 0.1
-      read_frequency: 30.0
-      write_frequency: 30.0
+      update_frequency: 30.0
     battery:
       num_cells: 3
       warning_percentage: 20
@@ -16,5 +12,4 @@
     motion_control:
       max_speed: 0.4
       max_angular_speed: 2.5
-    ros_topics:
-      odom_frequency: 10.0
+      odom_frequency: 30.0
