@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import traceback
 import rclpy
 from rclpy.node import Node
 
@@ -15,7 +16,6 @@ import websockets
 from brain_client.message_types import (
     MessageIn,
     MessageInType,
-    MessageOut,
     MessageOutType,
     TaskType,
     VisionAgentOutput,
@@ -26,6 +26,7 @@ from std_msgs.msg import String
 from brain_messages.srv import GetChatHistory
 
 from brain_client.ws_client import WSClient
+from brain_client.nav2_test import goto_position
 
 
 class BrainClientNode(Node):
@@ -99,6 +100,9 @@ class BrainClientNode(Node):
             )
 
     def handle_get_chat_history(self, request, response):
+        self.get_logger().info(
+            f"Received get_chat_history request. History: {self.chat_history}"
+        )
         response.history = json.dumps(self.chat_history)
         return response
 
@@ -116,9 +120,11 @@ class BrainClientNode(Node):
     async def _handle_vision_agent_output(self, msg):
         try:
             payload = VisionAgentOutput.model_validate(msg.payload)
-            self.handle_vision_agent_output(payload)
+            await self.handle_vision_agent_output(payload)
         except Exception as e:
+            # Put the traceback in the log
             self.get_logger().error(f"Error processing vision output: {e}")
+            self.get_logger().error(f"Traceback: {traceback.format_exc()}")
 
     async def _handle_chat_out(self, msg):
         text = msg.payload.get("text", "")
@@ -128,19 +134,24 @@ class BrainClientNode(Node):
         out_msg = String(data=text)
         self.chat_out_pub.publish(out_msg)
 
-    def handle_vision_agent_output(self, payload: VisionAgentOutput):
+    async def handle_vision_agent_output(self, payload: VisionAgentOutput):
         if payload.next_task is not None:
             self.get_logger().debug(f"[BrainClient] Next task: {payload.next_task}")
-            if payload.next_task.type == TaskType.VELOCITY_CONTROL:
-                velocity_dict = json.loads(payload.next_task.description)
-                twist_msg = Twist(
-                    linear=Vector3(x=velocity_dict["forward"]),
-                    angular=Vector3(z=velocity_dict["angle"]),
-                )
-                self.cmd_vel_pub.publish(twist_msg)
+            # if payload.next_task.type == TaskType.VELOCITY_CONTROL:
+            #     velocity_dict = json.loads(payload.next_task.description)
+            #     twist_msg = Twist(
+            #         linear=Vector3(x=velocity_dict["forward"]),
+            #         angular=Vector3(z=velocity_dict["angle"]),
+            #     )
+            #     self.cmd_vel_pub.publish(twist_msg)
             if payload.next_task.type == TaskType.NAVIGATION_TO_POSITION:
                 self.get_logger().info(
-                    f"[BrainClient] Navigating to position: {payload.next_task.description}"
+                    f"[BrainClient] Navigating to position: {payload.next_task.position}"
+                )
+                await goto_position(
+                    payload.next_task.inputs.x,
+                    payload.next_task.inputs.y,
+                    1.0,
                 )
                 # TODO: Implement navigation to position
         else:
