@@ -6,17 +6,22 @@ from pydantic import BaseModel, field_serializer
 
 
 class TaskType(Enum):
-    NAVIGATION_IN_SIGHT = "navigation_in_sight"
-    NAVIGATION_OUT_OF_SIGHT = "navigation_out_of_sight"
+    # NAVIGATION_IN_SIGHT = "navigation_in_sight"
+    # NAVIGATION_OUT_OF_SIGHT = "navigation_out_of_sight"
     NAVIGATION_TO_POSITION = "navigation_to_position"
-    ACTION_WITH_ARM = "action_with_arm"
-    ASK_FOR_INFORMATION = "ask_for_information"
-    VELOCITY_CONTROL = "velocity_control"
+    # ACTION_WITH_ARM = "action_with_arm"
+    # ASK_FOR_INFORMATION = "ask_for_information"
+    # VELOCITY_CONTROL = "velocity_control"
+
+
+class NavigationToPosition(BaseModel):
+    x: float
+    y: float
 
 
 class Task(BaseModel):
     type: TaskType
-    description: str
+    position: NavigationToPosition
 
     @field_serializer("type")
     def serialize_task_type(self, value: TaskType) -> str:
@@ -65,6 +70,5 @@ class VisionAgentOutput(BaseModel):
     thoughts: str
     new_goal: Optional[str]
     next_task: Optional[Task] = None
-    users_implicated: List[str]
     anticipation: Optional[str]
     to_tell_user: Optional[str]
