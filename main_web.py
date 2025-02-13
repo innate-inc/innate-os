@@ -7,8 +7,7 @@ import os
 
 import genesis as gs
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -16,9 +15,9 @@ from src.shared_queues import SharedQueues
 from src.simulation.simulation_node import SimulationNode
 from src.agent.agent_websocket_bridge import run_agent_async
 
-# Import your new router
+# Import the new video & reset endpoints router
+from src.routes.video_api import router as video_api_router
 from src.routes.chat_api import router as chat_api_router
-
 
 # -------------------------------------------------------------------------
 # FASTAPI APP
@@ -28,7 +27,7 @@ app = FastAPI()
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or a more restrictive list
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,95 +35,35 @@ app.add_middleware(
 
 # Mount the React build directory
 frontend_build_path = os.path.join(os.path.dirname(__file__), "frontend", "dist")
-app.mount(
-    "/static",
-    StaticFiles(directory=frontend_build_path),
-    name="static",
-)
+app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
 
-# Mount the new router
+# Include the routers
+app.include_router(video_api_router)
 app.include_router(chat_api_router)
 
-# Initialize a placeholder on the application's state
-# so that downstream routers can retrieve SHARED_QUEUES.
+# Initialize a placeholder on the application's state so that downstream routers can retrieve SHARED_QUEUES.
 app.state.SHARED_QUEUES = None
 
 # -------------------------------------------------------------------------
 # SHARED QUEUES
 # -------------------------------------------------------------------------
-SHARED_QUEUES: SharedQueues = None  # we'll populate this later
-
-
-# -------------------------------------------------------------------------
-# FASTAPI ROUTES
-# -------------------------------------------------------------------------
-@app.get("/video_feed")
-def video_feed():
-    """Returns a multipart/x-mixed-replace streaming response of JPEG frames."""
-    return StreamingResponse(
-        mjpeg_generator(), media_type="multipart/x-mixed-replace; boundary=frame"
-    )
-
-
-@app.get("/video_feed_chase")
-def video_feed_chase():
-    """Video streaming route for the chase camera."""
-    return StreamingResponse(
-        mjpeg_generator("chase"), media_type="multipart/x-mixed-replace; boundary=frame"
-    )
-
-
-def mjpeg_generator(camera_name="first_person"):
-    """Continuously yields frames from SHARED_QUEUES.sim_to_web as JPEG."""
-    global SHARED_QUEUES
-    while True:
-        if SHARED_QUEUES is None:
-            time.sleep(0.1)
-            continue
-
-        frame = SHARED_QUEUES.latest_frames.get(camera_name)
-
-        if frame is None:
-            time.sleep(0.01)
-            continue
-
-        success, encoded_image = cv2.imencode(".jpg", frame)
-        if not success:
-            continue
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n" + encoded_image.tobytes() + b"\r\n"
-        )
+SHARED_QUEUES: SharedQueues = None  # We'll populate this later
 
 
 def frame_collector(shared_queues: SharedQueues):
-    """Continuously read from sim_to_web and store the frames in latest_frames."""
+    """
+    Continuously read from sim_to_web and update the latest_frames.
+    """
     while not shared_queues.exit_event.is_set():
         frames_dict = shared_queues.sim_to_web.get()  # blocks until new frames
         if frames_dict is None:
-            # In case you ever put a sentinel in the queue
             break
-        # Overwrite the dictionary with the newly arrived frames
+        # Update the latest_frames dictionary with newly arrived frames
         for cam_name, frame in frames_dict.items():
             shared_queues.latest_frames[cam_name] = frame
 
 
-@app.post("/reset_robot")
-async def reset_robot(request: Request):
-    """
-    Enqueues a reset command to move the robot back to its origin.
-    """
-    global SHARED_QUEUES
-    if SHARED_QUEUES is not None:
-        from src.agent.types import ResetRobotCmd
-
-        try:
-            SHARED_QUEUES.agent_to_sim.put_nowait(ResetRobotCmd())
-        except:
-            return {"status": "queue_full"}
-        return {"status": "reset_enqueued"}
-    else:
-        return {"status": "no_shared_queues"}
+# Additional endpoints and functions (if any) can be placed here.
 
 
 # -------------------------------------------------------------------------
@@ -133,23 +72,22 @@ async def reset_robot(request: Request):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-v", "--vis", action="store_true", help="Enable Genesis viewer in main thread."
+        "-v", "--vis", action="store_true", default=False, help="Enable visualization"
     )
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Use local agent server (ws://localhost:9090).",
+        default=False,
+        help="Connect to local agent server instead of cloud",
     )
     args = parser.parse_args()
 
     # 1) Create shared queues
     global SHARED_QUEUES
     SHARED_QUEUES = SharedQueues()
-
-    # Make them available to the entire app
     app.state.SHARED_QUEUES = SHARED_QUEUES
 
-    # 1b) Start the background collector
+    # 1b) Start the background frame collector
     collector_thread = threading.Thread(
         target=frame_collector, args=(SHARED_QUEUES,), daemon=True
     )
@@ -168,48 +106,41 @@ def main():
         ),
     )
 
-    # 4) Start Uvicorn in another thread (so if you close the Genesis viewer, everything can shut down)
+    # 4) Start Uvicorn in another thread so the Genesis viewer and FastAPI server run concurrently
     def run_uvicorn():
         config = uvicorn.Config(
             app=app, host="0.0.0.0", port=8000, log_level="info", reload=False
         )
         server = uvicorn.Server(config)
-        server.run()  # this is a blocking call
+        server.run()
 
     uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
     uvicorn_thread.start()
 
     # 5) Launch simulation run() in its own thread (macOS) or directly (other platforms)
-    if platform.system() == "Darwin":  # macOS
+    if platform.system() == "Darwin":
         gs.tools.run_in_another_thread(fn=sim_node.run, args=())
     else:
-        sim_node.run()  # run directly on non-macOS platforms
+        sim_node.run()
 
-    # 6) If visualization is requested, do the viewer in the MAIN thread
-    #    Because typically rendering loops want to run in main. So we'll block here
-    #    until the viewer is closed, or until user hits Ctrl+C
+    # 6) If visualization is requested, drive the viewer in the main thread
     if args.vis:
         try:
-            sim_node.scene.viewer.start()  # blocks until the viewer closes
+            sim_node.scene.viewer.start()
         except KeyboardInterrupt:
             pass
         print("[Main] Viewer closed or keyboard interrupt. Shutting down...")
-
     else:
         print("[Main] No viewer requested. Press Ctrl+C to stop.")
-        # We can just wait in a loop for Ctrl+C
         try:
             while not SHARED_QUEUES.exit_event.is_set():
                 time.sleep(1.0)
         except KeyboardInterrupt:
             pass
 
-    # 7) On exit, signal everything to stop
+    # 7) On exit, signal all threads to stop
     SHARED_QUEUES.exit_event.set()
-
-    # Wait for threads to finish
     agent_thread.join()
-    # uvicorn_thread is daemon=True so it should die with the process
     print("[Main] All threads finished. Goodbye.")
 
 

@@ -30,21 +30,21 @@ const MessagesWrapper = styled.div`
 `;
 
 interface MessageBubbleProps {
-  isUser: boolean;
+  $isUser: boolean;
 }
 
 const MessageBubble = styled.div<MessageBubbleProps>`
-  background: ${({ isUser }) => (isUser ? "#efefef" : "transparent")};
+  background: ${({ $isUser }) => ($isUser ? "#efefef" : "transparent")};
   border: none;
   border-radius: 20px;
   padding: 10px 15px;
   margin-bottom: 10px;
-  align-self: ${({ isUser }) => (isUser ? "flex-end" : "flex-start")};
-  text-align: ${({ isUser }) => (isUser ? "right" : "left")};
+  align-self: ${({ $isUser }) => ($isUser ? "flex-end" : "flex-start")};
+  text-align: ${({ $isUser }) => ($isUser ? "right" : "left")};
 
   @media (prefers-color-scheme: dark) {
     /* Dark-mode version of the bubbles */
-    background: ${({ isUser }) => (isUser ? "#444" : "transparent")};
+    background: ${({ $isUser }) => ($isUser ? "#444" : "transparent")};
     color: #fff;
   }
 `;
@@ -176,6 +176,7 @@ export function Chat() {
     if (!cleanDraft || !wsRef.current) return;
 
     // Send the draft message to the server via WebSocket
+    console.log("Sending message:", cleanDraft);
     wsRef.current.send(cleanDraft);
 
     // Clear the input
@@ -186,7 +187,7 @@ export function Chat() {
     <ChatContainer>
       <MessagesWrapper>
         {messages.map((m, idx) => (
-          <MessageBubble key={idx} isUser={m.sender === "user"}>
+          <MessageBubble key={idx} $isUser={m.sender === "user"}>
             {m.text}
           </MessageBubble>
         ))}
