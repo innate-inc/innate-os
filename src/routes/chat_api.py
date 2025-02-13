@@ -47,8 +47,16 @@ async def chat_websocket(websocket: WebSocket):
     async def handle_inbound_user():
         while True:
             data = await websocket.receive_text()
-            new_entry = ChatMessage(sender="user", text=data, timestamp=time.time())
+            print(f"[ChatAPI] Received message: {data}")
+            new_entry = ChatMessage(
+                sender="user",
+                text=data,
+                timestamp=time.time(),
+                timestamp_put_in_queue=time.time(),
+            )
+            print(f"[ChatAPI] Message adding to queue: {new_entry}")
             shared_queues.chat_to_bridge.put_nowait(new_entry)
+            print(f"[ChatAPI] Message added to queue: {new_entry}")
 
     # Task B: handle outbound messages from chat_from_bridge -> send to WebSocket
     async def handle_outbound_agent():
