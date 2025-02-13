@@ -30,6 +30,8 @@ class Bringup(Node):
         # Setup ROS2 services and topics
         self._setup_services_and_topics()
 
+        self.uart_manager.set_light_command(mode=3, r=0, g=255, b=0, interval=100)
+
     def _get_parameters(self):
         """Declare and get all node parameters."""
         if self.debug:
