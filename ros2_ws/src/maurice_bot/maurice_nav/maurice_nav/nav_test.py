@@ -20,7 +20,7 @@ async def async_main():
     goal_pose.header.frame_id = "map"
     goal_pose.header.stamp = navigator.get_clock().now().to_msg()
     goal_pose.pose.position.x = 0.0
-    goal_pose.pose.position.y = 1.0
+    goal_pose.pose.position.y = -1.0
     goal_pose.pose.position.z = 0.0
     # Identity quaternion: no rotation.
     goal_pose.pose.orientation.x = 0.0
