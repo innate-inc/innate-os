@@ -4,6 +4,7 @@ A simple test node that sends a navigation goal using nav2_simple_commander asyn
 """
 
 import asyncio
+import traceback
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
@@ -68,5 +69,45 @@ async def async_main():
     rclpy.shutdown()
 
 
+async def wrap_execution(f):
+    """
+    Wraps an awaitable (the primitive's execution coroutine) and yields status messages.
+
+    :param coro: The awaitable (coroutine) representing the primitive execution.
+    :yield: Status update dictionaries.
+    """
+    # Yield the "started" event
+    yield {"status": "started", "message": "Execution started."}
+    try:
+        # Await the actual execution
+        result = await f()
+    except asyncio.CancelledError:
+        # Yield "interrupted" event if there is a cancellation
+        yield {
+            "status": "interrupted",
+            "message": "Execution was interrupted.",
+        }
+        raise
+    except Exception as e:
+        # Yield "failed" event if any exception is raised
+        yield {
+            "status": "failed",
+            "message": f"Execution failed with error: {e}. Traceback: {traceback.format_exc()}",
+        }
+        raise
+    else:
+        # If everything goes fine, yield "completed" event
+        yield {
+            "status": "completed",
+            "result": result,
+        }
+
+
+async def main():
+    gen = wrap_execution(async_main)
+    async for status in gen:
+        print(status)
+
+
 if __name__ == "__main__":
-    asyncio.run(async_main())
+    asyncio.run(main())
