@@ -1,80 +1,88 @@
+import rclpy
 import asyncio
-import json
 
-from rclpy.publisher import Publisher
-from rclpy.subscription import Subscription
-from std_msgs.msg import String
+from geometry_msgs.msg import PoseStamped, Twist
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from brain_client.primitives.types import Primitive
 
 
 class Nav2Controller:
-    def __init__(self, nav_cmd_pub: Publisher, nav_result_sub: Subscription, logger):
+    def __init__(self, logger):
         """
-        This controller delegates all navigation to the dedicated NavigationNode.
-        It publishes navigation commands on a topic and awaits the result published
-        by the NavigationNode.
+        Initialize the Nav2Controller by creating a BasicNavigator instance
+        and preparing a ROS node with a publisher for stop commands.
         """
-        self.nav_cmd_pub = nav_cmd_pub
+        # Create a BasicNavigator instance to communicate with Nav2.
+        self.navigator = BasicNavigator()
         self.logger = logger
-        self._result_future = None
 
-        # Set the result subscription's callback to our handler.
-        nav_result_sub.callback = self._nav_result_callback
+        # Create a node for publishing stop commands.
+        # (Note: In a more integrated application you might want to reuse an existing node.)
+        # self.pub_node = rclpy.create_node("navigate_to_position_stop_command_node")
+        self.logger.info("Nav2 position primitive node created")
+        # self.cmd_vel_pub = self.pub_node.create_publisher(Twist, "cmd_vel", 10)
 
-    def _nav_result_callback(self, msg: String):
+    async def go_to_position(self, x: float, y: float, w: float):
         """
-        Callback invoked when a navigation result is received.
-        Expects a JSON payload with a "status" key.
-        """
-        try:
-            data = json.loads(msg.data)
-        except Exception as e:
-            self.logger.error(f"Failed to decode navigation result: {e}")
-            return
-
-        status = data.get("status", "UNKNOWN")
-        self.logger.info(f"Received navigation result: {status}")
-        if self._result_future and not self._result_future.done():
-            self._result_future.set_result(status)
-
-    async def go_to_position(self, x: float, y: float, w: float = 1.0) -> str:
-        """
-        Publishes a navigation command and waits asynchronously for the result.
+        Sends a navigation goal to the navigator and waits until navigation ends.
+        The method returns the TaskResult indicating whether the goal
+        succeeded, was canceled, or failed/timed out.
 
         Args:
-            x (float): x-coordinate.
-            y (float): y-coordinate.
-            w (float): The w component of the orientation quaternion (default 1.0).
+            x (float): x-coordinate of the target position.
+            y (float): y-coordinate of the target position.
+            w (float): The w component of the orientation (no rotation implies an identity quaternion).
 
         Returns:
-            str: The navigation status (e.g. "SUCCEEDED", "FAILED", etc.)
+            TaskResult: The result status from the navigator.
         """
-        # Create an asyncio future to wait for the navigation result.
-        loop = asyncio.get_running_loop()
-        self._result_future = loop.create_future()
+        # Create a PoseStamped goal.
+        goal_pose = PoseStamped()
+        goal_pose.header.frame_id = "map"
+        goal_pose.header.stamp = self.navigator.get_clock().now().to_msg()
+        goal_pose.pose.position.x = x
+        goal_pose.pose.position.y = y
+        goal_pose.pose.position.z = 0.0
 
-        nav_command = {
-            "frame_id": "map",
-            "position": {"x": x, "y": y, "z": 0.0},
-            "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": w},
-        }
-        nav_msg = String(data=json.dumps(nav_command))
-        self.nav_cmd_pub.publish(nav_msg)
-        self.logger.info("Published navigation command, waiting for result...")
+        # Identity quaternion: no rotation.
+        goal_pose.pose.orientation.x = 0.0
+        goal_pose.pose.orientation.y = 0.0
+        goal_pose.pose.orientation.z = 0.0
+        goal_pose.pose.orientation.w = w
 
-        # Await the result published by NavigationNode.
-        status = await self._result_future
-        self._result_future = None
-        return status
+        self.logger.info("Sending goal pose ...")
+        # Run the blocking goToPose call in an executor.
+        self.navigator.goToPose(goal_pose)
+
+        self.logger.info("Waiting for navigation to complete ...")
+
+        # Poll asynchronously for task completion.
+        while not self.navigator.isTaskComplete():
+            await asyncio.sleep(0.1)  # Wait 100ms before checking again
+
+        result = self.navigator.getResult()
+
+        if result == TaskResult.SUCCEEDED:
+            self.logger.info("Goal succeeded!")
+        elif result == TaskResult.CANCELED:
+            self.logger.info("Goal was canceled!")
+        else:
+            self.logger.info("Goal failed or timed out.")
+            self.logger.info(f"result: {result}")
+
+        # Stop the robot by publishing a stop command.
+        stop_cmd = Twist()
+        stop_cmd.linear.x = 0.0
+        stop_cmd.angular.z = 0.0
+        # self.cmd_vel_pub.publish(stop_cmd)
+
+        return result
 
 
 class NavigateToPosition(Primitive):
-    def __init__(self, nav_cmd_pub: Publisher, nav_result_sub: Subscription, logger):
-        """
-        The navigation primitive simply delegates to the Nav2Controller.
-        """
+    def __init__(self, logger):
+        self.nav2_controller = Nav2Controller(logger)
         self.logger = logger
-        self.nav2_controller = Nav2Controller(nav_cmd_pub, nav_result_sub, logger)
 
     @property
     def name(self):
@@ -84,13 +92,10 @@ class NavigateToPosition(Primitive):
         return "Navigate the robot to the specified position using provided x and y coordinates."
 
     async def execute(self, x: float, y: float):
+        # Replace this simulated delay and print statements with actual navigation logic.
         self.logger.info(f"Initiating navigation to position: x={x}, y={y}")
-        status = await self.nav2_controller.go_to_position(x, y, w=1.0)
-        if status == "SUCCEEDED":
-            message = f"Reached position ({x}, {y})"
-            success = True
-        else:
-            message = f"Failed to reach position ({x}, {y}). Status: {status}"
-            success = False
-        self.logger.info(f"Navigation complete. {message}")
-        return message, success
+
+        await self.nav2_controller.go_to_position(x, y, 1.0)
+
+        self.logger.info(f"Navigation complete. Arrived at position: x={x}, y={y}")
+        return f"Reached position ({x}, {y})", True

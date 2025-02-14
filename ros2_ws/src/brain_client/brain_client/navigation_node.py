@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
-from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from nav2_simple_commander.robot_navigator import BasicNavigator
 import json
 
 
@@ -15,7 +15,6 @@ class NavigationNode(Node):
         self.nav_cmd_sub = self.create_subscription(
             String, "/navigation_command", self.nav_cmd_callback, 10
         )
-        self.nav_result_pub = self.create_publisher(String, "/navigation_result", 10)
         self.get_logger().info("NavigationNode started and waiting for commands.")
 
     def nav_cmd_callback(self, msg: String):
@@ -43,21 +42,7 @@ class NavigationNode(Node):
         self.get_logger().info(f"Navigating to: {pos}")
         # This call blocks until navigation is complete.
         self.navigator.goToPose(goal_pose)
-        result = self.navigator.getResult()
         self.get_logger().info("Navigation command completed.")
-
-        # Determine a status string based on the result.
-        if result == TaskResult.SUCCEEDED:
-            status = "SUCCEEDED"
-        elif result == TaskResult.CANCELED:
-            status = "CANCELED"
-        else:
-            status = "FAILED"
-
-        # Publish the result on /navigation_result.
-        result_msg = String(data=json.dumps({"status": status}))
-        self.nav_result_pub.publish(result_msg)
-        self.get_logger().info(f"Published navigation result: {status}")
 
 
 def main(args=None):
