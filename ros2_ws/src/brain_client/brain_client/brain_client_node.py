@@ -21,12 +21,13 @@ from brain_client.message_types import (
     VisionAgentOutput,
 )
 from sensor_msgs.msg import CompressedImage
-from geometry_msgs.msg import Twist, Vector3
+from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from brain_messages.srv import GetChatHistory
 
 from brain_client.ws_client import WSClient
-from brain_client.nav2_test import goto_position
+from brain_client.primitives.navigate_to_position import NavigateToPosition
+from brain_client.primitives.wrappers import wrap_execution
 
 
 class BrainClientNode(Node):
@@ -67,6 +68,11 @@ class BrainClientNode(Node):
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
+
+        # Primitives defined here
+        self.primitives_available = {
+            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition,
+        }
 
         # Exit event and image readiness flag
         self.exit_event = threading.Event()
@@ -119,6 +125,7 @@ class BrainClientNode(Node):
 
     async def _handle_vision_agent_output(self, msg):
         try:
+            self.get_logger().info(f"[BrainClient] VisionAgentOutput: {msg}")
             payload = VisionAgentOutput.model_validate(msg.payload)
             await self.handle_vision_agent_output(payload)
         except Exception as e:
@@ -136,24 +143,42 @@ class BrainClientNode(Node):
 
     async def handle_vision_agent_output(self, payload: VisionAgentOutput):
         if payload.next_task is not None:
-            self.get_logger().debug(f"[BrainClient] Next task: {payload.next_task}")
-            # if payload.next_task.type == TaskType.VELOCITY_CONTROL:
-            #     velocity_dict = json.loads(payload.next_task.description)
-            #     twist_msg = Twist(
-            #         linear=Vector3(x=velocity_dict["forward"]),
-            #         angular=Vector3(z=velocity_dict["angle"]),
-            #     )
-            #     self.cmd_vel_pub.publish(twist_msg)
-            if payload.next_task.type == TaskType.NAVIGATION_TO_POSITION:
+            self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
+            # TODO: Remove this once we have a real task.
+            payload.next_task.type = TaskType.NAVIGATE_TO_POSITION
+            payload.next_task.inputs["x"] = 1.0
+            payload.next_task.inputs["y"] = 1.0
+            if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
                 self.get_logger().info(
-                    f"[BrainClient] Navigating to position: {payload.next_task.position}"
+                    f"[BrainClient] Navigating to position: {payload.next_task.inputs}"
                 )
-                await goto_position(
-                    payload.next_task.inputs.x,
-                    payload.next_task.inputs.y,
-                    1.0,
+                # Get the proper primitive. The primitive's execute() remains simple.
+                primitive = self.primitives_available[payload.next_task.type]
+
+                # Wrap the execution of the primitive so we can get progress messages.
+                status_generator = wrap_execution(
+                    primitive, payload.next_task.inputs, self.get_logger()
                 )
-                # TODO: Implement navigation to position
+
+                # Process each status update.
+                async for status in status_generator:
+                    self.get_logger().info(f"Task status: {status}")
+
+                    if status["status"] == "completed":
+                        # Send a message to the client that the task is complete.
+                        self.get_logger().info(
+                            f"[BrainClient] Task {status['primitive_type']} completed."
+                        )
+                        self.ws_client.send(
+                            MessageIn(
+                                type=MessageInType.PRIMITIVE_COMPLETED,
+                                payload={
+                                    "primitive_name": status["primitive_name"],
+                                },
+                            )
+                        )
+            else:
+                self.get_logger().info("[BrainClient] No valid task provided.")
         else:
             self.get_logger().info("[BrainClient] No next task")
         if payload.stop_current_task:
