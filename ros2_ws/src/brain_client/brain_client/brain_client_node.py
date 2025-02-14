@@ -11,7 +11,6 @@ import time
 
 import cv2
 import numpy as np
-import websockets
 
 from brain_client.message_types import (
     MessageIn,
@@ -20,14 +19,13 @@ from brain_client.message_types import (
     TaskType,
     VisionAgentOutput,
 )
+from brain_client.primitives.navigate_to_position import NavigateToPosition
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from brain_messages.srv import GetChatHistory
 
 from brain_client.ws_client import WSClient
-from brain_client.primitives.navigate_to_position import NavigateToPosition
-from brain_client.primitives.wrappers import wrap_execution
 
 
 class BrainClientNode(Node):
@@ -69,9 +67,12 @@ class BrainClientNode(Node):
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
 
+        # New publisher for navigation commands
+        self.nav_cmd_pub = self.create_publisher(String, "/navigation_command", 10)
+
         # Primitives defined here
         self.primitives_available = {
-            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition,
+            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition(self.nav_cmd_pub),
         }
 
         # Exit event and image readiness flag
@@ -129,7 +130,6 @@ class BrainClientNode(Node):
             payload = VisionAgentOutput.model_validate(msg.payload)
             await self.handle_vision_agent_output(payload)
         except Exception as e:
-            # Put the traceback in the log
             self.get_logger().error(f"Error processing vision output: {e}")
             self.get_logger().error(f"Traceback: {traceback.format_exc()}")
 
@@ -144,7 +144,7 @@ class BrainClientNode(Node):
     async def handle_vision_agent_output(self, payload: VisionAgentOutput):
         if payload.next_task is not None:
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
-            # TODO: Remove this once we have a real task.
+            # For demonstration, we force the task type and set some dummy inputs.
             payload.next_task.type = TaskType.NAVIGATE_TO_POSITION
             payload.next_task.inputs["x"] = 1.0
             payload.next_task.inputs["y"] = 1.0
@@ -152,25 +152,25 @@ class BrainClientNode(Node):
                 self.get_logger().info(
                     f"[BrainClient] Navigating to position: {payload.next_task.inputs}"
                 )
-                # Get the proper primitive. The primitive's execute() remains simple.
-                primitive = self.primitives_available[payload.next_task.type]
+                # Instead of calling goToPose (which blocks), publish a nav command.
+                nav_command = {
+                    "frame_id": "map",
+                    "position": {
+                        "x": payload.next_task.inputs.get("x", 0.0),
+                        "y": payload.next_task.inputs.get("y", 0.0),
+                        "z": 0.0,
+                    },
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                }
+                nav_msg = String(data=json.dumps(nav_command))
+                self.nav_cmd_pub.publish(nav_msg)
+                self.get_logger().info("Published navigation command.")
 
-                # Wrap the execution of the primitive so we can get progress messages.
-                self.get_logger().info(f"Task started: {payload.next_task.type}")
-                await primitive.execute(**payload.next_task.inputs)
-
-                self.get_logger().info(f"Task completed: {payload.next_task.type}")
-
-                # Process each status update.
-                self.get_logger().info(
-                    f"[BrainClient] Task {payload.next_task.type} completed."
-                )
+                # You can send a status message to the cloud if needed.
                 self.ws_client.send(
                     MessageIn(
                         type=MessageInType.PRIMITIVE_COMPLETED,
-                        payload={
-                            "primitive_name": payload.next_task.type,
-                        },
+                        payload={"primitive_name": payload.next_task.type},
                     )
                 )
             else:
