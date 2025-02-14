@@ -69,10 +69,15 @@ class BrainClientNode(Node):
 
         # New publisher for navigation commands
         self.nav_cmd_pub = self.create_publisher(String, "/navigation_command", 10)
+        self.nav_result_sub = self.create_subscription(
+            String, "/navigation_result", self.nav_result_callback, 10
+        )
 
         # Primitives defined here
         self.primitives_available = {
-            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition(self.nav_cmd_pub),
+            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition(
+                self.nav_cmd_pub, self.nav_result_sub, self.get_logger()
+            ),
         }
 
         # Exit event and image readiness flag
@@ -94,6 +99,9 @@ class BrainClientNode(Node):
 
         self.ws_thread = threading.Thread(target=self.run_ws_loop, daemon=True)
         self.ws_thread.start()
+
+    def nav_result_callback(self, msg: String):
+        self.get_logger().info(f"Received navigation result: {msg.data}")
 
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
@@ -153,18 +161,9 @@ class BrainClientNode(Node):
                     f"[BrainClient] Navigating to position: {payload.next_task.inputs}"
                 )
                 # Instead of calling goToPose (which blocks), publish a nav command.
-                nav_command = {
-                    "frame_id": "map",
-                    "position": {
-                        "x": payload.next_task.inputs.get("x", 0.0),
-                        "y": payload.next_task.inputs.get("y", 0.0),
-                        "z": 0.0,
-                    },
-                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-                }
-                nav_msg = String(data=json.dumps(nav_command))
-                self.nav_cmd_pub.publish(nav_msg)
-                self.get_logger().info("Published navigation command.")
+                result, success = await self.primitives_available[
+                    payload.next_task.type
+                ].execute(0.0, 0.0)
 
                 # You can send a status message to the cloud if needed.
                 self.ws_client.send(
