@@ -19,11 +19,5 @@ def generate_launch_description():
                     }
                 ],
             ),
-            Node(
-                package="brain_client",
-                executable="navigation_node.py",
-                name="navigation_node",
-                output="screen",
-            ),
         ]
     )
