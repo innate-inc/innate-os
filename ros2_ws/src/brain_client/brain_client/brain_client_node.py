@@ -156,27 +156,23 @@ class BrainClientNode(Node):
                 primitive = self.primitives_available[payload.next_task.type]
 
                 # Wrap the execution of the primitive so we can get progress messages.
-                status_generator = wrap_execution(
-                    primitive, payload.next_task.inputs, self.get_logger()
-                )
+                self.get_logger().info(f"Task started: {payload.next_task.type}")
+                await primitive.execute(**payload.next_task.inputs)
+
+                self.get_logger().info(f"Task completed: {payload.next_task.type}")
 
                 # Process each status update.
-                async for status in status_generator:
-                    self.get_logger().info(f"Task status: {status}")
-
-                    if status["status"] == "completed":
-                        # Send a message to the client that the task is complete.
-                        self.get_logger().info(
-                            f"[BrainClient] Task {status['primitive_type']} completed."
-                        )
-                        self.ws_client.send(
-                            MessageIn(
-                                type=MessageInType.PRIMITIVE_COMPLETED,
-                                payload={
-                                    "primitive_name": status["primitive_name"],
-                                },
-                            )
-                        )
+                self.get_logger().info(
+                    f"[BrainClient] Task {payload.next_task.type} completed."
+                )
+                self.ws_client.send(
+                    MessageIn(
+                        type=MessageInType.PRIMITIVE_COMPLETED,
+                        payload={
+                            "primitive_name": payload.next_task.type,
+                        },
+                    )
+                )
             else:
                 self.get_logger().info("[BrainClient] No valid task provided.")
         else:
