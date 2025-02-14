@@ -58,6 +58,14 @@ class MessageOut(BaseModel):
         return value.value
 
 
+class InternalMessageType(str, Enum):
+    READY_FOR_CONNECTION = "ready_for_connection"
+
+
+class InternalMessage(BaseModel):
+    type: InternalMessageType
+
+
 class VisionAgentOutput(BaseModel):
     """
     Represents the output received from the vision agent backend.

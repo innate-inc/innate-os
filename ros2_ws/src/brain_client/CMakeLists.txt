@@ -18,7 +18,7 @@ ament_python_install_package(${PROJECT_NAME}
 # Install Python executables
 install(PROGRAMS
   brain_client/brain_client_node.py
-  brain_client/speed_test.py
+  brain_client/ws_client_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
