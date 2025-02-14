@@ -14,10 +14,16 @@ def generate_launch_description():
                     {
                         "websocket_uri": "ws://host.docker.internal:8765",
                         "token": "MY_HARDCODED_TOKEN",
-                        "image_topic": "/camera/color/image_raw/compressed",  # Updated to compressed
+                        "image_topic": "/camera/color/image_raw/compressed",
                         "cmd_vel_topic": "/cmd_vel",
                     }
                 ],
-            )
+            ),
+            Node(
+                package="brain_client",
+                executable="navigation_node.py",
+                name="navigation_node",
+                output="screen",
+            ),
         ]
     )
