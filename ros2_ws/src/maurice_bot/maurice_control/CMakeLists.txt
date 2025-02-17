@@ -19,6 +19,7 @@ install(PROGRAMS
   maurice_control/keyboard.py
   maurice_control/joystick.py
   maurice_control/leader.py
+  maurice_control/app.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
