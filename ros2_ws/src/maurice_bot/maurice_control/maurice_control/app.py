@@ -48,10 +48,15 @@ class AppControl(Node):
         Converts joystick input to velocity commands:
           - Linear velocity (x) is scaled from [-1, 1] to [-0.4, 0.4].
           - Angular velocity (z) is scaled from [-1, 1] to [-1.5, 1.5].
+          - Applies deadband of 0.1 to filter out small inputs.
         """
+        # Apply deadband
+        x = 0.0 if abs(msg.x) < 0.1 else msg.x
+        y = 0.0 if abs(msg.y) < 0.1 else msg.y
+
         twist_msg = Twist()
-        twist_msg.linear.x = msg.x * 0.4
-        twist_msg.angular.z = msg.y * 1.5
+        twist_msg.linear.x = y * 0.4
+        twist_msg.angular.z = -x * 1.5
         
         # Set other components to zero.
         twist_msg.linear.y = 0.0
