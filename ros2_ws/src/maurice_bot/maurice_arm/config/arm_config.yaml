@@ -1,9 +1,70 @@
 maurice_arm:
   ros__parameters:
+    # Main arm parameters
     device_name: "/dev/ttyACM0"
     baud_rate: 1000000
-    joint_limits_lower: [-3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159]
-    joint_limits_upper: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159]
-    servo_ids: [1, 2, 3, 4, 5, 6]
-    joint_velocity_limits: [3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159]  # rad/s
-    control_frequency: 100.0
+    control_frequency: 100
+
+    # Control Modes (use integers):
+    # 0: Current Control Mode
+    # 1: Velocity Control Mode
+    # 2: Position Control Mode (0 ~ 360 [°])
+    # 3: Extended Position Control Mode (Multi-turn)
+    # 4: Current-based Position Control Mode
+    # 5: PWM Control Mode (Voltage Control Mode)
+
+    # Joint-specific parameters using Current-based Position Control Mode (4)
+    joints:
+      joint1:
+        servo_id: 1
+        control_mode: 4
+        max_velocity: 5.0
+        pwm_limits: 885      # PWM limit (0-885)
+        position_limits:
+          min: 1.5708       # 90° in radians
+          max: 4.7124       # 270° in radians
+
+      joint2:
+        servo_id: 2
+        control_mode: 4
+        max_velocity: 5.0
+        pwm_limits: 885      # PWM limit (0-885)
+        position_limits:
+          min: 2.6180       # 150° in radians
+          max: 3.6652       # 210° in radians
+
+      joint3:
+        servo_id: 3
+        control_mode: 4
+        max_velocity: 5.0
+        pwm_limits: 885      # PWM limit (0-885)
+        position_limits:
+          min: 1.5708       # 90° in radians
+          max: 4.7124       # 270° in radians
+
+      joint4:
+        servo_id: 4
+        control_mode: 4
+        max_velocity: 5.0
+        pwm_limits: 885      # PWM limit (0-885)
+        position_limits:
+          min: 1.2217       # 70° in radians
+          max: 4.8869       # 280° in radians
+
+      joint5:
+        servo_id: 5
+        control_mode: 4
+        max_velocity: 5.0
+        pwm_limits: 885      # PWM limit (0-885)
+        position_limits:
+          min: 1.5708       # 90° in radians
+          max: 4.7124       # 270° in radians
+
+      joint6:
+        servo_id: 6
+        control_mode: 4
+        max_velocity: 5.0
+        pwm_limits: 885      # PWM limit (0-885)
+        position_limits:
+          min: 3.0543       # 175° in radians
+          max: 4.0143       # 230° in radians
