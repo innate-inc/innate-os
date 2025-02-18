@@ -1,64 +1,46 @@
 import asyncio
 import traceback
-
 import rclpy
-from typing import Dict, Any
-from brain_client.primitives.types import Primitive
-from brain_client.primitives.navigate_to_position import NavigateToPosition
+from rclpy.node import Node
+from std_msgs.msg import String
 
 
-async def wrap_execution(primitive: Primitive, inputs: Dict[str, Any], logger):
-    """
-    Wraps an awaitable (the primitive's execution coroutine) and yields status messages.
+def run_primitive_in_node(primitive_cls, execute_kwargs, logger):
+    # Only initialize if rclpy hasn't been initted already.
+    created_context = False
+    if not rclpy.ok():
+        rclpy.init()
+        created_context = True
 
-    :param coro: The awaitable (coroutine) representing the primitive execution.
-    :yield: Status update dictionaries.
-    """
-    # Yield the "started" event
-    yield {"status": "started", "message": "Execution started."}
+    node = PrimitiveWrapperNode(primitive_cls)
     try:
-        # Instantiate the primitive
-        primitive = primitive(logger)
-        primitive_name = primitive.name
-        result_msg, result_success = await primitive.execute(**inputs)
-    except asyncio.CancelledError:
-        # Yield "interrupted" event if there is a cancellation
-        yield {
-            "primitive_name": primitive_name,
-            "status": "interrupted",
-            "message": "Execution was interrupted.",
-        }
-        raise
+        node.execute_primitive(**execute_kwargs)
     except Exception as e:
-        # Yield "failed" event if any exception is raised
-        yield {
-            "primitive_name": primitive_name,
-            "status": "failed",
-            "message": f"Execution failed with error: {e}. Traceback: {traceback.format_exc()}",
-        }
-        raise
-    else:
-        # If everything goes fine, yield "completed" event
-        yield {
-            "primitive_name": primitive_name,
-            "status": "completed" if result_success else "failed",
-            "result_msg": result_msg,
-        }
+        logger.error(
+            f"Error running primitive: {e}. Traceback: {traceback.format_exc()}"
+        )
+    finally:
+        logger.info("Primitive execution completed.")
+        node.destroy_node()
+        if created_context:
+            rclpy.shutdown()
 
 
-def run_primitive(primitive: Primitive, inputs: Dict[str, Any]):
-    asyncio.run(wrap_execution(primitive, inputs))
+class PrimitiveWrapperNode(Node):
+    def __init__(self, primitive_cls):
+        super().__init__("primitive_wrapper_node")
+        self.primitive = primitive_cls(self.get_logger())
+        self.get_logger().info(
+            f"Wrapped primitive '{self.primitive.name}' initialized."
+        )
 
+        # Optionally set up additional communication publishers/subscribers
+        self.status_pub = self.create_publisher(String, "primitive_status", 10)
 
-async def run_primitive_in_node(primitive: Primitive, inputs: Dict[str, Any]):
-    rclpy.init()
-    node = rclpy.create_node("primitive_node")
-    primitive = primitive(node.get_logger())
-    gen = wrap_execution(primitive, inputs)
-    async for status in gen:
-        print(status)
-    rclpy.shutdown()
+    def execute_primitive(self, **kwargs):
+        self.primitive.execute(**kwargs)
+        self.get_logger().info(f"Primitive '{self.primitive.name}' execution over.")
+        self.set_done()
 
-
-if __name__ == "__main__":
-    run_primitive_in_node(NavigateToPosition, {"x": 0.0, "y": 0.0})
+    def set_done(self):
+        self.done = True

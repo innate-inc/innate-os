@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-
 import traceback
 import rclpy
 from rclpy.node import Node
-
-import asyncio
 import threading
 import json
 import time
-
 import cv2
+import base64
 import numpy as np
+import asyncio
 
 from brain_client.message_types import (
     InternalMessage,
@@ -26,6 +24,7 @@ from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from brain_messages.srv import GetChatHistory
+from brain_client.primitives.wrappers import run_primitive_in_node
 
 # Import our WSBridge class.
 from brain_client.ws_bridge import WSBridge
@@ -65,17 +64,15 @@ class BrainClientNode(Node):
         self.chat_in_sub = self.create_subscription(
             String, "/chat_in", self.chat_in_callback, 10
         )
+        # This publisher is still available if needed locally.
         self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
 
-        # New publisher for navigation commands
-        self.nav_cmd_pub = self.create_publisher(String, "/navigation_command", 10)
-
         # Primitives defined here
         self.primitives_available = {
-            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition(self.nav_cmd_pub),
+            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition(self.get_logger()),
         }
 
         # Exit event and image readiness flag
@@ -106,6 +103,13 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
+        # Boolean flag to check if a primitive is running
+        self.primitive_running = False
+
+        # Create and start an asyncio event loop in a background thread
+        self.async_loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=self.async_loop.run_forever, daemon=True)
+        thread.start()
 
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
@@ -139,8 +143,9 @@ class BrainClientNode(Node):
             payload = VisionAgentOutput.model_validate(msg.payload)
             self.handle_vision_agent_output(payload)
         except Exception as e:
-            self.get_logger().error(f"Error processing vision output: {e}")
-            self.get_logger().error(f"Traceback: {traceback.format_exc()}")
+            self.get_logger().error(
+                f"Error processing vision output: {e}. Traceback: {traceback.format_exc()}"
+            )
 
     def _handle_chat_out(self, msg):
         text = msg.payload.get("text", "")
@@ -156,19 +161,21 @@ class BrainClientNode(Node):
 
             # For demonstration, force a navigate-to-position task with dummy inputs.
             payload.next_task.type = TaskType.NAVIGATE_TO_POSITION
-            payload.next_task.inputs["x"] = 1.0
+            payload.next_task.inputs["x"] = 0.0
             payload.next_task.inputs["y"] = 0.0
 
             if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
                 self.get_logger().info(
                     f"[BrainClient] Scheduling NavigateToPosition with inputs: {payload.next_task.inputs}"
                 )
-                # Optionally, publish a status message (or use a callback mechanism from the primitive)
+                primitive = NavigateToPosition(self.get_logger())
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={"primitive_name": payload.next_task.type.value},
                 )
                 self.ws_bridge.send_message(status_msg)
+
+                primitive.execute(**payload.next_task.inputs)
             else:
                 self.get_logger().info("[BrainClient] No valid task provided.")
         else:

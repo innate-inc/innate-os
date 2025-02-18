@@ -22,7 +22,7 @@ class Nav2Controller:
         self.logger.info("Nav2 position primitive node created")
         # self.cmd_vel_pub = self.pub_node.create_publisher(Twist, "cmd_vel", 10)
 
-    async def go_to_position(self, x: float, y: float, w: float):
+    def go_to_position(self, x: float, y: float, w: float):
         """
         Sends a navigation goal to the navigator and waits until navigation ends.
         The method returns the TaskResult indicating whether the goal
@@ -51,14 +51,12 @@ class Nav2Controller:
         goal_pose.pose.orientation.w = w
 
         self.logger.info("Sending goal pose ...")
-        # Run the blocking goToPose call in an executor.
         self.navigator.goToPose(goal_pose)
 
         self.logger.info("Waiting for navigation to complete ...")
 
-        # Poll asynchronously for task completion.
         while not self.navigator.isTaskComplete():
-            await asyncio.sleep(0.1)  # Wait 100ms before checking again
+            feedback = self.navigator.getFeedback()
 
         result = self.navigator.getResult()
 
@@ -91,11 +89,11 @@ class NavigateToPosition(Primitive):
     def guidelines(self):
         return "Navigate the robot to the specified position using provided x and y coordinates."
 
-    async def execute(self, x: float, y: float):
+    def execute(self, x: float, y: float):
         # Replace this simulated delay and print statements with actual navigation logic.
         self.logger.info(f"Initiating navigation to position: x={x}, y={y}")
 
-        await self.nav2_controller.go_to_position(x, y, 1.0)
+        self.nav2_controller.go_to_position(x, y, 1.0)
 
         self.logger.info(f"Navigation complete. Arrived at position: x={x}, y={y}")
         return f"Reached position ({x}, {y})", True
