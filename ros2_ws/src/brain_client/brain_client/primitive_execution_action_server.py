@@ -85,11 +85,10 @@ class PrimitiveExecutionActionServer(Node):
             return ExecutePrimitive.Result(success=False, message=str(e))
 
         goal_handle.succeed()
-        self.get_logger().debug(
-            'Primitive "%s" executed successfully.' % primitive_type
-        )
         return ExecutePrimitive.Result(
-            success=True, message="Primitive executed successfully"
+            success=True,
+            message="Primitive executed successfully",
+            primitive_type=primitive_type,
         )
 
     def destroy(self):
