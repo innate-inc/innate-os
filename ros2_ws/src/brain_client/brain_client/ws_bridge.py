@@ -45,7 +45,7 @@ class WSBridge:
         Callback for incoming JSON-string messages.
         """
         try:
-            self.node.get_logger().info(f"WSBridge: Received message: {msg.data}")
+            self.node.get_logger().debug(f"WSBridge: Received message: {msg.data}")
             data = json.loads(msg.data)
         except Exception as e:
             self.node.get_logger().error(f"WSBridge: Failed to parse JSON: {e}")

@@ -20,7 +20,6 @@ from brain_client.message_types import (
     TaskType,
     VisionAgentOutput,
 )
-from brain_client.primitives.navigate_to_position import NavigateToPosition
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
@@ -116,13 +115,13 @@ class BrainClientNode(Node):
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().info(f"Received chat_in: {chat_entry}")
+        self.get_logger().debug(f"Received chat_in: {chat_entry}")
         # Send outgoing chat message via WSBridge.
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
         self.ws_bridge.send_message(outgoing_msg)
 
     def handle_get_chat_history(self, request, response):
-        self.get_logger().info(
+        self.get_logger().debug(
             f"Received get_chat_history request. History: {self.chat_history}"
         )
         response.history = json.dumps(self.chat_history)
@@ -141,7 +140,7 @@ class BrainClientNode(Node):
 
     def _handle_vision_agent_output(self, msg):
         try:
-            self.get_logger().info(f"[BrainClient] VisionAgentOutput: {msg}")
+            self.get_logger().debug(f"[BrainClient] VisionAgentOutput: {msg}")
             payload = VisionAgentOutput.model_validate(msg.payload)
             self.handle_vision_agent_output(payload)
         except Exception as e:
@@ -161,8 +160,8 @@ class BrainClientNode(Node):
         if payload.next_task is not None:
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
 
-            payload.next_task.inputs["x"] = 0.0
-            payload.next_task.inputs["y"] = 0.0
+            # payload.next_task.inputs["x"] = 0.0
+            # payload.next_task.inputs["y"] = 0.0
 
             if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
                 # Send asynchronous action goal.
@@ -176,7 +175,7 @@ class BrainClientNode(Node):
                 )
                 # self.ws_bridge.send_message(status_msg)
             else:
-                self.get_logger().info("[BrainClient] No valid task provided.")
+                self.get_logger().warn("[BrainClient] No valid task provided.")
         else:
             self.get_logger().info("[BrainClient] No next task provided.")
 
