@@ -17,6 +17,7 @@ from brain_client.message_types import (
     MessageIn,
     MessageInType,
     MessageOutType,
+    MessageOut,
     TaskType,
     VisionAgentOutput,
 )
@@ -163,11 +164,16 @@ class BrainClientNode(Node):
             self.primitive_action_client.cancel_all_goals()
             return
 
+        if payload.to_tell_user:
+            # Output to the chat what the agent decide to say
+            chat_entry = MessageOut(
+                type=MessageOutType.CHAT_OUT,
+                payload={"text": payload.to_tell_user},
+            )
+            self._handle_chat_out(chat_entry)
+
         if payload.next_task is not None:
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
-
-            # payload.next_task.inputs["x"] = 0.0
-            # payload.next_task.inputs["y"] = 0.0
 
             if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
                 # Send asynchronous action goal.
