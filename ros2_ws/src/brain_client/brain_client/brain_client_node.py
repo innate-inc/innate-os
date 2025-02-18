@@ -158,22 +158,18 @@ class BrainClientNode(Node):
         if payload.next_task is not None:
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
 
-            # For demonstration, force a navigate-to-position task with dummy inputs.
-            payload.next_task.type = TaskType.NAVIGATE_TO_POSITION
-            payload.next_task.inputs["x"] = 0.0
-            payload.next_task.inputs["y"] = 0.0
-
             if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
-                self.get_logger().info(
-                    f"[BrainClient] Scheduling NavigateToPosition with inputs: {payload.next_task.inputs}"
-                )
-                primitive = NavigateToPosition(self.get_logger())
+                # Get the instantiated primitive
+                primitive = self.primitives_available[payload.next_task.type]
+
+                # Send a message to the brain to indicate that the primitive is activated
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={"primitive_name": payload.next_task.type.value},
                 )
                 self.ws_bridge.send_message(status_msg)
 
+                # Execute the primitive
                 primitive.execute(**payload.next_task.inputs)
             else:
                 self.get_logger().info("[BrainClient] No valid task provided.")
