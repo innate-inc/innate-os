@@ -42,6 +42,9 @@ class SimulationNode:
                 camera_fov=40,
                 res=(1280, 720),
             ),
+            vis_options=gs.options.VisOptions(
+                ambient_light=(0.5, 0.5, 0.5),
+            ),
             show_FPS=False,
             show_viewer=self.enable_vis,
         )
