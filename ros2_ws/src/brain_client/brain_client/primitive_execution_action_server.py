@@ -38,20 +38,20 @@ class PrimitiveExecutionActionServer(Node):
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
         )
-        self.get_logger().info("Primitive Execution Action Server has started.")
+        self.get_logger().debug("Primitive Execution Action Server has started.")
 
     def goal_callback(self, goal_request):
-        self.get_logger().info(
+        self.get_logger().debug(
             'Received goal for primitive: "%s"' % goal_request.primitive_type
         )
         return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):
-        self.get_logger().info("Received cancel request.")
+        self.get_logger().debug("Received cancel request.")
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
-        self.get_logger().info(
+        self.get_logger().debug(
             'Executing primitive: "%s"' % goal_handle.request.primitive_type
         )
         # Decode the inputs (assumed to be JSON)
@@ -71,7 +71,7 @@ class PrimitiveExecutionActionServer(Node):
             )
 
         primitive = self._primitives[primitive_type]
-        self.get_logger().info(
+        self.get_logger().debug(
             'Starting primitive "%s" with inputs: %s' % (primitive_type, inputs)
         )
 
@@ -85,7 +85,9 @@ class PrimitiveExecutionActionServer(Node):
             return ExecutePrimitive.Result(success=False, message=str(e))
 
         goal_handle.succeed()
-        self.get_logger().info('Primitive "%s" executed successfully.' % primitive_type)
+        self.get_logger().debug(
+            'Primitive "%s" executed successfully.' % primitive_type
+        )
         return ExecutePrimitive.Result(
             success=True, message="Primitive executed successfully"
         )

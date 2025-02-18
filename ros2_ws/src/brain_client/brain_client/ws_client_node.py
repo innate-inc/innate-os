@@ -69,7 +69,7 @@ class WSClient:
                 break
 
             # Forward the raw JSON string from the WS server by publishing it.
-            self.node.get_logger().info(f"Forwarding incoming message: {incoming}")
+            self.node.get_logger().debug(f"Forwarding incoming message: {incoming}")
             ros_msg = String()
             ros_msg.data = incoming
             self.node.ws_pub.publish(ros_msg)
@@ -145,14 +145,14 @@ class WSClientNode(Node):
                 internal_message = InternalMessage.model_validate(data)
                 self.get_logger().info(f"Internal message: {internal_message}")
                 if internal_message.type == InternalMessageType.READY_FOR_CONNECTION:
-                    self.get_logger().info("Received ready for connection message.")
+                    self.get_logger().debug("Received ready for connection message.")
                     self.ws_thread = threading.Thread(target=self.run_ws_loop)
                     self.ws_thread.start()
 
             except Exception as e:
                 ## That's normal, it's not an internal message.
                 outgoing_message = MessageIn.model_validate(data)
-                self.get_logger().info(f"Outgoing message: {outgoing_message.type}")
+                self.get_logger().debug(f"Outgoing message: {outgoing_message.type}")
                 asyncio.run_coroutine_threadsafe(
                     self.ws_client.send(outgoing_message), self.ws_client.loop
                 )
