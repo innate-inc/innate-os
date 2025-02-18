@@ -1,0 +1,10 @@
+# Goal definition
+string primitive_type
+string inputs
+---
+# Result definition
+bool success
+string message
+---
+# Feedback definition
+float32 progress 

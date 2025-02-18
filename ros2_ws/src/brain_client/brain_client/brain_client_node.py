@@ -9,6 +9,7 @@ import cv2
 import base64
 import numpy as np
 import asyncio
+from rclpy.action import ActionClient
 
 from brain_client.message_types import (
     InternalMessage,
@@ -24,6 +25,7 @@ from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from brain_messages.srv import GetChatHistory
+from brain_messages.action import ExecutePrimitive
 
 # Import our WSBridge class.
 from brain_client.ws_bridge import WSBridge
@@ -69,11 +71,6 @@ class BrainClientNode(Node):
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
 
-        # Primitives defined here
-        self.primitives_available = {
-            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition(self.get_logger()),
-        }
-
         # Exit event and image readiness flag
         self.exit_event = threading.Event()
         self.ready_for_image = False
@@ -104,6 +101,12 @@ class BrainClientNode(Node):
 
         # Boolean flag to check if a primitive is running
         self.primitive_running = False
+
+        # Create the primitive execution action client once in the init.
+        # TODO: Convey the primitives it can execute
+        self.primitive_action_client = ActionClient(
+            self, ExecutePrimitive, "execute_primitive"
+        )
 
         # Create and start an asyncio event loop in a background thread
         self.async_loop = asyncio.new_event_loop()
@@ -158,19 +161,20 @@ class BrainClientNode(Node):
         if payload.next_task is not None:
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
 
-            if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
-                # Get the instantiated primitive
-                primitive = self.primitives_available[payload.next_task.type]
+            payload.next_task.inputs["x"] = 0.0
+            payload.next_task.inputs["y"] = 0.0
 
-                # Send a message to the brain to indicate that the primitive is activated
+            if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
+                # Send asynchronous action goal.
+                self.send_primitive_goal(
+                    payload.next_task.type, payload.next_task.inputs
+                )
+                # Notify that a primitive is activated.
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={"primitive_name": payload.next_task.type.value},
                 )
-                self.ws_bridge.send_message(status_msg)
-
-                # Execute the primitive
-                primitive.execute(**payload.next_task.inputs)
+                # self.ws_bridge.send_message(status_msg)
             else:
                 self.get_logger().info("[BrainClient] No valid task provided.")
         else:
@@ -188,6 +192,36 @@ class BrainClientNode(Node):
                 self.ws_bridge.send_message(image_msg)
                 self.get_logger().debug("Published image message.")
             self.ready_for_image = False
+
+    def send_primitive_goal(self, task_type, inputs):
+        """
+        Send a goal to execute a primitive via the primitive action server.
+        """
+        goal_msg = ExecutePrimitive.Goal()
+        goal_msg.primitive_type = task_type.value
+        goal_msg.inputs = json.dumps(inputs)
+
+        self.get_logger().info(f"Sending goal for primitive: {goal_msg.primitive_type}")
+        if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().error("Primitive execution action server not available!")
+            return
+
+        send_goal_future = self.primitive_action_client.send_goal_async(goal_msg)
+        send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info("Primitive execution goal rejected.")
+            return
+
+        self.get_logger().info("Primitive execution goal accepted.")
+        get_result_future = goal_handle.get_result_async()
+        get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info("Primitive execution result: %s" % result.message)
 
     def destroy_node(self):
         self.exit_event.set()

@@ -69,7 +69,7 @@ class WSClient:
                 break
 
             # Forward the raw JSON string from the WS server by publishing it.
-            self.node.get_logger().debug(f"Forwarding incoming message: {incoming}")
+            self.node.get_logger().info(f"Forwarding incoming message: {incoming}")
             ros_msg = String()
             ros_msg.data = incoming
             self.node.ws_pub.publish(ros_msg)

@@ -10,9 +10,14 @@ set(srv_files
   "srv/GetChatHistory.srv"
 )
 
+set(action_files
+  "action/ExecutePrimitive.action"
+)
+
 # Generate the interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${srv_files}
+  ${action_files}
   DEPENDENCIES std_msgs
 )
 

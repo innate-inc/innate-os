@@ -33,5 +33,11 @@ def generate_launch_description():
                     }
                 ],
             ),
+            Node(
+                package="brain_client",
+                executable="primitive_execution_action_server.py",
+                name="primitive_execution_action_server",
+                output="screen",
+            ),
         ]
     )

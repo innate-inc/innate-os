@@ -19,6 +19,7 @@ ament_python_install_package(${PROJECT_NAME}
 install(PROGRAMS
   brain_client/brain_client_node.py
   brain_client/ws_client_node.py
+  brain_client/primitive_execution_action_server.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
