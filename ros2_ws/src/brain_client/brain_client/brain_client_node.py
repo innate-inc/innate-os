@@ -1,44 +1,46 @@
 #!/usr/bin/env python3
-
+import traceback
 import rclpy
 from rclpy.node import Node
-
-import asyncio
 import threading
 import json
-import base64
-import time  # For chat message timestamps
-
+import time
 import cv2
+import base64
 import numpy as np
-import websockets
+import asyncio
+from rclpy.action import ActionClient
 
 from brain_client.message_types import (
+    InternalMessage,
+    InternalMessageType,
     MessageIn,
     MessageInType,
-    MessageOut,
     MessageOutType,
+    MessageOut,
     TaskType,
     VisionAgentOutput,
 )
 from sensor_msgs.msg import CompressedImage
-from geometry_msgs.msg import Twist, Vector3
-
+from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from brain_messages.srv import GetChatHistory
+from brain_messages.action import ExecutePrimitive
+
+# Import our WSBridge class.
+from brain_client.ws_bridge import WSBridge
 
 
 class BrainClientNode(Node):
     def __init__(self):
         super().__init__("brain_client_node")
 
-        # Declare parameters
+        # Parameters
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
         self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
 
-        # Read parameter values
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
@@ -52,238 +54,196 @@ class BrainClientNode(Node):
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
 
-        # Subscribe to the compressed image topic
+        # Publishers, subscribers, and service
         self.last_image = None
         self.image_sub = self.create_subscription(
             CompressedImage, self.image_topic, self.image_callback, 10
         )
-
-        # Publisher for cmd_vel
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
-        self.chat_history = []  # Locally stored chat history
-
-        # Subscribe to /chat_in from ROS local side
+        self.chat_history = []
         self.chat_in_sub = self.create_subscription(
             String, "/chat_in", self.chat_in_callback, 10
         )
-
-        # Publisher for /chat_out
+        # This publisher is still available if needed locally.
         self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
-
-        # Create a service for retrieving chat history
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
-        #
-        # [END ADDED chat]
 
-        # We'll run the asyncio loop in a separate thread.
+        # Exit event and image readiness flag
         self.exit_event = threading.Event()
-        self.ws_thread = threading.Thread(target=self.run_async_loop, daemon=True)
-        self.ws_thread.start()
+        self.ready_for_image = False
+
+        # Timer for checking image readiness
+        self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
+
+        # Instantiate the WSBridge.
+        # It subscribes to "ws_messages" (incoming) and publishes on "ws_outgoing" (outgoing).
+        self.ws_bridge = WSBridge(
+            self, incoming_topic="ws_messages", outgoing_topic="ws_outgoing"
+        )
+        # Register handlers with WSBridge.
+        self.ws_bridge.register_handler(
+            MessageOutType.READY_FOR_IMAGE, self._handle_ready_for_image
+        )
+        self.ws_bridge.register_handler(
+            MessageOutType.VISION_AGENT_OUTPUT, self._handle_vision_agent_output
+        )
+        self.ws_bridge.register_handler(MessageOutType.CHAT_OUT, self._handle_chat_out)
+
+        # Tell the ws_bridge we're ready to connect
+        for _ in range(3):
+            self.ws_bridge.send_message(
+                InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
+            )
+            time.sleep(1.0)
+
+        # Boolean flag to check if a primitive is running
+        self.primitive_running = False
+
+        # Create the primitive execution action client once in the init.
+        # TODO: Convey the primitives it can execute
+        self.primitive_action_client = ActionClient(
+            self, ExecutePrimitive, "execute_primitive"
+        )
+
+        # Create and start an asyncio event loop in a background thread
+        self.async_loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=self.async_loop.run_forever, daemon=True)
+        thread.start()
 
     def chat_in_callback(self, msg: String):
-        """
-        Called whenever a local /chat_in message is received.
-        We'll append it to local chat history (sender = "user")
-        and bounce it back on /chat_out as a confirmation.
-        """
-        chat_entry = {
-            "sender": "user",
-            "text": msg.data,
-            "timestamp": time.time(),
-        }
+        chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().info(f"Received chat_in: {chat_entry}")
-
-        # To fill: Send the chat_in message to the cloud
-        if self.websocket is not None:
-            chat_msg = MessageIn(
-                type=MessageInType.CHAT_IN,
-                payload={"text": msg.data},
-            )
-            asyncio.run_coroutine_threadsafe(
-                self.websocket.send(chat_msg.model_dump_json()), self.loop
-            )
+        self.get_logger().debug(f"Received chat_in: {chat_entry}")
+        # Send outgoing chat message via WSBridge.
+        outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
+        self.ws_bridge.send_message(outgoing_msg)
 
     def handle_get_chat_history(self, request, response):
-        """
-        Service callback that returns the entire chat history as a JSON string.
-        This corresponds to myrobot_msgs/srv/GetChatHistory.
-        Adjust as needed to match your actual service definition.
-        """
+        self.get_logger().debug(
+            f"Received get_chat_history request. History: {self.chat_history}"
+        )
         response.history = json.dumps(self.chat_history)
         return response
 
-    #
-    # [END ADDED chat callbacks]
-    #
-
-    def handle_vision_agent_output(self, payload: VisionAgentOutput):
-        """
-        Handle the vision agent output.
-        """
-        if payload.next_task is not None:
-            self.get_logger().debug(f"[BrainClient] Next task: {payload.next_task}")
-            if payload.next_task.type == TaskType.VELOCITY_CONTROL:
-                # Comes in like {"forward": 1.0, "angle": 2.0 if self.turn_right else -2.0}
-                self.get_logger().debug("[BrainClient] Velocity control task")
-                velocity_dict = json.loads(payload.next_task.description)
-                self.cmd_vel_pub.publish(
-                    Twist(
-                        linear=Vector3(x=velocity_dict["forward"]),
-                        angular=Vector3(z=velocity_dict["angle"]),
-                    )
-                )
-        if payload.stop_current_task:
-            self.get_logger().info("[BrainClient] Stopping current task")
-
     def image_callback(self, msg: CompressedImage):
-        """
-        Store the latest compressed image in memory. We only send it to the cloud
-        when the server says "ready_for_image".
-        """
         try:
-            # Convert compressed image data to OpenCV format
             np_arr = np.frombuffer(msg.data, np.uint8)
-            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            self.last_image = cv_image
+            self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         except Exception as e:
             self.get_logger().error(f"Failed to decode compressed image: {e}")
 
-    def run_async_loop(self):
-        """
-        Start an asyncio event loop that connects to the cloud server
-        and handles the messaging protocol.
-        """
-        loop = asyncio.new_event_loop()
-        self.loop = loop  # Store reference to the event loop
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.agent_loop_ws(self.ws_uri, self.token))
-        loop.close()
+    def _handle_ready_for_image(self, msg):
+        self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
+        self.ready_for_image = True
 
-    async def agent_loop_ws(self, server_uri: str, token: str):
-        """
-        Main coroutine that:
-          - Connects to the cloud WebSocket server
-          - Sends an auth token (now wrapped in MessageIn)
-          - Waits for commands from the server (e.g. "ready_for_image")
-        """
-        self.get_logger().debug(f"[BrainClient] Connecting to {server_uri} ...")
-
-        # We'll store a reference to the websocket if needed for forwarding chat
-        self.websocket = None
-
+    def _handle_vision_agent_output(self, msg):
         try:
-            async with websockets.connect(server_uri) as websocket:
-                self.websocket = websocket
-                self.get_logger().info(f"[BrainClient] Connected to {server_uri}")
-
-                auth_msg = MessageIn(type=MessageInType.AUTH, payload={"token": token})
-                await websocket.send(auth_msg.model_dump_json())
-                self.get_logger().debug("[BrainClient] Token sent")
-
-                should_send_image = False
-
-                # 2) Main loop
-                while rclpy.ok() and not self.exit_event.is_set():
-                    if should_send_image:
-                        if self.last_image is not None:
-                            await self.send_image_over_ws(websocket, self.last_image)
-                            self.last_image = None
-                            should_send_image = False
-
-                    try:
-                        incoming_msg = await asyncio.wait_for(
-                            websocket.recv(), timeout=0.1
-                        )
-                    except asyncio.TimeoutError:
-                        # No message, normal
-                        await asyncio.sleep(0.01)
-                        continue
-                    except websockets.exceptions.ConnectionClosed:
-                        self.get_logger().warn("Server closed the connection.")
-                        break
-
-                    # Parse inbound JSON
-                    try:
-                        data = json.loads(incoming_msg)
-                    except json.JSONDecodeError:
-                        self.get_logger().warn("Received non-JSON data. Ignoring.")
-                        continue
-
-                    msg = MessageOut.model_validate(data)
-                    msg_type = msg.type
-
-                    if msg_type == MessageOutType.READY_FOR_IMAGE:
-                        self.get_logger().debug(
-                            "[BrainClient] Received 'ready_for_image'"
-                        )
-                        should_send_image = True
-
-                    elif msg_type == MessageOutType.VISION_AGENT_OUTPUT:
-                        try:
-                            payload = VisionAgentOutput.model_validate(msg.payload)
-                            self.handle_vision_agent_output(payload)
-                        except Exception as e:
-                            self.get_logger().error(
-                                f"Failed to parse vision_agent_output: {e}"
-                            )
-
-                    elif msg_type == MessageOutType.CHAT_OUT:
-                        text = msg.payload.get("text", "")
-                        chat_entry = {
-                            "sender": "cloud",
-                            "text": text,
-                            "timestamp": time.time(),
-                        }
-                        self.chat_history.append(chat_entry)
-                        self.get_logger().info(
-                            f"Received chat_out from cloud: {chat_entry}"
-                        )
-
-                        # Publish to /chat_out locally
-                        out_msg = String()
-                        out_msg.data = text
-                        self.chat_out_pub.publish(out_msg)
-
-                    else:
-                        self.get_logger().debug(
-                            f"[BrainClient] Unknown message type: {msg_type}"
-                        )
-
-                    await asyncio.sleep(0.01)
-
+            self.get_logger().debug(f"[BrainClient] VisionAgentOutput: {msg}")
+            payload = VisionAgentOutput.model_validate(msg.payload)
+            self.handle_vision_agent_output(payload)
         except Exception as e:
-            self.get_logger().error(f"[BrainClient] WebSocket connection error: {e}")
+            self.get_logger().error(
+                f"Error processing vision output: {e}. Traceback: {traceback.format_exc()}"
+            )
 
-        self.get_logger().info("[BrainClient] Stopped agent_loop_ws.")
-        self.websocket = None
+    def _handle_chat_out(self, msg):
+        text = msg.payload.get("text", "")
+        chat_entry = {"sender": "cloud", "text": text, "timestamp": time.time()}
+        self.chat_history.append(chat_entry)
+        self.get_logger().info(f"Received chat_out: {chat_entry}")
+        out_msg = String(data=text)
+        self.chat_out_pub.publish(out_msg)
 
-    async def send_image_over_ws(self, websocket, cv_image):
-        """
-        Encodes the OpenCV frame as JPEG, base64-encodes it, and sends it via WebSockets.
-        Now the payload is wrapped in a MessageIn with type IMAGE.
-        """
-        success, encoded_img = cv2.imencode(".jpg", cv_image)
-        if not success:
-            self.get_logger().error("Failed to encode image as JPEG.")
+    def handle_vision_agent_output(self, payload: VisionAgentOutput):
+        if payload.stop_current_task:
+            self.get_logger().info("[BrainClient] Stop signal received.")
+            self.primitive_running = False
+            self.primitive_action_client.cancel_all_goals()
             return
 
-        b64_img = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
+        if payload.to_tell_user:
+            # Output to the chat what the agent decide to say
+            chat_entry = MessageOut(
+                type=MessageOutType.CHAT_OUT,
+                payload={"text": payload.to_tell_user},
+            )
+            self._handle_chat_out(chat_entry)
 
-        from brain_client.message_types import MessageIn, MessageInType
+        if payload.next_task is not None:
+            self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
 
-        msg_obj = MessageIn(
-            type=MessageInType.IMAGE,
-            payload={"image_b64": b64_img},
-        )
-        await websocket.send(msg_obj.model_dump_json())
-        self.get_logger().debug("[BrainClient] Sent image to server.")
+            if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
+                # Send asynchronous action goal.
+                self.send_primitive_goal(
+                    payload.next_task.type, payload.next_task.inputs
+                )
+                # Notify that a primitive is activated.
+                status_msg = MessageIn(
+                    type=MessageInType.PRIMITIVE_ACTIVATED,
+                    payload={"primitive_name": payload.next_task.type.value},
+                )
+                self.ws_bridge.send_message(status_msg)
+                self.primitive_running = True
+            else:
+                self.get_logger().warn("[BrainClient] No valid task provided.")
+        else:
+            self.get_logger().info("[BrainClient] No next task provided.")
+
+    def agent_loop_callback(self):
+        if self.ready_for_image and self.last_image is not None:
+            self.get_logger().debug("Agent loop: sending image")
+
+            success, encoded_img = cv2.imencode(".jpg", self.last_image)
+            if success:
+                b64_img = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
+                image_payload = {"image_b64": b64_img}
+                image_msg = MessageIn(type=MessageInType.IMAGE, payload=image_payload)
+                self.ws_bridge.send_message(image_msg)
+                self.get_logger().debug("Published image message.")
+            self.ready_for_image = False
+
+    def send_primitive_goal(self, task_type, inputs):
+        """
+        Send a goal to execute a primitive via the primitive action server.
+        """
+        goal_msg = ExecutePrimitive.Goal()
+        goal_msg.primitive_type = task_type.value
+        goal_msg.inputs = json.dumps(inputs)
+
+        self.get_logger().info(f"Sending goal for primitive: {goal_msg.primitive_type}")
+        if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().error("Primitive execution action server not available!")
+            return
+
+        send_goal_future = self.primitive_action_client.send_goal_async(goal_msg)
+        send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info("Primitive execution goal rejected.")
+            return
+
+        self.get_logger().info("Primitive execution goal accepted.")
+        get_result_future = goal_handle.get_result_async()
+        get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info(f"Primitive execution result: {result.success}")
+
+        if result.success:
+            self.primitive_running = False
+            outgoing_msg = MessageIn(
+                type=MessageInType.PRIMITIVE_COMPLETED,
+                payload={"primitive_name": result.primitive_type},
+            )
+            self.ws_bridge.send_message(outgoing_msg)
 
     def destroy_node(self):
-        # Called when shutting down
         self.exit_event.set()
         return super().destroy_node()
 

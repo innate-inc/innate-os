@@ -18,7 +18,8 @@ RUN apt-get update && apt-get install -y \
     zsh \
     git \
     curl \
-    tmux
+    tmux \
+    iputils-ping
 
 # 1b. Install ROS-related packages
 RUN apt-get install -y \
@@ -28,8 +29,9 @@ RUN apt-get install -y \
     ros-humble-launch-xml \
     ros-humble-cv-bridge \
     ros-humble-navigation2 \
-    ros-humble-nav2-bringup
-
+    ros-humble-demo-nodes-cpp \
+    ros-humble-nav2-bringup \
+    ros-humble-rviz2
 
 # 1c. Install Python packages and pip
 RUN apt-get install -y \

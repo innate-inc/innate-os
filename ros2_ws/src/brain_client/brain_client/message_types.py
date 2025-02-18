@@ -6,16 +6,17 @@ from pydantic import BaseModel, field_serializer
 
 
 class TaskType(Enum):
-    NAVIGATION_IN_SIGHT = "navigation_in_sight"
-    NAVIGATION_OUT_OF_SIGHT = "navigation_out_of_sight"
-    ACTION_WITH_ARM = "action_with_arm"
-    ASK_FOR_INFORMATION = "ask_for_information"
-    VELOCITY_CONTROL = "velocity_control"
+    NAVIGATE_TO_POSITION = "navigate_to_position"
+
+
+class NavigationToPosition(BaseModel):
+    x: float
+    y: float
 
 
 class Task(BaseModel):
     type: TaskType
-    description: str
+    inputs: Dict[str, Any]
 
     @field_serializer("type")
     def serialize_task_type(self, value: TaskType) -> str:
@@ -28,6 +29,10 @@ class MessageInType(str, Enum):
     DIRECTIVE = "directive"
     IMAGE = "image"
     CHAT_IN = "chat_in"
+    PRIMITIVE_ACTIVATED = "primitive_activated"
+    PRIMITIVE_COMPLETED = "primitive_completed"
+    PRIMITIVE_INTERRUPTED = "primitive_interrupted"
+    PRIMITIVE_FAILED = "primitive_failed"
 
 
 # These types represent messages sent out by the server/agent (e.g. commands or responses)
@@ -53,6 +58,14 @@ class MessageOut(BaseModel):
         return value.value
 
 
+class InternalMessageType(str, Enum):
+    READY_FOR_CONNECTION = "ready_for_connection"
+
+
+class InternalMessage(BaseModel):
+    type: InternalMessageType
+
+
 class VisionAgentOutput(BaseModel):
     """
     Represents the output received from the vision agent backend.
@@ -64,6 +77,5 @@ class VisionAgentOutput(BaseModel):
     thoughts: str
     new_goal: Optional[str]
     next_task: Optional[Task] = None
-    users_implicated: List[str]
     anticipation: Optional[str]
     to_tell_user: Optional[str]
