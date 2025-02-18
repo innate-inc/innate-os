@@ -24,7 +24,6 @@ from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from brain_messages.srv import GetChatHistory
-from brain_client.primitives.wrappers import run_primitive_in_node
 
 # Import our WSBridge class.
 from brain_client.ws_bridge import WSBridge
