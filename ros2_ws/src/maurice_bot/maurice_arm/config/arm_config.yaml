@@ -17,7 +17,7 @@ maurice_arm:
     joints:
       joint1:
         servo_id: 1
-        control_mode: 4
+        control_mode: 2
         max_velocity: 5.0
         pwm_limits: 885      # PWM limit (0-885)
         position_limits:
@@ -26,7 +26,7 @@ maurice_arm:
 
       joint2:
         servo_id: 2
-        control_mode: 4
+        control_mode: 2
         max_velocity: 5.0
         pwm_limits: 885      # PWM limit (0-885)
         position_limits:
@@ -35,7 +35,7 @@ maurice_arm:
 
       joint3:
         servo_id: 3
-        control_mode: 4
+        control_mode: 2
         max_velocity: 5.0
         pwm_limits: 885      # PWM limit (0-885)
         position_limits:
@@ -44,7 +44,7 @@ maurice_arm:
 
       joint4:
         servo_id: 4
-        control_mode: 4
+        control_mode: 2
         max_velocity: 5.0
         pwm_limits: 885      # PWM limit (0-885)
         position_limits:
@@ -53,7 +53,7 @@ maurice_arm:
 
       joint5:
         servo_id: 5
-        control_mode: 4
+        control_mode: 2
         max_velocity: 5.0
         pwm_limits: 885      # PWM limit (0-885)
         position_limits:
@@ -62,9 +62,9 @@ maurice_arm:
 
       joint6:
         servo_id: 6
-        control_mode: 4
+        control_mode: 2
         max_velocity: 5.0
-        pwm_limits: 885      # PWM limit (0-885)
+        pwm_limits: 85      # PWM limit (0-885)
         position_limits:
           min: 3.0543       # 175° in radians
           max: 4.0143       # 230° in radians
