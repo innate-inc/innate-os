@@ -10,7 +10,7 @@ def generate_launch_description():
     # Path to the config file
     config_file = os.path.join(pkg_dir, 'config', 'robot_config.yaml')
     
-    # Create the node
+    # Create the nodes
     bringup_node = Node(
         package='maurice_bringup',
         executable='bringup.py',
@@ -19,6 +19,15 @@ def generate_launch_description():
         output='screen'
     )
     
+    rosbridge_node = Node(
+        package='rosbridge_server',
+        executable='rosbridge_websocket',
+        name='rosbridge_websocket',
+        parameters=[{'address': '0.0.0.0'}],
+        output='screen'
+    )
+    
     return LaunchDescription([
-        bringup_node
+        bringup_node,
+        rosbridge_node
     ])
