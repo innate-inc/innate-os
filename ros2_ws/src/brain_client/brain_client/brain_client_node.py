@@ -157,6 +157,12 @@ class BrainClientNode(Node):
         self.chat_out_pub.publish(out_msg)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
+        if payload.stop_current_task:
+            self.get_logger().info("[BrainClient] Stop signal received.")
+            self.primitive_running = False
+            self.primitive_action_client.cancel_all_goals()
+            return
+
         if payload.next_task is not None:
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
 
@@ -173,7 +179,8 @@ class BrainClientNode(Node):
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={"primitive_name": payload.next_task.type.value},
                 )
-                # self.ws_bridge.send_message(status_msg)
+                self.ws_bridge.send_message(status_msg)
+                self.primitive_running = True
             else:
                 self.get_logger().warn("[BrainClient] No valid task provided.")
         else:
@@ -220,7 +227,15 @@ class BrainClientNode(Node):
 
     def get_result_callback(self, future):
         result = future.result().result
-        self.get_logger().info("Primitive execution result: %s" % result.message)
+        self.get_logger().info(f"Primitive execution result: {result.success}")
+
+        if result.success:
+            self.primitive_running = False
+            outgoing_msg = MessageIn(
+                type=MessageInType.PRIMITIVE_COMPLETED,
+                payload={"primitive_name": result.primitive_type},
+            )
+            self.ws_bridge.send_message(outgoing_msg)
 
     def destroy_node(self):
         self.exit_event.set()
