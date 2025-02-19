@@ -56,7 +56,8 @@ maurice_arm:
                   "min": -0.0872,
                   "max": 1.0821
               },
-              "pwm_limits": 85,
-              "control_mode": 2
+              "pwm_limits": 885,
+              "current_limit": 100,
+              "control_mode": 4
           }
       }

@@ -44,7 +44,7 @@ class MauriceArmNode(Node):
 
         # For each joint, perform the configuration sequence:
         # 1. Torque off, 2. set position limits, 3. set PWM limit,
-        # 4. set operating mode, then 5. Torque on.
+        # 4. set current limit, then 5. set operating mode, then 6. Torque on.
         for joint_name, joint in joints_param.items():
             servo_id = joint.get("servo_id")
             servo_ids.append(servo_id)
@@ -73,6 +73,13 @@ class MauriceArmNode(Node):
             self.get_logger().info(f"Setting {joint_name} PWM limit: {pwm_limit}")
             dynamixel.set_pwm_limit(servo_id, pwm_limit)
             time.sleep(0.5)
+
+            # Set current limit if provided
+            if "current_limit" in joint:
+                current_limit = joint["current_limit"]
+                self.get_logger().info(f"Setting {joint_name} current limit: {current_limit}")
+                dynamixel.set_current_limit(servo_id, current_limit)
+                time.sleep(0.5)
 
             # Set the operating mode.
             control_mode_param = joint.get("control_mode")
