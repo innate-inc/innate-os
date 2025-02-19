@@ -149,9 +149,9 @@ class BrainClientNode(Node):
                 f"Error processing vision output: {e}. Traceback: {traceback.format_exc()}"
             )
 
-    def _handle_chat_out(self, msg):
+    def _handle_chat_out(self, msg, sender="robot"):
         text = msg.payload.get("text", "")
-        chat_entry = {"sender": "cloud", "text": text, "timestamp": time.time()}
+        chat_entry = {"sender": sender, "text": text, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
         self.get_logger().info(f"Received chat_out: {chat_entry}")
         out_msg = String(data=text)
@@ -170,7 +170,23 @@ class BrainClientNode(Node):
                 type=MessageOutType.CHAT_OUT,
                 payload={"text": payload.to_tell_user},
             )
-            self._handle_chat_out(chat_entry)
+            self._handle_chat_out(chat_entry, sender="robot")
+
+        if payload.thoughts:
+            # Output to the chat what the agent think
+            chat_entry = MessageOut(
+                type=MessageOutType.CHAT_OUT,
+                payload={"text": payload.thoughts},
+            )
+            self._handle_chat_out(chat_entry, sender="robot_thoughts")
+
+        if payload.anticipation:
+            # Output to the chat what the agent anticipate
+            chat_entry = MessageOut(
+                type=MessageOutType.CHAT_OUT,
+                payload={"text": payload.anticipation},
+            )
+            self._handle_chat_out(chat_entry, sender="robot_anticipation")
 
         if payload.next_task is not None:
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
