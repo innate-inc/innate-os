@@ -64,8 +64,8 @@ class Robot:
         )
         for id in self.servo_ids:
             self.pwm_writer.addParam(id, [2048])
-        self._disable_torque()
-        self.motor_control_state = MotorControlType.DISABLED
+        #self._disable_torque()
+        self.motor_control_state = MotorControlType.POSITION_CONTROL
 
     def read_position(self, tries=2):
         """
