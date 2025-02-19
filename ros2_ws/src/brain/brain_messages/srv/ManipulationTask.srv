@@ -1,0 +1,7 @@
+# Request
+string task_name
+string task_description
+bool mobile_task
+---
+# Response
+bool success
