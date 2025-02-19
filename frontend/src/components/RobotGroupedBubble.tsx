@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import styled from "styled-components";
 
 const RobotExtrasBubble = styled.div`
@@ -28,10 +28,28 @@ const ArrowSpan = styled.span`
   margin-right: 4px;
 `;
 
-const ContentDiv = styled.div`
-  margin-top: 8px;
+/*
+  Instead of conditionally rendering the content, we always render the container and use a 
+  transition on its max-height (and margin-top) to animate open/close. We pass it the isOpen 
+  state and the computed content height.
+*/
+const ContentDiv = styled.div<{
+  isOpen: boolean;
+  contentHeight: number;
+}>`
   text-align: left;
+  overflow: hidden;
+  max-height: ${({ isOpen, contentHeight }) =>
+    isOpen ? `${contentHeight}px` : "0px"};
+  margin-top: ${({ isOpen }) => (isOpen ? "8px" : "0")};
+  transition: max-height 0.3s ease, margin-top 0.3s ease;
 `;
+
+/*
+  The inner container (InnerContent) holds the actual mapped content.
+  We use a ref on this inner container to measure its scrollHeight.
+*/
+const InnerContent = styled.div``;
 
 const ExtraItem = styled.div`
   margin-bottom: 4px;
@@ -50,8 +68,18 @@ export const RobotGroupedBubble = ({
   isLast,
 }: RobotGroupedBubbleProps) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [contentHeight, setContentHeight] = useState(0);
+  const innerRef = useRef<HTMLDivElement>(null);
 
-  const workingOrWorked = isLast ? "Worked" : "Working";
+  // Whenever the extras or open state change, update the content height value.
+  // This allows the max-height transition to smoothly animate to the measured height.
+  useEffect(() => {
+    if (innerRef.current) {
+      setContentHeight(innerRef.current.scrollHeight);
+    }
+  }, [groupedExtras, isOpen]);
+
+  const workingOrWorked = !isLast ? "Thought" : "Thinking";
 
   return (
     <RobotExtrasBubble>
@@ -63,13 +91,13 @@ export const RobotGroupedBubble = ({
             : `${workingOrWorked}...`}
         </span>
       </ToggleDiv>
-      {isOpen && (
-        <ContentDiv>
+      <ContentDiv isOpen={isOpen} contentHeight={contentHeight}>
+        <InnerContent ref={innerRef}>
           {groupedExtras.map((extra, index) => (
             <ExtraItem key={index}>{extra}</ExtraItem>
           ))}
-        </ContentDiv>
-      )}
+        </InnerContent>
+      </ContentDiv>
     </RobotExtrasBubble>
   );
 };
