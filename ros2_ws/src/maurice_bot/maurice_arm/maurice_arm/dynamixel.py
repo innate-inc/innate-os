@@ -32,10 +32,14 @@ class Dynamixel:
     ADDR_GOAL_POSITION = 116
     ADDR_VELOCITY_LIMIT = 44
     ADDR_GOAL_PWM = 100
+    ADDR_PWM_LIMIT = 36  # 2 bytes, PWM Limit (0 to 885)
     OPERATING_MODE_ADDR = 11
     POSITION_I = 82
     POSITION_P = 84
     ADDR_ID = 7
+    ADDR_MAX_POSITION_LIMIT = 48  # 4 bytes, Max Position Limit
+    ADDR_MIN_POSITION_LIMIT = 52  # 4 bytes, Min Position Limit
+    ADDR_CURRENT_LIMIT = 38       # 2 bytes, Current Limit
 
     @dataclass
     class Config:
@@ -210,8 +214,18 @@ class Dynamixel:
         self.operating_modes[motor_id] = operating_mode
 
     def set_pwm_limit(self, motor_id: int, limit: int):
+        """
+        Sets the PWM limit for a servo.
+        :param motor_id: The ID of the servo.
+        :param limit: The PWM limit value (range 0 to 885, per the control table).
+        :raises ValueError: If limit is outside valid range
+        """
+        if not 0 <= limit <= 885:
+            raise ValueError(f"PWM limit must be between 0 and 885, got {limit}")
+        
+        self._disable_torque(motor_id)
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, 36, limit
+            self.portHandler, motor_id, self.ADDR_PWM_LIMIT, limit
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
@@ -325,7 +339,40 @@ class Dynamixel:
         current_position = self.read_position(motor_id)
         # print(f'signed position {current_position - 2** 32}')
         print(f"position after {current_position}")
-        
+
+    def set_max_position_limit(self, motor_id: int, max_position: int):
+        """
+        Sets the maximum allowed position for a servo.
+        :param motor_id: The ID of the servo.
+        :param max_position: The maximum position value (0 to 4095).
+        """
+        dxl_comm_result, dxl_error = self.packetHandler.write4ByteTxRx(
+            self.portHandler, motor_id, self.ADDR_MAX_POSITION_LIMIT, max_position
+        )
+        self._process_response(dxl_comm_result, dxl_error, motor_id)
+
+    def set_min_position_limit(self, motor_id: int, min_position: int):
+        """
+        Sets the minimum allowed position for a servo.
+        :param motor_id: The ID of the servo.
+        :param min_position: The minimum position value (0 to 4095).
+        """
+        dxl_comm_result, dxl_error = self.packetHandler.write4ByteTxRx(
+            self.portHandler, motor_id, self.ADDR_MIN_POSITION_LIMIT, min_position
+        )
+        self._process_response(dxl_comm_result, dxl_error, motor_id)
+
+    def set_current_limit(self, motor_id: int, current_limit: int):
+        """
+        Sets the current limit for a servo.
+        :param motor_id: The ID of the servo.
+        :param current_limit: The current limit value in mA (0 to 1750).
+        """
+        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
+            self.portHandler, motor_id, self.ADDR_CURRENT_LIMIT, current_limit
+        )
+        self._process_response(dxl_comm_result, dxl_error, motor_id)
+
 __all__ = ['Dynamixel', 'OperatingMode', 'ReadAttribute']
 
 # For direct Python imports and ROS relay script
