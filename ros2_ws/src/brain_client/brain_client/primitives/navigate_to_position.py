@@ -10,17 +10,12 @@ class Nav2Controller:
     def __init__(self, logger):
         """
         Initialize the Nav2Controller by creating a BasicNavigator instance
-        and preparing a ROS node with a publisher for stop commands.
         """
         # Create a BasicNavigator instance to communicate with Nav2.
         self.navigator = BasicNavigator()
         self.logger = logger
 
-        # Create a node for publishing stop commands.
-        # (Note: In a more integrated application you might want to reuse an existing node.)
-        # self.pub_node = rclpy.create_node("navigate_to_position_stop_command_node")
         self.logger.info("Nav2 position primitive node created")
-        # self.cmd_vel_pub = self.pub_node.create_publisher(Twist, "cmd_vel", 10)
 
     def go_to_position(self, x: float, y: float, w: float):
         """

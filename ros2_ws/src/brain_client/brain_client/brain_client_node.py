@@ -142,6 +142,11 @@ class BrainClientNode(Node):
     def _handle_vision_agent_output(self, msg):
         try:
             self.get_logger().debug(f"[BrainClient] VisionAgentOutput: {msg}")
+            # HOTFIX: If there's a msg.payload["next_task"] with a "name" field, replace it with "type".
+            if "next_task" in msg.payload and msg.payload["next_task"] is not None:
+                if "name" in msg.payload["next_task"]:
+                    msg.payload["next_task"]["type"] = msg.payload["next_task"]["name"]
+                    msg.payload["next_task"].pop("name", None)
             payload = VisionAgentOutput.model_validate(msg.payload)
             self.handle_vision_agent_output(payload)
         except Exception as e:
@@ -164,14 +169,6 @@ class BrainClientNode(Node):
             self.primitive_action_client.cancel_all_goals()
             return
 
-        if payload.to_tell_user:
-            # Output to the chat what the agent decide to say
-            chat_entry = MessageOut(
-                type=MessageOutType.CHAT_OUT,
-                payload={"text": payload.to_tell_user},
-            )
-            self._handle_chat_out(chat_entry, sender="robot")
-
         if payload.thoughts:
             # Output to the chat what the agent think
             chat_entry = MessageOut(
@@ -179,6 +176,14 @@ class BrainClientNode(Node):
                 payload={"text": payload.thoughts},
             )
             self._handle_chat_out(chat_entry, sender="robot_thoughts")
+
+        if payload.to_tell_user:
+            # Output to the chat what the agent decide to say
+            chat_entry = MessageOut(
+                type=MessageOutType.CHAT_OUT,
+                payload={"text": payload.to_tell_user},
+            )
+            self._handle_chat_out(chat_entry, sender="robot")
 
         if payload.anticipation:
             # Output to the chat what the agent anticipate
