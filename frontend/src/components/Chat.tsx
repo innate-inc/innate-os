@@ -119,7 +119,16 @@ export function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const handleScroll = () => {
+    if (containerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+      setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 10);
+    }
+  };
 
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
@@ -186,8 +195,10 @@ export function Chat() {
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (isScrolledToBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, isScrolledToBottom]);
 
   const handleSend = () => {
     const cleanDraft = draft.trim();
@@ -270,7 +281,7 @@ export function Chat() {
 
   return (
     <ChatContainer>
-      <MessagesWrapper>
+      <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
         {displayMessages.map((m, idx) => {
           if (m.sender === "robot_grouped") {
             return <RobotExtrasBubble key={idx}>{m.text}</RobotExtrasBubble>;
