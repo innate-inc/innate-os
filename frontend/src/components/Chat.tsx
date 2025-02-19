@@ -41,6 +41,8 @@ const MessageBubble = styled.div<MessageBubbleProps>`
   margin-bottom: 10px;
   align-self: ${({ $isUser }) => ($isUser ? "flex-end" : "flex-start")};
   text-align: ${({ $isUser }) => ($isUser ? "right" : "left")};
+  font-size: 14px;
+  line-height: 22px;
 
   @media (prefers-color-scheme: dark) {
     /* Dark-mode version of the bubbles */
@@ -93,7 +95,7 @@ const SendButton = styled.button`
 
 interface Message {
   text: string;
-  sender: "user" | "robot" | string; // or strict union if you prefer
+  sender: "user" | "robot" | "robot_thought" | "robot_anticipation";
   timestamp: number;
 }
 
