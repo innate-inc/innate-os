@@ -15,8 +15,7 @@ const RobotExtrasBubble = styled.div`
   font-style: italic;
   color: #888;
   font-size: 12px;
-  padding: 8px 12px;
-  margin-bottom: 10px;
+  padding: 0px 12px;
   align-self: flex-start;
   background: transparent;
   border-radius: 10px;
