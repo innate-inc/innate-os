@@ -52,7 +52,7 @@ class MauriceArmNode(Node):
             # Disable torque for this servo
             self.get_logger().info(f"Disabling torque for {joint_name} (Servo ID {servo_id})")
             dynamixel._disable_torque(servo_id)
-            time.sleep(0.05)
+            time.sleep(0.5)
 
             # Convert position limits from radians to encoder counts.
             # Using: encoder_value = int( (radian / (2*pi)) * 4096 + 2048 )
@@ -66,13 +66,13 @@ class MauriceArmNode(Node):
             )
             dynamixel.set_min_position_limit(servo_id, min_encoder)
             dynamixel.set_max_position_limit(servo_id, max_encoder)
-            time.sleep(0.05)
+            time.sleep(0.5)
 
             # Set the PWM limit
             pwm_limit = joint.get("pwm_limits", 885)
             self.get_logger().info(f"Setting {joint_name} PWM limit: {pwm_limit}")
             dynamixel.set_pwm_limit(servo_id, pwm_limit)
-            time.sleep(0.05)
+            time.sleep(0.5)
 
             # Set the operating mode.
             control_mode_param = joint.get("control_mode")
@@ -90,12 +90,12 @@ class MauriceArmNode(Node):
             op_mode = control_mode_mapping[control_mode_param]
             self.get_logger().info(f"Setting {joint_name} operating mode to {op_mode.name} (param: {control_mode_param})")
             dynamixel.set_operating_mode(servo_id, op_mode)
-            time.sleep(0.05)
+            time.sleep(0.5)
 
             # Finally, enable torque for this servo.
             self.get_logger().info(f"Enabling torque for {joint_name} (Servo ID {servo_id})")
             dynamixel._enable_torque(servo_id)
-            time.sleep(0.05)
+            time.sleep(0.5)
 
         # Initialize robot interface with the collected servo IDs.
         self.robot = Robot(dynamixel=dynamixel, servo_ids=servo_ids)

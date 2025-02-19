@@ -17,8 +17,8 @@ maurice_arm:
           "joint_2": {
               "servo_id": 2,
               "position_limits": {
-                  "min": -1.0,
-                  "max": 1.0
+                  "min": -0.5,
+                  "max": 0.5
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -26,8 +26,8 @@ maurice_arm:
           "joint_3": {
               "servo_id": 3,
               "position_limits": {
-                  "min": -2.0,
-                  "max": 2.0
+                  "min": -1.57,
+                  "max": 1.57
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -35,8 +35,8 @@ maurice_arm:
           "joint_4": {
               "servo_id": 4,
               "position_limits": {
-                  "min": -2.5,
-                  "max": 2.5
+                  "min": -1.74,
+                  "max": 1.74
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -44,8 +44,8 @@ maurice_arm:
           "joint_5": {
               "servo_id": 5,
               "position_limits": {
-                  "min": -1.5,
-                  "max": 1.5
+                  "min": -1.57,
+                  "max": 1.57
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -53,10 +53,10 @@ maurice_arm:
           "joint_6": {
               "servo_id": 6,
               "position_limits": {
-                  "min": -1.0,
-                  "max": 1.0
+                  "min": -0.0872,
+                  "max": 1.0821
               },
-              "pwm_limits": 885,
+              "pwm_limits": 85,
               "control_mode": 2
           }
       }
