@@ -24,6 +24,7 @@ from brain_client.message_types import (
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
+from sensor_msgs.msg import Image
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 
@@ -40,6 +41,10 @@ class BrainClientNode(Node):
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
         self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        # New parameters for optional depth processing:
+        self.declare_parameter("depth_image_topic", "/camera/depth/image_raw")
+        # Set to True if you wish to receive and forward depth images as well
+        self.declare_parameter("send_depth", True)
 
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
@@ -51,39 +56,52 @@ class BrainClientNode(Node):
         self.cmd_vel_topic = (
             self.get_parameter("cmd_vel_topic").get_parameter_value().string_value
         )
+        self.depth_image_topic = (
+            self.get_parameter("depth_image_topic").get_parameter_value().string_value
+        )
+        self.send_depth = (
+            self.get_parameter("send_depth").get_parameter_value().bool_value
+        )
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
 
-        # Publishers, subscribers, and service
+        # Publishers, Subscribers, and Service
         self.last_image = None
+        self.last_depth_image = None
+
+        # RGB image subscription remains unchanged.
         self.image_sub = self.create_subscription(
             CompressedImage, self.image_topic, self.image_callback, 10
         )
+
+        # Optionally subscribe to the depth image topic if required.
+        if self.send_depth:
+            # Assuming that the depth image is published as a sensor_msgs/Image
+            # (which contains: header, height, width, encoding, is_bigendian, step, data)
+
+            self.depth_image_sub = self.create_subscription(
+                Image, self.depth_image_topic, self.depth_image_callback, 10
+            )
+
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
         self.chat_history = []
         self.chat_in_sub = self.create_subscription(
             String, "/chat_in", self.chat_in_callback, 10
         )
-        # This publisher is still available if needed locally.
         self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
 
-        # Exit event and image readiness flag
         self.exit_event = threading.Event()
         self.ready_for_image = False
 
-        # Timer for checking image readiness
         self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
 
-        # Instantiate the WSBridge.
-        # It subscribes to "ws_messages" (incoming) and publishes on "ws_outgoing" (outgoing).
         self.ws_bridge = WSBridge(
             self, incoming_topic="ws_messages", outgoing_topic="ws_outgoing"
         )
-        # Register handlers with WSBridge.
         self.ws_bridge.register_handler(
             MessageOutType.READY_FOR_IMAGE, self._handle_ready_for_image
         )
@@ -92,23 +110,20 @@ class BrainClientNode(Node):
         )
         self.ws_bridge.register_handler(MessageOutType.CHAT_OUT, self._handle_chat_out)
 
-        # Tell the ws_bridge we're ready to connect
         for _ in range(3):
             self.ws_bridge.send_message(
                 InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
             )
             time.sleep(1.0)
 
-        # Boolean flag to check if a primitive is running
         self.primitive_running = False
 
         # Create the primitive execution action client once in the init.
-        # TODO: Convey the primitives it can execute
+        # TODO: Convey the primitives it can execute instead of hardcoding it here.
         self.primitive_action_client = ActionClient(
             self, ExecutePrimitive, "execute_primitive"
         )
 
-        # Create and start an asyncio event loop in a background thread
         self.async_loop = asyncio.new_event_loop()
         thread = threading.Thread(target=self.async_loop.run_forever, daemon=True)
         thread.start()
@@ -117,7 +132,6 @@ class BrainClientNode(Node):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
         self.get_logger().debug(f"Received chat_in: {chat_entry}")
-        # Send outgoing chat message via WSBridge.
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
         self.ws_bridge.send_message(outgoing_msg)
 
@@ -134,6 +148,23 @@ class BrainClientNode(Node):
             self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         except Exception as e:
             self.get_logger().error(f"Failed to decode compressed image: {e}")
+
+    def depth_image_callback(self, msg):
+        try:
+            # This callback assumes a sensor_msgs/Image message for the depth channel.
+            # Determine the correct numpy dtype based on the image encoding.
+            if msg.encoding in ["16UC1", "mono16"]:
+                dtype = np.uint16
+            elif msg.encoding in ["32FC1", "mono32"]:
+                dtype = np.float32
+            else:
+                # Fallback to uint8 if the encoding is unexpected.
+                dtype = np.uint8
+            depth_array = np.frombuffer(msg.data, dtype=dtype)
+            depth_array = depth_array.reshape((msg.height, msg.width))
+            self.last_depth_image = depth_array
+        except Exception as e:
+            self.get_logger().error(f"Failed to decode depth image: {e}")
 
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
@@ -170,7 +201,6 @@ class BrainClientNode(Node):
             return
 
         if payload.thoughts:
-            # Output to the chat what the agent think
             chat_entry = MessageOut(
                 type=MessageOutType.CHAT_OUT,
                 payload={"text": payload.thoughts},
@@ -178,7 +208,6 @@ class BrainClientNode(Node):
             self._handle_chat_out(chat_entry, sender="robot_thoughts")
 
         if payload.to_tell_user:
-            # Output to the chat what the agent decide to say
             chat_entry = MessageOut(
                 type=MessageOutType.CHAT_OUT,
                 payload={"text": payload.to_tell_user},
@@ -186,7 +215,6 @@ class BrainClientNode(Node):
             self._handle_chat_out(chat_entry, sender="robot")
 
         if payload.anticipation:
-            # Output to the chat what the agent anticipate
             chat_entry = MessageOut(
                 type=MessageOutType.CHAT_OUT,
                 payload={"text": payload.anticipation},
@@ -197,11 +225,9 @@ class BrainClientNode(Node):
             self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
 
             if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
-                # Send asynchronous action goal.
                 self.send_primitive_goal(
                     payload.next_task.type, payload.next_task.inputs
                 )
-                # Notify that a primitive is activated.
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={"primitive_name": payload.next_task.type.value},
@@ -214,22 +240,60 @@ class BrainClientNode(Node):
             self.get_logger().info("[BrainClient] No next task provided.")
 
     def agent_loop_callback(self):
+        # This callback will send the RGB image and, if allowed, the depth image
         if self.ready_for_image and self.last_image is not None:
-            self.get_logger().debug("Agent loop: sending image")
+            try:
+                self.get_logger().info("Agent loop: sending image")
 
-            success, encoded_img = cv2.imencode(".jpg", self.last_image)
-            if success:
-                b64_img = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
-                image_payload = {"image_b64": b64_img}
-                image_msg = MessageIn(type=MessageInType.IMAGE, payload=image_payload)
+                # Compress the RGB image as JPEG (70% quality)
+                encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+                success, encoded_img = cv2.imencode(
+                    ".jpg", self.last_image, encode_params
+                )
+                if not success:
+                    self.get_logger().error("Failed to encode RGB image")
+                    self.ready_for_image = False
+                    return
+
+                rgb_b64 = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
+                payload = {"image_b64": rgb_b64}
+
+                # Optionally include depth data if enabled and available.
+                if self.send_depth and self.last_depth_image is not None:
+                    depth_frame = self.last_depth_image
+                    depth_data = depth_frame.tobytes()
+                    if depth_frame.dtype == np.uint16:
+                        encoding = "16UC1"
+                        bytes_per_pixel = 2
+                    elif depth_frame.dtype == np.float32:
+                        encoding = "32FC1"
+                        bytes_per_pixel = 4
+                    else:
+                        encoding = "8UC1"
+                        bytes_per_pixel = 1
+                    depth_payload = {
+                        "height": int(depth_frame.shape[0]),
+                        "width": int(depth_frame.shape[1]),
+                        "encoding": encoding,
+                        "is_bigendian": 0,
+                        "step": int(depth_frame.shape[1] * bytes_per_pixel),
+                        "data": base64.b64encode(depth_data).decode("utf-8"),
+                    }
+                    payload["depth"] = depth_payload
+
+                # Build and send the message
+                image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
                 self.ws_bridge.send_message(image_msg)
-                self.get_logger().debug("Published image message.")
-            self.ready_for_image = False
+                self.get_logger().info("Published image message with optional depth.")
+
+                # Reset flags so we do not resend the same images
+                self.ready_for_image = False
+                self.last_depth_image = None
+            except Exception as e:
+                self.get_logger().error(f"Error in agent_loop_callback: {e}")
+                raise
 
     def send_primitive_goal(self, task_type, inputs):
-        """
-        Send a goal to execute a primitive via the primitive action server.
-        """
         goal_msg = ExecutePrimitive.Goal()
         goal_msg.primitive_type = task_type.value
         goal_msg.inputs = json.dumps(inputs)
@@ -247,7 +311,6 @@ class BrainClientNode(Node):
         if not goal_handle.accepted:
             self.get_logger().info("Primitive execution goal rejected.")
             return
-
         self.get_logger().info("Primitive execution goal accepted.")
         get_result_future = goal_handle.get_result_async()
         get_result_future.add_done_callback(self.get_result_callback)
@@ -255,7 +318,6 @@ class BrainClientNode(Node):
     def get_result_callback(self, future):
         result = future.result().result
         self.get_logger().info(f"Primitive execution result: {result.success}")
-
         if result.success:
             self.primitive_running = False
             outgoing_msg = MessageIn(
