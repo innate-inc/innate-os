@@ -122,22 +122,31 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
         `;
       case "frontFocus":
         return `
-          /* Smaller chase camera pinned corner. We can pick a percentage
-             of the container's width for consistency. Example: 20%. */
+          /* Position the secondary image to align near the main image's right edge,
+             add a slight offset, a border, and a subtle shadow. 
+             Note:
+             - The main image is centered with 62.5% width so its right edge is near 81.25%.
+             - (100% - 62.5%) / 2 yields the natural gap (18.75%) on each side.
+             - Adding 8px nudges its position inward. */
           width: 20%;
           height: auto;
-          right: 0; /* or calculate a pinned offset */
-          bottom: 0;
+          right: calc((100% - 62.5%) / 2 + 8px);
+          bottom: 8px;
           object-fit: cover;
+          border: 1px solid #ddd;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         `;
       case "chaseFocus":
         return `
-          /* Smaller front camera pinned corner. */
+          /* Same as frontFocus – adjust the secondary image with a slight offset,
+             border, and shadow. */
           width: 20%;
           height: auto;
-          right: 0;
-          bottom: 0;
+          right: calc((100% - 62.5%) / 2 + 8px);
+          bottom: 8px;
           object-fit: cover;
+          border: 1px solid #ddd;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         `;
       default:
         return `
@@ -152,7 +161,7 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
     ${({ $viewMode }) => {
       if ($viewMode === "frontFocus" || $viewMode === "chaseFocus") {
         return `
-          /* Keep pinned corner effect, just scale the width if desired */
+          /* On small screens, maintain a similar offset with slightly scaled adjustments */
           width: 30vw;
           height: auto;
           right: 8px;
@@ -160,9 +169,11 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
           left: auto;
           top: auto;
           position: absolute;
+          border: 1px solid #ddd;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         `;
       } else {
-        /* If sideBySide or default, do a stacked approach */
+        /* For sideBySide and default, use a stacked approach */
         return `
           position: relative;
           width: 100%;
