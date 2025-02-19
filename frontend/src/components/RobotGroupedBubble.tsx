@@ -1,5 +1,15 @@
 import { useState, useRef, useEffect } from "react";
-import styled from "styled-components";
+import styled, { keyframes, css } from "styled-components";
+
+// New keyframes for animating the gradient background inside the text's pseudo-element.
+const textWaveAnimation = keyframes`
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -150% 0;
+  }
+`;
 
 const RobotExtrasBubble = styled.div`
   font-style: italic;
@@ -16,16 +26,56 @@ const RobotExtrasBubble = styled.div`
   }
 `;
 
+/* Simplified ToggleDiv without a background animation */
 const ToggleDiv = styled.div`
   cursor: pointer;
   display: flex;
   flex-direction: row;
   justify-content: flex-start;
   align-items: flex-start;
+  position: relative;
+  overflow: hidden;
 `;
 
 const ArrowSpan = styled.span`
   margin-right: 4px;
+`;
+
+/*
+  StatusSpan wraps the status text.
+  When isLast is true, it adds a ::before pseudo-element that duplicates the text (via data-text)
+  and uses background-clip: text to animate a white wave through the text.
+*/
+const StatusSpan = styled.span<{ isLast?: boolean }>`
+  position: relative;
+  display: inline-block;
+  color: ${({ isLast }) => (isLast ? "#666" : "inherit")};
+  padding-right: ${({ isLast }) => (isLast ? "20px" : "0")};
+
+  ${({ isLast }) =>
+    isLast &&
+    css`
+      &::before {
+        content: attr(data-text);
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(255, 255, 255, 0.3) 40%,
+          transparent 80%
+        );
+        background-size: 200% auto;
+        animation: ${textWaveAnimation} 3s linear infinite;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        pointer-events: none;
+        mix-blend-mode: screen;
+      }
+    `}
 `;
 
 /*
@@ -71,8 +121,7 @@ export const RobotGroupedBubble = ({
   const [contentHeight, setContentHeight] = useState(0);
   const innerRef = useRef<HTMLDivElement>(null);
 
-  // Whenever the extras or open state change, update the content height value.
-  // This allows the max-height transition to smoothly animate to the measured height.
+  // Update the content height on extras or open state changes.
   useEffect(() => {
     if (innerRef.current) {
       setContentHeight(innerRef.current.scrollHeight);
@@ -80,16 +129,18 @@ export const RobotGroupedBubble = ({
   }, [groupedExtras, isOpen]);
 
   const workingOrWorked = !isLast ? "Thought" : "Thinking";
+  const statusText =
+    durationSeconds > 0
+      ? `${workingOrWorked} for ${durationSeconds} seconds`
+      : `${workingOrWorked}...`;
 
   return (
     <RobotExtrasBubble>
       <ToggleDiv onClick={() => setIsOpen((prev) => !prev)}>
         <ArrowSpan>{isOpen ? "▲" : "▼"}</ArrowSpan>
-        <span>
-          {durationSeconds > 0
-            ? `${workingOrWorked} for ${durationSeconds} seconds`
-            : `${workingOrWorked}...`}
-        </span>
+        <StatusSpan isLast={isLast} data-text={statusText}>
+          {statusText}
+        </StatusSpan>
       </ToggleDiv>
       <ContentDiv isOpen={isOpen} contentHeight={contentHeight}>
         <InnerContent ref={innerRef}>
