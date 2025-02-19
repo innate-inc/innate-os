@@ -50,28 +50,28 @@ export const MainImage = styled.img<{ $viewMode: string }>`
     switch ($viewMode) {
       case "sideBySide":
         return `
-          /* Fill half the container's width, then center vertically if desired. */
+          /* Fill half the container's width with a white divider on the right */
           left: 0;
           top: 0;
           width: 50%;
           height: 100%;
           object-fit: cover;
+          border-right: 1px solid white;
+          z-index: 100;
         `;
       case "frontFocus":
         return `
-          /* Large front camera: 800×600 ratio roughly equals 4:3, but we can
-             do a percentage-based approach to keep it flexible. For example,
-             62.5% of container width is "800/1280=0.625". */
+          /* Large front camera: 62.5% width centered */
           left: 50%;
           top: 50%;
           transform: translate(-50%, -50%);
           width: 62.5%;
-          height: auto; /* or 75% if you want 800/600 ratio, etc. */
+          height: auto;
           object-fit: cover;
         `;
       case "chaseFocus":
         return `
-          /* Similarly, large chase camera. Same approach as frontFocus. */
+          /* Similar approach as frontFocus */
           left: 50%;
           top: 50%;
           transform: translate(-50%, -50%);
@@ -81,7 +81,7 @@ export const MainImage = styled.img<{ $viewMode: string }>`
         `;
       default:
         return `
-          /* fallback if needed */
+          /* Fallback */
           width: 100%;
           height: 100%;
           object-fit: cover;
@@ -90,8 +90,7 @@ export const MainImage = styled.img<{ $viewMode: string }>`
   }}
 
   @media (max-width: 768px) {
-    /* On smaller screens, we might just go full width or do more
-       "stacking" at this point. */
+    /* On smaller screens, use a relative positioning */
     position: relative;
     left: 0;
     top: 0;
