@@ -10,6 +10,7 @@ import base64
 import numpy as np
 import asyncio
 from rclpy.action import ActionClient
+import math
 
 from brain_client.message_types import (
     InternalMessage,
@@ -25,6 +26,7 @@ from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
+from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 
@@ -45,6 +47,7 @@ class BrainClientNode(Node):
         self.declare_parameter("depth_image_topic", "/camera/depth/image_raw")
         # Set to True if you wish to receive and forward depth images as well
         self.declare_parameter("send_depth", True)
+        self.declare_parameter("odom_topic", "/odom")
 
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
@@ -61,6 +64,11 @@ class BrainClientNode(Node):
         )
         self.send_depth = (
             self.get_parameter("send_depth").get_parameter_value().bool_value
+        )
+        self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
+        self.last_odom = None
+        self.odom_sub = self.create_subscription(
+            Odometry, self.odom_topic, self.odom_callback, 10
         )
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
@@ -165,6 +173,9 @@ class BrainClientNode(Node):
             self.last_depth_image = depth_array
         except Exception as e:
             self.get_logger().error(f"Failed to decode depth image: {e}")
+
+    def odom_callback(self, msg: Odometry):
+        self.last_odom = msg
 
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
@@ -281,10 +292,20 @@ class BrainClientNode(Node):
                     }
                     payload["depth"] = depth_payload
 
+                # Include robot coordinates (if available) in the payload.
+                if self.last_odom is not None:
+                    pos = self.last_odom.pose.pose.position
+                    ori = self.last_odom.pose.pose.orientation
+                    # Compute yaw from quaternion:
+                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                    theta = math.atan2(siny_cosp, cosy_cosp)
+                    payload["robot_coords"] = {"x": pos.x, "y": pos.y, "z": pos.z, "theta": theta}
+
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
                 self.ws_bridge.send_message(image_msg)
-                self.get_logger().info("Published image message with optional depth.")
+                self.get_logger().info("Published image message with optional depth and robot coordinates.")
 
                 # Reset flags so we do not resend the same images
                 self.ready_for_image = False
