@@ -53,22 +53,6 @@ const MessageBubble = styled.div<MessageBubbleProps>`
   }
 `;
 
-// This styled component is now used as the outer container for the grouped dropdown.
-const RobotExtrasBubble = styled.div`
-  font-style: italic;
-  color: #888;
-  font-size: 12px;
-  padding: 8px 12px;
-  margin-bottom: 10px;
-  align-self: flex-start;
-  background: transparent;
-  border-radius: 10px;
-
-  @media (prefers-color-scheme: dark) {
-    color: #bbb;
-  }
-`;
-
 const InputArea = styled.div`
   /* Pinned at the bottom */
   flex-shrink: 0;
@@ -219,6 +203,7 @@ export function Chat() {
             return (
               <RobotGroupedBubble
                 key={idx}
+                isLast={idx === groupedMessages.length - 1}
                 groupedExtras={m.groupedExtras}
                 durationSeconds={m.durationSeconds}
               />

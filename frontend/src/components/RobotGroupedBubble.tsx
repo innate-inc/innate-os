@@ -16,39 +16,60 @@ const RobotExtrasBubble = styled.div`
   }
 `;
 
+const ToggleDiv = styled.div`
+  cursor: pointer;
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: flex-start;
+`;
+
+const ArrowSpan = styled.span`
+  margin-right: 4px;
+`;
+
+const ContentDiv = styled.div`
+  margin-top: 8px;
+  text-align: left;
+`;
+
+const ExtraItem = styled.div`
+  margin-bottom: 4px;
+  text-align: left;
+`;
+
 interface RobotGroupedBubbleProps {
   groupedExtras: string[];
   durationSeconds: number;
+  isLast: boolean;
 }
 
-export function RobotGroupedBubble({
+export const RobotGroupedBubble = ({
   groupedExtras,
   durationSeconds,
-}: RobotGroupedBubbleProps) {
+  isLast,
+}: RobotGroupedBubbleProps) => {
   const [isOpen, setIsOpen] = useState(false);
+
+  const workingOrWorked = isLast ? "Worked" : "Working";
 
   return (
     <RobotExtrasBubble>
-      <div
-        style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
-        onClick={() => setIsOpen((prev) => !prev)}
-      >
+      <ToggleDiv onClick={() => setIsOpen((prev) => !prev)}>
+        <ArrowSpan>{isOpen ? "▲" : "▼"}</ArrowSpan>
         <span>
           {durationSeconds > 0
-            ? `Thinking for ${durationSeconds} seconds`
-            : "Thinking..."}
+            ? `${workingOrWorked} for ${durationSeconds} seconds`
+            : `${workingOrWorked}...`}
         </span>
-        <span style={{ marginLeft: "auto" }}>{isOpen ? "▲" : "▼"}</span>
-      </div>
+      </ToggleDiv>
       {isOpen && (
-        <div style={{ marginTop: "8px" }}>
+        <ContentDiv>
           {groupedExtras.map((extra, index) => (
-            <div key={index} style={{ marginBottom: "4px" }}>
-              {extra}
-            </div>
+            <ExtraItem key={index}>{extra}</ExtraItem>
           ))}
-        </div>
+        </ContentDiv>
       )}
     </RobotExtrasBubble>
   );
-}
+};
