@@ -1,0 +1,10 @@
+recorder:
+  ros__parameters:
+    data_directory: "/path/to/data"       # Directory where data will be saved
+    data_frequency: 10                    # Frequency (e.g., Hz) at which data is recorded
+    image_topics:                         # List of image topic names
+      - "/camera/image_raw"
+      - "/camera/image_processed"
+    arm_state_topic: "/arm/state"          # Topic for the arm state
+    leader_command_topic: "/leader/command"  # Single leader command topic
+    velocity_topic: "/cmd_vel"             # Topic for velocity data
