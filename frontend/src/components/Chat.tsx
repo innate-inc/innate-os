@@ -5,6 +5,8 @@ import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
 // Example icon from react-icons (feel free to use your own icon or an SVG):
 import { IoSend } from "react-icons/io5";
+import { RobotGroupedBubble } from "./RobotGroupedBubble";
+import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 
 const ChatContainer = styled.div`
   /* Default desktop width */
@@ -51,8 +53,7 @@ const MessageBubble = styled.div<MessageBubbleProps>`
   }
 `;
 
-// This is our extra bubble style for robot_thought/robot_anticipation messages
-// that we are grouping together.
+// This styled component is now used as the outer container for the grouped dropdown.
 const RobotExtrasBubble = styled.div`
   font-style: italic;
   color: #888;
@@ -61,6 +62,7 @@ const RobotExtrasBubble = styled.div`
   margin-bottom: 10px;
   align-self: flex-start;
   background: transparent;
+  border-radius: 10px;
 
   @media (prefers-color-scheme: dark) {
     color: #bbb;
@@ -108,12 +110,6 @@ const SendButton = styled.button`
     opacity: 0.8;
   }
 `;
-
-interface Message {
-  text: string;
-  sender: "user" | "robot" | "robot_thoughts" | "robot_anticipation";
-  timestamp: number;
-}
 
 export function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -212,79 +208,21 @@ export function Chat() {
     setDraft("");
   };
 
-  // Compute the messages that will be rendered.
-  // This grouping function walks through the sorted messages and merges consecutive
-  // robot_thought/robot_anticipation messages as one bubble when they are either sandwiched between
-  // robot messages or follow a robot message until the end.
-  const displayMessages = (() => {
-    const grouped: (Message & {
-      sender: string;
-      text: string;
-      timestamp: number;
-    })[] = [];
-    let i = 0;
-    while (i < messages.length) {
-      const msg = messages[i];
-      console.log("Processing message:", msg);
-      if (msg.sender === "user" || msg.sender === "robot") {
-        grouped.push(msg);
-        i++;
-      } else if (
-        msg.sender === "robot_thoughts" ||
-        msg.sender === "robot_anticipation"
-      ) {
-        // Collect all contiguous extra messages.
-        const extras: string[] = [];
-        const groupStartTimestamp = msg.timestamp;
-        while (
-          i < messages.length &&
-          (messages[i].sender === "robot_thoughts" ||
-            messages[i].sender === "robot_anticipation")
-        ) {
-          console.log("Adding extra:", messages[i].text);
-          extras.push(messages[i].text);
-          i++;
-        }
-        console.log("Extras:", extras);
-        const prev = grouped.length > 0 ? grouped[grouped.length - 1] : null;
-        const next = messages[i] || null;
-        // Group if the extras follow a robot message and either the next message is from a robot
-        // or there is no next message (i.e. extras are at end).
-        if (
-          prev &&
-          prev.sender === "robot" &&
-          (!next || next.sender === "robot")
-        ) {
-          grouped.push({
-            sender: "robot_grouped",
-            text: extras.join(" "),
-            timestamp: groupStartTimestamp,
-          });
-        } else {
-          // Render each extra message individually
-          extras.forEach((text) => {
-            grouped.push({
-              sender: "robot_grouped",
-              text,
-              timestamp: groupStartTimestamp,
-            });
-          });
-        }
-      } else {
-        // Fallback for any unexpected sender values
-        grouped.push(msg);
-        i++;
-      }
-    }
-    return grouped;
-  })();
+  // Use the grouping utility to prepare messages for display.
+  const groupedMessages: DisplayMessage[] = groupMessages(messages);
 
   return (
     <ChatContainer>
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
-        {displayMessages.map((m, idx) => {
+        {groupedMessages.map((m, idx) => {
           if (m.sender === "robot_grouped") {
-            return <RobotExtrasBubble key={idx}>{m.text}</RobotExtrasBubble>;
+            return (
+              <RobotGroupedBubble
+                key={idx}
+                groupedExtras={m.groupedExtras}
+                durationSeconds={m.durationSeconds}
+              />
+            );
           }
           return (
             <MessageBubble key={idx} $isUser={m.sender === "user"}>
