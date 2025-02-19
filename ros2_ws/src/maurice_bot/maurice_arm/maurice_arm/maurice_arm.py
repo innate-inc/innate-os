@@ -6,6 +6,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 import math
 import time
+import json
 
 # Import our Dynamixel and Robot classes
 from dynamixel import Dynamixel, OperatingMode
@@ -20,12 +21,15 @@ class MauriceArmNode(Node):
         self.declare_parameter('device_name', '/dev/ttyACM0')
         self.declare_parameter('baud_rate', 1000000)
         self.declare_parameter('control_frequency', 100)
-        self.declare_parameter('joints', {})
+        # Declare 'joints' as a string parameter with empty JSON object as default
+        self.declare_parameter('joints', '{}')
 
         device_name = self.get_parameter('device_name').value
         baud_rate = self.get_parameter('baud_rate').value
         control_frequency = self.get_parameter('control_frequency').value
-        joints_param = self.get_parameter('joints').value  # This is a dict of joints
+        # Get the joints parameter as a string and parse it as JSON
+        joints_str = self.get_parameter('joints').value
+        joints_param = json.loads(joints_str)
 
         # Create a list to hold servo IDs (extracted from joint parameters)
         servo_ids = []
