@@ -87,12 +87,15 @@ async def inbound_loop(ws, shared_queues):
 
             # 2) /chat_out
             elif topic == "/chat_out":
-                text = msg_data.get("data", "")
-                if text:
+                payload = json.loads(msg_data.get("data", ""))
+                sender = payload.get("sender", "")
+                text = payload.get("text", "")
+                timestamp = payload.get("timestamp", time.time())
+                if sender and text:
                     chat_msg = ChatMessage(
-                        sender="robot",
+                        sender=sender,
                         text=text,
-                        timestamp=time.time(),
+                        timestamp=timestamp,
                         timestamp_put_in_queue=time.time(),
                     )
                     # Forward to sim
