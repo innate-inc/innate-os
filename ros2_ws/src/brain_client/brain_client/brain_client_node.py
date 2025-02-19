@@ -154,7 +154,7 @@ class BrainClientNode(Node):
         chat_entry = {"sender": sender, "text": text, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
         self.get_logger().info(f"Received chat_out: {chat_entry}")
-        out_msg = String(data=text)
+        out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
