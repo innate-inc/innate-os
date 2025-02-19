@@ -27,6 +27,7 @@ endif()
 # Generate ROS 2 interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ManipulationTask.srv"
+  "msg/RecorderStatus.msg"
   DEPENDENCIES builtin_interfaces
 )
 

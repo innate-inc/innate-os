@@ -1,0 +1,3 @@
+string current_task_name
+string episode_number
+string status
