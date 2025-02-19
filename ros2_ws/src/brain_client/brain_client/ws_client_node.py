@@ -79,23 +79,6 @@ class WSClient:
         if self.websocket is not None:
             await self.websocket.send(msg.model_dump_json())
 
-    async def send_image(self, cv_image):
-        import cv2
-        import base64
-
-        success, encoded_img = cv2.imencode(".jpg", cv_image)
-        if not success:
-            self.node.get_logger().error("Failed to encode image as JPEG.")
-            return
-
-        b64_img = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
-        msg_obj = MessageIn(
-            type=MessageInType.IMAGE,
-            payload={"image_b64": b64_img},
-        )
-        await self.send(msg_obj)
-        self.node.get_logger().debug("Sent image over WebSocket.")
-
 
 ###############################################################################
 # WSClientNode – a dedicated ROS node that wraps the WSClient.
