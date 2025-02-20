@@ -1,5 +1,7 @@
 import h5py
 import numpy as np
+import os
+import json
 
 class EpisodeData:
     def __init__(self, camera_names=None):
@@ -118,3 +120,103 @@ class EpisodeData:
             'qvel': self.qvel,
             'images': self.images
         }
+
+
+class TaskManager:
+    def __init__(self, base_data_directory):
+        """
+        Initialize the TaskManager.
+
+        Args:
+            base_data_directory (str): The root directory where all task directories are created.
+        """
+        self.base_data_directory = base_data_directory
+        self.current_task_name = None
+        self.current_task_dir = None
+        self.metadata = None  # Will hold the task metadata
+        self.episodes = []    # List of EpisodeData objects
+
+    def start_new_task(self, task_name, task_description, mobile_flag):
+        """
+        Start a new task by creating a task directory and initializing metadata.
+
+        Args:
+            task_name (str): The name for the new task.
+            task_description (str): A description for the task.
+            mobile_flag (bool): Indicates if the task involves mobile data.
+        """
+        self.current_task_name = task_name
+        self.current_task_dir = os.path.join(self.base_data_directory, task_name)
+        os.makedirs(self.current_task_dir, exist_ok=True)
+        
+        # Initialize metadata dictionary.
+        self.metadata = {
+            "task_name": task_name,
+            "task_description": task_description,
+            "mobile_task": mobile_flag,
+            "number_of_episodes": 0,
+            "episodes": []  # Will contain details for each saved episode.
+        }
+        self._save_metadata()
+        self.episodes = []  # Reset the episodes list.
+
+    def add_episode(self, episode_data, start_timestamp, end_timestamp):
+        """
+        Save an episode's data to an HDF5 file and update the task's metadata.
+
+        Args:
+            episode_data (EpisodeData): The EpisodeData object containing buffered data.
+            start_timestamp (str): Start timestamp of the episode (e.g., ISO format).
+            end_timestamp (str): End timestamp of the episode.
+        """
+        # Determine new episode ID and filename.
+        episode_id = self.metadata["number_of_episodes"] + 1
+        file_name = f"episode_{episode_id}.h5"
+        file_path = os.path.join(self.current_task_dir, file_name)
+        
+        # Save the episode HDF5 file.
+        episode_data.save_file(file_path)
+        
+        # Update metadata with new episode info.
+        episode_info = {
+            "episode_id": episode_id,
+            "file_name": file_name,
+            "start_timestamp": start_timestamp,
+            "end_timestamp": end_timestamp
+        }
+        self.metadata["episodes"].append(episode_info)
+        self.metadata["number_of_episodes"] += 1
+        self._save_metadata()
+        
+        # Optionally, store the episode_data object.
+        self.episodes.append(episode_data)
+
+    def end_task(self):
+        """
+        End the current task by finalizing metadata and resetting state.
+        """
+        self._save_metadata()
+        self.current_task_name = None
+        self.current_task_dir = None
+        self.metadata = None
+        self.episodes = []
+
+    def _save_metadata(self):
+        """
+        Save the current metadata to a JSON file in the task directory.
+        """
+        if self.current_task_dir is None:
+            raise RuntimeError("No active task directory to save metadata.")
+        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        with open(metadata_path, 'w') as f:
+            json.dump(self.metadata, f, indent=4)
+
+    def load_metadata(self):
+        """
+        Load the metadata from the JSON file in the current task directory.
+        """
+        if self.current_task_dir is None:
+            raise RuntimeError("No active task directory to load metadata from.")
+        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        with open(metadata_path, 'r') as f:
+            self.metadata = json.load(f)
