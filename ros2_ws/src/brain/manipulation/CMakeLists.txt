@@ -45,5 +45,6 @@ install(
   PROGRAMS
     manipulation/recorder.py
     manipulation/TestPublisher.py
+    manipulation/recorder_interface.py
   DESTINATION lib/${PROJECT_NAME}
 )

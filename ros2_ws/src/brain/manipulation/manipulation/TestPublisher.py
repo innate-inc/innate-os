@@ -16,7 +16,7 @@ class TestPublisher(Node):
         self.bridge = CvBridge()
         
         # Hard-coded video file path; update this to your actual video file location.
-        video_file = '/path/to/video.mp4'
+        video_file = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/manipulation/big_buck_bunny.mp4'
         self.cap = cv2.VideoCapture(video_file)
         if not self.cap.isOpened():
             self.get_logger().error(f"Could not open video file: {video_file}")
@@ -82,7 +82,7 @@ class TestPublisher(Node):
         
         # Leader command for /leader/command (dummy array of floats)
         leader_command_msg = Float64MultiArray()
-        leader_command_msg.data = [1.0, 2.0, 3.0]
+        leader_command_msg.data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
         self.pub_leader_command.publish(leader_command_msg)
         
         # Twist message for /cmd_vel (dummy linear and angular velocities)
