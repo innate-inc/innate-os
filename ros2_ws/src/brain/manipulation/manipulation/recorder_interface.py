@@ -39,7 +39,6 @@ class TerminalInterface(Node):
             except EOFError:
                 break  # End of input
             if command == 'nt':
-                # New task: ask for task name, description, and mobile flag.
                 task_name = input("Enter task name: ")
                 task_description = input("Enter task description: ")
                 mobile_flag_str = input("Is this a mobile task? (y/n): ").strip().lower()
@@ -86,11 +85,14 @@ class TerminalInterface(Node):
             return
 
         future = self.new_task_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            print(f"New Task result: success={future.result().success}")
-        else:
-            print("Failed to call new_task service.")
+        future.add_done_callback(self.handle_new_task_response)
+
+    def handle_new_task_response(self, future):
+        try:
+            response = future.result()
+            print(f"New Task result: success={response.success}")
+        except Exception as e:
+            print(f"New Task service call failed: {e}")
 
     def call_new_episode(self):
         request = Trigger.Request()
@@ -99,11 +101,14 @@ class TerminalInterface(Node):
             return
 
         future = self.new_episode_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            print(f"New Episode result: success={future.result().success}, message='{future.result().message}'")
-        else:
-            print("Failed to call new_episode service.")
+        future.add_done_callback(self.handle_new_episode_response)
+
+    def handle_new_episode_response(self, future):
+        try:
+            response = future.result()
+            print(f"New Episode result: success={response.success}, message='{response.message}'")
+        except Exception as e:
+            print(f"New Episode service call failed: {e}")
 
     def call_save_episode(self):
         request = Trigger.Request()
@@ -112,11 +117,14 @@ class TerminalInterface(Node):
             return
 
         future = self.save_episode_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            print(f"Save Episode result: success={future.result().success}, message='{future.result().message}'")
-        else:
-            print("Failed to call save_episode service.")
+        future.add_done_callback(self.handle_save_episode_response)
+
+    def handle_save_episode_response(self, future):
+        try:
+            response = future.result()
+            print(f"Save Episode result: success={response.success}, message='{response.message}'")
+        except Exception as e:
+            print(f"Save Episode service call failed: {e}")
 
     def call_cancel_episode(self):
         request = Trigger.Request()
@@ -125,11 +133,14 @@ class TerminalInterface(Node):
             return
 
         future = self.cancel_episode_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            print(f"Cancel Episode result: success={future.result().success}, message='{future.result().message}'")
-        else:
-            print("Failed to call cancel_episode service.")
+        future.add_done_callback(self.handle_cancel_episode_response)
+
+    def handle_cancel_episode_response(self, future):
+        try:
+            response = future.result()
+            print(f"Cancel Episode result: success={response.success}, message='{response.message}'")
+        except Exception as e:
+            print(f"Cancel Episode service call failed: {e}")
 
     def call_end_task(self):
         request = Trigger.Request()
@@ -138,11 +149,14 @@ class TerminalInterface(Node):
             return
 
         future = self.end_task_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            print(f"End Task result: success={future.result().success}, message='{future.result().message}'")
-        else:
-            print("Failed to call end_task service.")
+        future.add_done_callback(self.handle_end_task_response)
+
+    def handle_end_task_response(self, future):
+        try:
+            response = future.result()
+            print(f"End Task result: success={response.success}, message='{response.message}'")
+        except Exception as e:
+            print(f"End Task service call failed: {e}")
 
     # ---------- Status Callback ----------
     def status_callback(self, msg: RecorderStatus):
@@ -151,7 +165,6 @@ class TerminalInterface(Node):
         print(f"Episode Number: {msg.episode_number}")
         print(f"Status: {msg.status}")
         print("------------------------------\n")
-        # Reprint menu prompt to avoid clobbering the terminal.
         print("Enter command (or 'm' for menu): ", end='', flush=True)
 
 def main(args=None):
