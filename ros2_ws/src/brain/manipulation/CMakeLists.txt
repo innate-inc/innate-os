@@ -39,3 +39,11 @@ install(
   DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
+
+# Install Python scripts
+install(
+  PROGRAMS
+    manipulation/recorder.py
+    manipulation/TestPublisher.py
+  DESTINATION lib/${PROJECT_NAME}
+)
