@@ -1,3 +1,4 @@
+# File: brain/manipulation/config/recorder.yaml
 recorder:
   ros__parameters:
     data_directory: "/path/to/data"       # Directory where data will be saved

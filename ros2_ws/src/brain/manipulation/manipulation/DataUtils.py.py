@@ -1,7 +1,11 @@
+#!/usr/bin/env python3
+# File: /ros2_ws/src/brain/manipulation/manipulation/DataUtils.py
+
 import h5py
 import numpy as np
 import os
 import json
+from brain_messages.msg import RecorderStatus
 
 class EpisodeData:
     def __init__(self, camera_names=None):
@@ -10,44 +14,49 @@ class EpisodeData:
         
         Args:
             camera_names (list, optional): List of camera names.
-                If not provided, defaults to ['camera1', 'camera2'].
+                If not provided, will be set dynamically on first add_timestep call.
         """
-        if camera_names is None:
-            camera_names = ['camera1', 'camera2']
         self.camera_names = camera_names
         
-        # Initialize buffers for time-step data.
+        # Initialize buffers for time-step data
         self.actions = []
         self.qpos = []
         self.qvel = []
         
-        # Create a dictionary for images with fixed camera names.
-        self.images = {cam: [] for cam in self.camera_names}
+        # Initialize images dict only if camera_names is provided
+        if camera_names is not None:
+            self.images = {cam: [] for cam in self.camera_names}
+        else:
+            self.images = {}
     
     def add_timestep(self, action, qpos, qvel, images):
         """
         Add a new time step of data.
         
-        The provided 'images' list must be ordered such that the first element corresponds
-        to 'camera1', the second to 'camera2', and so on.
+        On the first call, it dynamically sets the camera configuration based on the provided images.
+        Subsequent calls must match the initial camera configuration.
         
         Args:
             action: Data representing the action at the current time step.
             qpos: Data representing the robot's position at the current time step.
             qvel: Data representing the robot's velocity at the current time step.
-            images (list): A list of images corresponding to the default camera ordering.
+            images (list): A list of images.
         
         Raises:
-            ValueError: If the number of images does not match the number of cameras.
+            ValueError: If a subsequent call does not provide the same number of images as initially determined.
         """
-        if len(images) != len(self.camera_names):
+        if self.camera_names is None:
+            # Dynamically set camera names based on the number of images in the first timestep
+            self.camera_names = [f"camera_{i+1}" for i in range(len(images))]
+            self.images = {cam: [] for cam in self.camera_names}
+        elif len(images) != len(self.camera_names):
             raise ValueError(f"Expected {len(self.camera_names)} images, but got {len(images)}")
         
         self.actions.append(action)
         self.qpos.append(qpos)
         self.qvel.append(qvel)
         
-        # Append each image to the appropriate camera's list.
+        # Append each image to the appropriate camera's list
         for idx, cam in enumerate(self.camera_names):
             self.images[cam].append(images[idx])
     
@@ -139,6 +148,8 @@ class TaskManager:
     def start_new_task(self, task_name, task_description, mobile_flag):
         """
         Start a new task by creating a task directory and initializing metadata.
+        If a task with the given name already exists (i.e., a metadata file is found),
+        the task will be resumed instead.
 
         Args:
             task_name (str): The name for the new task.
@@ -147,9 +158,16 @@ class TaskManager:
         """
         self.current_task_name = task_name
         self.current_task_dir = os.path.join(self.base_data_directory, task_name)
+        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+
+        if os.path.exists(metadata_path):
+            # Task already exists; resume it.
+            print(f"Task '{task_name}' already exists. Resuming task.")
+            self.resume_task(task_name)
+            return
+
+        # Task does not exist; create a new one.
         os.makedirs(self.current_task_dir, exist_ok=True)
-        
-        # Initialize metadata dictionary.
         self.metadata = {
             "task_name": task_name,
             "task_description": task_description,
@@ -160,6 +178,25 @@ class TaskManager:
         self._save_metadata()
         self.episodes = []  # Reset the episodes list.
 
+    def resume_task(self, task_name):
+        """
+        Resume a previously started task by loading its metadata and setting the current task context.
+        
+        Args:
+            task_name (str): The name of the task to resume.
+        
+        Raises:
+            FileNotFoundError: If the task directory or metadata file does not exist.
+        """
+        self.current_task_name = task_name
+        self.current_task_dir = os.path.join(self.base_data_directory, task_name)
+        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        if not os.path.exists(metadata_path):
+            raise FileNotFoundError(f"Metadata file not found for task '{task_name}' at {self.current_task_dir}")
+        self.load_metadata()
+        # Optionally, the episodes list can be updated if needed by reading from the HDF5 files.
+        # For now, we leave self.episodes as an empty list.
+    
     def add_episode(self, episode_data, start_timestamp, end_timestamp):
         """
         Save an episode's data to an HDF5 file and update the task's metadata.
@@ -220,3 +257,21 @@ class TaskManager:
         metadata_path = os.path.join(self.current_task_dir, "metadata.json")
         with open(metadata_path, 'r') as f:
             self.metadata = json.load(f)
+
+    def get_status_message(self, episode_number, status):
+        """
+        Create and return a RecorderStatus message containing the current task name,
+        the given episode number, and a custom status message.
+
+        Args:
+            episode_number (str): The episode number as a string (or "N/A" if not applicable).
+            status (str): A status message describing the current state.
+
+        Returns:
+            RecorderStatus: The constructed RecorderStatus message.
+        """
+        msg = RecorderStatus()
+        msg.current_task_name = self.current_task_name if self.current_task_name else ""
+        msg.episode_number = episode_number
+        msg.status = status
+        return msg
