@@ -43,11 +43,18 @@ class BrainClientNode(Node):
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
         self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+
         # New parameters for optional depth processing:
         self.declare_parameter("depth_image_topic", "/camera/depth/image_raw")
+
         # Set to True if you wish to receive and forward depth images as well
         self.declare_parameter("send_depth", True)
         self.declare_parameter("odom_topic", "/odom")
+
+        # New parameters for camera FOV
+        self.declare_parameter("vertical_fov", 60.0)
+        self.declare_parameter("horizontal_resolution", 640)
+        self.declare_parameter("vertical_resolution", 480)
 
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
@@ -70,6 +77,11 @@ class BrainClientNode(Node):
         self.odom_sub = self.create_subscription(
             Odometry, self.odom_topic, self.odom_callback, 10
         )
+
+        self.vertical_fov = self.get_parameter("vertical_fov").get_parameter_value().double_value
+        self.horizontal_resolution = self.get_parameter("horizontal_resolution").get_parameter_value().integer_value
+        self.vertical_resolution = self.get_parameter("vertical_resolution").get_parameter_value().integer_value
+        self.horizontal_fov = math.degrees(2 * math.atan(math.tan(math.radians(self.vertical_fov) / 2) * self.horizontal_resolution / self.vertical_resolution))
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
 
@@ -268,6 +280,10 @@ class BrainClientNode(Node):
 
                 rgb_b64 = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
                 payload = {"image_b64": rgb_b64}
+
+                # Include the horizontal and vertical FOV of the camera
+                payload["horizontal_fov"] = self.horizontal_fov
+                payload["vertical_fov"] = self.vertical_fov
 
                 # Optionally include depth data if enabled and available.
                 if self.send_depth and self.last_depth_image is not None:
