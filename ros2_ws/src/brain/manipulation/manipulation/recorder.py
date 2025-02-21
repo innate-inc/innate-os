@@ -119,14 +119,11 @@ class RecorderNode(Node):
             self.get_logger().warn("Incomplete sensor data; skipping timestep.")
             return
         
-        # Build action data by combining leader command and velocity command.
-        action_data = []
-        action_data.extend(self.latest_leader_command.data)  # leader_command is a list of floats
-        twist = self.latest_cmd_vel  # cmd_vel (Twist) provides mobile velocity data
-        action_data.extend([
-            twist.linear.x, twist.linear.y, twist.linear.z,
-            twist.angular.x, twist.angular.y, twist.angular.z
-        ])
+        # Build action data starting with leader command
+        action_data = list(self.latest_leader_command.data)  # leader_command is a list of floats
+        # Add only forward speed and yaw rate from cmd_vel
+        twist = self.latest_cmd_vel
+        action_data.extend([twist.linear.x, twist.angular.z])
         
         # Get joint positions and velocities from the arm state message.
         qpos = list(self.latest_arm_state.position)
@@ -201,6 +198,15 @@ class RecorderNode(Node):
             response.success = False
             response.message = "No active episode."
             return response
+
+        # Check if episode has any timesteps
+        if self.current_episode.get_episode_length() == 0:
+            self.get_logger().error("Cannot save empty episode with no timesteps.")
+            self.publish_status(status="failed - empty episode", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "Cannot save empty episode."
+            return response
+
         end_time = time.time()
         self.task_manager.add_episode(
             self.current_episode,
