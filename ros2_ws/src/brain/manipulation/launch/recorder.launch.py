@@ -12,7 +12,7 @@ def generate_launch_description():
     # Define the recorder node with its parameters.
     recorder_node = Node(
         package='manipulation',
-        executable='recorder',
+        executable='recorder.py',
         name='recorder_node',
         output='screen',
         parameters=[config_file]
