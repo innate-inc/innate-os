@@ -19,15 +19,6 @@ def generate_launch_description():
         output='screen'
     )
     
-    rosbridge_node = Node(
-        package='rosbridge_server',
-        executable='rosbridge_websocket',
-        name='rosbridge_websocket',
-        parameters=[{'address': '0.0.0.0'}],
-        output='screen'
-    )
-    
     return LaunchDescription([
-        bringup_node,
-        rosbridge_node
+        bringup_node
     ])
