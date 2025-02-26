@@ -1,3 +1,4 @@
+from math import atan, tan
 import queue
 import numpy as np
 import genesis as gs
@@ -13,6 +14,14 @@ class SimulationNode:
     def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
+
+        self.render_camera_vfov = 40  # VERTICAL FOV
+        self.render_camera_hfov = 2 * atan(tan(self.render_camera_vfov / 2) * 1280 / 720)
+        self.render_camera_res = (1280, 720)
+
+        self.robot_camera_vfov = 60
+        self.robot_camera_hfov = 2 * atan(tan(self.robot_camera_vfov / 2) * 640 / 480)
+        self.robot_camera_res = (640, 480)
 
         # Initialize core components
         self._init_genesis()
@@ -39,8 +48,8 @@ class SimulationNode:
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(3.5, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
-                camera_fov=40,
-                res=(1280, 720),
+                camera_fov=self.render_camera_vfov,  # VERTICAL FOV
+                res=self.render_camera_res,
             ),
             vis_options=gs.options.VisOptions(
                 ambient_light=(0.5, 0.5, 0.5),
@@ -119,18 +128,18 @@ class SimulationNode:
         """Initialize robot camera and chase camera"""
         # Original robot camera
         self.robot_camera = self.scene.add_camera(
-            res=(640, 480),
+            res=self.robot_camera_res,
             pos=(0, 0, 0),
             lookat=(1, 0, 0),
-            fov=60,
+            fov=self.robot_camera_vfov,
         )
 
         # Add chase camera
         self.chase_camera = self.scene.add_camera(
-            res=(640, 480),
+            res=self.render_camera_res,
             pos=(0, -2.0, 2.0),  # 2m behind, 2m up
             lookat=(0, 0, 0),  # Will be updated to track robot
-            fov=60,
+            fov=self.render_camera_vfov,
         )
 
         # Camera intrinsics (for the robot camera)
