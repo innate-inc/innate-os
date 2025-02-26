@@ -11,6 +11,7 @@ import numpy as np
 import asyncio
 from rclpy.action import ActionClient
 import math
+import inspect
 
 from brain_client.message_types import (
     InternalMessage,
@@ -29,8 +30,7 @@ from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
-
-# Import our WSBridge class.
+from brain_client.primitives.navigate_to_position import NavigateToPosition
 from brain_client.ws_bridge import WSBridge
 
 
@@ -158,10 +158,15 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
+        # Initialize primitives dictionary
+        self.primitives_dict = {
+            TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
+            # Add other primitives here as they become available
+        }
+
         self.primitive_running = False
 
         # Create the primitive execution action client once in the init.
-        # TODO: Convey the primitives it can execute instead of hardcoding it here.
         self.primitive_action_client = ActionClient(
             self, ExecutePrimitive, "execute_primitive"
         )
@@ -170,7 +175,7 @@ class BrainClientNode(Node):
         self.primitives_registered = False
 
         # After initializing the primitive_action_client
-        # Create a list of available primitives for registration
+        # Register the primitives with the server
         self.register_primitives_with_server()
 
         self.async_loop = asyncio.new_event_loop()
@@ -427,33 +432,40 @@ class BrainClientNode(Node):
         """
         self.get_logger().info("Collecting primitive definitions for registration...")
 
-        # Get primitive information from the action server
+        # Prepare the registration data
         primitives = []
 
-        # Add the NAVIGATE_TO_POSITION primitive
-        primitives.append(
-            {
-                "name": TaskType.NAVIGATE_TO_POSITION.value,
-                "guideline": (
-                    "Navigate the robot to a specific position using x, y coordinates and orientation. "
-                    "The inputs are: x (float), y (float), theta (float). "
-                    "Can be used to navigate to a specific point in the map, rotate the robot, or move forward."
-                ),
-                "inputs": {
-                    "x": "float - x coordinate in meters",
-                    "y": "float - y coordinate in meters",
-                    "theta": "float - orientation in radians",
-                },
-            }
-        )
+        for primitive_name, primitive in self.primitives_dict.items():
+            # Extract parameter information using introspection
+            params = {}
+            signature = inspect.signature(primitive.execute)
 
-        # You can add other primitives here if available
+            for param_name, param in signature.parameters.items():
+                if param_name == "self":
+                    continue
+
+                # Get parameter type from annotation if available
+                param_type = "any"
+                if param.annotation != inspect.Parameter.empty:
+                    param_type = str(param.annotation.__name__)
+
+                params[param_name] = f"{param_type}"
+
+            primitives.append(
+                {
+                    "name": primitive_name,
+                    "guideline": primitive.guidelines(),
+                    "inputs": params,
+                }
+            )
 
         # Create and send the registration message
         reg_msg = MessageIn(
             type=MessageInType.REGISTER_PRIMITIVES, payload={"primitives": primitives}
         )
-        self.get_logger().info(f"Registering {len(primitives)} primitives with server")
+        self.get_logger().info(
+            f"Registering {len(primitives)} primitives with server: {[p['name'] for p in primitives]}"
+        )
         self.ws_bridge.send_message(reg_msg)
 
     def _handle_primitives_registered(self, msg):

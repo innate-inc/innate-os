@@ -12,7 +12,7 @@ class Primitive(ABC):
         pass
 
     @abstractmethod
-    async def execute(self):
+    def execute(self, *args, **kwargs):
         """
         Execute the primitive.
 
