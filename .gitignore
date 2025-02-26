@@ -2,7 +2,7 @@
 build/
 install/
 log/
-
+dds/super_client_configuration.xml
 
 # Python artifacts
 __pycache__/
