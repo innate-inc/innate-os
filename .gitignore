@@ -2,6 +2,7 @@
 build/
 install/
 log/
+dds/super_client_configuration.xml
 
 # Python artifacts
 __pycache__/
@@ -67,5 +68,10 @@ weights/
 checkpoints/
 runs/
 
-# DDS configuration file
-dds/super_client_configuration.xml
+
+# training data
+data/
+
+
+#other werid files
+*.mp4
