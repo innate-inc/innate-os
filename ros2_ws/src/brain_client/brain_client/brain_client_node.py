@@ -72,16 +72,35 @@ class BrainClientNode(Node):
         self.send_depth = (
             self.get_parameter("send_depth").get_parameter_value().bool_value
         )
-        self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
+        self.odom_topic = (
+            self.get_parameter("odom_topic").get_parameter_value().string_value
+        )
         self.last_odom = None
         self.odom_sub = self.create_subscription(
             Odometry, self.odom_topic, self.odom_callback, 10
         )
 
-        self.vertical_fov = self.get_parameter("vertical_fov").get_parameter_value().double_value
-        self.horizontal_resolution = self.get_parameter("horizontal_resolution").get_parameter_value().integer_value
-        self.vertical_resolution = self.get_parameter("vertical_resolution").get_parameter_value().integer_value
-        self.horizontal_fov = math.degrees(2 * math.atan(math.tan(math.radians(self.vertical_fov) / 2) * self.horizontal_resolution / self.vertical_resolution))
+        self.vertical_fov = (
+            self.get_parameter("vertical_fov").get_parameter_value().double_value
+        )
+        self.horizontal_resolution = (
+            self.get_parameter("horizontal_resolution")
+            .get_parameter_value()
+            .integer_value
+        )
+        self.vertical_resolution = (
+            self.get_parameter("vertical_resolution")
+            .get_parameter_value()
+            .integer_value
+        )
+        self.horizontal_fov = math.degrees(
+            2
+            * math.atan(
+                math.tan(math.radians(self.vertical_fov) / 2)
+                * self.horizontal_resolution
+                / self.vertical_resolution
+            )
+        )
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
 
@@ -218,9 +237,9 @@ class BrainClientNode(Node):
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         if payload.stop_current_task:
-            self.get_logger().info("[BrainClient] Stop signal received.")
+            self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
             self.primitive_running = False
-            self.primitive_action_client.cancel_all_goals()
+            self.primitive_action_client.cancel_goal_async()
             return
 
         if payload.thoughts:
@@ -245,7 +264,9 @@ class BrainClientNode(Node):
             self._handle_chat_out(chat_entry, sender="robot_anticipation")
 
         if payload.next_task is not None:
-            self.get_logger().info(f"[BrainClient] Next task: {payload.next_task}")
+            self.get_logger().info(
+                f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
+            )
 
             if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
                 self.send_primitive_goal(
@@ -258,9 +279,13 @@ class BrainClientNode(Node):
                 self.ws_bridge.send_message(status_msg)
                 self.primitive_running = True
             else:
-                self.get_logger().warn("[BrainClient] No valid task provided.")
+                self.get_logger().warn(
+                    "\033[93m[BrainClient] No valid task provided.\033[0m"
+                )
         else:
-            self.get_logger().info("[BrainClient] No next task provided.")
+            self.get_logger().info(
+                "\033[94m[BrainClient] No next task provided.\033[0m"
+            )
 
     def agent_loop_callback(self):
         # This callback will send the RGB image and, if allowed, the depth image
@@ -316,12 +341,19 @@ class BrainClientNode(Node):
                     siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
                     cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
                     theta = math.atan2(siny_cosp, cosy_cosp)
-                    payload["robot_coords"] = {"x": pos.x, "y": pos.y, "z": pos.z, "theta": theta}
+                    payload["robot_coords"] = {
+                        "x": pos.x,
+                        "y": pos.y,
+                        "z": pos.z,
+                        "theta": theta,
+                    }
 
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
                 self.ws_bridge.send_message(image_msg)
-                self.get_logger().info("Published image message with optional depth and robot coordinates.")
+                self.get_logger().info(
+                    "Published image message with optional depth and robot coordinates."
+                )
 
                 # Reset flags so we do not resend the same images
                 self.ready_for_image = False
@@ -335,9 +367,13 @@ class BrainClientNode(Node):
         goal_msg.primitive_type = task_type.value
         goal_msg.inputs = json.dumps(inputs)
 
-        self.get_logger().info(f"Sending goal for primitive: {goal_msg.primitive_type}")
+        self.get_logger().info(
+            f"\033[96m[BrainClient] Sending goal for primitive: {goal_msg.primitive_type}\033[0m"
+        )
         if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().error("Primitive execution action server not available!")
+            self.get_logger().error(
+                "\033[91m[BrainClient] Primitive execution action server not available!\033[0m"
+            )
             return
 
         send_goal_future = self.primitive_action_client.send_goal_async(goal_msg)
@@ -346,15 +382,22 @@ class BrainClientNode(Node):
     def goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().info("Primitive execution goal rejected.")
+            self.get_logger().info(
+                "\033[91m[BrainClient] Primitive execution goal rejected.\033[0m"
+            )
             return
-        self.get_logger().info("Primitive execution goal accepted.")
+        self.get_logger().info(
+            "\033[92m[BrainClient] Primitive execution goal accepted.\033[0m"
+        )
         get_result_future = goal_handle.get_result_async()
         get_result_future.add_done_callback(self.get_result_callback)
 
     def get_result_callback(self, future):
         result = future.result().result
-        self.get_logger().info(f"Primitive execution result: {result.success}")
+        status_color = "\033[92m" if result.success else "\033[91m"
+        self.get_logger().info(
+            f"{status_color}[BrainClient] Primitive execution result: {result.success}\033[0m"
+        )
         if result.success:
             self.primitive_running = False
             outgoing_msg = MessageIn(
