@@ -148,6 +148,9 @@ class BrainClientNode(Node):
             MessageOutType.VISION_AGENT_OUTPUT, self._handle_vision_agent_output
         )
         self.ws_bridge.register_handler(MessageOutType.CHAT_OUT, self._handle_chat_out)
+        self.ws_bridge.register_handler(
+            MessageOutType.PRIMITIVES_REGISTERED, self._handle_primitives_registered
+        )
 
         for _ in range(3):
             self.ws_bridge.send_message(
@@ -162,6 +165,13 @@ class BrainClientNode(Node):
         self.primitive_action_client = ActionClient(
             self, ExecutePrimitive, "execute_primitive"
         )
+
+        # Flag to keep track of primitive registration status
+        self.primitives_registered = False
+
+        # After initializing the primitive_action_client
+        # Create a list of available primitives for registration
+        self.register_primitives_with_server()
 
         self.async_loop = asyncio.new_event_loop()
         thread = threading.Thread(target=self.async_loop.run_forever, daemon=True)
@@ -289,6 +299,10 @@ class BrainClientNode(Node):
 
     def agent_loop_callback(self):
         # This callback will send the RGB image and, if allowed, the depth image
+        if not self.primitives_registered:
+            # If primitives are not yet registered, don't send images
+            return
+
         if self.ready_for_image and self.last_image is not None:
             try:
                 self.get_logger().info("Agent loop: sending image")
@@ -405,6 +419,56 @@ class BrainClientNode(Node):
                 payload={"primitive_name": result.primitive_type},
             )
             self.ws_bridge.send_message(outgoing_msg)
+
+    def register_primitives_with_server(self):
+        """
+        Collects information about available primitives and sends it to the server
+        for registration.
+        """
+        self.get_logger().info("Collecting primitive definitions for registration...")
+
+        # Get primitive information from the action server
+        primitives = []
+
+        # Add the NAVIGATE_TO_POSITION primitive
+        primitives.append(
+            {
+                "name": TaskType.NAVIGATE_TO_POSITION.value,
+                "guideline": (
+                    "Navigate the robot to a specific position using x, y coordinates and orientation. "
+                    "The inputs are: x (float), y (float), theta (float). "
+                    "Can be used to navigate to a specific point in the map, rotate the robot, or move forward."
+                ),
+                "inputs": {
+                    "x": "float - x coordinate in meters",
+                    "y": "float - y coordinate in meters",
+                    "theta": "float - orientation in radians",
+                },
+            }
+        )
+
+        # You can add other primitives here if available
+
+        # Create and send the registration message
+        reg_msg = MessageIn(
+            type=MessageInType.REGISTER_PRIMITIVES, payload={"primitives": primitives}
+        )
+        self.get_logger().info(f"Registering {len(primitives)} primitives with server")
+        self.ws_bridge.send_message(reg_msg)
+
+    def _handle_primitives_registered(self, msg):
+        """
+        Handle the PRIMITIVES_REGISTERED response from the server.
+        """
+        self.get_logger().info(f"Primitives registration response: {msg.payload}")
+        if msg.payload.get("success", False):
+            self.primitives_registered = True
+            count = msg.payload.get("count", 0)
+            self.get_logger().info(
+                f"Successfully registered {count} primitives with server"
+            )
+        else:
+            self.get_logger().error("Failed to register primitives with server")
 
     def destroy_node(self):
         self.exit_event.set()
