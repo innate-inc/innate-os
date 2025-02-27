@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-
 """
 A ROS2 Humble node that indexes a data directory for task subdirectories
 (with valid metadata) and displays a numbered list. The user selects a task,
-and the node visualizes each episode (showing images at 30 Hz with overlaid arm
-positions and velocities). Left/right arrow keys allow switching tasks.
+and the node visualizes one episode at a time (showing images at ~30 Hz with overlaid
+arm positions and velocities). Left/right arrow keys switch episodes and 'q' quits.
 """
 
 import os
@@ -15,9 +14,9 @@ import cv2
 import rclpy
 from rclpy.node import Node
 
-# Note: Adjust these key codes if necessary.
-LEFT_ARROW = 81    # may vary per system
-RIGHT_ARROW = 83   # may vary per system
+# Key codes for Linux (if your tests show left arrow=81 and right arrow=83, use these)
+LEFT_ARROW = 81
+RIGHT_ARROW = 83
 
 class DataViewerNode(Node):
     def __init__(self):
@@ -30,7 +29,7 @@ class DataViewerNode(Node):
         self.declare_parameter('leader_command_topic', "/leader/command")
         self.declare_parameter('velocity_topic', "/cmd_vel")
 
-        # Retrieve all parameters
+        # Retrieve parameters
         self.base_data_directory = self.get_parameter('data_directory').value
         self.data_frequency = self.get_parameter('data_frequency').value
         self.image_topics = self.get_parameter('image_topics').value
@@ -50,12 +49,12 @@ class DataViewerNode(Node):
 
         # List tasks and ask the user for a selection.
         self.current_task_index = self.select_task()
-        self.visualize_task()  # start visualization for the selected task
+        self.visualize_episodes()  # Start episode visualization for the selected task
 
     def index_tasks(self):
         """
         Walk through the base directory and return a list of tasks.
-        Each task is a dictionary with task name, directory, metadata and episode count.
+        Each task is a dictionary with task name, directory, metadata, and episode count.
         """
         tasks = []
         for subdir in os.listdir(self.base_data_directory):
@@ -94,7 +93,12 @@ class DataViewerNode(Node):
         # Convert to a zero-index.
         return selection - 1
 
-    def visualize_task(self):
+    def flush_key_buffer(self):
+        """Flush any pending key events."""
+        while cv2.waitKey(1) != -1:
+            pass
+
+    def visualize_episodes(self):
         """
         Visualize one episode at a time for the selected task.
         Left/right arrow keys switch episodes, and 'q' quits.
@@ -117,21 +121,29 @@ class DataViewerNode(Node):
             )
             self.play_episode(file_path)
 
+            # Create a dummy window to wait for key input.
+            cv2.namedWindow("Episode Navigation", cv2.WINDOW_NORMAL)
             print("Press left/right arrow keys to navigate episodes, or 'q' to quit.")
             key = cv2.waitKey(0)
+            cv2.destroyWindow("Episode Navigation")
+
             if key == ord('q'):
                 self.get_logger().info("Quitting viewer.")
-                rclpy.shutdown()
                 break
             elif key == LEFT_ARROW:
                 current_episode_index = (current_episode_index - 1) % len(episodes)
             elif key == RIGHT_ARROW:
                 current_episode_index = (current_episode_index + 1) % len(episodes)
+            # Otherwise, repeat the same episode
+
+        cv2.destroyAllWindows()
+        rclpy.shutdown()
 
     def play_episode(self, file_path):
         """
-        Open an episode HDF5 file, and play back each time step at ~30 Hz.
+        Open an episode HDF5 file and play back each time step at ~30 Hz.
         Overlays the arm positions (qpos) and velocities (qvel) onto the displayed images.
+        During playback, only 'q' is handled to allow quitting early.
         """
         try:
             hf = h5py.File(file_path, 'r')
@@ -149,16 +161,16 @@ class DataViewerNode(Node):
         for t in range(num_timesteps):
             img_list = []
             for cam in camera_names:
-                # Get t-th image for each camera.
+                # Get the t-th image for each camera.
                 img = images_group[cam][t]
-                # If necessary, convert image color (e.g. from RGB to BGR for OpenCV).
+                # Convert image color if needed.
                 if len(img.shape) == 3 and img.shape[2] == 3:
                     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                # Resize image to target dimensions
+                # Resize to common dimensions (e.g., 640x480)
                 img = cv2.resize(img, (1280, 720))
                 img_list.append(img)
 
-            # Combine images side-by-side (if more than one camera).
+            # Combine images side-by-side.
             if img_list:
                 try:
                     disp_img = cv2.hconcat(img_list)
@@ -167,58 +179,27 @@ class DataViewerNode(Node):
             else:
                 disp_img = np.zeros((480, 640, 3), dtype=np.uint8)
 
-            # Overlay arm state info.
-            overlay_text = f"qpos: {qpos[t]} \n qvel: {qvel[t]}"
-            cv2.putText(disp_img, overlay_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7, (0, 255, 0), 2)
+            # Set font parameters
+            font_scale = 0.5
+            thickness = 1
+            line_height = 20
+            x, y0 = 10, 30
+
+            # Draw three lines of text
+            cv2.putText(disp_img, f"qpos: {qpos[t]}", (x, y0), cv2.FONT_HERSHEY_SIMPLEX, 
+                       font_scale, (0, 255, 0), thickness)
+            cv2.putText(disp_img, f"cmd_vel: {qvel[t]}", (x, y0 + line_height), 
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
+            cv2.putText(disp_img, f"action: {actions[t]}", (x, y0 + 2*line_height), 
+                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
 
             cv2.imshow("Episode Playback", disp_img)
-            # Wait ~33 ms (30 Hz). Also capture key events.
-            key = cv2.waitKey(33)  # key is an integer code
-
-            # Allow quitting early if user presses 'q'
+            key = cv2.waitKey(int(1000/self.data_frequency))  # ~30 Hz playback
             if key == ord('q'):
                 break
-            # Check for arrow keys to switch tasks mid-episode
-            if key == LEFT_ARROW:
-                self.current_task_index = (self.current_task_index - 1) % len(self.tasks)
-                self.get_logger().info("Switching to previous task")
-                hf.close()
-                cv2.destroyAllWindows()
-                self.visualize_task()
-                return
-            elif key == RIGHT_ARROW:
-                self.current_task_index = (self.current_task_index + 1) % len(self.tasks)
-                self.get_logger().info("Switching to next task")
-                hf.close()
-                cv2.destroyAllWindows()
-                self.visualize_task()
-                return
 
         hf.close()
         cv2.destroyAllWindows()
-
-    def wait_for_task_navigation(self):
-        """
-        After an entire task has been visualized, wait for the user to press
-        the left/right arrow key to change tasks or 'q' to quit.
-        """
-        print("Press left/right arrow keys to switch tasks, or 'q' to quit.")
-        while True:
-            key = cv2.waitKey(0)
-            if key == ord('q'):
-                self.get_logger().info("Quitting viewer.")
-                rclpy.shutdown()
-                break
-            elif key == LEFT_ARROW:
-                self.current_task_index = (self.current_task_index - 1) % len(self.tasks)
-                self.visualize_task()
-                break
-            elif key == RIGHT_ARROW:
-                self.current_task_index = (self.current_task_index + 1) % len(self.tasks)
-                self.visualize_task()
-                break
-
 
 def main(args=None):
     rclpy.init(args=args)
@@ -230,6 +211,6 @@ def main(args=None):
     node.destroy_node()
     rclpy.shutdown()
 
-
 if __name__ == '__main__':
     main()
+
