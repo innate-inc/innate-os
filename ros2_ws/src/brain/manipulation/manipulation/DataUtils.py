@@ -98,12 +98,13 @@ class EpisodeData:
         """
         Clear all buffered data.
         
-        This method resets the buffers for actions, qpos, qvel, and images.
+        This method resets the buffers for actions, qpos, qvel, and images,
+        maintaining the same camera configuration as before.
         """
         self.actions = []
         self.qpos = []
         self.qvel = []
-        self.images = {cam: [] for cam in self.camera_names}
+        self.images = {cam: [] for cam in self.camera_names} if self.camera_names else {}
     
     def get_episode_length(self):
         """
