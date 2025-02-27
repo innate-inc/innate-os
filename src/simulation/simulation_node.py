@@ -76,6 +76,19 @@ class SimulationNode:
             )
         )
 
+        # Add human model lying on the ground
+        self.human = self.scene.add_entity(
+            gs.morphs.Mesh(
+                file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
+                fixed=True,  # Make it static
+                euler=(0, 0, 90),  # Rotate to lie flat
+                pos=(0.5, -3.0, 0.05),  # Position as requested (with slight z-offset)
+                scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
+                convexify=False,
+                collision=False,  # Enable collision for robot interaction
+            )
+        )
+
         # Export as STL
         file_path = "data/replica_scene.stl"
 
