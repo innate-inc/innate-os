@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 
 
 class Directive(ABC):
@@ -31,7 +31,7 @@ class Directive(ABC):
         pass
 
     @abstractmethod
-    def get_prompt(self) -> str:
+    def get_prompt(self) -> Optional[str]:
         """
         Returns the prompt/description for this directive.
         This defines the robot's personality and behavior guidelines.

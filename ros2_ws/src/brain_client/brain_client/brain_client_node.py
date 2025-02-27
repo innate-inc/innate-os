@@ -33,6 +33,7 @@ from brain_messages.action import ExecutePrimitive
 from brain_client.primitives.navigate_to_position import NavigateToPosition
 from brain_client.ws_bridge import WSBridge
 from brain_client.directives.default_directive import DefaultDirective
+from brain_client.directives.sassy_directive import SassyDirective
 
 
 class BrainClientNode(Node):
@@ -173,7 +174,8 @@ class BrainClientNode(Node):
             String, "/set_directive", self.set_directive_callback, 10
         )
         self.directives = {
-            directive.name: directive for directive in [DefaultDirective()]
+            directive.name: directive
+            for directive in [DefaultDirective(), SassyDirective()]
         }
         self.current_directive = self.directives["default_directive"]
 
