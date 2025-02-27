@@ -77,3 +77,11 @@ class ResetRobotCmd:
     """
 
     pass
+
+
+class DirectiveCmd(NamedTuple):
+    """
+    A command to update the robot's directive/behavior.
+    """
+
+    directive: str

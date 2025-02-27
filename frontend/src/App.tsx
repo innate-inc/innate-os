@@ -117,6 +117,9 @@ export default function App() {
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("sideBySide");
 
+  // Add these state variables inside the App component
+  const [directiveText, setDirectiveText] = useState("");
+
   function handlePasswordSubmit() {
     if (enteredPassword === CORRECT_PASSWORD) {
       setIsAuthenticated(true);
@@ -141,6 +144,37 @@ export default function App() {
       }
     } catch (error) {
       console.error("Error resetting robot:", error);
+    }
+  }
+
+  // Add this function inside the App component
+  async function handleSetDirective() {
+    if (!directiveText.trim()) {
+      alert("Please enter a directive");
+      return;
+    }
+
+    try {
+      const baseUrl =
+        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+
+      const response = await fetch(`${baseUrl}/set_directive`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: directiveText }),
+      });
+
+      const data = await response.json();
+      console.log("Directive response:", data);
+
+      if (data.status === "directive_enqueued") {
+        alert("New directive sent to robot!");
+        setDirectiveText(""); // Clear the input
+      }
+    } catch (error) {
+      console.error("Error setting directive:", error);
     }
   }
 
@@ -169,6 +203,24 @@ export default function App() {
       <ResetButton onClick={handleResetRobot}>
         <MdRefresh size={20} /> Reset Robot
       </ResetButton>
+      <div>
+        <input
+          type="text"
+          placeholder="Enter new directive..."
+          value={directiveText}
+          onChange={(e) => setDirectiveText(e.target.value)}
+          style={{
+            width: "300px",
+            padding: "10px",
+            marginRight: "10px",
+            borderRadius: "6px",
+            border: "1px solid #ccc",
+          }}
+        />
+        <StyledSubmitButton onClick={handleSetDirective}>
+          Set Directive
+        </StyledSubmitButton>
+      </div>
       <TopSection>
         <Title>Innate Simulator</Title>
         <ImageDisplay viewMode={viewMode} />

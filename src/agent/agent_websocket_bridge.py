@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import websockets
 
-from src.agent.types import OccupancyGridMsg, RobotStateMsg, VelocityCmd
+from src.agent.types import OccupancyGridMsg, RobotStateMsg, VelocityCmd, DirectiveCmd
 from src.shared_queues import ChatMessage, ChatSignal
 
 
@@ -165,6 +165,7 @@ async def outbound_loop(ws, shared_queues):
     adv_odom = rosbridge_advertise("/odom", "nav_msgs/msg/Odometry")
     adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
     adv_chat_in = rosbridge_advertise("/chat_in", "std_msgs/msg/String")
+    adv_set_directive = rosbridge_advertise("/set_directive", "std_msgs/msg/String")
 
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
@@ -172,6 +173,7 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_odom))
     await ws.send(json.dumps(adv_map))
     await ws.send(json.dumps(adv_chat_in))
+    await ws.send(json.dumps(adv_set_directive))
 
     print("[ROSBridge] Advertised camera-related topics, /odom, /map, and /chat_in")
 
@@ -192,6 +194,11 @@ async def outbound_loop(ws, shared_queues):
                 await publish_robot_state(ws, msg)
             elif isinstance(msg, OccupancyGridMsg):
                 await publish_occupancy_grid(ws, msg)
+            elif isinstance(msg, DirectiveCmd):
+                directive_msg = {"data": msg.directive}
+                outbound = rosbridge_publish("/set_directive", directive_msg)
+                await ws.send(json.dumps(outbound))
+                print(f"[ROSBridge] Published directive: {msg.directive}")
         except queue.Empty:
             # no messages to publish right now
             pass
