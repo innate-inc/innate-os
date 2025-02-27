@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 import time
 import cv2
 
-from src.agent.types import ResetRobotCmd
+from src.agent.types import ResetRobotCmd, DirectiveCmd
 
 router = APIRouter()
 
@@ -73,5 +73,24 @@ async def reset_robot(request: Request):
         except Exception:
             return {"status": "queue_full"}
         return {"status": "reset_enqueued"}
+    else:
+        return {"status": "no_shared_queues"}
+
+
+@router.post("/set_directive")
+async def set_directive(request: Request, directive: dict):
+    """
+    Enqueues a directive command to update the robot's behavior.
+    Retrieves the shared queues from the application's state.
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is not None:
+        try:
+            shared_queues.sim_to_agent.put_nowait(
+                DirectiveCmd(directive=directive["text"])
+            )
+        except Exception:
+            return {"status": "queue_full"}
+        return {"status": "directive_enqueued"}
     else:
         return {"status": "no_shared_queues"}
