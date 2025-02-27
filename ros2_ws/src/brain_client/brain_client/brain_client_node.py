@@ -168,6 +168,11 @@ class BrainClientNode(Node):
         self.primitive_running = False
         self.directive = "You have a sassy personality and are a bit of a jerk when you talk to people."
 
+        # Add a subscription to change directive
+        self.directive_sub = self.create_subscription(
+            String, "/set_directive", self.directive_callback, 10
+        )
+
         # Create the primitive execution action client once in the init.
         self.primitive_action_client = ActionClient(
             self, ExecutePrimitive, "execute_primitive"
@@ -500,6 +505,27 @@ class BrainClientNode(Node):
             f"Registering {len(primitives)} primitives and directive with server"
         )
         self.ws_bridge.send_message(reg_msg)
+
+    def directive_callback(self, msg: String):
+        """
+        Callback for changing the AI's directive.
+        """
+        new_directive = msg.data
+        self.get_logger().info(f"Received new directive: {new_directive}")
+        self.directive = new_directive
+
+        # Re-register primitives and directive with the server to update
+        self.register_primitives_and_directive()
+
+        # Publish confirmation
+        chat_entry = {
+            "sender": "system",
+            "text": f"Directive updated to: {new_directive}",
+            "timestamp": time.time(),
+        }
+        self.chat_history.append(chat_entry)
+        out_msg = String(data=json.dumps(chat_entry))
+        self.chat_out_pub.publish(out_msg)
 
     def destroy_node(self):
         self.exit_event.set()
