@@ -30,10 +30,17 @@ from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
-from brain_client.primitives.navigate_to_position import NavigateToPosition
+
 from brain_client.ws_bridge import WSBridge
+
+from brain_client.primitives.navigate_to_position import NavigateToPosition
+from brain_client.primitives.send_email import SendEmail
+
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.sassy_directive import SassyDirective
+from brain_client.directives.friendly_guide_directive import FriendlyGuideDirective
+from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
+from brain_client.directives.elder_safety_directive import ElderSafetyDirective
 
 
 class BrainClientNode(Node):
@@ -164,6 +171,7 @@ class BrainClientNode(Node):
         # Initialize primitives dictionary
         self.primitives_dict = {
             TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
+            TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
             # Add other primitives here as they become available
         }
 
@@ -175,7 +183,13 @@ class BrainClientNode(Node):
         )
         self.directives = {
             directive.name: directive
-            for directive in [DefaultDirective(), SassyDirective()]
+            for directive in [
+                DefaultDirective(),
+                SassyDirective(),
+                FriendlyGuideDirective(),
+                SecurityPatrolDirective(),
+                ElderSafetyDirective(),
+            ]
         }
         self.current_directive = self.directives["default_directive"]
 

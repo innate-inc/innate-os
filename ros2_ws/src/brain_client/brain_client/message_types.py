@@ -7,6 +7,7 @@ from pydantic import BaseModel, field_serializer
 
 class TaskType(Enum):
     NAVIGATE_TO_POSITION = "navigate_to_position"
+    SEND_EMAIL = "send_email"
 
 
 class NavigationToPosition(BaseModel):

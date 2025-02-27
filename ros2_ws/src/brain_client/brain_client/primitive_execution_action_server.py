@@ -17,6 +17,7 @@ from brain_messages.action import ExecutePrimitive
 
 # Import available primitive(s) and any needed types.
 from brain_client.primitives.navigate_to_position import NavigateToPosition
+from brain_client.primitives.send_email import SendEmail
 from brain_client.message_types import TaskType
 
 
@@ -28,6 +29,7 @@ class PrimitiveExecutionActionServer(Node):
         # (Key is the string value from TaskType, e.g. "navigate_to_position")
         self._primitives = {
             TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
+            TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
         }
 
         self._action_server = ActionServer(
