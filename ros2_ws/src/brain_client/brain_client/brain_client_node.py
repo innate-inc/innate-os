@@ -495,7 +495,7 @@ class BrainClientNode(Node):
                 )
 
         included_primitives = [
-            p["name"]
+            p
             for p in primitives
             if p["name"] in self.current_directive.get_primitives()
         ]
@@ -506,7 +506,7 @@ class BrainClientNode(Node):
             payload={
                 "primitives": included_primitives if included_primitives else None,
                 "directive": self.current_directive.get_prompt(),
-                "token": self.token,  # Include authentication token
+                "token": self.token,
             },
         )
         self.get_logger().info(
