@@ -274,7 +274,11 @@ class RecorderNode(Node):
             response.success = False
             response.message = "No active episode."
             return response
+
         self.current_episode.clear()
+        # Only decrement if episode_count is greater than 0
+        if self.episode_count > 0:
+            self.episode_count -= 1
         self.get_logger().info("Episode canceled; buffered data discarded.")
         # Publish status update for cancelled episode
         episode_str = str(self.episode_count)
