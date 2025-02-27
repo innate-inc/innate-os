@@ -15,8 +15,10 @@ class SimulationNode:
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
 
-        self.render_camera_vfov = 40  # VERTICAL FOV
-        self.render_camera_hfov = 2 * atan(tan(self.render_camera_vfov / 2) * 1280 / 720)
+        self.render_camera_vfov = 40
+        self.render_camera_hfov = 2 * atan(
+            tan(self.render_camera_vfov / 2) * 1280 / 720
+        )
         self.render_camera_res = (1280, 720)
 
         self.robot_camera_vfov = 60
