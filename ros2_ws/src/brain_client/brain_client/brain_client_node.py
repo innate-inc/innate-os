@@ -32,6 +32,7 @@ from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_client.primitives.navigate_to_position import NavigateToPosition
 from brain_client.ws_bridge import WSBridge
+from brain_client.directives.default_directive import DefaultDirective
 
 
 class BrainClientNode(Node):
@@ -166,12 +167,15 @@ class BrainClientNode(Node):
         }
 
         self.primitive_running = False
-        self.directive = "You have a sassy personality and are a bit of a jerk when you talk to people."
 
         # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
-            String, "/set_directive", self.directive_callback, 10
+            String, "/set_directive", self.set_directive_callback, 10
         )
+        self.directives = {
+            directive.name: directive for directive in [DefaultDirective()]
+        }
+        self.current_directive = self.directives["default_directive"]
 
         # Create the primitive execution action client once in the init.
         self.primitive_action_client = ActionClient(
@@ -490,42 +494,60 @@ class BrainClientNode(Node):
                     }
                 )
 
-        directive = self.directive
+        included_primitives = [
+            p["name"]
+            for p in primitives
+            if p["name"] in self.current_directive.get_primitives()
+        ]
 
         # Create and send the registration message
         reg_msg = MessageIn(
             type=MessageInType.REGISTER_PRIMITIVES_AND_DIRECTIVE,
             payload={
-                "primitives": primitives if primitives else None,
-                "directive": directive,  # Single directive, can be None
+                "primitives": included_primitives if included_primitives else None,
+                "directive": self.current_directive.get_prompt(),
                 "token": self.token,  # Include authentication token
             },
         )
         self.get_logger().info(
-            f"Registering {len(primitives)} primitives and directive with server"
+            f"Registering {len(primitives)} primitives and directive '{self.current_directive.name}' with server"
         )
         self.ws_bridge.send_message(reg_msg)
 
-    def directive_callback(self, msg: String):
+    def set_directive_callback(self, msg: String):
         """
         Callback for changing the AI's directive.
         """
-        new_directive = msg.data
-        self.get_logger().info(f"Received new directive: {new_directive}")
-        self.directive = new_directive
+        directive_name = msg.data.strip()
+        self.get_logger().info(f"Received directive change request: {directive_name}")
 
-        # Re-register primitives and directive with the server to update
-        self.register_primitives_and_directive()
+        if directive_name in self.directives:
+            self.current_directive = self.directives[directive_name]
+            self.get_logger().info(f"Activated directive: {directive_name}")
 
-        # Publish confirmation
-        chat_entry = {
-            "sender": "system",
-            "text": f"Directive updated to: {new_directive}",
-            "timestamp": time.time(),
-        }
-        self.chat_history.append(chat_entry)
-        out_msg = String(data=json.dumps(chat_entry))
-        self.chat_out_pub.publish(out_msg)
+            # Re-register primitives and directive with the server to update
+            self.register_primitives_and_directive()
+
+            # Publish confirmation
+            chat_entry = {
+                "sender": "system",
+                "text": f"Directive updated to: {directive_name}",
+                "timestamp": time.time(),
+            }
+            self.chat_history.append(chat_entry)
+            out_msg = String(data=json.dumps(chat_entry))
+            self.chat_out_pub.publish(out_msg)
+        else:
+            self.get_logger().error(f"Unknown directive: {directive_name}")
+            available_directives = list(self.directives.keys())
+            error_msg = {
+                "sender": "system",
+                "text": f"Error: Unknown directive '{directive_name}'. Available directives: {available_directives}",
+                "timestamp": time.time(),
+            }
+            self.chat_history.append(error_msg)
+            out_msg = String(data=json.dumps(error_msg))
+            self.chat_out_pub.publish(out_msg)
 
     def destroy_node(self):
         self.exit_event.set()
