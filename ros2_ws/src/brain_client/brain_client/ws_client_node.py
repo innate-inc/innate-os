@@ -15,9 +15,7 @@ from brain_client.message_types import (
     InternalMessage,
     InternalMessageType,
     MessageIn,
-    MessageOut,
     MessageInType,
-    MessageOutType,
 )
 
 

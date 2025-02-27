@@ -149,7 +149,8 @@ class BrainClientNode(Node):
         )
         self.ws_bridge.register_handler(MessageOutType.CHAT_OUT, self._handle_chat_out)
         self.ws_bridge.register_handler(
-            MessageOutType.PRIMITIVES_REGISTERED, self._handle_primitives_registered
+            MessageOutType.PRIMITIVES_AND_DIRECTIVE_REGISTERED,
+            self._handle_primitives_and_directive_registered,
         )
 
         for _ in range(3):
@@ -165,6 +166,7 @@ class BrainClientNode(Node):
         }
 
         self.primitive_running = False
+        self.directive = "You have a sassy personality and are a bit of a jerk when you talk to people."
 
         # Create the primitive execution action client once in the init.
         self.primitive_action_client = ActionClient(
@@ -176,11 +178,15 @@ class BrainClientNode(Node):
 
         # After initializing the primitive_action_client
         # Register the primitives with the server
-        self.register_primitives_with_server()
+        self.register_primitives_and_directive()
 
         self.async_loop = asyncio.new_event_loop()
         thread = threading.Thread(target=self.async_loop.run_forever, daemon=True)
         thread.start()
+
+        self.get_logger().info(
+            "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
+        )
 
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
@@ -425,62 +431,75 @@ class BrainClientNode(Node):
             )
             self.ws_bridge.send_message(outgoing_msg)
 
-    def register_primitives_with_server(self):
-        """
-        Collects information about available primitives and sends it to the server
-        for registration.
-        """
-        self.get_logger().info("Collecting primitive definitions for registration...")
-
-        # Prepare the registration data
-        primitives = []
-
-        for primitive_name, primitive in self.primitives_dict.items():
-            # Extract parameter information using introspection
-            params = {}
-            signature = inspect.signature(primitive.execute)
-
-            for param_name, param in signature.parameters.items():
-                if param_name == "self":
-                    continue
-
-                # Get parameter type from annotation if available
-                param_type = "any"
-                if param.annotation != inspect.Parameter.empty:
-                    param_type = str(param.annotation.__name__)
-
-                params[param_name] = f"{param_type}"
-
-            primitives.append(
-                {
-                    "name": primitive_name,
-                    "guideline": primitive.guidelines(),
-                    "inputs": params,
-                }
-            )
-
-        # Create and send the registration message
-        reg_msg = MessageIn(
-            type=MessageInType.REGISTER_PRIMITIVES, payload={"primitives": primitives}
-        )
-        self.get_logger().info(
-            f"Registering {len(primitives)} primitives with server: {[p['name'] for p in primitives]}"
-        )
-        self.ws_bridge.send_message(reg_msg)
-
-    def _handle_primitives_registered(self, msg):
+    def _handle_primitives_and_directive_registered(self, msg):
         """
         Handle the PRIMITIVES_REGISTERED response from the server.
         """
-        self.get_logger().info(f"Primitives registration response: {msg.payload}")
+        self.get_logger().info(f"Registration response: {msg.payload}")
         if msg.payload.get("success", False):
             self.primitives_registered = True
-            count = msg.payload.get("count", 0)
+            self.directive_registered = True
+            primitive_count = msg.payload.get("primitive_count", 0)
+            directive_registered = msg.payload.get("directive_registered", False)
             self.get_logger().info(
-                f"Successfully registered {count} primitives with server"
+                f"Successfully registered {primitive_count} primitives and directive: {directive_registered}"
             )
         else:
-            self.get_logger().error("Failed to register primitives with server")
+            self.get_logger().error(
+                "Failed to register primitives and/or directive with server"
+            )
+
+    def register_primitives_and_directive(self):
+        """
+        Collects information about available primitives and directive and sends it to the server
+        for registration.
+        """
+        self.get_logger().info(
+            "Collecting primitive and directive definitions for registration..."
+        )
+
+        # Prepare the registration data for primitives
+        primitives = []
+        if self.primitives_dict:
+            for primitive_name, primitive in self.primitives_dict.items():
+                # Extract parameter information using introspection
+                params = {}
+                signature = inspect.signature(primitive.execute)
+
+                for param_name, param in signature.parameters.items():
+                    if param_name == "self":
+                        continue
+
+                    # Get parameter type from annotation if available
+                    param_type = "any"
+                    if param.annotation != inspect.Parameter.empty:
+                        param_type = str(param.annotation.__name__)
+
+                    params[param_name] = f"{param_type}"
+
+                primitives.append(
+                    {
+                        "name": primitive_name,
+                        "guideline": primitive.guidelines(),
+                        "inputs": params,
+                    }
+                )
+
+        directive = self.directive
+
+        # Create and send the registration message
+        reg_msg = MessageIn(
+            type=MessageInType.REGISTER_PRIMITIVES_AND_DIRECTIVE,
+            payload={
+                "primitives": primitives if primitives else None,
+                "directive": directive,  # Single directive, can be None
+                "token": self.token,  # Include authentication token
+            },
+        )
+        self.get_logger().info(
+            f"Registering {len(primitives)} primitives and directive with server"
+        )
+        self.ws_bridge.send_message(reg_msg)
 
     def destroy_node(self):
         self.exit_event.set()
