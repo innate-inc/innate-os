@@ -1,5 +1,5 @@
 # File: brain/manipulation/config/recorder.yaml
-recorder_node:
+/**:
   ros__parameters:
     data_directory: "/home/jetson1/maurice-prod/data"       # Directory where data will be saved
     data_frequency: 10                    # Frequency (e.g., Hz) at which data is recorded
