@@ -4,7 +4,14 @@ import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
 import { ToggleViewMode } from "./components/ToggleViewMode";
 import { Chat } from "./components/Chat";
-import { MdRefresh } from "react-icons/md";
+import {
+  MdRefresh,
+  MdAutoMode,
+  MdMood,
+  MdTour,
+  MdSecurity,
+  MdHealthAndSafety,
+} from "react-icons/md";
 
 const Title = styled.h1`
   font-size: 24px;
@@ -106,6 +113,32 @@ const StyledSubmitButton = styled.button`
   }
 `;
 
+const DirectiveButtonsContainer = styled.div`
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 8px;
+`;
+
+const DirectiveButton = styled.button`
+  background-color: #007bff;
+  border: none;
+  padding: 8px 12px;
+  color: white;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+
+  &:hover {
+    background-color: #0056b3;
+  }
+`;
+
 export default function App() {
   // A very simple password approach (do not use in production)
   const CORRECT_PASSWORD = "lol";
@@ -116,6 +149,9 @@ export default function App() {
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("sideBySide");
+
+  // Add these state variables inside the App component
+  const [directiveText, setDirectiveText] = useState("");
 
   function handlePasswordSubmit() {
     if (enteredPassword === CORRECT_PASSWORD) {
@@ -144,6 +180,31 @@ export default function App() {
     }
   }
 
+  // Modified to take a directive parameter instead of using state
+  async function handleSetDirective(directive: string) {
+    try {
+      const baseUrl =
+        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+
+      const response = await fetch(`${baseUrl}/set_directive`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: directive }),
+      });
+
+      const data = await response.json();
+      console.log("Directive response:", data);
+
+      if (data.status === "directive_enqueued") {
+        alert(`New directive sent to robot: ${directive}`);
+      }
+    } catch (error) {
+      console.error("Error setting directive:", error);
+    }
+  }
+
   if (!isAuthenticated && import.meta.env.VITE_REQUIRE_AUTH === "true") {
     return (
       <Container>
@@ -169,6 +230,33 @@ export default function App() {
       <ResetButton onClick={handleResetRobot}>
         <MdRefresh size={20} /> Reset Robot
       </ResetButton>
+
+      <DirectiveButtonsContainer>
+        <DirectiveButton
+          onClick={() => handleSetDirective("default_directive")}
+        >
+          Default <MdAutoMode size={18} />
+        </DirectiveButton>
+        <DirectiveButton onClick={() => handleSetDirective("sassy_directive")}>
+          Sassy <MdMood size={18} />
+        </DirectiveButton>
+        <DirectiveButton
+          onClick={() => handleSetDirective("friendly_guide_directive")}
+        >
+          Guide <MdTour size={18} />
+        </DirectiveButton>
+        <DirectiveButton
+          onClick={() => handleSetDirective("security_patrol_directive")}
+        >
+          Security <MdSecurity size={18} />
+        </DirectiveButton>
+        <DirectiveButton
+          onClick={() => handleSetDirective("elder_safety_directive")}
+        >
+          Elder Care <MdHealthAndSafety size={18} />
+        </DirectiveButton>
+      </DirectiveButtonsContainer>
+
       <TopSection>
         <Title>Innate Simulator</Title>
         <ImageDisplay viewMode={viewMode} />

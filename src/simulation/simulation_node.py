@@ -1,7 +1,10 @@
+from math import atan, tan
 import queue
 import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
+import json
+from scipy.spatial.transform import Rotation as R
 
 from src.simulation.stl_slicing import slice_stl
 from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd, ResetRobotCmd
@@ -9,10 +12,24 @@ from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
+ROBOT_INIT_POS = (0, 0, 0.8)
+ROBOT_INIT_QUAT = (1, 0, 0, 0)
+
+
 class SimulationNode:
     def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
+
+        self.render_camera_vfov = 40
+        self.render_camera_hfov = 2 * atan(
+            tan(self.render_camera_vfov / 2) * 1280 / 720
+        )
+        self.render_camera_res = (1280, 720)
+
+        self.robot_camera_vfov = 60
+        self.robot_camera_hfov = 2 * atan(tan(self.robot_camera_vfov / 2) * 640 / 480)
+        self.robot_camera_res = (640, 480)
 
         # Initialize core components
         self._init_genesis()
@@ -39,8 +56,8 @@ class SimulationNode:
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(3.5, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
-                camera_fov=40,
-                res=(1280, 720),
+                camera_fov=self.render_camera_vfov,  # VERTICAL FOV
+                res=self.render_camera_res,
             ),
             vis_options=gs.options.VisOptions(
                 ambient_light=(0.5, 0.5, 0.5),
@@ -49,19 +66,37 @@ class SimulationNode:
             show_viewer=self.enable_vis,
         )
         # Add ground plane
-        self.scene.add_entity(gs.morphs.Plane())
+        self.scene.add_entity(gs.morphs.Plane(pos=(0, 0.05, 0)))
 
     def _init_environment(self):
         """Initialize the environment meshes and process occupancy grid"""
-        # Add environment meshes
+        # Option 1: Load scene without convexification, then add individual collision objects
         replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
                 file="data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
                 fixed=True,
                 euler=(90, 0, 0),
-                pos=(0, 0, -0.1),
+                pos=(0, 0, 0),
+                convexify=False,  # Load without convexification
+                collision=False,  # No collision on main mesh
+            )
+        )
+
+        # Add separate collision geometry based on the stage config file
+        self._add_collision_from_stage_config(
+            "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
+        )
+
+        # Add human model lying on the ground
+        self.human = self.scene.add_entity(
+            gs.morphs.Mesh(
+                file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
+                fixed=True,  # Make it static
+                euler=(0, 0, 90),  # Rotate to lie flat
+                pos=(0.5, -3.0, 0.05),  # Position as requested (with slight z-offset)
+                scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
                 convexify=False,
-                collision=False,
+                collision=False,  # Enable collision for robot interaction
             )
         )
 
@@ -69,6 +104,78 @@ class SimulationNode:
         file_path = "data/replica_scene.stl"
 
         self._process_occupancy_grid(file_path)
+
+    def _add_collision_from_stage_config(self, config_path):
+        """Add collision geometry based on receptacles defined in the stage config"""
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        # Extract receptacles from user_defined section
+        receptacles = config.get("user_defined", {})
+
+        # Create rotation for 90 degrees around X-axis (same as euler=(90,0,0) in main scene)
+        scene_rotation = R.from_euler("x", 90, degrees=True)
+
+        # Add collision meshes for each receptacle
+        for name, receptacle in receptacles.items():
+            position = receptacle.get("position", [0, 0, 0])
+            rotation = receptacle.get("rotation", [1, 0, 0, 0])
+
+            # Convert position from list to numpy array
+            position = np.array(position)
+
+            # Rotate the position to match main scene orientation
+            position = scene_rotation.apply(position)
+
+            # Convert the original quaternion [w,x,y,z] to scipy format [x,y,z,w]
+            original_quat = np.array(
+                [rotation[1], rotation[2], rotation[3], rotation[0]]
+            )
+            original_rotation = R.from_quat(original_quat)
+
+            # Combine rotations (scene rotation * original rotation)
+            combined_rotation = scene_rotation * original_rotation
+
+            # Convert back to [w,x,y,z] quaternion format for Genesis
+            new_quat = combined_rotation.as_quat()  # [x,y,z,w]
+            final_quat = [
+                new_quat[3],
+                new_quat[0],
+                new_quat[1],
+                new_quat[2],
+            ]  # [w,x,y,z]
+
+            # Extract object name from receptacle name
+            if "_frl_apartment_" in name or "_frl_" in name:
+                parts = name.split("_frl_")
+                if len(parts) > 1:
+                    # Extract the object name
+                    object_name = "frl_" + parts[1]
+
+                    # Remove any .001, .002, etc. suffixes from the object name
+                    if "." in object_name:
+                        base_name, suffix = object_name.rsplit(".", 1)
+                        if suffix.isdigit() or (
+                            len(suffix) > 0 and all(c.isdigit() for c in suffix)
+                        ):
+                            object_name = base_name
+
+                    try:
+                        # Load the actual object mesh with collision but no visualization
+                        self.scene.add_entity(
+                            gs.morphs.Mesh(
+                                file=f"data/ReplicaCAD_dataset/objects/{object_name}.glb",
+                                pos=position.tolist(),
+                                quat=final_quat,
+                                fixed=True,
+                                visualization=False,  # Invisible collision only
+                                collision=True,
+                                convexify=True,  # Individual objects can be safely convexified
+                            )
+                        )
+                        print(f"Added collision for: {object_name}")
+                    except Exception as e:
+                        print(f"Failed to load collision for {object_name}: {e}")
 
     def _process_occupancy_grid(self, file_path):
         """
@@ -104,7 +211,11 @@ class SimulationNode:
     def _init_robot(self):
         """Initialize robot and its parameters"""
         self.robot = self.scene.add_entity(
-            gs.morphs.URDF(file="data/urdf/turtlebot3_burger.urdf", pos=(0, 0, 0))
+            gs.morphs.URDF(
+                file="data/urdf/turtlebot3_burger.urdf",
+                pos=ROBOT_INIT_POS,
+                quat=ROBOT_INIT_QUAT,
+            )
         )
 
         # Set up wheel joints
@@ -119,18 +230,18 @@ class SimulationNode:
         """Initialize robot camera and chase camera"""
         # Original robot camera
         self.robot_camera = self.scene.add_camera(
-            res=(640, 480),
+            res=self.robot_camera_res,
             pos=(0, 0, 0),
             lookat=(1, 0, 0),
-            fov=60,
+            fov=self.robot_camera_vfov,
         )
 
         # Add chase camera
         self.chase_camera = self.scene.add_camera(
-            res=(640, 480),
+            res=self.render_camera_res,
             pos=(0, -2.0, 2.0),  # 2m behind, 2m up
             lookat=(0, 0, 0),  # Will be updated to track robot
-            fov=60,
+            fov=self.render_camera_vfov,
         )
 
         # Camera intrinsics (for the robot camera)
@@ -157,6 +268,8 @@ class SimulationNode:
     def init_movement(self):
         """Initialize robot movement"""
         self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
+        self.auto_movement_started = False
+        self.auto_movement_delay = 30  # 3 seconds at dt=0.1
 
     def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
         """Convert linear and angular velocity to left and right wheel velocities."""
@@ -174,6 +287,22 @@ class SimulationNode:
         step_count = 0
 
         while not self.shared_queues.exit_event.is_set():
+            # --- (A) Auto movement after delay
+            if (
+                not self.auto_movement_started
+                and step_count >= self.auto_movement_delay
+            ):
+                print("Starting auto movement - moving forward at 0.2 m/s")
+                linear_vel = 0.2  # 20 cm/s
+                angular_vel = 0.0
+                left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
+                    linear_vel, angular_vel
+                )
+                self.robot.control_dofs_velocity(
+                    [left_vel, right_vel], [self.left_idx, self.right_idx]
+                )
+                self.auto_movement_started = True
+
             # --- (B) Gather robot pose, velocity
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
@@ -198,16 +327,22 @@ class SimulationNode:
                 self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
 
                 # Render both cameras
-                # BUG: When we are closing the visualizer and these two instructions are the one running they don't finish and the program gets stuck.
-                # Note that I only have it seen on macos, not on linux.
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
                 chase_rgb, _, _, _ = self.chase_camera.render()
 
-                rgb_to_send = rgb
+                # Convert RGB to BGR format if needed (or BGR to RGB)
+                if rgb is not None:
+                    rgb_to_send = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                else:
+                    rgb_to_send = None
+
+                if chase_rgb is not None:
+                    chase_rgb = cv2.cvtColor(chase_rgb, cv2.COLOR_RGB2BGR)
+
                 depth_to_send = depth
 
                 try:
-                    camera_views = {"first_person": rgb, "chase": chase_rgb}
+                    camera_views = {"first_person": rgb_to_send, "chase": chase_rgb}
                     self.shared_queues.sim_to_web.put_nowait(camera_views)
                 except queue.Full:
                     pass
@@ -288,8 +423,8 @@ class SimulationNode:
                     )
                 elif isinstance(cmd, ResetRobotCmd):
                     print("[SimulationNode] Resetting robot pose to origin.")
-                    self.robot.set_pos((0, 0, 0))
-                    self.robot.set_quat((0, 0, 0, 1))
+                    self.robot.set_pos(ROBOT_INIT_POS)
+                    self.robot.set_quat(ROBOT_INIT_QUAT)
                     self.robot.control_dofs_velocity(
                         [0.0, 0.0], [self.left_idx, self.right_idx]
                     )

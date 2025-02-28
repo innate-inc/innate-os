@@ -5,6 +5,8 @@ import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
 // Example icon from react-icons (feel free to use your own icon or an SVG):
 import { IoSend } from "react-icons/io5";
+import { RobotGroupedBubble } from "./RobotGroupedBubble";
+import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 
 const ChatContainer = styled.div`
   /* Default desktop width */
@@ -41,6 +43,8 @@ const MessageBubble = styled.div<MessageBubbleProps>`
   margin-bottom: 10px;
   align-self: ${({ $isUser }) => ($isUser ? "flex-end" : "flex-start")};
   text-align: ${({ $isUser }) => ($isUser ? "right" : "left")};
+  font-size: 14px;
+  line-height: 22px;
 
   @media (prefers-color-scheme: dark) {
     /* Dark-mode version of the bubbles */
@@ -91,17 +95,20 @@ const SendButton = styled.button`
   }
 `;
 
-interface Message {
-  text: string;
-  sender: "user" | "robot" | string; // or strict union if you prefer
-  timestamp: number;
-}
-
 export function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const handleScroll = () => {
+    if (containerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+      setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 10);
+    }
+  };
 
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
@@ -168,8 +175,10 @@ export function Chat() {
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (isScrolledToBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, isScrolledToBottom]);
 
   const handleSend = () => {
     const cleanDraft = draft.trim();
@@ -183,14 +192,29 @@ export function Chat() {
     setDraft("");
   };
 
+  // Use the grouping utility to prepare messages for display.
+  const groupedMessages: DisplayMessage[] = groupMessages(messages);
+
   return (
     <ChatContainer>
-      <MessagesWrapper>
-        {messages.map((m, idx) => (
-          <MessageBubble key={idx} $isUser={m.sender === "user"}>
-            {m.text}
-          </MessageBubble>
-        ))}
+      <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
+        {groupedMessages.map((m, idx) => {
+          if (m.sender === "robot_grouped") {
+            return (
+              <RobotGroupedBubble
+                key={idx}
+                isLast={idx === groupedMessages.length - 1}
+                groupedExtras={m.groupedExtras}
+                durationSeconds={m.durationSeconds}
+              />
+            );
+          }
+          return (
+            <MessageBubble key={idx} $isUser={m.sender === "user"}>
+              {m.text}
+            </MessageBubble>
+          );
+        })}
         {/* Marker element for auto-scroll */}
         <div ref={messagesEndRef} />
       </MessagesWrapper>
