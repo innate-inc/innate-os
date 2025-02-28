@@ -1,0 +1,5 @@
+# Request (empty - no parameters needed to get the list of directives)
+---
+# Response
+string[] directives      # List of available directive names
+string current_directive # Currently active directive name

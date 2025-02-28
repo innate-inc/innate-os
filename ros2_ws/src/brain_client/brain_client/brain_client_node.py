@@ -30,6 +30,7 @@ from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
+from brain_messages.srv import GetAvailableDirectives
 
 from brain_client.ws_bridge import WSBridge
 
@@ -193,6 +194,13 @@ class BrainClientNode(Node):
         }
         self.current_directive = self.directives["default_directive"]
 
+        # Create service to get available directives
+        self.get_directives_srv = self.create_service(
+            GetAvailableDirectives,
+            "/get_available_directives",
+            self.handle_get_available_directives,
+        )
+
         # Create the primitive execution action client once in the init.
         self.primitive_action_client = ActionClient(
             self, ExecutePrimitive, "execute_primitive"
@@ -285,7 +293,7 @@ class BrainClientNode(Node):
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
             self.primitive_running = False
-            self.primitive_action_client.cancel_goal_async()
+            # self.primitive_action_client.cancel_goal_async()
             return
 
         if payload.thoughts:
@@ -564,6 +572,16 @@ class BrainClientNode(Node):
             self.chat_history.append(error_msg)
             out_msg = String(data=json.dumps(error_msg))
             self.chat_out_pub.publish(out_msg)
+
+    def handle_get_available_directives(self, request, response):
+        """
+        Service handler that returns a list of all available directives.
+        """
+        self.get_logger().info("Received request for available directives")
+        directive_names = list(self.directives.keys())
+        response.directives = directive_names
+        response.current_directive = self.current_directive.name
+        return response
 
     def destroy_node(self):
         self.exit_event.set()
