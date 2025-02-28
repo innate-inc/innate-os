@@ -3,6 +3,8 @@ import queue
 import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
+import json
+from scipy.spatial.transform import Rotation as R
 
 from src.simulation.stl_slicing import slice_stl
 from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd, ResetRobotCmd
@@ -10,7 +12,7 @@ from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
-ROBOT_INIT_POS = (0, -2, 0.8)
+ROBOT_INIT_POS = (0, -2.5, 0.8)
 ROBOT_INIT_QUAT = (1, 0, 0, 0)
 
 
@@ -64,20 +66,25 @@ class SimulationNode:
             show_viewer=self.enable_vis,
         )
         # Add ground plane
-        # self.scene.add_entity(gs.morphs.Plane())
+        self.scene.add_entity(gs.morphs.Plane(pos=(0, 0.05, 0)))
 
     def _init_environment(self):
         """Initialize the environment meshes and process occupancy grid"""
-        # Add environment meshes
+        # Option 1: Load scene without convexification, then add individual collision objects
         replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
                 file="data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
                 fixed=True,
                 euler=(90, 0, 0),
                 pos=(0, 0, 0),
-                convexify=False,
-                collision=True,
+                convexify=False,  # Load without convexification
+                collision=False,  # No collision on main mesh
             )
+        )
+
+        # Add separate collision geometry based on the stage config file
+        self._add_collision_from_stage_config(
+            "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
         )
 
         # Add human model lying on the ground
@@ -89,7 +96,7 @@ class SimulationNode:
                 pos=(0.5, -3.0, 0.05),  # Position as requested (with slight z-offset)
                 scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
                 convexify=False,
-                collision=True,  # Enable collision for robot interaction
+                collision=False,  # Enable collision for robot interaction
             )
         )
 
@@ -97,6 +104,78 @@ class SimulationNode:
         file_path = "data/replica_scene.stl"
 
         self._process_occupancy_grid(file_path)
+
+    def _add_collision_from_stage_config(self, config_path):
+        """Add collision geometry based on receptacles defined in the stage config"""
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        # Extract receptacles from user_defined section
+        receptacles = config.get("user_defined", {})
+
+        # Create rotation for 90 degrees around X-axis (same as euler=(90,0,0) in main scene)
+        scene_rotation = R.from_euler("x", 90, degrees=True)
+
+        # Add collision meshes for each receptacle
+        for name, receptacle in receptacles.items():
+            position = receptacle.get("position", [0, 0, 0])
+            rotation = receptacle.get("rotation", [1, 0, 0, 0])
+
+            # Convert position from list to numpy array
+            position = np.array(position)
+
+            # Rotate the position to match main scene orientation
+            position = scene_rotation.apply(position)
+
+            # Convert the original quaternion [w,x,y,z] to scipy format [x,y,z,w]
+            original_quat = np.array(
+                [rotation[1], rotation[2], rotation[3], rotation[0]]
+            )
+            original_rotation = R.from_quat(original_quat)
+
+            # Combine rotations (scene rotation * original rotation)
+            combined_rotation = scene_rotation * original_rotation
+
+            # Convert back to [w,x,y,z] quaternion format for Genesis
+            new_quat = combined_rotation.as_quat()  # [x,y,z,w]
+            final_quat = [
+                new_quat[3],
+                new_quat[0],
+                new_quat[1],
+                new_quat[2],
+            ]  # [w,x,y,z]
+
+            # Extract object name from receptacle name
+            if "_frl_apartment_" in name or "_frl_" in name:
+                parts = name.split("_frl_")
+                if len(parts) > 1:
+                    # Extract the object name
+                    object_name = "frl_" + parts[1]
+
+                    # Remove any .001, .002, etc. suffixes from the object name
+                    if "." in object_name:
+                        base_name, suffix = object_name.rsplit(".", 1)
+                        if suffix.isdigit() or (
+                            len(suffix) > 0 and all(c.isdigit() for c in suffix)
+                        ):
+                            object_name = base_name
+
+                    try:
+                        # Load the actual object mesh with collision but no visualization
+                        self.scene.add_entity(
+                            gs.morphs.Mesh(
+                                file=f"data/ReplicaCAD_dataset/objects/{object_name}.glb",
+                                pos=position.tolist(),
+                                quat=final_quat,
+                                fixed=True,
+                                visualization=False,  # Invisible collision only
+                                collision=True,
+                                convexify=True,  # Individual objects can be safely convexified
+                            )
+                        )
+                        print(f"Added collision for: {object_name}")
+                    except Exception as e:
+                        print(f"Failed to load collision for {object_name}: {e}")
 
     def _process_occupancy_grid(self, file_path):
         """
