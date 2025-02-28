@@ -11,7 +11,7 @@ from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge  # For image conversion
-
+import cv2
 # Import RecorderStatus message
 from brain_messages.msg import RecorderStatus
 
@@ -26,6 +26,7 @@ class RecorderNode(Node):
         self.declare_parameter('arm_state_topic', '/arm/state')
         self.declare_parameter('leader_command_topic', '/leader/command')
         self.declare_parameter('velocity_topic', '/cmd_vel')
+        self.declare_parameter('image_size', [640, 480])
         
         # Get parameter values
         data_directory = self.get_parameter('data_directory').value
@@ -34,7 +35,7 @@ class RecorderNode(Node):
         self.arm_state_topic = self.get_parameter('arm_state_topic').value
         self.leader_command_topic = self.get_parameter('leader_command_topic').value
         self.velocity_topic = self.get_parameter('velocity_topic').value
-        
+        self.image_size = self.get_parameter('image_size').value
         # Initialize TaskManager and internal state
         self.task_manager = TaskManager(data_directory)
         self.current_episode = None  # Holds an EpisodeData instance when an episode is active
@@ -174,6 +175,7 @@ class RecorderNode(Node):
         for topic in self.image_topics:
             try:
                 cv_image = self.bridge.imgmsg_to_cv2(self.latest_images[topic], desired_encoding='passthrough')
+                cv_image = cv2.resize(cv_image, (self.image_size[0], self.image_size[1]))
                 images_converted.append(cv_image)
             except Exception as e:
                 self.get_logger().error(f"Error converting image from topic {topic}: {e}")

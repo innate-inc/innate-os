@@ -28,7 +28,7 @@ class DataViewerNode(Node):
         self.declare_parameter('arm_state_topic', "/arm/state")
         self.declare_parameter('leader_command_topic', "/leader/command")
         self.declare_parameter('velocity_topic', "/cmd_vel")
-
+        self.declare_parameter('image_size', [640, 480])
         # Retrieve parameters
         self.base_data_directory = self.get_parameter('data_directory').value
         self.data_frequency = self.get_parameter('data_frequency').value
@@ -36,7 +36,7 @@ class DataViewerNode(Node):
         self.arm_state_topic = self.get_parameter('arm_state_topic').value
         self.leader_command_topic = self.get_parameter('leader_command_topic').value
         self.velocity_topic = self.get_parameter('velocity_topic').value
-
+        self.image_size = self.get_parameter('image_size').value
         self.get_logger().info(f"Using data directory: {self.base_data_directory}")
         self.get_logger().info(f"Playback frequency: {self.data_frequency} Hz")
 
@@ -167,7 +167,7 @@ class DataViewerNode(Node):
                 if len(img.shape) == 3 and img.shape[2] == 3:
                     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 # Resize to common dimensions (e.g., 640x480)
-                img = cv2.resize(img, (1280, 720))
+                img = cv2.resize(img, (self.image_size[0], self.image_size[1]))
                 img_list.append(img)
 
             # Combine images side-by-side.
