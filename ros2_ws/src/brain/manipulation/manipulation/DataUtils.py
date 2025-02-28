@@ -208,7 +208,7 @@ class TaskManager:
             end_timestamp (str): End timestamp of the episode.
         """
         # Determine new episode ID and filename.
-        episode_id = self.metadata["number_of_episodes"] + 1
+        episode_id = self.metadata["number_of_episodes"]
         file_name = f"episode_{episode_id}.h5"
         file_path = os.path.join(self.current_task_dir, file_name)
         
