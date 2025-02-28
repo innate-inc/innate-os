@@ -10,6 +10,10 @@ from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
+ROBOT_INIT_POS = (0, -2, 0.8)
+ROBOT_INIT_QUAT = (1, 0, 0, 0)
+
+
 class SimulationNode:
     def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
         self.shared_queues = shared_queues
@@ -60,7 +64,7 @@ class SimulationNode:
             show_viewer=self.enable_vis,
         )
         # Add ground plane
-        self.scene.add_entity(gs.morphs.Plane())
+        # self.scene.add_entity(gs.morphs.Plane())
 
     def _init_environment(self):
         """Initialize the environment meshes and process occupancy grid"""
@@ -70,9 +74,9 @@ class SimulationNode:
                 file="data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
                 fixed=True,
                 euler=(90, 0, 0),
-                pos=(0, 0, -0.1),
+                pos=(0, 0, 0),
                 convexify=False,
-                collision=False,
+                collision=True,
             )
         )
 
@@ -85,7 +89,7 @@ class SimulationNode:
                 pos=(0.5, -3.0, 0.05),  # Position as requested (with slight z-offset)
                 scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
                 convexify=False,
-                collision=False,  # Enable collision for robot interaction
+                collision=True,  # Enable collision for robot interaction
             )
         )
 
@@ -128,7 +132,11 @@ class SimulationNode:
     def _init_robot(self):
         """Initialize robot and its parameters"""
         self.robot = self.scene.add_entity(
-            gs.morphs.URDF(file="data/urdf/turtlebot3_burger.urdf", pos=(0, 0, 0))
+            gs.morphs.URDF(
+                file="data/urdf/turtlebot3_burger.urdf",
+                pos=ROBOT_INIT_POS,
+                quat=ROBOT_INIT_QUAT,
+            )
         )
 
         # Set up wheel joints
@@ -181,6 +189,8 @@ class SimulationNode:
     def init_movement(self):
         """Initialize robot movement"""
         self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
+        self.auto_movement_started = False
+        self.auto_movement_delay = 30  # 3 seconds at dt=0.1
 
     def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
         """Convert linear and angular velocity to left and right wheel velocities."""
@@ -198,6 +208,22 @@ class SimulationNode:
         step_count = 0
 
         while not self.shared_queues.exit_event.is_set():
+            # --- (A) Auto movement after delay
+            if (
+                not self.auto_movement_started
+                and step_count >= self.auto_movement_delay
+            ):
+                print("Starting auto movement - moving forward at 0.2 m/s")
+                linear_vel = 0.2  # 20 cm/s
+                angular_vel = 0.0
+                left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
+                    linear_vel, angular_vel
+                )
+                self.robot.control_dofs_velocity(
+                    [left_vel, right_vel], [self.left_idx, self.right_idx]
+                )
+                self.auto_movement_started = True
+
             # --- (B) Gather robot pose, velocity
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
@@ -312,8 +338,8 @@ class SimulationNode:
                     )
                 elif isinstance(cmd, ResetRobotCmd):
                     print("[SimulationNode] Resetting robot pose to origin.")
-                    self.robot.set_pos((0, 0, 0))
-                    self.robot.set_quat((0, 0, 0, 1))
+                    self.robot.set_pos(ROBOT_INIT_POS)
+                    self.robot.set_quat(ROBOT_INIT_QUAT)
                     self.robot.control_dofs_velocity(
                         [0.0, 0.0], [self.left_idx, self.right_idx]
                     )
