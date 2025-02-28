@@ -1,5 +1,6 @@
 import rclpy
 import asyncio
+import math
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
@@ -10,19 +11,14 @@ class Nav2Controller:
     def __init__(self, logger):
         """
         Initialize the Nav2Controller by creating a BasicNavigator instance
-        and preparing a ROS node with a publisher for stop commands.
         """
         # Create a BasicNavigator instance to communicate with Nav2.
         self.navigator = BasicNavigator()
         self.logger = logger
 
-        # Create a node for publishing stop commands.
-        # (Note: In a more integrated application you might want to reuse an existing node.)
-        # self.pub_node = rclpy.create_node("navigate_to_position_stop_command_node")
         self.logger.info("Nav2 position primitive node created")
-        # self.cmd_vel_pub = self.pub_node.create_publisher(Twist, "cmd_vel", 10)
 
-    def go_to_position(self, x: float, y: float, w: float):
+    def go_to_position(self, x: float, y: float, theta: float):
         """
         Sends a navigation goal to the navigator and waits until navigation ends.
         The method returns the TaskResult indicating whether the goal
@@ -44,11 +40,10 @@ class Nav2Controller:
         goal_pose.pose.position.y = y
         goal_pose.pose.position.z = 0.0
 
-        # Identity quaternion: no rotation.
         goal_pose.pose.orientation.x = 0.0
         goal_pose.pose.orientation.y = 0.0
-        goal_pose.pose.orientation.z = 0.0
-        goal_pose.pose.orientation.w = w
+        goal_pose.pose.orientation.z = math.sin(theta / 2.0)
+        goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
         self.logger.debug("Sending goal pose ...")
         self.navigator.goToPose(goal_pose)
@@ -86,13 +81,20 @@ class NavigateToPosition(Primitive):
         return "navigate_to_position"
 
     def guidelines(self):
-        return "Navigate the robot to the specified position using provided x and y coordinates."
+        return (
+            "Use when you need to navigate the robot to the specified position using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
+            + "Can be used to navigate to a specific point in the map, or rotate the robot, or move forward..."
+        )
 
-    def execute(self, x: float, y: float):
+    def execute(self, x: float, y: float, theta: float):
         # Replace this simulated delay and print statements with actual navigation logic.
-        self.logger.debug(f"Initiating navigation to position: x={x}, y={y}")
+        self.logger.info(
+            f"\033[96m[BrainClient] Initiating navigation to position: x={x}, y={y}, theta={theta}\033[0m"
+        )
 
-        self.nav2_controller.go_to_position(x, y, 1.0)
+        self.nav2_controller.go_to_position(x, y, theta)
 
-        self.logger.debug(f"Navigation complete. Arrived at position: x={x}, y={y}")
-        return f"Reached position ({x}, {y})", True
+        self.logger.info(
+            f"\033[92m[BrainClient] Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}\033[0m"
+        )
+        return f"Reached position ({x}, {y}, {theta})", True

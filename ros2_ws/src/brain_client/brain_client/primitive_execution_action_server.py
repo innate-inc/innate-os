@@ -17,6 +17,7 @@ from brain_messages.action import ExecutePrimitive
 
 # Import available primitive(s) and any needed types.
 from brain_client.primitives.navigate_to_position import NavigateToPosition
+from brain_client.primitives.send_email import SendEmail
 from brain_client.message_types import TaskType
 
 
@@ -28,6 +29,7 @@ class PrimitiveExecutionActionServer(Node):
         # (Key is the string value from TaskType, e.g. "navigate_to_position")
         self._primitives = {
             TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
+            TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
         }
 
         self._action_server = ActionServer(
@@ -42,7 +44,7 @@ class PrimitiveExecutionActionServer(Node):
 
     def goal_callback(self, goal_request):
         self.get_logger().debug(
-            'Received goal for primitive: "%s"' % goal_request.primitive_type
+            f"Received goal for primitive: '{goal_request.primitive_type}'"
         )
         return GoalResponse.ACCEPT
 
@@ -52,19 +54,19 @@ class PrimitiveExecutionActionServer(Node):
 
     def execute_callback(self, goal_handle):
         self.get_logger().debug(
-            'Executing primitive: "%s"' % goal_handle.request.primitive_type
+            f"Executing primitive: '{goal_handle.request.primitive_type}'"
         )
         # Decode the inputs (assumed to be JSON)
         try:
             inputs = json.loads(goal_handle.request.inputs)
         except Exception as e:
-            self.get_logger().error("Invalid JSON for inputs: %s" % str(e))
+            self.get_logger().error(f"Invalid JSON for inputs: {str(e)}")
             goal_handle.abort()
             return ExecutePrimitive.Result(success=False, message="Invalid inputs JSON")
 
         primitive_type = goal_handle.request.primitive_type
         if primitive_type not in self._primitives:
-            self.get_logger().error('Primitive "%s" not available' % primitive_type)
+            self.get_logger().error(f"Primitive '{primitive_type}' not available")
             goal_handle.abort()
             return ExecutePrimitive.Result(
                 success=False, message="Primitive not available"
@@ -72,7 +74,7 @@ class PrimitiveExecutionActionServer(Node):
 
         primitive = self._primitives[primitive_type]
         self.get_logger().debug(
-            'Starting primitive "%s" with inputs: %s' % (primitive_type, inputs)
+            f"Starting primitive '{primitive_type}' with inputs: {inputs}"
         )
 
         try:
@@ -80,7 +82,7 @@ class PrimitiveExecutionActionServer(Node):
             # behavior you could run this in a separate thread.)
             primitive.execute(**inputs)
         except Exception as e:
-            self.get_logger().error("Error executing primitive: %s" % str(e))
+            self.get_logger().error(f"Error executing primitive: {str(e)}")
             goal_handle.abort()
             return ExecutePrimitive.Result(success=False, message=str(e))
 

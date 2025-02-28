@@ -19,7 +19,8 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     tmux \
-    iputils-ping
+    iputils-ping \
+    libudev-dev
 
 # 1b. Install ROS-related packages
 RUN apt-get install -y \
