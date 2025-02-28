@@ -12,7 +12,7 @@ from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
-ROBOT_INIT_POS = (0, -2.5, 0.8)
+ROBOT_INIT_POS = (0, 0, 0.8)
 ROBOT_INIT_QUAT = (1, 0, 0, 0)
 
 
@@ -327,16 +327,22 @@ class SimulationNode:
                 self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
 
                 # Render both cameras
-                # BUG: When we are closing the visualizer and these two instructions are the one running they don't finish and the program gets stuck.
-                # Note that I only have it seen on macos, not on linux.
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
                 chase_rgb, _, _, _ = self.chase_camera.render()
 
-                rgb_to_send = rgb
+                # Convert RGB to BGR format if needed (or BGR to RGB)
+                if rgb is not None:
+                    rgb_to_send = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                else:
+                    rgb_to_send = None
+
+                if chase_rgb is not None:
+                    chase_rgb = cv2.cvtColor(chase_rgb, cv2.COLOR_RGB2BGR)
+
                 depth_to_send = depth
 
                 try:
-                    camera_views = {"first_person": rgb, "chase": chase_rgb}
+                    camera_views = {"first_person": rgb_to_send, "chase": chase_rgb}
                     self.shared_queues.sim_to_web.put_nowait(camera_views)
                 except queue.Full:
                     pass
