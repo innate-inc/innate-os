@@ -1,12 +1,13 @@
 #!/bin/zsh
 alias discovery="~/maurice-prod/dds/discovery.zsh"
+alias discovery-and-launch-sim="~/maurice-prod/dds/discovery-and-launch-sim.zsh"
 
 
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export ROS_DOMAIN_ID=0
 
 
-export ROS_DISCOVERY_SERVER_IP=192.168.1.124
+export ROS_DISCOVERY_SERVER_IP=${ROS_DISCOVERY_SERVER_IP_OVERRIDE:-192.168.1.124}
 export ROS_DISCOVERY_SERVER_PORT=11811
 export ROS_DISCOVERY_SERVER=$ROS_DISCOVERY_SERVER_IP:$ROS_DISCOVERY_SERVER_PORT
 
