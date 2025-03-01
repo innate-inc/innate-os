@@ -4,14 +4,7 @@ import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
 import { ToggleViewMode } from "./components/ToggleViewMode";
 import { Chat } from "./components/Chat";
-import {
-  MdRefresh,
-  MdAutoMode,
-  MdMood,
-  MdTour,
-  MdSecurity,
-  MdHealthAndSafety,
-} from "react-icons/md";
+import { MdRefresh } from "react-icons/md";
 
 const Title = styled.h1`
   font-size: 24px;
@@ -113,46 +106,6 @@ const StyledSubmitButton = styled.button`
   }
 `;
 
-const DirectiveButtonsContainer = styled.div`
-  position: fixed;
-  bottom: 80px;
-  right: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 10;
-`;
-
-const DirectiveButton = styled.button`
-  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
-  border: none;
-  padding: 10px;
-  color: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  width: 40px;
-  height: 40px;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-
-    &:hover {
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
-    }
-  }
-`;
-
 export default function App() {
   // A very simple password approach (do not use in production)
   const CORRECT_PASSWORD = "lol";
@@ -194,7 +147,7 @@ export default function App() {
     }
   }
 
-  // Modified to take a directive parameter instead of using state
+  // We keep the handleSetDirective function for potential future use
   async function handleSetDirective(directive: string) {
     try {
       const baseUrl =
@@ -245,50 +198,17 @@ export default function App() {
         <MdRefresh size={20} /> Reset Robot
       </ResetButton>
 
-      <DirectiveButtonsContainer>
-        <DirectiveButton
-          title="Default Mode"
-          onClick={() => handleSetDirective("default_directive")}
-        >
-          <MdAutoMode size={20} />
-        </DirectiveButton>
-        <DirectiveButton
-          title="Sassy Mode"
-          onClick={() => handleSetDirective("sassy_directive")}
-        >
-          <MdMood size={20} />
-        </DirectiveButton>
-        <DirectiveButton
-          title="Guide Mode"
-          onClick={() => handleSetDirective("friendly_guide_directive")}
-        >
-          <MdTour size={20} />
-        </DirectiveButton>
-        <DirectiveButton
-          title="Security Mode"
-          onClick={() => handleSetDirective("security_patrol_directive")}
-        >
-          <MdSecurity size={20} />
-        </DirectiveButton>
-        <DirectiveButton
-          title="Elder Care Mode"
-          onClick={() => handleSetDirective("elder_safety_directive")}
-        >
-          <MdHealthAndSafety size={20} />
-        </DirectiveButton>
-      </DirectiveButtonsContainer>
-
       <TopSection>
         <Title>Innate Simulator</Title>
         <ImageDisplay viewMode={viewMode} />
         <ToggleViewMode viewMode={viewMode} setViewMode={setViewMode} />
       </TopSection>
+
       <ChatSection>
-        <Chat />
+        <Chat onSetDirective={handleSetDirective} />
       </ChatSection>
-      <VersionBadge>
-        v{__APP_VERSION__} - c.{__COMMIT_HASH__}
-      </VersionBadge>
+
+      <VersionBadge>v0.1.0</VersionBadge>
     </Container>
   );
 }
