@@ -5,6 +5,14 @@ import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
 // Example icon from react-icons (feel free to use your own icon or an SVG):
 import { IoSend, IoPerson, IoHardwareChip } from "react-icons/io5";
+// Import directive icons
+import {
+  IoHappy,
+  IoFlag,
+  IoShield,
+  IoHeart,
+  IoSettings,
+} from "react-icons/io5";
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 
@@ -121,6 +129,7 @@ const SendButton = styled.button`
   height: 40px;
   display: flex;
   align-items: center;
+  padding: 0;
   justify-content: center;
   cursor: pointer;
   margin-left: 8px;
@@ -130,16 +139,143 @@ const SendButton = styled.button`
   &:hover {
     transform: scale(1.05);
   }
+`;
 
-  /* Add styling for the SVG icon */
-  svg {
-    display: block;
-    padding: 0;
-    margin: 0;
+const DirectivesContainer = styled.div`
+  display: flex;
+  overflow-x: auto;
+  padding: 8px 12px;
+  gap: 8px;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+
+  @media (prefers-color-scheme: dark) {
+    background: #1e293b;
+    border-bottom: 1px solid #374151;
   }
 `;
 
-export function Chat() {
+interface DirectiveButtonProps {
+  $isActive: boolean;
+}
+
+const DirectiveButton = styled.button<DirectiveButtonProps>`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 9999px;
+  min-width: max-content;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+
+  background: ${({ $isActive }) =>
+    $isActive
+      ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
+      : "transparent"};
+  color: ${({ $isActive }) => ($isActive ? "#ffffff" : "#4b5563")};
+
+  &:hover {
+    background: ${({ $isActive }) =>
+      $isActive
+        ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
+        : "#f3f4f6"};
+  }
+
+  @media (prefers-color-scheme: dark) {
+    color: ${({ $isActive }) => ($isActive ? "#ffffff" : "#e5e7eb")};
+
+    &:hover {
+      background: ${({ $isActive }) =>
+        $isActive
+          ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
+          : "#334155"};
+    }
+  }
+`;
+
+const DirectiveContent = styled.div`
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+`;
+
+const DirectiveTitle = styled.span`
+  font-weight: 500;
+  font-size: 14px;
+  display: block;
+`;
+
+const DirectiveSubtitle = styled.span`
+  font-size: 12px;
+  opacity: 0.8;
+  display: block;
+`;
+
+const IconWrapper = styled.div<{ $isActive: boolean }>`
+  position: relative;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: white;
+    display: ${({ $isActive }) => ($isActive ? "block" : "none")};
+  }
+`;
+
+// Define the directive type
+interface Directive {
+  id: string;
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+}
+
+// Define all available directives
+const DIRECTIVES: Directive[] = [
+  {
+    id: "default_directive",
+    title: "Default",
+    subtitle: "Standard operation mode",
+    icon: <IoSettings size={16} />,
+  },
+  {
+    id: "sassy_directive",
+    title: "Sassy",
+    subtitle: "Playful, witty responses",
+    icon: <IoHappy size={16} />,
+  },
+  {
+    id: "friendly_guide_directive",
+    title: "Guide",
+    subtitle: "Helpful, instructional",
+    icon: <IoFlag size={16} />,
+  },
+  {
+    id: "security_patrol_directive",
+    title: "Security",
+    subtitle: "Vigilant, protective",
+    icon: <IoShield size={16} />,
+  },
+  {
+    id: "elder_safety_directive",
+    title: "Elder Care",
+    subtitle: "Patient, supportive",
+    icon: <IoHeart size={16} />,
+  },
+];
+
+interface ChatProps {
+  onSetDirective: (directive: string) => void;
+}
+
+export function Chat({ onSetDirective }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       sender: "robot",
@@ -162,6 +298,7 @@ export function Chat() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
+  const [activeDirective, setActiveDirective] = useState("default_directive");
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -257,6 +394,27 @@ export function Chat() {
 
   return (
     <ChatContainer>
+      <DirectivesContainer>
+        {DIRECTIVES.map((directive) => (
+          <DirectiveButton
+            key={directive.id}
+            $isActive={activeDirective === directive.id}
+            onClick={() => {
+              setActiveDirective(directive.id);
+              onSetDirective(directive.id);
+            }}
+          >
+            <IconWrapper $isActive={activeDirective === directive.id}>
+              {directive.icon}
+            </IconWrapper>
+            <DirectiveContent>
+              <DirectiveTitle>{directive.title}</DirectiveTitle>
+              <DirectiveSubtitle>{directive.subtitle}</DirectiveSubtitle>
+            </DirectiveContent>
+          </DirectiveButton>
+        ))}
+      </DirectivesContainer>
+
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
         {groupedMessages.map((m, idx) => {
           if (m.sender === "robot_grouped") {
