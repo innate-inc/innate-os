@@ -1,5 +1,6 @@
 #!/bin/zsh
 alias discovery="~/maurice-prod/dds/discovery.zsh"
+alias discovery-and-launch-sim="~/maurice-prod/dds/discovery-and-launch-sim.zsh"
 
 
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
