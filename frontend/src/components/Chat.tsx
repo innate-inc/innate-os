@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
 // Example icon from react-icons (feel free to use your own icon or an SVG):
-import { IoSend } from "react-icons/io5";
+import { IoSend, IoPerson, IoHardwareChip } from "react-icons/io5";
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 
@@ -15,6 +15,8 @@ const ChatContainer = styled.div`
   display: flex;
   flex-direction: column;
   align-self: center;
+  font-family: "Poppins", system-ui, -apple-system, BlinkMacSystemFont,
+    sans-serif;
 
   /* On screens below 768px, take the full width */
   @media (max-width: 768px) {
@@ -28,7 +30,7 @@ const MessagesWrapper = styled.div`
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 `;
 
 interface MessageBubbleProps {
@@ -36,34 +38,79 @@ interface MessageBubbleProps {
 }
 
 const MessageBubble = styled.div<MessageBubbleProps>`
-  background: ${({ $isUser }) => ($isUser ? "#efefef" : "transparent")};
-  border: none;
-  border-radius: 20px;
-  padding: 10px 15px;
-  margin-bottom: 10px;
+  max-width: 80%;
+  background: ${({ $isUser }) =>
+    $isUser ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)" : "#ffffff"};
+  color: ${({ $isUser }) => ($isUser ? "#ffffff" : "#333333")};
+  border: ${({ $isUser }) => ($isUser ? "none" : "1px solid #e5e7eb")};
+  border-radius: 18px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
   align-self: ${({ $isUser }) => ($isUser ? "flex-end" : "flex-start")};
   text-align: ${({ $isUser }) => ($isUser ? "right" : "left")};
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 15px;
+  line-height: 1.5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 10px;
+    height: 10px;
+    ${({ $isUser }) =>
+      $isUser
+        ? "right: -5px; background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);"
+        : "left: -5px; background: #ffffff;"}
+    transform: translateY(-50%) rotate(45deg);
+    border-radius: 1px;
+  }
 
   @media (prefers-color-scheme: dark) {
-    /* Dark-mode version of the bubbles */
-    background: ${({ $isUser }) => ($isUser ? "#444" : "transparent")};
-    color: #fff;
+    background: ${({ $isUser }) =>
+      $isUser
+        ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
+        : "#1e293b"};
+    color: ${({ $isUser }) => ($isUser ? "#ffffff" : "#e5e7eb")};
+    border: ${({ $isUser }) => ($isUser ? "none" : "1px solid #374151")};
+
+    &::before {
+      ${({ $isUser }) =>
+        $isUser
+          ? "background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);"
+          : "background: #1e293b;"}
+    }
+  }
+`;
+
+const MessageSender = styled.div<{ $isUser: boolean }>`
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: ${({ $isUser }) => ($isUser ? "#f0f4ff" : "#4b5563")};
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  @media (prefers-color-scheme: dark) {
+    color: ${({ $isUser }) => ($isUser ? "#f0f4ff" : "#9ca3af")};
   }
 `;
 
 const InputArea = styled.div`
-  /* Pinned at the bottom */
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: 8px;
-  background: #eee;
-  border-radius: 16px;
+  padding: 12px 16px;
+  background: #ffffff;
+  border-radius: 20px;
+  margin: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 
   @media (prefers-color-scheme: dark) {
-    background: #2a2a2a;
+    background: #1e293b;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   }
 `;
 
@@ -71,32 +118,65 @@ const TextInput = styled.input`
   flex: 1;
   border: none;
   border-radius: 16px;
-  padding: 8px;
+  padding: 12px;
   outline: none;
   background: transparent;
+  font-size: 15px;
   ::placeholder {
-    color: #666;
+    color: #94a3b8;
   }
   @media (prefers-color-scheme: dark) {
-    color: #fff;
+    color: #e5e7eb;
     ::placeholder {
-      color: #aaa;
+      color: #64748b;
     }
   }
 `;
 
 const SendButton = styled.button`
-  background: none;
+  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
   border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   margin-left: 8px;
+  color: white;
+  transition: transform 0.2s ease;
+
   &:hover {
-    opacity: 0.8;
+    transform: scale(1.05);
+  }
+
+  /* Add styling for the SVG icon */
+  svg {
+    display: block;
+    padding: 0;
+    margin: 0;
   }
 `;
 
 export function Chat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      sender: "robot",
+      text: "Hello! I'm your robot assistant. How can I help you today?",
+      timestamp: Date.now() - 5000,
+    },
+    {
+      sender: "robot_thoughts",
+      text: "Analyzing environment...",
+      timestamp: Date.now() - 4000,
+    },
+    {
+      sender: "robot_anticipation",
+      text: "Ready to receive commands",
+      timestamp: Date.now() - 3000,
+    },
+  ]);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -211,6 +291,19 @@ export function Chat() {
           }
           return (
             <MessageBubble key={idx} $isUser={m.sender === "user"}>
+              <MessageSender $isUser={m.sender === "user"}>
+                {m.sender === "user" ? (
+                  <>
+                    <span>You</span>
+                    <IoPerson size={14} />
+                  </>
+                ) : (
+                  <>
+                    <IoHardwareChip size={14} />
+                    <span>Robot</span>
+                  </>
+                )}
+              </MessageSender>
               {m.text}
             </MessageBubble>
           );
@@ -232,7 +325,7 @@ export function Chat() {
           }}
         />
         <SendButton onClick={handleSend}>
-          <IoSend size={24} />
+          <IoSend size={20} style={{ display: "block", padding: 0 }} />
         </SendButton>
       </InputArea>
     </ChatContainer>

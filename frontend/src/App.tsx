@@ -114,28 +114,42 @@ const StyledSubmitButton = styled.button`
 `;
 
 const DirectiveButtonsContainer = styled.div`
-  position: absolute;
-  top: 10px;
-  right: 10px;
+  position: fixed;
+  bottom: 80px;
+  right: 20px;
   display: flex;
+  flex-direction: column;
   gap: 8px;
+  z-index: 10;
 `;
 
 const DirectiveButton = styled.button`
-  background-color: #007bff;
+  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
   border: none;
-  padding: 8px 12px;
+  padding: 10px;
   color: white;
-  border-radius: 4px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
   font-size: 14px;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  width: 40px;
+  height: 40px;
 
   &:hover {
-    background-color: #0056b3;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+
+    &:hover {
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+    }
   }
 `;
 
@@ -233,27 +247,34 @@ export default function App() {
 
       <DirectiveButtonsContainer>
         <DirectiveButton
+          title="Default Mode"
           onClick={() => handleSetDirective("default_directive")}
         >
-          Default <MdAutoMode size={18} />
-        </DirectiveButton>
-        <DirectiveButton onClick={() => handleSetDirective("sassy_directive")}>
-          Sassy <MdMood size={18} />
+          <MdAutoMode size={20} />
         </DirectiveButton>
         <DirectiveButton
+          title="Sassy Mode"
+          onClick={() => handleSetDirective("sassy_directive")}
+        >
+          <MdMood size={20} />
+        </DirectiveButton>
+        <DirectiveButton
+          title="Guide Mode"
           onClick={() => handleSetDirective("friendly_guide_directive")}
         >
-          Guide <MdTour size={18} />
+          <MdTour size={20} />
         </DirectiveButton>
         <DirectiveButton
+          title="Security Mode"
           onClick={() => handleSetDirective("security_patrol_directive")}
         >
-          Security <MdSecurity size={18} />
+          <MdSecurity size={20} />
         </DirectiveButton>
         <DirectiveButton
+          title="Elder Care Mode"
           onClick={() => handleSetDirective("elder_safety_directive")}
         >
-          Elder Care <MdHealthAndSafety size={18} />
+          <MdHealthAndSafety size={20} />
         </DirectiveButton>
       </DirectiveButtonsContainer>
 
