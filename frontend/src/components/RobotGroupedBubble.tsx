@@ -1,87 +1,99 @@
 import { useState, useRef, useEffect } from "react";
 import styled, { keyframes, css } from "styled-components";
 
-// New keyframes for animating the gradient background inside the text's pseudo-element.
-const textWaveAnimation = keyframes`
-  0% {
-    background-position: 150% 0;
-  }
-  100% {
-    background-position: -150% 0;
-  }
+// Animation for thinking indicator
+const pulseAnimation = keyframes`
+  0% { opacity: 0.5; }
+  50% { opacity: 1; }
+  100% { opacity: 0.5; }
 `;
 
 const RobotExtrasBubble = styled.div`
-  font-style: italic;
-  color: #888;
-  font-size: 12px;
-  padding: 0px 12px;
+  max-width: 90%;
+  font-size: 13px;
+  padding: 1px;
   align-self: flex-start;
   background: transparent;
   border-radius: 10px;
+  position: relative;
+  margin-bottom: 4px;
 
   @media (prefers-color-scheme: dark) {
-    color: #bbb;
+    color: #94a3b8;
   }
 `;
 
-/* Simplified ToggleDiv without a background animation */
 const ToggleDiv = styled.div`
   cursor: pointer;
   display: flex;
   flex-direction: row;
   justify-content: flex-start;
-  align-items: flex-start;
+  align-items: center;
   position: relative;
-  overflow: hidden;
+  padding: 8px 12px;
+  background-color: rgba(79, 70, 229, 0.1);
+  border-radius: 12px;
+  border: 1px solid rgba(79, 70, 229, 0.2);
+  transition: background-color 0.2s ease;
+
+  &:hover {
+    background-color: rgba(79, 70, 229, 0.15);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    background-color: rgba(79, 70, 229, 0.2);
+    border: 1px solid rgba(79, 70, 229, 0.3);
+
+    &:hover {
+      background-color: rgba(79, 70, 229, 0.25);
+    }
+  }
 `;
 
 const ArrowSpan = styled.span`
-  margin-right: 4px;
+  margin-right: 6px;
+  font-size: 10px;
+  color: #4f46e5;
+
+  @media (prefers-color-scheme: dark) {
+    color: #818cf8;
+  }
 `;
 
-/*
-  StatusSpan wraps the status text.
-  When isLast is true, it adds a ::before pseudo-element that duplicates the text (via data-text)
-  and uses background-clip: text to animate a white wave through the text.
-*/
 const StatusSpan = styled.span<{ isLast?: boolean }>`
   position: relative;
   display: inline-block;
-  color: ${({ isLast }) => (isLast ? "#666" : "inherit")};
-  padding-right: ${({ isLast }) => (isLast ? "20px" : "0")};
+  color: ${({ isLast }) => (isLast ? "#4f46e5" : "#6366f1")};
+  font-weight: 500;
 
   ${({ isLast }) =>
     isLast &&
     css`
-      &::before {
-        content: attr(data-text);
-        position: absolute;
-        top: 0;
-        left: 0;
-        height: 100%;
-        background: linear-gradient(
-          90deg,
-          transparent 0%,
-          rgba(255, 255, 255, 0.3) 40%,
-          transparent 80%
-        );
-        background-size: 200% auto;
-        animation: ${textWaveAnimation} 3s linear infinite;
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
-        pointer-events: none;
-        mix-blend-mode: screen;
+      &::after {
+        content: "";
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        margin-left: 6px;
+        border-radius: 50%;
+        background-color: #4f46e5;
+        animation: ${pulseAnimation} 1.5s infinite ease-in-out;
       }
     `}
+
+  @media (prefers-color-scheme: dark) {
+    color: ${({ isLast }) => (isLast ? "#818cf8" : "#6366f1")};
+
+    ${({ isLast }) =>
+      isLast &&
+      css`
+        &::after {
+          background-color: #818cf8;
+        }
+      `}
+  }
 `;
 
-/*
-  Instead of conditionally rendering the content, we always render the container and use a 
-  transition on its max-height (and margin-top) to animate open/close. We pass it the isOpen 
-  state and the computed content height.
-*/
 const ContentDiv = styled.div<{
   isOpen: boolean;
   contentHeight: number;
@@ -94,15 +106,48 @@ const ContentDiv = styled.div<{
   transition: max-height 0.3s ease, margin-top 0.3s ease;
 `;
 
-/*
-  The inner container (InnerContent) holds the actual mapped content.
-  We use a ref on this inner container to measure its scrollHeight.
-*/
-const InnerContent = styled.div``;
+const InnerContent = styled.div`
+  background-color: rgba(79, 70, 229, 0.05);
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid rgba(79, 70, 229, 0.1);
+  color: #4b5563;
+
+  @media (prefers-color-scheme: dark) {
+    background-color: rgba(79, 70, 229, 0.1);
+    border: 1px solid rgba(79, 70, 229, 0.2);
+    color: #94a3b8;
+  }
+`;
 
 const ExtraItem = styled.div`
-  margin-bottom: 4px;
+  margin-bottom: 8px;
   text-align: left;
+  position: relative;
+  padding-left: 12px;
+
+  &:before {
+    content: "•";
+    position: absolute;
+    left: 0;
+    color: #6366f1;
+  }
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+`;
+
+const ProcessTime = styled.div`
+  font-size: 11px;
+  text-align: right;
+  color: #6366f1;
+  margin-top: 8px;
+  font-weight: 500;
+
+  @media (prefers-color-scheme: dark) {
+    color: #818cf8;
+  }
 `;
 
 interface RobotGroupedBubbleProps {
@@ -127,7 +172,7 @@ export const RobotGroupedBubble = ({
     }
   }, [groupedExtras, isOpen]);
 
-  const workingOrWorked = !isLast ? "Thought" : "Thinking";
+  const workingOrWorked = !isLast ? "Processed" : "Processing";
   const statusText =
     durationSeconds > 0
       ? `${workingOrWorked} for ${durationSeconds} seconds`
@@ -137,15 +182,14 @@ export const RobotGroupedBubble = ({
     <RobotExtrasBubble>
       <ToggleDiv onClick={() => setIsOpen((prev) => !prev)}>
         <ArrowSpan>{isOpen ? "▲" : "▼"}</ArrowSpan>
-        <StatusSpan isLast={isLast} data-text={statusText}>
-          {statusText}
-        </StatusSpan>
+        <StatusSpan isLast={isLast}>{statusText}</StatusSpan>
       </ToggleDiv>
       <ContentDiv isOpen={isOpen} contentHeight={contentHeight}>
         <InnerContent ref={innerRef}>
           {groupedExtras.map((extra, index) => (
             <ExtraItem key={index}>{extra}</ExtraItem>
           ))}
+          <ProcessTime>Process time: {durationSeconds}s</ProcessTime>
         </InnerContent>
       </ContentDiv>
     </RobotExtrasBubble>
