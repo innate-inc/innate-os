@@ -309,8 +309,8 @@ class SimulationNode:
             lin_vel = self.robot.get_vel().cpu().numpy()
             ang_vel = self.robot.get_ang().cpu().numpy()
 
-            # --- (C) Render cameras only every 10th frame (i.e. every 1 sec if dt=0.1)
-            if step_count % 10 == 0:
+            # --- (C) Render cameras only every 5th frame (i.e. every 0.5 sec if dt=0.1)
+            if step_count % 5 == 0:
                 camera_link = self.robot.get_link("camera_link")
                 camera_pos = camera_link.get_pos()
                 camera_quat = camera_link.get_quat()
