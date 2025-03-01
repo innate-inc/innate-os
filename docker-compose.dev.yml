@@ -23,6 +23,7 @@ services:
       - novnc
     environment:
       - DISPLAY=novnc:0.0
+      - ROS_DISCOVERY_SERVER_IP_OVERRIDE=127.0.0.1
     ports:
       - "9090:9090"
 
