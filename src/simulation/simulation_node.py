@@ -90,7 +90,7 @@ class SimulationNode:
         # Add human model lying on the ground
         self.human = self.scene.add_entity(
             gs.morphs.Mesh(
-                file="data/assets/lying_man/Lying_man_0127.OBJ",  # Use the OBJ file
+                file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
                 fixed=True,  # Make it static
                 euler=(0, 0, 90),  # Rotate to lie flat
                 pos=(0.5, -3.0, 0.05),  # Position as requested (with slight z-offset)
@@ -173,18 +173,6 @@ class SimulationNode:
                                 convexify=True,  # Individual objects can be safely convexified
                             )
                         )
-
-                        # Add to tracked furniture objects with position and rough dimensions
-                        # We'll estimate a rectangular footprint for each object
-                        furniture_info = {
-                            "name": object_name,
-                            "position": position.tolist(),
-                            "quat": final_quat,
-                            # Estimate size - we could load actual dimensions from files if available
-                            "size": [0.5, 0.5],  # Default 0.5m x 0.5m footprint
-                        }
-                        self.furniture_objects.append(furniture_info)
-
                         print(f"Added collision for: {object_name}")
                     except Exception as e:
                         print(f"Failed to load collision for {object_name}: {e}")
@@ -216,58 +204,9 @@ class SimulationNode:
                     self.occupancy_grid, grid_slice, dtype=np.uint8
                 )
 
-        # Add furniture objects to the occupancy grid
-        self._add_furniture_to_occupancy_grid()
-
         # Optionally, if needed, flip the grid along the vertical axis so (0,0) is bottom-left
         # self.occupancy_grid = np.flipud(self.occupancy_grid)
         cv2.imwrite("occupancy_grid.png", self.occupancy_grid)
-
-    def _add_furniture_to_occupancy_grid(self):
-        """Add furniture objects to the occupancy grid"""
-        if not hasattr(self, "furniture_objects") or not self.furniture_objects:
-            return
-
-        if self.occupancy_grid is None or self.grid_bounds is None:
-            print(
-                "Warning: Cannot add furniture to occupancy grid - grid not initialized"
-            )
-            return
-
-        # Get grid parameters
-        min_x = self.grid_bounds["min_x"]
-        min_y = self.grid_bounds["min_y"]
-        scale = self.grid_bounds["scale"]
-
-        for furniture in self.furniture_objects:
-            # Get furniture position
-            pos = furniture["position"]
-            size = furniture["size"]
-
-            # Convert world coordinates to grid coordinates
-            grid_x = int((pos[0] - min_x) * scale)
-            grid_y = int((pos[1] - min_y) * scale)
-
-            # Calculate grid cell dimensions of the furniture
-            grid_width = int(size[0] * scale)
-            grid_height = int(size[1] * scale)
-
-            # Get half dimensions for rectangle drawing
-            half_width = grid_width // 2
-            half_height = grid_height // 2
-
-            # Define the rectangle in grid coordinates
-            min_grid_x = max(0, grid_x - half_width)
-            max_grid_x = min(self.occupancy_grid.shape[1] - 1, grid_x + half_width)
-            min_grid_y = max(0, grid_y - half_height)
-            max_grid_y = min(self.occupancy_grid.shape[0] - 1, grid_y + half_height)
-
-            # Add furniture to occupancy grid (set to 0 for occupied cells)
-            self.occupancy_grid[min_grid_y:max_grid_y, min_grid_x:max_grid_x] = 0
-
-            print(
-                f"Added furniture to occupancy grid: {furniture['name']} at ({grid_x}, {grid_y})"
-            )
 
     def _init_robot(self):
         """Initialize robot and its parameters"""
