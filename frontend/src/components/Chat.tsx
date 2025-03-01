@@ -44,6 +44,8 @@ const MessageBubble = styled.div<MessageBubbleProps>`
   color: ${({ $isUser }) => ($isUser ? "#ffffff" : "#333333")};
   border: ${({ $isUser }) => ($isUser ? "none" : "1px solid #e5e7eb")};
   border-radius: 18px;
+  border-bottom-left-radius: ${({ $isUser }) => ($isUser ? "18px" : "0")};
+  border-bottom-right-radius: ${({ $isUser }) => ($isUser ? "0" : "18px")};
   padding: 12px 16px;
   margin-bottom: 8px;
   align-self: ${({ $isUser }) => ($isUser ? "flex-end" : "flex-start")};
@@ -51,21 +53,6 @@ const MessageBubble = styled.div<MessageBubbleProps>`
   font-size: 15px;
   line-height: 1.5;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-  position: relative;
-
-  &::before {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    width: 10px;
-    height: 10px;
-    ${({ $isUser }) =>
-      $isUser
-        ? "right: -5px; background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);"
-        : "left: -5px; background: #ffffff;"}
-    transform: translateY(-50%) rotate(45deg);
-    border-radius: 1px;
-  }
 
   @media (prefers-color-scheme: dark) {
     background: ${({ $isUser }) =>
@@ -74,13 +61,6 @@ const MessageBubble = styled.div<MessageBubbleProps>`
         : "#1e293b"};
     color: ${({ $isUser }) => ($isUser ? "#ffffff" : "#e5e7eb")};
     border: ${({ $isUser }) => ($isUser ? "none" : "1px solid #374151")};
-
-    &::before {
-      ${({ $isUser }) =>
-        $isUser
-          ? "background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);"
-          : "background: #1e293b;"}
-    }
   }
 `;
 
