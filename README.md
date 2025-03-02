@@ -22,31 +22,31 @@ This project integrates:
 ### Backend Setup (macOS)
 
 1. Clone the repository:
-```bash
+```zsh
 git clone <repository-url>
 cd genesis-sim-tests
 ```
 
 2. Create and activate a virtual environment:
-```bash
+```zsh
 python -m venv venv
 source venv/bin/activate
 ```
 
 3. Install dependencies:
-```bash
+```zsh
 pip install -r requirements.macos.txt
 ```
 
 ### Frontend Setup
 
 1. Navigate to the frontend directory:
-```bash
+```zsh
 cd frontend
 ```
 
 2. Install dependencies:
-```bash
+```zsh
 yarn install
 ```
 
@@ -55,7 +55,7 @@ yarn install
 ### Start the Backend
 
 Run the main web application:
-```bash
+```zsh
 python main_web.py
 ```
 
@@ -66,7 +66,7 @@ Options:
 ### Start the Frontend Development Server
 
 In a separate terminal:
-```bash
+```zsh
 cd frontend
 yarn dev
 ```
@@ -105,3 +105,75 @@ The application exposes several API endpoints:
 
 - If you encounter issues with the Genesis viewer, try running with the `-v` flag
 - For WebSocket connection issues, use the `--local` flag to connect to a local agent server 
+
+## VM Deployment
+
+### Prerequisites
+- Virtual Machine with access to sim.innate.bot domain
+- Docker installed
+- tmux for managing multiple sessions
+- nginx for web server configuration
+
+### Deployment Process
+
+1. **Import Genesis Simulation and Maurice Production Version**
+
+   Clone both repositories to the VM:
+   ```zsh
+   git clone <genesis-sim-repo-url>
+   git clone <maurice-prod-repo-url>
+   ```
+
+2. **Start Maurice Prod**
+
+   In the first ssh connection:
+   ```zsh
+   # Navigate to Maurice production directory
+   cd <maurice-prod-directory>
+   
+   # Start the Docker container with brain components
+   docker-compose -f docker-compose.prod.yml up -d
+   docker compose -f docker-compose.dev.yml exec maurice zsh -l
+
+   # Then follow the process in the repo to start the bridge and brain
+   ```
+
+3. **Setup Genesis Simulation Environment**
+
+   In another ssh connection:
+   ```zsh
+   # Create a new tmux window
+   tmux new
+   
+   # Navigate to Genesis simulation directory
+   cd <genesis-sim-directory>
+   
+   # Start the simulation with local agent server and no visualization
+   python main_web.py --local
+   ```
+
+4. **Nginx Configuration**
+
+   Configure nginx to serve the application at sim.innate.bot:
+   ```zsh
+   # Edit nginx configuration
+   sudo nano /etc/nginx/sites-available/default
+
+   # Add the config from nginx/default.conf
+
+   # Enable the site and restart nginx
+   sudo ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
+   sudo nginx -t  # Test the configuration
+   sudo systemctl restart nginx
+   ```
+
+5. **Access the Simulation**
+
+   The simulation should now be accessible at http://sim.innate.bot
+
+### Managing the Deployment
+
+- To detach from a tmux session: Press `Ctrl+B` then `D`
+- To reattach to a tmux session: `tmux attach -t session-name`
+- To list all tmux sessions: `tmux ls`
+- To stop the services, reattach to the respective tmux sessions and press `Ctrl+C` 
