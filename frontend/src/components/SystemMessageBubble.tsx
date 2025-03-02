@@ -1,4 +1,3 @@
-import { useState, useRef, useEffect } from "react";
 import styled from "styled-components";
 import { IoCog } from "react-icons/io5";
 
