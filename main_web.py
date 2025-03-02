@@ -1,9 +1,9 @@
 import argparse
 import time
 import threading
-import cv2
 import platform
 import os
+
 
 import genesis as gs
 import uvicorn
@@ -19,9 +19,13 @@ from src.agent.agent_websocket_bridge import run_agent_async
 from src.routes.video_api import router as video_api_router
 from src.routes.chat_api import router as chat_api_router
 
-# -------------------------------------------------------------------------
-# FASTAPI APP
-# -------------------------------------------------------------------------
+
+# Define constants
+LOCAL_ROSBRIDGE_URI = "ws://localhost:9090"
+CLOUD_ROSBRIDGE_URI = (
+    "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
+)
+
 app = FastAPI()
 
 # Enable CORS
@@ -41,7 +45,8 @@ app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
 app.include_router(video_api_router)
 app.include_router(chat_api_router)
 
-# Initialize a placeholder on the application's state so that downstream routers can retrieve SHARED_QUEUES.
+# Initialize a placeholder on the application's state so that downstream
+# routers can retrieve SHARED_QUEUES.
 app.state.SHARED_QUEUES = None
 
 # -------------------------------------------------------------------------
@@ -99,14 +104,11 @@ def main():
     # 3) Start the agent (async) in a separate thread
     agent_thread = run_agent_async(
         SHARED_QUEUES,
-        rosbridge_uri=(
-            "ws://localhost:9090"
-            if args.local
-            else "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
-        ),
+        rosbridge_uri=(LOCAL_ROSBRIDGE_URI if args.local else CLOUD_ROSBRIDGE_URI),
     )
 
-    # 4) Start Uvicorn in another thread so the Genesis viewer and FastAPI server run concurrently
+    # 4) Start Uvicorn in another thread so the Genesis viewer and FastAPI
+    # server run concurrently
     def run_uvicorn():
         config = uvicorn.Config(
             app=app, host="0.0.0.0", port=8000, log_level="info", reload=False
@@ -117,7 +119,8 @@ def main():
     uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
     uvicorn_thread.start()
 
-    # 5) Launch simulation run() in its own thread (macOS) or directly (other platforms)
+    # 5) Launch simulation run() in its own thread (macOS) or directly
+    # (other platforms)
     if platform.system() == "Darwin":
         gs.tools.run_in_another_thread(fn=sim_node.run, args=())
     else:
