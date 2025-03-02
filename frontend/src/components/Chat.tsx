@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
 // Example icon from react-icons (feel free to use your own icon or an SVG):
-import { IoSend, IoPerson, IoHardwareChip } from "react-icons/io5";
+import { IoSend, IoPerson, IoHardwareChip, IoCog } from "react-icons/io5";
 // Import directive icons
 import {
   IoHappy,
@@ -275,30 +275,139 @@ interface ChatProps {
   onSetDirective: (directive: string) => void;
 }
 
+// Add a styled component for system messages (add this with other styled components)
+const SystemMessageBubble = styled.div`
+  max-width: 75%;
+  background: rgba(79, 70, 229, 0.08);
+  color: #334155;
+  border: 1px solid rgba(79, 70, 229, 0.15);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1.4;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+
+  @media (prefers-color-scheme: dark) {
+    background: rgba(79, 70, 229, 0.12);
+    color: #94a3b8;
+    border: 1px solid rgba(79, 70, 229, 0.2);
+  }
+`;
+
+const SystemMessageSender = styled.div`
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 12px;
+  padding-right: 12px;
+  border-right: 1px solid rgba(79, 70, 229, 0.2);
+  color: #4f46e5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 80px;
+
+  @media (prefers-color-scheme: dark) {
+    color: #818cf8;
+    border-right: 1px solid rgba(79, 70, 229, 0.3);
+  }
+`;
+
+const SystemMessageContent = styled.div`
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: center;
+`;
+
+// For long system messages, add these components
+const SystemToggleContainer = styled.div`
+  max-width: 75%;
+  align-self: flex-start;
+  margin-bottom: 8px;
+`;
+
+const SystemToggleDiv = styled.div`
+  cursor: pointer;
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  position: relative;
+  padding: 10px 14px;
+  background-color: rgba(79, 70, 229, 0.08);
+  border-radius: 12px;
+  border: 1px solid rgba(79, 70, 229, 0.15);
+  transition: background-color 0.2s ease;
+
+  &:hover {
+    background-color: rgba(79, 70, 229, 0.12);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    background-color: rgba(79, 70, 229, 0.12);
+    border: 1px solid rgba(79, 70, 229, 0.2);
+
+    &:hover {
+      background-color: rgba(79, 70, 229, 0.18);
+    }
+  }
+`;
+
+const SystemContentDiv = styled.div<{
+  isOpen: boolean;
+  contentHeight: number;
+}>`
+  overflow: hidden;
+  max-height: ${({ isOpen, contentHeight }) =>
+    isOpen ? `${contentHeight}px` : "0px"};
+  margin-top: ${({ isOpen }) => (isOpen ? "8px" : "0")};
+  transition: max-height 0.3s ease, margin-top 0.3s ease;
+`;
+
+const SystemInnerContent = styled.div`
+  background-color: rgba(79, 70, 229, 0.05);
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid rgba(79, 70, 229, 0.1);
+  color: #4b5563;
+  font-size: 14px;
+  line-height: 1.4;
+
+  @media (prefers-color-scheme: dark) {
+    background-color: rgba(79, 70, 229, 0.1);
+    border: 1px solid rgba(79, 70, 229, 0.2);
+    color: #94a3b8;
+  }
+`;
+
+const ArrowSpan = styled.span`
+  margin-left: 6px;
+  font-size: 10px;
+  color: #4f46e5;
+
+  @media (prefers-color-scheme: dark) {
+    color: #818cf8;
+  }
+`;
+
 export function Chat({ onSetDirective }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      sender: "robot",
-      text: "Hello! I'm your robot assistant. How can I help you today?",
-      timestamp: Date.now() - 5000,
-    },
-    {
-      sender: "robot_thoughts",
-      text: "Analyzing environment...",
-      timestamp: Date.now() - 4000,
-    },
-    {
-      sender: "robot_anticipation",
-      text: "Ready to receive commands",
-      timestamp: Date.now() - 3000,
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
   const [activeDirective, setActiveDirective] = useState("default_directive");
+  const [expandedSystemMessages, setExpandedSystemMessages] = useState<{
+    [key: number]: boolean;
+  }>({});
+  const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
+    {}
+  );
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -392,6 +501,22 @@ export function Chat({ onSetDirective }: ChatProps) {
   // Use the grouping utility to prepare messages for display.
   const groupedMessages: DisplayMessage[] = groupMessages(messages);
 
+  console.log("Grouped messages:", groupedMessages);
+
+  // Helper function to measure text width
+  const measureTextWidth = (
+    text: string,
+    fontSize: number,
+    fontFamily: string
+  ) => {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) return 0;
+
+    context.font = `${fontSize}px ${fontFamily}`;
+    return context.measureText(text).width;
+  };
+
   return (
     <ChatContainer>
       <DirectivesContainer>
@@ -426,25 +551,76 @@ export function Chat({ onSetDirective }: ChatProps) {
                 durationSeconds={m.durationSeconds}
               />
             );
+          } else if (m.sender === "system") {
+            const isLongMessage = m.text.length > 60;
+            const messageId = idx;
+            const isExpanded = expandedSystemMessages[messageId] || false;
+
+            if (isLongMessage) {
+              return (
+                <SystemToggleContainer key={idx}>
+                  <SystemToggleDiv
+                    onClick={() => {
+                      setExpandedSystemMessages((prev) => ({
+                        ...prev,
+                        [messageId]: !prev[messageId],
+                      }));
+                    }}
+                  >
+                    <SystemMessageSender>
+                      <IoCog size={14} />
+                      <span>System</span>
+                    </SystemMessageSender>
+                    <SystemMessageContent>
+                      {m.text.substring(0, 60)}...
+                      <ArrowSpan>{isExpanded ? "▲" : "▼"}</ArrowSpan>
+                    </SystemMessageContent>
+                  </SystemToggleDiv>
+                  <SystemContentDiv
+                    isOpen={isExpanded}
+                    contentHeight={
+                      systemContentRefs.current[messageId]?.scrollHeight || 0
+                    }
+                  >
+                    <SystemInnerContent
+                      ref={(el) => (systemContentRefs.current[messageId] = el)}
+                    >
+                      {m.text}
+                    </SystemInnerContent>
+                  </SystemContentDiv>
+                </SystemToggleContainer>
+              );
+            } else {
+              return (
+                <SystemMessageBubble key={idx}>
+                  <SystemMessageSender>
+                    <IoCog size={14} />
+                    <span>System</span>
+                  </SystemMessageSender>
+                  <SystemMessageContent>{m.text}</SystemMessageContent>
+                </SystemMessageBubble>
+              );
+            }
+          } else {
+            return (
+              <MessageBubble key={idx} $isUser={m.sender === "user"}>
+                <MessageSender $isUser={m.sender === "user"}>
+                  {m.sender === "user" ? (
+                    <>
+                      <span>You</span>
+                      <IoPerson size={14} />
+                    </>
+                  ) : (
+                    <>
+                      <IoHardwareChip size={14} />
+                      <span>Robot</span>
+                    </>
+                  )}
+                </MessageSender>
+                {m.text}
+              </MessageBubble>
+            );
           }
-          return (
-            <MessageBubble key={idx} $isUser={m.sender === "user"}>
-              <MessageSender $isUser={m.sender === "user"}>
-                {m.sender === "user" ? (
-                  <>
-                    <span>You</span>
-                    <IoPerson size={14} />
-                  </>
-                ) : (
-                  <>
-                    <IoHardwareChip size={14} />
-                    <span>Robot</span>
-                  </>
-                )}
-              </MessageSender>
-              {m.text}
-            </MessageBubble>
-          );
         })}
         {/* Marker element for auto-scroll */}
         <div ref={messagesEndRef} />
