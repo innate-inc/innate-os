@@ -117,9 +117,6 @@ export default function App() {
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("sideBySide");
 
-  // Add these state variables inside the App component
-  const [directiveText, setDirectiveText] = useState("");
-
   function handlePasswordSubmit() {
     if (enteredPassword === CORRECT_PASSWORD) {
       setIsAuthenticated(true);
