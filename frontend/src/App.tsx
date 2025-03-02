@@ -163,10 +163,6 @@ export default function App() {
 
       const data = await response.json();
       console.log("Directive response:", data);
-
-      if (data.status === "directive_enqueued") {
-        alert(`New directive sent to robot: ${directive}`);
-      }
     } catch (error) {
       console.error("Error setting directive:", error);
     }
