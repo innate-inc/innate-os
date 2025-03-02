@@ -1,6 +1,6 @@
 export interface Message {
   text: string;
-  sender: "user" | "robot" | "robot_thoughts" | "robot_anticipation";
+  sender: "user" | "robot" | "robot_thoughts" | "robot_anticipation" | "system";
   timestamp: number;
 }
 
