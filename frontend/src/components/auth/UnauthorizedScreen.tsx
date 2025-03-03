@@ -13,8 +13,8 @@ const Container = styled.div`
   gap: 2rem;
   text-align: center;
   padding: 1rem;
-  background-color: #121212; /* Dark background */
-  color: #e0e0e0; /* Light text for dark background */
+  background-color: ${({ theme }) => theme.colors.background};
+  color: ${({ theme }) => theme.colors.foreground};
   position: relative;
 `;
 
@@ -31,26 +31,26 @@ const Logo = styled.img`
 
 const Title = styled.h1`
   font-size: 28px;
-  font-weight: bold;
+  font-weight: ${({ theme }) => theme.fontWeights.bold};
   margin-bottom: 1rem;
-  color: #ffffff; /* Bright white for title on dark background */
+  color: ${({ theme }) => theme.colors.foreground};
 `;
 
 const Subtitle = styled.p`
   font-size: 18px;
   margin-bottom: 1rem;
   max-width: 600px;
-  color: #b0b0b0; /* Slightly dimmed text for readability */
+  color: ${({ theme }) => theme.colors.muted};
   line-height: 1.5;
 `;
 
 const UserInfo = styled.div`
   padding: 1rem;
-  border-radius: 8px;
+  border-radius: ${({ theme }) => theme.borderRadius};
   margin-bottom: 1rem;
   font-size: 16px;
-  color: #e0e0e0;
-  border: 1px solid #444; /* Subtle border instead of background */
+  color: ${({ theme }) => theme.colors.foreground};
+  border: 1px solid ${({ theme }) => theme.colors.border};
 `;
 
 const ButtonContainer = styled.div`
@@ -64,8 +64,10 @@ const StripeButton = styled.a`
   background-color: #6772e5;
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: ${({ theme }) => theme.borderRadius};
   font-size: 16px;
+  font-family: ${({ theme }) => theme.fonts.body};
+  font-weight: ${({ theme }) => theme.fontWeights.medium};
   cursor: pointer;
   text-decoration: none;
   transition: background-color 0.2s ease;
@@ -76,12 +78,14 @@ const StripeButton = styled.a`
 `;
 
 const ContactLink = styled.a`
-  color: #6772e5; /* Stripe blue color for consistency */
+  color: ${({ theme }) => theme.colors.primary};
   text-decoration: underline;
   margin-top: 1rem;
+  font-family: ${({ theme }) => theme.fonts.body};
 
   &:hover {
     text-decoration: none;
+    color: ${({ theme }) => theme.colors.primaryHover};
   }
 `;
 

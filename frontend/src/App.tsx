@@ -9,9 +9,9 @@ import { LogoutButton } from "./components/auth/LogoutButton";
 import { useAuth0 } from "@auth0/auth0-react";
 
 const Title = styled.h1`
-  font-size: 24px;
-  font-weight: bold;
-  margin-bottom: 2rem;
+  font-size: 22px;
+  font-weight: ${({ theme }) => theme.fontWeights.bold};
+  margin-bottom: 1.5rem;
 `;
 
 const Container = styled.div`
@@ -22,12 +22,13 @@ const Container = styled.div`
   overflow: hidden;
   text-align: center;
   padding: 1rem;
-  position: relative;
+  background-color: ${({ theme }) => theme.colors.background};
+  color: ${({ theme }) => theme.colors.foreground};
 `;
 
 const TopSection = styled.div`
   flex-shrink: 0;
-  margin-top: 2rem;
+  margin-top: 1rem;
 `;
 
 const ChatSection = styled.div`
@@ -44,18 +45,17 @@ const VersionBadge = styled.div`
   margin: 8px;
   font-size: 12px;
   opacity: 0.7;
-  @media (prefers-color-scheme: dark) {
-    color: #fff;
-  }
+  color: ${({ theme }) => theme.colors.muted};
 `;
 
 const UserContainer = styled.div`
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 20px;
+  right: 20px;
   display: flex;
   align-items: center;
   gap: 10px;
+  z-index: 100;
 `;
 
 // The main application component
