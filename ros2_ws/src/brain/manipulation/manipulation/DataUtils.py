@@ -227,7 +227,7 @@ class TaskManager:
         self._save_metadata()
         
         # Optionally, store the episode_data object.
-        self.episodes.append(episode_data)
+        #self.episodes.append(episode_data)
 
     def end_task(self):
         """
