@@ -1,4 +1,4 @@
-import styled from "styled-components";
+import styled, { css } from "styled-components";
 
 /**
  * Instead of a hard-coded 600, let's define an aspect ratio for 1280×600.
@@ -37,19 +37,17 @@ export const PreviewContainer = styled.div`
   }
 `;
 
-/**
- * For demonstration: The MainImage uses percentages so that it
- * scales automatically with the container's size.
- */
-export const MainImage = styled.img<{ $viewMode: string }>`
+// Define the shared styles as a function to avoid TypeScript errors
+const getMainImageStyles = ($viewMode: string) => css`
   position: absolute;
   transition: all 0.8s ease-in-out;
   z-index: 1; /* behind secondary */
+  object-fit: cover;
 
-  ${({ $viewMode }) => {
+  ${() => {
     switch ($viewMode) {
       case "sideBySide":
-        return `
+        return css`
           /* Fill half the container's width with a white divider on the right */
           left: 0;
           top: 0;
@@ -60,7 +58,7 @@ export const MainImage = styled.img<{ $viewMode: string }>`
           z-index: 100;
         `;
       case "frontFocus":
-        return `
+        return css`
           /* Large front camera: 62.5% width centered */
           left: 50%;
           top: 50%;
@@ -70,7 +68,7 @@ export const MainImage = styled.img<{ $viewMode: string }>`
           object-fit: cover;
         `;
       case "chaseFocus":
-        return `
+        return css`
           /* Similar approach as frontFocus */
           left: 50%;
           top: 50%;
@@ -80,7 +78,7 @@ export const MainImage = styled.img<{ $viewMode: string }>`
           object-fit: cover;
         `;
       default:
-        return `
+        return css`
           /* Fallback */
           width: 100%;
           height: 100%;
@@ -100,18 +98,16 @@ export const MainImage = styled.img<{ $viewMode: string }>`
   }
 `;
 
-/**
- * Similarly, the SecondaryImage uses percentages and pinned corners if needed.
- */
-export const SecondaryImage = styled.img<{ $viewMode: string }>`
+const getSecondaryImageStyles = ($viewMode: string) => css`
   position: absolute;
   transition: all 0.8s ease-in-out;
   z-index: 2; /* above main */
+  object-fit: cover;
 
-  ${({ $viewMode }) => {
+  ${() => {
     switch ($viewMode) {
       case "sideBySide":
-        return `
+        return css`
           /* Fill the right half of the container. */
           left: 50%;
           top: 0;
@@ -120,7 +116,7 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
           object-fit: cover;
         `;
       case "frontFocus":
-        return `
+        return css`
           /* Position the secondary image to align near the main image's right edge,
              add a slight offset, a border, and a subtle shadow. 
              Note:
@@ -136,7 +132,7 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
           box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         `;
       case "chaseFocus":
-        return `
+        return css`
           /* Same as frontFocus – adjust the secondary image with a slight offset,
              border, and shadow. */
           width: 20%;
@@ -148,7 +144,7 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
           box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         `;
       default:
-        return `
+        return css`
           width: 100%;
           height: 100%;
           object-fit: cover;
@@ -157,9 +153,9 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
   }}
 
   @media (max-width: 768px) {
-    ${({ $viewMode }) => {
+    ${() => {
       if ($viewMode === "frontFocus" || $viewMode === "chaseFocus") {
-        return `
+        return css`
           /* On small screens, maintain a similar offset with slightly scaled adjustments */
           width: 30vw;
           height: auto;
@@ -173,7 +169,7 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
         `;
       } else {
         /* For sideBySide and default, use a stacked approach */
-        return `
+        return css`
           position: relative;
           width: 100%;
           height: auto;
@@ -182,4 +178,22 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
       }
     }}
   }
+`;
+
+// Export the styled components with proper typing
+export const MainImage = styled.img<{ $viewMode: string }>`
+  ${({ $viewMode }) => getMainImageStyles($viewMode)}
+`;
+
+export const SecondaryImage = styled.img<{ $viewMode: string }>`
+  ${({ $viewMode }) => getSecondaryImageStyles($viewMode)}
+`;
+
+// Export the styled video components
+export const MainVideo = styled.video<{ $viewMode: string }>`
+  ${({ $viewMode }) => getMainImageStyles($viewMode)}
+`;
+
+export const SecondaryVideo = styled.video<{ $viewMode: string }>`
+  ${({ $viewMode }) => getSecondaryImageStyles($viewMode)}
 `;
