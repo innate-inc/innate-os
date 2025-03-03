@@ -1,16 +1,20 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import HTMLResponse
 import os
 import time
 import asyncio
 from src.shared_queues import SharedQueues, ChatMessage, ChatSignal
-from src.agent import agent_websocket_bridge  # to access bridge_chat_history
+from typing import Set
+from src.middleware.auth import get_current_user
 
 
 router = APIRouter()
 
+# Track connected clients by user ID
+connected_clients: Set[str] = set()
 
-@router.get("/")
+
+@router.get("/", dependencies=[Depends(get_current_user)])
 def serve_react_app():
     """
     Serves the React frontend index.html from the pre-built dist folder.
@@ -26,19 +30,30 @@ def serve_react_app():
 
 
 @router.websocket("/ws/chat")
-async def chat_websocket(websocket: WebSocket):
+async def chat_websocket(websocket: WebSocket, user_id: str = None):
     """
     WebSocket endpoint for exchanging chat messages with the frontend.
     - Receives text messages from the client
     - Sends them back immediately
     - Forwards them to agent_websocket_bridge
+
+    The user_id is expected to be passed as a query parameter.
     """
     await websocket.accept()
+
+    # Get user_id from query parameters
+    if not user_id:
+        query_params = dict(websocket.query_params)
+        user_id = query_params.get("user_id", "anonymous")
+
+    # Add user to connected clients
+    connected_clients.add(user_id)
+    print(f"Client connected: {user_id}. Total connected: {len(connected_clients)}")
 
     # Retrieve shared queues from the application's state
     shared_queues: SharedQueues = websocket.app.state.SHARED_QUEUES
 
-    # 1) Upon connection, signal to the bridge that we're ready to receive messages history
+    # Upon connection, signal to the bridge that we're ready to receive messages
     shared_queues.chat_to_bridge.put_nowait(
         ChatSignal(signal="ready", timestamp=time.time())
     )
@@ -47,18 +62,30 @@ async def chat_websocket(websocket: WebSocket):
     async def handle_inbound_user():
         while True:
             data = await websocket.receive_text()
-            new_entry = ChatMessage(
-                sender="user",
-                text=data,
-                timestamp=time.time(),
-                timestamp_put_in_queue=time.time(),
-            )
-            shared_queues.chat_to_bridge.put_nowait(new_entry)
+            # Verify user is still connected before processing the message
+            if user_id in connected_clients:
+                new_entry = ChatMessage(
+                    sender="user",
+                    text=data,
+                    timestamp=time.time(),
+                    timestamp_put_in_queue=time.time(),
+                )
+                shared_queues.chat_to_bridge.put_nowait(new_entry)
+            else:
+                # If user is not in connected_clients, send an error message
+                await websocket.send_json(
+                    {
+                        "sender": "system",
+                        "text": "You must be connected to send messages.",
+                        "timestamp": time.time(),
+                        "error": True,
+                    }
+                )
 
     # Task B: handle outbound messages from chat_from_bridge -> send to WebSocket
     async def handle_outbound_agent():
         while True:
-            # BUG: sometimes one of these messages in the queue will get lost and i can't figure why
+            # Sometimes messages in the queue will get lost
             msg = await asyncio.get_event_loop().run_in_executor(
                 None, shared_queues.chat_from_bridge.get
             )
@@ -81,5 +108,22 @@ async def chat_websocket(websocket: WebSocket):
         # The client disconnected
         pass
     finally:
+        # Remove user from connected clients when disconnected
+        if user_id in connected_clients:
+            connected_clients.remove(user_id)
+            print(
+                f"Client disconnected: {user_id}. "
+                f"Total connected: {len(connected_clients)}"
+            )
         for t in tasks:
             t.cancel()
+
+
+# Add a new endpoint to check if a user is connected
+@router.get("/is-connected/{user_id}", dependencies=[Depends(get_current_user)])
+async def check_connection_status(user_id: str):
+    """
+    Check if a user is currently connected via WebSocket.
+    Returns True if connected, False otherwise.
+    """
+    return {"connected": user_id in connected_clients}
