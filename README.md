@@ -9,6 +9,7 @@ This project integrates:
 - FastAPI backend server
 - React frontend
 - WebSocket communication for real-time agent interaction
+- Auth0 authentication for secure access
 
 ## Prerequisites
 
@@ -177,3 +178,12 @@ The application exposes several API endpoints:
 - To reattach to a tmux session: `tmux attach -t session-name`
 - To list all tmux sessions: `tmux ls`
 - To stop the services, reattach to the respective tmux sessions and press `Ctrl+C` 
+
+## Authentication
+
+The application now supports Auth0 authentication, allowing users to:
+- Sign in with Google accounts
+- Create and manage their own accounts
+- Securely access the simulator
+
+For detailed setup instructions, see [AUTH0_SETUP.md](AUTH0_SETUP.md). 

@@ -5,6 +5,10 @@ import { ImageDisplay } from "./components/ImageDisplay";
 import { ToggleViewMode } from "./components/ToggleViewMode";
 import { Chat } from "./components/Chat";
 import { MdRefresh } from "react-icons/md";
+import { AuthGuard } from "./components/auth/AuthGuard";
+import { UserProfile } from "./components/auth/UserProfile";
+import { LogoutButton } from "./components/auth/LogoutButton";
+import { useAuth0 } from "@auth0/auth0-react";
 
 const Title = styled.h1`
   font-size: 24px;
@@ -68,72 +72,44 @@ const ResetButton = styled.button`
   }
 `;
 
-const AuthContainer = styled.div`
+const UserContainer = styled.div`
+  position: absolute;
+  top: 10px;
+  right: 10px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 1rem;
-  margin-top: 2rem;
+  gap: 10px;
 `;
 
-const StyledPasswordInput = styled.input`
-  width: 250px;
-  padding: 10px;
-  border: 2px solid #007bff;
-  border-radius: 6px;
-  font-size: 16px;
-  outline: none;
-  transition: border-color 0.3s ease;
-
-  &:focus {
-    border-color: #0056b3;
-  }
-`;
-
-const StyledSubmitButton = styled.button`
-  width: 150px;
-  padding: 10px;
-  background-color: #007bff;
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 16px;
-  cursor: pointer;
-  transition: background-color 0.2s ease;
-
-  &:hover {
-    background-color: #0056b3;
-  }
-`;
-
-export default function App() {
-  // A very simple password approach (do not use in production)
-  const CORRECT_PASSWORD = "lol";
-  const [enteredPassword, setEnteredPassword] = useState("");
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-  // For existing logic
+// The main application component
+function SimulatorApp() {
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("sideBySide");
 
-  function handlePasswordSubmit() {
-    if (enteredPassword === CORRECT_PASSWORD) {
-      setIsAuthenticated(true);
-    } else {
-      alert("Incorrect password. Please try again.");
-      setEnteredPassword("");
-    }
-  }
+  const { isAuthenticated, getAccessTokenSilently } = useAuth0();
 
   async function handleResetRobot() {
     try {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
+      // Get the access token if authenticated
+      const headers: Record<string, string> = {};
+      if (isAuthenticated) {
+        try {
+          const token = await getAccessTokenSilently();
+          headers.Authorization = `Bearer ${token}`;
+        } catch (error) {
+          console.error("Error getting access token:", error);
+        }
+      }
+
       const response = await fetch(`${baseUrl}/reset_robot`, {
         method: "POST",
+        headers,
       });
+
       const data = await response.json();
       console.log("Reset response:", data);
       if (data.status === "reset_enqueued") {
@@ -144,17 +120,28 @@ export default function App() {
     }
   }
 
-  // We keep the handleSetDirective function for potential future use
   async function handleSetDirective(directive: string) {
     try {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
+      // Get the access token if authenticated
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
+      if (isAuthenticated) {
+        try {
+          const token = await getAccessTokenSilently();
+          headers.Authorization = `Bearer ${token}`;
+        } catch (error) {
+          console.error("Error getting access token:", error);
+        }
+      }
+
       const response = await fetch(`${baseUrl}/set_directive`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers,
         body: JSON.stringify({ text: directive }),
       });
 
@@ -165,31 +152,18 @@ export default function App() {
     }
   }
 
-  if (!isAuthenticated && import.meta.env.VITE_REQUIRE_AUTH === "true") {
-    return (
-      <Container>
-        <Title>Please Enter Password</Title>
-        <AuthContainer>
-          <StyledPasswordInput
-            type="password"
-            placeholder="Password"
-            value={enteredPassword}
-            onChange={(e) => setEnteredPassword(e.target.value)}
-          />
-          <StyledSubmitButton onClick={handlePasswordSubmit}>
-            Submit
-          </StyledSubmitButton>
-        </AuthContainer>
-      </Container>
-    );
-  }
-
-  // If authenticated, show the simulator
   return (
     <Container className="App">
       <ResetButton onClick={handleResetRobot}>
         <MdRefresh size={20} /> Reset Robot
       </ResetButton>
+
+      {isAuthenticated && (
+        <UserContainer>
+          <UserProfile />
+          <LogoutButton />
+        </UserContainer>
+      )}
 
       <TopSection>
         <Title>Innate Simulator</Title>
@@ -203,5 +177,14 @@ export default function App() {
 
       <VersionBadge>v0.1.0</VersionBadge>
     </Container>
+  );
+}
+
+// Export the app wrapped with the AuthGuard
+export default function App() {
+  return (
+    <AuthGuard>
+      <SimulatorApp />
+    </AuthGuard>
   );
 }
