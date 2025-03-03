@@ -1,6 +1,7 @@
 import styled from "styled-components";
 import { isMobile } from "react-device-detect";
 import { MdRefresh } from "react-icons/md";
+import { useState, useEffect } from "react";
 import {
   PreviewContainer,
   MainImage,
@@ -96,14 +97,97 @@ const ModeButton = styled.button<{ $active?: boolean }>`
   }
 `;
 
+// Loading indicator styled component
+const LoadingContainer = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(30, 41, 59, 0.9);
+  z-index: 200;
+  border-radius: 8px;
+`;
+
+const Spinner = styled.div`
+  width: 50px;
+  height: 50px;
+  border: 5px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: #4f46e5;
+  animation: spin 1s ease-in-out infinite;
+  margin-bottom: 16px;
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+`;
+
+const LoadingText = styled.p`
+  color: white;
+  font-size: 16px;
+  font-weight: 500;
+  text-align: center;
+  max-width: 80%;
+  margin: 0 auto;
+`;
+
+const ErrorText = styled(LoadingText)`
+  color: #f87171;
+  margin-bottom: 8px;
+`;
+
+const RetryButton = styled.button`
+  background-color: #4f46e5;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 16px;
+  transition: background-color 0.2s;
+
+  &:hover {
+    background-color: #4338ca;
+  }
+
+  &:disabled {
+    background-color: #6b7280;
+    cursor: not-allowed;
+  }
+`;
+
+// Interface for the video feeds ready response
+interface SimulationReadyResponse {
+  ready: boolean;
+  message: string;
+}
+
 export function ImageDisplay({
   viewMode,
   setViewMode,
   onResetRobot,
 }: ImageDisplayProps) {
+  // State to track if we should show the loading screen
+  const [showLoading, setShowLoading] = useState(true);
+  // State to track if we've failed to connect to the simulation
+  const [connectionFailed, setConnectionFailed] = useState(false);
+  // State to store the error message
+  const [errorMessage, setErrorMessage] = useState("Simulation not running");
+  // State to track if we're checking the simulation
+  const [isChecking, setIsChecking] = useState(false);
+
   // Grab IP from environment, use a fallback if missing
   const baseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
+  // Set up the sources for the main and secondary feeds based on view mode
   let mainSrc = baseUrl + "/video_feed";
   let subSrc = baseUrl + "/video_feed_chase";
 
@@ -113,7 +197,60 @@ export function ImageDisplay({
   } else if (viewMode === "frontFocus") {
     mainSrc = baseUrl + "/video_feed";
     subSrc = baseUrl + "/video_feed_chase";
+  } else if (viewMode === "sideBySide") {
+    // In side-by-side mode, we keep the original sources
+    mainSrc = baseUrl + "/video_feed";
+    subSrc = baseUrl + "/video_feed_chase";
   }
+
+  // Function to check if the simulation is running
+  const checkSimulationReady = async () => {
+    setIsChecking(true);
+
+    try {
+      const response = await fetch(`${baseUrl}/video_feeds_ready`);
+
+      if (response.ok) {
+        const data: SimulationReadyResponse = await response.json();
+
+        if (data.ready) {
+          // Simulation is running, hide loading screen
+          setShowLoading(false);
+          setConnectionFailed(false);
+        } else {
+          // Simulation is not running, show error message
+          setConnectionFailed(true);
+          setErrorMessage(data.message);
+        }
+      } else {
+        // API call failed
+        setConnectionFailed(true);
+        setErrorMessage("Failed to connect to the server");
+      }
+    } catch (error) {
+      console.error("Error checking simulation status:", error);
+      setConnectionFailed(true);
+      setErrorMessage("Error connecting to the server");
+    } finally {
+      setIsChecking(false);
+    }
+  };
+
+  // Check simulation when component mounts or viewMode changes
+  useEffect(() => {
+    checkSimulationReady();
+
+    // Set up polling to periodically check if simulation becomes available
+    const intervalId = setInterval(() => {
+      if (connectionFailed) {
+        checkSimulationReady();
+      }
+    }, 5000); // Check every 5 seconds if in failed state
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [viewMode]);
 
   // Only show all modes on desktop. On mobile, remove "sideBySide".
   const desktopModes: ViewMode[] = ["sideBySide", "frontFocus", "chaseFocus"];
@@ -136,29 +273,70 @@ export function ImageDisplay({
     chaseFocus: "Chase Focus",
   };
 
+  // Handle view mode change
+  const handleViewModeChange = (newMode: ViewMode) => {
+    if (newMode !== viewMode) {
+      setViewMode(newMode);
+    }
+  };
+
   return (
     <PreviewContainer>
+      {/* Main feed */}
       <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
-      <SecondaryImage $viewMode={viewMode} src={subSrc} alt="Sub Camera" />
 
-      <ResetButton onClick={onResetRobot}>
-        <MdRefresh size={16} /> Reset Robot
-      </ResetButton>
+      {/* Secondary feed */}
+      <SecondaryImage
+        $viewMode={viewMode}
+        src={subSrc}
+        alt="Secondary Camera"
+      />
 
-      <ToggleWrapper>
-        <Indicator index={currentIndex} $maxIndex={modes.length} />
-        <ButtonRow>
-          {modes.map((mode) => (
-            <ModeButton
-              key={mode}
-              $active={viewMode === mode}
-              onClick={() => setViewMode(mode)}
-            >
-              {labels[mode]}
-            </ModeButton>
-          ))}
-        </ButtonRow>
-      </ToggleWrapper>
+      {/* Loading indicator */}
+      {showLoading && (
+        <LoadingContainer>
+          {connectionFailed ? (
+            <>
+              <ErrorText>{errorMessage}</ErrorText>
+              <LoadingText>
+                Please check if the simulation is running and try again.
+              </LoadingText>
+              <RetryButton onClick={checkSimulationReady} disabled={isChecking}>
+                {isChecking ? "Checking..." : "Retry Connection"}
+              </RetryButton>
+            </>
+          ) : (
+            <>
+              <Spinner />
+              <LoadingText>Loading camera feed...</LoadingText>
+            </>
+          )}
+        </LoadingContainer>
+      )}
+
+      {/* Only show controls when not in loading state */}
+      {!showLoading && (
+        <>
+          <ResetButton onClick={onResetRobot}>
+            <MdRefresh size={16} /> Reset Robot
+          </ResetButton>
+
+          <ToggleWrapper>
+            <Indicator index={currentIndex} $maxIndex={modes.length} />
+            <ButtonRow>
+              {modes.map((mode) => (
+                <ModeButton
+                  key={mode}
+                  $active={viewMode === mode}
+                  onClick={() => handleViewModeChange(mode)}
+                >
+                  {labels[mode]}
+                </ModeButton>
+              ))}
+            </ButtonRow>
+          </ToggleWrapper>
+        </>
+      )}
     </PreviewContainer>
   );
 }

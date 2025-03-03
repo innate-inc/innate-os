@@ -43,3 +43,10 @@
 .read-the-docs {
   color: #a1a1aa;
 }
+
+/* Loading animation */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
