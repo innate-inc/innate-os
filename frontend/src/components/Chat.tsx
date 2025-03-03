@@ -26,8 +26,7 @@ const ChatContainer = styled.div`
   display: flex;
   flex-direction: column;
   align-self: center;
-  font-family: "Poppins", system-ui, -apple-system, BlinkMacSystemFont,
-    sans-serif;
+  font-family: ${({ theme }) => theme.fonts.body};
 
   /* On screens below 768px, take the full width */
   @media (max-width: 768px) {
@@ -50,10 +49,14 @@ interface MessageBubbleProps {
 
 const MessageBubble = styled.div<MessageBubbleProps>`
   max-width: 80%;
-  background: ${({ $isUser }) =>
-    $isUser ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)" : "#ffffff"};
-  color: ${({ $isUser }) => ($isUser ? "#ffffff" : "#333333")};
-  border: ${({ $isUser }) => ($isUser ? "none" : "1px solid #e5e7eb")};
+  background: ${({ $isUser, theme }) =>
+    $isUser
+      ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
+      : theme.colors.secondary};
+  color: ${({ $isUser, theme }) =>
+    $isUser ? "#ffffff" : theme.colors.foreground};
+  border: ${({ $isUser, theme }) =>
+    $isUser ? "none" : `1px solid ${theme.colors.border}`};
   border-radius: 18px;
   border-bottom-left-radius: ${({ $isUser }) => ($isUser ? "18px" : "0")};
   border-bottom-right-radius: ${({ $isUser }) => ($isUser ? "0" : "18px")};
@@ -63,7 +66,7 @@ const MessageBubble = styled.div<MessageBubbleProps>`
   text-align: ${({ $isUser }) => ($isUser ? "right" : "left")};
   font-size: 15px;
   line-height: 1.5;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  box-shadow: ${({ theme }) => theme.shadows.small};
 
   @media (prefers-color-scheme: dark) {
     background: ${({ $isUser }) =>
@@ -77,9 +80,9 @@ const MessageBubble = styled.div<MessageBubbleProps>`
 
 const MessageSender = styled.div<{ $isUser: boolean }>`
   font-size: 13px;
-  font-weight: 600;
+  font-weight: ${({ theme }) => theme.fontWeights.semibold};
   margin-bottom: 4px;
-  color: ${({ $isUser }) => ($isUser ? "#f0f4ff" : "#4b5563")};
+  color: ${({ $isUser, theme }) => ($isUser ? "#f0f4ff" : theme.colors.muted)};
   display: flex;
   align-items: center;
   gap: 6px;
@@ -94,15 +97,10 @@ const InputArea = styled.div`
   display: flex;
   align-items: center;
   padding: 12px 16px;
-  background: #ffffff;
+  background: ${({ theme }) => theme.colors.secondary};
   border-radius: 20px;
   margin: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-
-  @media (prefers-color-scheme: dark) {
-    background: #1e293b;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  }
+  box-shadow: ${({ theme }) => theme.shadows.small};
 `;
 
 const TextInput = styled.input`
@@ -113,14 +111,10 @@ const TextInput = styled.input`
   outline: none;
   background: transparent;
   font-size: 15px;
+  font-family: ${({ theme }) => theme.fonts.body};
+  color: ${({ theme }) => theme.colors.foreground};
   ::placeholder {
-    color: #94a3b8;
-  }
-  @media (prefers-color-scheme: dark) {
-    color: #e5e7eb;
-    ::placeholder {
-      color: #64748b;
-    }
+    color: ${({ theme }) => theme.colors.muted};
   }
 `;
 
@@ -149,13 +143,8 @@ const DirectivesContainer = styled.div`
   overflow-x: auto;
   padding: 8px 12px;
   gap: 8px;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
-
-  @media (prefers-color-scheme: dark) {
-    background: #1e293b;
-    border-bottom: 1px solid #374151;
-  }
+  background: ${({ theme }) => theme.colors.secondary};
+  border-bottom: 1px solid ${({ theme }) => theme.colors.border};
 `;
 
 interface DirectiveButtonProps {
@@ -172,18 +161,20 @@ const DirectiveButton = styled.button<DirectiveButtonProps>`
   transition: all 0.2s ease;
   border: none;
   cursor: pointer;
+  font-family: ${({ theme }) => theme.fonts.body};
 
   background: ${({ $isActive }) =>
     $isActive
       ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
       : "transparent"};
-  color: ${({ $isActive }) => ($isActive ? "#ffffff" : "#4b5563")};
+  color: ${({ $isActive, theme }) =>
+    $isActive ? "#ffffff" : theme.colors.foreground};
 
   &:hover {
-    background: ${({ $isActive }) =>
+    background: ${({ $isActive, theme }) =>
       $isActive
         ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-        : "#f3f4f6"};
+        : theme.colors.background};
   }
 
   @media (prefers-color-scheme: dark) {

@@ -26,8 +26,8 @@ const AuthContainer = styled.div`
   gap: 2rem;
   text-align: center;
   padding: 1rem;
-  background-color: #121212; /* Dark background */
-  color: #e0e0e0; /* Light text for dark background */
+  background-color: ${({ theme }) => theme.colors.background};
+  color: ${({ theme }) => theme.colors.foreground};
   position: relative;
 `;
 
@@ -44,16 +44,16 @@ const Logo = styled.img`
 
 const Title = styled.h1`
   font-size: 24px;
-  font-weight: bold;
+  font-weight: ${({ theme }) => theme.fontWeights.bold};
   margin-bottom: 1rem;
-  color: #ffffff; /* Bright white for title on dark background */
+  color: ${({ theme }) => theme.colors.foreground};
 `;
 
 const Subtitle = styled.p`
   font-size: 16px;
   margin-bottom: 2rem;
   max-width: 500px;
-  color: #b0b0b0; /* Slightly dimmed text for readability */
+  color: ${({ theme }) => theme.colors.muted};
 `;
 
 const ButtonContainer = styled.div`
@@ -67,20 +67,17 @@ const LoadingContainer = styled.div`
   align-items: center;
   height: 100vh;
   font-size: 18px;
+  background-color: ${({ theme }) => theme.colors.background};
+  color: ${({ theme }) => theme.colors.foreground};
 `;
 
 const ErrorMessage = styled.div`
-  color: #ff6b6b; /* Brighter red for dark theme */
+  color: ${({ theme }) => theme.colors.error};
   margin-bottom: 1rem;
   padding: 0.5rem;
-  border: 1px solid #ff6b6b;
-  border-radius: 4px;
-  background-color: rgba(
-    255,
-    107,
-    107,
-    0.1
-  ); /* Semi-transparent red background */
+  border: 1px solid ${({ theme }) => theme.colors.error};
+  border-radius: ${({ theme }) => theme.borderRadius};
+  background-color: rgba(239, 68, 68, 0.1);
   max-width: 500px;
 `;
 

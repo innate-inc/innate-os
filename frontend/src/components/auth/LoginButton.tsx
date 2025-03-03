@@ -5,9 +5,11 @@ const StyledButton = styled.button`
   padding: 10px 20px;
   background-color: #6772e5; /* Stripe blue for consistency */
   border: none;
-  border-radius: 6px;
+  border-radius: ${({ theme }) => theme.borderRadius};
   color: #fff;
   font-size: 16px;
+  font-family: ${({ theme }) => theme.fonts.body};
+  font-weight: ${({ theme }) => theme.fontWeights.medium};
   cursor: pointer;
   transition: background-color 0.2s ease;
 
