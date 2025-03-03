@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import time
 import cv2
 
@@ -33,6 +33,27 @@ def mjpeg_generator(shared_queues, camera_name="first_person"):
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" + encoded_image.tobytes() + b"\r\n"
         )
+
+
+@router.get("/video_feeds_ready")
+def video_feeds_ready(request: Request):
+    """
+    Simple endpoint to check if the video feeds are ready.
+    Just checks if shared_queues exists, which indicates the simulation is running.
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    # Simply check if shared_queues exists
+    is_ready = shared_queues is not None
+
+    return JSONResponse(
+        {
+            "ready": is_ready,
+            "message": (
+                "Simulation is running" if is_ready else "Simulation not initialized"
+            ),
+        }
+    )
 
 
 @router.get("/video_feed", include_in_schema=False)

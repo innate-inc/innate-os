@@ -458,8 +458,6 @@ export function Chat({ onSetDirective }: ChatProps) {
   // Use the grouping utility to prepare messages for display.
   const groupedMessages: DisplayMessage[] = groupMessages(messages);
 
-  console.log("Grouped messages:", groupedMessages);
-
   // Helper function to toggle system message expansion
   const toggleSystemMessage = (messageId: number) => {
     setExpandedSystemMessages((prev) => ({
