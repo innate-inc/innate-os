@@ -95,104 +95,126 @@ async def chat_websocket(websocket: WebSocket, user_id: str = None):
 
     # Task A: handle inbound messages from user -> push to chat_to_bridge
     async def handle_inbound_user():
-        while True:
-            try:
-                print(f"Waiting for message from user {user_id}...")
-                data = await websocket.receive_text()
-                print(f"Received message from user {user_id}: {data}")
+        try:
+            while True:
+                try:
+                    print(f"Waiting for message from user {user_id}...")
+                    data = await websocket.receive_text()
+                    print(f"Received message from user {user_id}: {data}")
 
-                # Verify user is still connected before processing the message
-                if user_id in connected_clients:
-                    # Get the user's email from our stored mapping
-                    user_email = get_user_email_from_id(user_id)
-                    print(f"User email: {user_email}")
+                    # Verify user is still connected before processing the message
+                    if user_id in connected_clients:
+                        # Get the user's email from our stored mapping
+                        user_email = get_user_email_from_id(user_id)
+                        print(f"User email: {user_email}")
 
-                    # If we don't have an email stored, use the one from the query parameters
-                    if not user_email and email:
-                        user_email = email
-                        user_emails[user_id] = email
-                        print(f"Using email from query parameters: {email}")
+                        # If we don't have an email stored, use the one from query parameters
+                        if not user_email and email:
+                            user_email = email
+                            user_emails[user_id] = email
+                            print(f"Using email from query parameters: {email}")
 
-                    if not is_authorized({"email": user_email}):
+                        if not is_authorized({"email": user_email}):
+                            print(
+                                f"User {user_id} with email {user_email} "
+                                f"is not authorized"
+                            )
+                            await websocket.send_json(
+                                {
+                                    "sender": "system",
+                                    "text": "You are not authorized to send messages. "
+                                    "Please subscribe or contact axel@innate.bot for access.",
+                                    "timestamp": time.time(),
+                                    "error": True,
+                                }
+                            )
+                            continue
+
                         print(
-                            f"User {user_id} with email {user_email} "
-                            f"is not authorized"
+                            f"User {user_id} with email {user_email} is authorized, "
+                            f"forwarding message"
+                        )
+                        new_entry = ChatMessage(
+                            sender="user",
+                            text=data,
+                            timestamp=time.time(),
+                            timestamp_put_in_queue=time.time(),
+                        )
+                        shared_queues.chat_to_bridge.put_nowait(new_entry)
+
+                        # Echo the message back to the user for testing
+                        echo_msg = ChatMessage(
+                            sender="robot",
+                            text=f"Echo: {data}",
+                            timestamp=time.time(),
                         )
                         await websocket.send_json(
                             {
+                                "sender": echo_msg.sender,
+                                "text": echo_msg.text,
+                                "timestamp": echo_msg.timestamp,
+                            }
+                        )
+                        print(f"Sent echo message to user {user_id}")
+
+                    else:
+                        # If user is not in connected_clients, send an error message
+                        print(f"User {user_id} is not in connected_clients")
+                        await websocket.send_json(
+                            {
                                 "sender": "system",
-                                "text": "You are not authorized to send messages. "
-                                "Please subscribe or contact axel@innate.bot for access.",
+                                "text": "You must be connected to send messages.",
                                 "timestamp": time.time(),
                                 "error": True,
                             }
                         )
-                        continue
-
-                    print(
-                        f"User {user_id} with email {user_email} is authorized, "
-                        f"forwarding message"
-                    )
-                    new_entry = ChatMessage(
-                        sender="user",
-                        text=data,
-                        timestamp=time.time(),
-                        timestamp_put_in_queue=time.time(),
-                    )
-                    shared_queues.chat_to_bridge.put_nowait(new_entry)
-
-                    # Echo the message back to the user for testing
-                    echo_msg = ChatMessage(
-                        sender="robot",
-                        text=f"Echo: {data}",
-                        timestamp=time.time(),
-                    )
-                    await websocket.send_json(
-                        {
-                            "sender": echo_msg.sender,
-                            "text": echo_msg.text,
-                            "timestamp": echo_msg.timestamp,
-                        }
-                    )
-                    print(f"Sent echo message to user {user_id}")
-
-                else:
-                    # If user is not in connected_clients, send an error message
-                    print(f"User {user_id} is not in connected_clients")
-                    await websocket.send_json(
-                        {
-                            "sender": "system",
-                            "text": "You must be connected to send messages.",
-                            "timestamp": time.time(),
-                            "error": True,
-                        }
-                    )
-            except Exception as e:
-                print(f"Error in handle_inbound_user: {e}")
-                # Don't re-raise the exception to keep the loop running
+                except WebSocketDisconnect:
+                    print(f"WebSocket disconnected for user {user_id}")
+                    if user_id in connected_clients:
+                        connected_clients.remove(user_id)
+                    break
+                except Exception as e:
+                    print(f"Error in handle_inbound_user: {e}")
+                    # Don't re-raise the exception to keep the loop running
+        except Exception as e:
+            print(f"Fatal error in handle_inbound_user: {e}")
+            if user_id in connected_clients:
+                connected_clients.remove(user_id)
 
     # Task B: handle outbound messages from chat_from_bridge -> send to WebSocket
     async def handle_outbound_agent():
-        while True:
-            try:
-                print(f"Waiting for message from bridge for user {user_id}...")
-                # Sometimes messages in the queue will get lost
-                msg = await asyncio.get_event_loop().run_in_executor(
-                    None, shared_queues.chat_from_bridge.get
-                )
-                print(f"Received message from bridge: {msg.sender}: {msg.text[:50]}...")
+        try:
+            while True:
+                try:
+                    print(f"Waiting for message from bridge for user {user_id}...")
+                    # Sometimes messages in the queue will get lost
+                    msg = await asyncio.get_event_loop().run_in_executor(
+                        None, shared_queues.chat_from_bridge.get
+                    )
+                    print(
+                        f"Received message from bridge: {msg.sender}: {msg.text[:50]}..."
+                    )
 
-                await websocket.send_json(
-                    {
-                        "sender": msg.sender,
-                        "text": msg.text,
-                        "timestamp": msg.timestamp,
-                    }
-                )
-                print(f"Sent message to user {user_id}")
-            except Exception as e:
-                print(f"Error in handle_outbound_agent: {e}")
-                # Don't re-raise the exception to keep the loop running
+                    await websocket.send_json(
+                        {
+                            "sender": msg.sender,
+                            "text": msg.text,
+                            "timestamp": msg.timestamp,
+                        }
+                    )
+                    print(f"Sent message to user {user_id}")
+                except WebSocketDisconnect:
+                    print(f"WebSocket disconnected for user {user_id}")
+                    if user_id in connected_clients:
+                        connected_clients.remove(user_id)
+                    break
+                except Exception as e:
+                    print(f"Error in handle_outbound_agent: {e}")
+                    # Don't re-raise the exception to keep the loop running
+        except Exception as e:
+            print(f"Fatal error in handle_outbound_agent: {e}")
+            if user_id in connected_clients:
+                connected_clients.remove(user_id)
 
     try:
         # Run both tasks concurrently until WebSocket disconnect or error
@@ -200,10 +222,12 @@ async def chat_websocket(websocket: WebSocket, user_id: str = None):
             asyncio.create_task(handle_inbound_user()),
             asyncio.create_task(handle_outbound_agent()),
         ]
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     except WebSocketDisconnect:
         # The client disconnected
-        pass
+        print(f"WebSocket disconnected for user {user_id} in main task")
+    except Exception as e:
+        print(f"Error in main WebSocket task: {e}")
     finally:
         # Remove user from connected clients when disconnected
         if user_id in connected_clients:
