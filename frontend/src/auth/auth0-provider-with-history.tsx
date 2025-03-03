@@ -51,17 +51,17 @@ export const Auth0ProviderWithHistory = ({
       domain={domain}
       clientId={clientId}
       authorizationParams={authorizationParams}
-      //   cacheLocation="localstorage"
-      //   useRefreshTokens={true}
-      //   skipRedirectCallback={shouldSkipRedirectCallback()}
-      //   onRedirectCallback={(appState) => {
-      //     console.log("Auth0 redirect callback", appState);
-      //     window.history.replaceState(
-      //       {},
-      //       document.title,
-      //       appState?.returnTo || window.location.pathname
-      //     );
-      //   }}
+      cacheLocation="localstorage"
+      useRefreshTokens={true}
+      skipRedirectCallback={shouldSkipRedirectCallback()}
+      onRedirectCallback={(appState) => {
+        console.log("Auth0 redirect callback", appState);
+        window.history.replaceState(
+          {},
+          document.title,
+          appState?.returnTo || window.location.pathname
+        );
+      }}
     >
       {children}
     </Auth0Provider>
