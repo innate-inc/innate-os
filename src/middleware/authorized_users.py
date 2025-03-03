@@ -22,19 +22,26 @@ def is_authorized(user: Dict[str, Any]) -> bool:
         bool: True if the user is authorized, False otherwise
     """
     if not user or not user.get("email"):
+        print(f"User not authorized: No user or no email - {user}")
         return False
 
     email = user.get("email", "").lower()
+    print(f"Checking authorization for email: {email}")
 
     # Check if the email is in the authorized users list
     if email in AUTHORIZED_USERS:
+        print(f"User authorized: Email {email} is in AUTHORIZED_USERS list")
         return True
 
     # Check if the email domain is in the authorized domains list
     for domain in AUTHORIZED_DOMAINS:
         if email.endswith(f"@{domain}"):
+            print(
+                f"User authorized: Email {email} domain is in AUTHORIZED_DOMAINS list"
+            )
             return True
 
+    print(f"User not authorized: Email {email} is not in any authorized list")
     return False
 
 
