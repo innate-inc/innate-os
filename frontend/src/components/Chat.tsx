@@ -17,7 +17,7 @@ import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 import { useAuth0 } from "@auth0/auth0-react";
-import { isAuthorized } from "../services/authService";
+import { isAuthorized, fetchAndStoreUserInfo } from "../services/authService";
 
 const ChatContainer = styled.div`
   /* Default desktop width */
@@ -283,7 +283,8 @@ export function Chat({ onSetDirective }: ChatProps) {
   const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
     {}
   );
-  const { user, isAuthenticated } = useAuth0();
+  const { user, isAuthenticated, getAccessTokenSilently } = useAuth0();
+  const [userInfoStored, setUserInfoStored] = useState(false);
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -291,6 +292,61 @@ export function Chat({ onSetDirective }: ChatProps) {
       setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 10);
     }
   };
+
+  // Effect to store user info when authenticated
+  useEffect(() => {
+    if (isAuthenticated && user && !userInfoStored) {
+      // Get the access token and fetch user info
+      const fetchUserInfo = async () => {
+        try {
+          console.log("Getting access token...");
+          const accessToken = await getAccessTokenSilently();
+          console.log("Access token obtained, fetching user info...");
+          console.log("User object:", user);
+          const data = await fetchAndStoreUserInfo(user, accessToken);
+          if (data) {
+            console.log("User info stored successfully:", data);
+
+            // Check if the user is authorized
+            if (data.is_authorized) {
+              console.log("User is authorized!");
+              setUserInfoStored(true);
+            } else if (data.email) {
+              // If we have an email but not authorized, still mark as stored
+              console.log("User email stored but not authorized");
+              setUserInfoStored(true);
+            } else {
+              // If we don't have an email, try again
+              console.log(
+                "Failed to store user info, retrying in 2 seconds..."
+              );
+              setTimeout(() => {
+                setUserInfoStored(false); // Reset to trigger another attempt
+              }, 2000);
+            }
+          } else {
+            // If we couldn't store the user info, try again after a delay
+            console.log("Failed to store user info, retrying in 2 seconds...");
+            setTimeout(() => {
+              setUserInfoStored(false); // Reset to trigger another attempt
+            }, 2000);
+          }
+        } catch (error) {
+          console.error(
+            "Error getting access token or storing user info:",
+            error
+          );
+          // If there was an error, try again after a delay
+          console.log("Error storing user info, retrying in 2 seconds...");
+          setTimeout(() => {
+            setUserInfoStored(false); // Reset to trigger another attempt
+          }, 2000);
+        }
+      };
+
+      fetchUserInfo();
+    }
+  }, [isAuthenticated, user, userInfoStored, getAccessTokenSilently]);
 
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
@@ -332,81 +388,106 @@ export function Chat({ onSetDirective }: ChatProps) {
       return;
     }
 
+    // Make sure user info is stored before connecting to WebSocket
+    if (isAuthenticated && user && !userInfoStored) {
+      console.log(
+        "Waiting for user info to be stored before connecting to WebSocket"
+      );
+      return;
+    }
+
     // Get user ID from Auth0 if authenticated
     const userId = isAuthenticated && user && user.sub ? user.sub : "anonymous";
+    console.log("Connecting to WebSocket with user ID:", userId);
 
-    // Add user ID as query parameter
+    // Get user email from Auth0 if authenticated
+    const userEmail = isAuthenticated && user && user.email ? user.email : "";
+    console.log("User email:", userEmail);
+
+    // Add user ID and email as query parameters
     const wsUrl = `${
       import.meta.env.VITE_WS_BASE_URL
-    }/ws/chat?user_id=${encodeURIComponent(userId)}`;
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
+    }/ws/chat?user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(
+      userEmail
+    )}`;
+    console.log("WebSocket URL:", wsUrl);
 
-    socket.onopen = () => {
-      console.log("Connected to chat websocket");
-    };
+    try {
+      const socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
 
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
+      socket.onopen = () => {
+        console.log("Connected to chat websocket");
+      };
 
-        // Handle error messages
-        if (data.error) {
-          console.error("Error from server:", data.text);
-          setMessages((prev) => [
-            ...prev,
-            {
-              sender: data.sender || "system",
-              text: data.text,
-              timestamp: data.timestamp || Date.now() / 1000,
-              isError: true,
-            },
-          ]);
-          return;
-        }
+      socket.onmessage = (event) => {
+        console.log("Received message from server:", event.data);
+        try {
+          const data = JSON.parse(event.data);
 
-        if (data.sender && data.text) {
-          setMessages((prev) => {
-            // Check if an identical message already exists
-            const duplicateExists = prev.some(
-              (m) =>
-                m.sender === data.sender &&
-                m.text === data.text &&
-                m.timestamp === data.timestamp
-            );
-            if (duplicateExists) {
-              return prev;
-            }
-            // Add the new message and sort by timestamp in ascending order
-            const newMessages = [
+          // Handle error messages
+          if (data.error) {
+            console.error("Error from server:", data.text);
+            setMessages((prev) => [
               ...prev,
               {
-                sender: data.sender,
+                sender: data.sender || "system",
                 text: data.text,
-                timestamp: data.timestamp,
+                timestamp: data.timestamp || Date.now() / 1000,
+                isError: true,
               },
-            ];
-            newMessages.sort((a, b) => a.timestamp - b.timestamp);
-            return newMessages;
-          });
+            ]);
+            return;
+          }
+
+          if (data.sender && data.text) {
+            console.log("Adding message to state:", data);
+            setMessages((prev) => {
+              // Check if an identical message already exists
+              const duplicateExists = prev.some(
+                (m) =>
+                  m.sender === data.sender &&
+                  m.text === data.text &&
+                  m.timestamp === data.timestamp
+              );
+              if (duplicateExists) {
+                console.log("Duplicate message, not adding to state");
+                return prev;
+              }
+              // Add the new message and sort by timestamp in ascending order
+              const newMessages = [
+                ...prev,
+                {
+                  sender: data.sender,
+                  text: data.text,
+                  timestamp: data.timestamp,
+                },
+              ];
+              newMessages.sort((a, b) => a.timestamp - b.timestamp);
+              return newMessages;
+            });
+          }
+        } catch (error) {
+          console.error("Invalid message received:", event.data, error);
         }
-      } catch {
-        console.error("Invalid message received:", event.data);
-      }
-    };
+      };
 
-    socket.onclose = () => {
-      console.log("Chat websocket closed");
-    };
+      socket.onclose = (event) => {
+        console.log("Chat websocket closed:", event);
+      };
 
-    socket.onerror = (error) => {
-      console.error("WebSocket error:", error);
-    };
+      socket.onerror = (error) => {
+        console.error("WebSocket error:", error);
+      };
 
-    return () => {
-      socket.close();
-    };
-  }, [isAuthenticated, user]);
+      return () => {
+        console.log("Closing WebSocket connection");
+        socket.close();
+      };
+    } catch (error) {
+      console.error("Error creating WebSocket connection:", error);
+    }
+  }, [isAuthenticated, user, userInfoStored]);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -415,11 +496,19 @@ export function Chat({ onSetDirective }: ChatProps) {
   }, [messages, isScrolledToBottom]);
 
   const handleSend = () => {
+    console.log("handleSend called");
     const cleanDraft = draft.trim();
-    if (!cleanDraft || !wsRef.current) return;
+    console.log("Draft:", cleanDraft);
+    console.log("WebSocket ref:", wsRef.current);
+
+    if (!cleanDraft || !wsRef.current) {
+      console.log("No draft or no WebSocket ref");
+      return;
+    }
 
     // Check if the user is authorized to send messages
     if (!isAuthorized(user)) {
+      console.log("User not authorized to send messages");
       setMessages((prev) => [
         ...prev,
         {
@@ -436,6 +525,7 @@ export function Chat({ onSetDirective }: ChatProps) {
     if (wsRef.current.readyState === WebSocket.OPEN) {
       // Send the draft message to the server via WebSocket
       console.log("Sending message:", cleanDraft);
+      console.log("WebSocket readyState:", wsRef.current.readyState);
       wsRef.current.send(cleanDraft);
 
       // Clear the input
@@ -443,6 +533,7 @@ export function Chat({ onSetDirective }: ChatProps) {
     } else {
       // Handle case where WebSocket is not open
       console.error("WebSocket is not open. Cannot send message.");
+      console.log("WebSocket readyState:", wsRef.current?.readyState);
       // Optionally add a message to the UI
       setMessages((prev) => [
         ...prev,

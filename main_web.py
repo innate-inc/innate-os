@@ -3,8 +3,7 @@ import time
 import threading
 import platform
 import os
-
-
+from dotenv import load_dotenv
 import genesis as gs
 import uvicorn
 from fastapi import FastAPI
@@ -18,6 +17,9 @@ from src.agent.agent_websocket_bridge import run_agent_async
 # Import the new video & reset endpoints router
 from src.routes.video_api import router as video_api_router
 from src.routes.chat_api import router as chat_api_router
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Define constants
 LOCAL_ROSBRIDGE_URI = "ws://localhost:9090"
