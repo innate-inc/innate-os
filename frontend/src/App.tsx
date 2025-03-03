@@ -3,7 +3,6 @@ import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
 import { Chat } from "./components/Chat";
-import { MdRefresh } from "react-icons/md";
 import { AuthGuard } from "./components/auth/AuthGuard";
 import { UserProfile } from "./components/auth/UserProfile";
 import { LogoutButton } from "./components/auth/LogoutButton";
@@ -47,27 +46,6 @@ const VersionBadge = styled.div`
   opacity: 0.7;
   @media (prefers-color-scheme: dark) {
     color: #fff;
-  }
-`;
-
-const ResetButton = styled.button`
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background-color: #007bff;
-  border: none;
-  padding: 8px 12px;
-  color: white;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.2s ease;
-
-  &:hover {
-    background-color: #0056b3;
   }
 `;
 
@@ -153,10 +131,6 @@ function SimulatorApp() {
 
   return (
     <Container className="App">
-      <ResetButton onClick={handleResetRobot}>
-        <MdRefresh size={20} /> Reset Robot
-      </ResetButton>
-
       {isAuthenticated && (
         <UserContainer>
           <UserProfile />
@@ -166,7 +140,11 @@ function SimulatorApp() {
 
       <TopSection>
         <Title>Innate Simulator</Title>
-        <ImageDisplay viewMode={viewMode} setViewMode={setViewMode} />
+        <ImageDisplay
+          viewMode={viewMode}
+          setViewMode={setViewMode}
+          onResetRobot={handleResetRobot}
+        />
       </TopSection>
 
       <ChatSection>

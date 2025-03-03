@@ -1,5 +1,6 @@
 import styled from "styled-components";
 import { isMobile } from "react-device-detect";
+import { MdRefresh } from "react-icons/md";
 import {
   PreviewContainer,
   MainImage,
@@ -11,6 +12,7 @@ type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus";
 type ImageDisplayProps = {
   viewMode: ViewMode;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
+  onResetRobot: () => void;
 };
 
 // Styled components for the slider, adapted from ToggleViewMode
@@ -27,6 +29,32 @@ const ToggleWrapper = styled.div`
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
+`;
+
+const ResetButton = styled.button`
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+
+  &:hover {
+    background: rgba(0, 0, 0, 0.8);
+  }
+
+  &:focus {
+    outline: none;
+  }
 `;
 
 const Indicator = styled.div<{ index: number; $maxIndex: number }>`
@@ -68,7 +96,11 @@ const ModeButton = styled.button<{ $active?: boolean }>`
   }
 `;
 
-export function ImageDisplay({ viewMode, setViewMode }: ImageDisplayProps) {
+export function ImageDisplay({
+  viewMode,
+  setViewMode,
+  onResetRobot,
+}: ImageDisplayProps) {
   // Grab IP from environment, use a fallback if missing
   const baseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
@@ -108,6 +140,10 @@ export function ImageDisplay({ viewMode, setViewMode }: ImageDisplayProps) {
     <PreviewContainer>
       <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
       <SecondaryImage $viewMode={viewMode} src={subSrc} alt="Sub Camera" />
+
+      <ResetButton onClick={onResetRobot}>
+        <MdRefresh size={16} /> Reset Robot
+      </ResetButton>
 
       <ToggleWrapper>
         <Indicator index={currentIndex} $maxIndex={modes.length} />
