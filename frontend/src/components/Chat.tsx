@@ -17,6 +17,7 @@ import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 import { useAuth0 } from "@auth0/auth0-react";
+import { isAuthorized } from "../services/authService";
 
 const ChatContainer = styled.div`
   /* Default desktop width */
@@ -310,6 +311,36 @@ export function Chat({ onSetDirective }: ChatProps) {
       return;
     }
 
+    // Check if the user is authorized to connect
+    if (!isAuthorized(user)) {
+      console.log("User is not authorized to connect to chat");
+      // Add a system message indicating the user is not authorized
+      setMessages((prev) => {
+        // Check if we already have this message to avoid duplicates
+        const hasUnauthorizedMessage = prev.some(
+          (m) =>
+            m.sender === "system" &&
+            m.text.includes("not authorized") &&
+            m.isError
+        );
+
+        if (hasUnauthorizedMessage) {
+          return prev;
+        }
+
+        return [
+          ...prev,
+          {
+            sender: "system",
+            text: "You are not authorized to use the chat. Please subscribe or contact axel@innate.bot for access.",
+            timestamp: Date.now() / 1000,
+            isError: true,
+          },
+        ];
+      });
+      return;
+    }
+
     // Get user ID from Auth0 if authenticated
     const userId = isAuthenticated && user && user.sub ? user.sub : "anonymous";
 
@@ -395,6 +426,20 @@ export function Chat({ onSetDirective }: ChatProps) {
   const handleSend = () => {
     const cleanDraft = draft.trim();
     if (!cleanDraft || !wsRef.current) return;
+
+    // Check if the user is authorized to send messages
+    if (!isAuthorized(user)) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "You are not authorized to send messages. Please subscribe or contact axel@innate.bot for access.",
+          timestamp: Date.now() / 1000,
+          isError: true,
+        },
+      ]);
+      return;
+    }
 
     // Check if WebSocket is open
     if (wsRef.current.readyState === WebSocket.OPEN) {

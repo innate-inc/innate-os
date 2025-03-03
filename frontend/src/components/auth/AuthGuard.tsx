@@ -3,6 +3,9 @@ import { ReactNode, useEffect } from "react";
 import styled from "styled-components";
 import { LoginButton } from "./LoginButton";
 import { SignupButton } from "./SignupButton";
+import { isAuthorized } from "../../services/authService";
+import { UnauthorizedScreen } from "./UnauthorizedScreen";
+import innateLogo from "../../assets/innate.png";
 
 // Define a type for Auth0 errors which may include additional properties
 interface Auth0Error extends Error {
@@ -23,18 +26,34 @@ const AuthContainer = styled.div`
   gap: 2rem;
   text-align: center;
   padding: 1rem;
+  background-color: #121212; /* Dark background */
+  color: #e0e0e0; /* Light text for dark background */
+  position: relative;
+`;
+
+const LogoContainer = styled.div`
+  position: absolute;
+  top: 20px;
+  left: 20px;
+`;
+
+const Logo = styled.img`
+  height: 40px;
+  width: auto;
 `;
 
 const Title = styled.h1`
   font-size: 24px;
   font-weight: bold;
   margin-bottom: 1rem;
+  color: #ffffff; /* Bright white for title on dark background */
 `;
 
 const Subtitle = styled.p`
   font-size: 16px;
   margin-bottom: 2rem;
   max-width: 500px;
+  color: #b0b0b0; /* Slightly dimmed text for readability */
 `;
 
 const ButtonContainer = styled.div`
@@ -51,17 +70,23 @@ const LoadingContainer = styled.div`
 `;
 
 const ErrorMessage = styled.div`
-  color: #dc3545;
+  color: #ff6b6b; /* Brighter red for dark theme */
   margin-bottom: 1rem;
   padding: 0.5rem;
-  border: 1px solid #dc3545;
+  border: 1px solid #ff6b6b;
   border-radius: 4px;
-  background-color: #f8d7da;
+  background-color: rgba(
+    255,
+    107,
+    107,
+    0.1
+  ); /* Semi-transparent red background */
   max-width: 500px;
 `;
 
 export const AuthGuard = ({ children }: AuthGuardProps) => {
-  const { isAuthenticated, isLoading, error, loginWithRedirect } = useAuth0();
+  const { isAuthenticated, isLoading, error, loginWithRedirect, user } =
+    useAuth0();
 
   useEffect(() => {
     // Log detailed auth state for debugging
@@ -91,6 +116,9 @@ export const AuthGuard = ({ children }: AuthGuardProps) => {
     const auth0Error = error as Auth0Error;
     return (
       <AuthContainer>
+        <LogoContainer>
+          <Logo src={innateLogo} alt="Innate Robotics" />
+        </LogoContainer>
         <Title>Authentication Error</Title>
         <ErrorMessage>
           {error.message ||
@@ -109,7 +137,7 @@ export const AuthGuard = ({ children }: AuthGuardProps) => {
             }
             style={{
               padding: "10px 20px",
-              backgroundColor: "#0070f3",
+              backgroundColor: "#6772e5" /* Stripe blue for consistency */,
               color: "white",
               border: "none",
               borderRadius: "4px",
@@ -127,10 +155,13 @@ export const AuthGuard = ({ children }: AuthGuardProps) => {
   if (!isAuthenticated) {
     return (
       <AuthContainer>
-        <Title>Welcome to Innate Simulator</Title>
+        <LogoContainer>
+          <Logo src={innateLogo} alt="Innate Robotics" />
+        </LogoContainer>
+        <Title>Welcome to the First Open AI Operator for Robotics</Title>
         <Subtitle>
           Please log in with your existing account or sign up for a new account
-          to access the simulator.
+          to access the robotics operator platform.
         </Subtitle>
         <ButtonContainer>
           <LoginButton />
@@ -140,6 +171,11 @@ export const AuthGuard = ({ children }: AuthGuardProps) => {
     );
   }
 
-  // User is authenticated, render the children
+  // Check if the authenticated user is authorized
+  if (!isAuthorized(user)) {
+    return <UnauthorizedScreen />;
+  }
+
+  // User is authenticated and authorized, render the children
   return <>{children}</>;
 };
