@@ -6,6 +6,7 @@ import asyncio
 from src.shared_queues import SharedQueues, ChatMessage, ChatSignal
 from typing import Set
 from src.middleware.auth import get_current_user
+from src.middleware.authorized_users import is_authorized
 
 
 router = APIRouter()
@@ -64,6 +65,22 @@ async def chat_websocket(websocket: WebSocket, user_id: str = None):
             data = await websocket.receive_text()
             # Verify user is still connected before processing the message
             if user_id in connected_clients:
+                # Check if the user is authorized to send messages
+                # This is a simplified check - in a real implementation, you would
+                # fetch the user's details from a database or Auth0
+                user_email = get_user_email_from_id(user_id)
+                if not is_authorized({"email": user_email}):
+                    await websocket.send_json(
+                        {
+                            "sender": "system",
+                            "text": "You are not authorized to send messages. "
+                            "Please subscribe or contact axel@innate.bot for access.",
+                            "timestamp": time.time(),
+                            "error": True,
+                        }
+                    )
+                    continue
+
                 new_entry = ChatMessage(
                     sender="user",
                     text=data,
@@ -127,3 +144,18 @@ async def check_connection_status(user_id: str):
     Returns True if connected, False otherwise.
     """
     return {"connected": user_id in connected_clients}
+
+
+# Helper function to get user email from user ID
+# In a real implementation, this would query a database or Auth0
+def get_user_email_from_id(user_id: str) -> str:
+    """
+    Get the user's email from their user ID.
+    This is a placeholder function - in a real implementation, you would
+    fetch the user's details from a database or Auth0.
+    """
+    # For now, just return a placeholder email
+    # In a real implementation, you would query your user database
+    if user_id == "anonymous":
+        return ""
+    return f"{user_id}@example.com"

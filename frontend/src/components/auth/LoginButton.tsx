@@ -3,7 +3,7 @@ import styled from "styled-components";
 
 const StyledButton = styled.button`
   padding: 10px 20px;
-  background-color: #007bff;
+  background-color: #6772e5; /* Stripe blue for consistency */
   border: none;
   border-radius: 6px;
   color: #fff;
@@ -12,7 +12,7 @@ const StyledButton = styled.button`
   transition: background-color 0.2s ease;
 
   &:hover {
-    background-color: #0056b3;
+    background-color: #5469d4;
   }
 `;
 

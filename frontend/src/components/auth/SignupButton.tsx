@@ -3,7 +3,7 @@ import styled from "styled-components";
 
 const StyledButton = styled.button`
   padding: 10px 20px;
-  background-color: #28a745;
+  background-color: #38b2ac; /* Teal color for contrast with login button */
   border: none;
   border-radius: 6px;
   color: #fff;
@@ -12,7 +12,7 @@ const StyledButton = styled.button`
   transition: background-color 0.2s ease;
 
   &:hover {
-    background-color: #218838;
+    background-color: #2c9a94;
   }
 `;
 
