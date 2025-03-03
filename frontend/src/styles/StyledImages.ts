@@ -7,7 +7,7 @@ export const PreviewContainer = styled.div`
   position: relative;
   /* Make it full-width but max at 1280px. */
   width: 60vw;
-  max-width: 1280px;
+  max-width: 800px;
   margin: 0 auto;
   /* Use the aspect-ratio property so that the height scales fluidly
      together with the width. */
