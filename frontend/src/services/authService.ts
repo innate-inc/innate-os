@@ -39,3 +39,57 @@ export const isAuthorized = (user: User | undefined): boolean => {
 
   return false;
 };
+
+/**
+ * Fetch user info from the backend and store it
+ * This ensures the backend has the user's email for authorization
+ * @param user The Auth0 user object
+ * @param accessToken The access token from Auth0
+ * @returns The user info from the backend
+ */
+export const fetchAndStoreUserInfo = async (
+  user: User | undefined,
+  accessToken: string
+): Promise<{
+  user_id: string;
+  email: string;
+  is_authorized: boolean;
+} | null> => {
+  if (!user || !accessToken) {
+    console.log("No user or access token to fetch info for");
+    return null;
+  }
+
+  console.log("User email from Auth0:", user.email);
+  console.log("User sub from Auth0:", user.sub);
+
+  try {
+    // Get the API base URL from environment variables
+    const apiBaseUrl = import.meta.env.VITE_SIM_BASE_URL || "";
+    const endpoint = `${apiBaseUrl}/auth/user-info`;
+
+    console.log(`Calling endpoint: ${endpoint}`);
+
+    // Call the backend API to store user info
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    console.log("Response status:", response.status);
+
+    if (!response.ok) {
+      throw new Error(`Failed to store user info: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log("User info stored successfully:", data);
+    return data;
+  } catch (error) {
+    console.error("Error storing user info:", error);
+    return null;
+  }
+};
