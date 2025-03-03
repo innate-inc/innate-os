@@ -244,19 +244,19 @@ const DIRECTIVES: Directive[] = [
   {
     id: "default_directive",
     title: "Default",
-    subtitle: "Standard operation mode",
+    subtitle: "Obedient, no initiative",
     icon: <IoSettings size={16} />,
   },
   {
     id: "sassy_directive",
     title: "Sassy",
-    subtitle: "Playful, witty responses",
+    subtitle: "Playful, witty behavior",
     icon: <IoHappy size={16} />,
   },
   {
     id: "friendly_guide_directive",
     title: "Guide",
-    subtitle: "Helpful, instructional",
+    subtitle: "Guides you around",
     icon: <IoFlag size={16} />,
   },
   {
@@ -268,7 +268,7 @@ const DIRECTIVES: Directive[] = [
   {
     id: "elder_safety_directive",
     title: "Elder Care",
-    subtitle: "Patient, supportive",
+    subtitle: "Proactively cares for users",
     icon: <IoHeart size={16} />,
   },
 ];
