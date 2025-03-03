@@ -412,81 +412,106 @@ export function Chat({ onSetDirective }: ChatProps) {
     )}`;
     console.log("WebSocket URL:", wsUrl);
 
-    try {
-      const socket = new WebSocket(wsUrl);
-      wsRef.current = socket;
+    // Create a function to establish the WebSocket connection
+    const connectWebSocket = () => {
+      try {
+        console.log("Creating new WebSocket connection...");
+        const socket = new WebSocket(wsUrl);
+        wsRef.current = socket;
 
-      socket.onopen = () => {
-        console.log("Connected to chat websocket");
-      };
+        socket.onopen = () => {
+          console.log("Connected to chat websocket");
+        };
 
-      socket.onmessage = (event) => {
-        console.log("Received message from server:", event.data);
-        try {
-          const data = JSON.parse(event.data);
+        socket.onmessage = (event) => {
+          console.log("Received message from server:", event.data);
+          try {
+            const data = JSON.parse(event.data);
 
-          // Handle error messages
-          if (data.error) {
-            console.error("Error from server:", data.text);
-            setMessages((prev) => [
-              ...prev,
-              {
-                sender: data.sender || "system",
-                text: data.text,
-                timestamp: data.timestamp || Date.now() / 1000,
-                isError: true,
-              },
-            ]);
-            return;
-          }
-
-          if (data.sender && data.text) {
-            console.log("Adding message to state:", data);
-            setMessages((prev) => {
-              // Check if an identical message already exists
-              const duplicateExists = prev.some(
-                (m) =>
-                  m.sender === data.sender &&
-                  m.text === data.text &&
-                  m.timestamp === data.timestamp
-              );
-              if (duplicateExists) {
-                console.log("Duplicate message, not adding to state");
-                return prev;
-              }
-              // Add the new message and sort by timestamp in ascending order
-              const newMessages = [
+            // Handle error messages
+            if (data.error) {
+              console.error("Error from server:", data.text);
+              setMessages((prev) => [
                 ...prev,
                 {
-                  sender: data.sender,
+                  sender: data.sender || "system",
                   text: data.text,
-                  timestamp: data.timestamp,
+                  timestamp: data.timestamp || Date.now() / 1000,
+                  isError: true,
                 },
-              ];
-              newMessages.sort((a, b) => a.timestamp - b.timestamp);
-              return newMessages;
-            });
+              ]);
+              return;
+            }
+
+            if (data.sender && data.text) {
+              console.log("Adding message to state:", data);
+              setMessages((prev) => {
+                // Check if an identical message already exists
+                const duplicateExists = prev.some(
+                  (m) =>
+                    m.sender === data.sender &&
+                    m.text === data.text &&
+                    m.timestamp === data.timestamp
+                );
+                if (duplicateExists) {
+                  console.log("Duplicate message, not adding to state");
+                  return prev;
+                }
+                // Add the new message and sort by timestamp in ascending order
+                const newMessages = [
+                  ...prev,
+                  {
+                    sender: data.sender,
+                    text: data.text,
+                    timestamp: data.timestamp,
+                  },
+                ];
+                newMessages.sort((a, b) => a.timestamp - b.timestamp);
+                return newMessages;
+              });
+            }
+          } catch (error) {
+            console.error("Invalid message received:", event.data, error);
           }
-        } catch (error) {
-          console.error("Invalid message received:", event.data, error);
-        }
-      };
+        };
 
-      socket.onclose = (event) => {
-        console.log("Chat websocket closed:", event);
-      };
+        socket.onclose = (event) => {
+          console.log("Chat websocket closed:", event);
+          // Try to reconnect after a delay if it wasn't a clean close
+          if (!event.wasClean) {
+            console.log(
+              "WebSocket connection lost, will try to reconnect in 3 seconds..."
+            );
+            setTimeout(() => {
+              if (wsRef.current?.readyState === WebSocket.CLOSED) {
+                console.log("Attempting to reconnect WebSocket...");
+                connectWebSocket();
+              }
+            }, 3000);
+          }
+        };
 
-      socket.onerror = (error) => {
-        console.error("WebSocket error:", error);
-      };
+        socket.onerror = (error) => {
+          console.error("WebSocket error:", error);
+        };
 
-      return () => {
-        console.log("Closing WebSocket connection");
+        return socket;
+      } catch (error) {
+        console.error("Error creating WebSocket connection:", error);
+        return null;
+      }
+    };
+
+    // Establish the initial connection
+    const socket = connectWebSocket();
+
+    // Cleanup function
+    return () => {
+      console.log("Closing WebSocket connection");
+      if (socket) {
         socket.close();
-      };
-    } catch (error) {
-      console.error("Error creating WebSocket connection:", error);
-    }
+      }
+    };
   }, [isAuthenticated, user, userInfoStored]);
 
   useEffect(() => {
@@ -528,18 +553,39 @@ export function Chat({ onSetDirective }: ChatProps) {
       console.log("WebSocket readyState:", wsRef.current.readyState);
       wsRef.current.send(cleanDraft);
 
+      // Add the message to the UI immediately
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "user",
+          text: cleanDraft,
+          timestamp: Date.now() / 1000,
+        },
+      ]);
+
       // Clear the input
       setDraft("");
     } else {
       // Handle case where WebSocket is not open
       console.error("WebSocket is not open. Cannot send message.");
       console.log("WebSocket readyState:", wsRef.current?.readyState);
+
+      // Try to reconnect
+      if (
+        wsRef.current.readyState === WebSocket.CLOSED ||
+        wsRef.current.readyState === WebSocket.CLOSING
+      ) {
+        console.log("WebSocket is closed, triggering reconnect...");
+        // Force a re-render to trigger the useEffect that establishes the WebSocket connection
+        setUserInfoStored(false);
+      }
+
       // Optionally add a message to the UI
       setMessages((prev) => [
         ...prev,
         {
           sender: "system",
-          text: "You are not connected. Please refresh the page to reconnect.",
+          text: "You are not connected. Attempting to reconnect...",
           timestamp: Date.now() / 1000,
         },
       ]);
