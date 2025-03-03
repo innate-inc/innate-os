@@ -16,6 +16,7 @@ import {
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
+import { useAuth0 } from "@auth0/auth0-react";
 
 const ChatContainer = styled.div`
   /* Default desktop width */
@@ -290,6 +291,7 @@ export function Chat({ onSetDirective }: ChatProps) {
   const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
     {}
   );
+  const { user, isAuthenticated } = useAuth0();
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -308,7 +310,13 @@ export function Chat({ onSetDirective }: ChatProps) {
       return;
     }
 
-    const wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/ws/chat`;
+    // Get user ID from Auth0 if authenticated
+    const userId = isAuthenticated && user && user.sub ? user.sub : "anonymous";
+
+    // Add user ID as query parameter
+    const wsUrl = `${
+      import.meta.env.VITE_WS_BASE_URL
+    }/ws/chat?user_id=${encodeURIComponent(userId)}`;
     const socket = new WebSocket(wsUrl);
     wsRef.current = socket;
 
@@ -319,6 +327,22 @@ export function Chat({ onSetDirective }: ChatProps) {
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // Handle error messages
+        if (data.error) {
+          console.error("Error from server:", data.text);
+          setMessages((prev) => [
+            ...prev,
+            {
+              sender: data.sender || "system",
+              text: data.text,
+              timestamp: data.timestamp || Date.now() / 1000,
+              isError: true,
+            },
+          ]);
+          return;
+        }
+
         if (data.sender && data.text) {
           setMessages((prev) => {
             // Check if an identical message already exists
@@ -344,7 +368,7 @@ export function Chat({ onSetDirective }: ChatProps) {
             return newMessages;
           });
         }
-      } catch (err) {
+      } catch {
         console.error("Invalid message received:", event.data);
       }
     };
@@ -360,7 +384,7 @@ export function Chat({ onSetDirective }: ChatProps) {
     return () => {
       socket.close();
     };
-  }, []);
+  }, [isAuthenticated, user]);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -372,12 +396,27 @@ export function Chat({ onSetDirective }: ChatProps) {
     const cleanDraft = draft.trim();
     if (!cleanDraft || !wsRef.current) return;
 
-    // Send the draft message to the server via WebSocket
-    console.log("Sending message:", cleanDraft);
-    wsRef.current.send(cleanDraft);
+    // Check if WebSocket is open
+    if (wsRef.current.readyState === WebSocket.OPEN) {
+      // Send the draft message to the server via WebSocket
+      console.log("Sending message:", cleanDraft);
+      wsRef.current.send(cleanDraft);
 
-    // Clear the input
-    setDraft("");
+      // Clear the input
+      setDraft("");
+    } else {
+      // Handle case where WebSocket is not open
+      console.error("WebSocket is not open. Cannot send message.");
+      // Optionally add a message to the UI
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "You are not connected. Please refresh the page to reconnect.",
+          timestamp: Date.now() / 1000,
+        },
+      ]);
+    }
   };
 
   // Use the grouping utility to prepare messages for display.
@@ -417,47 +456,50 @@ export function Chat({ onSetDirective }: ChatProps) {
       </DirectivesContainer>
 
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
-        {groupedMessages.map((m, idx) => {
-          if (m.sender === "robot_grouped") {
+        {groupedMessages.map((message, index) => {
+          if (message.sender === "user") {
             return (
-              <RobotGroupedBubble
-                key={idx}
-                isLast={idx === groupedMessages.length - 1}
-                groupedExtras={m.groupedExtras}
-                durationSeconds={m.durationSeconds}
-              />
-            );
-          } else if (m.sender === "system") {
-            return (
-              <SystemMessageBubble
-                key={idx}
-                messageId={idx}
-                text={m.text}
-                isExpanded={expandedSystemMessages[idx] || false}
-                onToggleExpand={toggleSystemMessage}
-                contentRef={(el) => (systemContentRefs.current[idx] = el)}
-              />
-            );
-          } else {
-            return (
-              <MessageBubble key={idx} $isUser={m.sender === "user"}>
-                <MessageSender $isUser={m.sender === "user"}>
-                  {m.sender === "user" ? (
-                    <>
-                      <span>You</span>
-                      <IoPerson size={14} />
-                    </>
-                  ) : (
-                    <>
-                      <IoHardwareChip size={14} />
-                      <span>Robot</span>
-                    </>
-                  )}
+              <MessageBubble key={`${message.sender}-${index}`} $isUser>
+                <MessageSender $isUser>
+                  <span>You</span>
+                  <IoPerson size={14} />
                 </MessageSender>
-                {m.text}
+                {message.text}
               </MessageBubble>
             );
+          } else if (message.sender === "robot") {
+            return (
+              <MessageBubble key={`${message.sender}-${index}`} $isUser>
+                <MessageSender $isUser>
+                  <IoHardwareChip size={14} />
+                  <span>Robot</span>
+                </MessageSender>
+                {message.text}
+              </MessageBubble>
+            );
+          } else if (message.sender === "robot_grouped") {
+            return (
+              <RobotGroupedBubble
+                key={`${message.sender}-${index}`}
+                groupedExtras={message.groupedExtras}
+                durationSeconds={message.durationSeconds}
+                isLast={index === groupedMessages.length - 1}
+              />
+            );
+          } else if (message.sender === "system") {
+            return (
+              <SystemMessageBubble
+                key={`${message.sender}-${index}`}
+                messageId={index}
+                text={message.text}
+                isExpanded={!!expandedSystemMessages[index]}
+                onToggleExpand={toggleSystemMessage}
+                contentRef={(el) => (systemContentRefs.current[index] = el)}
+                isError={message.isError}
+              />
+            );
           }
+          return null;
         })}
         {/* Marker element for auto-scroll */}
         <div ref={messagesEndRef} />
