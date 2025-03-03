@@ -4,30 +4,30 @@ import styled from "styled-components";
 const ProfileContainer = styled.div`
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
 `;
 
 const ProfileImage = styled.img`
-  width: 40px;
-  height: 40px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
-  object-fit: cover;
+  border: 1px solid ${({ theme }) => theme.colors.border};
 `;
 
 const ProfileInfo = styled.div`
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
 `;
 
 const UserName = styled.span`
-  font-weight: bold;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: ${({ theme }) => theme.fontWeights.medium};
 `;
 
 const UserEmail = styled.span`
-  font-size: 12px;
-  color: #666;
+  font-size: 11px;
+  color: ${({ theme }) => theme.colors.muted};
 `;
 
 export const UserProfile = () => {
