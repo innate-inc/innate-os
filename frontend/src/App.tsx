@@ -2,7 +2,6 @@ import { useState } from "react";
 import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
-import { ToggleViewMode } from "./components/ToggleViewMode";
 import { Chat } from "./components/Chat";
 import { MdRefresh } from "react-icons/md";
 import { AuthGuard } from "./components/auth/AuthGuard";
@@ -167,8 +166,7 @@ function SimulatorApp() {
 
       <TopSection>
         <Title>Innate Simulator</Title>
-        <ImageDisplay viewMode={viewMode} />
-        <ToggleViewMode viewMode={viewMode} setViewMode={setViewMode} />
+        <ImageDisplay viewMode={viewMode} setViewMode={setViewMode} />
       </TopSection>
 
       <ChatSection>
