@@ -296,48 +296,29 @@ export function Chat({ onSetDirective }: ChatProps) {
   // Effect to store user info when authenticated
   useEffect(() => {
     if (isAuthenticated && user && !userInfoStored) {
-      // Get the access token and fetch user info
       const fetchUserInfo = async () => {
         try {
-          console.log("Getting access token...");
           const accessToken = await getAccessTokenSilently();
-          console.log("Access token obtained, fetching user info...");
-          console.log("User object:", user);
           const data = await fetchAndStoreUserInfo(user, accessToken);
-          if (data) {
-            console.log("User info stored successfully:", data);
 
+          if (data) {
             // Check if the user is authorized
-            if (data.is_authorized) {
-              console.log("User is authorized!");
-              setUserInfoStored(true);
-            } else if (data.email) {
-              // If we have an email but not authorized, still mark as stored
-              console.log("User email stored but not authorized");
+            if (data.is_authorized || data.email) {
               setUserInfoStored(true);
             } else {
-              // If we don't have an email, try again
-              console.log(
-                "Failed to store user info, retrying in 2 seconds..."
-              );
+              // If we don't have an email, try again after a delay
               setTimeout(() => {
                 setUserInfoStored(false); // Reset to trigger another attempt
               }, 2000);
             }
           } else {
             // If we couldn't store the user info, try again after a delay
-            console.log("Failed to store user info, retrying in 2 seconds...");
             setTimeout(() => {
               setUserInfoStored(false); // Reset to trigger another attempt
             }, 2000);
           }
         } catch (error) {
-          console.error(
-            "Error getting access token or storing user info:",
-            error
-          );
           // If there was an error, try again after a delay
-          console.log("Error storing user info, retrying in 2 seconds...");
           setTimeout(() => {
             setUserInfoStored(false); // Reset to trigger another attempt
           }, 2000);
@@ -360,8 +341,6 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Check if the user is authorized to connect
     if (!isAuthorized(user)) {
-      console.log("User is not authorized to connect to chat");
-      // Add a system message indicating the user is not authorized
       setMessages((prev) => {
         // Check if we already have this message to avoid duplicates
         const hasUnauthorizedMessage = prev.some(
@@ -390,19 +369,12 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Make sure user info is stored before connecting to WebSocket
     if (isAuthenticated && user && !userInfoStored) {
-      console.log(
-        "Waiting for user info to be stored before connecting to WebSocket"
-      );
       return;
     }
 
-    // Get user ID from Auth0 if authenticated
+    // Get user ID and email from Auth0 if authenticated
     const userId = isAuthenticated && user && user.sub ? user.sub : "anonymous";
-    console.log("Connecting to WebSocket with user ID:", userId);
-
-    // Get user email from Auth0 if authenticated
     const userEmail = isAuthenticated && user && user.email ? user.email : "";
-    console.log("User email:", userEmail);
 
     // Add user ID and email as query parameters
     const wsUrl = `${
@@ -410,12 +382,10 @@ export function Chat({ onSetDirective }: ChatProps) {
     }/ws/chat?user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(
       userEmail
     )}`;
-    console.log("WebSocket URL:", wsUrl);
 
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
       try {
-        console.log("Creating new WebSocket connection...");
         const socket = new WebSocket(wsUrl);
         wsRef.current = socket;
 
@@ -424,13 +394,11 @@ export function Chat({ onSetDirective }: ChatProps) {
         };
 
         socket.onmessage = (event) => {
-          console.log("Received message from server:", event.data);
           try {
             const data = JSON.parse(event.data);
 
             // Handle error messages
             if (data.error) {
-              console.error("Error from server:", data.text);
               setMessages((prev) => [
                 ...prev,
                 {
@@ -444,7 +412,6 @@ export function Chat({ onSetDirective }: ChatProps) {
             }
 
             if (data.sender && data.text) {
-              console.log("Adding message to state:", data);
               setMessages((prev) => {
                 // Check if an identical message already exists
                 const duplicateExists = prev.some(
@@ -454,7 +421,6 @@ export function Chat({ onSetDirective }: ChatProps) {
                     m.timestamp === data.timestamp
                 );
                 if (duplicateExists) {
-                  console.log("Duplicate message, not adding to state");
                   return prev;
                 }
                 // Add the new message and sort by timestamp in ascending order
@@ -470,29 +436,24 @@ export function Chat({ onSetDirective }: ChatProps) {
                 return newMessages;
               });
             }
-          } catch (error) {
-            console.error("Invalid message received:", event.data, error);
+          } catch {
+            console.error("Invalid message received:", event.data);
           }
         };
 
         socket.onclose = (event) => {
-          console.log("Chat websocket closed:", event);
           // Try to reconnect after a delay if it wasn't a clean close
           if (!event.wasClean) {
-            console.log(
-              "WebSocket connection lost, will try to reconnect in 3 seconds..."
-            );
             setTimeout(() => {
               if (wsRef.current?.readyState === WebSocket.CLOSED) {
-                console.log("Attempting to reconnect WebSocket...");
                 connectWebSocket();
               }
             }, 3000);
           }
         };
 
-        socket.onerror = (error) => {
-          console.error("WebSocket error:", error);
+        socket.onerror = () => {
+          console.error("WebSocket error");
         };
 
         return socket;
@@ -507,7 +468,6 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Cleanup function
     return () => {
-      console.log("Closing WebSocket connection");
       if (socket) {
         socket.close();
       }
@@ -521,19 +481,11 @@ export function Chat({ onSetDirective }: ChatProps) {
   }, [messages, isScrolledToBottom]);
 
   const handleSend = () => {
-    console.log("handleSend called");
     const cleanDraft = draft.trim();
-    console.log("Draft:", cleanDraft);
-    console.log("WebSocket ref:", wsRef.current);
-
-    if (!cleanDraft || !wsRef.current) {
-      console.log("No draft or no WebSocket ref");
-      return;
-    }
+    if (!cleanDraft || !wsRef.current) return;
 
     // Check if the user is authorized to send messages
     if (!isAuthorized(user)) {
-      console.log("User not authorized to send messages");
       setMessages((prev) => [
         ...prev,
         {
@@ -549,8 +501,6 @@ export function Chat({ onSetDirective }: ChatProps) {
     // Check if WebSocket is open
     if (wsRef.current.readyState === WebSocket.OPEN) {
       // Send the draft message to the server via WebSocket
-      console.log("Sending message:", cleanDraft);
-      console.log("WebSocket readyState:", wsRef.current.readyState);
       wsRef.current.send(cleanDraft);
 
       // Add the message to the UI immediately
@@ -566,21 +516,16 @@ export function Chat({ onSetDirective }: ChatProps) {
       // Clear the input
       setDraft("");
     } else {
-      // Handle case where WebSocket is not open
-      console.error("WebSocket is not open. Cannot send message.");
-      console.log("WebSocket readyState:", wsRef.current?.readyState);
-
       // Try to reconnect
       if (
         wsRef.current.readyState === WebSocket.CLOSED ||
         wsRef.current.readyState === WebSocket.CLOSING
       ) {
-        console.log("WebSocket is closed, triggering reconnect...");
         // Force a re-render to trigger the useEffect that establishes the WebSocket connection
         setUserInfoStored(false);
       }
 
-      // Optionally add a message to the UI
+      // Add a message to the UI
       setMessages((prev) => [
         ...prev,
         {
