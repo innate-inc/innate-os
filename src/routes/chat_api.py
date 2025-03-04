@@ -138,20 +138,6 @@ async def handle_inbound_user(
                         timestamp_put_in_queue=time.time(),
                     )
                     shared_queues.chat_to_bridge.put_nowait(new_entry)
-
-                    # Echo the message back to the user for testing
-                    echo_msg = ChatMessage(
-                        sender="robot",
-                        text=f"Echo: {data}",
-                        timestamp=time.time(),
-                    )
-                    await websocket.send_json(
-                        {
-                            "sender": echo_msg.sender,
-                            "text": echo_msg.text,
-                            "timestamp": echo_msg.timestamp,
-                        }
-                    )
                 else:
                     # If user is not in connected_clients, send an error message
                     await websocket.send_json(
