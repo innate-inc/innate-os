@@ -35,5 +35,5 @@ class SharedQueues:
         self.exit_event = threading.Event()
 
         # Queues specifically for chat messages
-        self.chat_to_bridge = queue.Queue(maxsize=50)
-        self.chat_from_bridge = queue.Queue(maxsize=50)
+        self.chat_to_bridge = queue.Queue(maxsize=500)
+        self.chat_from_bridge = queue.Queue(maxsize=500)

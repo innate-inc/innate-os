@@ -503,16 +503,6 @@ export function Chat({ onSetDirective }: ChatProps) {
       // Send the draft message to the server via WebSocket
       wsRef.current.send(cleanDraft);
 
-      // Add the message to the UI immediately
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "user",
-          text: cleanDraft,
-          timestamp: Date.now() / 1000,
-        },
-      ]);
-
       // Clear the input
       setDraft("");
     } else {
