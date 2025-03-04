@@ -317,7 +317,7 @@ export function Chat({ onSetDirective }: ChatProps) {
               setUserInfoStored(false); // Reset to trigger another attempt
             }, 2000);
           }
-        } catch (error) {
+        } catch {
           // If there was an error, try again after a delay
           setTimeout(() => {
             setUserInfoStored(false); // Reset to trigger another attempt
@@ -575,8 +575,8 @@ export function Chat({ onSetDirective }: ChatProps) {
             );
           } else if (message.sender === "robot") {
             return (
-              <MessageBubble key={`${message.sender}-${index}`} $isUser>
-                <MessageSender $isUser>
+              <MessageBubble key={`${message.sender}-${index}`} $isUser={false}>
+                <MessageSender $isUser={false}>
                   <IoHardwareChip size={14} />
                   <span>Robot</span>
                 </MessageSender>
