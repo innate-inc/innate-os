@@ -14,6 +14,7 @@ from cv_bridge import CvBridge  # For image conversion
 import cv2
 # Import RecorderStatus message
 from brain_messages.msg import RecorderStatus
+import os
 
 class RecorderNode(Node):
     def __init__(self):
@@ -29,7 +30,7 @@ class RecorderNode(Node):
         self.declare_parameter('image_size', [640, 480])
         
         # Get parameter values
-        data_directory = self.get_parameter('data_directory').value
+        data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
         self.data_frequency = self.get_parameter('data_frequency').value
         self.image_topics = self.get_parameter('image_topics').value
         self.arm_state_topic = self.get_parameter('arm_state_topic').value
