@@ -30,7 +30,7 @@ class DataViewerNode(Node):
         self.declare_parameter('velocity_topic', "/cmd_vel")
         self.declare_parameter('image_size', [640, 480])
         # Retrieve parameters
-        self.base_data_directory = self.get_parameter('data_directory').value
+        self.base_data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
         self.data_frequency = self.get_parameter('data_frequency').value
         self.image_topics = self.get_parameter('image_topics').value
         self.arm_state_topic = self.get_parameter('arm_state_topic').value
