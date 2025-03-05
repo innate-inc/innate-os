@@ -1,71 +1,52 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 import os
-import shutil
-import json
+import glob
+import h5py
+import cv2
+import numpy as np
 
-# Explicitly set the base directory
-base_dir = '/home/vignesh/data'
+# Hard-coded directory containing the episode_x.h5 files
+directory_path = "/home/vignesh/maurice-prod/data/Paper"
 
-# Original directories containing the files relative to the base directory
-paper_dirs = ['Paper1', 'Paper2']
-# New combined directory relative to the base directory
-combined_dir = 'Paper'
-combined_dir_path = os.path.join(base_dir, combined_dir)
+# Get list of all episode_*.h5 files (sorted by name)
+h5_files = sorted(glob.glob(os.path.join(directory_path, "episode_*.h5")))
 
-# Create the combined directory if it doesn't exist
-if not os.path.exists(combined_dir_path):
-    os.makedirs(combined_dir_path)
+for h5_file in h5_files:
+    print(f"Processing {h5_file} ...")
+    try:
+        # Open the file in read/write mode so we can modify it in-place.
+        with h5py.File(h5_file, 'r+') as f:
+            if "observations/images" not in f:
+                print(f"  -> No 'observations/images' group found in {h5_file}. Skipping.")
+                continue
 
-combined_metadata = {
-    "task_name": "Paper",
-    "task_description": "Paper",
-    "mobile_task": True,
-    "number_of_episodes": 0,
-    "episodes": []
-}
+            images_group = f["observations/images"]
+            # Using list() to iterate keys as we'll be modifying the group.
+            for camera in list(images_group.keys()):
+                ds = images_group[camera]
+                data = ds[()]
+                print(f"  Processing camera: {camera}, original shape: {data.shape}")
 
-all_episodes = []
+                # Resize image(s) based on the shape of the dataset
+                if data.ndim == 3:
+                    # Single image: (height, width, channels)
+                    resized = cv2.resize(data, (640, 480))
+                elif data.ndim == 4:
+                    # Multiple images: (num_images, height, width, channels)
+                    resized_list = []
+                    for i in range(data.shape[0]):
+                        resized_img = cv2.resize(data[i], (640, 480))
+                        resized_list.append(resized_img)
+                    resized = np.stack(resized_list)
+                else:
+                    print(f"  -> Unexpected shape {data.shape} for camera {camera}. Skipping.")
+                    continue
 
-# Process metadata from both directories
-for paper in paper_dirs:
-    metadata_path = os.path.join(base_dir, paper, 'metadata.json')
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-    # Add each episode with its source directory path
-    for episode in metadata.get('episodes', []):
-        # Add absolute source directory to locate the file
-        episode['source_dir'] = os.path.join(base_dir, paper)
-        all_episodes.append(episode)
+                # Delete the old dataset and create a new one with the resized data
+                del images_group[camera]
+                images_group.create_dataset(camera, data=resized, compression="gzip")
+                print(f"  Updated camera: {camera} with new shape: {resized.shape}")
+    except Exception as e:
+        print(f"Error processing {h5_file}: {e}")
 
-# Sort the episodes by their start timestamp
-all_episodes.sort(key=lambda ep: ep['start_timestamp'])
-
-# Copy files and update episode metadata with a new global numbering scheme
-for idx, episode in enumerate(all_episodes, start=1):
-    source_dir = episode.pop('source_dir')  # Remove the temporary field after use
-    old_file_name = episode['file_name']
-    new_file_name = f"episode_{idx}.h5"
-    
-    # Update metadata for this episode
-    episode['episode_id'] = idx
-    episode['file_name'] = new_file_name
-    
-    # Define source and destination file paths
-    src_file_path = os.path.join(source_dir, old_file_name)
-    dst_file_path = os.path.join(combined_dir_path, new_file_name)
-    
-    # Copy the file to the new combined directory with the new name
-    shutil.copy(src_file_path, dst_file_path)
-    
-    # Append the updated episode metadata
-    combined_metadata['episodes'].append(episode)
-
-# Update total number of episodes
-combined_metadata['number_of_episodes'] = len(combined_metadata['episodes'])
-
-# Write the combined metadata to the new metadata.json in the combined directory
-combined_metadata_path = os.path.join(combined_dir_path, 'metadata.json')
-with open(combined_metadata_path, 'w') as f:
-    json.dump(combined_metadata, f, indent=4)
-
-print(f"Combined {len(all_episodes)} episodes into '{combined_dir_path}' directory.")
+print("All episodes processed.")
