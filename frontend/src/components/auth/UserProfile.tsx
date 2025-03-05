@@ -1,5 +1,6 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import styled from "styled-components";
+import { useEffect, useState } from "react";
 
 const ProfileContainer = styled.div`
   display: flex;
@@ -30,8 +31,19 @@ const UserEmail = styled.span`
   color: ${({ theme }) => theme.colors.muted};
 `;
 
+// Default avatar as a base64 string or you can use a local image path
+const DEFAULT_AVATAR =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2ZmZiI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgM2MyLjY3IDAgOCAyLjEzIDggN3YyYzAgMi4xMy00LjU4IDQtOCA0cy04LTEuODctOC00di0yYzAtNC44NyA1LjMzLTcgOC03eiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iOCIgcj0iMiIvPjwvc3ZnPg==";
+
 export const UserProfile = () => {
   const { user, isAuthenticated, isLoading } = useAuth0();
+  const [imgSrc, setImgSrc] = useState<string>("");
+
+  useEffect(() => {
+    if (user?.picture) {
+      setImgSrc(user.picture);
+    }
+  }, [user]);
 
   if (isLoading) {
     return <div>Loading...</div>;
@@ -43,9 +55,14 @@ export const UserProfile = () => {
 
   return (
     <ProfileContainer>
-      {user.picture && (
-        <ProfileImage src={user.picture} alt={user.name || "User"} />
-      )}
+      <ProfileImage
+        src={imgSrc || DEFAULT_AVATAR}
+        alt={user.name || "User"}
+        onError={(e) => {
+          // console.error("Image failed to load:", e);
+          setImgSrc(DEFAULT_AVATAR);
+        }}
+      />
       <ProfileInfo>
         <UserName>{user.name}</UserName>
         <UserEmail>{user.email}</UserEmail>
