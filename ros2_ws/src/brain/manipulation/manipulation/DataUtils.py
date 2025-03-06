@@ -146,7 +146,7 @@ class TaskManager:
         self.metadata = None  # Will hold the task metadata
         self.episodes = []    # List of EpisodeData objects
 
-    def start_new_task(self, task_name, task_description, mobile_flag):
+    def start_new_task(self, task_name, task_description, mobile_flag, data_frequency):
         """
         Start a new task by creating a task directory and initializing metadata.
         If a task with the given name already exists (i.e., a metadata file is found),
@@ -156,6 +156,7 @@ class TaskManager:
             task_name (str): The name for the new task.
             task_description (str): A description for the task.
             mobile_flag (bool): Indicates if the task involves mobile data.
+            data_frequency (float): The frequency at which data is collected (in Hz).
         """
         self.current_task_name = task_name
         self.current_task_dir = os.path.join(self.base_data_directory, task_name)
@@ -173,6 +174,7 @@ class TaskManager:
             "task_name": task_name,
             "task_description": task_description,
             "mobile_task": mobile_flag,
+            "data_frequency": data_frequency,
             "number_of_episodes": 0,
             "episodes": []  # Will contain details for each saved episode.
         }

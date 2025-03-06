@@ -196,7 +196,7 @@ class RecorderNode(Node):
             self.publish_status(status="failed - episode active", episode_number=str(self.episode_count))
             self.current_episode = None
             self.state = "TASK_ACTIVE"
-        self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task)
+        self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
         self.current_task_name = request.task_name
         self.state = "TASK_ACTIVE"
         self.get_logger().info(f"New task '{request.task_name}' started.")
