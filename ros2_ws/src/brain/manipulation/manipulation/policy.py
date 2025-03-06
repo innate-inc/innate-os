@@ -8,6 +8,7 @@ import torch
 import torchvision.transforms as transforms
 import pickle
 import os
+import cv2
 
 # Import your policy class and any necessary constants/configs.
 from InnateACT.policy import ACTPolicy
@@ -38,8 +39,11 @@ policy_config = {
 class InferenceNode(Node):
     def __init__(self):
         super().__init__('inference_node')
-        self.get_logger().info("Inference node started.")
+        self.get_logger().info("Inference node started (using passthrough for images).")
         self.bridge = CvBridge()
+
+        # Add image size definition
+        self.image_size = (640, 480)
 
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -80,13 +84,15 @@ class InferenceNode(Node):
 
     def image1_callback(self, msg: Image):
         try:
-            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            # Changed to passthrough encoding
+            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
         except Exception as e:
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
         try:
-            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            # Changed to passthrough encoding
+            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
         except Exception as e:
             self.get_logger().error(f"Error converting image2: {e}")
 
@@ -94,37 +100,32 @@ class InferenceNode(Node):
         self.latest_joint_state = msg
 
     def inference_loop(self):
-        # Ensure that data has been received from all topics
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
             self.get_logger().info("Waiting for all topics to be received...")
             return
 
         self.get_logger().info("Running inference...")
 
-        # Preprocess the images: convert to float, normalize, and change channel order from HWC to CHW.
         try:
-            img1 = self.latest_image1.astype(np.float32) / 255.0
-            img2 = self.latest_image2.astype(np.float32) / 255.0
+            # Add resizing step and simplify image processing
+            img1 = cv2.resize(self.latest_image1, self.image_size)
+            img2 = cv2.resize(self.latest_image2, self.image_size)
+
+            # Convert to float and normalize in one step
+            img1 = img1.astype(np.float32) / 255.0
+            img2 = img2.astype(np.float32) / 255.0
+
+            # Convert from HWC to CHW format
             img1 = np.transpose(img1, (2, 0, 1))
             img2 = np.transpose(img2, (2, 0, 1))
+
+            # Convert to tensors and stack
+            img1_tensor = torch.tensor(img1).to(self.device)
+            img2_tensor = torch.tensor(img2).to(self.device)
+            images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
         except Exception as e:
             self.get_logger().error(f"Error processing images: {e}")
             return
-
-        # Convert the images to torch tensors and apply normalization
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225])
-        try:
-            img1_tensor = torch.tensor(img1).to(self.device)
-            img2_tensor = torch.tensor(img2).to(self.device)
-            img1_tensor = normalize(img1_tensor)
-            img2_tensor = normalize(img2_tensor)
-        except Exception as e:
-            self.get_logger().error(f"Error normalizing images: {e}")
-            return
-
-        # Stack images along a new dimension and add batch dimension: expected shape [B, Cams, C, H, W]
-        images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
 
         # Process the joint state to obtain qpos tensor and normalize it
         try:
