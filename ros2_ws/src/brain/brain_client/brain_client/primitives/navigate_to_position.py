@@ -16,6 +16,11 @@ class Nav2Controller:
         self.navigator = BasicNavigator()
         self.logger = logger
 
+        # Create a publisher for velocity commands
+        # self.cmd_vel_pub = self.navigator.create_publisher(
+        #     Twist, '/cmd_vel', 10
+        # )
+
         self.logger.info("Nav2 position primitive node created")
 
     def go_to_position(self, x: float, y: float, theta: float):
@@ -27,7 +32,7 @@ class Nav2Controller:
         Args:
             x (float): x-coordinate of the target position.
             y (float): y-coordinate of the target position.
-            w (float): The w component of the orientation (no rotation implies an identity quaternion).
+            theta (float): The orientation angle in radians.
 
         Returns:
             TaskResult: The result status from the navigator.
@@ -82,19 +87,23 @@ class NavigateToPosition(Primitive):
 
     def guidelines(self):
         return (
-            "Use when you need to navigate the robot to the specified position using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
-            + "Can be used to navigate to a specific point in the map, or rotate the robot, or move forward..."
+            "Use when you need to navigate the robot to the specified position using "
+            "provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
+            "Can be used to navigate to a specific point in the map, or rotate the "
+            "robot, or move forward..."
         )
 
     def execute(self, x: float, y: float, theta: float):
         # Replace this simulated delay and print statements with actual navigation logic.
         self.logger.info(
-            f"\033[96m[BrainClient] Initiating navigation to position: x={x}, y={y}, theta={theta}\033[0m"
+            f"\033[96m[BrainClient] Initiating navigation to position: "
+            f"x={x}, y={y}, theta={theta}\033[0m"
         )
 
         self.nav2_controller.go_to_position(x, y, theta)
 
         self.logger.info(
-            f"\033[92m[BrainClient] Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}\033[0m"
+            f"\033[92m[BrainClient] Navigation complete. Arrived at position: "
+            f"x={x}, y={y}, theta={theta}\033[0m"
         )
         return f"Reached position ({x}, {y}, {theta})", True
