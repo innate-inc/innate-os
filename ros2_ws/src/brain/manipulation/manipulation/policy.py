@@ -6,6 +6,8 @@ from cv_bridge import CvBridge
 import numpy as np
 import torch
 import torchvision.transforms as transforms
+import pickle
+import os
 
 # Import your policy class and any necessary constants/configs.
 from InnateACT.policy import ACTPolicy
@@ -43,6 +45,18 @@ class InferenceNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.policy = ACTPolicy(policy_config).to(self.device)
         checkpoint_path = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_20250303_1859/policy_epoch_16000_seed_100.ckpt'  # Update this path to your checkpoint file
+        
+        # Load normalization stats from the same directory as checkpoint
+        checkpoint_dir = os.path.dirname(checkpoint_path)
+        stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
+        try:
+            with open(stats_path, 'rb') as f:
+                self.norm_stats = pickle.load(f)
+            self.get_logger().info("Normalization stats loaded.")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load normalization stats: {e}")
+            self.norm_stats = None
+
         try:
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             self.policy.load_state_dict(state_dict)
@@ -112,10 +126,16 @@ class InferenceNode(Node):
         # Stack images along a new dimension and add batch dimension: expected shape [B, Cams, C, H, W]
         images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
 
-        # Process the joint state to obtain qpos tensor
+        # Process the joint state to obtain qpos tensor and normalize it
         try:
             qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
             qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device)
+            
+            # Apply normalization using training stats if available
+            if self.norm_stats is not None:
+                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=qpos_tensor.dtype, device=self.device)
+                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=qpos_tensor.dtype, device=self.device)
+                qpos_tensor = (qpos_tensor - qpos_mean) / qpos_std
         except Exception as e:
             self.get_logger().error(f"Error processing joint state: {e}")
             return
@@ -123,7 +143,14 @@ class InferenceNode(Node):
         # For inference, pass qpos and image; actions is None so the policy will sample from the prior.
         with torch.no_grad():
             output = self.policy(qpos_tensor, images)
-            self.get_logger().info(str(output.shape))
+            self.get_logger().info(f"Output shape: {output.shape}")
+
+            # Unnormalize the actions if normalization stats are available
+            if self.norm_stats is not None and "action_mean" in self.norm_stats:
+                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=output.dtype, device=self.device)
+                action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
+                unnormalized_actions = output * action_std + action_mean
+                self.get_logger().info(f"Unnormalized actions: {unnormalized_actions}")
 
 def main(args=None):
     rclpy.init(args=args)
