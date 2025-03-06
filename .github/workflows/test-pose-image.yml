@@ -1,0 +1,34 @@
+name: Test Pose Image Feature
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ros2_ws/src/brain/brain_client/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ros2_ws/src/brain/brain_client/**'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-asyncio numpy opencv-python pydantic
+    
+    - name: Run tests
+      working-directory: ros2_ws/src/brain/brain_client
+      run: |
+        python -m pytest tests/test_pose_image_feature.py -v
