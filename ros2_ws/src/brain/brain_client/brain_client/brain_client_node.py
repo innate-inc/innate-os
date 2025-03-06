@@ -66,6 +66,9 @@ class BrainClientNode(Node):
         self.declare_parameter("horizontal_resolution", 640)
         self.declare_parameter("vertical_resolution", 480)
 
+        # New parameter for pose image interval
+        self.declare_parameter("pose_image_interval", 0.5)  # 0.5 seconds default
+
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
@@ -111,6 +114,11 @@ class BrainClientNode(Node):
                 / self.vertical_resolution
             )
         )
+        
+        # Get pose image interval parameter
+        self.pose_image_interval = (
+            self.get_parameter("pose_image_interval").get_parameter_value().double_value
+        )
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
 
@@ -145,6 +153,10 @@ class BrainClientNode(Node):
 
         self.exit_event = threading.Event()
         self.ready_for_image = False
+        
+        # New variables for pose image timer
+        self.pose_image_timer = None
+        self.pose_image_started = False
 
         self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
 
@@ -265,6 +277,52 @@ class BrainClientNode(Node):
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
         self.ready_for_image = True
+        
+        # Start the pose image timer after the first ready_for_image, if not already started
+        if not self.pose_image_started and self.primitives_registered:
+            self.get_logger().info("Starting regular pose image transmission")
+            self.pose_image_started = True
+            self.pose_image_timer = self.create_timer(
+                self.pose_image_interval, self.pose_image_callback
+            )
+
+    def pose_image_callback(self):
+        """Send pose images regularly with the robot's current position."""
+        try:
+            # Skip if no valid image or odometry data is available
+            if self.last_image is None or self.last_odom is None:
+                return
+                
+            # Compress the image as JPEG
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+            success, encoded_img = cv2.imencode(".jpg", self.last_image, encode_params)
+            if not success:
+                self.get_logger().error("Failed to encode image for pose_image")
+                return
+                
+            # Extract position and orientation data
+            pos = self.last_odom.pose.pose.position
+            ori = self.last_odom.pose.pose.orientation
+            
+            # Compute yaw from quaternion
+            siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+            cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+            theta = math.atan2(siny_cosp, cosy_cosp)
+            
+            # Create and send the pose_image message
+            # No user_token is needed as the server will use the connection_id
+            payload = {
+                "image": base64.b64encode(encoded_img.tobytes()).decode("utf-8"),
+                "x": pos.x,
+                "y": pos.y, 
+                "theta": theta
+            }
+            
+            pose_image_msg = MessageIn(type=MessageInType.POSE_IMAGE, payload=payload)
+            self.ws_bridge.send_message(pose_image_msg)
+            self.get_logger().debug(f"Sent pose_image at position ({pos.x:.2f}, {pos.y:.2f}, {theta:.2f})")
+        except Exception as e:
+            self.get_logger().error(f"Error in pose_image_callback: {e}")
 
     def _handle_vision_agent_output(self, msg):
         try:
@@ -480,11 +538,19 @@ class BrainClientNode(Node):
         if msg.payload.get("success", False):
             self.primitives_registered = True
             self.directive_registered = True
-            primitive_count = msg.payload.get("primitive_count", 0)
+            primitive_count = msg.payload.get("count", 0)
             directive_registered = msg.payload.get("directive_registered", False)
             self.get_logger().info(
                 f"Successfully registered {primitive_count} primitives and directive: {directive_registered}"
             )
+            
+            # Start the pose image timer if we've already received a ready_for_image message
+            if self.ready_for_image and not self.pose_image_started:
+                self.get_logger().info("Starting regular pose image transmission after registration")
+                self.pose_image_started = True
+                self.pose_image_timer = self.create_timer(
+                    self.pose_image_interval, self.pose_image_callback
+                )
         else:
             self.get_logger().error(
                 "Failed to register primitives and/or directive with server"
@@ -593,6 +659,9 @@ class BrainClientNode(Node):
 
     def destroy_node(self):
         self.exit_event.set()
+        # Cancel the pose image timer if it exists
+        if self.pose_image_timer:
+            self.pose_image_timer.cancel()
         return super().destroy_node()
 
 
