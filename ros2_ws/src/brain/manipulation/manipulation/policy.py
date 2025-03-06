@@ -8,7 +8,7 @@ import torch
 import torchvision.transforms as transforms
 
 # Import your policy class and any necessary constants/configs.
-from manipulation.InnateACT.policy import ACTPolicy
+from InnateACT.policy import ACTPolicy
 
 # Define the policy configuration (make sure these match your training configuration)
 policy_config = {
@@ -30,7 +30,7 @@ policy_config = {
     'dropout': 0.1,
     'pre_norm': False,
     'state_dim': 6,
-    'action_dim': 6  # Adjust if needed
+    'action_dim': 8  # Adjust if needed
 }
 
 class InferenceNode(Node):
@@ -42,7 +42,7 @@ class InferenceNode(Node):
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.policy = ACTPolicy(policy_config).to(self.device)
-        checkpoint_path = '/path/to/your/checkpoint.ckpt'  # Update this path to your checkpoint file
+        checkpoint_path = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_20250303_1859/policy_epoch_16000_seed_100.ckpt'  # Update this path to your checkpoint file
         try:
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             self.policy.load_state_dict(state_dict)
@@ -57,9 +57,9 @@ class InferenceNode(Node):
         self.latest_joint_state = None
 
         # Subscribers for the two image topics and joint state topic
-        self.create_subscription(Image, '/camera_1/image_raw', self.image1_callback, 10)
-        self.create_subscription(Image, '/camera_2/image_raw', self.image2_callback, 10)
-        self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
+        self.create_subscription(Image, '/camera/image_raw', self.image1_callback, 10)
+        self.create_subscription(Image, '/camera/image_processed', self.image2_callback, 10)
+        self.create_subscription(JointState, '/arm/state', self.joint_state_callback, 10)
 
         # Timer to run the inference loop at 10 Hz
         self.timer = self.create_timer(0.1, self.inference_loop)
@@ -123,7 +123,7 @@ class InferenceNode(Node):
         # For inference, pass qpos and image; actions is None so the policy will sample from the prior.
         with torch.no_grad():
             output = self.policy(qpos_tensor, images)
-            self.get_logger().info(f"Inference output: {output}")
+            self.get_logger().info(str(output.shape))
 
 def main(args=None):
     rclpy.init(args=args)

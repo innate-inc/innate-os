@@ -48,5 +48,6 @@ install(
     manipulation/recorder_interface.py
     manipulation/visualizer.py
     manipulation/test.py
+    manipulation/policy.py
   DESTINATION lib/${PROJECT_NAME}
 )

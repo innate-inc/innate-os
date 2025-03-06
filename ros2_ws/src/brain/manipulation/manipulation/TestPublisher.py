@@ -56,6 +56,9 @@ class TestPublisher(Node):
                 self.get_logger().error("Failed to read video frame after reset.")
                 return
         
+        # Resize frame to 640x480
+        frame = cv2.resize(frame, (640, 480))
+        
         # Process the frame for the processed topic (convert to grayscale).
         processed_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
