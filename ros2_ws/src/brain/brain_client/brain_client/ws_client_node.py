@@ -36,7 +36,12 @@ class WSClient:
     async def connect(self):
         self.node.get_logger().debug(f"[WSClient] Connecting to {self.uri} ...")
         try:
-            async with websockets.connect(self.uri) as websocket:
+            # Set a longer timeout that works for all operations
+            async with websockets.connect(
+                self.uri,
+                ping_interval=30,  # Send a ping every 30 seconds
+                ping_timeout=60,  # Wait up to 60 seconds for a pong response
+            ) as websocket:
                 self.websocket = websocket
                 self.node.get_logger().info(f"[WSClient] Connected to {self.uri}")
 
