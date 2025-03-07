@@ -92,8 +92,8 @@ class SimulationNode:
             gs.morphs.Mesh(
                 file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
                 fixed=True,  # Make it static
-                euler=(0, 0, 90),  # Rotate to lie flat
-                pos=(0.5, -3.0, 0.05),  # Position as requested (with slight z-offset)
+                euler=(180, 180, 90),  # Rotate to lie flat
+                pos=(0.5, -3.0, 0.10),  # Position as requested (with slight z-offset)
                 scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
                 convexify=False,
                 collision=False,  # Enable collision for robot interaction
@@ -268,7 +268,6 @@ class SimulationNode:
     def init_movement(self):
         """Initialize robot movement"""
         self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
-        self.auto_movement_started = False
         self.auto_movement_delay = 30  # 3 seconds at dt=0.1
 
     def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
@@ -287,22 +286,6 @@ class SimulationNode:
         step_count = 0
 
         while not self.shared_queues.exit_event.is_set():
-            # --- (A) Auto movement after delay
-            if (
-                not self.auto_movement_started
-                and step_count >= self.auto_movement_delay
-            ):
-                print("Starting auto movement - moving forward at 0.2 m/s")
-                linear_vel = 0.2  # 20 cm/s
-                angular_vel = 0.0
-                left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
-                    linear_vel, angular_vel
-                )
-                self.robot.control_dofs_velocity(
-                    [left_vel, right_vel], [self.left_idx, self.right_idx]
-                )
-                self.auto_movement_started = True
-
             # --- (B) Gather robot pose, velocity
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
