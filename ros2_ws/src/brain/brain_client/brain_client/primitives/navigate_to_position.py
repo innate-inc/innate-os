@@ -87,10 +87,8 @@ class NavigateToPosition(Primitive):
 
     def guidelines(self):
         return (
-            "Use when you need to navigate the robot to the specified position using "
-            "provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
-            "Can be used to navigate to a specific point in the map, or rotate the "
-            "robot, or move forward..."
+            "Use when you need to navigate the robot to the specified position using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
+            + "Can be used to navigate to a specific point in the map."
         )
 
     def execute(self, x: float, y: float, theta: float):
