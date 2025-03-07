@@ -517,12 +517,14 @@ class BrainClientNode(Node):
             f"{status_color}[BrainClient] Primitive execution result: {result.success}\033[0m"
         )
         # Send a stop command to the robot if the primitive failed.
+        # Wait 1sec
+        time.sleep(1)  # TODO: Find a better way to do this.
         stop_cmd = Twist()
         stop_cmd.linear.x = 0.0
         stop_cmd.angular.z = 0.0
         self.cmd_vel_pub.publish(stop_cmd)
 
-        self.get_logger().info(f"\033[92m[BrainClient] Stopping robot\033[0m")
+        self.get_logger().info("\033[92m[BrainClient] Stopping robot\033[0m")
 
         if result.success:
             self.primitive_running = False
