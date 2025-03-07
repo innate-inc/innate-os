@@ -4,7 +4,13 @@
 import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
 // Example icon from react-icons (feel free to use your own icon or an SVG):
-import { IoSend, IoPerson, IoHardwareChip } from "react-icons/io5";
+import {
+  IoSend,
+  IoPerson,
+  IoHardwareChip,
+  IoMic,
+  IoMicOff,
+} from "react-icons/io5";
 // Import directive icons
 import {
   IoHappy,
@@ -18,6 +24,7 @@ import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 import { useAuth0 } from "@auth0/auth0-react";
 import { isAuthorized, fetchAndStoreUserInfo } from "../services/authService";
+import Groq from "groq-sdk";
 
 const ChatContainer = styled.div`
   /* Default desktop width */
@@ -103,13 +110,18 @@ const InputArea = styled.div`
   box-shadow: ${({ theme }) => theme.shadows.small};
 `;
 
-const TextInput = styled.input`
+interface TextInputProps {
+  $isListening: boolean;
+}
+
+const TextInput = styled.input<TextInputProps>`
   flex: 1;
   border: none;
   border-radius: 16px;
   padding: 12px;
   outline: none;
-  background: transparent;
+  background: ${({ $isListening }) =>
+    $isListening ? "#f0f4ff20" : "transparent"};
   font-size: 15px;
   font-family: ${({ theme }) => theme.fonts.body};
   color: ${({ theme }) => theme.colors.foreground};
@@ -135,6 +147,33 @@ const SendButton = styled.button`
 
   &:hover {
     transform: scale(1.05);
+  }
+`;
+
+const MicButton = styled.button<{ $isListening: boolean }>`
+  background: ${({ $isListening }) =>
+    $isListening
+      ? "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"
+      : "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)"};
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  justify-content: center;
+  cursor: pointer;
+  margin-right: 8px;
+  color: white;
+  transition: all 0.2s ease;
+
+  &:hover {
+    transform: scale(1.05);
+    background: ${({ $isListening }) =>
+      $isListening
+        ? "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)"
+        : "linear-gradient(135deg, #4b5563 0%, #374151 100%)"};
   }
 `;
 
@@ -285,6 +324,9 @@ export function Chat({ onSetDirective }: ChatProps) {
   );
   const { user, isAuthenticated, getAccessTokenSilently } = useAuth0();
   const [userInfoStored, setUserInfoStored] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -527,6 +569,160 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   };
 
+  // Speech recognition functions
+  const startListening = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+        await processAudio(audioBlob);
+
+        // Stop all tracks to release the microphone
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setIsListening(true);
+    } catch (error) {
+      console.error("Error accessing microphone:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "Error accessing microphone. Please check your browser permissions.",
+          timestamp: Date.now() / 1000,
+          isError: true,
+        },
+      ]);
+    }
+  };
+
+  const stopListening = () => {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    setIsListening(false);
+  };
+
+  const toggleListening = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  };
+
+  const processAudio = async (audioBlob: Blob) => {
+    try {
+      // Convert blob to base64
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+
+      reader.onloadend = async () => {
+        // Show processing message
+        setMessages((prev) => [
+          ...prev,
+          {
+            sender: "system",
+            text: "Processing your speech...",
+            timestamp: Date.now() / 1000,
+          },
+        ]);
+
+        try {
+          // Create a temporary file from the blob
+          const file = new File([audioBlob], "recording.webm", {
+            type: "audio/webm",
+          });
+
+          // Create FormData to send the file
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("model", "distil-whisper-large-v3-en");
+
+          console.log("Key", import.meta.env.VITE_GROQ_API_KEY);
+
+          // Send to backend for processing with Groq API
+          const groq = new Groq({
+            apiKey: import.meta.env.VITE_GROQ_API_KEY || "",
+            dangerouslyAllowBrowser: true,
+          });
+          const transcription = await groq.audio.transcriptions.create({
+            file: file,
+            model: "distil-whisper-large-v3-en",
+          });
+
+          if (transcription && transcription.text) {
+            // Set the transcribed text as the draft
+            setDraft(transcription.text);
+
+            // Remove the processing message
+            setMessages((prev) =>
+              prev.filter(
+                (msg) =>
+                  !(
+                    msg.sender === "system" &&
+                    msg.text === "Processing your speech..."
+                  )
+              )
+            );
+          } else {
+            throw new Error("No transcription returned");
+          }
+        } catch (error) {
+          console.error("Error processing audio:", error);
+
+          // Remove the processing message and show error
+          setMessages((prev) => {
+            const filteredMessages = prev.filter(
+              (msg) =>
+                !(
+                  msg.sender === "system" &&
+                  msg.text === "Processing your speech..."
+                )
+            );
+
+            return [
+              ...filteredMessages,
+              {
+                sender: "system",
+                text: "Error processing your speech. Please try again.",
+                timestamp: Date.now() / 1000,
+                isError: true,
+              },
+            ];
+          });
+        }
+      };
+    } catch (error) {
+      console.error("Error processing audio:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "Error processing your speech. Please try again.",
+          timestamp: Date.now() / 1000,
+          isError: true,
+        },
+      ]);
+    }
+  };
+
   // Use the grouping utility to prepare messages for display.
   const groupedMessages: DisplayMessage[] = groupMessages(messages);
 
@@ -611,9 +807,16 @@ export function Chat({ onSetDirective }: ChatProps) {
         <div ref={messagesEndRef} />
       </MessagesWrapper>
       <InputArea>
+        <MicButton
+          onClick={toggleListening}
+          $isListening={isListening}
+          title={isListening ? "Stop recording" : "Start voice input"}
+        >
+          {isListening ? <IoMicOff size={20} /> : <IoMic size={20} />}
+        </MicButton>
         <TextInput
           type="text"
-          placeholder="Type your message..."
+          placeholder={isListening ? "Listening..." : "Type your message..."}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -622,6 +825,8 @@ export function Chat({ onSetDirective }: ChatProps) {
               handleSend();
             }
           }}
+          $isListening={isListening}
+          disabled={isListening}
         />
         <SendButton onClick={handleSend}>
           <IoSend size={20} style={{ display: "block", padding: 0 }} />
