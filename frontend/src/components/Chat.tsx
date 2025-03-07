@@ -25,6 +25,7 @@ import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
 import { useAuth0 } from "@auth0/auth0-react";
 import { isAuthorized, fetchAndStoreUserInfo } from "../services/authService";
 import Groq from "groq-sdk";
+import { CartesiaClient } from "@cartesia/cartesia-js";
 
 const ChatContainer = styled.div`
   /* Default desktop width */
@@ -327,6 +328,12 @@ export function Chat({ onSetDirective }: ChatProps) {
   const [isListening, setIsListening] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const cartesiaRef = useRef<CartesiaClient | null>(null);
+  const websocketRef = useRef<any>(null);
+  const audioBuffersRef = useRef<Float32Array[]>([]);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -545,6 +552,9 @@ export function Chat({ onSetDirective }: ChatProps) {
       // Send the draft message to the server via WebSocket
       wsRef.current.send(cleanDraft);
 
+      // FOR DEBUGGING: Speak the user message
+      speakMessage(cleanDraft, true);
+
       // Clear the input
       setDraft("");
     } else {
@@ -734,6 +744,223 @@ export function Chat({ onSetDirective }: ChatProps) {
     }));
   };
 
+  // Initialize Cartesia client
+  useEffect(() => {
+    if (!cartesiaRef.current) {
+      cartesiaRef.current = new CartesiaClient({
+        apiKey: import.meta.env.VITE_CARTESIA_API_KEY || "",
+      });
+    }
+
+    // Initialize AudioContext
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+    }
+
+    return () => {
+      // Clean up WebSocket connection if active
+      if (websocketRef.current) {
+        websocketRef.current.disconnect();
+      }
+
+      // Stop any playing audio
+      if (audioSourceRef.current) {
+        try {
+          audioSourceRef.current.stop();
+        } catch (e) {
+          // Ignore errors if already stopped
+        }
+      }
+    };
+  }, []);
+
+  // Function to decode base64 to array buffer
+  const base64ToArrayBuffer = (base64: string) => {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  };
+
+  // Function to speak messages using Cartesia WebSocket
+  const speakMessage = async (text: string, isUser: boolean = false) => {
+    if (!cartesiaRef.current || isSpeaking || !text.trim()) return;
+
+    try {
+      setIsSpeaking(true);
+      audioBuffersRef.current = []; // Clear previous audio buffers
+
+      // Initialize WebSocket if not already done
+      if (!websocketRef.current) {
+        websocketRef.current = cartesiaRef.current.tts.websocket({
+          container: "raw",
+          encoding: "pcm_f32le",
+          sampleRate: 44100,
+        });
+
+        try {
+          await websocketRef.current.connect();
+        } catch (error) {
+          console.error(`Failed to connect to Cartesia: ${error}`);
+          setIsSpeaking(false);
+          return;
+        }
+      }
+
+      console.log(`Speaking ${isUser ? "user" : "robot"} message: "${text}"`);
+
+      // Create a stream - use different voices for user vs robot
+      const response = await websocketRef.current.send({
+        modelId: "sonic-english",
+        voice: {
+          mode: "id",
+          // Use different voice IDs for user vs robot for easy distinction
+          id: isUser
+            ? "a0e99841-438c-4a64-b679-ae501e7d6091" // User voice
+            : "7c3f8e3d-8b1f-4c0e-b8f0-5f7b36c6a5b4", // Robot voice (different ID)
+        },
+        transcript: text,
+      });
+
+      // Process audio data
+      response.on("message", (message: any) => {
+        // Handle chunked audio data
+        // Parse the message
+        const parsedMessage = JSON.parse(message);
+
+        if (
+          parsedMessage.type === "chunk" &&
+          parsedMessage.data &&
+          audioContextRef.current
+        ) {
+          try {
+            // Convert base64 string to binary data
+            const audioBuffer = base64ToArrayBuffer(parsedMessage.data);
+
+            // Convert to Float32Array for Web Audio API
+            const floatArray = new Float32Array(audioBuffer);
+
+            // Store the audio chunk
+            audioBuffersRef.current.push(floatArray);
+
+            // If this is the first chunk, start playing immediately
+            if (audioBuffersRef.current.length === 1) {
+              playAudioChunks();
+            }
+          } catch (error) {
+            console.error("Error processing audio chunk:", error);
+          }
+        }
+
+        // Handle completion
+        if (message.type === "chunk" && message.done) {
+          console.log(`Finished speaking ${isUser ? "user" : "robot"} message`);
+          // We'll set isSpeaking to false when audio playback completes
+        }
+      });
+
+      // Handle errors
+      response.on("error", (error: any) => {
+        console.error("Error during speech synthesis:", error);
+        setIsSpeaking(false);
+      });
+    } catch (error) {
+      console.error("Error generating speech:", error);
+      setIsSpeaking(false);
+    }
+  };
+
+  // Function to play audio chunks
+  const playAudioChunks = () => {
+    if (!audioContextRef.current || audioBuffersRef.current.length === 0)
+      return;
+
+    try {
+      // Calculate total length of all chunks
+      let totalLength = 0;
+      for (const chunk of audioBuffersRef.current) {
+        totalLength += chunk.length;
+      }
+
+      // Create a combined buffer
+      const combinedBuffer = new Float32Array(totalLength);
+
+      // Copy all chunks into the combined buffer
+      let offset = 0;
+      for (const chunk of audioBuffersRef.current) {
+        combinedBuffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Create an audio buffer
+      const audioBuffer = audioContextRef.current.createBuffer(
+        1, // mono
+        combinedBuffer.length,
+        44100 // sample rate
+      );
+
+      // Fill the buffer with our audio data
+      audioBuffer.getChannelData(0).set(combinedBuffer);
+
+      // Create a buffer source
+      const source = audioContextRef.current.createBufferSource();
+      audioSourceRef.current = source;
+      source.buffer = audioBuffer;
+
+      // When playback ends
+      source.onended = () => {
+        setIsSpeaking(false);
+        audioBuffersRef.current = []; // Clear buffers
+        audioSourceRef.current = null;
+      };
+
+      // Connect to the audio context destination and play
+      source.connect(audioContextRef.current.destination);
+      source.start();
+    } catch (error) {
+      console.error("Error playing audio chunks:", error);
+      setIsSpeaking(false);
+    }
+  };
+
+  // Stop speaking function
+  const stopSpeaking = () => {
+    if (audioSourceRef.current) {
+      try {
+        audioSourceRef.current.stop();
+      } catch (e) {
+        // Ignore errors if already stopped
+      }
+      audioSourceRef.current = null;
+    }
+    audioBuffersRef.current = []; // Clear buffers
+    setIsSpeaking(false);
+  };
+
+  // Effect to handle new messages
+  useEffect(() => {
+    if (messages.length > 0) {
+      const latestMessage = messages[messages.length - 1];
+
+      // Only speak messages from the robot OR USER
+      if (
+        latestMessage &&
+        (latestMessage.sender === "robot" || latestMessage.sender === "user")
+      ) {
+        speakMessage(latestMessage.text, latestMessage.sender === "user");
+      }
+
+      // Scroll to bottom if needed
+      if (isScrolledToBottom) {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+  }, [messages]);
+
   return (
     <ChatContainer>
       <DirectivesContainer>
@@ -775,6 +1002,21 @@ export function Chat({ onSetDirective }: ChatProps) {
                 <MessageSender $isUser={false}>
                   <IoHardwareChip size={14} />
                   <span>Robot</span>
+                  {/* Add a button to manually trigger speech */}
+                  <button
+                    onClick={() => speakMessage(message.text, false)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      marginLeft: "auto",
+                      opacity: isSpeaking ? 0.5 : 1,
+                    }}
+                    disabled={isSpeaking}
+                    title={isSpeaking ? "Speaking..." : "Speak this message"}
+                  >
+                    🔊
+                  </button>
                 </MessageSender>
                 {message.text}
               </MessageBubble>
@@ -806,6 +1048,38 @@ export function Chat({ onSetDirective }: ChatProps) {
         {/* Marker element for auto-scroll */}
         <div ref={messagesEndRef} />
       </MessagesWrapper>
+
+      {/* Add a stop speaking button when active */}
+      {isSpeaking && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: "80px",
+            right: "20px",
+            zIndex: 100,
+          }}
+        >
+          <button
+            onClick={stopSpeaking}
+            style={{
+              background: "rgba(239, 68, 68, 0.9)",
+              color: "white",
+              border: "none",
+              borderRadius: "50%",
+              width: "40px",
+              height: "40px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.2)",
+            }}
+          >
+            🔇
+          </button>
+        </div>
+      )}
+
       <InputArea>
         <MicButton
           onClick={toggleListening}
