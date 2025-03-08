@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
@@ -9,6 +10,7 @@ import torchvision.transforms as transforms
 import pickle
 import os
 import cv2
+from geometry_msgs.msg import Twist
 
 # Import your policy class and any necessary constants/configs.
 from InnateACT.policy import ACTPolicy
@@ -48,8 +50,8 @@ class InferenceNode(Node):
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.policy = ACTPolicy(policy_config).to(self.device)
-        checkpoint_path = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_20250303_1859/policy_epoch_16000_seed_100.ckpt'  # Update this path to your checkpoint file
-        
+        checkpoint_path = '~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_4_20250307_0302/policy_epoch_20000_seed_100.ckpt'  # Update this path to your checkpoint file
+        checkpoint_path = os.path.expanduser(checkpoint_path)
         # Load normalization stats from the same directory as checkpoint
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
@@ -75,12 +77,15 @@ class InferenceNode(Node):
         self.latest_joint_state = None
 
         # Subscribers for the two image topics and joint state topic
-        self.create_subscription(Image, '/camera/image_raw', self.image1_callback, 10)
-        self.create_subscription(Image, '/camera/image_processed', self.image2_callback, 10)
-        self.create_subscription(JointState, '/arm/state', self.joint_state_callback, 10)
+        self.create_subscription(Image, '/image_raw', self.image2_callback, 10)
+        self.create_subscription(Image, '/color/image', self.image1_callback, 10)
+        self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
 
         # Timer to run the inference loop at 10 Hz
         self.timer = self.create_timer(0.1, self.inference_loop)
+
+        # Create a publisher for the twist command
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
     def image1_callback(self, msg: Image):
         try:
@@ -100,6 +105,7 @@ class InferenceNode(Node):
         self.latest_joint_state = msg
 
     def inference_loop(self):
+        start_time = time.time()
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
             self.get_logger().info("Waiting for all topics to be received...")
             return
@@ -144,15 +150,31 @@ class InferenceNode(Node):
         # For inference, pass qpos and image; actions is None so the policy will sample from the prior.
         with torch.no_grad():
             output = self.policy(qpos_tensor, images)
-            self.get_logger().info(f"Output shape: {output.shape}")
+            #self.get_logger().info(f"Output shape: {output.shape}")
 
             # Unnormalize the actions if normalization stats are available
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
                 action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=output.dtype, device=self.device)
                 action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
                 unnormalized_actions = output * action_std + action_mean
-                self.get_logger().info(f"Unnormalized actions: {unnormalized_actions}")
+                
+                # Get first 10 elements and their last 2 values
+                first_10 = unnormalized_actions[0, :10, -2:]  # Shape: [10, 2]
+                #self.get_logger().info(f"First 10 elements (last 2 values): {first_10.cpu().numpy()}")
+                
+                # Sleep for 30ms
+                time.sleep(0.03)
 
+                # Extract the last two values from the last query as twist command
+                twist_data = unnormalized_actions[0, -1, -2:]  # Assuming these correspond to [linear_x, angular_z]
+                twist_msg = Twist()
+                twist_msg.linear.x = twist_data[0].item()   # Linear velocity
+                twist_msg.angular.z = twist_data[1].item()  # Angular velocity
+
+                # Publish the twist command to /cmd_vel
+                self.cmd_vel_pub.publish(twist_msg)
+                self.get_logger().info(f"Published Twist: linear.x={twist_msg.linear.x}, angular.z={twist_msg.angular.z}")
+        print(f"Time taken: {time.time() - start_time}")
 def main(args=None):
     rclpy.init(args=args)
     node = InferenceNode()
