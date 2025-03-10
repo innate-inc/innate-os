@@ -429,27 +429,32 @@ class BrainClientNode(Node):
                 payload["vertical_fov"] = self.vertical_fov
 
                 # Optionally include depth data if enabled and available.
-                if self.send_depth and self.last_depth_image is not None:
-                    depth_frame = self.last_depth_image
-                    depth_data = depth_frame.tobytes()
-                    if depth_frame.dtype == np.uint16:
-                        encoding = "16UC1"
-                        bytes_per_pixel = 2
-                    elif depth_frame.dtype == np.float32:
-                        encoding = "32FC1"
-                        bytes_per_pixel = 4
-                    else:
-                        encoding = "8UC1"
-                        bytes_per_pixel = 1
-                    depth_payload = {
-                        "height": int(depth_frame.shape[0]),
-                        "width": int(depth_frame.shape[1]),
-                        "encoding": encoding,
-                        "is_bigendian": 0,
-                        "step": int(depth_frame.shape[1] * bytes_per_pixel),
-                        "data": base64.b64encode(depth_data).decode("utf-8"),
-                    }
-                    payload["depth"] = depth_payload
+                if self.send_depth and self.last_depth_image is None:
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No depth image available.\033[0m"
+                    )
+                    return
+
+                depth_frame = self.last_depth_image
+                depth_data = depth_frame.tobytes()
+                if depth_frame.dtype == np.uint16:
+                    encoding = "16UC1"
+                    bytes_per_pixel = 2
+                elif depth_frame.dtype == np.float32:
+                    encoding = "32FC1"
+                    bytes_per_pixel = 4
+                else:
+                    encoding = "8UC1"
+                    bytes_per_pixel = 1
+                depth_payload = {
+                    "height": int(depth_frame.shape[0]),
+                    "width": int(depth_frame.shape[1]),
+                    "encoding": encoding,
+                    "is_bigendian": 0,
+                    "step": int(depth_frame.shape[1] * bytes_per_pixel),
+                    "data": base64.b64encode(depth_data).decode("utf-8"),
+                }
+                payload["depth"] = depth_payload
 
                 # Include robot coordinates (if available) in the payload.
                 if self.last_odom is not None:
