@@ -58,7 +58,7 @@ export const UserProfile = () => {
       <ProfileImage
         src={imgSrc || DEFAULT_AVATAR}
         alt={user.name || "User"}
-        onError={(e) => {
+        onError={() => {
           // console.error("Image failed to load:", e);
           setImgSrc(DEFAULT_AVATAR);
         }}
