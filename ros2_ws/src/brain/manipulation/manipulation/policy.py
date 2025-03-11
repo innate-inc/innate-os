@@ -3,6 +3,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
+from std_msgs.msg import Float64MultiArray  # New import for arm state command
 from cv_bridge import CvBridge
 import numpy as np
 import torch
@@ -77,15 +78,16 @@ class InferenceNode(Node):
         self.latest_joint_state = None
 
         # Subscribers for the two image topics and joint state topic
-        self.create_subscription(Image, '/image_raw', self.image2_callback, 10)
         self.create_subscription(Image, '/color/image', self.image1_callback, 10)
+        self.create_subscription(Image, '/image_raw', self.image2_callback, 10)
         self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
 
         # Timer to run the inference loop at 10 Hz
         self.timer = self.create_timer(0.1, self.inference_loop)
 
-        # Create a publisher for the twist command
+        # Create publishers for cmd_vel and arm state command
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/state', 10)
 
     def image1_callback(self, msg: Image):
         try:
@@ -109,8 +111,6 @@ class InferenceNode(Node):
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
             self.get_logger().info("Waiting for all topics to be received...")
             return
-
-        self.get_logger().info("Running inference...")
 
         try:
             # Add resizing step and simplify image processing
@@ -150,31 +150,34 @@ class InferenceNode(Node):
         # For inference, pass qpos and image; actions is None so the policy will sample from the prior.
         with torch.no_grad():
             output = self.policy(qpos_tensor, images)
-            #self.get_logger().info(f"Output shape: {output.shape}")
-
             # Unnormalize the actions if normalization stats are available
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
                 action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=output.dtype, device=self.device)
                 action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
                 unnormalized_actions = output * action_std + action_mean
-                
-                # Get first 10 elements and their last 2 values
-                first_10 = unnormalized_actions[0, :10, -2:]  # Shape: [10, 2]
-                #self.get_logger().info(f"First 10 elements (last 2 values): {first_10.cpu().numpy()}")
-                
-                # Sleep for 30ms
-                time.sleep(0.03)
 
-                # Extract the last two values from the last query as twist command
+                # Extract the twist command (last two elements) from the final query
                 twist_data = unnormalized_actions[0, -1, -2:]  # Assuming these correspond to [linear_x, angular_z]
                 twist_msg = Twist()
                 twist_msg.linear.x = twist_data[0].item()   # Linear velocity
-                twist_msg.angular.z = twist_data[1].item()  # Angular velocity
+                twist_msg.angular.z = twist_data[1].item()    # Angular velocity
 
                 # Publish the twist command to /cmd_vel
                 self.cmd_vel_pub.publish(twist_msg)
                 self.get_logger().info(f"Published Twist: linear.x={twist_msg.linear.x}, angular.z={twist_msg.angular.z}")
+
+                # Extract the first six elements for arm state command from the final query
+                arm_command = unnormalized_actions[0, -1, :6]
+                arm_msg = Float64MultiArray()
+                arm_msg.data = arm_command.cpu().numpy().tolist()
+                # Publish the arm state command to /maurice_arm/state
+                self.arm_state_pub.publish(arm_msg)
+                self.get_logger().info(f"Published Arm State: {arm_msg.data}")
+
+                # Optional: a brief sleep (adjusted to 30ms) if needed for timing
+                time.sleep(0.03)
         print(f"Time taken: {time.time() - start_time}")
+
 def main(args=None):
     rclpy.init(args=args)
     node = InferenceNode()
