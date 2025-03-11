@@ -82,7 +82,7 @@ class InferenceNode(Node):
         self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
 
         # Timer to run the publishing loop at 30 Hz (every ~0.033 seconds)
-        self.timer = self.create_timer(1/30.0, self.inference_loop)
+        self.timer = self.create_timer(1/10.0, self.inference_loop)
 
         # Create publishers for cmd_vel and arm state command
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -179,7 +179,7 @@ class InferenceNode(Node):
         # The arm command is taken from the first six elements.
         arm_msg = Float64MultiArray()
         arm_msg.data = next_action[:6]
-        self.arm_state_pub.publish(arm_msg)
+        #self.arm_state_pub.publish(arm_msg)
         self.get_logger().info(f"Published Arm Command: {arm_msg.data}")
 
         print(f"Cycle time: {time.time() - start_time:.3f} seconds")
