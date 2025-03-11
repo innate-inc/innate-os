@@ -5,6 +5,7 @@ import genesis as gs
 import cv2  # for potential image saving/processing
 import json
 from scipy.spatial.transform import Rotation as R
+import time  # Add import for time functions
 
 from src.simulation.stl_slicing import slice_stl
 from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd, ResetRobotCmd
@@ -21,6 +22,10 @@ class SimulationNode:
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
 
+        # Add timing variables for real-time simulation
+        self.last_render_time = 0
+        self.render_interval = 0.5  # Render every 0.5 seconds
+        
         self.render_camera_vfov = 40
         self.render_camera_hfov = 2 * atan(
             tan(self.render_camera_vfov / 2) * 1280 / 720
@@ -284,6 +289,11 @@ class SimulationNode:
     def run(self):
         local_forward = np.array([1.0, 0.0, 0.0])
         step_count = 0
+        sim_time = 0  # Track simulation time
+        
+        # Get the simulation timestep from the scene
+        dt = self.scene.sim_options.dt
+        last_step_time = time.time()
 
         while not self.shared_queues.exit_event.is_set():
             # --- (B) Gather robot pose, velocity
@@ -292,8 +302,11 @@ class SimulationNode:
             lin_vel = self.robot.get_vel().cpu().numpy()
             ang_vel = self.robot.get_ang().cpu().numpy()
 
-            # --- (C) Render cameras only every 5th frame (i.e. every 0.5 sec if dt=0.1)
-            if step_count % 5 == 0:
+            # --- (C) Render cameras based on time interval
+            sim_time += dt
+            
+            # Check if enough time has passed since last render
+            if sim_time - self.last_render_time >= self.render_interval:
                 camera_link = self.robot.get_link("camera_link")
                 camera_pos = camera_link.get_pos()
                 camera_quat = camera_link.get_quat()
@@ -329,6 +342,9 @@ class SimulationNode:
                     self.shared_queues.sim_to_web.put_nowait(camera_views)
                 except queue.Full:
                     pass
+                
+                # Update last render time
+                self.last_render_time = sim_time
             else:
                 rgb_to_send = None
                 depth_to_send = None
@@ -418,6 +434,20 @@ class SimulationNode:
             try:
                 self.scene.step()
                 step_count += 1
+                
+                # --- (H) Sleep to maintain real-time simulation
+                current_time = time.time()
+                elapsed = current_time - last_step_time
+                sleep_time = dt - elapsed
+                
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                elif sleep_time < -0.1:  # Only warn if we're significantly behind
+                    print(f"[SimulationNode] Warning: Simulation running slower than real-time (behind by {-sleep_time:.3f}s)")
+                
+                # Update last step time for next iteration
+                last_step_time = time.time()
+                
             except Exception as e:
                 if "Viewer closed" in str(e):
                     print("Viewer closed, stopping simulation.")
