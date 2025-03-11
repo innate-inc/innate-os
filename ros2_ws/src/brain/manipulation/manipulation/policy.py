@@ -87,7 +87,7 @@ class InferenceNode(Node):
 
         # Create publishers for cmd_vel and arm state command
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/state', 10)
+        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
 
     def image1_callback(self, msg: Image):
         try:
