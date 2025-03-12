@@ -1,5 +1,9 @@
 # Maurice Production OS
 
+## WARNING
+
+IF YOU EVER MAKE THIS PUBLIC, DELETE THE KEY FOR AXEL'S EMAILS sending in the primitive for send_email
+
 ## Simulation
 
 The below is for running in dev mode, which is the only one that works right now.
