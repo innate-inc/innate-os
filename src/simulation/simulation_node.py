@@ -25,7 +25,7 @@ class SimulationNode:
         # Add timing variables for real-time simulation
         self.last_render_time = 0
         self.render_interval = 0.5  # Render every 0.5 seconds
-        
+
         self.render_camera_vfov = 40
         self.render_camera_hfov = 2 * atan(
             tan(self.render_camera_vfov / 2) * 1280 / 720
@@ -45,6 +45,11 @@ class SimulationNode:
         self._init_map_params()
 
         self.scene.build()
+
+        print("Scene built")
+
+        # Update occupancy grid with objects
+        self._add_objects_to_occupancy_grid()
 
         self.init_movement()
 
@@ -87,23 +92,26 @@ class SimulationNode:
             )
         )
 
+        # Initialize scene_objects list
+        self.scene_objects = []
+
         # Add separate collision geometry based on the stage config file
         self._add_collision_from_stage_config(
             "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
         )
 
         # Add human model lying on the ground
-        self.human = self.scene.add_entity(
-            gs.morphs.Mesh(
-                file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
-                fixed=True,  # Make it static
-                euler=(180, 180, 90),  # Rotate to lie flat
-                pos=(0.5, -3.0, 0.10),  # Position as requested (with slight z-offset)
-                scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
-                convexify=False,
-                collision=False,  # Enable collision for robot interaction
-            )
-        )
+        # self.human = self.scene.add_entity(
+        #     gs.morphs.Mesh(
+        #         file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
+        #         fixed=True,  # Make it static
+        #         euler=(180, 180, 0),  # Rotate to lie flat
+        #         pos=(-1.5, 1.5, 0.10),  # Position as requested (with slight z-offset)
+        #         scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
+        #         convexify=False,
+        #         collision=False,  # Enable collision for robot interaction
+        #     )
+        # )
 
         # Export as STL
         file_path = "data/replica_scene.stl"
@@ -167,7 +175,7 @@ class SimulationNode:
 
                     try:
                         # Load the actual object mesh with collision but no visualization
-                        self.scene.add_entity(
+                        mesh_entity = self.scene.add_entity(
                             gs.morphs.Mesh(
                                 file=f"data/ReplicaCAD_dataset/objects/{object_name}.glb",
                                 pos=position.tolist(),
@@ -178,6 +186,20 @@ class SimulationNode:
                                 convexify=True,  # Individual objects can be safely convexified
                             )
                         )
+
+                        # Store the entity reference for later AABB calculation
+                        if not hasattr(self, "scene_objects"):
+                            self.scene_objects = []
+
+                        self.scene_objects.append(
+                            {
+                                "name": object_name,
+                                "entity": mesh_entity,
+                                "position": position,
+                                "rotation": combined_rotation,
+                            }
+                        )
+
                         print(f"Added collision for: {object_name}")
                     except Exception as e:
                         print(f"Failed to load collision for {object_name}: {e}")
@@ -212,6 +234,71 @@ class SimulationNode:
         # Optionally, if needed, flip the grid along the vertical axis so (0,0) is bottom-left
         # self.occupancy_grid = np.flipud(self.occupancy_grid)
         cv2.imwrite("occupancy_grid.png", self.occupancy_grid)
+
+    def _add_objects_to_occupancy_grid(self):
+        """Add objects to the occupancy grid based on their AABBs"""
+        if not hasattr(self, "occupancy_grid") or self.occupancy_grid is None:
+            print("Warning: Occupancy grid not initialized yet")
+            return
+
+        if not hasattr(self, "scene_objects") or not self.scene_objects:
+            print("No objects to add to occupancy grid")
+            return
+
+        print(f"Adding {len(self.scene_objects)} objects to occupancy grid")
+
+        # For each object, get its AABB and project onto the grid
+        for obj in self.scene_objects:
+            entity = obj["entity"]
+
+            try:
+                # Get the AABB (Axis-Aligned Bounding Box) of the mesh
+                min_point, max_point = entity.get_AABB()
+
+                # Convert to numpy arrays for easier manipulation
+                min_point = np.array(min_point.cpu().numpy())
+                max_point = np.array(max_point.cpu().numpy())
+
+                # We only care about x and y for the occupancy grid (floor plan)
+                # Convert world coordinates to grid coordinates
+                min_grid_x = int(
+                    (min_point[0] - self.map_origin_x) / self.map_resolution
+                )
+                min_grid_y = int(
+                    (min_point[1] - self.map_origin_y) / self.map_resolution
+                )
+                max_grid_x = int(
+                    (max_point[0] - self.map_origin_x) / self.map_resolution
+                )
+                max_grid_y = int(
+                    (max_point[1] - self.map_origin_y) / self.map_resolution
+                )
+
+                # Ensure coordinates are within grid bounds
+                min_grid_x = max(0, min(min_grid_x, self.map_width - 1))
+                min_grid_y = max(0, min(min_grid_y, self.map_height - 1))
+                max_grid_x = max(0, min(max_grid_x, self.map_width - 1))
+                max_grid_y = max(0, min(max_grid_y, self.map_height - 1))
+
+                print(
+                    f"Adding object {obj['name']} to occupancy grid: ({min_grid_x}, {min_grid_y}) to ({max_grid_x}, {max_grid_y})"
+                )
+
+                # Fill the bounding box with occupied cells (0 = occupied in this grid)
+                for y in range(min_grid_y, max_grid_y + 1):
+                    for x in range(min_grid_x, max_grid_x + 1):
+                        if 0 <= y < self.map_height and 0 <= x < self.map_width:
+                            self.occupancy_grid[y, x] = 255
+
+                print(
+                    f"Added object {obj['name']} to occupancy grid: ({min_grid_x}, {min_grid_y}) to ({max_grid_x}, {max_grid_y})"
+                )
+
+            except Exception as e:
+                print(f"Failed to add {obj['name']} to occupancy grid: {e}")
+
+        # Save the updated occupancy grid
+        cv2.imwrite("occupancy_grid_with_objects.png", self.occupancy_grid)
 
     def _init_robot(self):
         """Initialize robot and its parameters"""
@@ -290,7 +377,7 @@ class SimulationNode:
         local_forward = np.array([1.0, 0.0, 0.0])
         step_count = 0
         sim_time = 0  # Track simulation time
-        
+
         # Get the simulation timestep from the scene
         dt = self.scene.sim_options.dt
         last_step_time = time.time()
@@ -304,7 +391,7 @@ class SimulationNode:
 
             # --- (C) Render cameras based on time interval
             sim_time += dt
-            
+
             # Check if enough time has passed since last render
             if sim_time - self.last_render_time >= self.render_interval:
                 camera_link = self.robot.get_link("camera_link")
@@ -342,7 +429,7 @@ class SimulationNode:
                     self.shared_queues.sim_to_web.put_nowait(camera_views)
                 except queue.Full:
                     pass
-                
+
                 # Update last render time
                 self.last_render_time = sim_time
             else:
@@ -434,20 +521,22 @@ class SimulationNode:
             try:
                 self.scene.step()
                 step_count += 1
-                
+
                 # --- (H) Sleep to maintain real-time simulation
                 current_time = time.time()
                 elapsed = current_time - last_step_time
                 sleep_time = dt - elapsed
-                
+
                 if sleep_time > 0:
                     time.sleep(sleep_time)
                 elif sleep_time < -0.1:  # Only warn if we're significantly behind
-                    print(f"[SimulationNode] Warning: Simulation running slower than real-time (behind by {-sleep_time:.3f}s)")
-                
+                    print(
+                        f"[SimulationNode] Warning: Simulation running slower than real-time (behind by {-sleep_time:.3f}s)"
+                    )
+
                 # Update last step time for next iteration
                 last_step_time = time.time()
-                
+
             except Exception as e:
                 if "Viewer closed" in str(e):
                     print("Viewer closed, stopping simulation.")
