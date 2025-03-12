@@ -128,7 +128,7 @@ class BrainClientNode(Node):
 
         # RGB image subscription remains unchanged.
         self.image_sub = self.create_subscription(
-            CompressedImage, self.image_topic, self.image_callback, 10
+            CompressedImage, self.image_topic, self.image_callback, 1
         )
 
         # Optionally subscribe to the depth image topic if required.
@@ -137,7 +137,7 @@ class BrainClientNode(Node):
             # (which contains: header, height, width, encoding, is_bigendian, step, data)
 
             self.depth_image_sub = self.create_subscription(
-                Image, self.depth_image_topic, self.depth_image_callback, 10
+                Image, self.depth_image_topic, self.depth_image_callback, 1
             )
 
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -236,19 +236,20 @@ class BrainClientNode(Node):
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().debug(f"Received chat_in: {chat_entry}")
+        self.get_logger().info(f"\033[1;92mReceived chat_in: {chat_entry}\033[0m")
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
         self.ws_bridge.send_message(outgoing_msg)
 
     def handle_get_chat_history(self, request, response):
         self.get_logger().debug(
-            f"Received get_chat_history request. History: {self.chat_history}"
+            f"\033[1;94mReceived get_chat_history request. History: {self.chat_history}\033[0m"
         )
         response.history = json.dumps(self.chat_history)
         return response
 
     def image_callback(self, msg: CompressedImage):
         try:
+            # self.get_logger().info(f"\033[1;92m[BrainClient] Received image_callback\033[0m")
             np_arr = np.frombuffer(msg.data, np.uint8)
             self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         except Exception as e:
@@ -382,7 +383,10 @@ class BrainClientNode(Node):
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
 
-            if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
+            self.get_logger().info(f"Primitive task type: {payload.next_task.type.value}")
+
+            if payload.next_task.type.value in self.primitives_dict:
+                # Handle any task type that exists in the primitives dictionary
                 self.send_primitive_goal(
                     payload.next_task.type, payload.next_task.inputs
                 )
@@ -393,9 +397,7 @@ class BrainClientNode(Node):
                 self.ws_bridge.send_message(status_msg)
                 self.primitive_running = True
             else:
-                self.get_logger().warn(
-                    "\033[93m[BrainClient] No valid task provided.\033[0m"
-                )
+                self.get_logger().warn(f"Unknown primitive type: {payload.next_task.type}")
         else:
             self.get_logger().info(
                 "\033[94m[BrainClient] No next task provided.\033[0m"
