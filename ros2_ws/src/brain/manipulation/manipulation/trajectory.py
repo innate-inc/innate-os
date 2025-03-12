@@ -1,6 +1,8 @@
+#!/usr/bin/env python3
+# trajectory.py
 import numpy as np
 
-def cubic_trajectory(start, end, total_time, num_steps=100):
+def cubic_trajectory(start, end, total_time, freq=15):
     """
     Generate a cubic interpolated trajectory from start to end with zero initial and final speeds.
 
@@ -16,6 +18,7 @@ def cubic_trajectory(start, end, total_time, num_steps=100):
                            Shape is (num_steps, number_of_joints).
     """
     # Create a time vector from 0 to total_time
+    num_steps = int(total_time * freq)
     t = np.linspace(0, total_time, num_steps)
     
     # Normalize time to [0, 1]

@@ -11,9 +11,11 @@ import pickle
 import os
 import cv2
 from geometry_msgs.msg import Twist
+import json
 
 # Import your policy class and any necessary constants/configs.
 from InnateACT.policy import ACTPolicy
+from trajectory import cubic_trajectory
 
 # Define the policy configuration (ensure these match your training configuration)
 policy_config = {
@@ -52,9 +54,11 @@ class InferenceNode(Node):
         self.policy = ACTPolicy(policy_config).to(self.device)
         checkpoint_path = '/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_4_20250312_0345/policy_epoch_20000_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
-        # Load normalization stats from the same directory as checkpoint
+        # Load normalization stats and metadata from the same directory as checkpoint
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
+        metadata_path = os.path.join(checkpoint_dir, 'metadata.json')
+        
         try:
             with open(stats_path, 'rb') as f:
                 self.norm_stats = pickle.load(f)
@@ -64,13 +68,21 @@ class InferenceNode(Node):
             self.norm_stats = None
 
         try:
+            with open(metadata_path, 'r') as f:
+                self.metadata = json.load(f)
+            self.get_logger().info("Metadata loaded successfully.")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load metadata: {e}")
+            self.metadata = None
+
+        try:
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             self.policy.load_state_dict(state_dict)
             self.policy.eval()
             self.get_logger().info("Policy loaded successfully.")
         except Exception as e:
             self.get_logger().error(f"Failed to load policy checkpoint: {e}")
-
+        
         # Variables to hold the latest sensor data
         self.latest_image1 = None
         self.latest_image2 = None
@@ -81,16 +93,21 @@ class InferenceNode(Node):
         self.create_subscription(Image, '/image_raw', self.image2_callback, 10)
         self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
 
-        # Timer to run the publishing loop at 30 Hz (every ~0.033 seconds)
-        self.timer = self.create_timer(1/15.0, self.inference_loop)
-
-        # Create publishers for cmd_vel and arm state command
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         # Publishing arm commands on a topic '/maurice_arm/commands'
         self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
 
+
+
+        # Timer to run the publishing loop at 30 Hz (every ~0.033 seconds)
+        self.timer = self.create_timer(1/15.0, self.inference_loop)
+
+        # Create publishers for cmd_vel and arm state command
+        
+
         # Buffer to hold the predicted actions (each action is an 8-element vector)
         self.action_buffer = []
+        self.first_step=True
 
     def image1_callback(self, msg: Image):
         try:
@@ -109,10 +126,27 @@ class InferenceNode(Node):
 
     def run_inference(self):
         """Run the policy network to predict 100 time steps, then return the first 20 actions."""
+        
         # Make sure all sensor data are available
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
             self.get_logger().info("Waiting for all topics to be received...")
             return None
+            
+        if self.first_step:
+            qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
+            if self.metadata and 'average_first_step_action' in self.metadata:
+                start_pos = np.array(self.metadata['average_first_step_action'])[:6]
+                # Generate a smooth trajectory from current position to start position
+                _, base_trajectory = cubic_trajectory(qpos, start_pos, total_time=1.0, freq=15)
+                print(base_trajectory.shape)
+                # Pad each timestep with two zeros for base motion
+                padded_trajectory = np.pad(base_trajectory, ((0, 0), (0, 2)), mode='constant', constant_values=0)
+                
+                self.first_step = False
+                return padded_trajectory.tolist()  # Convert numpy array to list
+            else:
+                self.first_step = False  # Continue without trajectory if no metadata
+                return None
 
         try:
             # Preprocess images
@@ -149,13 +183,14 @@ class InferenceNode(Node):
                 action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
                 unnormalized_actions = output * action_std + action_mean
                 # unnormalized_actions is assumed to be [batch, 100, 8]
-                # Take the first 20 predicted actions
-                actions = unnormalized_actions[0, :20, :]  # Shape: [20, 8]
+                # Take the first 20 predicted actions and convert to list
+                actions = unnormalized_actions[0, :20, :].cpu().numpy().tolist()  # Convert to CPU, then numpy, then list
                 return actions
             else:
                 return None
 
     def inference_loop(self):
+        
         start_time = time.time()
         # If the buffer is empty, run inference to get a new sequence.
         if not self.action_buffer:
@@ -163,7 +198,7 @@ class InferenceNode(Node):
             if actions is None:
                 return
             # Convert the tensor to a list of actions (each is an 8-element vector)
-            self.action_buffer = actions.cpu().numpy().tolist()
+            self.action_buffer = actions
             self.get_logger().info("New action buffer computed with 20 actions.")
 
         # Pop the next action from the buffer and publish it.
