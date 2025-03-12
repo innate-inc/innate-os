@@ -529,9 +529,12 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   }, [messages, isScrolledToBottom]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const cleanDraft = draft.trim();
     if (!cleanDraft || !wsRef.current) return;
+
+    // Initialize AudioContext on user interaction
+    await ensureAudioContext();
 
     // Check if the user is authorized to send messages
     if (!isAuthorized(user)) {
@@ -752,11 +755,8 @@ export function Chat({ onSetDirective }: ChatProps) {
       });
     }
 
-    // Initialize AudioContext
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext ||
-        (window as any).webkitAudioContext)();
-    }
+    // Don't create AudioContext here automatically
+    // We'll create it on first user interaction instead
 
     return () => {
       // Clean up WebSocket connection if active
@@ -775,6 +775,22 @@ export function Chat({ onSetDirective }: ChatProps) {
     };
   }, []);
 
+  // Function to ensure AudioContext is created and resumed
+  const ensureAudioContext = async () => {
+    // Create AudioContext if it doesn't exist
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+    }
+
+    // Resume the AudioContext if it's suspended
+    if (audioContextRef.current.state === "suspended") {
+      await audioContextRef.current.resume();
+    }
+
+    return audioContextRef.current.state === "running";
+  };
+
   // Function to decode base64 to array buffer
   const base64ToArrayBuffer = (base64: string) => {
     const binaryString = atob(base64);
@@ -791,6 +807,16 @@ export function Chat({ onSetDirective }: ChatProps) {
     if (!cartesiaRef.current || isSpeaking || !text.trim()) return;
 
     try {
+      // Don't try to auto-initialize AudioContext for messages that arrive automatically
+      // Only proceed if we already have a running AudioContext
+      if (
+        !audioContextRef.current ||
+        audioContextRef.current.state !== "running"
+      ) {
+        console.log("AudioContext not running, can't autoplay speech");
+        return;
+      }
+
       setIsSpeaking(true);
       audioBuffersRef.current = []; // Clear previous audio buffers
 
@@ -941,18 +967,24 @@ export function Chat({ onSetDirective }: ChatProps) {
     setIsSpeaking(false);
   };
 
-  // Effect to handle new messages
+  // Add a new function to manually speak a message with user interaction
+  const manualSpeakMessage = async (text: string, isUser: boolean = false) => {
+    try {
+      // This will be called from a click handler, so we can initialize/resume AudioContext
+      await ensureAudioContext();
+      speakMessage(text, isUser);
+    } catch (error) {
+      console.error("Error in manual speech:", error);
+    }
+  };
+
+  // Modify the effect that handles new messages
   useEffect(() => {
     if (messages.length > 0) {
       const latestMessage = messages[messages.length - 1];
 
-      // Only speak messages from the robot OR USER
-      if (
-        latestMessage &&
-        (latestMessage.sender === "robot" || latestMessage.sender === "user")
-      ) {
-        speakMessage(latestMessage.text, latestMessage.sender === "user");
-      }
+      // Don't try to auto-speak messages anymore
+      // Users will need to click the speaker button instead
 
       // Scroll to bottom if needed
       if (isScrolledToBottom) {
@@ -961,8 +993,38 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   }, [messages]);
 
+  // Add a button to enable audio for the session
+  const enableAudio = async () => {
+    try {
+      const success = await ensureAudioContext();
+      if (success) {
+        // Maybe show a toast or some UI indication that audio is now enabled
+        console.log("Audio enabled successfully");
+      } else {
+        console.warn("Failed to enable audio");
+      }
+    } catch (error) {
+      console.error("Error enabling audio:", error);
+    }
+  };
+
   return (
     <ChatContainer>
+      <button
+        onClick={enableAudio}
+        style={{
+          background: "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)",
+          color: "white",
+          border: "none",
+          borderRadius: "8px",
+          padding: "8px 16px",
+          margin: "8px",
+          cursor: "pointer",
+          alignSelf: "center",
+        }}
+      >
+        Enable Audio
+      </button>
       <DirectivesContainer>
         {DIRECTIVES.map((directive) => (
           <DirectiveButton
@@ -1002,9 +1064,12 @@ export function Chat({ onSetDirective }: ChatProps) {
                 <MessageSender $isUser={false}>
                   <IoHardwareChip size={14} />
                   <span>Robot</span>
-                  {/* Add a button to manually trigger speech */}
                   <button
-                    onClick={() => speakMessage(message.text, false)}
+                    onClick={async () => {
+                      // This is a user interaction, so we can safely try to initialize AudioContext
+                      await ensureAudioContext();
+                      speakMessage(message.text, false);
+                    }}
                     style={{
                       background: "transparent",
                       border: "none",
