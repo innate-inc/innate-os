@@ -49,5 +49,6 @@ install(
     manipulation/visualizer.py
     manipulation/test.py
     manipulation/policy.py
+    manipulation/trajectory.py
   DESTINATION lib/${PROJECT_NAME}
 )
