@@ -50,7 +50,7 @@ class InferenceNode(Node):
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.policy = ACTPolicy(policy_config).to(self.device)
-        checkpoint_path = '~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_4_20250307_0302/policy_epoch_20000_seed_100.ckpt'
+        checkpoint_path = '/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_4_20250312_0345/policy_epoch_20000_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         # Load normalization stats from the same directory as checkpoint
         checkpoint_dir = os.path.dirname(checkpoint_path)
@@ -82,7 +82,7 @@ class InferenceNode(Node):
         self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
 
         # Timer to run the publishing loop at 30 Hz (every ~0.033 seconds)
-        self.timer = self.create_timer(1/10.0, self.inference_loop)
+        self.timer = self.create_timer(1/15.0, self.inference_loop)
 
         # Create publishers for cmd_vel and arm state command
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -179,7 +179,7 @@ class InferenceNode(Node):
         # The arm command is taken from the first six elements.
         arm_msg = Float64MultiArray()
         arm_msg.data = next_action[:6]
-        #self.arm_state_pub.publish(arm_msg)
+        self.arm_state_pub.publish(arm_msg)
         self.get_logger().info(f"Published Arm Command: {arm_msg.data}")
 
         print(f"Cycle time: {time.time() - start_time:.3f} seconds")
