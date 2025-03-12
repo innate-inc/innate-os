@@ -557,9 +557,6 @@ export function Chat({ onSetDirective }: ChatProps) {
       // Send the draft message to the server via WebSocket
       wsRef.current.send(cleanDraft);
 
-      // FOR DEBUGGING: Speak the user message
-      speakMessage(cleanDraft, true);
-
       // Clear the input
       setDraft("");
     } else {
@@ -852,7 +849,7 @@ export function Chat({ onSetDirective }: ChatProps) {
           // Use different voice IDs for user vs robot for easy distinction
           id: isUser
             ? "a0e99841-438c-4a64-b679-ae501e7d6091" // User voice
-            : "7c3f8e3d-8b1f-4c0e-b8f0-5f7b36c6a5b4", // Robot voice (different ID)
+            : "a0e99841-438c-4a64-b679-ae501e7d6091", // Robot voice (different ID)
         },
         transcript: text,
       });
@@ -862,6 +859,10 @@ export function Chat({ onSetDirective }: ChatProps) {
         // Handle chunked audio data
         // Parse the message
         const parsedMessage = JSON.parse(message);
+
+        if (parsedMessage.type === "error") {
+          console.error("Error during speech synthesis:", parsedMessage);
+        }
 
         if (
           parsedMessage.type === "chunk" &&
@@ -981,24 +982,17 @@ export function Chat({ onSetDirective }: ChatProps) {
     setIsSpeaking(false);
   };
 
-  // Add a new function to manually speak a message with user interaction
-  const manualSpeakMessage = async (text: string, isUser: boolean = false) => {
-    try {
-      // This will be called from a click handler, so we can initialize/resume AudioContext
-      await ensureAudioContext();
-      speakMessage(text, isUser);
-    } catch (error) {
-      console.error("Error in manual speech:", error);
-    }
-  };
-
   // Modify the effect that handles new messages
   useEffect(() => {
     if (messages.length > 0) {
       const latestMessage = messages[messages.length - 1];
 
       // Don't try to auto-speak messages anymore
-      // Users will need to click the speaker button instead
+      // If the latest message is a robot message, speak it
+      if (latestMessage.sender === "robot") {
+        console.log("Speaking robot message");
+        speakMessage(latestMessage.text, false);
+      }
 
       // Scroll to bottom if needed
       if (isScrolledToBottom) {
