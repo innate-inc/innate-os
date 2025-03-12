@@ -334,6 +334,8 @@ export function Chat({ onSetDirective }: ChatProps) {
   const websocketRef = useRef<any>(null);
   const audioBuffersRef = useRef<Float32Array[]>([]);
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const [audioQueue, setAudioQueue] = useState<Float32Array[]>([]);
+  const isPlayingRef = useRef<boolean>(false);
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -818,7 +820,10 @@ export function Chat({ onSetDirective }: ChatProps) {
       }
 
       setIsSpeaking(true);
-      audioBuffersRef.current = []; // Clear previous audio buffers
+      // Clear any existing audio queue
+      setAudioQueue([]);
+      audioBuffersRef.current = [];
+      isPlayingRef.current = false;
 
       // Initialize WebSocket if not already done
       if (!websocketRef.current) {
@@ -870,22 +875,18 @@ export function Chat({ onSetDirective }: ChatProps) {
             // Convert to Float32Array for Web Audio API
             const floatArray = new Float32Array(audioBuffer);
 
-            // Store the audio chunk
-            audioBuffersRef.current.push(floatArray);
-
-            // If this is the first chunk, start playing immediately
-            if (audioBuffersRef.current.length === 1) {
-              playAudioChunks();
-            }
+            // Add to the queue of chunks to play
+            setAudioQueue((prevQueue) => [...prevQueue, floatArray]);
           } catch (error) {
             console.error("Error processing audio chunk:", error);
           }
         }
 
         // Handle completion
-        if (message.type === "chunk" && message.done) {
-          console.log(`Finished speaking ${isUser ? "user" : "robot"} message`);
-          // We'll set isSpeaking to false when audio playback completes
+        if (parsedMessage.type === "chunk" && parsedMessage.done) {
+          console.log(
+            `Finished receiving ${isUser ? "user" : "robot"} message audio`
+          );
         }
       });
 
@@ -900,60 +901,72 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   };
 
-  // Function to play audio chunks
-  const playAudioChunks = () => {
-    if (!audioContextRef.current || audioBuffersRef.current.length === 0)
-      return;
-
-    try {
-      // Calculate total length of all chunks
-      let totalLength = 0;
-      for (const chunk of audioBuffersRef.current) {
-        totalLength += chunk.length;
+  // Effect to monitor the audio queue and play chunks sequentially
+  useEffect(() => {
+    const playNextChunk = async () => {
+      if (
+        !audioContextRef.current ||
+        audioQueue.length === 0 ||
+        isPlayingRef.current
+      ) {
+        return;
       }
 
-      // Create a combined buffer
-      const combinedBuffer = new Float32Array(totalLength);
+      // Mark as playing
+      isPlayingRef.current = true;
 
-      // Copy all chunks into the combined buffer
-      let offset = 0;
-      for (const chunk of audioBuffersRef.current) {
-        combinedBuffer.set(chunk, offset);
-        offset += chunk.length;
+      // Get the next chunk
+      const nextChunk = audioQueue[0];
+
+      try {
+        // Create an audio buffer
+        const audioBuffer = audioContextRef.current.createBuffer(
+          1, // mono
+          nextChunk.length,
+          44100 // sample rate
+        );
+
+        // Fill the buffer with our audio data
+        audioBuffer.getChannelData(0).set(nextChunk);
+
+        // Create a buffer source
+        const source = audioContextRef.current.createBufferSource();
+        audioSourceRef.current = source;
+        source.buffer = audioBuffer;
+
+        // When playback ends
+        source.onended = () => {
+          // Remove the played chunk from the queue
+          setAudioQueue((prevQueue) => prevQueue.slice(1));
+          audioSourceRef.current = null;
+          isPlayingRef.current = false;
+
+          // If this was the last chunk, we're done speaking
+          if (audioQueue.length <= 1) {
+            setIsSpeaking(false);
+          }
+        };
+
+        // Connect to the audio context destination and play
+        source.connect(audioContextRef.current.destination);
+        source.start();
+      } catch (error) {
+        console.error("Error playing audio chunk:", error);
+        isPlayingRef.current = false;
+        setAudioQueue((prevQueue) => prevQueue.slice(1));
+
+        // If this was the last chunk, we're done speaking
+        if (audioQueue.length <= 1) {
+          setIsSpeaking(false);
+        }
       }
+    };
 
-      // Create an audio buffer
-      const audioBuffer = audioContextRef.current.createBuffer(
-        1, // mono
-        combinedBuffer.length,
-        44100 // sample rate
-      );
+    // Try to play the next chunk whenever the queue changes
+    playNextChunk();
+  }, [audioQueue]);
 
-      // Fill the buffer with our audio data
-      audioBuffer.getChannelData(0).set(combinedBuffer);
-
-      // Create a buffer source
-      const source = audioContextRef.current.createBufferSource();
-      audioSourceRef.current = source;
-      source.buffer = audioBuffer;
-
-      // When playback ends
-      source.onended = () => {
-        setIsSpeaking(false);
-        audioBuffersRef.current = []; // Clear buffers
-        audioSourceRef.current = null;
-      };
-
-      // Connect to the audio context destination and play
-      source.connect(audioContextRef.current.destination);
-      source.start();
-    } catch (error) {
-      console.error("Error playing audio chunks:", error);
-      setIsSpeaking(false);
-    }
-  };
-
-  // Stop speaking function
+  // Stop speaking function - update to clear the queue
   const stopSpeaking = () => {
     if (audioSourceRef.current) {
       try {
@@ -963,7 +976,8 @@ export function Chat({ onSetDirective }: ChatProps) {
       }
       audioSourceRef.current = null;
     }
-    audioBuffersRef.current = []; // Clear buffers
+    setAudioQueue([]); // Clear the queue
+    isPlayingRef.current = false;
     setIsSpeaking(false);
   };
 
