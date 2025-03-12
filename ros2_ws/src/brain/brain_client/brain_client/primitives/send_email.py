@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -15,6 +16,11 @@ class SendEmail(Primitive):
     def __init__(self, logger):
         self.logger = logger
         self.default_recipient = "axel@innate.bot"
+        # Email server configuration
+        self.smtp_server = "smtp.gmail.com"  # Example using Gmail
+        self.smtp_port = 587
+        self.sender_email = "axel@innate.bot"  # Replace with robot's email
+        self.password = "ncbtviozpktktsdm"  # Use app password for Gmail
 
     @property
     def name(self):
@@ -28,7 +34,7 @@ class SendEmail(Primitive):
 
     def execute(self, subject: str, message: str, recipient: str = None):
         """
-        Simulates sending an email to the specified recipient (or default if none provided).
+        Sends an email to the specified recipient (or default if none provided).
 
         Args:
             subject (str): Email subject line
@@ -48,13 +54,27 @@ class SendEmail(Primitive):
             f"Message: {message}"
         )
 
-        # In a real implementation, you would connect to an SMTP server here
-        # For demonstration, we'll just simulate it with a delay
-        time.sleep(1)
+        try:
+            # Create message
+            msg = MIMEMultipart()
+            msg['From'] = self.sender_email
+            msg['To'] = recipient
+            msg['Subject'] = subject
+            msg.attach(MIMEText(message, 'plain'))
 
-        # Log success message
-        self.logger.info(
-            f"\033[92m[BrainClient] Emergency email notification sent to {recipient}\033[0m"
-        )
+            # Connect to server and send
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(self.sender_email, self.password)
+            server.send_message(msg)
+            server.quit()
 
-        return f"Email sent to {recipient}", True
+            # Log success message
+            self.logger.info(
+                f"\033[92m[BrainClient] Emergency email notification sent to {recipient}\033[0m"
+            )
+            return f"Email sent to {recipient}", True
+
+        except Exception as e:
+            self.logger.error(f"Failed to send email: {str(e)}")
+            return f"Failed to send email: {str(e)}", False
