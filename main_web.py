@@ -106,6 +106,13 @@ def main():
         default="",
         help="Auth0 API identifier",
     )
+    # Add logging flag argument
+    parser.add_argument(
+        "--log-everything",
+        action="store_true",
+        default=False,
+        help="Enable logging of all model outputs",
+    )
     args = parser.parse_args()
 
     # Set Auth0 environment variables
@@ -116,7 +123,7 @@ def main():
 
     # 1) Create shared queues
     global SHARED_QUEUES
-    SHARED_QUEUES = SharedQueues()
+    SHARED_QUEUES = SharedQueues(log_everything=args.log_everything)
     app.state.SHARED_QUEUES = SHARED_QUEUES
 
     # 1b) Start the background frame collector
