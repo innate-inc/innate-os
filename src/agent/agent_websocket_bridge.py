@@ -165,6 +165,8 @@ async def outbound_loop(ws, shared_queues):
     adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
     adv_chat_in = rosbridge_advertise("/chat_in", "std_msgs/msg/String")
     adv_set_directive = rosbridge_advertise("/set_directive", "std_msgs/msg/String")
+    # Add a new topic for logging configuration
+    adv_logging_config = rosbridge_advertise("/logging_config", "std_msgs/msg/Bool")
 
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
@@ -173,8 +175,11 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_map))
     await ws.send(json.dumps(adv_chat_in))
     await ws.send(json.dumps(adv_set_directive))
+    await ws.send(json.dumps(adv_logging_config))
 
-    print("[ROSBridge] Advertised camera-related topics, /odom, /map, and /chat_in")
+    print(
+        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, and /logging_config"
+    )
 
     # Also subscribe to /cmd_vel, /chat_out
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
@@ -182,6 +187,25 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(sub_cmd_vel))
     await ws.send(json.dumps(sub_chat_out))
     print("[ROSBridge] Subscribed to /cmd_vel and /chat_out")
+
+    # Send the logging configuration immediately after connection
+    if hasattr(shared_queues, "log_everything"):
+        # Method 1: Publish to a topic
+        logging_msg = {"data": shared_queues.log_everything}
+        outbound = rosbridge_publish("/logging_config", logging_msg)
+        await ws.send(json.dumps(outbound))
+
+        # Method 2: Call a service (more reliable for initialization)
+        srv_set_logging = rosbridge_call_service(
+            "/set_logging_config", "std_srvs/srv/SetBool"
+        )
+        # Add the data parameter for the service call
+        srv_set_logging["args"] = {"data": shared_queues.log_everything}
+        await ws.send(json.dumps(srv_set_logging))
+
+        print(
+            f"[ROSBridge] Set logging configuration: log_everything={shared_queues.log_everything}"
+        )
 
     while not shared_queues.exit_event.is_set():
         # a) Check if there's a message from the sim
@@ -241,6 +265,7 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
     two concurrent tasks: inbound_loop & outbound_loop & chat_bridge_loop.
     """
     print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
+
     try:
         async with websockets.connect(rosbridge_uri) as ws:
             print(f"[ROSBridge] Connected to {rosbridge_uri}")

@@ -20,10 +20,16 @@ def main():
         default=False,
         help="Connect to local agent server instead of cloud",
     )
+    parser.add_argument(
+        "--log-everything",
+        action="store_true",
+        default=False,
+        help="Enable logging of all model outputs",
+    )
     args = parser.parse_args()
 
     # Create the shared queues structure
-    shared_queues = SharedQueues()
+    shared_queues = SharedQueues(log_everything=args.log_everything)
 
     # Initialize the simulation node
     sim_node = SimulationNode(shared_queues, enable_vis=args.vis)
