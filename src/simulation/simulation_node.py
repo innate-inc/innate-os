@@ -13,7 +13,7 @@ from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
-ROBOT_INIT_POS = (0, 0, 0.8)
+ROBOT_INIT_POS = (2, -5, 0.8)
 ROBOT_INIT_QUAT = (1, 0, 0, 0)
 
 
@@ -101,17 +101,17 @@ class SimulationNode:
         )
 
         # Add human model lying on the ground
-        # self.human = self.scene.add_entity(
-        #     gs.morphs.Mesh(
-        #         file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
-        #         fixed=True,  # Make it static
-        #         euler=(180, 180, 0),  # Rotate to lie flat
-        #         pos=(-1.5, 1.5, 0.10),  # Position as requested (with slight z-offset)
-        #         scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
-        #         convexify=False,
-        #         collision=False,  # Enable collision for robot interaction
-        #     )
-        # )
+        self.human = self.scene.add_entity(
+            gs.morphs.Mesh(
+                file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
+                fixed=True,  # Make it static
+                euler=(180, 180, 0),  # Rotate to lie flat
+                pos=(-1.5, 1.5, 0.10),  # Position as requested (with slight z-offset)
+                scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
+                convexify=False,
+                collision=False,  # Enable collision for robot interaction
+            )
+        )
 
         # Export as STL
         file_path = "data/replica_scene.stl"
