@@ -2,6 +2,17 @@
 
 This directory contains tools for benchmarking different directives sent to the robot simulation. The benchmarking system captures video frames, chat messages, and performance metrics during directive execution.
 
+## Prerequisites
+
+Before running any benchmarks, you must ensure that all components of the system are running in the correct order:
+
+1. **Start the Robot**: First, start the robot component
+2. **Start the Simulation**: Next, start the simulation environment
+3. **Start the Brain**: Ensure the robot's brain is running properly
+4. **Run Benchmarks**: Only after all the above components are running correctly
+
+> **IMPORTANT**: The brain needs to run properly for the benchmarks to work correctly. If you encounter issues with the brain, you may need to reset it before running benchmarks.
+
 ## Overview
 
 The benchmarking system consists of three main components:
@@ -36,7 +47,7 @@ benchmarks/
 To run a single benchmark test:
 
 ```bash
-./benchmarks/benchmark_runner.py "Find a red object" --duration 300 --trial 1
+./benchmarks/benchmark_runner.py "friendly_guide_directive" --duration 300 --trial 1
 ```
 
 Parameters:
@@ -51,7 +62,7 @@ Parameters:
 To run multiple benchmarks in sequence:
 
 ```bash
-./benchmarks/run_benchmarks.py --directives "Find a red object" "Go to the kitchen" --trials 3
+./benchmarks/run_benchmarks.py --directives "friendly_guide_directive" "security_patrol_directive" --trials 3
 ```
 
 Parameters:
@@ -78,18 +89,44 @@ Parameters:
 - `--directive`: Specific directive to analyze (for videos)
 - `--trial`: Specific trial to analyze (for videos)
 
+## Available Directives
+
+The system supports the following directives:
+
+- `default_directive`
+- `sassy_directive`
+- `friendly_guide_directive`
+- `security_patrol_directive`
+- `elder_safety_directive`
+
+Make sure to use these exact directive names when running benchmarks.
+
 ## Example Workflow
 
-1. Start the simulation server
+1. Start all required components in the correct order:
+   - Start the robot
+   - Start the simulation
+   - Start the brain
+   - Verify all components are running correctly
+
 2. Run benchmarks for multiple directives:
    ```bash
-   ./benchmarks/run_benchmarks.py --directives "Find a red object" "Go to the kitchen" "Pick up the cup" --trials 3 --duration 180
+   ./benchmarks/run_benchmarks.py --directives "friendly_guide_directive" "security_patrol_directive" "elder_safety_directive" --trials 3 --duration 180
    ```
+
 3. Analyze the results:
    ```bash
    ./benchmarks/analyze_results.py --create_summary --create_charts --create_videos
    ```
+
 4. View the generated reports in the `benchmarks/reports` directory
+
+## Troubleshooting
+
+- If the benchmark fails with "Simulation is not ready" error, make sure all components (robot, simulation, brain) are running.
+- If the robot's brain reports failures, you may need to reset the brain before running benchmarks.
+- If chat messages show "brain had a failure" repeatedly, restart the brain component.
+- The chat log is saved in real-time, so you can monitor progress even if a benchmark is interrupted.
 
 ## Requirements
 
@@ -99,10 +136,4 @@ Parameters:
 - Pillow (`pip install pillow`)
 - NumPy (`pip install numpy`)
 - Requests (`pip install requests`)
-
-## Notes
-
-- The simulation must be running before starting benchmarks
-- Each benchmark will reset the robot to its starting position
-- The system captures frames at the specified interval to avoid excessive disk usage
-- Timeline videos show both camera views and recent chat messages 
+- WebSocket client (`pip install websocket-client`) 
