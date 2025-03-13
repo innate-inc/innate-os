@@ -25,7 +25,7 @@ class SharedQueues:
     - sim_to_web: dictionary of named images for web streaming
     """
 
-    def __init__(self):
+    def __init__(self, log_everything=False):
         self.sim_to_agent = queue.Queue(maxsize=10)
         self.agent_to_sim = queue.Queue(maxsize=10)
         self.sim_to_web = queue.Queue(
@@ -33,6 +33,9 @@ class SharedQueues:
         )  # Will now contain dicts of named images
         self.latest_frames = {}
         self.exit_event = threading.Event()
+
+        # Flag to indicate if all model outputs should be logged
+        self.log_everything = log_everything
 
         # Queues specifically for chat messages
         self.chat_to_bridge = queue.Queue(maxsize=500)
