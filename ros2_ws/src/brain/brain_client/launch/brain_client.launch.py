@@ -18,6 +18,7 @@ def generate_launch_description():
                         "image_topic": "/camera/color/image_raw/compressed",
                         "cmd_vel_topic": "/cmd_vel",
                         "pose_image_interval": 0.5,  # Send pose images every 0.5 seconds
+                        "log_everything": False,  # Flag to enable complete vision agent output logging
                     }
                 ],
             ),

@@ -31,6 +31,7 @@ from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
+from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
 
@@ -68,6 +69,9 @@ class BrainClientNode(Node):
 
         # New parameter for pose image interval
         self.declare_parameter("pose_image_interval", 0.5)  # 0.5 seconds default
+
+        # Parameter for logging complete vision agent output
+        self.declare_parameter("log_everything", False)  # Default to False
 
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
@@ -120,7 +124,13 @@ class BrainClientNode(Node):
             self.get_parameter("pose_image_interval").get_parameter_value().double_value
         )
 
+        # Flag for logging complete vision agent output
+        self.log_everything = (
+            self.get_parameter("log_everything").get_parameter_value().bool_value
+        )
+
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
+        self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
         # Publishers, Subscribers, and Service
         self.last_image = None
@@ -149,6 +159,11 @@ class BrainClientNode(Node):
         self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
+        )
+
+        # Create service for setting logging configuration
+        self.set_logging_srv = self.create_service(
+            SetBool, "/set_logging_config", self.handle_set_logging_config
         )
 
         self.exit_event = threading.Event()
@@ -247,6 +262,21 @@ class BrainClientNode(Node):
         response.history = json.dumps(self.chat_history)
         return response
 
+    def handle_set_logging_config(self, request, response):
+        """
+        Service handler for setting the logging configuration.
+        Sets the log_everything flag based on the request data.
+        """
+        self.log_everything = request.data
+        self.get_logger().info(
+            f"\033[1;92m[BrainClient] Set logging configuration: log_everything={self.log_everything}\033[0m"
+        )
+        response.success = True
+        response.message = (
+            f"Logging configuration set: log_everything={self.log_everything}"
+        )
+        return response
+
     def image_callback(self, msg: CompressedImage):
         try:
             # self.get_logger().info(f"\033[1;92m[BrainClient] Received image_callback\033[0m")
@@ -336,6 +366,23 @@ class BrainClientNode(Node):
                     msg.payload["next_task"]["type"] = msg.payload["next_task"]["name"]
                     msg.payload["next_task"].pop("name", None)
             payload = VisionAgentOutput.model_validate(msg.payload)
+
+            # If log_everything is enabled, send the complete vision agent output as a chat message
+            if self.log_everything:
+                self.get_logger().info(
+                    "\033[1;92m[BrainClient] Sending complete vision agent output\033[0m"
+                )
+                # Convert the complete payload to a JSON string for the chat message
+                complete_output_text = json.dumps(msg.payload)
+                chat_entry = {
+                    "sender": "vision_agent_output",
+                    "text": complete_output_text,
+                    "timestamp": time.time(),
+                }
+                self.chat_history.append(chat_entry)
+                out_msg = String(data=json.dumps(chat_entry))
+                self.chat_out_pub.publish(out_msg)
+
             self.handle_vision_agent_output(payload)
         except Exception as e:
             self.get_logger().error(
@@ -383,7 +430,9 @@ class BrainClientNode(Node):
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
 
-            self.get_logger().info(f"Primitive task type: {payload.next_task.type.value}")
+            self.get_logger().info(
+                f"Primitive task type: {payload.next_task.type.value}"
+            )
 
             if payload.next_task.type.value in self.primitives_dict:
                 # Handle any task type that exists in the primitives dictionary
@@ -397,7 +446,9 @@ class BrainClientNode(Node):
                 self.ws_bridge.send_message(status_msg)
                 self.primitive_running = True
             else:
-                self.get_logger().warn(f"Unknown primitive type: {payload.next_task.type}")
+                self.get_logger().warn(
+                    f"Unknown primitive type: {payload.next_task.type}"
+                )
         else:
             self.get_logger().info(
                 "\033[94m[BrainClient] No next task provided.\033[0m"
