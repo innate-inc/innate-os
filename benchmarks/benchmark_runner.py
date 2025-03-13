@@ -7,6 +7,7 @@ import threading
 import cv2
 from datetime import datetime
 from pathlib import Path
+import websocket
 
 
 class DirectiveBenchmark:
@@ -70,10 +71,21 @@ class DirectiveBenchmark:
         with open(self.output_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
-    def _save_chat_log(self):
-        """Save the chat log to a JSON file."""
+    def _save_chat_message(self, message):
+        """Save a single chat message to the log file in real-time."""
+        # Append to the chat log in memory
+        self.chat_log.append(message)
+        self.metrics["chat_messages"] += 1
+
+        # Ensure the output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Append to the chat log file
         with open(self.output_dir / "chat_log.json", "w") as f:
             json.dump(self.chat_log, f, indent=2)
+
+        # Update metrics file with the latest count
+        self._save_metrics()
 
     def _save_metrics(self):
         """Save performance metrics to a JSON file."""
@@ -163,27 +175,156 @@ class DirectiveBenchmark:
         cap.release()
 
     def _monitor_chat(self):
-        """Monitor and record chat messages."""
-        # The chat system uses WebSockets instead of a REST API endpoint
-        # For benchmarking purposes, we'll just log that we can't monitor chat
-        # and continue with the benchmark
-        print(
-            "Note: Chat monitoring is not implemented - the chat system uses WebSockets"
-        )
-        print("Chat messages will not be recorded in this benchmark")
+        """Monitor and record chat messages using WebSockets."""
+        # Create a WebSocket URL
+        base_url_no_http = self.base_url.replace("http://", "")
+        user_params = "user_id=benchmark&email=benchmark@example.com"
+        ws_url = f"ws://{base_url_no_http}/ws/chat?{user_params}"
+        print(f"Connecting to WebSocket: {ws_url}")
 
-        # Set a placeholder message
-        placeholder_msg = {
-            "sender": "system",
-            "text": "Chat monitoring not implemented - WebSocket connection required",
-            "timestamp": time.time(),
-        }
-        self.chat_log.append(placeholder_msg)
-        self.metrics["chat_messages"] = 1
+        # Message handler for WebSocket
+        def on_message(ws, message):
+            try:
+                data = json.loads(message)
+                if "sender" in data and "text" in data:
+                    print(f"Chat message: {data['sender']}: {data['text']}")
+                    # Save message in real-time
+                    self._save_chat_message(data)
+            except Exception as e:
+                print(f"Error processing message: {e}")
 
-        # Keep the thread running for the duration of the benchmark
-        while self.running:
-            time.sleep(1.0)
+        # Error handler for WebSocket
+        def on_error(ws, error):
+            print(f"WebSocket error: {error}")
+
+        # Connection close handler
+        def on_close(ws, close_status_code, close_msg):
+            print("WebSocket connection closed")
+
+        # Connection open handler
+        def on_open(ws):
+            print("WebSocket connection established")
+
+        # Create WebSocket connection
+        try:
+            # Create a WebSocket app
+            ws = websocket.WebSocketApp(
+                ws_url,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+                on_open=on_open,
+            )
+
+            # Start WebSocket connection in a separate thread
+            ws_thread = threading.Thread(target=ws.run_forever)
+            ws_thread.daemon = True
+            ws_thread.start()
+
+            # Keep the thread running for the duration of the benchmark
+            while self.running:
+                time.sleep(1.0)
+
+            # Close WebSocket connection
+            ws.close()
+
+        except Exception as e:
+            print(f"Error setting up WebSocket: {e}")
+            print("Chat messages will not be recorded in this benchmark")
+
+            # Set a placeholder message
+            placeholder_msg = {
+                "sender": "system",
+                "text": "Chat monitoring failed - WebSocket connection error",
+                "timestamp": time.time(),
+            }
+            self._save_chat_message(placeholder_msg)
+
+            # Keep the thread running for the duration of the benchmark
+            while self.running:
+                time.sleep(1.0)
+
+    def _check_brain_status(self):
+        """
+        Check if the brain is running properly by monitoring initial chat messages.
+        Returns True if the brain appears to be functioning, False otherwise.
+        """
+        print("Checking brain status...")
+
+        # Create a WebSocket URL for monitoring brain status
+        base_url_no_http = self.base_url.replace("http://", "")
+        user_params = "user_id=brain_check&email=benchmark@example.com"
+        ws_url = f"ws://{base_url_no_http}/ws/chat?{user_params}"
+
+        # Variables to track brain status
+        brain_ok = False
+        brain_error = False
+        messages_received = 0
+        check_complete = threading.Event()
+
+        # Message handler for WebSocket
+        def on_message(ws, message):
+            nonlocal brain_ok, brain_error, messages_received
+            try:
+                data = json.loads(message)
+                if "sender" in data and "text" in data:
+                    messages_received += 1
+                    text = data["text"].lower()
+
+                    # Check for error messages
+                    has_brain_error = (
+                        "brain had a failure" in text or "brain malfunction" in text
+                    )
+                    if has_brain_error:
+                        brain_error = True
+                        print("Brain error detected in chat messages")
+                        check_complete.set()
+
+                    # If we've received several messages without errors, assume brain is OK
+                    if messages_received >= 3 and not brain_error:
+                        brain_ok = True
+                        print("Brain appears to be functioning")
+                        check_complete.set()
+            except Exception as e:
+                print(f"Error processing message during brain check: {e}")
+
+        # Create WebSocket connection
+        try:
+            ws = websocket.WebSocketApp(
+                ws_url,
+                on_message=on_message,
+                on_error=lambda ws, error: print(f"WebSocket error: {error}"),
+                on_close=lambda ws, code, msg: print("WebSocket connection closed"),
+                on_open=lambda ws: print("WebSocket connection established"),
+            )
+
+            # Start WebSocket connection in a separate thread
+            ws_thread = threading.Thread(target=ws.run_forever)
+            ws_thread.daemon = True
+            ws_thread.start()
+
+            # Wait for up to 15 seconds to determine brain status
+            check_complete.wait(15)
+
+            # Close WebSocket connection
+            ws.close()
+
+            if brain_error:
+                print(
+                    "WARNING: Brain errors detected. Consider resetting the brain "
+                    "before continuing."
+                )
+                return False
+            elif brain_ok:
+                print("Brain check passed")
+                return True
+            else:
+                print("Brain status check inconclusive")
+                return True  # Continue anyway
+
+        except Exception as e:
+            print(f"Error checking brain status: {e}")
+            return True  # Continue anyway if we can't check
 
     def run(self):
         """Run the benchmark test."""
@@ -194,6 +335,15 @@ class DirectiveBenchmark:
         if not self._check_simulation_ready():
             print("Simulation is not ready. Please start the simulation first.")
             return False
+
+        # Check if brain is functioning properly
+        if not self._check_brain_status():
+            print(
+                "Brain check failed. You may want to reset the brain before continuing."
+            )
+            user_input = input("Continue anyway? (y/n): ")
+            if user_input.lower() != "y":
+                return False
 
         # Save metadata
         self._save_metadata()
@@ -212,6 +362,10 @@ class DirectiveBenchmark:
         if not self._send_directive():
             print("Failed to send directive.")
             return False
+
+        # Wait for the brain to process the directive
+        print("Waiting for the brain to process the directive...")
+        time.sleep(5)
 
         # Start data collection
         self.running = True
@@ -245,8 +399,7 @@ class DirectiveBenchmark:
             # Record end time
             self.metrics["end_time"] = datetime.now().isoformat()
 
-            # Save results
-            self._save_chat_log()
+            # Save results - messages are saved in real-time
             self._save_metrics()
 
             print("Benchmark completed.")
