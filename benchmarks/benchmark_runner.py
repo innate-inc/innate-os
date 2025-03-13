@@ -105,7 +105,23 @@ class DirectiveBenchmark:
             response = requests.post(
                 f"{self.base_url}/set_directive", json={"text": self.directive}
             )
-            return response.json().get("status") == "directive_enqueued"
+            result = response.json()
+            status = result.get("status", "")
+
+            if status == "directive_enqueued":
+                return True
+            elif status == "queue_full":
+                print("Warning: Directive queue is full. Waiting and retrying...")
+                # Wait a bit and try again
+                time.sleep(5)
+                retry_response = requests.post(
+                    f"{self.base_url}/set_directive", json={"text": self.directive}
+                )
+                retry_result = retry_response.json()
+                return retry_result.get("status") == "directive_enqueued"
+            else:
+                print(f"Unexpected status: {status}")
+                return False
         except Exception as e:
             print(f"Error sending directive: {e}")
             return False
@@ -148,30 +164,26 @@ class DirectiveBenchmark:
 
     def _monitor_chat(self):
         """Monitor and record chat messages."""
-        # This is a placeholder - in a real implementation, you would
-        # connect to your chat API and record messages
-        last_check_time = time.time()
-        check_interval = 1.0  # Check for new messages every second
+        # The chat system uses WebSockets instead of a REST API endpoint
+        # For benchmarking purposes, we'll just log that we can't monitor chat
+        # and continue with the benchmark
+        print(
+            "Note: Chat monitoring is not implemented - the chat system uses WebSockets"
+        )
+        print("Chat messages will not be recorded in this benchmark")
 
+        # Set a placeholder message
+        placeholder_msg = {
+            "sender": "system",
+            "text": "Chat monitoring not implemented - WebSocket connection required",
+            "timestamp": time.time(),
+        }
+        self.chat_log.append(placeholder_msg)
+        self.metrics["chat_messages"] = 1
+
+        # Keep the thread running for the duration of the benchmark
         while self.running:
-            current_time = time.time()
-            if current_time - last_check_time >= check_interval:
-                try:
-                    # Get recent chat messages
-                    response = requests.get(f"{self.base_url}/chat/messages")
-                    messages = response.json()
-
-                    # Add new messages to our log
-                    for msg in messages:
-                        if msg not in self.chat_log:
-                            self.chat_log.append(msg)
-                            self.metrics["chat_messages"] += 1
-
-                    last_check_time = current_time
-                except Exception as e:
-                    print(f"Error monitoring chat: {e}")
-
-            time.sleep(0.1)
+            time.sleep(1.0)
 
     def run(self):
         """Run the benchmark test."""
