@@ -1,7 +1,8 @@
 export interface Message {
   text: string;
-  sender: "user" | "robot" | "robot_thoughts" | "robot_anticipation";
+  sender: "user" | "robot" | "robot_thoughts" | "robot_anticipation" | "system";
   timestamp: number;
+  isError?: boolean;
 }
 
 export interface GroupedMessage {
@@ -20,24 +21,29 @@ export type DisplayMessage = Message | GroupedMessage;
 export function groupMessages(messages: Message[]): DisplayMessage[] {
   const grouped: DisplayMessage[] = [];
 
-  // These variables track the last seen user or robot messages as we iterate.
-  let lastRobotTimestamp: number | undefined;
-  let lastUserTimestamp: number | undefined;
+  // These variables track the last seen message timestamp as we iterate.
+  let lastMessageTimestamp: number | undefined;
 
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
 
-    // For direct user messages, add and update the user timestamp.
+    // For direct user messages, add and update the timestamp.
     if (msg.sender === "user") {
       grouped.push(msg);
-      lastUserTimestamp = msg.timestamp;
+      lastMessageTimestamp = msg.timestamp;
       i++;
 
-      // For direct robot messages, add and update the robot timestamp.
+      // For direct robot messages, add and update the timestamp.
     } else if (msg.sender === "robot") {
       grouped.push(msg);
-      lastRobotTimestamp = msg.timestamp;
+      lastMessageTimestamp = msg.timestamp;
+      i++;
+
+      // For system messages, add and update the timestamp.
+    } else if (msg.sender === "system") {
+      grouped.push(msg);
+      lastMessageTimestamp = msg.timestamp;
       i++;
 
       // For robot_thoughts or robot_anticipation we group them.
@@ -61,17 +67,11 @@ export function groupMessages(messages: Message[]): DisplayMessage[] {
         i++;
       }
 
-      // Use lastRobotTimestamp if available, otherwise lastUserTimestamp.
+      // Calculate duration based on the last message timestamp
       let durationSeconds = 0;
-      const lastReferenceTimestamp =
-        lastRobotTimestamp !== undefined
-          ? lastRobotTimestamp
-          : lastUserTimestamp;
-      if (lastReferenceTimestamp !== undefined && extras.length > 0) {
+      if (lastMessageTimestamp !== undefined && extras.length > 0) {
         const lastExtraTimestamp = extras[extras.length - 1].timestamp;
-        durationSeconds = Math.ceil(
-          lastExtraTimestamp - lastReferenceTimestamp
-        );
+        durationSeconds = Math.ceil(lastExtraTimestamp - lastMessageTimestamp);
       }
 
       grouped.push({

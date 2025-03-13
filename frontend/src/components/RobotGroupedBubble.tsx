@@ -60,14 +60,14 @@ const ArrowSpan = styled.span`
   }
 `;
 
-const StatusSpan = styled.span<{ isLast?: boolean }>`
+const StatusSpan = styled.span<{ $isLast?: boolean }>`
   position: relative;
   display: inline-block;
-  color: ${({ isLast }) => (isLast ? "#4f46e5" : "#6366f1")};
+  color: ${({ $isLast }) => ($isLast ? "#4f46e5" : "#6366f1")};
   font-weight: 500;
 
-  ${({ isLast }) =>
-    isLast &&
+  ${({ $isLast }) =>
+    $isLast &&
     css`
       &::after {
         content: "";
@@ -82,10 +82,10 @@ const StatusSpan = styled.span<{ isLast?: boolean }>`
     `}
 
   @media (prefers-color-scheme: dark) {
-    color: ${({ isLast }) => (isLast ? "#818cf8" : "#6366f1")};
+    color: ${({ $isLast }) => ($isLast ? "#818cf8" : "#6366f1")};
 
-    ${({ isLast }) =>
-      isLast &&
+    ${({ $isLast }) =>
+      $isLast &&
       css`
         &::after {
           background-color: #818cf8;
@@ -95,14 +95,14 @@ const StatusSpan = styled.span<{ isLast?: boolean }>`
 `;
 
 const ContentDiv = styled.div<{
-  isOpen: boolean;
-  contentHeight: number;
+  $isOpen: boolean;
+  $contentHeight: number;
 }>`
   text-align: left;
   overflow: hidden;
-  max-height: ${({ isOpen, contentHeight }) =>
-    isOpen ? `${contentHeight}px` : "0px"};
-  margin-top: ${({ isOpen }) => (isOpen ? "8px" : "0")};
+  max-height: ${({ $isOpen, $contentHeight }) =>
+    $isOpen ? `${$contentHeight}px` : "0px"};
+  margin-top: ${({ $isOpen }) => ($isOpen ? "8px" : "0")};
   transition: max-height 0.3s ease, margin-top 0.3s ease;
 `;
 
@@ -182,9 +182,9 @@ export const RobotGroupedBubble = ({
     <RobotExtrasBubble>
       <ToggleDiv onClick={() => setIsOpen((prev) => !prev)}>
         <ArrowSpan>{isOpen ? "▲" : "▼"}</ArrowSpan>
-        <StatusSpan isLast={isLast}>{statusText}</StatusSpan>
+        <StatusSpan $isLast={isLast}>{statusText}</StatusSpan>
       </ToggleDiv>
-      <ContentDiv isOpen={isOpen} contentHeight={contentHeight}>
+      <ContentDiv $isOpen={isOpen} $contentHeight={contentHeight}>
         <InnerContent ref={innerRef}>
           {groupedExtras.map((extra, index) => (
             <ExtraItem key={index}>{extra}</ExtraItem>

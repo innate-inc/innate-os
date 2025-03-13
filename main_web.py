@@ -1,10 +1,9 @@
 import argparse
 import time
 import threading
-import cv2
 import platform
 import os
-
+from dotenv import load_dotenv
 import genesis as gs
 import uvicorn
 from fastapi import FastAPI
@@ -19,18 +18,24 @@ from src.agent.agent_websocket_bridge import run_agent_async
 from src.routes.video_api import router as video_api_router
 from src.routes.chat_api import router as chat_api_router
 
-# -------------------------------------------------------------------------
-# FASTAPI APP
-# -------------------------------------------------------------------------
+# Load environment variables from .env file
+load_dotenv()
+
+# Define constants
+LOCAL_ROSBRIDGE_URI = "ws://localhost:9090"
+CLOUD_ROSBRIDGE_URI = (
+    "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
+)
+
 app = FastAPI()
 
-# Enable CORS
+# Enable CORS with support for Authorization header
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "Authorization"],
 )
 
 # Mount the React build directory
@@ -38,10 +43,18 @@ frontend_build_path = os.path.join(os.path.dirname(__file__), "frontend", "dist"
 app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
 
 # Include the routers
+# Note: We're not adding authentication to the video_api_router yet
+# to keep things simple
 app.include_router(video_api_router)
+
+# Add authentication to the chat_api_router
+# This will require a valid Auth0 token for all endpoints in this router
+# except for the WebSocket endpoint which handles authentication separately
+# The WebSocket endpoint will handle authentication on its own
 app.include_router(chat_api_router)
 
-# Initialize a placeholder on the application's state so that downstream routers can retrieve SHARED_QUEUES.
+# Initialize a placeholder on the application's state so that downstream
+# routers can retrieve SHARED_QUEUES.
 app.state.SHARED_QUEUES = None
 
 # -------------------------------------------------------------------------
@@ -80,7 +93,26 @@ def main():
         default=False,
         help="Connect to local agent server instead of cloud",
     )
+    # Add Auth0 configuration arguments
+    parser.add_argument(
+        "--auth0-domain",
+        type=str,
+        default="",
+        help="Auth0 domain (e.g., your-tenant.auth0.com)",
+    )
+    parser.add_argument(
+        "--auth0-audience",
+        type=str,
+        default="",
+        help="Auth0 API identifier",
+    )
     args = parser.parse_args()
+
+    # Set Auth0 environment variables
+    if args.auth0_domain:
+        os.environ["AUTH0_DOMAIN"] = args.auth0_domain
+    if args.auth0_audience:
+        os.environ["AUTH0_AUDIENCE"] = args.auth0_audience
 
     # 1) Create shared queues
     global SHARED_QUEUES
@@ -99,14 +131,11 @@ def main():
     # 3) Start the agent (async) in a separate thread
     agent_thread = run_agent_async(
         SHARED_QUEUES,
-        rosbridge_uri=(
-            "ws://localhost:9090"
-            if args.local
-            else "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
-        ),
+        rosbridge_uri=(LOCAL_ROSBRIDGE_URI if args.local else CLOUD_ROSBRIDGE_URI),
     )
 
-    # 4) Start Uvicorn in another thread so the Genesis viewer and FastAPI server run concurrently
+    # 4) Start Uvicorn in another thread so the Genesis viewer and FastAPI
+    # server run concurrently
     def run_uvicorn():
         config = uvicorn.Config(
             app=app, host="0.0.0.0", port=8000, log_level="info", reload=False
@@ -117,7 +146,8 @@ def main():
     uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
     uvicorn_thread.start()
 
-    # 5) Launch simulation run() in its own thread (macOS) or directly (other platforms)
+    # 5) Launch simulation run() in its own thread (macOS) or directly
+    # (other platforms)
     if platform.system() == "Darwin":
         gs.tools.run_in_another_thread(fn=sim_node.run, args=())
     else:

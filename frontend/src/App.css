@@ -2,6 +2,8 @@
   max-width: 1280px;
   margin: 0 auto;
   text-align: center;
+  display: flex;
+  flex-direction: column;
 }
 
 .logo {
@@ -34,8 +36,17 @@
 
 .card {
   padding: 2em;
+  background-color: #1e293b;
+  border-radius: 8px;
 }
 
 .read-the-docs {
-  color: #888;
+  color: #a1a1aa;
+}
+
+/* Loading animation */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
