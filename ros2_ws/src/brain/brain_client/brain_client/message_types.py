@@ -29,6 +29,7 @@ class MessageInType(str, Enum):
     AUTH = "auth"
     DIRECTIVE = "directive"
     IMAGE = "image"
+    POSE_IMAGE = "pose_image"
     CHAT_IN = "chat_in"
     PRIMITIVE_ACTIVATED = "primitive_activated"
     PRIMITIVE_COMPLETED = "primitive_completed"

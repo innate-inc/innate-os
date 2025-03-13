@@ -66,6 +66,9 @@ class BrainClientNode(Node):
         self.declare_parameter("horizontal_resolution", 640)
         self.declare_parameter("vertical_resolution", 480)
 
+        # New parameter for pose image interval
+        self.declare_parameter("pose_image_interval", 0.5)  # 0.5 seconds default
+
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
@@ -112,6 +115,11 @@ class BrainClientNode(Node):
             )
         )
 
+        # Get pose image interval parameter
+        self.pose_image_interval = (
+            self.get_parameter("pose_image_interval").get_parameter_value().double_value
+        )
+
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
 
         # Publishers, Subscribers, and Service
@@ -120,7 +128,7 @@ class BrainClientNode(Node):
 
         # RGB image subscription remains unchanged.
         self.image_sub = self.create_subscription(
-            CompressedImage, self.image_topic, self.image_callback, 10
+            CompressedImage, self.image_topic, self.image_callback, 1
         )
 
         # Optionally subscribe to the depth image topic if required.
@@ -129,7 +137,7 @@ class BrainClientNode(Node):
             # (which contains: header, height, width, encoding, is_bigendian, step, data)
 
             self.depth_image_sub = self.create_subscription(
-                Image, self.depth_image_topic, self.depth_image_callback, 10
+                Image, self.depth_image_topic, self.depth_image_callback, 1
             )
 
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -145,6 +153,10 @@ class BrainClientNode(Node):
 
         self.exit_event = threading.Event()
         self.ready_for_image = False
+
+        # New variables for pose image timer
+        self.pose_image_timer = None
+        self.pose_image_started = False
 
         self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
 
@@ -224,19 +236,20 @@ class BrainClientNode(Node):
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().debug(f"Received chat_in: {chat_entry}")
+        self.get_logger().info(f"\033[1;92mReceived chat_in: {chat_entry}\033[0m")
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
         self.ws_bridge.send_message(outgoing_msg)
 
     def handle_get_chat_history(self, request, response):
         self.get_logger().debug(
-            f"Received get_chat_history request. History: {self.chat_history}"
+            f"\033[1;94mReceived get_chat_history request. History: {self.chat_history}\033[0m"
         )
         response.history = json.dumps(self.chat_history)
         return response
 
     def image_callback(self, msg: CompressedImage):
         try:
+            # self.get_logger().info(f"\033[1;92m[BrainClient] Received image_callback\033[0m")
             np_arr = np.frombuffer(msg.data, np.uint8)
             self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         except Exception as e:
@@ -265,6 +278,54 @@ class BrainClientNode(Node):
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
         self.ready_for_image = True
+
+        # Start the pose image timer after the first ready_for_image, if not already started
+        if not self.pose_image_started and self.primitives_registered:
+            self.get_logger().info("Starting regular pose image transmission")
+            self.pose_image_started = True
+            self.pose_image_timer = self.create_timer(
+                self.pose_image_interval, self.pose_image_callback
+            )
+
+    def pose_image_callback(self):
+        """Send pose images regularly with the robot's current position."""
+        try:
+            # Skip if no valid image or odometry data is available
+            if self.last_image is None or self.last_odom is None:
+                return
+
+            # Compress the image as JPEG
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+            success, encoded_img = cv2.imencode(".jpg", self.last_image, encode_params)
+            if not success:
+                self.get_logger().error("Failed to encode image for pose_image")
+                return
+
+            # Extract position and orientation data
+            pos = self.last_odom.pose.pose.position
+            ori = self.last_odom.pose.pose.orientation
+
+            # Compute yaw from quaternion
+            siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+            cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+            theta = math.atan2(siny_cosp, cosy_cosp)
+
+            # Create and send the pose_image message
+            # No user_token is needed as the server will use the connection_id
+            payload = {
+                "image": base64.b64encode(encoded_img.tobytes()).decode("utf-8"),
+                "x": pos.x,
+                "y": pos.y,
+                "theta": theta,
+            }
+
+            pose_image_msg = MessageIn(type=MessageInType.POSE_IMAGE, payload=payload)
+            self.ws_bridge.send_message(pose_image_msg)
+            self.get_logger().debug(
+                f"Sent pose_image at position ({pos.x:.2f}, {pos.y:.2f}, {theta:.2f})"
+            )
+        except Exception as e:
+            self.get_logger().error(f"Error in pose_image_callback: {e}")
 
     def _handle_vision_agent_output(self, msg):
         try:
@@ -322,7 +383,10 @@ class BrainClientNode(Node):
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
 
-            if payload.next_task.type == TaskType.NAVIGATE_TO_POSITION:
+            self.get_logger().info(f"Primitive task type: {payload.next_task.type.value}")
+
+            if payload.next_task.type.value in self.primitives_dict:
+                # Handle any task type that exists in the primitives dictionary
                 self.send_primitive_goal(
                     payload.next_task.type, payload.next_task.inputs
                 )
@@ -333,9 +397,7 @@ class BrainClientNode(Node):
                 self.ws_bridge.send_message(status_msg)
                 self.primitive_running = True
             else:
-                self.get_logger().warn(
-                    "\033[93m[BrainClient] No valid task provided.\033[0m"
-                )
+                self.get_logger().warn(f"Unknown primitive type: {payload.next_task.type}")
         else:
             self.get_logger().info(
                 "\033[94m[BrainClient] No next task provided.\033[0m"
@@ -369,27 +431,32 @@ class BrainClientNode(Node):
                 payload["vertical_fov"] = self.vertical_fov
 
                 # Optionally include depth data if enabled and available.
-                if self.send_depth and self.last_depth_image is not None:
-                    depth_frame = self.last_depth_image
-                    depth_data = depth_frame.tobytes()
-                    if depth_frame.dtype == np.uint16:
-                        encoding = "16UC1"
-                        bytes_per_pixel = 2
-                    elif depth_frame.dtype == np.float32:
-                        encoding = "32FC1"
-                        bytes_per_pixel = 4
-                    else:
-                        encoding = "8UC1"
-                        bytes_per_pixel = 1
-                    depth_payload = {
-                        "height": int(depth_frame.shape[0]),
-                        "width": int(depth_frame.shape[1]),
-                        "encoding": encoding,
-                        "is_bigendian": 0,
-                        "step": int(depth_frame.shape[1] * bytes_per_pixel),
-                        "data": base64.b64encode(depth_data).decode("utf-8"),
-                    }
-                    payload["depth"] = depth_payload
+                if self.send_depth and self.last_depth_image is None:
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No depth image available.\033[0m"
+                    )
+                    return
+
+                depth_frame = self.last_depth_image
+                depth_data = depth_frame.tobytes()
+                if depth_frame.dtype == np.uint16:
+                    encoding = "16UC1"
+                    bytes_per_pixel = 2
+                elif depth_frame.dtype == np.float32:
+                    encoding = "32FC1"
+                    bytes_per_pixel = 4
+                else:
+                    encoding = "8UC1"
+                    bytes_per_pixel = 1
+                depth_payload = {
+                    "height": int(depth_frame.shape[0]),
+                    "width": int(depth_frame.shape[1]),
+                    "encoding": encoding,
+                    "is_bigendian": 0,
+                    "step": int(depth_frame.shape[1] * bytes_per_pixel),
+                    "data": base64.b64encode(depth_data).decode("utf-8"),
+                }
+                payload["depth"] = depth_payload
 
                 # Include robot coordinates (if available) in the payload.
                 if self.last_odom is not None:
@@ -456,6 +523,16 @@ class BrainClientNode(Node):
         self.get_logger().info(
             f"{status_color}[BrainClient] Primitive execution result: {result.success}\033[0m"
         )
+        # Send a stop command to the robot if the primitive failed.
+        # Wait 1sec
+        time.sleep(1)  # TODO: Find a better way to do this.
+        stop_cmd = Twist()
+        stop_cmd.linear.x = 0.0
+        stop_cmd.angular.z = 0.0
+        self.cmd_vel_pub.publish(stop_cmd)
+
+        self.get_logger().info("\033[92m[BrainClient] Stopping robot\033[0m")
+
         if result.success:
             self.primitive_running = False
             outgoing_msg = MessageIn(
@@ -472,11 +549,21 @@ class BrainClientNode(Node):
         if msg.payload.get("success", False):
             self.primitives_registered = True
             self.directive_registered = True
-            primitive_count = msg.payload.get("primitive_count", 0)
+            primitive_count = msg.payload.get("count", 0)
             directive_registered = msg.payload.get("directive_registered", False)
             self.get_logger().info(
                 f"Successfully registered {primitive_count} primitives and directive: {directive_registered}"
             )
+
+            # Start the pose image timer if we've already received a ready_for_image message
+            if self.ready_for_image and not self.pose_image_started:
+                self.get_logger().info(
+                    "Starting regular pose image transmission after registration"
+                )
+                self.pose_image_started = True
+                self.pose_image_timer = self.create_timer(
+                    self.pose_image_interval, self.pose_image_callback
+                )
         else:
             self.get_logger().error(
                 "Failed to register primitives and/or directive with server"
@@ -585,6 +672,9 @@ class BrainClientNode(Node):
 
     def destroy_node(self):
         self.exit_event.set()
+        # Cancel the pose image timer if it exists
+        if self.pose_image_timer:
+            self.pose_image_timer.cancel()
         return super().destroy_node()
 
 
