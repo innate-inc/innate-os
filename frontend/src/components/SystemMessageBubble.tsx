@@ -109,6 +109,7 @@ const SystemContentDiv = styled.div<{
     isOpen ? `${contentHeight}px` : "0px"};
   margin-top: ${({ isOpen }) => (isOpen ? "8px" : "0")};
   transition: max-height 0.3s ease, margin-top 0.3s ease;
+  cursor: pointer;
 `;
 
 const SystemInnerContent = styled.div<{ $isError?: boolean }>`
@@ -122,6 +123,7 @@ const SystemInnerContent = styled.div<{ $isError?: boolean }>`
   color: #4b5563;
   font-size: 14px;
   line-height: 1.4;
+  cursor: pointer;
 
   @media (prefers-color-scheme: dark) {
     background-color: ${(props) =>
@@ -189,6 +191,7 @@ export const SystemMessageBubble = ({
             $isError={isError}
             id={`system-content-${messageId}`}
             ref={contentRef}
+            onClick={() => onToggleExpand(messageId)}
           >
             {text}
           </SystemInnerContent>
