@@ -113,6 +113,13 @@ def main():
         default=False,
         help="Enable logging of all model outputs",
     )
+    # Add authentication control argument
+    parser.add_argument(
+        "--need-oauth",
+        action="store_true",
+        default=True,
+        help="Require OAuth authentication for chat API (default: True)",
+    )
     args = parser.parse_args()
 
     # Set Auth0 environment variables
@@ -120,6 +127,9 @@ def main():
         os.environ["AUTH0_DOMAIN"] = args.auth0_domain
     if args.auth0_audience:
         os.environ["AUTH0_AUDIENCE"] = args.auth0_audience
+
+    # Set authentication requirement flag
+    os.environ["NEED_OAUTH"] = str(args.need_oauth)
 
     # 1) Create shared queues
     global SHARED_QUEUES
