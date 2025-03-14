@@ -104,6 +104,7 @@ const ContentDiv = styled.div<{
     $isOpen ? `${$contentHeight}px` : "0px"};
   margin-top: ${({ $isOpen }) => ($isOpen ? "8px" : "0")};
   transition: max-height 0.3s ease, margin-top 0.3s ease;
+  cursor: pointer;
 `;
 
 const InnerContent = styled.div`
@@ -112,6 +113,7 @@ const InnerContent = styled.div`
   padding: 12px;
   border: 1px solid rgba(79, 70, 229, 0.1);
   color: #4b5563;
+  cursor: pointer;
 
   @media (prefers-color-scheme: dark) {
     background-color: rgba(79, 70, 229, 0.1);
@@ -178,13 +180,19 @@ export const RobotGroupedBubble = ({
       ? `${workingOrWorked} for ${durationSeconds} seconds`
       : `${workingOrWorked}...`;
 
+  const toggleOpen = () => setIsOpen((prev) => !prev);
+
   return (
     <RobotExtrasBubble>
-      <ToggleDiv onClick={() => setIsOpen((prev) => !prev)}>
+      <ToggleDiv onClick={toggleOpen}>
         <ArrowSpan>{isOpen ? "▲" : "▼"}</ArrowSpan>
         <StatusSpan $isLast={isLast}>{statusText}</StatusSpan>
       </ToggleDiv>
-      <ContentDiv $isOpen={isOpen} $contentHeight={contentHeight}>
+      <ContentDiv
+        $isOpen={isOpen}
+        $contentHeight={contentHeight}
+        onClick={isOpen ? toggleOpen : undefined}
+      >
         <InnerContent ref={innerRef}>
           {groupedExtras.map((extra, index) => (
             <ExtraItem key={index}>{extra}</ExtraItem>
