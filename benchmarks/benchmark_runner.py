@@ -201,14 +201,26 @@ class DirectiveBenchmark:
         ws_url = f"ws://{base_url_no_http}/ws/chat?{user_params}"
         print(f"Connecting to WebSocket: {ws_url}")
 
+        # Get the start timestamp for filtering messages
+        start_timestamp = self.metrics.get("start_timestamp", time.time())
+
         # Message handler for WebSocket
         def on_message(ws, message):
             try:
                 data = json.loads(message)
                 if "sender" in data and "text" in data:
-                    print(f"Chat message: {data['sender']}: {data['text']}")
-                    # Save message in real-time
-                    self._save_chat_message(data)
+                    # Check if the message has a timestamp
+                    msg_time = data.get("timestamp", time.time())
+
+                    # Only process messages that occurred after the test started
+                    if msg_time >= start_timestamp:
+                        print(f"Chat message: {data['sender']}: {data['text']}")
+                        # Save message in real-time
+                        self._save_chat_message(data)
+                    else:
+                        # Skip messages from before the test started
+                        # print("Skipping message from before test start")
+                        pass
             except Exception as e:
                 print(f"Error processing message: {e}")
 
@@ -299,7 +311,8 @@ class DirectiveBenchmark:
                         print("Brain error detected in chat messages")
                         check_complete.set()
 
-                    # If we've received several messages without errors, assume brain is OK
+                    # If we've received several messages without errors,
+                    # assume brain is OK
                     if messages_received >= 3 and not brain_error:
                         brain_ok = True
                         print("Brain appears to be functioning")
@@ -346,27 +359,27 @@ class DirectiveBenchmark:
             return True  # Continue anyway if we can't check
 
     def _send_message(self, message_text):
-        """Send a message to the robot."""
+        """Send a message to the robot using WebSockets."""
         try:
-            response = requests.post(
-                f"{self.base_url}/chat_message",
-                json={
-                    "text": message_text,
-                    "user_id": "benchmark",
-                    "email": "benchmark@example.com",
-                },
-            )
-            result = response.json()
-            status = result.get("status", "")
+            # Create a WebSocket URL
+            base_url_no_http = self.base_url.replace("http://", "")
+            user_params = "user_id=benchmark&email=benchmark@example.com"
+            ws_url = f"ws://{base_url_no_http}/ws/chat?{user_params}"
 
-            if status == "message_sent":
-                print(f"Message sent: '{message_text}'")
-                return True
-            else:
-                print(f"Failed to send message. Status: {status}")
-                return False
+            # Connect to WebSocket
+            ws = websocket.create_connection(ws_url)
+
+            # Send message
+            message = {"text": message_text, "sender": "user", "timestamp": time.time()}
+            ws.send(json.dumps(message))
+
+            # Close connection
+            ws.close()
+
+            print(f"Message sent via WebSocket: '{message_text}'")
+            return True
         except Exception as e:
-            print(f"Error sending message: {e}")
+            print(f"Error sending message via WebSocket: {e}")
             return False
 
     def _schedule_messages(self):
@@ -444,6 +457,9 @@ class DirectiveBenchmark:
         # Start data collection
         self.running = True
         self.metrics["start_time"] = datetime.now().isoformat()
+        self.metrics["start_timestamp"] = (
+            time.time()
+        )  # Unix timestamp for filtering messages
 
         # Start threads for frame capture and chat monitoring
         first_person_thread = threading.Thread(
