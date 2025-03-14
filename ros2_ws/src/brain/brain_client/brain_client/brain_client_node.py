@@ -255,11 +255,6 @@ class BrainClientNode(Node):
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
         )
 
-        # Temporary test: Create a timer to send a test goal and cancel it after 1 second
-        self.create_timer(
-            10.0, self.send_test_goal
-        )  # Wait 3 seconds before sending test goal
-
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
@@ -405,7 +400,7 @@ class BrainClientNode(Node):
         text = msg.payload.get("text", "")
         chat_entry = {"sender": sender, "text": text, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().info(f"Received chat_out: {chat_entry}")
+        self.get_logger().debug(f"Received chat_out: {chat_entry}")
         out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
 
@@ -802,61 +797,6 @@ class BrainClientNode(Node):
         if self.pose_image_timer:
             self.pose_image_timer.cancel()
         return super().destroy_node()
-
-    def send_test_goal(self):
-        """Temporary test function to send a goal and cancel it after 4 second."""
-        self.get_logger().info("\033[93m[BrainClient] Sending test goal...\033[0m")
-
-        # Check if the action server is available
-        if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().error(
-                "\033[91m[BrainClient] Primitive execution action server not available for test!\033[0m"
-            )
-            return
-
-        # Create a simple navigate goal (with coordinates that likely won't be reached in 1 second)
-        goal_msg = ExecutePrimitive.Goal()
-        goal_msg.primitive_type = TaskType.NAVIGATE_TO_POSITION.value
-        goal_msg.inputs = json.dumps({"x": 1.0, "y": 1.0, "theta": 0.0})
-
-        # Send the goal
-        self.get_logger().info(
-            "\033[93m[BrainClient] Sending test navigation goal\033[0m"
-        )
-        send_goal_future = self.primitive_action_client.send_goal_async(goal_msg)
-        send_goal_future.add_done_callback(self.test_goal_response_callback)
-
-    def test_goal_response_callback(self, future):
-        """Callback for the test goal response that schedules cancellation after 4 seconds."""
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().info("Test goal rejected.")
-            return
-
-        # Store the goal handle as a class member, following the ROS2 example
-        self._goal_handle = goal_handle
-        self.get_logger().debug("Test goal accepted. Will cancel in 1 second...")
-
-        # Schedule cancellation after 1 second
-        self.cancel_timer = self.create_timer(
-            1.0, self.cancel_test_goal, callback_group=None
-        )
-
-        # Also get the result (in case it completes before we cancel)
-        get_result_future = goal_handle.get_result_async()
-        get_result_future.add_done_callback(self.get_result_callback)
-
-    def cancel_test_goal(self):
-        """Cancel the test goal after the timer expires."""
-        # Destroy the timer to make it one-shot
-        self.destroy_timer(self.cancel_timer)
-
-        if hasattr(self, "_goal_handle") and self._goal_handle is not None:
-            self.get_logger().debug("Canceling test goal now")
-            cancel_future = self._goal_handle.cancel_goal_async()
-            cancel_future.add_done_callback(self.cancel_response_callback)
-        else:
-            self.get_logger().info("No goal handle to cancel")
 
 
 def main(args=None):
