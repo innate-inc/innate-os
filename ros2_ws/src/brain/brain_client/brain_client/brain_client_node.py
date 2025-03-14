@@ -31,7 +31,7 @@ from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
 
@@ -164,6 +164,11 @@ class BrainClientNode(Node):
         # Create service for setting logging configuration
         self.set_logging_srv = self.create_service(
             SetBool, "/set_logging_config", self.handle_set_logging_config
+        )
+
+        # Create service for resetting the brain
+        self.reset_srv = self.create_service(
+            Trigger, "/reset_brain", self.handle_reset_brain
         )
 
         self.exit_event = threading.Event()
@@ -719,6 +724,49 @@ class BrainClientNode(Node):
         directive_names = list(self.directives.keys())
         response.directives = directive_names
         response.current_directive = self.current_directive.name
+        return response
+
+    def handle_reset_brain(self, request, response):
+        """
+        Service handler for resetting the brain.
+        Sends a reset message to the agent in the cloud and wipes the local history.
+        """
+        self.get_logger().info("\033[1;92m[BrainClient] Resetting brain\033[0m")
+
+        # Clear local chat history
+        self.chat_history = []
+
+        # Stop any running primitive
+        if self.primitive_running:
+            self.get_logger().info(
+                "\033[1;92m[BrainClient] Stopping running primitive\033[0m"
+            )
+            self.primitive_running = False
+            # Send a stop command to the robot
+            stop_cmd = Twist()
+            stop_cmd.linear.x = 0.0
+            stop_cmd.angular.z = 0.0
+            self.cmd_vel_pub.publish(stop_cmd)
+
+        # Send reset message to the agent in the cloud
+        reset_msg = MessageIn(type=MessageInType.RESET, payload={})
+        self.ws_bridge.send_message(reset_msg)
+
+        # Publish a system message to the chat
+        chat_entry = {
+            "sender": "system",
+            "text": "Brain has been reset",
+            "timestamp": time.time(),
+        }
+        self.chat_history.append(chat_entry)
+        out_msg = String(data=json.dumps(chat_entry))
+        self.chat_out_pub.publish(out_msg)
+
+        # Re-register primitives and directive with the server
+        self.register_primitives_and_directive()
+
+        response.success = True
+        response.message = "Brain has been reset successfully"
         return response
 
     def destroy_node(self):
