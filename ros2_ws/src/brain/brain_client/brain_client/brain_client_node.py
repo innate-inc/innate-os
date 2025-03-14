@@ -743,6 +743,7 @@ class BrainClientNode(Node):
             )
             self.primitive_running = False
             # Send a stop command to the robot
+            # TODO: This WON'T work, Beeds to be implemented in the primitive action server.
             stop_cmd = Twist()
             stop_cmd.linear.x = 0.0
             stop_cmd.angular.z = 0.0
