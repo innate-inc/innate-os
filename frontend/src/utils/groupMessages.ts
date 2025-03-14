@@ -1,6 +1,12 @@
 export interface Message {
   text: string;
-  sender: "user" | "robot" | "robot_thoughts" | "robot_anticipation" | "system";
+  sender:
+    | "user"
+    | "robot"
+    | "robot_thoughts"
+    | "robot_anticipation"
+    | "system"
+    | "vision_agent_output";
   timestamp: number;
   isError?: boolean;
 }

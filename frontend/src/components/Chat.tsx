@@ -735,8 +735,12 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   };
 
+  const filteredMessages = messages.filter(
+    (msg) => msg.sender !== "vision_agent_output"
+  );
+
   // Use the grouping utility to prepare messages for display.
-  const groupedMessages: DisplayMessage[] = groupMessages(messages);
+  const groupedMessages: DisplayMessage[] = groupMessages(filteredMessages);
 
   // Helper function to toggle system message expansion
   const toggleSystemMessage = (messageId: number) => {
