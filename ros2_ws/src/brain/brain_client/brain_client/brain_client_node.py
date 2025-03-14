@@ -209,6 +209,8 @@ class BrainClientNode(Node):
         }
 
         self.primitive_running = False
+        # Add a variable to store the current goal handle
+        self._goal_handle = None
 
         # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
@@ -252,6 +254,11 @@ class BrainClientNode(Node):
         self.get_logger().info(
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
         )
+
+        # Temporary test: Create a timer to send a test goal and cancel it after 1 second
+        self.create_timer(
+            10.0, self.send_test_goal
+        )  # Wait 3 seconds before sending test goal
 
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
@@ -406,7 +413,13 @@ class BrainClientNode(Node):
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
             self.primitive_running = False
-            # self.primitive_action_client.cancel_goal_async()
+            # Cancel the current goal if it exists
+            if self._goal_handle is not None:
+                self.get_logger().info(
+                    "\033[91m[BrainClient] Canceling current goal.\033[0m"
+                )
+                cancel_future = self._goal_handle.cancel_goal_async()
+                cancel_future.add_done_callback(self.cancel_response_callback)
             return
 
         if payload.thoughts:
@@ -567,11 +580,31 @@ class BrainClientNode(Node):
                 "\033[91m[BrainClient] Primitive execution goal rejected.\033[0m"
             )
             return
+        # Store the goal handle for potential cancellation, using the same naming as in the example
+        self._goal_handle = goal_handle
         self.get_logger().info(
             "\033[92m[BrainClient] Primitive execution goal accepted.\033[0m"
         )
         get_result_future = goal_handle.get_result_async()
         get_result_future.add_done_callback(self.get_result_callback)
+
+    def cancel_response_callback(self, future):
+        """Handle the response from a cancel_goal_async request."""
+        cancel_response = future.result()
+        self.get_logger().info(f"Cancel response: {cancel_response}")
+
+        # Check if any goals were canceled, following the ROS2 example
+        if (
+            hasattr(cancel_response, "goals_canceling")
+            and len(cancel_response.goals_canceling) > 0
+        ):
+            self.get_logger().info(
+                "\033[92m[BrainClient] Goal cancellation accepted.\033[0m"
+            )
+        else:
+            self.get_logger().info(
+                "\033[91m[BrainClient] Goal cancellation rejected.\033[0m"
+            )
 
     def get_result_callback(self, future):
         result = future.result().result
@@ -579,6 +612,8 @@ class BrainClientNode(Node):
         self.get_logger().info(
             f"{status_color}[BrainClient] Primitive execution result: {result.success}\033[0m"
         )
+        # Clear the goal handle since the goal is complete
+        self._goal_handle = None
         # Send a stop command to the robot if the primitive failed.
         # Wait 1sec
         time.sleep(1)  # TODO: Find a better way to do this.
@@ -776,6 +811,67 @@ class BrainClientNode(Node):
         if self.pose_image_timer:
             self.pose_image_timer.cancel()
         return super().destroy_node()
+
+    def send_test_goal(self):
+        """Temporary test function to send a goal and cancel it after 1 second."""
+        self.get_logger().info("\033[93m[BrainClient] Sending test goal...\033[0m")
+
+        # Check if the action server is available
+        if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().error(
+                "\033[91m[BrainClient] Primitive execution action server not available for test!\033[0m"
+            )
+            return
+
+        # Create a simple navigate goal (with coordinates that likely won't be reached in 1 second)
+        goal_msg = ExecutePrimitive.Goal()
+        goal_msg.primitive_type = TaskType.NAVIGATE_TO_POSITION.value
+        goal_msg.inputs = json.dumps({"x": 1.0, "y": 1.0, "theta": 0.0})
+
+        # Send the goal
+        self.get_logger().info(
+            "\033[93m[BrainClient] Sending test navigation goal\033[0m"
+        )
+        send_goal_future = self.primitive_action_client.send_goal_async(goal_msg)
+        send_goal_future.add_done_callback(self.test_goal_response_callback)
+
+    def test_goal_response_callback(self, future):
+        """Callback for the test goal response that schedules cancellation after 1 second."""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info("\033[91m[BrainClient] Test goal rejected.\033[0m")
+            return
+
+        # Store the goal handle as a class member, following the ROS2 example
+        self._goal_handle = goal_handle
+        self.get_logger().info(
+            "\033[92m[BrainClient] Test goal accepted. Will cancel in 1 second...\033[0m"
+        )
+
+        # Schedule cancellation after 1 second
+        self.cancel_timer = self.create_timer(
+            1.0, self.cancel_test_goal, callback_group=None
+        )
+
+        # Also get the result (in case it completes before we cancel)
+        get_result_future = goal_handle.get_result_async()
+        get_result_future.add_done_callback(self.get_result_callback)
+
+    def cancel_test_goal(self):
+        """Cancel the test goal after the timer expires."""
+        # Destroy the timer to make it one-shot
+        self.destroy_timer(self.cancel_timer)
+
+        if hasattr(self, "_goal_handle") and self._goal_handle is not None:
+            self.get_logger().info(
+                "\033[93m[BrainClient] Canceling test goal now\033[0m"
+            )
+            cancel_future = self._goal_handle.cancel_goal_async()
+            cancel_future.add_done_callback(self.cancel_response_callback)
+        else:
+            self.get_logger().info(
+                "\033[91m[BrainClient] No goal handle to cancel\033[0m"
+            )
 
 
 def main(args=None):
