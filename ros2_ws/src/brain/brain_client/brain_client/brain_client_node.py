@@ -850,7 +850,7 @@ class BrainClientNode(Node):
 
         # Schedule cancellation after 1 second
         self.cancel_timer = self.create_timer(
-            1.0, self.cancel_test_goal, callback_group=None
+            4.0, self.cancel_test_goal, callback_group=None
         )
 
         # Also get the result (in case it completes before we cancel)
