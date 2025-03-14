@@ -1,6 +1,6 @@
-import rclpy
 import math
 import threading
+import time
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from brain_client.primitives.types import Primitive
@@ -70,7 +70,7 @@ class Nav2Controller:
             # Get feedback but don't block for too long
             self.navigator.getFeedback()
             # Small sleep to prevent CPU hogging
-            rclpy.sleep_for(0.1)  # 100ms check interval
+            time.sleep(0.1)  # 100ms check interval
 
         result = self.navigator.getResult()
 
