@@ -5,6 +5,8 @@ import argparse
 import requests
 import threading
 import cv2
+import yaml
+import os
 from datetime import datetime
 from pathlib import Path
 import websocket
@@ -18,21 +20,33 @@ class DirectiveBenchmark:
 
     def __init__(
         self,
-        directive,
-        duration=300,  # 5 minutes in seconds
+        config_file,
         trial_num=1,
         base_url="http://localhost:8000",
         frame_capture_interval=1.0,  # seconds between frame captures
     ):
-        self.directive = directive
-        self.duration = duration
+        # Load configuration
+        with open(config_file, "r") as f:
+            self.config = yaml.safe_load(f)
+
+        # Use values from config file
+        self.directive = self.config.get("directive")
+        self.duration = self.config.get("duration", 300)
+        self.config_name = self.config.get(
+            "name", os.path.basename(config_file).split(".")[0]
+        )
+        self.messages = self.config.get("messages", [])
+
         self.trial_num = trial_num
         self.base_url = base_url
         self.frame_capture_interval = frame_capture_interval
+        self.config_file = config_file
 
         # Create directory structure
-        directive_safe = self._sanitize_filename(directive)
-        self.output_dir = Path(f"benchmarks/{directive_safe}/trial_{trial_num}")
+        output_base = self._sanitize_filename(self.config_name)
+
+        # Store results in a dedicated results directory
+        self.output_dir = Path(f"benchmarks/results/{output_base}/trial_{trial_num}")
         self.images_dir = self.output_dir / "images"
         self.first_person_dir = self.images_dir / "first_person"
         self.chase_dir = self.images_dir / "chase"
@@ -53,6 +67,7 @@ class DirectiveBenchmark:
         # Control flags
         self.running = False
         self.threads = []
+        self.message_timers = []
 
     def _sanitize_filename(self, name):
         """Convert a string to a safe filename."""
@@ -66,6 +81,10 @@ class DirectiveBenchmark:
             "trial_num": self.trial_num,
             "timestamp": datetime.now().isoformat(),
             "base_url": self.base_url,
+            "config_name": self.config_name,
+            "config_description": self.config.get("description", ""),
+            "config_goal": self.config.get("goal", ""),
+            "scheduled_messages": self.messages,
         }
 
         with open(self.output_dir / "metadata.json", "w") as f:
@@ -326,10 +345,65 @@ class DirectiveBenchmark:
             print(f"Error checking brain status: {e}")
             return True  # Continue anyway if we can't check
 
+    def _send_message(self, message_text):
+        """Send a message to the robot."""
+        try:
+            response = requests.post(
+                f"{self.base_url}/chat_message",
+                json={
+                    "text": message_text,
+                    "user_id": "benchmark",
+                    "email": "benchmark@example.com",
+                },
+            )
+            result = response.json()
+            status = result.get("status", "")
+
+            if status == "message_sent":
+                print(f"Message sent: '{message_text}'")
+                return True
+            else:
+                print(f"Failed to send message. Status: {status}")
+                return False
+        except Exception as e:
+            print(f"Error sending message: {e}")
+            return False
+
+    def _schedule_messages(self):
+        """Schedule messages to be sent at specified times."""
+        if not self.messages:
+            return
+
+        print(f"Scheduling {len(self.messages)} messages...")
+
+        for message in self.messages:
+            delay = message.get("time", 0)
+            text = message.get("text", "")
+
+            if delay >= 0 and text:
+                # Create a timer to send the message after the specified delay
+                timer = threading.Timer(delay, lambda msg=text: self._send_message(msg))
+                timer.daemon = True
+                self.message_timers.append(timer)
+                print(f"Scheduled message at {delay}s: '{text}'")
+
+        # Start all timers
+        for timer in self.message_timers:
+            timer.start()
+
     def run(self):
         """Run the benchmark test."""
         print(f"Starting benchmark for directive: '{self.directive}'")
+        if self.config:
+            print(f"Using configuration: '{self.config_name}'")
+            if "description" in self.config:
+                print(f"Description: {self.config.get('description')}")
+            if "goal" in self.config:
+                print(f"Goal: {self.config.get('goal')}")
         print(f"Output directory: {self.output_dir}")
+
+        # Ensure the results directory exists
+        Path("benchmarks/results").mkdir(parents=True, exist_ok=True)
 
         # Check if simulation is ready
         if not self._check_simulation_ready():
@@ -383,6 +457,9 @@ class DirectiveBenchmark:
             thread.daemon = True
             thread.start()
 
+        # Schedule messages if any are defined in the configuration
+        self._schedule_messages()
+
         print(f"Benchmark running for {self.duration} seconds...")
 
         # Run for specified duration
@@ -395,6 +472,11 @@ class DirectiveBenchmark:
             self.running = False
             for thread in self.threads:
                 thread.join(timeout=2.0)
+
+            # Cancel any pending message timers
+            for timer in self.message_timers:
+                if timer.is_alive():
+                    timer.cancel()
 
             # Record end time
             self.metrics["end_time"] = datetime.now().isoformat()
@@ -417,12 +499,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run directive benchmarks for robot simulation"
     )
-    parser.add_argument("directive", help="The directive to send to the robot")
+
     parser.add_argument(
-        "--duration",
-        type=int,
-        default=300,
-        help="Test duration in seconds (default: 300)",
+        "--config",
+        required=True,
+        help="Path to YAML configuration file",
     )
     parser.add_argument(
         "--trial", type=int, default=1, help="Trial number (default: 1)"
@@ -442,8 +523,7 @@ def main():
     args = parser.parse_args()
 
     benchmark = DirectiveBenchmark(
-        directive=args.directive,
-        duration=args.duration,
+        config_file=args.config,
         trial_num=args.trial,
         base_url=args.url,
         frame_capture_interval=args.interval,
