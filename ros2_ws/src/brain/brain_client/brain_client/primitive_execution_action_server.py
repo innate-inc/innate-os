@@ -19,6 +19,7 @@ from brain_messages.action import ExecutePrimitive
 from brain_client.primitives.navigate_to_position import NavigateToPosition
 from brain_client.primitives.send_email import SendEmail
 from brain_client.message_types import TaskType
+from brain_client.primitives.types import PrimitiveResult
 
 
 class PrimitiveExecutionActionServer(Node):
@@ -108,13 +109,27 @@ class PrimitiveExecutionActionServer(Node):
 
         try:
             # Execute the primitive
-            result_message, success = primitive.execute(**inputs)
+            result_message, result_status = primitive.execute(**inputs)
 
-            # Check if the execution was successful
-            if not success:
+            # Handle the result based on the PrimitiveResult enum
+            if result_status == PrimitiveResult.SUCCESS:
                 self.get_logger().info(
-                    f"Primitive execution returned failure: {result_message}"
+                    f"Primitive execution succeeded: {result_message}"
                 )
+                goal_handle.succeed()
+                return ExecutePrimitive.Result(
+                    success=True, message=result_message, primitive_type=primitive_type
+                )
+            elif result_status == PrimitiveResult.CANCELLED:
+                self.get_logger().info(
+                    f"Primitive execution was cancelled: {result_message}"
+                )
+                goal_handle.canceled()
+                return ExecutePrimitive.Result(
+                    success=True, message=result_message, primitive_type=primitive_type
+                )
+            else:  # PrimitiveResult.FAILURE
+                self.get_logger().info(f"Primitive execution failed: {result_message}")
                 goal_handle.abort()
                 return ExecutePrimitive.Result(
                     success=False, message=result_message, primitive_type=primitive_type
@@ -124,13 +139,6 @@ class PrimitiveExecutionActionServer(Node):
             self.get_logger().error(f"Error executing primitive: {str(e)}")
             goal_handle.abort()
             return ExecutePrimitive.Result(success=False, message=str(e))
-
-        goal_handle.succeed()
-        return ExecutePrimitive.Result(
-            success=True,
-            message="Primitive executed successfully",
-            primitive_type=primitive_type,
-        )
 
     def destroy(self):
         self._action_server.destroy()

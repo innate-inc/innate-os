@@ -2,7 +2,7 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from brain_client.primitives.types import Primitive
+from brain_client.primitives.types import Primitive, PrimitiveResult
 
 
 class SendEmail(Primitive):
@@ -42,7 +42,7 @@ class SendEmail(Primitive):
             recipient (str, optional): Email recipient. Defaults to axel@innate.bot if not specified.
 
         Returns:
-            tuple: (confirmation message, success boolean)
+            tuple: (result_message, result_status) where result_status is a PrimitiveResult enum value
         """
         if recipient is None:
             recipient = self.default_recipient
@@ -73,11 +73,11 @@ class SendEmail(Primitive):
             self.logger.info(
                 f"\033[92m[BrainClient] Emergency email notification sent to {recipient}\033[0m"
             )
-            return f"Email sent to {recipient}", True
+            return f"Email sent to {recipient}", PrimitiveResult.SUCCESS
 
         except Exception as e:
             self.logger.error(f"Failed to send email: {str(e)}")
-            return f"Failed to send email: {str(e)}", False
+            return f"Failed to send email: {str(e)}", PrimitiveResult.FAILURE
 
     def cancel(self):
         """
