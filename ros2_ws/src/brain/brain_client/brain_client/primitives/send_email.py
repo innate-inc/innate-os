@@ -2,7 +2,6 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import time
 from brain_client.primitives.types import Primitive
 
 
@@ -29,7 +28,8 @@ class SendEmail(Primitive):
     def guidelines(self):
         return (
             "Use to send an emergency email notification. Provide a subject and message. "
-            "This should be used when a potential emergency is detected and assistance might be required."
+            "This should be used when a potential emergency is detected and assistance "
+            "might be required."
         )
 
     def execute(self, subject: str, message: str, recipient: str = None):
@@ -57,10 +57,10 @@ class SendEmail(Primitive):
         try:
             # Create message
             msg = MIMEMultipart()
-            msg['From'] = self.sender_email
-            msg['To'] = recipient
-            msg['Subject'] = subject
-            msg.attach(MIMEText(message, 'plain'))
+            msg["From"] = self.sender_email
+            msg["To"] = recipient
+            msg["Subject"] = subject
+            msg.attach(MIMEText(message, "plain"))
 
             # Connect to server and send
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
@@ -78,3 +78,20 @@ class SendEmail(Primitive):
         except Exception as e:
             self.logger.error(f"Failed to send email: {str(e)}")
             return f"Failed to send email: {str(e)}", False
+
+    def cancel(self):
+        """
+        Cancel the email sending operation.
+
+        Since email sending is typically a quick operation that completes almost instantly,
+        this method doesn't do much. It's implemented to satisfy the Primitive interface.
+
+        Returns:
+            str: A message describing the cancellation result.
+        """
+        self.logger.info(
+            "\033[91m[BrainClient] Email sending operation cannot be canceled once started\033[0m"
+        )
+        return (
+            "Email sending is an atomic operation that cannot be canceled once started"
+        )

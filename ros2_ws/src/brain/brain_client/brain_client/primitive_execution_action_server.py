@@ -32,6 +32,8 @@ class PrimitiveExecutionActionServer(Node):
             TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
         }
 
+        # Primitives now handle cancellation internally
+
         self._action_server = ActionServer(
             self,
             ExecutePrimitive,
@@ -49,7 +51,34 @@ class PrimitiveExecutionActionServer(Node):
         return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):
-        self.get_logger().debug("Received cancel request.")
+        """
+        Handle cancellation requests by calling the cancel method on the primitive.
+        """
+        self.get_logger().info("Received cancel request.")
+
+        try:
+            # Get the primitive type from the goal handle
+            primitive_type = goal_handle.request.primitive_type
+
+            # Find and cancel the primitive
+            if primitive_type in self._primitives:
+                primitive = self._primitives[primitive_type]
+                self.get_logger().info(f"Canceling primitive: {primitive_type}")
+                primitive.cancel()
+            else:
+                self.get_logger().warning(f"Unknown primitive type: {primitive_type}")
+        except Exception as e:
+            self.get_logger().error(f"Error in cancel_callback: {str(e)}")
+
+            # If we couldn't determine the primitive type, try to cancel all primitives
+            self.get_logger().info("Attempting to cancel all primitives")
+            for name, primitive in self._primitives.items():
+                try:
+                    primitive.cancel()
+                except Exception as cancel_error:
+                    err_msg = f"Error canceling {name}: {str(cancel_error)}"
+                    self.get_logger().error(err_msg)
+
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
@@ -78,9 +107,19 @@ class PrimitiveExecutionActionServer(Node):
         )
 
         try:
-            # Execute the primitive. (This call may block; if you want non-blocking
-            # behavior you could run this in a separate thread.)
-            primitive.execute(**inputs)
+            # Execute the primitive
+            result_message, success = primitive.execute(**inputs)
+
+            # Check if the execution was successful
+            if not success:
+                self.get_logger().info(
+                    f"Primitive execution returned failure: {result_message}"
+                )
+                goal_handle.abort()
+                return ExecutePrimitive.Result(
+                    success=False, message=result_message, primitive_type=primitive_type
+                )
+
         except Exception as e:
             self.get_logger().error(f"Error executing primitive: {str(e)}")
             goal_handle.abort()

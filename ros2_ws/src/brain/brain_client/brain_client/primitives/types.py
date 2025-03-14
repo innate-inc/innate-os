@@ -17,6 +17,20 @@ class Primitive(ABC):
         Execute the primitive.
 
         Subclasses must implement this method.
+        Returns a tuple of (result_message, success_flag)
+        """
+        pass
+
+    @abstractmethod
+    def cancel(self):
+        """
+        Cancel the execution of the primitive.
+
+        Subclasses must implement this method to properly handle cancellation.
+        This method should be safe to call at any time, even if the primitive
+        is not currently executing.
+
+        Returns a message describing the cancellation result.
         """
         pass
 
