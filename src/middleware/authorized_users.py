@@ -1,4 +1,5 @@
 from typing import Dict, Any
+import os
 
 # List of authorized users (emails)
 AUTHORIZED_USERS = [
@@ -21,6 +22,12 @@ def is_authorized(user: Dict[str, Any]) -> bool:
     Returns:
         bool: True if the user is authorized, False otherwise
     """
+    # Check if authentication is required
+    need_oauth = os.environ.get("NEED_OAUTH", "True").lower() == "true"
+    if not need_oauth:
+        print("Authentication bypassed: NEED_OAUTH is False")
+        return True
+
     if not user or not user.get("email"):
         print(f"User not authorized: No user or no email - {user}")
         return False
