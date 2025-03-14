@@ -55,7 +55,7 @@ class PrimitiveExecutionActionServer(Node):
         """
         Handle cancellation requests by calling the cancel method on the primitive.
         """
-        self.get_logger().info("Received cancel request.")
+        self.get_logger().debug("Received cancel request.")
 
         try:
             # Get the primitive type from the goal handle
@@ -64,7 +64,7 @@ class PrimitiveExecutionActionServer(Node):
             # Find and cancel the primitive
             if primitive_type in self._primitives:
                 primitive = self._primitives[primitive_type]
-                self.get_logger().info(f"Canceling primitive: {primitive_type}")
+                self.get_logger().debug(f"Canceling primitive: {primitive_type}")
                 primitive.cancel()
             else:
                 self.get_logger().warning(f"Unknown primitive type: {primitive_type}")
@@ -72,7 +72,7 @@ class PrimitiveExecutionActionServer(Node):
             self.get_logger().error(f"Error in cancel_callback: {str(e)}")
 
             # If we couldn't determine the primitive type, try to cancel all primitives
-            self.get_logger().info("Attempting to cancel all primitives")
+            self.get_logger().debug("Attempting to cancel all primitives")
             for name, primitive in self._primitives.items():
                 try:
                     primitive.cancel()
@@ -114,7 +114,7 @@ class PrimitiveExecutionActionServer(Node):
             # Handle the result based on the PrimitiveResult enum
             if result_status == PrimitiveResult.SUCCESS:
                 self.get_logger().info(
-                    f"Primitive execution succeeded: {result_message}"
+                    f"Primitive '{primitive_type}' succeeded: {result_message}"
                 )
                 goal_handle.succeed()
                 return ExecutePrimitive.Result(
@@ -122,14 +122,16 @@ class PrimitiveExecutionActionServer(Node):
                 )
             elif result_status == PrimitiveResult.CANCELLED:
                 self.get_logger().info(
-                    f"Primitive execution was cancelled: {result_message}"
+                    f"Primitive '{primitive_type}' cancelled: {result_message}"
                 )
                 goal_handle.canceled()
                 return ExecutePrimitive.Result(
                     success=True, message=result_message, primitive_type=primitive_type
                 )
             else:  # PrimitiveResult.FAILURE
-                self.get_logger().info(f"Primitive execution failed: {result_message}")
+                self.get_logger().info(
+                    f"Primitive '{primitive_type}' failed: {result_message}"
+                )
                 goal_handle.abort()
                 return ExecutePrimitive.Result(
                     success=False, message=result_message, primitive_type=primitive_type

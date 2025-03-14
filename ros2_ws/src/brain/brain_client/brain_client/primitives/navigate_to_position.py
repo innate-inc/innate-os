@@ -93,7 +93,7 @@ class Nav2Controller:
         """
         Cancels the current navigation task.
         """
-        self.logger.info("Canceling current navigation task...")
+        self.logger.debug("Canceling current navigation task...")
         # Set the cancellation flag
         self._cancel_requested.set()
         # Also call cancelTask directly in case we're not in the loop
@@ -126,7 +126,7 @@ class NavigateToPosition(Primitive):
 
         # Check if the navigation was canceled
         if result == TaskResult.CANCELED:
-            self.logger.info("\033[93m[BrainClient] Navigation was canceled\033[0m")
+            self.logger.debug("\033[93m[BrainClient] Navigation was canceled\033[0m")
             return "Navigation canceled", PrimitiveResult.CANCELLED
         elif result == TaskResult.SUCCEEDED:
             self.logger.info(
@@ -144,6 +144,6 @@ class NavigateToPosition(Primitive):
         """
         Cancels the current navigation task.
         """
-        self.logger.info("\033[91m[BrainClient] Canceling navigation task\033[0m")
+        self.logger.debug("\033[91m[BrainClient] Canceling navigation task\033[0m")
         self.nav2_controller.cancel_navigation()
         return "Navigation canceled"

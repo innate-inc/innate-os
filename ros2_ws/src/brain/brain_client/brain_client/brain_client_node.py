@@ -591,32 +591,37 @@ class BrainClientNode(Node):
     def cancel_response_callback(self, future):
         """Handle the response from a cancel_goal_async request."""
         cancel_response = future.result()
-        self.get_logger().info(f"Cancel response: {cancel_response}")
+        # In ROS2, CancelGoal_Response has return_code instead of accepted
+        # Check if the return_code is SUCCESS (1)
+        self.get_logger().debug(f"Cancel response: {cancel_response}")
 
         # Check if any goals were canceled, following the ROS2 example
         if (
             hasattr(cancel_response, "goals_canceling")
             and len(cancel_response.goals_canceling) > 0
         ):
-            self.get_logger().info(
+            self.get_logger().debug(
                 "\033[92m[BrainClient] Goal cancellation accepted.\033[0m"
             )
         else:
-            self.get_logger().info(
+            self.get_logger().debug(
                 "\033[91m[BrainClient] Goal cancellation rejected.\033[0m"
             )
 
     def get_result_callback(self, future):
         result = future.result().result
         status_color = "\033[92m" if result.success else "\033[91m"
-        self.get_logger().info(
+        self.get_logger().debug(
             f"{status_color}[BrainClient] Primitive execution result: {result.success}\033[0m"
         )
         # Clear the goal handle since the goal is complete
         self._goal_handle = None
         # Send a stop command to the robot if the primitive failed.
         # Wait 1sec
-        time.sleep(1)  # TODO: Find a better way to do this.
+        time.sleep(
+            1
+        )  # TODO: Find a better way to do this. And probably only if it was a navigation primitive?
+        # Note that I think cancelling the goal will also send a stop command, so maybe we can look into that.
         stop_cmd = Twist()
         stop_cmd.linear.x = 0.0
         stop_cmd.angular.z = 0.0
@@ -813,7 +818,7 @@ class BrainClientNode(Node):
         return super().destroy_node()
 
     def send_test_goal(self):
-        """Temporary test function to send a goal and cancel it after 1 second."""
+        """Temporary test function to send a goal and cancel it after 4 second."""
         self.get_logger().info("\033[93m[BrainClient] Sending test goal...\033[0m")
 
         # Check if the action server is available
@@ -836,7 +841,7 @@ class BrainClientNode(Node):
         send_goal_future.add_done_callback(self.test_goal_response_callback)
 
     def test_goal_response_callback(self, future):
-        """Callback for the test goal response that schedules cancellation after 1 second."""
+        """Callback for the test goal response that schedules cancellation after 4 seconds."""
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().info("\033[91m[BrainClient] Test goal rejected.\033[0m")
