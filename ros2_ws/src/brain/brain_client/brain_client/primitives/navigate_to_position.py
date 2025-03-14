@@ -118,32 +118,28 @@ class NavigateToPosition(Primitive):
 
     def execute(self, x: float, y: float, theta: float):
         self.logger.info(
-            f"\033[96m[BrainClient] Initiating navigation to position: "
-            f"x={x}, y={y}, theta={theta}\033[0m"
+            f"Initiating navigation to position: x={x}, y={y}, theta={theta}"
         )
 
         result = self.nav2_controller.go_to_position(x, y, theta)
 
         # Check if the navigation was canceled
         if result == TaskResult.CANCELED:
-            self.logger.debug("\033[93m[BrainClient] Navigation was canceled\033[0m")
+            self.logger.debug("Navigation was canceled")
             return "Navigation canceled", PrimitiveResult.CANCELLED
         elif result == TaskResult.SUCCEEDED:
             self.logger.info(
-                f"\033[92m[BrainClient] Navigation complete. Arrived at position: "
-                f"x={x}, y={y}, theta={theta}\033[0m"
+                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}"
             )
             return f"Reached position ({x}, {y}, {theta})", PrimitiveResult.SUCCESS
         else:
-            self.logger.info(
-                f"\033[91m[BrainClient] Navigation failed with result: {result}\033[0m"
-            )
+            self.logger.info(f"Navigation failed with result: {result}")
             return f"Navigation failed with result: {result}", PrimitiveResult.FAILURE
 
     def cancel(self):
         """
         Cancels the current navigation task.
         """
-        self.logger.debug("\033[91m[BrainClient] Canceling navigation task\033[0m")
+        self.logger.debug("Canceling navigation task")
         self.nav2_controller.cancel_navigation()
         return "Navigation canceled"
