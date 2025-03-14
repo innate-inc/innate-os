@@ -1,0 +1,8 @@
+name: "quick_response_test"
+description: "Test if the robot responds quickly to a simple directive"
+goal: "Robot should respond within 5 seconds and only respond once"
+directive: "default_directive"
+duration: 60  # seconds
+messages:
+  - time: 10  # seconds after start
+    text: "Hello how are you?" 
