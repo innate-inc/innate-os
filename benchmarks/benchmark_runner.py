@@ -369,9 +369,8 @@ class DirectiveBenchmark:
             # Connect to WebSocket
             ws = websocket.create_connection(ws_url)
 
-            # Send message
-            message = {"text": message_text, "sender": "user", "timestamp": time.time()}
-            ws.send(json.dumps(message))
+            # Send message - just send the text directly, not a JSON object
+            ws.send(message_text)
 
             # Close connection
             ws.close()
