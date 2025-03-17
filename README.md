@@ -63,7 +63,7 @@ python main_web.py
 Options:
 - `-v` or `--vis`: Enable visualization
 - `--local`: Connect to local agent server instead of cloud
-- `--need-oauth`: Require OAuth authentication for chat API (default: True)
+- `--need-oauth`: Require OAuth authentication for chat API (choices: "true", "false", default: "true")
 - `--auth0-domain`: Auth0 domain for authentication
 - `--auth0-audience`: Auth0 API identifier
 
