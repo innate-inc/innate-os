@@ -69,6 +69,10 @@ class DirectiveBenchmark:
         self.threads = []
         self.message_timers = []
 
+        # WebSocket connection for sending messages
+        self.chat_ws = None
+        self.chat_ws_lock = threading.Lock()  # Lock for thread safety
+
     def _sanitize_filename(self, name):
         """Convert a string to a safe filename."""
         return "".join(c if c.isalnum() or c in ["-", "_"] else "_" for c in name)
@@ -197,9 +201,11 @@ class DirectiveBenchmark:
         """Monitor and record chat messages using WebSockets."""
         # Create a WebSocket URL
         base_url_no_http = self.base_url.replace("http://", "")
-        user_params = "user_id=benchmark&email=benchmark@example.com"
+        user_id = "monitor"
+        email = "benchmark@example.com"
+        user_params = f"user_id={user_id}&email={email}"
         ws_url = f"ws://{base_url_no_http}/ws/chat?{user_params}"
-        print(f"Connecting to WebSocket: {ws_url}")
+        print(f"Connecting to monitoring WebSocket: {ws_url}")
 
         # Get the start timestamp for filtering messages
         start_timestamp = self.metrics.get("start_timestamp", time.time())
@@ -219,22 +225,21 @@ class DirectiveBenchmark:
                         self._save_chat_message(data)
                     else:
                         # Skip messages from before the test started
-                        # print("Skipping message from before test start")
                         pass
             except Exception as e:
                 print(f"Error processing message: {e}")
 
         # Error handler for WebSocket
         def on_error(ws, error):
-            print(f"WebSocket error: {error}")
+            print(f"Monitoring WebSocket error: {error}")
 
         # Connection close handler
         def on_close(ws, close_status_code, close_msg):
-            print("WebSocket connection closed")
+            print("Monitoring WebSocket connection closed")
 
         # Connection open handler
         def on_open(ws):
-            print("WebSocket connection established")
+            print("Monitoring WebSocket connection established")
 
         # Create WebSocket connection
         try:
@@ -260,7 +265,7 @@ class DirectiveBenchmark:
             ws.close()
 
         except Exception as e:
-            print(f"Error setting up WebSocket: {e}")
+            print(f"Error setting up monitoring WebSocket: {e}")
             print("Chat messages will not be recorded in this benchmark")
 
             # Set a placeholder message
@@ -284,8 +289,11 @@ class DirectiveBenchmark:
 
         # Create a WebSocket URL for monitoring brain status
         base_url_no_http = self.base_url.replace("http://", "")
-        user_params = "user_id=brain_check&email=benchmark@example.com"
+        user_id = "brain_check"
+        email = "benchmark@example.com"
+        user_params = f"user_id={user_id}&email={email}"
         ws_url = f"ws://{base_url_no_http}/ws/chat?{user_params}"
+        print(f"Connecting to brain check WebSocket: {ws_url}")
 
         # Variables to track brain status
         brain_ok = False
@@ -327,7 +335,9 @@ class DirectiveBenchmark:
                 on_message=on_message,
                 on_error=lambda ws, error: print(f"WebSocket error: {error}"),
                 on_close=lambda ws, code, msg: print("WebSocket connection closed"),
-                on_open=lambda ws: print("WebSocket connection established"),
+                on_open=lambda ws: print(
+                    "Brain check WebSocket connection established"
+                ),
             )
 
             # Start WebSocket connection in a separate thread
@@ -358,28 +368,57 @@ class DirectiveBenchmark:
             print(f"Error checking brain status: {e}")
             return True  # Continue anyway if we can't check
 
-    def _send_message(self, message_text):
-        """Send a message to the robot using WebSockets."""
+    def _initialize_chat_connection(self):
+        """Initialize a persistent WebSocket connection for sending messages."""
         try:
             # Create a WebSocket URL
             base_url_no_http = self.base_url.replace("http://", "")
-            user_params = "user_id=benchmark&email=benchmark@example.com"
+            user_id = "benchmark"
+            email = "benchmark@example.com"
+            user_params = f"user_id={user_id}&email={email}"
             ws_url = f"ws://{base_url_no_http}/ws/chat?{user_params}"
 
-            # Connect to WebSocket
-            ws = websocket.create_connection(ws_url)
+            print(f"Initializing persistent WebSocket connection: {ws_url}")
 
-            # Send message - just send the text directly, not a JSON object
-            ws.send(message_text)
-
-            # Close connection
-            ws.close()
-
-            print(f"Message sent via WebSocket: '{message_text}'")
+            # Create WebSocket connection
+            self.chat_ws = websocket.create_connection(ws_url)
+            print("Persistent WebSocket connection established")
             return True
         except Exception as e:
-            print(f"Error sending message via WebSocket: {e}")
+            print(f"Error initializing WebSocket connection: {e}")
+            self.chat_ws = None
             return False
+
+    def _close_chat_connection(self):
+        """Close the persistent WebSocket connection."""
+        with self.chat_ws_lock:
+            if self.chat_ws:
+                try:
+                    self.chat_ws.close()
+                    print("Persistent WebSocket connection closed")
+                except Exception as e:
+                    print(f"Error closing WebSocket connection: {e}")
+                finally:
+                    self.chat_ws = None
+
+    def _send_message(self, message_text):
+        """Send a message to the robot using the persistent WebSocket connection."""
+        with self.chat_ws_lock:
+            try:
+                # If connection doesn't exist or is closed, initialize it
+                if not self.chat_ws:
+                    if not self._initialize_chat_connection():
+                        return False
+
+                # Send message - just send the text directly, not a JSON object
+                self.chat_ws.send(message_text)
+                print(f"Message sent via WebSocket: '{message_text}'")
+                return True
+            except Exception as e:
+                print(f"Error sending message via WebSocket: {e}")
+                # Try to re-establish connection on next send
+                self._close_chat_connection()
+                return False
 
     def _schedule_messages(self):
         """Schedule messages to be sent at specified times."""
@@ -449,6 +488,9 @@ class DirectiveBenchmark:
             print("Failed to send directive.")
             return False
 
+        # Initialize persistent WebSocket connection for chat messages
+        self._initialize_chat_connection()
+
         # Wait for the brain to process the directive
         print("Waiting for the brain to process the directive...")
         time.sleep(5)
@@ -492,6 +534,9 @@ class DirectiveBenchmark:
             for timer in self.message_timers:
                 if timer.is_alive():
                     timer.cancel()
+
+            # Close the persistent WebSocket connection
+            self._close_chat_connection()
 
             # Record end time
             self.metrics["end_time"] = datetime.now().isoformat()
