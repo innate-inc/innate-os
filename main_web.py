@@ -116,9 +116,10 @@ def main():
     # Add authentication control argument
     parser.add_argument(
         "--need-oauth",
-        action="store_true",
-        default=True,
-        help="Require OAuth authentication for chat API (default: True)",
+        type=str,
+        choices=["true", "false"],
+        default="true",
+        help="Require OAuth authentication for chat API (default: true)",
     )
     args = parser.parse_args()
 
@@ -129,7 +130,7 @@ def main():
         os.environ["AUTH0_AUDIENCE"] = args.auth0_audience
 
     # Set authentication requirement flag
-    os.environ["NEED_OAUTH"] = str(args.need_oauth)
+    os.environ["NEED_OAUTH"] = args.need_oauth
 
     # 1) Create shared queues
     global SHARED_QUEUES
