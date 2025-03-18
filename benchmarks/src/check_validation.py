@@ -325,6 +325,7 @@ def evaluate_final_success(
     chase_dir: Path,
     chat_log: List,
     metrics: Dict,
+    use_frames: bool = True,
 ) -> Dict:
     """
     Evaluate whether the benchmark was successful based on the success criterion.
@@ -335,6 +336,7 @@ def evaluate_final_success(
         chase_dir: Directory with chase frames
         chat_log: List of chat messages
         metrics: Benchmark metrics
+        use_frames: Whether to use frames in evaluation
 
     Returns:
         Dictionary with success status and reason
@@ -343,8 +345,12 @@ def evaluate_final_success(
         return {"success": False, "reason": "No success criterion defined"}
 
     # Get representative frames from the benchmark
-    frames = get_representative_frames(first_person_dir, chase_dir, comprehensive=True)
-    if not frames:
+    frames = (
+        get_representative_frames(first_person_dir, chase_dir, comprehensive=True)
+        if use_frames
+        else []
+    )
+    if not frames and use_frames:
         return {"success": False, "reason": "No frames available for evaluation"}
 
     # Evaluate the success criterion using VLM
