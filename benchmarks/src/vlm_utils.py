@@ -26,27 +26,24 @@ def encode_image(image_path):
         return None
 
 
-def get_representative_frames(first_person_dir, chase_dir, comprehensive=False):
+def get_representative_frames(first_person_dir, chase_dir):
     """
     Select representative frames from the benchmark for VLM evaluation.
 
     Args:
         first_person_dir (Path): Directory containing first-person view frames
         chase_dir (Path): Directory containing chase view frames
-        comprehensive (bool): If True, includes more frames for a more thorough evaluation
 
     Returns:
         list: Paths to selected image frames
     """
-    # Select frames at regular intervals
     first_person_frames = sorted(list(first_person_dir.glob("*.jpg")))
     chase_frames = sorted(list(chase_dir.glob("*.jpg")))
 
     if not first_person_frames and not chase_frames:
         return []
-
     # Select frames at regular intervals
-    interval = 5 if comprehensive else 20  # More frames for comprehensive analysis
+    interval = 5
 
     # Combine frames from both cameras, alternating
     selected_frames = []
@@ -95,7 +92,7 @@ def evaluate_with_vlm(
             "properties": {
                 "reflection": {
                     "type": "string",
-                    "description": "Detailed explanation of why the criterion was met or not met",
+                    "description": "Detailed explanation of the criterion evaluation",
                 },
                 result_key: {
                     "type": "boolean",
@@ -103,7 +100,7 @@ def evaluate_with_vlm(
                 },
                 "reason": {
                     "type": "string",
-                    "description": "Detailed explanation of why the criterion was met or not met",
+                    "description": "Detailed explanation of the criterion evaluation",
                 },
             },
             "required": ["reflection", result_key, "reason"],
@@ -118,9 +115,9 @@ def evaluate_with_vlm(
         system_message = {
             "role": "system",
             "content": (
-                f"You are an AI evaluator for robot benchmarks. You will receive frames "
-                f"showing a robot performing tasks, a chat log with timestamps, and "
-                f"information about how long the benchmark has been running. "
+                f"You are an AI evaluator for robot benchmarks. You will receive "
+                f"frames showing a robot performing tasks, a chat log with timestamps, "
+                f"and information about benchmark running time. "
                 f"Evaluate whether the {prompt_type} criterion has been met based on "
                 f"all the information provided."
             ),
@@ -144,7 +141,10 @@ def evaluate_with_vlm(
         current_time = time.time()
         if metrics and "start_timestamp" in metrics:
             time_since_start = current_time - metrics["start_timestamp"]
-            time_info = f"Current benchmark running time: {round(time_since_start, 2)} seconds\n\n"
+            time_info = (
+                f"Current benchmark running time: {round(time_since_start, 2)} "
+                f"seconds\n\n"
+            )
         else:
             time_info = "Benchmark running time: unknown\n\n"
 
