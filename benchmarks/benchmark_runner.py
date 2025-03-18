@@ -14,6 +14,11 @@ from src.vlm_utils import (
     get_representative_frames,
     evaluate_with_vlm,
 )
+from src.check_validation import (
+    validate_checks,
+    evaluate_stop_criterion,
+    evaluate_final_success,
+)
 
 
 class DirectiveBenchmark:
@@ -566,166 +571,38 @@ class DirectiveBenchmark:
                                 f"check '{check_id}': '{text}'"
                             )
 
-    # TODO: Implement check validation methods for different check types
-    def _validate_location_check(self, check_id, check_data):
-        """
-        Validate if the robot is within the specified location bounding box.
-        This is a placeholder for future implementation.
-        """
-        # TODO: Implement location validation using robot position data
-        return False
+    def _validate_checks(self):
+        """Validate all checks in the configuration."""
+        updated_status = validate_checks(
+            self.expectations,
+            self.check_status,
+            self.first_person_dir,
+            self.chase_dir,
+            self.chat_log,
+            self.messages,
+            self.metrics,
+            self._save_metrics,
+        )
 
-    # TODO: Implement primitive call validation
-    def _validate_primitive_check(self, check_id, check_data):
-        """
-        Validate if the specified primitive was called with appropriate arguments.
-        This is a placeholder for future implementation.
-        """
-        # TODO: Implement primitive call validation using LLM for argument verification
-        return False
-
-    # TODO: Implement compound check validation
-    def _validate_compound_check(self, check_id, check_data):
-        """
-        Validate if a primitive was called while in a specific location.
-        This is a placeholder for future implementation.
-        """
-        # TODO: Implement compound validation logic
-        return False
-
-    # TODO: Implement sequence check validation
-    def _validate_sequence_check(self, check_id, check_data):
-        """
-        Validate if a sequence of checks occurred in the specified order.
-        This is a placeholder for future implementation.
-        """
-        # TODO: Implement sequence validation logic
-        return False
-
-    def _validate_vlm_check(self, check_id, check_data):
-        """
-        Use a VLM to verify a specific aspect of the robot's behavior.
-        """
-        # Get verification prompt from check data
-        verification_prompt = check_data.get("verification_prompt")
-        if not verification_prompt:
-            print(f"Error: No verification prompt for VLM check '{check_id}'")
-            return False
-
-        # Get time-related context for this check
-        context = f"Check ID: {check_id}\n"
-        if "description" in check_data:
-            context += f"Description: {check_data['description']}\n"
-
-        # Add timing information
-        current_time = time.time()
-        benchmark_running_time = current_time - self.metrics["start_timestamp"]
-        context += f"Current benchmark running time: {round(benchmark_running_time, 2)} seconds\n"
-
-        # Add related message information if any messages are triggered by this check
-        related_messages = []
-        for message in self.messages:
-            if (
-                message.get("trigger_type") == "check"
-                and message.get("check_id") == check_id
-            ):
-                related_messages.append(message)
-
-        if related_messages:
-            context += (
-                "Related messages that will be triggered when this check passes:\n"
-            )
-            for i, msg in enumerate(related_messages):
-                delay = msg.get("delay", 0)
-                text = msg.get("text", "")
-                context += f"  Message {i+1}: '{text}' (delay: {delay}s)\n"
-
-        # Enhanced verification prompt with context
-        enhanced_prompt = f"{context}\nVerification task: {verification_prompt}"
-
-        # Get representative frames for analysis
-        frames = get_representative_frames(self.first_person_dir, self.chase_dir)
-        if not frames:
-            print(f"Warning: No frames available for VLM check '{check_id}'")
-            return False
-
-        # Evaluate using VLM
-        try:
-            result = evaluate_with_vlm(
-                enhanced_prompt,
-                frames,
-                chat_log=self.chat_log,
-                metrics=self.metrics,
-                is_stop_check=False,
-            )
-
-            # Log the result
-            passed = result.get("success", False)
-            reason = result.get("reason", "No reason provided")
-
-            if passed:
-                print(f"Check '{check_id}' passed: {reason}")
-            else:
-                print(f"Check '{check_id}' failed: {reason}")
-
-            # Store the result in metrics
-            if "check_results" not in self.metrics:
-                self.metrics["check_results"] = {}
-
-            self.metrics["check_results"][check_id] = {
-                "passed": passed,
-                "time": time.time() - self.metrics["start_timestamp"],
-                "reason": reason,
-            }
-            self._save_metrics()
-
-            return passed
-
-        except Exception as e:
-            print(f"Error in VLM check '{check_id}': {e}")
-            return False
+        # Handle any newly passed checks
+        for check_id, passed in updated_status.items():
+            if passed and not self.check_status.get(check_id, False):
+                self._update_check_status(check_id, True)
 
     def _should_stop_early(self, use_frames=False):
         """
         Check if the benchmark should stop early based on the stop criterion.
         Uses a VLM to evaluate the stop criterion against the current state.
         """
-        if not self.stop_criterion:
-            return False
-
-        # Get representative frames from the benchmark so far
-        frames = (
-            get_representative_frames(self.first_person_dir, self.chase_dir)
-            if use_frames
-            else []
-        )
-        if not frames and use_frames:
-            return False
-
-        # Evaluate the stop criterion using VLM
-        result = evaluate_with_vlm(
+        return evaluate_stop_criterion(
             self.stop_criterion,
-            frames,
-            chat_log=self.chat_log,
-            metrics=self.metrics,
-            is_stop_check=True,
+            self.first_person_dir,
+            self.chase_dir,
+            self.chat_log,
+            self.metrics,
+            self._save_metrics,
+            use_frames,
         )
-
-        if result.get("should_stop", False):
-            # Log the reason for stopping
-            print(f"Stop criterion met: {result.get('reason', 'Unknown reason')}")
-
-            # Save the stop decision to metrics
-            self.metrics["early_stop"] = {
-                "triggered": True,
-                "time": time.time() - self.metrics["start_timestamp"],
-                "reason": result.get("reason", "Unknown reason"),
-            }
-            self._save_metrics()
-
-            return True
-
-        return False
 
     def _evaluate_final_success(self):
         """
@@ -735,60 +612,13 @@ class DirectiveBenchmark:
         if not self.expectations.get("success_criterion"):
             return {"success": False, "reason": "No success criterion defined"}
 
-        # Get representative frames from the benchmark
-        frames = get_representative_frames(
-            self.first_person_dir, self.chase_dir, comprehensive=True
-        )
-        if not frames:
-            return {"success": False, "reason": "No frames available for evaluation"}
-
-        # Evaluate the success criterion using VLM
-        return evaluate_with_vlm(
+        return evaluate_final_success(
             self.expectations["success_criterion"],
-            frames,
-            chat_log=self.chat_log,
-            metrics=self.metrics,
-            is_stop_check=False,
+            self.first_person_dir,
+            self.chase_dir,
+            self.chat_log,
+            self.metrics,
         )
-
-    def _validate_checks(self):
-        """Validate all checks in the configuration."""
-        if not self.expectations.get("checks"):
-            return
-
-        print("Validating checks...")
-        for check in self.expectations["checks"]:
-            check_id = check.get("id")
-            check_type = check.get("type")
-
-            if not check_id or not check_type:
-                continue
-
-            # Skip checks that have already passed
-            if self.check_status.get(check_id, False):
-                continue
-
-            # Validate based on check type
-            passed = False
-            if check_type == "location":
-                passed = self._validate_location_check(check_id, check)
-            elif check_type == "primitive":
-                passed = self._validate_primitive_check(check_id, check)
-            elif check_type == "compound":
-                passed = self._validate_compound_check(check_id, check)
-            elif check_type == "sequence":
-                passed = self._validate_sequence_check(check_id, check)
-            elif check_type == "vlm_verification":
-                passed = self._validate_vlm_check(check_id, check)
-            else:
-                print(
-                    f"Warning: Unknown check type '{check_type}' for check '{check_id}'"
-                )
-                continue
-
-            # Update check status and trigger any associated messages
-            if passed:
-                self._update_check_status(check_id, True)
 
     def run(self):
         """Run the benchmark test."""
