@@ -198,7 +198,7 @@ def evaluate_with_vlm(
 
             result = json.loads(result)
 
-        print(f"VLM evaluation result: {result}")
+        print(f"VLM evaluation result: {result}\n\n")
         return result
 
     except Exception as e:
