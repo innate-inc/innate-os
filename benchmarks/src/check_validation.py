@@ -269,6 +269,28 @@ def validate_vlm_check(
             print(f"Check '{check_id}' failed: {reason}")
 
         # Store the result in metrics
+        if "checks" not in metrics:
+            metrics["checks"] = {}
+
+        # Initialize this check in metrics if not already present
+        if check_id not in metrics["checks"]:
+            metrics["checks"][check_id] = {
+                "type": "vlm_verification",
+                "description": check_data.get("description", ""),
+                "configuration": {"verification_prompt": verification_prompt},
+            }
+
+        # Update check status in metrics
+        metrics["checks"][check_id]["passed"] = passed
+        metrics["checks"][check_id]["reason"] = reason
+
+        # Add completion time if passed
+        if passed and "start_timestamp" in metrics:
+            metrics["checks"][check_id]["completion_time"] = (
+                time.time() - metrics["start_timestamp"]
+            )
+
+        # For backwards compatibility
         if "check_results" not in metrics:
             metrics["check_results"] = {}
 
@@ -277,6 +299,7 @@ def validate_vlm_check(
             "time": time.time() - metrics["start_timestamp"],
             "reason": reason,
         }
+
         save_metrics_callback()  # Save metrics via callback
 
         return passed
@@ -339,6 +362,31 @@ def validate_checks(
     print(f"Position history: {len(position_history or [])} points")
     print(f"Chat log: {len(chat_log)} messages")
 
+    # Initialize the checks dictionary in metrics if it doesn't exist
+    if "checks" not in metrics:
+        metrics["checks"] = {}
+
+    # Populate the checks dictionary with all check details from expectations
+    for check in expectations["checks"]:
+        check_id = check.get("id")
+        if not check_id:
+            continue
+
+        # Store check details in metrics
+        if check_id not in metrics["checks"]:
+            # Create an entry for this check with its configuration details
+            metrics["checks"][check_id] = {
+                "type": check.get("type"),
+                "description": check.get("description", ""),
+                "passed": updated_status.get(check_id, False),
+                "configuration": {
+                    k: v
+                    for k, v in check.items()
+                    if k not in ["id", "type", "description"]
+                },
+            }
+
+    # Now validate each check
     for check in expectations["checks"]:
         check_id = check.get("id")
         check_type = check.get("type")
@@ -348,6 +396,9 @@ def validate_checks(
 
         # Skip checks that have already passed
         if updated_status.get(check_id, False):
+            # Make sure the passed status is reflected in metrics
+            if check_id in metrics["checks"]:
+                metrics["checks"][check_id]["passed"] = True
             continue
 
         # Validate based on check type
@@ -379,17 +430,29 @@ def validate_checks(
         # Update check status
         if passed:
             updated_status[check_id] = True
-            # Record the time when the check passed
-            if "start_timestamp" in metrics and metrics["start_timestamp"]:
-                current_time = time.time()
-                elapsed = current_time - metrics["start_timestamp"]
-                # Store the completion time in the metrics
-                if "check_completion_times" not in metrics:
-                    metrics["check_completion_times"] = {}
-                metrics["check_completion_times"][check_id] = elapsed
-                print(f"Check '{check_id}' completed at {elapsed:.2f} seconds")
-                save_metrics_callback()  # Save updated metrics
 
+            # Update the check in the metrics
+            if check_id in metrics["checks"]:
+                metrics["checks"][check_id]["passed"] = True
+
+                # Record the time when the check passed
+                if "start_timestamp" in metrics and metrics["start_timestamp"]:
+                    current_time = time.time()
+                    elapsed = current_time - metrics["start_timestamp"]
+                    # Store the completion time in the metrics
+                    metrics["checks"][check_id]["completion_time"] = elapsed
+                    print(f"Check '{check_id}' completed at {elapsed:.2f} seconds")
+
+            save_metrics_callback()  # Save updated metrics
+
+    # For backwards compatibility, maintain the check_completion_times dictionary
+    # (can be removed in future versions)
+    metrics["check_completion_times"] = {}
+    for check_id, check_data in metrics["checks"].items():
+        if check_data.get("passed") and "completion_time" in check_data:
+            metrics["check_completion_times"][check_id] = check_data["completion_time"]
+
+    save_metrics_callback()  # Final save of metrics
     return updated_status
 
 
