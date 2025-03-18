@@ -468,6 +468,9 @@ class SimulationNode:
                 wz=ang_vel[2],
             )
 
+            # Update shared robot position directly (more reliable than waiting for websocket bridge)
+            self.shared_queues.update_robot_position(pos[0], pos[1], pos[2], sim_time)
+
             # Publish the unified RobotStateMsg to the bridge
             try:
                 self.shared_queues.sim_to_agent.put_nowait(state_msg)
