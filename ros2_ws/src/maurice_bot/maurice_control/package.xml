@@ -13,6 +13,8 @@
   <depend>maurice_msgs</depend>
   <depend>maurice_arm</depend>
 
+  <exec_depend>rosbridge_server</exec_depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
