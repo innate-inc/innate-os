@@ -1,6 +1,156 @@
-# Robot Directive Benchmarking System
+# Agent Benchmarking Framework
 
-This directory contains tools for benchmarking different directives sent to the robot simulation. The benchmarking system captures video frames, chat messages, and performance metrics during directive execution.
+This directory contains a framework for benchmarking agent performance across various categories of tasks. The benchmarks are designed to evaluate the agent's capabilities in six main categories, with three tasks per category.
+
+## Benchmark Categories
+
+1. **Long-term Consistency**
+   - Evaluating the agent's ability to maintain performance over extended periods.
+   - Includes tests for continuous operation, memory retention, and behavioral stability.
+
+2. **Navigation**
+   - Assessing the agent's ability to move efficiently and accurately in various environments.
+   - Includes memory navigation, complex routing, and obstacle avoidance.
+
+3. **Real-time Interruption**
+   - Testing the agent's responsiveness to real-time changes and interruptions in task execution.
+   - Includes task switching, pause/resume functionality, and handling contradictory instructions.
+
+4. **Dynamism**
+   - Evaluating the agent's ability to adapt to dynamic changes in the environment.
+   - Includes adapting to moving obstacles, environmental changes, and modified goal parameters.
+
+5. **Discovery**
+   - Assessing the agent's capability to explore and map new environments or changes.
+   - Includes mapping unknown environments, finding hidden objects, and detecting environment alterations.
+
+6. **Basic Task Completion**
+   - Ensuring the agent can complete fundamental tasks reliably.
+   - Includes simple object manipulation, following multi-step instructions, and basic environmental interaction.
+
+## Running Benchmarks
+
+### Running a Single Benchmark
+
+```bash
+python benchmarks/benchmark_runner.py --config benchmarks/configs/path/to/config.yaml --trial 1
+```
+
+### Running Multiple Benchmarks
+
+```bash
+# Run specific config files
+python benchmarks/run_benchmarks.py --configs configs/file1.yaml configs/file2.yaml --trials 10
+
+# Run all configs in a category
+python benchmarks/run_benchmarks.py --category 01_long_term_consistency --trials 10
+
+# Run all available configs
+python benchmarks/run_benchmarks.py --all --trials 10
+```
+
+## Configuration Format
+
+Benchmark configurations use YAML files with the following structure:
+
+```yaml
+# Environment section - defines the simulation environment
+environment:
+  name: "environment_name"  # Which environment to use
+  initial_parameters:
+    - robot_position: [x, y, z]
+      robot_orientation: [qx, qy, qz, qw]
+      object_positions:
+        object1: [x, y, z]
+        object2: [x, y, z]
+
+# Input section - what we provide to the agent
+name: "benchmark_name"
+category: "category_name"
+description: "Description of what this benchmark tests"
+goal: "Specific measurable outcome expected"
+directive: "directive_name"  # Name of the predefined directive
+duration: 600  # seconds
+
+# Message scheduling
+messages:
+  # Time-based message
+  - trigger_type: "time"
+    time: 60  # seconds after start
+    text: "Message text"
+  
+  # Check-based message
+  - trigger_type: "check"
+    check_id: "check_identifier"
+    delay: 10  # seconds after check passes (optional)
+    text: "Message text"
+
+# Expectations section - how we verify success
+expectations:
+  checks:
+    # Location check
+    - id: "location_check_id"
+      type: "location"
+      coordinates: [x1, y1, z1, x2, y2, z2]  # Bounding box
+    
+    # Primitive check
+    - id: "primitive_check_id"
+      type: "primitive"
+      primitive_name: "primitive_name"
+      verification_prompt: "LLM prompt to verify arguments"
+    
+    # Compound check (primitive in location)
+    - id: "compound_check_id"
+      type: "compound"
+      location: "location_check_id"
+      action: "primitive_check_id"
+      verification_prompt: "Verification prompt"
+    
+    # Sequence check
+    - id: "sequence_check_id"
+      type: "sequence"
+      order: ["check_id1", "check_id2", "check_id3"]
+      verification_prompt: "Verification prompt"
+
+  # Overall success criterion
+  success_criterion: "VLM prompt describing what constitutes success"
+
+  # Early stop criterion
+  stop_criterion: "VLM prompt describing when the test can be stopped early"
+```
+
+### Key Components
+
+1. **Environment**: Specifies the simulation environment and initial object/robot positions.
+
+2. **Input**: Defines the task name, category, description, goal, directive, and duration.
+
+3. **Messages**: Scheduled messages that can be triggered:
+   - By specific times after the start of the benchmark
+   - When specific checks pass (optionally with a delay)
+
+4. **Expectations**: Defines success criteria through checks:
+   - `location`: Verifies the agent visited a specific area
+   - `primitive`: Verifies a specific primitive was called with correct arguments
+   - `compound`: Verifies a primitive was called in a specific location
+   - `sequence`: Verifies a sequence of checks occurred in the correct order
+   - `vlm_verification`: Uses a VLM to verify a specific behavior
+
+5. **Success/Stop Criteria**: VLM prompts that determine:
+   - When the benchmark is considered successful
+   - When the benchmark can be stopped early
+
+## Analyzing Results
+
+Benchmark results are stored in the `benchmarks/results/` directory, organized by benchmark name and trial number.
+
+To analyze results:
+
+```bash
+python benchmarks/analyze_results.py --benchmark benchmark_name
+```
+
+This will generate reports and visualizations based on the benchmark results.
 
 ## Prerequisites
 
