@@ -9,6 +9,7 @@ from nav_msgs.msg import Odometry
 from maurice_msgs.srv import LightCommand
 from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import BatteryState
+import time
 
 class Bringup(Node):
     def __init__(self, debug=False):
@@ -30,7 +31,9 @@ class Bringup(Node):
         # Setup ROS2 services and topics
         self._setup_services_and_topics()
 
-        self.uart_manager.set_light_command(mode=3, r=0, g=255, b=0, interval=100)
+        self.uart_manager.set_light_command(mode=1, r=255, g=255, b=255, interval=100)
+        time.sleep(10)
+        self.uart_manager.set_light_command(mode=0, r=0, g=0, b=0, interval=0)
 
     def _get_parameters(self):
         """Declare and get all node parameters."""

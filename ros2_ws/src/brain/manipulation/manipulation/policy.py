@@ -100,7 +100,7 @@ class InferenceNode(Node):
 
 
         # Timer to run the publishing loop at 30 Hz (every ~0.033 seconds)
-        self.timer = self.create_timer(1/15.0, self.inference_loop)
+        self.timer = self.create_timer(1/30.0, self.inference_loop)
 
         # Create publishers for cmd_vel and arm state command
         
@@ -137,7 +137,7 @@ class InferenceNode(Node):
             if self.metadata and 'average_first_step_action' in self.metadata:
                 start_pos = np.array(self.metadata['average_first_step_action'])[:6]
                 # Generate a smooth trajectory from current position to start position
-                _, base_trajectory = cubic_trajectory(qpos, start_pos, total_time=1.0, freq=15)
+                _, base_trajectory = cubic_trajectory(qpos, start_pos, total_time=1.0, freq=20)
                 print(base_trajectory.shape)
                 # Pad each timestep with two zeros for base motion
                 padded_trajectory = np.pad(base_trajectory, ((0, 0), (0, 2)), mode='constant', constant_values=0)
@@ -184,7 +184,7 @@ class InferenceNode(Node):
                 unnormalized_actions = output * action_std + action_mean
                 # unnormalized_actions is assumed to be [batch, 100, 8]
                 # Take the first 20 predicted actions and convert to list
-                actions = unnormalized_actions[0, :20, :].cpu().numpy().tolist()  # Convert to CPU, then numpy, then list
+                actions = unnormalized_actions[0, :10, :].cpu().numpy().tolist()  # Convert to CPU, then numpy, then list
                 return actions
             else:
                 return None
@@ -206,8 +206,8 @@ class InferenceNode(Node):
 
         # The twist command is taken from the last two elements.
         twist_msg = Twist()
-        twist_msg.linear.x = next_action[-2]
-        twist_msg.angular.z = next_action[-1]
+        twist_msg.linear.x = next_action[-2]/2
+        twist_msg.angular.z = next_action[-1]/2
         self.cmd_vel_pub.publish(twist_msg)
         self.get_logger().info(f"Published Twist: linear.x={twist_msg.linear.x}, angular.z={twist_msg.angular.z}")
 
