@@ -335,6 +335,10 @@ def validate_checks(
         "position_history": position_history or [],
     }
 
+    # Print summary of available data for validation
+    print(f"Position history: {len(position_history or [])} points")
+    print(f"Chat log: {len(chat_log)} messages")
+
     for check in expectations["checks"]:
         check_id = check.get("id")
         check_type = check.get("type")

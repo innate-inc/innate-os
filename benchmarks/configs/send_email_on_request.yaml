@@ -1,0 +1,32 @@
+# Environment section - defines the simulation environment
+environment:
+  name: "default"  # Using a default environment since original doesn't specify
+  initial_parameters:
+    - robot_position: [0.0, 0.0, 0.0]  # Default position
+      robot_orientation: [0, 0, 1, 0]  # Default orientation
+
+# Input section - based on the original example
+name: "send_email_on_request"
+description: "Test if the robot can send an email on request"
+goal: "Robot should send an email to axel@innate.bot"
+directive: "default_directive"
+duration: 300  # seconds
+
+# Message with updated format
+messages:
+  - trigger_type: "time"
+    time: 10  # seconds after start
+    text: "Can you send an email to axel@innate.bot?"
+
+# Expectations section
+expectations:
+  checks:
+    - id: "email_sent"
+      type: "primitive"
+      primitive_name: "send_email"
+      verification_prompt: "Did the robot send an email using the send_email primitive?"
+  use_frames: false
+  
+  success_criterion: "Did the robot send an email to axel@innate.bot after being asked to do so?"
+
+  early_stop_criterion: "If it has been more than 15 seconds since the email was sent, we can stop the test."

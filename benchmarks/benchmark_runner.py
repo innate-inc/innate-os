@@ -119,12 +119,17 @@ class DirectiveBenchmark:
         # Initialize data structures
         self.chat_log = []
         self.position_history = []  # Track robot positions throughout the run
+
+        # Only store essential metrics in the metrics object
         self.metrics = {
             "start_time": None,
             "end_time": None,
             "frames_captured": {"first_person": 0, "chase": 0},
             "chat_messages": 0,
         }
+
+        # We'll use this to track timestamps for position history
+        self.position_timestamps = []
 
         # Control flags
         self.running = False
@@ -185,6 +190,25 @@ class DirectiveBenchmark:
         """Save performance metrics to a JSON file."""
         with open(self.output_dir / "metrics.json", "w") as f:
             json.dump(self.metrics, f, indent=2)
+
+    def _save_position_history(self):
+        """Save robot position history to a separate JSON file."""
+        position_data = []
+
+        # Combine positions with timestamps
+        for i, position in enumerate(self.position_history):
+            # Only add timestamp if available
+            if i < len(self.position_timestamps):
+                timestamp = self.position_timestamps[i]
+                position_data.append(
+                    {"timestamp": timestamp, "position": [position[0], position[1]]}
+                )
+            else:
+                # Fallback for positions without timestamps (shouldn't happen)
+                position_data.append({"position": [position[0], position[1]]})
+
+        with open(self.output_dir / "position_history.json", "w") as f:
+            json.dump(position_data, f, indent=2)
 
     def _check_simulation_ready(self):
         """Check if the simulation is ready."""
@@ -358,6 +382,7 @@ class DirectiveBenchmark:
         """Continuously track the robot's position and store in history."""
         position_interval = 1.0  # Record position every second
         last_position_time = time.time()
+        last_save_time = time.time()
 
         while self.running:
             current_time = time.time()
@@ -375,25 +400,21 @@ class DirectiveBenchmark:
                         x = position_data["position"][0]
                         y = position_data["position"][1]
 
-                        # Store position with timestamp
+                        # Store position
                         position_entry = (x, y)
                         self.position_history.append(position_entry)
 
-                        # Also record in metrics
-                        if "position_history" not in self.metrics:
-                            self.metrics["position_history"] = []
+                        # Store timestamp separately (seconds since start)
+                        timestamp = current_time - self.metrics["start_timestamp"]
+                        self.position_timestamps.append(timestamp)
 
-                        self.metrics["position_history"].append(
-                            {
-                                "timestamp": current_time
-                                - self.metrics["start_timestamp"],
-                                "position": [x, y],
-                            }
-                        )
+                        # Save position history periodically to avoid IO overhead
+                        if (
+                            current_time - last_save_time >= 10.0
+                        ):  # Save every 10 seconds
+                            self._save_position_history()
+                            last_save_time = current_time
 
-                        # Save metrics but not too frequently to avoid IO overhead
-                        if len(self.position_history) % 10 == 0:
-                            self._save_metrics()
                 except Exception as e:
                     print(f"Error tracking robot position: {e}")
 
@@ -581,6 +602,9 @@ class DirectiveBenchmark:
 
             # Record end time
             self.metrics["end_time"] = datetime.now().isoformat()
+
+            # Save final position history to its own file
+            self._save_position_history()
 
             # Validate all checks at the end of the benchmark
             print("Performing validation of all checks at the end of benchmark run...")
