@@ -55,6 +55,13 @@ class Nav2Controller:
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
         self.logger.debug("Sending goal pose ...")
+        path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
+
+        # If the path is None, we can't navigate to the goal
+        if path is None:
+            self.logger.error("Failed to get path to goal")
+            return TaskResult.FAILED
+
         self.navigator.goToPose(goal_pose)
 
         self.logger.debug("Waiting for navigation to complete ...")
@@ -68,7 +75,9 @@ class Nav2Controller:
                 break
 
             # Get feedback but don't block for too long
-            self.navigator.getFeedback()
+            feedback = self.navigator.getFeedback()
+            if feedback:
+                self.logger.debug(f"Navigation feedback: {feedback}")
             # Small sleep to prevent CPU hogging
             time.sleep(0.1)  # 100ms check interval
 

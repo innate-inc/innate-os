@@ -614,6 +614,16 @@ class BrainClientNode(Node):
                 payload={"primitive_name": result.primitive_type},
             )
             self.ws_bridge.send_message(outgoing_msg)
+        elif result.success == False:
+            self.primitive_running = False
+            outgoing_msg = MessageIn(
+                type=MessageInType.PRIMITIVE_FAILED,
+                payload={
+                    "primitive_name": result.primitive_type,
+                    "reason": result.message,
+                },
+            )
+            self.ws_bridge.send_message(outgoing_msg)
 
     def _handle_primitives_and_directive_registered(self, msg):
         """
