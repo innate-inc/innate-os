@@ -13,7 +13,13 @@ import cv2
 import numpy as np
 import websockets
 
-from src.agent.types import OccupancyGridMsg, RobotStateMsg, VelocityCmd, DirectiveCmd
+from src.agent.types import (
+    OccupancyGridMsg,
+    RobotStateMsg,
+    VelocityCmd,
+    DirectiveCmd,
+    ResetRobotCmd,
+)
 from src.shared_queues import ChatMessage, ChatSignal
 
 
@@ -222,6 +228,13 @@ async def outbound_loop(ws, shared_queues):
                 outbound = rosbridge_publish("/set_directive", directive_msg)
                 await ws.send(json.dumps(outbound))
                 print(f"[ROSBridge] Published directive: {msg.directive}")
+            elif isinstance(msg, ResetRobotCmd):
+                # Call the /reset_brain service with Trigger service type
+                reset_srv = rosbridge_call_service(
+                    "/reset_brain", "std_srvs/srv/Trigger"
+                )
+                await ws.send(json.dumps(reset_srv))
+                print("[ROSBridge] Called /reset_brain service")
         except queue.Empty:
             # no messages to publish right now
             pass
