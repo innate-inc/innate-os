@@ -6,7 +6,6 @@ import os
 import sys
 import yaml
 import json
-from pathlib import Path
 
 
 def run_benchmark(config_file, trial=1, base_url="http://localhost:8000", interval=1.0):
@@ -57,9 +56,10 @@ def run_multiple_trials(
     # Check if the number of trials is a multiple of the number of parameter sets
     if num_param_sets > 1 and num_trials % num_param_sets != 0:
         print(
-            f"\nWARNING: The number of trials ({num_trials}) is not a multiple of the number of initial parameter sets ({num_param_sets})."
+            "\nWARNING: The number of trials ({}) is not a multiple of"
+            " the number of initial parameter sets ({})."
         )
-        print(f"This means some parameter sets will be tested more times than others.")
+        print("This means some parameter sets will be tested more times than others.")
         print(
             f"Consider using a multiple of {num_param_sets} trials for balanced testing."
         )
@@ -277,6 +277,8 @@ def main():
         if os.path.exists("benchmarks/benchmarks_config.json"):
             args.command = "all"
             args.config = "benchmarks/benchmarks_config.json"
+            args.url = "http://localhost:8000"
+            args.interval = 1.0
         else:
             parser.print_help()
             sys.exit(1)
