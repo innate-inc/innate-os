@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { ThemeProvider } from 'styled-components';
-import { BrowserRouter as Router } from 'react-router-dom';
-import { theme } from './styles/theme';
-import { AppLayout, Sidebar, MainContent } from './components/layout/AppLayout';
-import { BenchmarkCard } from './components/benchmark/BenchmarkCard';
-import { TrialGrid } from './components/trial/TrialGrid';
-import GlobalStyle from './styles/GlobalStyle';
-import { Benchmark, Trial } from './types/benchmark';
-import styled from 'styled-components';
+import React, { useState, useEffect } from "react";
+import { ThemeProvider } from "styled-components";
+import { BrowserRouter as Router } from "react-router-dom";
+import { theme } from "./styles/theme";
+import { AppLayout, Sidebar, MainContent } from "./components/layout/AppLayout";
+import { BenchmarkCard } from "./components/benchmark/BenchmarkCard";
+import { TrialGrid } from "./components/trial/TrialGrid";
+import GlobalStyle from "./styles/GlobalStyle";
+import { Benchmark, Trial } from "./types/benchmark";
+import styled from "styled-components";
 
 const PageTitle = styled.h1`
   color: ${({ theme }) => theme.colors.text};
@@ -30,8 +30,9 @@ const TrialDetails = styled.div`
   padding: ${({ theme }) => theme.spacing.xl};
   margin-top: ${({ theme }) => theme.spacing.xl};
   box-shadow: ${({ theme }) => theme.shadows.card};
-  border-left: 4px solid ${({ theme, success }) => 
-    success ? theme.colors.success : theme.colors.error};
+  border-left: 4px solid
+    ${({ theme, success }) =>
+      success ? theme.colors.success : theme.colors.error};
 `;
 
 const TrialTitle = styled.h2`
@@ -72,7 +73,7 @@ const ChatLog = styled.div`
 const ChatMessage = styled.div`
   padding: ${({ theme }) => theme.spacing.md};
   border-bottom: 1px solid ${({ theme }) => theme.colors.border};
-  
+
   &:last-child {
     border-bottom: none;
   }
@@ -103,9 +104,9 @@ const StatusTag = styled.div<{ success: boolean }>`
   display: inline-block;
   padding: ${({ theme }) => `${theme.spacing.xs} ${theme.spacing.sm}`};
   border-radius: ${({ theme }) => theme.borderRadius.small};
-  background: ${({ theme, success }) => 
-    success ? theme.colors.success + '20' : theme.colors.error + '20'};
-  color: ${({ theme, success }) => 
+  background: ${({ theme, success }) =>
+    success ? theme.colors.success + "20" : theme.colors.error + "20"};
+  color: ${({ theme, success }) =>
     success ? theme.colors.success : theme.colors.error};
   font-weight: bold;
   font-size: 0.875rem;
@@ -113,12 +114,10 @@ const StatusTag = styled.div<{ success: boolean }>`
 `;
 
 const loadBenchmarkData = async (benchmarkName: string): Promise<Benchmark> => {
-  // Load all trials for a benchmark
   const trials: Trial[] = [];
   let successCount = 0;
 
-  // We know the trial numbers from the file listing
-  const trialNumbers = benchmarkName === 'quick_response_test' ? 
+  const trialNumbers = benchmarkName === 'quick_response_test_sonnet' ? 
     Array.from({length: 10}, (_, i) => i + 1) :
     Array.from({length: 6}, (_, i) => i + 1);
 
@@ -169,12 +168,23 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const benchmarkNames = ['quick_response_test', 'quick_response_test_gemini'];
+        // First get the list of benchmarks from index.json
+        const indexResponse = await fetch('/results/index.json');
+        const indexData = await indexResponse.json();
+        const benchmarkNames = indexData.benchmarks;
+
+        console.log('Loading benchmarks:', benchmarkNames);
+
         const loadedBenchmarks = await Promise.all(
           benchmarkNames.map(name => loadBenchmarkData(name))
         );
+
+        console.log('Loaded benchmarks:', loadedBenchmarks);
+
         setBenchmarks(loadedBenchmarks);
-        setSelectedBenchmark(loadedBenchmarks[0]);
+        if (loadedBenchmarks.length > 0) {
+          setSelectedBenchmark(loadedBenchmarks[0]);
+        }
         setLoading(false);
       } catch (error) {
         console.error('Error loading benchmarks:', error);
@@ -195,7 +205,12 @@ const App: React.FC = () => {
   };
 
   if (loading) {
-    return <LoadingOverlay>Loading benchmark data...</LoadingOverlay>;
+    return (
+      <ThemeProvider theme={theme}>
+        <GlobalStyle />
+        <LoadingOverlay>Loading benchmark data...</LoadingOverlay>
+      </ThemeProvider>
+    );
   }
 
   return (
@@ -204,10 +219,10 @@ const App: React.FC = () => {
       <Router>
         <AppLayout>
           <Sidebar>
-            {benchmarks.map(benchmark => (
-              <BenchmarkCard 
+            {benchmarks.map((benchmark) => (
+              <BenchmarkCard
                 key={benchmark.name}
-                benchmark={benchmark} 
+                benchmark={benchmark}
                 onClick={() => handleBenchmarkClick(benchmark)}
               />
             ))}
@@ -219,7 +234,7 @@ const App: React.FC = () => {
                 {selectedBenchmark.description && (
                   <Description>{selectedBenchmark.description}</Description>
                 )}
-                <TrialGrid 
+                <TrialGrid
                   trials={selectedBenchmark.trials}
                   onTrialClick={handleTrialClick}
                 />
@@ -227,24 +242,32 @@ const App: React.FC = () => {
                   <TrialDetails success={selectedTrial.success}>
                     <TrialTitle>Trial {selectedTrial.id} Details</TrialTitle>
                     <StatusTag success={selectedTrial.success}>
-                      {selectedTrial.success ? 'Success' : 'Failed'}
+                      {selectedTrial.success ? "Success" : "Failed"}
                     </StatusTag>
                     <MetricGrid>
                       <Metric>
                         <MetricLabel>Duration</MetricLabel>
-                        <MetricValue>{selectedTrial.metrics.duration.toFixed(1)}s</MetricValue>
+                        <MetricValue>
+                          {selectedTrial.metrics.duration.toFixed(1)}s
+                        </MetricValue>
                       </Metric>
                       <Metric>
                         <MetricLabel>Chat Messages</MetricLabel>
-                        <MetricValue>{selectedTrial.metrics.chatMessages}</MetricValue>
+                        <MetricValue>
+                          {selectedTrial.metrics.chatMessages}
+                        </MetricValue>
                       </Metric>
                       <Metric>
                         <MetricLabel>First Person Frames</MetricLabel>
-                        <MetricValue>{selectedTrial.metrics.frames_captured.first_person}</MetricValue>
+                        <MetricValue>
+                          {selectedTrial.metrics.frames_captured.first_person}
+                        </MetricValue>
                       </Metric>
                       <Metric>
                         <MetricLabel>Chase Frames</MetricLabel>
-                        <MetricValue>{selectedTrial.metrics.frames_captured.chase}</MetricValue>
+                        <MetricValue>
+                          {selectedTrial.metrics.frames_captured.chase}
+                        </MetricValue>
                       </Metric>
                     </MetricGrid>
                     <Description>{selectedTrial.reason}</Description>
@@ -255,7 +278,9 @@ const App: React.FC = () => {
                           <ChatSender>{msg.sender}:</ChatSender>
                           {msg.text}
                           {msg.time_since_start !== undefined && (
-                            <ChatTime>(at {msg.time_since_start.toFixed(1)}s)</ChatTime>
+                            <ChatTime>
+                              (at {msg.time_since_start.toFixed(1)}s)
+                            </ChatTime>
                           )}
                         </ChatMessage>
                       ))}
