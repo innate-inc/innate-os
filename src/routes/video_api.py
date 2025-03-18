@@ -81,6 +81,42 @@ def video_feed_chase(request: Request):
     )
 
 
+@router.get("/get_robot_position")
+def get_robot_position(request: Request):
+    """
+    Returns the current 3D position (x, y, z) of the robot.
+    Uses the SharedQueues' direct robot position tracking.
+
+    Returns:
+        JSON response with position [x, y, z] and timestamp
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    # Check if we have valid shared_queues
+    if shared_queues is None:
+        return JSONResponse(
+            {
+                "position": [0.0, 0.0, 0.0],  # Default position
+                "timestamp": time.time(),
+                "error": "Simulation not initialized",
+            },
+            status_code=200,  # Still return 200 to avoid breaking clients
+        )
+
+    # Retrieve position and timestamp directly from shared queues
+    position, timestamp = shared_queues.get_robot_position()
+
+    # Convert any NumPy types to native Python types
+    position = [float(p) for p in position]  # Convert to native Python floats
+
+    return JSONResponse(
+        {
+            "position": position,
+            "timestamp": float(timestamp),  # Ensure timestamp is also a Python float
+        }
+    )
+
+
 @router.post("/reset_robot")
 async def reset_robot(request: Request):
     """

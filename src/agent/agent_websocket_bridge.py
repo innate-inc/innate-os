@@ -220,9 +220,9 @@ async def outbound_loop(ws, shared_queues):
 
             # We have a message
             if isinstance(msg, RobotStateMsg):
-                await publish_robot_state(ws, msg)
+                await publish_robot_state(ws, msg, shared_queues)
             elif isinstance(msg, OccupancyGridMsg):
-                await publish_occupancy_grid(ws, msg)
+                await publish_occupancy_grid(ws, msg, shared_queues)
             elif isinstance(msg, DirectiveCmd):
                 directive_msg = {"data": msg.directive}
                 outbound = rosbridge_publish("/set_directive", directive_msg)
@@ -307,10 +307,13 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
 #   /camera/color/camera_info (sensor_msgs/CameraInfo)
 #   /odom (nav_msgs/Odometry)
 #
-async def publish_robot_state(ws, rsm: RobotStateMsg):
+async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
     now = time.time()
     sec = int(now)
     nsec = int((now - sec) * 1e9)
+
+    # Update the shared robot position for direct access by other components
+    shared_queues.update_robot_position(rsm.px, rsm.py, rsm.pz, now)
 
     # -- 1) COMPRESS COLOR IMAGE --
     if rsm.rgb_frame is not None:
@@ -403,7 +406,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
     await ws.send(json.dumps(outbound, default=np_encoder))
 
 
-async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
+async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):
     now = time.time()
     sec = int(now)
     nsec = int((now - sec) * 1e9)
