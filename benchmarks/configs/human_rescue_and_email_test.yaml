@@ -21,7 +21,12 @@ expectations:
     # Location checks
     - id: "human_location"
       type: "location"
-      coordinates: [14.0, 7.5, 16.0, 9.5]  # Area where human is located
+      coordinates: [0.0, 0.0, -3.0, 5.0]  # Area where human is located
+    - id: "email_sent"
+      type: "primitive"
+      primitive_name: "send_email"
+      verification_prompt: "Did the robot send an email using the send_email primitive?"
+
   use_frames: false
   
   success_criterion: "Did the robot first go to the human and then sent an email?"

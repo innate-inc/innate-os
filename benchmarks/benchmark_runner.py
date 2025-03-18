@@ -118,6 +118,7 @@ class DirectiveBenchmark:
 
         # Initialize data structures
         self.chat_log = []
+        self.position_history = []  # Track robot positions throughout the run
         self.metrics = {
             "start_time": None,
             "end_time": None,
@@ -353,8 +354,55 @@ class DirectiveBenchmark:
                                 f"check '{check_id}': '{text}'"
                             )
 
+    def _track_robot_position(self):
+        """Continuously track the robot's position and store in history."""
+        position_interval = 1.0  # Record position every second
+        last_position_time = time.time()
+
+        while self.running:
+            current_time = time.time()
+            if current_time - last_position_time >= position_interval:
+                try:
+                    # Get current robot position
+                    response = requests.get(f"{self.base_url}/get_robot_position")
+                    position_data = response.json()
+
+                    # Extract position coordinates
+                    if (
+                        "position" in position_data
+                        and len(position_data["position"]) >= 2
+                    ):
+                        x = position_data["position"][0]
+                        y = position_data["position"][1]
+
+                        # Store position with timestamp
+                        position_entry = (x, y)
+                        self.position_history.append(position_entry)
+
+                        # Also record in metrics
+                        if "position_history" not in self.metrics:
+                            self.metrics["position_history"] = []
+
+                        self.metrics["position_history"].append(
+                            {
+                                "timestamp": current_time
+                                - self.metrics["start_timestamp"],
+                                "position": [x, y],
+                            }
+                        )
+
+                        # Save metrics but not too frequently to avoid IO overhead
+                        if len(self.position_history) % 10 == 0:
+                            self._save_metrics()
+                except Exception as e:
+                    print(f"Error tracking robot position: {e}")
+
+                last_position_time = current_time
+
+            time.sleep(0.1)  # Sleep to avoid excessive CPU usage
+
     def _validate_checks(self):
-        """Validate all checks in the configuration."""
+        """Validate all checks in the configuration - called only at end of run."""
         updated_status = validate_checks(
             self.expectations,
             self.check_status,
@@ -365,12 +413,15 @@ class DirectiveBenchmark:
             self.metrics,
             self._save_metrics,
             base_url=self.base_url,
+            position_history=self.position_history,
         )
 
         # Handle any newly passed checks
         for check_id, passed in updated_status.items():
             if passed and not self.check_status.get(check_id, False):
                 self._update_check_status(check_id, True)
+
+        return updated_status
 
     def _should_stop_early(self):
         """
@@ -481,6 +532,7 @@ class DirectiveBenchmark:
             target=self._capture_frames, args=("first_person",)
         )
         chase_thread = threading.Thread(target=self._capture_frames, args=("chase",))
+        position_thread = threading.Thread(target=self._track_robot_position)
 
         # Start chat monitoring using WebSocketManager
         self.websocket_manager.running = True
@@ -488,10 +540,11 @@ class DirectiveBenchmark:
             self.metrics["start_timestamp"]
         )
 
-        self.threads = [first_person_thread, chase_thread, chat_thread]
+        self.threads = [first_person_thread, chase_thread, chat_thread, position_thread]
         for thread in [
             first_person_thread,
             chase_thread,
+            position_thread,
         ]:  # Chat thread already started
             thread.daemon = True
             thread.start()
@@ -503,20 +556,9 @@ class DirectiveBenchmark:
 
         # Run for specified duration or until stop criterion met
         stop_time = time.time() + self.duration
-        # Note: Removed unused variables last_check_time and check_interval
-        # as check validations are currently commented out
-
-        last_check_time = time.time()
-        check_interval = 1.0  # Check every second
 
         try:
             while time.time() < stop_time and self.running:
-                # Validate checks periodically
-                current_time = time.time()
-                if current_time - last_check_time >= check_interval:
-                    self._validate_checks()
-                    last_check_time = current_time
-
                 # Check if we should stop early
                 if self._should_stop_early():
                     print("Stop criterion met. Ending benchmark early.")
@@ -540,6 +582,10 @@ class DirectiveBenchmark:
             # Record end time
             self.metrics["end_time"] = datetime.now().isoformat()
 
+            # Validate all checks at the end of the benchmark
+            print("Performing validation of all checks at the end of benchmark run...")
+            self._validate_checks()
+
             # Evaluate final success and add to metrics
             success_result = self._evaluate_final_success()
             self.metrics["success"] = success_result
@@ -554,6 +600,7 @@ class DirectiveBenchmark:
             )
             print(f"Captured {self.metrics['frames_captured']['chase']} chase frames")
             print(f"Recorded {self.metrics['chat_messages']} chat messages")
+            print(f"Recorded {len(self.position_history)} robot positions")
             print(f"Success: {success_result.get('success', False)}")
             print(f"Reason: {success_result.get('reason', 'No reason provided')}")
 
