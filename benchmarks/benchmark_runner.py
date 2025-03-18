@@ -151,6 +151,12 @@ class DirectiveBenchmark:
 
     def _save_chat_message(self, message):
         """Save a single chat message to the log file in real-time."""
+        # Calculate time since benchmark start
+        if "timestamp" in message and self.metrics.get("start_timestamp"):
+            time_since_start = message["timestamp"] - self.metrics["start_timestamp"]
+            # Add time_since_start to the message
+            message["time_since_start"] = round(time_since_start, 2)
+
         # Append to the chat log in memory
         self.chat_log.append(message)
         self.metrics["chat_messages"] += 1
@@ -606,30 +612,217 @@ class DirectiveBenchmark:
     def _should_stop_early(self):
         """
         Check if the benchmark should stop early based on the stop criterion.
-        Currently a placeholder for future implementation.
+        Uses a VLM to evaluate the stop criterion against the current state.
         """
         if not self.stop_criterion:
             return False
 
-        # TODO: Implement VLM-based verification of stop criterion
-        # This would involve:
-        # 1. Selecting representative frames from the benchmark so far
-        # 2. Sending them to a VLM along with the stop_criterion prompt
-        # 3. Analyzing the VLM's response to determine if the criterion is met
+        # Get representative frames from the benchmark so far
+        frames = self._get_representative_frames()
+        if not frames:
+            return False
+
+        # Evaluate the stop criterion using VLM
+        result = self._evaluate_with_vlm(
+            self.stop_criterion, frames, is_stop_check=True
+        )
+
+        if result.get("should_stop", False):
+            # Log the reason for stopping
+            print(f"Stop criterion met: {result.get('reason', 'Unknown reason')}")
+
+            # Save the stop decision to metrics
+            self.metrics["early_stop"] = {
+                "triggered": True,
+                "time": time.time() - self.metrics["start_timestamp"],
+                "reason": result.get("reason", "Unknown reason"),
+            }
+            self._save_metrics()
+
+            return True
 
         return False
 
-    def _validate_checks(self):
+    def _evaluate_final_success(self):
         """
-        Validates all checks defined in the expectations.
-        This is a placeholder for future implementation.
+        Evaluate whether the benchmark was successful based on the success criterion.
+        Uses a VLM to evaluate the success criterion against the collected data.
         """
-        # TODO: Implement periodic validation of all checks
-        # This would involve:
-        # 1. Iterating through all checks in self.expectations.get("checks", [])
-        # 2. Calling the appropriate validation method based on check type
-        # 3. Updating check status and triggering messages as needed
-        pass
+        if not self.expectations.get("success_criterion"):
+            return {"success": False, "reason": "No success criterion defined"}
+
+        # Get representative frames from the benchmark
+        frames = self._get_representative_frames(comprehensive=True)
+        if not frames:
+            return {"success": False, "reason": "No frames available for evaluation"}
+
+        # Evaluate the success criterion using VLM
+        return self._evaluate_with_vlm(
+            self.expectations["success_criterion"], frames, is_stop_check=False
+        )
+
+    def _get_representative_frames(self, comprehensive=False):
+        """
+        Select representative frames from the benchmark for VLM evaluation.
+
+        Args:
+            comprehensive (bool): If True, includes more frames for a more thorough evaluation
+
+        Returns:
+            list: Paths to selected image frames
+        """
+        # TODO: Implement intelligent frame selection for VLM analysis
+        # For now, just select a few frames at regular intervals
+
+        first_person_frames = sorted(list(self.first_person_dir.glob("*.jpg")))
+        chase_frames = sorted(list(self.chase_dir.glob("*.jpg")))
+
+        if not first_person_frames and not chase_frames:
+            return []
+
+        # Select frames at regular intervals
+        interval = 5 if comprehensive else 20  # More frames for comprehensive analysis
+
+        # Combine frames from both cameras, alternating
+        selected_frames = []
+        max_frames = min(len(first_person_frames), len(chase_frames))
+
+        for i in range(0, max_frames, interval):
+            if i < len(first_person_frames):
+                selected_frames.append(str(first_person_frames[i]))
+            if i < len(chase_frames):
+                selected_frames.append(str(chase_frames[i]))
+
+        return selected_frames[:20]  # Limit to 20 frames to avoid token limits
+
+    def _encode_image(self, image_path):
+        """
+        Encode an image to base64 for VLM API.
+
+        Args:
+            image_path (str): Path to the image file
+
+        Returns:
+            str: Base64 encoded image
+        """
+        try:
+            import base64
+
+            with open(image_path, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
+                return encoded_string
+        except Exception as e:
+            print(f"Error encoding image {image_path}: {e}")
+            return None
+
+    def _evaluate_with_vlm(self, criterion, frame_paths, is_stop_check=False):
+        """
+        Evaluate a criterion using a VLM model with the given frames.
+
+        Args:
+            criterion (str): The criterion to evaluate
+            frame_paths (list): Paths to image frames
+            is_stop_check (bool): Whether this is a stop criterion check
+
+        Returns:
+            dict: Structured result with success/should_stop and reason fields
+        """
+        # TODO: Replace with actual VLM API call
+        # This is a placeholder that would be replaced with a real VLM API call
+
+        # TODO: Add your VLM API key below or in an environment variable
+        vlm_api_key = None  # Replace with your API key or use an environment variable
+
+        if not vlm_api_key:
+            print("Warning: No VLM API key provided, using mock response")
+            # Mock response for testing
+            if is_stop_check:
+                return {
+                    "should_stop": False,
+                    "reason": "Mock response - no stop condition met",
+                }
+            else:
+                return {
+                    "success": False,
+                    "reason": "Mock response - VLM verification not implemented",
+                }
+
+        try:
+            # Sample schema for structured output - used in actual API call when uncommented
+            schema = {
+                "type": "object",
+                "properties": {
+                    "should_stop" if is_stop_check else "success": {
+                        "type": "boolean",
+                        "description": "Whether the criterion has been met",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Detailed explanation of why the criterion was met or not met",
+                    },
+                },
+                "required": ["should_stop" if is_stop_check else "success", "reason"],
+            }
+
+            # TODO: Format frames as base64 encoded images for the VLM
+            # encoded_frames = [self._encode_image(frame_path) for frame_path in frame_paths]
+
+            # Create a prompt that instructs the VLM to evaluate the criterion - used when API call is uncommented
+            prompt_type = "stop" if is_stop_check else "success"
+
+            # These variables will be used in the actual API call when uncommented
+            system_prompt = (
+                f"You are an AI evaluator for robot benchmarks. You will receive frames "
+                f"showing a robot performing tasks. Evaluate whether the {prompt_type} "
+                f"criterion has been met. Respond with structured JSON containing the "
+                f"fields 'should_stop' (boolean) and 'reason' (string) if evaluating a "
+                f"stop criterion, or 'success' (boolean) and 'reason' (string) if "
+                f"evaluating a success criterion."
+            )
+
+            user_prompt = (
+                f"Based on the provided frames, evaluate the following {prompt_type} "
+                f"criterion:\n\n{criterion}\n\n"
+                f"Provide your evaluation as structured JSON with the following format:\n"
+                f"{{ \"{'should_stop' if is_stop_check else 'success'}\": boolean, "
+                f'"reason": "detailed explanation" }}'
+            )
+
+            """
+            # Uncomment to implement actual API call to GPT-4o or similar VLM
+            response = openai.ChatCompletion.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                functions=[{"name": "evaluation_result", "parameters": schema}],
+                function_call={"name": "evaluation_result"}
+            )
+            
+            # Parse the structured output
+            result = json.loads(response.choices[0].message.function_call.arguments)
+            return result
+            """
+
+            # Mock result for testing - remove when implementing actual API call
+            if is_stop_check:
+                return {
+                    "should_stop": False,
+                    "reason": "Mock response - no stop condition met",
+                }
+            else:
+                return {
+                    "success": False,
+                    "reason": "Mock response - success evaluation not implemented",
+                }
+
+        except Exception as e:
+            print(f"Error in VLM evaluation: {e}")
+            if is_stop_check:
+                return {"should_stop": False, "reason": f"Error in VLM evaluation: {e}"}
+            else:
+                return {"success": False, "reason": f"Error in VLM evaluation: {e}"}
 
     def run(self):
         """Run the benchmark test."""
@@ -760,6 +953,10 @@ class DirectiveBenchmark:
             # Record end time
             self.metrics["end_time"] = datetime.now().isoformat()
 
+            # Evaluate final success and add to metrics
+            success_result = self._evaluate_final_success()
+            self.metrics["success"] = success_result
+
             # Save results - messages are saved in real-time
             self._save_metrics()
 
@@ -770,6 +967,8 @@ class DirectiveBenchmark:
             )
             print(f"Captured {self.metrics['frames_captured']['chase']} chase frames")
             print(f"Recorded {self.metrics['chat_messages']} chat messages")
+            print(f"Success: {success_result.get('success', False)}")
+            print(f"Reason: {success_result.get('reason', 'No reason provided')}")
 
         return True
 
