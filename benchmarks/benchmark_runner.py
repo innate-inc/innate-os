@@ -686,7 +686,7 @@ class DirectiveBenchmark:
             print(f"Error in VLM check '{check_id}': {e}")
             return False
 
-    def _should_stop_early(self):
+    def _should_stop_early(self, use_frames=False):
         """
         Check if the benchmark should stop early based on the stop criterion.
         Uses a VLM to evaluate the stop criterion against the current state.
@@ -695,8 +695,8 @@ class DirectiveBenchmark:
             return False
 
         # Get representative frames from the benchmark so far
-        frames = self._get_representative_frames()
-        if not frames:
+        frames = self._get_representative_frames() if use_frames else []
+        if not frames and use_frames:
             return False
 
         # Evaluate the stop criterion using VLM
@@ -1081,12 +1081,13 @@ class DirectiveBenchmark:
         try:
             while time.time() < stop_time and self.running:
                 # Validate checks periodically
-                current_time = time.time()
-                if current_time - last_check_time >= check_interval:
-                    self._validate_checks()
-                    last_check_time = current_time
+                # current_time = time.time()
+                # if current_time - last_check_time >= check_interval:
+                #     self._validate_checks()
+                #     last_check_time = current_time
 
                 # Check if we should stop early
+                print("Checking if we should stop early...")
                 if self._should_stop_early():
                     print("Stop criterion met. Ending benchmark early.")
                     break
