@@ -159,13 +159,41 @@ The benchmark runner now supports using Vision-Language Models (VLMs) such as GP
 
 Before using VLM integration, you need to:
 
-1. Get an API key for a capable VLM like GPT-4o
-2. Set up your key in the benchmark runner:
-   ```python
-   # In benchmark_runner.py - _evaluate_with_vlm method:
-   vlm_api_key = "your_api_key_here"  # or use environment variable
+1. Install required packages:
+   ```bash
+   pip install -r benchmarks/requirements.txt
    ```
-3. Uncomment the actual API call implementation in the same method
+
+2. Create a `.env` file in the `benchmarks` directory with your OpenAI API key:
+   ```
+   OPENAI_API_KEY=your_api_key_here
+   ```
+   
+   A valid API key is already included in the `.env` file. If you need to use your own key, replace it in the file.
+
+3. The VLM integration is now automatically enabled when running benchmarks. The system uses GPT-4o with structured JSON output to evaluate success and stop criteria.
+
+### Using VLM Verification in Configurations
+
+To use VLM verification in your benchmark configurations:
+
+1. Add checks with type "vlm_verification" to verify specific behaviors:
+   ```yaml
+   expectations:
+     checks:
+       - id: "check_id"
+         type: "vlm_verification"
+         verification_prompt: "Did the robot perform X action correctly?"
+   ```
+
+2. Define success and stop criteria as natural language prompts:
+   ```yaml
+   expectations:
+     success_criterion: "Did the robot complete all required tasks successfully?"
+     stop_criterion: "Has the robot failed in a way that makes continuing pointless?"
+   ```
+
+3. The benchmark runner will use these prompts with captured frames to evaluate criteria.
 
 ### Time-Since-Start in Chat Logs
 
