@@ -283,8 +283,6 @@ class DirectiveBenchmark:
 
                     # Only process messages that occurred after the test started
                     if msg_time >= start_timestamp:
-                        print(f"Chat message: {data['sender']}: {data['text']}")
-                        # Save message in real-time
                         self._save_chat_message(data)
                     else:
                         # Skip messages from before the test started
@@ -823,6 +821,10 @@ class DirectiveBenchmark:
             schema = {
                 "type": "object",
                 "properties": {
+                    "reflection": {
+                        "type": "string",
+                        "description": "Detailed explanation of why the criterion was met or not met",
+                    },
                     result_key: {
                         "type": "boolean",
                         "description": "Whether the criterion has been met",
@@ -832,7 +834,7 @@ class DirectiveBenchmark:
                         "description": "Detailed explanation of why the criterion was met or not met",
                     },
                 },
-                "required": [result_key, "reason"],
+                "required": ["reflection", result_key, "reason"],
                 "additionalProperties": False,
             }
 
@@ -843,10 +845,13 @@ class DirectiveBenchmark:
             prompt_type = "stop" if is_stop_check else "success"
             system_message = {
                 "role": "system",
-                "content": f"You are an AI evaluator for robot benchmarks. You will receive frames "
-                f"showing a robot performing tasks and a chat log with timestamps. "
-                f"Evaluate whether the {prompt_type} criterion has been met based on "
-                f"the images provided and the chat log.",
+                "content": (
+                    f"You are an AI evaluator for robot benchmarks. You will receive frames "
+                    f"showing a robot performing tasks, a chat log with timestamps, and "
+                    f"information about how long the benchmark has been running. "
+                    f"Evaluate whether the {prompt_type} criterion has been met based on "
+                    f"all the information provided."
+                ),
             }
             messages.append(system_message)
 
@@ -863,12 +868,24 @@ class DirectiveBenchmark:
             # Build user message with text, chat log, and images
             user_message_content = []
 
+            # Calculate current time since benchmark start
+            current_time = time.time()
+            if "start_timestamp" in self.metrics:
+                time_since_start = current_time - self.metrics["start_timestamp"]
+                time_info = f"Current benchmark running time: {round(time_since_start, 2)} seconds\n\n"
+            else:
+                time_info = "Benchmark running time: unknown\n\n"
+
             # First add the text part with chat log
+            eval_text = (
+                f"Based on the provided frames and chat log, evaluate the "
+                f"following {prompt_type} criterion:\n\n{criterion}\n\n"
+                f"{time_info}{chat_log_text}"
+            )
             user_message_content.append(
                 {
                     "type": "input_text",
-                    "text": f"Based on the provided frames and chat log, evaluate the following "
-                    f"{prompt_type} criterion:\n\n{criterion}\n\n{chat_log_text}",
+                    "text": eval_text,
                 }
             )
 
