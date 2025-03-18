@@ -10,6 +10,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 import websocket
+from openai import OpenAI
+from dotenv import load_dotenv
 
 
 class DirectiveBenchmark:
@@ -600,14 +602,60 @@ class DirectiveBenchmark:
         # TODO: Implement sequence validation logic
         return False
 
-    # TODO: Implement VLM verification
     def _validate_vlm_check(self, check_id, check_data):
         """
         Use a VLM to verify a specific aspect of the robot's behavior.
-        This is a placeholder for future implementation.
+
+        Args:
+            check_id (str): Identifier for the check
+            check_data (dict): Check configuration data
+
+        Returns:
+            bool: True if the check passes, False otherwise
         """
-        # TODO: Implement VLM-based verification using captured frames
-        return False
+        # Get verification prompt from check data
+        verification_prompt = check_data.get("verification_prompt")
+        if not verification_prompt:
+            print(f"Error: No verification prompt for VLM check '{check_id}'")
+            return False
+
+        # Get representative frames for analysis
+        frames = self._get_representative_frames()
+        if not frames:
+            print(f"Warning: No frames available for VLM check '{check_id}'")
+            return False
+
+        # Evaluate using VLM
+        try:
+            result = self._evaluate_with_vlm(
+                verification_prompt, frames, is_stop_check=False
+            )
+
+            # Log the result
+            passed = result.get("success", False)
+            reason = result.get("reason", "No reason provided")
+
+            if passed:
+                print(f"Check '{check_id}' passed: {reason}")
+            else:
+                print(f"Check '{check_id}' failed: {reason}")
+
+            # Store the result in metrics
+            if "check_results" not in self.metrics:
+                self.metrics["check_results"] = {}
+
+            self.metrics["check_results"][check_id] = {
+                "passed": passed,
+                "time": time.time() - self.metrics["start_timestamp"],
+                "reason": reason,
+            }
+            self._save_metrics()
+
+            return passed
+
+        except Exception as e:
+            print(f"Error in VLM check '{check_id}': {e}")
+            return False
 
     def _should_stop_early(self):
         """
@@ -666,7 +714,8 @@ class DirectiveBenchmark:
         Select representative frames from the benchmark for VLM evaluation.
 
         Args:
-            comprehensive (bool): If True, includes more frames for a more thorough evaluation
+            comprehensive (bool): If True, includes more frames for a more
+            thorough evaluation
 
         Returns:
             list: Paths to selected image frames
@@ -727,32 +776,23 @@ class DirectiveBenchmark:
         Returns:
             dict: Structured result with success/should_stop and reason fields
         """
-        # TODO: Replace with actual VLM API call
-        # This is a placeholder that would be replaced with a real VLM API call
+        # Load the API key from .env file
+        load_dotenv("benchmarks/.env")
+        api_key = os.getenv("OPENAI_API_KEY")
 
-        # TODO: Add your VLM API key below or in an environment variable
-        vlm_api_key = None  # Replace with your API key or use an environment variable
-
-        if not vlm_api_key:
-            print("Warning: No VLM API key provided, using mock response")
-            # Mock response for testing
-            if is_stop_check:
-                return {
-                    "should_stop": False,
-                    "reason": "Mock response - no stop condition met",
-                }
-            else:
-                return {
-                    "success": False,
-                    "reason": "Mock response - VLM verification not implemented",
-                }
+        if not api_key:
+            raise ValueError("No VLM API key provided in benchmarks/.env")
 
         try:
-            # Sample schema for structured output - used in actual API call when uncommented
+            # Create OpenAI client
+            client = OpenAI(api_key=api_key)
+
+            # Create schema for structured output
+            result_key = "should_stop" if is_stop_check else "success"
             schema = {
                 "type": "object",
                 "properties": {
-                    "should_stop" if is_stop_check else "success": {
+                    result_key: {
                         "type": "boolean",
                         "description": "Whether the criterion has been met",
                     },
@@ -761,61 +801,76 @@ class DirectiveBenchmark:
                         "description": "Detailed explanation of why the criterion was met or not met",
                     },
                 },
-                "required": ["should_stop" if is_stop_check else "success", "reason"],
+                "required": [result_key, "reason"],
+                "additionalProperties": False,
             }
 
-            # TODO: Format frames as base64 encoded images for the VLM
-            # encoded_frames = [self._encode_image(frame_path) for frame_path in frame_paths]
+            # Encode images to base64
+            content = []
 
-            # Create a prompt that instructs the VLM to evaluate the criterion - used when API call is uncommented
+            # Add the system message
             prompt_type = "stop" if is_stop_check else "success"
-
-            # These variables will be used in the actual API call when uncommented
             system_prompt = (
                 f"You are an AI evaluator for robot benchmarks. You will receive frames "
                 f"showing a robot performing tasks. Evaluate whether the {prompt_type} "
-                f"criterion has been met. Respond with structured JSON containing the "
-                f"fields 'should_stop' (boolean) and 'reason' (string) if evaluating a "
-                f"stop criterion, or 'success' (boolean) and 'reason' (string) if "
-                f"evaluating a success criterion."
+                f"criterion has been met based on the images provided."
+            )
+            content.append({"role": "system", "content": system_prompt})
+
+            # Build the user message with images
+            user_content = [
+                {
+                    "type": "text",
+                    "text": f"Based on the provided frames, evaluate the following "
+                    f"{prompt_type} criterion:\n\n{criterion}",
+                }
+            ]
+
+            # Add images to the content
+            for frame_path in frame_paths:
+                encoded_image = self._encode_image(frame_path)
+                if encoded_image:
+                    user_content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{encoded_image}"
+                            },
+                        }
+                    )
+
+            # Add the user message with all images
+            content.append({"role": "user", "content": user_content})
+
+            # Call the OpenAI API
+            response = client.responses.create(
+                model="gpt-4o-2024-08-06",
+                input=content,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "criterion_evaluation",
+                        "schema": schema,
+                        "strict": True,
+                    }
+                },
             )
 
-            user_prompt = (
-                f"Based on the provided frames, evaluate the following {prompt_type} "
-                f"criterion:\n\n{criterion}\n\n"
-                f"Provide your evaluation as structured JSON with the following format:\n"
-                f"{{ \"{'should_stop' if is_stop_check else 'success'}\": boolean, "
-                f'"reason": "detailed explanation" }}'
-            )
-
-            """
-            # Uncomment to implement actual API call to GPT-4o or similar VLM
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                functions=[{"name": "evaluation_result", "parameters": schema}],
-                function_call={"name": "evaluation_result"}
-            )
-            
             # Parse the structured output
-            result = json.loads(response.choices[0].message.function_call.arguments)
-            return result
-            """
+            result = (
+                response.output_text.dict()
+                if hasattr(response.output_text, "dict")
+                else response.output_text
+            )
 
-            # Mock result for testing - remove when implementing actual API call
-            if is_stop_check:
-                return {
-                    "should_stop": False,
-                    "reason": "Mock response - no stop condition met",
-                }
-            else:
-                return {
-                    "success": False,
-                    "reason": "Mock response - success evaluation not implemented",
-                }
+            # If response is a string (JSON), parse it
+            if isinstance(result, str):
+                import json
+
+                result = json.loads(result)
+
+            print(f"VLM evaluation result: {result}")
+            return result
 
         except Exception as e:
             print(f"Error in VLM evaluation: {e}")
@@ -823,6 +878,45 @@ class DirectiveBenchmark:
                 return {"should_stop": False, "reason": f"Error in VLM evaluation: {e}"}
             else:
                 return {"success": False, "reason": f"Error in VLM evaluation: {e}"}
+
+    def _validate_checks(self):
+        """Validate all checks in the configuration."""
+        if not self.expectations.get("checks"):
+            return
+
+        print("Validating checks...")
+        for check in self.expectations["checks"]:
+            check_id = check.get("id")
+            check_type = check.get("type")
+
+            if not check_id or not check_type:
+                continue
+
+            # Skip checks that have already passed
+            if self.check_status.get(check_id, False):
+                continue
+
+            # Validate based on check type
+            passed = False
+            if check_type == "location":
+                passed = self._validate_location_check(check_id, check)
+            elif check_type == "primitive":
+                passed = self._validate_primitive_check(check_id, check)
+            elif check_type == "compound":
+                passed = self._validate_compound_check(check_id, check)
+            elif check_type == "sequence":
+                passed = self._validate_sequence_check(check_id, check)
+            elif check_type == "vlm_verification":
+                passed = self._validate_vlm_check(check_id, check)
+            else:
+                print(
+                    f"Warning: Unknown check type '{check_type}' for check '{check_id}'"
+                )
+                continue
+
+            # Update check status and trigger any associated messages
+            if passed:
+                self._update_check_status(check_id, True)
 
     def run(self):
         """Run the benchmark test."""
@@ -924,10 +1018,16 @@ class DirectiveBenchmark:
 
         # Run for specified duration or until stop criterion met
         stop_time = time.time() + self.duration
+        last_check_time = time.time()
+        check_interval = 15  # seconds between check validations
+
         try:
             while time.time() < stop_time and self.running:
-                # TODO: Implement periodic check validation
-                # self._validate_checks()
+                # Validate checks periodically
+                current_time = time.time()
+                if current_time - last_check_time >= check_interval:
+                    self._validate_checks()
+                    last_check_time = current_time
 
                 # Check if we should stop early
                 if self._should_stop_early():
