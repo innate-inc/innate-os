@@ -1,15 +1,8 @@
 {
     "benchmarks": [
         {
-            "name": "Basic Navigation Test",
-            "config": "benchmarks/configs/navigation.yaml",
-            "trials": 3,
-            "start_trial": 1,
-            "delay": 5
-        },
-        {
-            "name": "Object Manipulation Test",
-            "config": "benchmarks/configs/manipulation.yaml",
+            "name": "Basic Talking Test",
+            "config": "benchmarks/configs/new_example_config.yaml",
             "trials": 3,
             "start_trial": 1,
             "delay": 5
