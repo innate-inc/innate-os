@@ -619,6 +619,37 @@ class DirectiveBenchmark:
             print(f"Error: No verification prompt for VLM check '{check_id}'")
             return False
 
+        # Get time-related context for this check
+        context = f"Check ID: {check_id}\n"
+        if "description" in check_data:
+            context += f"Description: {check_data['description']}\n"
+
+        # Add timing information
+        current_time = time.time()
+        benchmark_running_time = current_time - self.metrics["start_timestamp"]
+        context += f"Current benchmark running time: {round(benchmark_running_time, 2)} seconds\n"
+
+        # Add related message information if any messages are triggered by this check
+        related_messages = []
+        for message in self.messages:
+            if (
+                message.get("trigger_type") == "check"
+                and message.get("check_id") == check_id
+            ):
+                related_messages.append(message)
+
+        if related_messages:
+            context += (
+                "Related messages that will be triggered when this check passes:\n"
+            )
+            for i, msg in enumerate(related_messages):
+                delay = msg.get("delay", 0)
+                text = msg.get("text", "")
+                context += f"  Message {i+1}: '{text}' (delay: {delay}s)\n"
+
+        # Enhanced verification prompt with context
+        enhanced_prompt = f"{context}\nVerification task: {verification_prompt}"
+
         # Get representative frames for analysis
         frames = self._get_representative_frames()
         if not frames:
@@ -628,7 +659,7 @@ class DirectiveBenchmark:
         # Evaluate using VLM
         try:
             result = self._evaluate_with_vlm(
-                verification_prompt, frames, is_stop_check=False
+                enhanced_prompt, frames, is_stop_check=False
             )
 
             # Log the result
@@ -805,47 +836,60 @@ class DirectiveBenchmark:
                 "additionalProperties": False,
             }
 
-            # Encode images to base64
-            content = []
+            # Build messages with images - proper format for OpenAI API
+            messages = []
 
-            # Add the system message
+            # Build system message
             prompt_type = "stop" if is_stop_check else "success"
-            system_prompt = (
-                f"You are an AI evaluator for robot benchmarks. You will receive frames "
-                f"showing a robot performing tasks. Evaluate whether the {prompt_type} "
-                f"criterion has been met based on the images provided."
-            )
-            content.append({"role": "system", "content": system_prompt})
+            system_message = {
+                "role": "system",
+                "content": f"You are an AI evaluator for robot benchmarks. You will receive frames "
+                f"showing a robot performing tasks and a chat log with timestamps. "
+                f"Evaluate whether the {prompt_type} criterion has been met based on "
+                f"the images provided and the chat log.",
+            }
+            messages.append(system_message)
 
-            # Build the user message with images
-            user_content = [
+            # Format the chat log for inclusion in the prompt
+            chat_log_text = ""
+            if self.chat_log:
+                chat_log_text = "Chat Log (with time_since_start in seconds):\n"
+                for msg in self.chat_log:
+                    sender = msg.get("sender", "unknown")
+                    text = msg.get("text", "")
+                    time_since_start = msg.get("time_since_start", "unknown")
+                    chat_log_text += f"[{time_since_start}s] {sender}: {text}\n"
+
+            # Build user message with text, chat log, and images
+            user_message_content = []
+
+            # First add the text part with chat log
+            user_message_content.append(
                 {
-                    "type": "text",
-                    "text": f"Based on the provided frames, evaluate the following "
-                    f"{prompt_type} criterion:\n\n{criterion}",
+                    "type": "input_text",
+                    "text": f"Based on the provided frames and chat log, evaluate the following "
+                    f"{prompt_type} criterion:\n\n{criterion}\n\n{chat_log_text}",
                 }
-            ]
+            )
 
-            # Add images to the content
+            # Then add each image
             for frame_path in frame_paths:
                 encoded_image = self._encode_image(frame_path)
                 if encoded_image:
-                    user_content.append(
+                    user_message_content.append(
                         {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{encoded_image}"
-                            },
+                            "type": "input_image",
+                            "image_url": f"data:image/jpeg;base64,{encoded_image}",
                         }
                     )
 
-            # Add the user message with all images
-            content.append({"role": "user", "content": user_content})
+            # Add user message with all content
+            messages.append({"role": "user", "content": user_message_content})
 
-            # Call the OpenAI API
+            # Call the OpenAI API with the properly formatted messages
             response = client.responses.create(
                 model="gpt-4o-2024-08-06",
-                input=content,
+                input=messages,
                 text={
                     "format": {
                         "type": "json_schema",
@@ -857,11 +901,7 @@ class DirectiveBenchmark:
             )
 
             # Parse the structured output
-            result = (
-                response.output_text.dict()
-                if hasattr(response.output_text, "dict")
-                else response.output_text
-            )
+            result = response.output_text
 
             # If response is a string (JSON), parse it
             if isinstance(result, str):
