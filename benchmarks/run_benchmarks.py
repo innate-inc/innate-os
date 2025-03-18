@@ -105,10 +105,6 @@ def run_multiple_trials(
             print(f"\nTrial #{trial_num} completed successfully")
         else:
             print(f"\nTrial #{trial_num} failed")
-            response = input("Continue with remaining trials? (y/n): ")
-            if response.lower() != "y":
-                print("Aborting remaining trials.")
-                break
 
         # Add a delay between trials to allow the system to stabilize
         if trial_num < start_trial + num_trials - 1:
