@@ -540,9 +540,6 @@ class BrainClientNode(Node):
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
                 self.ws_bridge.send_message(image_msg)
-                self.get_logger().info(
-                    "Published image message with optional depth and robot coordinates."
-                )
 
                 # Reset flags so we do not resend the same images
                 self.ready_for_image = False

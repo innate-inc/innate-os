@@ -36,7 +36,7 @@ class MessageInType(str, Enum):
     PRIMITIVE_INTERRUPTED = "primitive_interrupted"
     PRIMITIVE_FAILED = "primitive_failed"
     REGISTER_PRIMITIVES_AND_DIRECTIVE = "register_primitives_and_directive"
-    RESET = "reset"  # Reset the agent's state and history
+    RESET = "reset"
 
 
 # These types represent messages sent out by the server/agent (e.g. commands or responses)
