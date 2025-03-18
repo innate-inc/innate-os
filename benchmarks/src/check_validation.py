@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 import requests
+import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -35,15 +36,16 @@ def get_robot_position(
 
 def validate_location_check(check_id: str, check_data: Dict, **kwargs) -> bool:
     """
-    Validate if the robot is within the specified 2D location bounding box.
+    Validate if the robot was within the specified 2D location bounding box
+    at any point during the benchmark.
 
     Args:
         check_id: Identifier for the check
         check_data: Check configuration data containing coordinates [x1, y1, x2, y2]
-        **kwargs: Additional context data including base_url
+        **kwargs: Additional context data including position_history
 
     Returns:
-        True if the robot is in the specified area, False otherwise
+        True if the robot was in the specified area at any point, False otherwise
     """
     # Get coordinates from check data
     coordinates = check_data.get("coordinates")
@@ -59,48 +61,86 @@ def validate_location_check(check_id: str, check_data: Dict, **kwargs) -> bool:
     x_min, x_max = min(x1, x2), max(x1, x2)
     y_min, y_max = min(y1, y2), max(y1, y2)
 
-    # Get base URL from kwargs
-    base_url = kwargs.get("base_url", "http://localhost:8000")
+    # Get position history
+    position_history = kwargs.get("position_history", [])
+    if not position_history:
+        print(f"Warning: No position history available for check '{check_id}'")
 
-    # Get current robot position
-    robot_position = get_robot_position(base_url)
-    if not robot_position:
-        print(f"Warning: Could not get robot position for check '{check_id}'")
-        return False
+        # Fallback to current position if no history
+        base_url = kwargs.get("base_url", "http://localhost:8000")
+        current_position = get_robot_position(base_url)
+        if current_position:
+            position_history = [current_position]
+        else:
+            return False
 
-    # Check if robot is within the bounding box
-    x, y = robot_position
-    in_bounds = (x_min <= x <= x_max) and (y_min <= y <= y_max)
+    # Check if robot was within the bounding box at any point
+    for position in position_history:
+        x, y = position
+        if (x_min <= x <= x_max) and (y_min <= y <= y_max):
+            print(
+                f"Location check '{check_id}' PASSED: Robot was at ({x}, {y}), "
+                f"within bounds ({x_min}, {y_min}) to ({x_max}, {y_max})"
+            )
+            return True
 
-    if in_bounds:
-        print(
-            f"Location check '{check_id}' passed: Robot at ({x}, {y}) "
-            f"is within bounds ({x_min}, {y_min}) to ({x_max}, {y_max})"
-        )
-    else:
-        print(
-            f"Location check '{check_id}' failed: Robot at ({x}, {y}) "
-            f"is outside bounds ({x_min}, {y_min}) to ({x_max}, {y_max})"
-        )
-
-    return in_bounds
+    # If we get here, the robot was never in the bounding box
+    print(
+        f"Location check '{check_id}' FAILED: Robot never entered "
+        f"bounds ({x_min}, {y_min}) to ({x_max}, {y_max})"
+    )
+    return False
 
 
 def validate_primitive_check(check_id: str, check_data: Dict, **kwargs) -> bool:
     """
-    Validate if the specified primitive was called with appropriate arguments.
-    This is a placeholder for future implementation.
+    Simply check if the specified primitive was called in the chat logs.
+    No argument validation - just verify the primitive appears in the chat history.
 
     Args:
         check_id: Identifier for the check
         check_data: Check configuration data
-        **kwargs: Additional context data
+        **kwargs: Additional context data including chat_log
 
     Returns:
-        True if the check passes, False otherwise
+        True if the primitive was called, False otherwise
     """
-    # TODO: Implement primitive call validation using LLM for argument verification
-    print(f"Primitive check '{check_id}' - Not implemented yet")
+    primitive_name = check_data.get("primitive_name")
+    if not primitive_name:
+        print(f"Error: No primitive name specified for check '{check_id}'")
+        return False
+
+    # Get chat log from kwargs
+    chat_log = kwargs.get("chat_log", [])
+    if not chat_log:
+        print(f"Warning: No chat log available for check '{check_id}'")
+        return False
+
+    # Look for the primitive in vision_agent_output messages
+    for message in chat_log:
+        sender = message.get("sender", "")
+        text = message.get("text", "")
+
+        # Check if this is a vision agent output message
+        if sender == "vision_agent_output" and text:
+            try:
+                # Parse the JSON content
+                agent_output = json.loads(text)
+
+                # Check if there's a next_task with the specified primitive type
+                next_task = agent_output.get("next_task", {})
+                if next_task and next_task.get("type") == primitive_name:
+                    print(
+                        f"Primitive check '{check_id}' PASSED: Found '{primitive_name}'"
+                    )
+                    return True
+            except json.JSONDecodeError:
+                # If the text isn't valid JSON, just skip this message
+                continue
+
+    print(
+        f"Primitive check '{check_id}' FAILED: '{primitive_name}' not found in chat log"
+    )
     return False
 
 
@@ -256,9 +296,11 @@ def validate_checks(
     metrics: Dict,
     save_metrics_callback: callable,
     base_url: str = "http://localhost:8000",
+    position_history: List[Tuple[float, float]] = None,
 ) -> Dict[str, bool]:
     """
     Validate all checks in the configuration and return the updated status.
+    This is only called at the end of the benchmark run.
 
     Args:
         expectations: Benchmark expectations configuration
@@ -270,6 +312,7 @@ def validate_checks(
         metrics: Benchmark metrics
         save_metrics_callback: Function to save metrics
         base_url: Base URL for the API
+        position_history: List of robot positions recorded during the benchmark
 
     Returns:
         Updated check status dictionary
@@ -277,8 +320,20 @@ def validate_checks(
     if not expectations.get("checks"):
         return check_status
 
-    print("Validating checks...")
+    print("Validating all checks at the end of benchmark run...")
     updated_status = check_status.copy()
+
+    # Common kwargs to pass to all validation functions
+    validation_kwargs = {
+        "chat_log": chat_log,
+        "base_url": base_url,
+        "first_person_dir": first_person_dir,
+        "chase_dir": chase_dir,
+        "messages": messages,
+        "metrics": metrics,
+        "save_metrics_callback": save_metrics_callback,
+        "position_history": position_history or [],
+    }
 
     for check in expectations["checks"]:
         check_id = check.get("id")
@@ -294,26 +349,25 @@ def validate_checks(
         # Validate based on check type
         passed = False
         if check_type == "location":
-            passed = validate_location_check(check_id, check, base_url=base_url)
+            passed = validate_location_check(check_id, check, **validation_kwargs)
         elif check_type == "primitive":
-            passed = validate_primitive_check(check_id, check)
+            passed = validate_primitive_check(check_id, check, **validation_kwargs)
         elif check_type == "compound":
-            passed = validate_compound_check(check_id, check)
+            passed = validate_compound_check(check_id, check, **validation_kwargs)
         elif check_type == "sequence":
-            passed = validate_sequence_check(check_id, check)
+            passed = validate_sequence_check(check_id, check, **validation_kwargs)
         elif check_type == "vlm_verification":
-            # passed = validate_vlm_check(
-            #     check_id,
-            #     check,
-            #     first_person_dir,
-            #     chase_dir,
-            #     chat_log,
-            #     messages,
-            #     metrics,
-            #     save_metrics_callback,
-            # )
-            pass
-            # We pass for now because this check could have latency and we don't want it to slow the other analytical ones
+            # For VLM checks, we need to pass specific arguments
+            passed = validate_vlm_check(
+                check_id,
+                check,
+                first_person_dir,
+                chase_dir,
+                chat_log,
+                messages,
+                metrics,
+                save_metrics_callback,
+            )
         else:
             print(f"Warning: Unknown check type '{check_type}' for check '{check_id}'")
             continue
@@ -321,6 +375,16 @@ def validate_checks(
         # Update check status
         if passed:
             updated_status[check_id] = True
+            # Record the time when the check passed
+            if "start_timestamp" in metrics and metrics["start_timestamp"]:
+                current_time = time.time()
+                elapsed = current_time - metrics["start_timestamp"]
+                # Store the completion time in the metrics
+                if "check_completion_times" not in metrics:
+                    metrics["check_completion_times"] = {}
+                metrics["check_completion_times"][check_id] = elapsed
+                print(f"Check '{check_id}' completed at {elapsed:.2f} seconds")
+                save_metrics_callback()  # Save updated metrics
 
     return updated_status
 
