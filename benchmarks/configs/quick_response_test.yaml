@@ -20,6 +20,11 @@ messages:
 
 # Expectations section
 expectations:
+  checks:
+    # Location checks
+    - id: "initial_position"
+      type: "location"
+      coordinates: [1.5, -5.5, 2.5, -4.5]  # Area where human is located
   use_frames: false
   
   success_criterion: "Did the robot respond to the 'Hello how are you?' message exactly once and within 10 seconds of receiving it and only respond once?"
