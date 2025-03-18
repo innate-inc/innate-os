@@ -17,9 +17,10 @@ This document outlines the remaining implementation tasks for the agent benchmar
    - [ ] Add verification of environment setup
 
 3. **Early Stopping Implementation**
-   - [ ] Implement VLM-based verification of stop criterion
-   - [ ] Add frame selection logic for VLM analysis
-   - [ ] Implement VLM response analysis
+   - [x] Implement framework for VLM-based verification of stop criterion
+   - [ ] Add VLM API key configuration
+   - [x] Add frame selection logic for VLM analysis
+   - [ ] Complete VLM response analysis implementation
 
 ## Medium Priority Tasks
 
@@ -33,9 +34,11 @@ This document outlines the remaining implementation tasks for the agent benchmar
    - [ ] Create timeline visualization of check completions
 
 3. **VLM Integration**
-   - [ ] Implement frame selection for VLM analysis
-   - [ ] Add VLM API integration
-   - [ ] Implement response parsing and analysis
+   - [x] Implement framework for VLM analysis
+   - [x] Add placeholder for VLM API integration
+   - [ ] **IMPORTANT**: Add your VLM API key in the `_evaluate_with_vlm` method
+   - [ ] Implement image encoding for VLM API
+   - [ ] Complete response parsing and analysis
 
 ## Low Priority Tasks
 
@@ -54,28 +57,46 @@ This document outlines the remaining implementation tasks for the agent benchmar
 ## Architecture Decisions
 
 1. **VLM Integration Strategy**
-   - Determine which VLM provider to use
-   - Define standard prompting format for verification
-   - Establish frame selection criteria
+   - [x] Decided to use GPT-4o with structured JSON output
+   - [x] Defined standard prompting format for verification
+   - [x] Established frame selection criteria (alternating cameras at intervals)
 
 2. **Check Validation Frequency**
    - Decide how often to run check validations
    - Balance between validation thoroughness and performance
 
 3. **Early Stopping Criteria**
-   - Define clear rules for when benchmarks can be stopped early
-   - Ensure consistency in early stopping across different tasks
+   - [x] Implemented framework for early stopping based on VLM analysis
+   - [x] Added structured output format for stop decisions
+   - [ ] Ensure consistency in early stopping across different tasks
 
 ## Benchmark Methodology
 
 1. **Success Criteria Standardization**
-   - Establish consistent success criteria across similar tasks
-   - Ensure objective measurement where possible
+   - [x] Implemented framework for consistent success criteria evaluation
+   - [ ] Ensure objective measurement where possible
 
 2. **Task Completion Time**
-   - Decide whether to include completion time in success metrics
-   - Implement time-to-completion tracking
+   - [x] Added tracking of time_since_start in chat messages
+   - [ ] Implement time-to-completion tracking for specific checks
 
 3. **Failure Analysis**
-   - Develop methodology for analyzing and categorizing failures
-   - Implement automatic failure categorization where possible 
+   - [x] Added structured output for failure reasons in VLM responses
+   - [ ] Implement automatic failure categorization where possible
+
+## VLM API Key Setup
+
+To fully enable VLM-based verification, you need to:
+
+1. Get an API key for GPT-4o or another capable VLM
+2. Add the API key to the `_evaluate_with_vlm` method in benchmark_runner.py
+3. Uncomment the actual API call code and remove the mock response
+
+```python
+# In benchmark_runner.py:
+def _evaluate_with_vlm(self, criterion, frame_paths, is_stop_check=False):
+    # Add your API key here
+    vlm_api_key = "your_api_key_here"  # or use an environment variable
+    
+    # The rest of the implementation will use this key
+``` 

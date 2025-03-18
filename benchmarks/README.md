@@ -111,6 +111,11 @@ expectations:
       type: "sequence"
       order: ["check_id1", "check_id2", "check_id3"]
       verification_prompt: "Verification prompt"
+    
+    # VLM verification check
+    - id: "vlm_check_id"
+      type: "vlm_verification"
+      verification_prompt: "Did the robot perform a specific behavior correctly?"
 
   # Overall success criterion
   success_criterion: "VLM prompt describing what constitutes success"
@@ -139,6 +144,32 @@ expectations:
 5. **Success/Stop Criteria**: VLM prompts that determine:
    - When the benchmark is considered successful
    - When the benchmark can be stopped early
+
+## VLM Integration for Success and Stop Criteria
+
+The benchmark runner now supports using Vision-Language Models (VLMs) such as GPT-4o to evaluate success and stop criteria. This evaluation is performed by:
+
+1. **Frame Selection**: Selecting representative frames from first-person and chase cameras throughout the benchmark run.
+
+2. **Structured Output**: Using GPT-4o with structured JSON output to evaluate if criteria are met, providing a boolean result and detailed explanation.
+
+3. **Early Stopping**: Periodically checking if the stop criterion is met, allowing benchmarks to end early if completed or failed.
+
+### Setting Up VLM Integration
+
+Before using VLM integration, you need to:
+
+1. Get an API key for a capable VLM like GPT-4o
+2. Set up your key in the benchmark runner:
+   ```python
+   # In benchmark_runner.py - _evaluate_with_vlm method:
+   vlm_api_key = "your_api_key_here"  # or use environment variable
+   ```
+3. Uncomment the actual API call implementation in the same method
+
+### Time-Since-Start in Chat Logs
+
+Chat logs now include a `time_since_start` field that shows seconds elapsed since the benchmark started, making it easier to analyze response times and message timing.
 
 ## Analyzing Results
 
