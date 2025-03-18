@@ -1,6 +1,6 @@
 # src/shared_queues.py
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, List, Tuple
 import threading
 import queue
 
@@ -40,3 +40,27 @@ class SharedQueues:
         # Queues specifically for chat messages
         self.chat_to_bridge = queue.Queue(maxsize=500)
         self.chat_from_bridge = queue.Queue(maxsize=500)
+
+        # Store the latest robot position for direct access
+        # Format: [x, y, z]
+        self.latest_robot_position: List[float] = [0.0, 0.0, 0.0]
+        self.robot_position_timestamp: float = 0.0
+        self.robot_position_lock = threading.Lock()  # For thread-safe updates
+
+    def update_robot_position(
+        self, x: float, y: float, z: float, timestamp: float = None
+    ):
+        """Thread-safe method to update the robot's position"""
+        if timestamp is None:
+            import time
+
+            timestamp = time.time()
+
+        with self.robot_position_lock:
+            self.latest_robot_position = [x, y, z]
+            self.robot_position_timestamp = timestamp
+
+    def get_robot_position(self) -> Tuple[List[float], float]:
+        """Thread-safe method to get the robot's position and timestamp"""
+        with self.robot_position_lock:
+            return self.latest_robot_position.copy(), self.robot_position_timestamp
