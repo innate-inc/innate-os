@@ -68,6 +68,7 @@ ENV/
 weights/
 checkpoints/
 runs/
+ros2_ws/src/brain/manipulation/ckpts/*
 
 
 # training data
