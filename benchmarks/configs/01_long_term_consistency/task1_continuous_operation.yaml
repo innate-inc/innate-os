@@ -52,15 +52,15 @@ expectations:
     # Location checks
     - id: "kitchen_visit"
       type: "location"
-      coordinates: [12.0, 3.0, 0.0, 13.0, 4.0, 2.0]  # Kitchen area
+      coordinates: [12.0, 3.0, 13.0, 4.0]  # Kitchen area
     
     - id: "living_room_visit"
       type: "location"
-      coordinates: [8.0, 6.0, 0.0, 10.0, 8.0, 2.0]  # Living room area
+      coordinates: [8.0, 6.0, 10.0, 8.0]  # Living room area
     
     - id: "kitchen_return"
       type: "location"
-      coordinates: [12.0, 3.0, 0.0, 13.0, 4.0, 2.0]  # Kitchen area again
+      coordinates: [12.0, 3.0, 13.0, 4.0]  # Kitchen area again
     
     # Primitive checks
     - id: "describe_object"

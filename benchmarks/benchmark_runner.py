@@ -364,6 +364,7 @@ class DirectiveBenchmark:
             self.messages,
             self.metrics,
             self._save_metrics,
+            base_url=self.base_url,
         )
 
         # Handle any newly passed checks

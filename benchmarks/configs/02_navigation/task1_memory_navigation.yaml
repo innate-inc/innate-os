@@ -43,17 +43,30 @@ messages:
 expectations:
   checks:
     # Location checks
-    - id: "office_explored"
+    - id: "whiteboard_area"
       type: "location"
-      coordinates: [14.0, 7.5, 0.0, 16.0, 9.5, 2.0]  # Area where whiteboard is located
+      coordinates: [14.0, 7.5, 16.0, 9.5]  # Area where whiteboard is located
     
-    - id: "whiteboard_area_found"
+    - id: "close_to_whiteboard"
       type: "location"
-      coordinates: [14.5, 8.0, 0.0, 15.5, 9.0, 2.0]  # Closer to whiteboard
+      coordinates: [14.5, 8.0, 15.5, 9.0]  # Closer to whiteboard
     
-    - id: "return_to_start"
+    - id: "starting_point_return"
       type: "location"
-      coordinates: [4.0, 1.0, 0.0, 6.0, 3.0, 1.0]  # Starting area
+      coordinates: [4.0, 1.0, 6.0, 3.0]  # Starting area
+    
+    # Location checks for key areas
+    - id: "kitchen_visit"
+      type: "location"
+      coordinates: [12.0, 3.0, 13.0, 4.0]  # Kitchen area
+    
+    - id: "living_room_visit"
+      type: "location"
+      coordinates: [8.0, 6.0, 10.0, 8.0]  # Living room area
+    
+    - id: "bedroom_visit"
+      type: "location"
+      coordinates: [15.0, 8.0, 17.0, 10.0]  # Bedroom area
     
     # Sequence checks
     - id: "navigation_sequence"

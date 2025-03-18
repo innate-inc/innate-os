@@ -1,27 +1,89 @@
 #!/usr/bin/env python3
 import time
+import requests
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple, Optional
 
 from .vlm_utils import get_representative_frames, evaluate_with_vlm
 
 
+def get_robot_position(
+    base_url: str = "http://localhost:8000",
+) -> Optional[Tuple[float, float]]:
+    """
+    Get the current 2D position (x, y) of the robot from the API.
+
+    Args:
+        base_url: The base URL for the API
+
+    Returns:
+        Tuple containing (x, y) position or None if position cannot be retrieved
+    """
+    try:
+        response = requests.get(f"{base_url}/get_robot_position")
+        position_data = response.json()
+
+        # Extract x and y coordinates
+        if "position" in position_data and len(position_data["position"]) >= 2:
+            return (position_data["position"][0], position_data["position"][1])
+
+        return None
+    except Exception as e:
+        print(f"Error getting robot position: {e}")
+        return None
+
+
 def validate_location_check(check_id: str, check_data: Dict, **kwargs) -> bool:
     """
-    Validate if the robot is within the specified location bounding box.
-    This is a placeholder for future implementation.
+    Validate if the robot is within the specified 2D location bounding box.
 
     Args:
         check_id: Identifier for the check
-        check_data: Check configuration data
-        **kwargs: Additional context data
+        check_data: Check configuration data containing coordinates [x1, y1, x2, y2]
+        **kwargs: Additional context data including base_url
 
     Returns:
-        True if the check passes, False otherwise
+        True if the robot is in the specified area, False otherwise
     """
-    # TODO: Implement location validation using robot position data
-    print(f"Location check '{check_id}' - Not implemented yet")
-    return False
+    # Get coordinates from check data
+    coordinates = check_data.get("coordinates")
+    if not coordinates or len(coordinates) != 4:
+        print(f"Error: Invalid coordinates format for location check '{check_id}'")
+        print("Expected format: [x1, y1, x2, y2] defining a 2D bounding box")
+        return False
+
+    # Parse the coordinates for the bounding box
+    x1, y1, x2, y2 = coordinates
+
+    # Ensure x1 <= x2 and y1 <= y2
+    x_min, x_max = min(x1, x2), max(x1, x2)
+    y_min, y_max = min(y1, y2), max(y1, y2)
+
+    # Get base URL from kwargs
+    base_url = kwargs.get("base_url", "http://localhost:8000")
+
+    # Get current robot position
+    robot_position = get_robot_position(base_url)
+    if not robot_position:
+        print(f"Warning: Could not get robot position for check '{check_id}'")
+        return False
+
+    # Check if robot is within the bounding box
+    x, y = robot_position
+    in_bounds = (x_min <= x <= x_max) and (y_min <= y <= y_max)
+
+    if in_bounds:
+        print(
+            f"Location check '{check_id}' passed: Robot at ({x}, {y}) "
+            f"is within bounds ({x_min}, {y_min}) to ({x_max}, {y_max})"
+        )
+    else:
+        print(
+            f"Location check '{check_id}' failed: Robot at ({x}, {y}) "
+            f"is outside bounds ({x_min}, {y_min}) to ({x_max}, {y_max})"
+        )
+
+    return in_bounds
 
 
 def validate_primitive_check(check_id: str, check_data: Dict, **kwargs) -> bool:
@@ -193,6 +255,7 @@ def validate_checks(
     messages: List,
     metrics: Dict,
     save_metrics_callback: callable,
+    base_url: str = "http://localhost:8000",
 ) -> Dict[str, bool]:
     """
     Validate all checks in the configuration and return the updated status.
@@ -206,6 +269,7 @@ def validate_checks(
         messages: List of scheduled messages
         metrics: Benchmark metrics
         save_metrics_callback: Function to save metrics
+        base_url: Base URL for the API
 
     Returns:
         Updated check status dictionary
@@ -230,7 +294,7 @@ def validate_checks(
         # Validate based on check type
         passed = False
         if check_type == "location":
-            passed = validate_location_check(check_id, check)
+            passed = validate_location_check(check_id, check, base_url=base_url)
         elif check_type == "primitive":
             passed = validate_primitive_check(check_id, check)
         elif check_type == "compound":
@@ -238,16 +302,18 @@ def validate_checks(
         elif check_type == "sequence":
             passed = validate_sequence_check(check_id, check)
         elif check_type == "vlm_verification":
-            passed = validate_vlm_check(
-                check_id,
-                check,
-                first_person_dir,
-                chase_dir,
-                chat_log,
-                messages,
-                metrics,
-                save_metrics_callback,
-            )
+            # passed = validate_vlm_check(
+            #     check_id,
+            #     check,
+            #     first_person_dir,
+            #     chase_dir,
+            #     chat_log,
+            #     messages,
+            #     metrics,
+            #     save_metrics_callback,
+            # )
+            pass
+            # We pass for now because this check could have latency and we don't want it to slow the other analytical ones
         else:
             print(f"Warning: Unknown check type '{check_type}' for check '{check_id}'")
             continue

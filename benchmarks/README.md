@@ -91,7 +91,7 @@ expectations:
     # Location check
     - id: "location_check_id"
       type: "location"
-      coordinates: [x1, y1, z1, x2, y2, z2]  # Bounding box
+      coordinates: [x1, y1, x2, y2]  # 2D bounding box for x,y coordinates
     
     # Primitive check
     - id: "primitive_check_id"
