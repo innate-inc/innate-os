@@ -35,7 +35,60 @@ class DirectiveBenchmark:
         self.config_name = self.config.get(
             "name", os.path.basename(config_file).split(".")[0]
         )
-        self.messages = self.config.get("messages", [])
+
+        # Handle the new format messages (backward compatibility for old format)
+        self.messages = []
+        if "messages" in self.config:
+            for msg in self.config.get("messages", []):
+                # Check if this is in the new format with trigger_type
+                if "trigger_type" in msg:
+                    # Convert to internal message format
+                    if msg["trigger_type"] == "time":
+                        self.messages.append(
+                            {
+                                "time": msg["time"],
+                                "text": msg["text"],
+                                "trigger_type": "time",
+                            }
+                        )
+                    elif msg["trigger_type"] == "check":
+                        self.messages.append(
+                            {
+                                "check_id": msg["check_id"],
+                                "delay": msg.get("delay", 0),
+                                "text": msg["text"],
+                                "trigger_type": "check",
+                            }
+                        )
+                # Legacy format support
+                elif "time" in msg and "text" in msg:
+                    self.messages.append(
+                        {
+                            "time": msg["time"],
+                            "text": msg["text"],
+                            "trigger_type": "time",
+                        }
+                    )
+
+        # Environment settings (new format)
+        self.environment = self.config.get("environment", {})
+        self.env_name = self.environment.get("name", "default")
+        self.initial_parameters = self.environment.get("initial_parameters", [{}])
+
+        # Get the parameters for this trial (cycle through them)
+        if self.initial_parameters:
+            param_index = (trial_num - 1) % len(self.initial_parameters)
+            self.current_parameters = self.initial_parameters[param_index]
+        else:
+            self.current_parameters = {}
+
+        # Stop criterion (new format)
+        self.expectations = self.config.get("expectations", {})
+        self.stop_criterion = self.expectations.get("stop_criterion", None)
+
+        # Track check status for message triggers
+        self.check_status = {}
+        self.check_completion_times = {}
 
         self.trial_num = trial_num
         self.base_url = base_url
@@ -88,6 +141,8 @@ class DirectiveBenchmark:
             "config_name": self.config_name,
             "config_description": self.config.get("description", ""),
             "config_goal": self.config.get("goal", ""),
+            "environment": self.env_name,
+            "initial_parameters": self.current_parameters,
             "scheduled_messages": self.messages,
         }
 
@@ -421,26 +476,160 @@ class DirectiveBenchmark:
                 return False
 
     def _schedule_messages(self):
-        """Schedule messages to be sent at specified times."""
+        """Schedule messages to be sent at specified times or after checks pass."""
         if not self.messages:
             return
 
         print(f"Scheduling {len(self.messages)} messages...")
 
         for message in self.messages:
-            delay = message.get("time", 0)
-            text = message.get("text", "")
+            if message.get("trigger_type") == "time":
+                delay = message.get("time", 0)
+                text = message.get("text", "")
 
-            if delay >= 0 and text:
-                # Create a timer to send the message after the specified delay
-                timer = threading.Timer(delay, lambda msg=text: self._send_message(msg))
-                timer.daemon = True
-                self.message_timers.append(timer)
-                print(f"Scheduled message at {delay}s: '{text}'")
+                if delay >= 0 and text:
+                    # Create a timer to send the message after the specified delay
+                    timer = threading.Timer(
+                        delay, lambda msg=text: self._send_message(msg)
+                    )
+                    timer.daemon = True
+                    self.message_timers.append(timer)
+                    print(f"Scheduled time-based message at {delay}s: '{text}'")
 
-        # Start all timers
+            # Check-based messages will be handled when checks pass
+            elif message.get("trigger_type") == "check":
+                check_id = message.get("check_id")
+                delay = message.get("delay", 0)
+                text = message.get("text", "")
+                if check_id and text:
+                    print(
+                        f"Registered check-based message for check '{check_id}' "
+                        f"with delay {delay}s: '{text}'"
+                    )
+                    # These messages are triggered when the check passes,
+                    # handled in check validation
+
+        # Start all timers for time-based messages
         for timer in self.message_timers:
             timer.start()
+
+    def _update_check_status(self, check_id, passed):
+        """Update the status of a check and trigger any associated messages."""
+        # Record the previous status to detect transitions
+        previous_status = self.check_status.get(check_id, False)
+
+        # Update the status
+        self.check_status[check_id] = passed
+
+        # If the check just passed (transition from failed to passed)
+        if passed and not previous_status:
+            # Record when this check was completed
+            current_time = time.time()
+            self.check_completion_times[check_id] = current_time
+            print(f"Check '{check_id}' passed at time {current_time}")
+
+            # Trigger any messages associated with this check
+            for message in self.messages:
+                if (
+                    message.get("trigger_type") == "check"
+                    and message.get("check_id") == check_id
+                ):
+                    delay = message.get("delay", 0)
+                    text = message.get("text", "")
+
+                    if text:
+                        if delay > 0:
+                            # Schedule the message to be sent after the delay
+                            timer = threading.Timer(
+                                delay, lambda msg=text: self._send_message(msg)
+                            )
+                            timer.daemon = True
+                            self.message_timers.append(timer)
+                            timer.start()
+                            print(
+                                f"Scheduled check-triggered message with {delay}s "
+                                f"delay for check '{check_id}': '{text}'"
+                            )
+                        else:
+                            # Send immediately
+                            self._send_message(text)
+                            print(
+                                f"Sent immediate check-triggered message for "
+                                f"check '{check_id}': '{text}'"
+                            )
+
+    # TODO: Implement check validation methods for different check types
+    def _validate_location_check(self, check_id, check_data):
+        """
+        Validate if the robot is within the specified location bounding box.
+        This is a placeholder for future implementation.
+        """
+        # TODO: Implement location validation using robot position data
+        return False
+
+    # TODO: Implement primitive call validation
+    def _validate_primitive_check(self, check_id, check_data):
+        """
+        Validate if the specified primitive was called with appropriate arguments.
+        This is a placeholder for future implementation.
+        """
+        # TODO: Implement primitive call validation using LLM for argument verification
+        return False
+
+    # TODO: Implement compound check validation
+    def _validate_compound_check(self, check_id, check_data):
+        """
+        Validate if a primitive was called while in a specific location.
+        This is a placeholder for future implementation.
+        """
+        # TODO: Implement compound validation logic
+        return False
+
+    # TODO: Implement sequence check validation
+    def _validate_sequence_check(self, check_id, check_data):
+        """
+        Validate if a sequence of checks occurred in the specified order.
+        This is a placeholder for future implementation.
+        """
+        # TODO: Implement sequence validation logic
+        return False
+
+    # TODO: Implement VLM verification
+    def _validate_vlm_check(self, check_id, check_data):
+        """
+        Use a VLM to verify a specific aspect of the robot's behavior.
+        This is a placeholder for future implementation.
+        """
+        # TODO: Implement VLM-based verification using captured frames
+        return False
+
+    def _should_stop_early(self):
+        """
+        Check if the benchmark should stop early based on the stop criterion.
+        Currently a placeholder for future implementation.
+        """
+        if not self.stop_criterion:
+            return False
+
+        # TODO: Implement VLM-based verification of stop criterion
+        # This would involve:
+        # 1. Selecting representative frames from the benchmark so far
+        # 2. Sending them to a VLM along with the stop_criterion prompt
+        # 3. Analyzing the VLM's response to determine if the criterion is met
+
+        return False
+
+    def _validate_checks(self):
+        """
+        Validates all checks defined in the expectations.
+        This is a placeholder for future implementation.
+        """
+        # TODO: Implement periodic validation of all checks
+        # This would involve:
+        # 1. Iterating through all checks in self.expectations.get("checks", [])
+        # 2. Calling the appropriate validation method based on check type
+        # 3. Updating check status and triggering messages as needed
+        pass
 
     def run(self):
         """Run the benchmark test."""
@@ -472,6 +661,27 @@ class DirectiveBenchmark:
 
         # Save metadata
         self._save_metadata()
+
+        # Apply environment parameters (future implementation)
+        # For now, just log what would be configured
+        if self.current_parameters:
+            print(f"Environment: {self.env_name}")
+            if "robot_position" in self.current_parameters:
+                print(f"Robot position: {self.current_parameters['robot_position']}")
+            if "robot_orientation" in self.current_parameters:
+                print(
+                    f"Robot orientation: {self.current_parameters['robot_orientation']}"
+                )
+            if "object_positions" in self.current_parameters:
+                print(
+                    f"Object positions: {self.current_parameters['object_positions']}"
+                )
+
+            # TODO: Implement setting of environment parameters
+            # This would involve:
+            # 1. API calls to set robot position and orientation
+            # 2. API calls to place objects at specified positions
+            # 3. Verification that environment is set up correctly
 
         # Reset the robot
         print("Resetting robot...")
@@ -519,9 +729,18 @@ class DirectiveBenchmark:
 
         print(f"Benchmark running for {self.duration} seconds...")
 
-        # Run for specified duration
+        # Run for specified duration or until stop criterion met
+        stop_time = time.time() + self.duration
         try:
-            time.sleep(self.duration)
+            while time.time() < stop_time and self.running:
+                # TODO: Implement periodic check validation
+                # self._validate_checks()
+
+                # Check if we should stop early
+                if self._should_stop_early():
+                    print("Stop criterion met. Ending benchmark early.")
+                    break
+                time.sleep(1.0)  # Check conditions every second
         except KeyboardInterrupt:
             print("Benchmark interrupted by user.")
         finally:
