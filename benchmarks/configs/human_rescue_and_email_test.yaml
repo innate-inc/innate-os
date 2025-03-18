@@ -17,6 +17,11 @@ messages:
 
 # Expectations section
 expectations:
+  checks:
+    # Location checks
+    - id: "human_location"
+      type: "location"
+      coordinates: [14.0, 7.5, 16.0, 9.5]  # Area where human is located
   use_frames: false
   
   success_criterion: "Did the robot first go to the human and then sent an email?"
