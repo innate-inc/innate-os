@@ -151,9 +151,23 @@ The benchmark runner now supports using Vision-Language Models (VLMs) such as GP
 
 1. **Frame Selection**: Selecting representative frames from first-person and chase cameras throughout the benchmark run.
 
-2. **Structured Output**: Using GPT-4o with structured JSON output to evaluate if criteria are met, providing a boolean result and detailed explanation.
+2. **Chat Log Analysis**: Including the complete chat log with timestamps, enabling time-based evaluation of criteria.
 
-3. **Early Stopping**: Periodically checking if the stop criterion is met, allowing benchmarks to end early if completed or failed.
+3. **Structured Output**: Using GPT-4o with structured JSON output to evaluate if criteria are met, providing a boolean result and detailed explanation.
+
+4. **Early Stopping**: Periodically checking if the stop criterion is met, allowing benchmarks to end early if completed or failed.
+
+### Enhanced Context for Evaluations
+
+The VLM receives rich context for evaluations:
+
+1. **Timestamp Information**: All messages include `time_since_start` in seconds, making it easy to evaluate response times.
+
+2. **Complete Chat History**: The entire chat log is sent with each evaluation, enabling analysis of interactions.
+
+3. **Visual Information**: Representative frames from both camera views provide visual context.
+
+4. **Check-Specific Context**: When evaluating specific checks, additional context about the check is provided.
 
 ### Setting Up VLM Integration
 
@@ -184,6 +198,7 @@ To use VLM verification in your benchmark configurations:
        - id: "check_id"
          type: "vlm_verification"
          verification_prompt: "Did the robot perform X action correctly?"
+         description: "Optional description of what this check verifies"
    ```
 
 2. Define success and stop criteria as natural language prompts:
@@ -193,7 +208,7 @@ To use VLM verification in your benchmark configurations:
      stop_criterion: "Has the robot failed in a way that makes continuing pointless?"
    ```
 
-3. The benchmark runner will use these prompts with captured frames to evaluate criteria.
+3. The benchmark runner will use these prompts with captured frames and chat logs to evaluate criteria.
 
 ### Time-Since-Start in Chat Logs
 
