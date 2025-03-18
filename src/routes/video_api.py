@@ -91,6 +91,7 @@ async def reset_robot(request: Request):
     if shared_queues is not None:
         try:
             shared_queues.agent_to_sim.put_nowait(ResetRobotCmd())
+            shared_queues.sim_to_agent.put_nowait(ResetRobotCmd())
         except Exception:
             return {"status": "queue_full"}
         return {"status": "reset_enqueued"}
