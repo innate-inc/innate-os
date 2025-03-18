@@ -345,6 +345,54 @@ class DirectiveBenchmark:
             self.check_completion_times[check_id] = current_time
             print(f"Check '{check_id}' passed at time {current_time}")
 
+            # Update metrics with check details
+            if "checks" not in self.metrics:
+                self.metrics["checks"] = {}
+
+            # Find the check configuration from expectations
+            check_config = None
+            if self.expectations and "checks" in self.expectations:
+                for check in self.expectations["checks"]:
+                    if check.get("id") == check_id:
+                        check_config = check
+                        break
+
+            # Create or update the check entry in metrics
+            if check_id not in self.metrics["checks"]:
+                self.metrics["checks"][check_id] = {
+                    "passed": passed,
+                    "completion_time": current_time - self.metrics["start_timestamp"],
+                }
+
+                # Add check details if available
+                if check_config:
+                    self.metrics["checks"][check_id]["type"] = check_config.get("type")
+                    self.metrics["checks"][check_id]["description"] = check_config.get(
+                        "description", ""
+                    )
+                    # Store other configuration details
+                    self.metrics["checks"][check_id]["configuration"] = {
+                        k: v
+                        for k, v in check_config.items()
+                        if k not in ["id", "type", "description"]
+                    }
+            else:
+                # Just update passed status and completion time
+                self.metrics["checks"][check_id]["passed"] = passed
+                self.metrics["checks"][check_id]["completion_time"] = (
+                    current_time - self.metrics["start_timestamp"]
+                )
+
+            # For backwards compatibility
+            if "check_completion_times" not in self.metrics:
+                self.metrics["check_completion_times"] = {}
+            self.metrics["check_completion_times"][check_id] = (
+                current_time - self.metrics["start_timestamp"]
+            )
+
+            # Save updated metrics
+            self._save_metrics()
+
             # Trigger any messages associated with this check
             for message in self.messages:
                 if (
