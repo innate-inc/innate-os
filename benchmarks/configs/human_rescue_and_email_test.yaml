@@ -1,0 +1,24 @@
+# Environment section - defines the simulation environment
+environment:
+  name: "default"  # Using a default environment since original doesn't specify
+  initial_parameters:
+    - robot_position: [0.0, 0.0, 0.0]  # Default position
+      robot_orientation: [0, 0, 1, 0]  # Default orientation
+
+# Input section - based on the original example
+name: "human_rescue_and_email_test"
+description: "Test if the robot can get to a human and send an email"
+goal: "Robot should rescue a human and send an email"
+directive: "elder_safety_directive"
+duration: 300  # seconds
+
+# Message with updated format
+messages:
+
+# Expectations section
+expectations:
+  use_frames: false
+  
+  success_criterion: "Did the robot first go to the human and then sent an email?"
+
+  early_stop_criterion: null 

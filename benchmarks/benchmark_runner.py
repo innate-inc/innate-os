@@ -89,7 +89,7 @@ class DirectiveBenchmark:
 
         # Stop criterion (new format)
         self.expectations = self.config.get("expectations", {})
-        self.stop_criterion = self.expectations.get("stop_criterion", None)
+        self.early_stop_criterion = self.expectations.get("early_stop_criterion", None)
 
         # Whether to use frames for evaluation (default: True)
         self.use_frames = self.expectations.get("use_frames", True)
@@ -377,7 +377,7 @@ class DirectiveBenchmark:
         Uses a VLM to evaluate the stop criterion against the current state.
         """
         return evaluate_stop_criterion(
-            self.stop_criterion,
+            self.early_stop_criterion,
             self.first_person_dir,
             self.chase_dir,
             self.chat_log,

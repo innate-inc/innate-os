@@ -24,4 +24,4 @@ expectations:
   
   success_criterion: "Did the robot respond to the 'Hello how are you?' message exactly once and within 10 seconds of receiving it and only respond once?"
 
-  stop_criterion: "If it has been more than 60 seconds since the hello message was sent, we can stop the test." 
+  early_stop_criterion: "If it has been more than 60 seconds since the hello message was sent, we can stop the test." 
