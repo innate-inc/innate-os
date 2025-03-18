@@ -1,3 +1,0 @@
-[submodule "ros2_ws/src/brain/manipulation/manipulation/InnateACT"]
-	path = ros2_ws/src/brain/manipulation/manipulation/InnateACT
-	url = git@github.com:innate-inc/InnateACT.git
