@@ -59,7 +59,12 @@ def get_representative_frames(first_person_dir, chase_dir):
 
 
 def evaluate_with_vlm(
-    criterion, frame_paths, chat_log=None, metrics=None, is_stop_check=False
+    criterion,
+    frame_paths,
+    chat_log=None,
+    metrics=None,
+    is_stop_check=False,
+    print_evaluation=False,
 ):
     """
     Evaluate a criterion using a VLM model with the given frames.
@@ -198,7 +203,8 @@ def evaluate_with_vlm(
 
             result = json.loads(result)
 
-        print(f"VLM evaluation result: {result}\n\n")
+        if print_evaluation:
+            print(f"VLM evaluation result: {result}\n\n")
         return result
 
     except Exception as e:
