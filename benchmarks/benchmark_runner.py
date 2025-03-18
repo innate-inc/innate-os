@@ -506,13 +506,16 @@ class DirectiveBenchmark:
         # Note: Removed unused variables last_check_time and check_interval
         # as check validations are currently commented out
 
+        last_check_time = time.time()
+        check_interval = 1.0  # Check every second
+
         try:
             while time.time() < stop_time and self.running:
                 # Validate checks periodically
-                # current_time = time.time()
-                # if current_time - last_check_time >= check_interval:
-                #     self._validate_checks()
-                #     last_check_time = current_time
+                current_time = time.time()
+                if current_time - last_check_time >= check_interval:
+                    self._validate_checks()
+                    last_check_time = current_time
 
                 # Check if we should stop early
                 if self._should_stop_early():
