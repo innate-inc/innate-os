@@ -117,29 +117,36 @@ const loadBenchmarkData = async (benchmarkName: string): Promise<Benchmark> => {
   const trials: Trial[] = [];
   let successCount = 0;
 
-  const trialNumbers = benchmarkName === 'quick_response_test_sonnet' ? 
-    Array.from({length: 10}, (_, i) => i + 1) :
-    Array.from({length: 6}, (_, i) => i + 1);
+  const trialNumbers = Array.from({ length: 10 }, (_, i) => i + 1);
 
   for (const trialNum of trialNumbers) {
     try {
       const [metadata, metrics, chatLog] = await Promise.all([
-        fetch(`/results/${benchmarkName}/trial_${trialNum}/metadata.json`).then(r => r.json()),
-        fetch(`/results/${benchmarkName}/trial_${trialNum}/metrics.json`).then(r => r.json()),
-        fetch(`/results/${benchmarkName}/trial_${trialNum}/chat_log.json`).then(r => r.json())
+        fetch(`/results/${benchmarkName}/trial_${trialNum}/metadata.json`).then(
+          (r) => r.json()
+        ),
+        fetch(`/results/${benchmarkName}/trial_${trialNum}/metrics.json`).then(
+          (r) => r.json()
+        ),
+        fetch(`/results/${benchmarkName}/trial_${trialNum}/chat_log.json`).then(
+          (r) => r.json()
+        ),
       ]);
 
       const trial: Trial = {
         id: String(trialNum),
         success: metrics.success?.success || false,
-        reason: metrics.success?.reason || 'No reason provided',
+        reason: metrics.success?.reason || "No reason provided",
         timestamp: metadata.timestamp,
         metrics: {
-          duration: (new Date(metrics.end_time).getTime() - new Date(metrics.start_time).getTime()) / 1000,
+          duration:
+            (new Date(metrics.end_time).getTime() -
+              new Date(metrics.start_time).getTime()) /
+            1000,
           chatMessages: metrics.chat_messages,
-          frames_captured: metrics.frames_captured
+          frames_captured: metrics.frames_captured,
         },
-        chat_log: chatLog
+        chat_log: chatLog,
       };
 
       if (trial.success) successCount++;
@@ -154,14 +161,16 @@ const loadBenchmarkData = async (benchmarkName: string): Promise<Benchmark> => {
     trials,
     totalTrials: trials.length,
     successCount,
-    description: trials[0]?.metadata?.description || '',
-    goal: trials[0]?.metadata?.goal || ''
+    description: trials[0]?.metadata?.description || "",
+    goal: trials[0]?.metadata?.goal || "",
   };
 };
 
 const App: React.FC = () => {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
-  const [selectedBenchmark, setSelectedBenchmark] = useState<Benchmark | null>(null);
+  const [selectedBenchmark, setSelectedBenchmark] = useState<Benchmark | null>(
+    null
+  );
   const [selectedTrial, setSelectedTrial] = useState<Trial | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -169,17 +178,17 @@ const App: React.FC = () => {
     const loadData = async () => {
       try {
         // First get the list of benchmarks from index.json
-        const indexResponse = await fetch('/results/index.json');
+        const indexResponse = await fetch("/results/index.json");
         const indexData = await indexResponse.json();
         const benchmarkNames = indexData.benchmarks;
 
-        console.log('Loading benchmarks:', benchmarkNames);
+        console.log("Loading benchmarks:", benchmarkNames);
 
         const loadedBenchmarks = await Promise.all(
-          benchmarkNames.map(name => loadBenchmarkData(name))
+          benchmarkNames.map((name) => loadBenchmarkData(name))
         );
 
-        console.log('Loaded benchmarks:', loadedBenchmarks);
+        console.log("Loaded benchmarks:", loadedBenchmarks);
 
         setBenchmarks(loadedBenchmarks);
         if (loadedBenchmarks.length > 0) {
@@ -187,7 +196,7 @@ const App: React.FC = () => {
         }
         setLoading(false);
       } catch (error) {
-        console.error('Error loading benchmarks:', error);
+        console.error("Error loading benchmarks:", error);
         setLoading(false);
       }
     };
