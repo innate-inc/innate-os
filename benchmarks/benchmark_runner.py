@@ -91,6 +91,9 @@ class DirectiveBenchmark:
         self.expectations = self.config.get("expectations", {})
         self.stop_criterion = self.expectations.get("stop_criterion", None)
 
+        # Whether to use frames for evaluation (default: True)
+        self.use_frames = self.expectations.get("use_frames", True)
+
         # Track check status for message triggers
         self.check_status = {}
         self.check_completion_times = {}
@@ -368,7 +371,7 @@ class DirectiveBenchmark:
             if passed and not self.check_status.get(check_id, False):
                 self._update_check_status(check_id, True)
 
-    def _should_stop_early(self, use_frames=False):
+    def _should_stop_early(self):
         """
         Check if the benchmark should stop early based on the stop criterion.
         Uses a VLM to evaluate the stop criterion against the current state.
@@ -380,7 +383,7 @@ class DirectiveBenchmark:
             self.chat_log,
             self.metrics,
             self._save_metrics,
-            use_frames,
+            self.use_frames,
         )
 
     def _evaluate_final_success(self):
@@ -397,6 +400,7 @@ class DirectiveBenchmark:
             self.chase_dir,
             self.chat_log,
             self.metrics,
+            self.use_frames,
         )
 
     def run(self):
@@ -498,8 +502,8 @@ class DirectiveBenchmark:
 
         # Run for specified duration or until stop criterion met
         stop_time = time.time() + self.duration
-        last_check_time = time.time()
-        check_interval = 15  # seconds between check validations
+        # Note: Removed unused variables last_check_time and check_interval
+        # as check validations are currently commented out
 
         try:
             while time.time() < stop_time and self.running:

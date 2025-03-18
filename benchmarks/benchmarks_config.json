@@ -3,7 +3,7 @@
         {
             "name": "Basic Talking Test",
             "config": "benchmarks/configs/new_example_config.yaml",
-            "trials": 3,
+            "trials": 10,
             "start_trial": 1,
             "delay": 5
         }

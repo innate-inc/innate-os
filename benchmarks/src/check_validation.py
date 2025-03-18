@@ -278,7 +278,7 @@ def evaluate_stop_criterion(
         chat_log: List of chat messages
         metrics: Benchmark metrics
         save_metrics_callback: Function to save metrics
-        use_frames: Whether to use frames in evaluation
+        use_frames: Whether to use frames in evaluation (5 most recent if True)
 
     Returns:
         True if benchmark should stop, False otherwise
@@ -286,12 +286,12 @@ def evaluate_stop_criterion(
     if not stop_criterion:
         return False
 
-    # Get representative frames from the benchmark so far
-    frames = (
-        get_representative_frames(first_person_dir, chase_dir) if use_frames else []
-    )
-    if not frames and use_frames:
-        return False
+    # Get frames from the benchmark so far if use_frames is True
+    frames = []
+    if use_frames:
+        frames = get_representative_frames(first_person_dir, chase_dir)
+        if not frames:
+            return False
 
     # Evaluate the stop criterion using VLM
     result = evaluate_with_vlm(
@@ -336,7 +336,7 @@ def evaluate_final_success(
         chase_dir: Directory with chase frames
         chat_log: List of chat messages
         metrics: Benchmark metrics
-        use_frames: Whether to use frames in evaluation
+        use_frames: Whether to use frames in evaluation (5 most recent if True)
 
     Returns:
         Dictionary with success status and reason
@@ -344,14 +344,14 @@ def evaluate_final_success(
     if not success_criterion:
         return {"success": False, "reason": "No success criterion defined"}
 
-    # Get representative frames from the benchmark
-    frames = (
-        get_representative_frames(first_person_dir, chase_dir, comprehensive=True)
-        if use_frames
-        else []
-    )
-    if not frames and use_frames:
-        return {"success": False, "reason": "No frames available for evaluation"}
+    # Get frames from the benchmark if use_frames is True
+    frames = []
+    if use_frames:
+        frames = get_representative_frames(
+            first_person_dir, chase_dir, use_recent_frames=True
+        )
+        if not frames:
+            return {"success": False, "reason": "No frames available for evaluation"}
 
     # Evaluate the success criterion using VLM
     return evaluate_with_vlm(
