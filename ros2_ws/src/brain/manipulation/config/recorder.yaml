@@ -1,11 +1,12 @@
 # File: brain/manipulation/config/recorder.yaml
-recorder_node:
+/**:
   ros__parameters:
-    data_directory: "/home/vignesh/maurice-prod/data"       # Directory where data will be saved
-    data_frequency: 10                    # Frequency (e.g., Hz) at which data is recorded
+    data_directory: "~/maurice-prod/data"       # Directory where data will be saved
+    data_frequency: 30                    # Frequency (e.g., Hz) at which data is recorded
     image_topics:                         # List of image topic names
       - "/color/image"
       - "/image_raw"
-    arm_state_topic: "/arm/state"          # Topic for the arm state
-    leader_command_topic: "/leader/command"  # Single leader command topic
+    arm_state_topic: "/maurice_arm/state"          # Topic for the arm state
+    leader_command_topic: "/maurice_arm/commands"  # Single leader command topic
     velocity_topic: "/cmd_vel"             # Topic for velocity data
+    image_size: [640, 480]

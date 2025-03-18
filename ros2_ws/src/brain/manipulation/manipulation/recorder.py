@@ -11,9 +11,10 @@ from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge  # For image conversion
-
+import cv2
 # Import RecorderStatus message
 from brain_messages.msg import RecorderStatus
+import os
 
 class RecorderNode(Node):
     def __init__(self):
@@ -26,15 +27,16 @@ class RecorderNode(Node):
         self.declare_parameter('arm_state_topic', '/arm/state')
         self.declare_parameter('leader_command_topic', '/leader/command')
         self.declare_parameter('velocity_topic', '/cmd_vel')
+        self.declare_parameter('image_size', [640, 480])
         
         # Get parameter values
-        data_directory = self.get_parameter('data_directory').value
+        data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
         self.data_frequency = self.get_parameter('data_frequency').value
         self.image_topics = self.get_parameter('image_topics').value
         self.arm_state_topic = self.get_parameter('arm_state_topic').value
         self.leader_command_topic = self.get_parameter('leader_command_topic').value
         self.velocity_topic = self.get_parameter('velocity_topic').value
-        
+        self.image_size = self.get_parameter('image_size').value
         # Initialize TaskManager and internal state
         self.task_manager = TaskManager(data_directory)
         self.current_episode = None  # Holds an EpisodeData instance when an episode is active
@@ -55,6 +57,18 @@ class RecorderNode(Node):
         self.latest_leader_command = None
         self.latest_cmd_vel = None
         
+        # Tracking message reception for each topic.
+        # Initialize booleans for image topics and the other topics.
+        self.topics_received = {}
+        for topic in self.image_topics:
+            self.topics_received[topic] = False
+        self.topics_received[self.arm_state_topic] = False
+        self.topics_received[self.leader_command_topic] = False
+        self.topics_received[self.velocity_topic] = False
+
+        # Overall flag: True when every topic has received at least one message.
+        self.all_topics_received = False
+        
         # Create subscribers for sensor topics.
         # Subscribe to each image topic provided in the parameters.
         for topic in self.image_topics:
@@ -63,10 +77,15 @@ class RecorderNode(Node):
                 lambda msg, t=topic: self.image_callback(msg, t), 
                 10
             )
-        
         self.create_subscription(JointState, self.arm_state_topic, self.arm_state_callback, 10)
         self.create_subscription(Float64MultiArray, self.leader_command_topic, self.leader_command_callback, 10)
         self.create_subscription(Twist, self.velocity_topic, self.cmd_vel_callback, 10)
+        
+        # Log the topics it is subscribing to
+        self.get_logger().info(f"Subscribing to image topics: {self.image_topics}")
+        self.get_logger().info(f"Subscribing to arm state topic: {self.arm_state_topic}")
+        self.get_logger().info(f"Subscribing to leader command topic: {self.leader_command_topic}")
+        self.get_logger().info(f"Subscribing to velocity topic: {self.velocity_topic}")
         
         # Create service servers with updated names prefixed with "recorder/"
         self.new_task_srv = self.create_service(ManipulationTask, 'recorder/new_task', self.handle_new_task)
@@ -74,6 +93,14 @@ class RecorderNode(Node):
         self.save_episode_srv = self.create_service(Trigger, 'recorder/save_episode', self.handle_save_episode)
         self.cancel_episode_srv = self.create_service(Trigger, 'recorder/cancel_episode', self.handle_cancel_episode)
         self.end_task_srv = self.create_service(Trigger, 'recorder/end_task', self.handle_end_task)
+        
+        # Log the services it is hosting
+        self.get_logger().info("Hosting services:")
+        self.get_logger().info("  recorder/new_task")
+        self.get_logger().info("  recorder/new_episode")
+        self.get_logger().info("  recorder/save_episode")
+        self.get_logger().info("  recorder/cancel_episode")
+        self.get_logger().info("  recorder/end_task")
         
         # Create a publisher for recorder status
         self.status_pub = self.create_publisher(RecorderStatus, 'recorder/status', 10)
@@ -83,25 +110,40 @@ class RecorderNode(Node):
         
         self.get_logger().info("Recorder Node initialized in IDLE state.")
     
-    def publish_status(self, status: str, episode_number: str = "", current_task_name: str = ""):
-        msg = RecorderStatus()
-        msg.current_task_name = current_task_name if current_task_name else self.current_task_name
-        msg.episode_number = episode_number
-        msg.status = status
-        self.status_pub.publish(msg)
-    
+    def check_all_topics_received(self):
+        """Check if every subscribed topic has received at least one message."""
+        if not self.all_topics_received and all(self.topics_received.values()):
+            self.all_topics_received = True
+            self.get_logger().info("All topics have received at least one message.")
+
     # Generic image callback to store images by topic.
-    def image_callback(self, msg: Image, topic: str):
+    def image_callback(self, msg, topic: str):
         self.latest_images[topic] = msg
+        if not self.topics_received[topic]:
+            self.topics_received[topic] = True
+            self.get_logger().info(f"First message received on image topic: {topic}")
+            self.check_all_topics_received()
     
-    def arm_state_callback(self, msg: JointState):
+    def arm_state_callback(self, msg):
         self.latest_arm_state = msg
+        if not self.topics_received[self.arm_state_topic]:
+            self.topics_received[self.arm_state_topic] = True
+            self.get_logger().info(f"First message received on arm state topic: {self.arm_state_topic}")
+            self.check_all_topics_received()
 
-    def leader_command_callback(self, msg: Float64MultiArray):
+    def leader_command_callback(self, msg):
         self.latest_leader_command = msg
+        if not self.topics_received[self.leader_command_topic]:
+            self.topics_received[self.leader_command_topic] = True
+            self.get_logger().info(f"First message received on leader command topic: {self.leader_command_topic}")
+            self.check_all_topics_received()
 
-    def cmd_vel_callback(self, msg: Twist):
+    def cmd_vel_callback(self, msg):
         self.latest_cmd_vel = msg
+        if not self.topics_received[self.velocity_topic]:
+            self.topics_received[self.velocity_topic] = True
+            self.get_logger().info(f"First message received on velocity topic: {self.velocity_topic}")
+            self.check_all_topics_received()
 
     # Timer callback to record sensor data as a timestep.
     def timer_callback(self):
@@ -134,6 +176,7 @@ class RecorderNode(Node):
         for topic in self.image_topics:
             try:
                 cv_image = self.bridge.imgmsg_to_cv2(self.latest_images[topic], desired_encoding='passthrough')
+                cv_image = cv2.resize(cv_image, (self.image_size[0], self.image_size[1]))
                 images_converted.append(cv_image)
             except Exception as e:
                 self.get_logger().error(f"Error converting image from topic {topic}: {e}")
@@ -153,7 +196,7 @@ class RecorderNode(Node):
             self.publish_status(status="failed - episode active", episode_number=str(self.episode_count))
             self.current_episode = None
             self.state = "TASK_ACTIVE"
-        self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task)
+        self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
         self.current_task_name = request.task_name
         self.state = "TASK_ACTIVE"
         self.get_logger().info(f"New task '{request.task_name}' started.")
@@ -234,7 +277,11 @@ class RecorderNode(Node):
             response.success = False
             response.message = "No active episode."
             return response
+
         self.current_episode.clear()
+        # Only decrement if episode_count is greater than 0
+        if self.episode_count > 0:
+            self.episode_count -= 1
         self.get_logger().info("Episode canceled; buffered data discarded.")
         # Publish status update for cancelled episode
         episode_str = str(self.episode_count)
@@ -264,6 +311,13 @@ class RecorderNode(Node):
         response.success = True
         response.message = "Task ended."
         return response
+
+    def publish_status(self, status: str, episode_number: str = "", current_task_name: str = ""):
+        msg = RecorderStatus()
+        msg.current_task_name = current_task_name if current_task_name else self.current_task_name
+        msg.episode_number = episode_number
+        msg.status = status
+        self.status_pub.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)

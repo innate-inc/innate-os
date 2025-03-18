@@ -98,12 +98,13 @@ class EpisodeData:
         """
         Clear all buffered data.
         
-        This method resets the buffers for actions, qpos, qvel, and images.
+        This method resets the buffers for actions, qpos, qvel, and images,
+        maintaining the same camera configuration as before.
         """
         self.actions = []
         self.qpos = []
         self.qvel = []
-        self.images = {cam: [] for cam in self.camera_names}
+        self.images = {cam: [] for cam in self.camera_names} if self.camera_names else {}
     
     def get_episode_length(self):
         """
@@ -145,7 +146,7 @@ class TaskManager:
         self.metadata = None  # Will hold the task metadata
         self.episodes = []    # List of EpisodeData objects
 
-    def start_new_task(self, task_name, task_description, mobile_flag):
+    def start_new_task(self, task_name, task_description, mobile_flag, data_frequency):
         """
         Start a new task by creating a task directory and initializing metadata.
         If a task with the given name already exists (i.e., a metadata file is found),
@@ -155,6 +156,7 @@ class TaskManager:
             task_name (str): The name for the new task.
             task_description (str): A description for the task.
             mobile_flag (bool): Indicates if the task involves mobile data.
+            data_frequency (float): The frequency at which data is collected (in Hz).
         """
         self.current_task_name = task_name
         self.current_task_dir = os.path.join(self.base_data_directory, task_name)
@@ -172,6 +174,7 @@ class TaskManager:
             "task_name": task_name,
             "task_description": task_description,
             "mobile_task": mobile_flag,
+            "data_frequency": data_frequency,
             "number_of_episodes": 0,
             "episodes": []  # Will contain details for each saved episode.
         }
@@ -207,7 +210,7 @@ class TaskManager:
             end_timestamp (str): End timestamp of the episode.
         """
         # Determine new episode ID and filename.
-        episode_id = self.metadata["number_of_episodes"] + 1
+        episode_id = self.metadata["number_of_episodes"]
         file_name = f"episode_{episode_id}.h5"
         file_path = os.path.join(self.current_task_dir, file_name)
         
@@ -226,7 +229,7 @@ class TaskManager:
         self._save_metadata()
         
         # Optionally, store the episode_data object.
-        self.episodes.append(episode_data)
+        #self.episodes.append(episode_data)
 
     def end_task(self):
         """

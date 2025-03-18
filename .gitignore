@@ -3,6 +3,7 @@ build/
 install/
 log/
 dds/super_client_configuration.xml
+ros2_ws/src/brain/manipulation/ckpts/*
 
 # Python artifacts
 __pycache__/
