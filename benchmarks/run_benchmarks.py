@@ -56,12 +56,13 @@ def run_multiple_trials(
     # Check if the number of trials is a multiple of the number of parameter sets
     if num_param_sets > 1 and num_trials % num_param_sets != 0:
         print(
-            "\nWARNING: The number of trials ({}) is not a multiple of"
-            " the number of initial parameter sets ({})."
+            f"\nWARNING: The number of trials ({num_trials}) is not a multiple of"
+            f" the number of initial parameter sets ({num_param_sets})."
         )
         print("This means some parameter sets will be tested more times than others.")
         print(
-            f"Consider using a multiple of {num_param_sets} trials for balanced testing."
+            f"Consider using a multiple of {num_param_sets} trials"
+            " for balanced testing."
         )
 
         response = input("Continue anyway? (y/n): ")
@@ -72,7 +73,8 @@ def run_multiple_trials(
     print(f"Running {num_trials} trials of benchmark with config: {config_file}")
     if num_param_sets > 1:
         print(
-            f"The config has {num_param_sets} different initial parameter sets that will be cycled through."
+            f"The config has {num_param_sets} different initial parameter sets"
+            " that will be cycled through."
         )
     print(f"Starting from trial #{start_trial}")
 
@@ -199,7 +201,7 @@ def run_benchmarks_from_config(
 
         # Add a delay between benchmarks
         if i < total_benchmarks - 1:
-            print(f"\nWaiting 10 seconds before next benchmark...")
+            print("\nWaiting 10 seconds before next benchmark...")
             time.sleep(10)
 
     print(f"\n{'#'*80}")
@@ -252,7 +254,8 @@ def main():
     all_parser.add_argument(
         "--config",
         default="benchmarks/benchmarks_config.json",
-        help="Path to benchmarks configuration file (default: benchmarks/benchmarks_config.json)",
+        help="Path to benchmarks configuration file"
+        " (default: benchmarks/benchmarks_config.json)",
     )
 
     # Common arguments for both commands
@@ -277,6 +280,7 @@ def main():
         if os.path.exists("benchmarks/benchmarks_config.json"):
             args.command = "all"
             args.config = "benchmarks/benchmarks_config.json"
+            # Set default values for common arguments
             args.url = "http://localhost:8000"
             args.interval = 1.0
         else:
