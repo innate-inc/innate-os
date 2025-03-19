@@ -229,12 +229,26 @@ async def outbound_loop(ws, shared_queues):
                 await ws.send(json.dumps(outbound))
                 print(f"[ROSBridge] Published directive: {msg.directive}")
             elif isinstance(msg, ResetRobotCmd):
-                # Call the /reset_brain service with Trigger service type
                 reset_srv = rosbridge_call_service(
-                    "/reset_brain", "std_srvs/srv/Trigger"
+                    "/reset_brain", "brain_messages/srv/ResetBrain"
                 )
+
+                # Set the memory_state parameter directly (empty string if none provided)
+                # Using dict for clarity when working with the service call params
+                memory_state = ""
+                if msg.memory_state:
+                    memory_state = msg.memory_state
+
+                # This is the correct way to format args for the service call in rosbridge
+                reset_srv["args"] = {"memory_state": memory_state}
+
+                if memory_state:
+                    print(f"[ROSBridge] Reset with memory state: {memory_state}")
+                else:
+                    print("[ROSBridge] Reset without memory state")
+
                 await ws.send(json.dumps(reset_srv))
-                print("[ROSBridge] Called /reset_brain service")
+
         except queue.Empty:
             # no messages to publish right now
             pass

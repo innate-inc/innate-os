@@ -2,10 +2,17 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 import time
 import cv2
+from typing import Optional
+from pydantic import BaseModel
 
 from src.agent.types import ResetRobotCmd, DirectiveCmd
 
 router = APIRouter()
+
+
+# Create a model for the reset robot request
+class ResetRobotRequest(BaseModel):
+    memory_state: Optional[str] = None
 
 
 def mjpeg_generator(shared_queues, camera_name="first_person"):
@@ -118,19 +125,32 @@ def get_robot_position(request: Request):
 
 
 @router.post("/reset_robot")
-async def reset_robot(request: Request):
+async def reset_robot(
+    request: Request, reset_request: Optional[ResetRobotRequest] = None
+):
     """
     Enqueues a reset command to move the robot back to its origin.
+    Optionally specifies a memory state to load.
     Retrieves the shared queues from the application's state.
+
+    The memory_state can be specified in the JSON body:
+    {"memory_state": "init_mem_human_rescue_and_email_test"}
     """
     shared_queues = request.app.state.SHARED_QUEUES
+
+    # Get memory_state from request body if provided
+    memory_state = None
+    if reset_request is not None:
+        memory_state = reset_request.memory_state
+
     if shared_queues is not None:
         try:
-            shared_queues.agent_to_sim.put_nowait(ResetRobotCmd())
-            shared_queues.sim_to_agent.put_nowait(ResetRobotCmd())
+            reset_cmd = ResetRobotCmd(memory_state=memory_state)
+            shared_queues.agent_to_sim.put_nowait(reset_cmd)
+            shared_queues.sim_to_agent.put_nowait(reset_cmd)
         except Exception:
             return {"status": "queue_full"}
-        return {"status": "reset_enqueued"}
+        return {"status": "reset_enqueued", "memory_state": memory_state}
     else:
         return {"status": "no_shared_queues"}
 
