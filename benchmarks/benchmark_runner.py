@@ -221,9 +221,30 @@ class DirectiveBenchmark:
             return False
 
     def _reset_robot(self):
-        """Reset the robot to its starting position."""
+        """
+        Reset the robot to its starting position.
+        If init_memory is specified in the config, it will be used to
+        initialize robot memory.
+        """
         try:
-            response = requests.post(f"{self.base_url}/reset_robot")
+            # Check if init_memory is present in the config
+            memory_state = self.config.get("init_memory")
+
+            # Use the requests library to send a POST request with proper JSON
+            headers = {"Content-Type": "application/json"}
+
+            if memory_state:
+                print(f"Resetting robot with memory state: {memory_state}")
+                data = {"memory_state": memory_state}
+                response = requests.post(
+                    f"{self.base_url}/reset_robot", json=data, headers=headers
+                )
+            else:
+                # Even with no memory state, still send proper JSON format
+                response = requests.post(
+                    f"{self.base_url}/reset_robot", json={}, headers=headers
+                )
+
             return response.json().get("status") == "reset_enqueued"
         except Exception as e:
             print(f"Error resetting robot: {e}")
