@@ -10,7 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(maurice_msgs REQUIRED)
-
+find_package(rosbridge_server REQUIRED)
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
 
