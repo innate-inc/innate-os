@@ -1,15 +1,8 @@
 {
     "benchmarks": [
         {
-            "name": "Basic Talking Test",
-            "config": "benchmarks/configs/quick_response_test.yaml",
-            "trials": 1,
-            "start_trial": 1,
-            "delay": 5
-        },
-        {
-            "name": "Send Email on Request",
-            "config": "benchmarks/configs/send_email_on_request.yaml",
+            "name": "Human Rescue and Email Test",
+            "config": "benchmarks/configs/human_rescue_and_email_test.yaml",
             "trials": 1,
             "start_trial": 1,
             "delay": 5
