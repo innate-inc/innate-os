@@ -73,10 +73,19 @@ class VelocityCmd(NamedTuple):
 
 class ResetRobotCmd:
     """
-    A simple command telling the simulator to reset the robot's pose to the origin.
+    A command telling the simulator to reset the robot's pose to the origin.
+    Optionally includes memory state information to be loaded by the robot.
     """
 
-    pass
+    def __init__(self, memory_state: str = None):
+        """
+        Initialize a reset command with optional memory state information.
+
+        Args:
+            memory_state: Identifier for the memory state to load,
+                         e.g., "init_mem_human_rescue_and_email_test"
+        """
+        self.memory_state = memory_state
 
 
 class DirectiveCmd(NamedTuple):

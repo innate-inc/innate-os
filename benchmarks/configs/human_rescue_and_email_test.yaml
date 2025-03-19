@@ -12,6 +12,9 @@ goal: "Robot should rescue a human and send an email"
 directive: "elder_safety_directive"
 duration: 300  # seconds
 
+# Initial memory state to load
+init_memory: "init_mem_human_rescue_and_email_test"
+
 # Message with updated format
 messages: []
 
