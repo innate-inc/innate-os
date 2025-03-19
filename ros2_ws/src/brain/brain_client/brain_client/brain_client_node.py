@@ -31,7 +31,8 @@ from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
-from std_srvs.srv import SetBool, Trigger
+from brain_messages.srv import ResetBrain
+from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
 
@@ -168,7 +169,7 @@ class BrainClientNode(Node):
 
         # Create service for resetting the brain
         self.reset_srv = self.create_service(
-            Trigger, "/reset_brain", self.handle_reset_brain
+            ResetBrain, "/reset_brain", self.handle_reset_brain
         )
 
         self.exit_event = threading.Event()
@@ -760,6 +761,10 @@ class BrainClientNode(Node):
         Sends a reset message to the agent in the cloud and wipes the local history.
         """
         self.get_logger().info("\033[1;92m[BrainClient] Resetting brain\033[0m")
+        memory_state = request.memory_state
+        self.get_logger().info(
+            f"\033[1;92m[BrainClient] Memory state: {memory_state}\033[0m"
+        )
 
         # Clear local chat history
         self.chat_history = []
@@ -778,13 +783,15 @@ class BrainClientNode(Node):
             self.cmd_vel_pub.publish(stop_cmd)
 
         # Send reset message to the agent in the cloud
-        reset_msg = MessageIn(type=MessageInType.RESET, payload={})
+        reset_msg = MessageIn(
+            type=MessageInType.RESET, payload={"memory_state": memory_state}
+        )
         self.ws_bridge.send_message(reset_msg)
 
         # Publish a system message to the chat
         chat_entry = {
             "sender": "system",
-            "text": "Brain has been reset",
+            "text": f"Brain has been reset with memory state: {memory_state}",
             "timestamp": time.time(),
         }
         self.chat_history.append(chat_entry)
@@ -795,7 +802,6 @@ class BrainClientNode(Node):
         self.register_primitives_and_directive()
 
         response.success = True
-        response.message = "Brain has been reset successfully"
         return response
 
     def destroy_node(self):

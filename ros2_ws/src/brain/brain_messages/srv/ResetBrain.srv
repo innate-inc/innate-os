@@ -1,0 +1,7 @@
+# brain_messages/srv/ResetBrain.srv
+
+# Request
+string memory_state
+---
+# Response
+bool success
