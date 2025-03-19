@@ -42,7 +42,7 @@ def generate_launch_description():
     # Frame names for the TF chain:
     # - base_link: robot base
     # - camera_link: will receive the measured offset from base_link (via static publisher)
-    # - oak_d_base: defined in the URDF as the camera’s mounting frame relative to camera_link (zero offset)
+    # - oak_d_base: defined in the URDF as the camera's mounting frame relative to camera_link (zero offset)
     declare_base_link = DeclareLaunchArgument(
         'base_link', default_value='base_link',
         description='Robot base frame.')
@@ -57,13 +57,13 @@ def generate_launch_description():
     # Measured Offset Arguments (for static transform publisher)
     # -------------------------------------------------------
     declare_measured_cam_pos_x = DeclareLaunchArgument(
-        'measured_cam_pos_x', default_value='0.0197',
+        'measured_cam_pos_x', default_value='0.01039',
         description='Measured camera X offset from base_link in meters.')
     declare_measured_cam_pos_y = DeclareLaunchArgument(
-        'measured_cam_pos_y', default_value='0.0',
+        'measured_cam_pos_y', default_value='0.00708',
         description='Measured camera Y offset from base_link in meters.')
     declare_measured_cam_pos_z = DeclareLaunchArgument(
-        'measured_cam_pos_z', default_value='0.19663',
+        'measured_cam_pos_z', default_value='0.1976',
         description='Measured camera Z offset from base_link in meters.')
     declare_measured_cam_roll = DeclareLaunchArgument(
         'measured_cam_roll', default_value='0.0',
