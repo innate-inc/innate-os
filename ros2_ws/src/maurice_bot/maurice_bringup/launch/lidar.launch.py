@@ -11,16 +11,16 @@ def generate_launch_description():
     )
 
     # Node to publish a static transform from base_link to laser_frame.
-    # Translations are in meters: X = -0.07055, Y = 0.0, Z = 0.16018.
-    # No rotation is applied (roll, pitch, yaw are all 0).
+    # Translations are in meters, converted from millimeters:
+    # X = -76.4mm = -0.0764m, Y = 0mm = 0.0m, Z = 171.65mm = 0.17165m
     static_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='lidar_tf',  # Updated node name here
+        name='lidar_tf',
         arguments=[
-            "-0.07055", "0.0", "0.16018",  # Translation: X, Y, Z (in meters)
+            "-0.0764", "0.0", "0.17165",  # Translation: X, Y, Z (in meters)
             "0", "0", "0",                # Rotation: roll, pitch, yaw (in radians)
-            "base_link", "base_scan"     # Parent and child frames
+            "base_link", "base_scan"      # Parent and child frames
         ]
     )
 
