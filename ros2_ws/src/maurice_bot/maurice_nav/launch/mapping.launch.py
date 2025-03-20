@@ -13,19 +13,19 @@ from lifecycle_msgs.msg import Transition
 
 
 def generate_launch_description():
-    # Define launch configurations for autostart, lifecycle manager, and sim time.
+    # Launch configurations for autostart, lifecycle manager, and sim time.
     autostart = LaunchConfiguration('autostart')
     use_lifecycle_manager = LaunchConfiguration("use_lifecycle_manager")
     use_sim_time = LaunchConfiguration('use_sim_time')
 
-    # Get the parameter file from the package share directory
+    # Get the parameter file from the package share directory.
     slam_params_file = os.path.join(
         get_package_share_directory("maurice_nav"),
         'config',
         'mapping_params_init.yaml'
     )
 
-    # Declare launch arguments for autostart, lifecycle manager, and sim time.
+    # Declare launch arguments.
     declare_autostart_cmd = DeclareLaunchArgument(
         'autostart',
         default_value='true',
@@ -56,6 +56,7 @@ def generate_launch_description():
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
+        namespace='',  # Added required namespace parameter.
         output='screen'
     )
 
@@ -85,7 +86,6 @@ def generate_launch_description():
         condition=IfCondition(AndSubstitution(autostart, NotSubstitution(use_lifecycle_manager)))
     )
 
-    # Create and populate the launch description.
     ld = LaunchDescription()
 
     ld.add_action(declare_autostart_cmd)
