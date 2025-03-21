@@ -1,0 +1,51 @@
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    filter_duration: 0.3
+
+    # Use your custom Behavior Tree XML for navigate-to-pose
+    default_nav_to_pose_bt_xml: "/home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_nav/config/nav_to_pose.xml"
+    
+    always_reload_bt_xml: false
+    goal_blackboard_id: goal
+    path_blackboard_id: path
+
+    # Only need the navigate_to_pose navigator
+    navigators: ['navigate_to_pose']
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator/NavigateToPoseNavigator"
+
+    # Plugin libraries used by the BT nodes
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+
+    # Error code prefixes can help with recovery logging
+    error_code_name_prefixes:
+      - nav_to_pose
+      - follow_path
+      - backup
+      - spin
+      - wait

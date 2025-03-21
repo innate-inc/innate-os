@@ -79,8 +79,17 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'autostart': True,
-            'node_names': ['map_server', 'amcl', 'planner_server', 'controller_server']
+            'node_names': ['map_server', 'amcl', 'planner_server', 'controller_server', 'bt_navigator']
         }]
+    )
+
+    # Create the BT Navigator node
+    bt_navigator_node = Node(
+        package='nav2_bt_navigator',
+        executable='bt_navigator',
+        name='bt_navigator',
+        output='screen',
+        parameters=[os.path.join(share_dir, 'config', 'bt_navigator.yaml')]
     )
 
     return LaunchDescription([
@@ -90,5 +99,6 @@ def generate_launch_description():
         amcl_node,
         planner_node,
         controller_node,
+        bt_navigator_node,
         lifecycle_manager_node
     ])
