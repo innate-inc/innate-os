@@ -6,6 +6,7 @@ string inputs
 bool success
 string message
 string primitive_type
+string success_type  # One of: "success", "cancelled", "failure"
 ---
 # Feedback definition
 string primitive_type

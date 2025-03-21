@@ -23,6 +23,7 @@ from brain_client.message_types import (
     TaskType,
     VisionAgentOutput,
 )
+from brain_client.primitives.types import PrimitiveResult
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
@@ -410,7 +411,7 @@ class BrainClientNode(Node):
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
-            self.primitive_running = None
+
             # Cancel the current goal if it exists
             if self._goal_handle is not None:
                 self.get_logger().info(
@@ -583,10 +584,8 @@ class BrainClientNode(Node):
 
     def cancel_response_callback(self, future):
         """Handle the response from a cancel_goal_async request."""
+        # This is not REALLY necessary, but for logging purposes it's nice to have.
         cancel_response = future.result()
-        # In ROS2, CancelGoal_Response has return_code instead of accepted
-        # Check if the return_code is SUCCESS (1)
-        self.get_logger().warn(f"Cancel response: {cancel_response}")
 
         # Check if any goals were canceled, following the ROS2 example
         if (
@@ -595,7 +594,7 @@ class BrainClientNode(Node):
         ):
             self.get_logger().debug("Goal cancellation accepted.")
         else:
-            self.get_logger().debug("Goal cancellation rejected.")
+            self.get_logger().error("Goal cancellation rejected.")
 
     def get_result_callback(self, future):
         result = future.result().result
@@ -623,16 +622,29 @@ class BrainClientNode(Node):
         if self.primitive_running:
             primitive_id = self.primitive_running["primitive_id"]
 
+        # Check the success_type field to determine the appropriate message type
+        self.get_logger().info(f"Primitive result: {result}")
         if result.success:
-            self.primitive_running = None
-            outgoing_msg = MessageIn(
-                type=MessageInType.PRIMITIVE_COMPLETED,
-                payload={
-                    "primitive_name": result.primitive_type,
-                    "primitive_id": primitive_id,
-                },
-            )
-            self.ws_bridge.send_message(outgoing_msg)
+            if result.success_type == PrimitiveResult.SUCCESS.value:
+                self.primitive_running = None
+                outgoing_msg = MessageIn(
+                    type=MessageInType.PRIMITIVE_COMPLETED,
+                    payload={
+                        "primitive_name": result.primitive_type,
+                        "primitive_id": primitive_id,
+                    },
+                )
+                self.ws_bridge.send_message(outgoing_msg)
+            elif result.success_type == PrimitiveResult.CANCELLED.value:
+                self.primitive_running = None
+                outgoing_msg = MessageIn(
+                    type=MessageInType.PRIMITIVE_INTERRUPTED,
+                    payload={
+                        "primitive_name": result.primitive_type,
+                        "primitive_id": primitive_id,
+                    },
+                )
+                self.ws_bridge.send_message(outgoing_msg)
         elif not result.success:
             self.primitive_running = None
             outgoing_msg = MessageIn(
@@ -644,6 +656,8 @@ class BrainClientNode(Node):
                 },
             )
             self.ws_bridge.send_message(outgoing_msg)
+        else:
+            self.get_logger().error(f"Unknown primitive result: {result}")
 
     def _handle_primitives_and_directive_registered(self, msg):
         """

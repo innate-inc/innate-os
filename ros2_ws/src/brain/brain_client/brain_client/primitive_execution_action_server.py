@@ -92,14 +92,21 @@ class PrimitiveExecutionActionServer(Node):
         except Exception as e:
             self.get_logger().error(f"Invalid JSON for inputs: {str(e)}")
             goal_handle.abort()
-            return ExecutePrimitive.Result(success=False, message="Invalid inputs JSON")
+            return ExecutePrimitive.Result(
+                success=False,
+                message="Invalid inputs JSON",
+                success_type=PrimitiveResult.FAILURE.value,
+            )
 
         primitive_type = goal_handle.request.primitive_type
         if primitive_type not in self._primitives:
             self.get_logger().error(f"Primitive '{primitive_type}' not available")
             goal_handle.abort()
             return ExecutePrimitive.Result(
-                success=False, message="Primitive not available"
+                success=False,
+                message="Primitive not available",
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.FAILURE.value,
             )
 
         primitive = self._primitives[primitive_type]
@@ -118,7 +125,10 @@ class PrimitiveExecutionActionServer(Node):
                 )
                 goal_handle.succeed()
                 return ExecutePrimitive.Result(
-                    success=True, message=result_message, primitive_type=primitive_type
+                    success=True,
+                    message=result_message,
+                    primitive_type=primitive_type,
+                    success_type=PrimitiveResult.SUCCESS.value,
                 )
             elif result_status == PrimitiveResult.CANCELLED:
                 self.get_logger().info(
@@ -126,7 +136,10 @@ class PrimitiveExecutionActionServer(Node):
                 )
                 goal_handle.canceled()
                 return ExecutePrimitive.Result(
-                    success=True, message=result_message, primitive_type=primitive_type
+                    success=True,
+                    message=result_message,
+                    primitive_type=primitive_type,
+                    success_type=PrimitiveResult.CANCELLED.value,
                 )
             else:  # PrimitiveResult.FAILURE
                 self.get_logger().info(
@@ -134,13 +147,21 @@ class PrimitiveExecutionActionServer(Node):
                 )
                 goal_handle.abort()
                 return ExecutePrimitive.Result(
-                    success=False, message=result_message, primitive_type=primitive_type
+                    success=False,
+                    message=result_message,
+                    primitive_type=primitive_type,
+                    success_type=PrimitiveResult.FAILURE.value,
                 )
 
         except Exception as e:
             self.get_logger().error(f"Error executing primitive: {str(e)}")
             goal_handle.abort()
-            return ExecutePrimitive.Result(success=False, message=str(e))
+            return ExecutePrimitive.Result(
+                success=False,
+                message=str(e),
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.FAILURE.value,
+            )
 
     def destroy(self):
         self._action_server.destroy()
