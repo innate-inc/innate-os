@@ -14,6 +14,7 @@ def generate_launch_description():
     # Get the share directory of the maurice_nav package where the AMCL config is stored
     maurice_nav_share_dir = get_package_share_directory('maurice_nav')
     amcl_params_file = os.path.join(maurice_nav_share_dir, 'config', 'amcl.yaml')
+    costmap_params_file = os.path.join(maurice_nav_share_dir, 'config', 'costmap.yaml')
     
     # Declare launch arguments so that these paths can be overridden if needed
     map_arg = DeclareLaunchArgument(
@@ -25,6 +26,11 @@ def generate_launch_description():
         'amcl_params_file',
         default_value=amcl_params_file,
         description='Full path to the AMCL parameters file'
+    )
+    costmap_params_arg = DeclareLaunchArgument(
+        'costmap_params_file',
+        default_value=costmap_params_file,
+        description='Full path to the costmap parameters file'
     )
     
     # Launch the map server node which loads and publishes the map
@@ -45,6 +51,24 @@ def generate_launch_description():
         parameters=[LaunchConfiguration('amcl_params_file')]
     )
     
+    # Global costmap node
+    global_costmap_node = Node(
+        package='nav2_costmap_2d',
+        executable='costmap_2d_node',
+        name='global_costmap',
+        output='screen',
+        parameters=[LaunchConfiguration('costmap_params_file')]
+    )
+
+    # Local costmap node
+    local_costmap_node = Node(
+        package='nav2_costmap_2d',
+        executable='costmap_2d_node',
+        name='local_costmap',
+        output='screen',
+        parameters=[LaunchConfiguration('costmap_params_file')]
+    )
+    
     # Add the lifecycle manager to automatically transition the nodes
     lifecycle_manager_node = Node(
         package='nav2_lifecycle_manager',
@@ -53,15 +77,18 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'autostart': True,
-            'node_names': ['map_server', 'amcl']
+            'node_names': ['map_server', 'amcl', 'global_costmap', 'local_costmap']
         }]
     )
     
     return LaunchDescription([
         map_arg,
         amcl_params_arg,
+        costmap_params_arg,
         map_server_node,
         amcl_node,
+        global_costmap_node,
+        local_costmap_node,
         lifecycle_manager_node
     ])
 
