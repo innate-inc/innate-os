@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>maurice_nav</name>
-  <version>0.0.0</version>
+  <version>0.0.1</version>
   <description>A ROS2 navigation package using Python</description>
   <maintainer email="you@example.com">Your Name</maintainer>
   <license>Apache License 2.0</license>
@@ -16,4 +16,8 @@
   <!-- Lint and testing dependencies -->
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
 </package>
