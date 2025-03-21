@@ -30,4 +30,23 @@ install(
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install Python scripts/programs
+install(PROGRAMS
+  maurice_nav/__init__.py
+  # Add more scripts as needed
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install package.xml
+install(
+  FILES package.xml
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# Install package.xml for package indexing
+install(
+  FILES package.xml
+  DESTINATION share/ament_index/resource_index/packages
+)
+
 ament_package()
