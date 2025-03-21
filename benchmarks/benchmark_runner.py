@@ -29,6 +29,7 @@ class DirectiveBenchmark:
         trial_num=1,
         base_url="http://localhost:8000",
         frame_capture_interval=1.0,  # seconds between frame captures
+        variant=None,  # Gemini variant to use
     ):
         # Load configuration
         with open(config_file, "r") as f:
@@ -40,6 +41,8 @@ class DirectiveBenchmark:
         self.config_name = self.config.get(
             "name", os.path.basename(config_file).split(".")[0]
         )
+        # Store the variant to use
+        self.variant = variant
 
         # Handle the new format messages (backward compatibility for old format)
         self.messages = []
@@ -159,6 +162,7 @@ class DirectiveBenchmark:
             "environment": self.env_name,
             "initial_parameters": self.current_parameters,
             "scheduled_messages": self.messages,
+            "variant": self.variant,
         }
 
         with open(self.output_dir / "metadata.json", "w") as f:
@@ -606,6 +610,18 @@ class DirectiveBenchmark:
         # Wait for reset to complete
         time.sleep(2)
 
+        # If a variant is specified, send a message to switch to it
+        if self.variant:
+            variant_message = f"!gemini {self.variant}"
+            print(f"Sending variant switch message: {variant_message}")
+
+            # Send the variant switch message
+            self.websocket_manager.send_message(variant_message)
+
+            # Wait for the switch to take effect
+            print("Waiting 3 seconds for variant switch to take effect...")
+            time.sleep(3)
+
         # Send directive
         print(f"Sending directive: '{self.directive}'")
         if not self._send_directive():
@@ -724,6 +740,10 @@ def main():
         default=1.0,
         help="Frame capture interval in seconds (default: 1.0)",
     )
+    parser.add_argument(
+        "--variant",
+        help="Gemini variant to use",
+    )
 
     args = parser.parse_args()
 
@@ -732,6 +752,7 @@ def main():
         trial_num=args.trial,
         base_url=args.url,
         frame_capture_interval=args.interval,
+        variant=args.variant,
     )
 
     benchmark.run()
