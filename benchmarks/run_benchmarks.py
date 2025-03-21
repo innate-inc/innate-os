@@ -8,7 +8,9 @@ import yaml
 import json
 
 
-def run_benchmark(config_file, trial=1, base_url="http://localhost:8000", interval=1.0):
+def run_benchmark(
+    config_file, trial=1, base_url="http://localhost:8000", interval=1.0, variant=None
+):
     """Run a single benchmark with the given config file."""
     cmd = [
         "python",
@@ -23,9 +25,15 @@ def run_benchmark(config_file, trial=1, base_url="http://localhost:8000", interv
         str(interval),
     ]
 
+    # Add variant parameter if provided
+    if variant:
+        cmd.extend(["--variant", variant])
+
     config_name = os.path.basename(config_file)
     print(f"\n{'='*80}")
     print(f"Running benchmark: '{config_name}' (Trial {trial})")
+    if variant:
+        print(f"Using variant: {variant}")
     print(f"{'='*80}\n")
 
     try:
@@ -40,7 +48,13 @@ def run_benchmark(config_file, trial=1, base_url="http://localhost:8000", interv
 
 
 def run_multiple_trials(
-    config_file, num_trials, base_url, interval, start_trial=1, delay_between_trials=5
+    config_file,
+    num_trials,
+    base_url,
+    interval,
+    start_trial=1,
+    delay_between_trials=5,
+    variant=None,
 ):
     """
     Run multiple trials of a benchmark in sequence
@@ -71,6 +85,8 @@ def run_multiple_trials(
             return False
 
     print(f"Running {num_trials} trials of benchmark with config: {config_file}")
+    if variant:
+        print(f"Using variant: {variant}")
     if num_param_sets > 1:
         print(
             f"The config has {num_param_sets} different initial parameter sets"
@@ -98,6 +114,7 @@ def run_multiple_trials(
             trial=trial_num,
             base_url=base_url,
             interval=interval,
+            variant=variant,
         )
 
         if success:
@@ -169,6 +186,7 @@ def run_benchmarks_from_config(
         trials = benchmark.get("trials", 1)
         start_trial = benchmark.get("start_trial", 1)
         delay = benchmark.get("delay", 5)
+        variants = benchmark.get("variants", None)
 
         if not config_path:
             print("Error: Missing 'config' path in benchmark definition.")
@@ -182,18 +200,76 @@ def run_benchmarks_from_config(
             print(f"Error: Config file does not exist: {config_path}")
             continue
 
-        # Run the benchmark with specified number of trials
-        success = run_multiple_trials(
-            config_file=config_path,
-            num_trials=trials,
-            base_url=base_url,
-            interval=interval,
-            start_trial=start_trial,
-            delay_between_trials=delay,
-        )
+        # If variants is specified, run the benchmark for each variant
+        if variants and len(variants) > 0:
+            variants_str = ", ".join(variants)
+            print(f"Testing with {len(variants)} variants: {variants_str}")
+            total_trials = trials * len(variants)
+            print(
+                f"Will run a total of {total_trials} trials "
+                f"({trials} trials per variant)"
+            )
 
-        if success:
-            successful_benchmarks += 1
+            variant_successful_trials = 0
+            current_trial = start_trial
+
+            for variant_idx, variant in enumerate(variants):
+                print(f"\n{'='*60}")
+                print(
+                    f"RUNNING WITH VARIANT: {variant} "
+                    f"({variant_idx+1}/{len(variants)})"
+                )
+                print(f"{'='*60}\n")
+
+                # If not the first variant, we need to wait a bit
+                # to ensure system stability before switching variants
+                if variant_idx > 0:
+                    wait_msg = "Waiting 10 seconds before switching to next variant..."
+                    print(wait_msg)
+                    time.sleep(10)
+
+                # Run the benchmark with specified number of trials for this variant
+                success = run_multiple_trials(
+                    config_file=config_path,
+                    num_trials=trials,
+                    base_url=base_url,
+                    interval=interval,
+                    start_trial=current_trial,
+                    delay_between_trials=delay,
+                    variant=variant,
+                )
+
+                if success:
+                    variant_successful_trials += trials
+
+                # Update the current trial for the next variant
+                current_trial += trials
+
+            # Check if all trials across all variants were successful
+            if variant_successful_trials == total_trials:
+                successful_benchmarks += 1
+
+            print(f"\n{'='*60}")
+            print(
+                f"COMPLETED {variant_successful_trials} OUT OF {total_trials} "
+                f"TRIALS ACROSS ALL VARIANTS"
+            )
+            print(f"{'='*60}")
+
+        else:
+            # Run the benchmark normally with specified number of trials
+            success = run_multiple_trials(
+                config_file=config_path,
+                num_trials=trials,
+                base_url=base_url,
+                interval=interval,
+                start_trial=start_trial,
+                delay_between_trials=delay,
+                variant=None,
+            )
+
+            if success:
+                successful_benchmarks += 1
 
         # Add a delay between benchmarks
         if i < total_benchmarks - 1:
@@ -292,6 +368,7 @@ def main():
             interval=args.interval,
             start_trial=args.start,
             delay_between_trials=args.delay,
+            variant=None,
         )
     elif args.command == "all":
         run_benchmarks_from_config(
