@@ -8,8 +8,9 @@ bt_navigator:
 
     # Use your custom Behavior Tree XML for navigate-to-pose
     default_nav_to_pose_bt_xml: "/home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_nav/config/nav_to_pose.xml"
-    
-    always_reload_bt_xml: false
+    default_nav_through_poses_bt_xml: "/home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_nav/config/nav_through_poses.xml"
+
+    always_reload_bt_xml: true
     goal_blackboard_id: goal
     path_blackboard_id: path
 
@@ -21,6 +22,7 @@ bt_navigator:
     # Plugin libraries used by the BT nodes
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
       - nav2_follow_path_action_bt_node
       - nav2_back_up_action_bt_node
       - nav2_spin_action_bt_node
@@ -34,6 +36,8 @@ bt_navigator:
       - nav2_rate_controller_bt_node
       - nav2_distance_controller_bt_node
       - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_goal_updater_node_bt_node
       - nav2_recovery_node_bt_node
       - nav2_pipeline_sequence_bt_node
       - nav2_round_robin_node_bt_node
@@ -41,6 +45,8 @@ bt_navigator:
       - nav2_time_expired_condition_bt_node
       - nav2_distance_traveled_condition_bt_node
       - nav2_single_trigger_bt_node
+      # Uncomment if available in your distribution:
+      # - nav2_planner_recovery_condition_bt_node
 
     # Error code prefixes can help with recovery logging
     error_code_name_prefixes:

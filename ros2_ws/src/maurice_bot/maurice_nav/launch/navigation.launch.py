@@ -18,6 +18,8 @@ def generate_launch_description():
     controller_params_file = os.path.join(share_dir, 'config', 'controller.yaml')
     costmap_params_file = os.path.join(share_dir, 'config', 'costmap.yaml')
     amcl_params_file = os.path.join(share_dir, 'config', 'amcl.yaml')
+    bt_navigator_params_file = os.path.join(share_dir, 'config', 'bt_navigator.yaml')
+    behavior_params_file = os.path.join(share_dir, 'config', 'behavior.yaml')
 
     # Use the map file located at ~/maurice-prod/maps/map.yaml
     default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
@@ -79,7 +81,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'autostart': True,
-            'node_names': ['map_server', 'amcl', 'planner_server', 'controller_server', 'bt_navigator']
+            'node_names': ['map_server', 'amcl', 'planner_server', 'controller_server', 'bt_navigator', 'behavior_server']
         }]
     )
 
@@ -89,7 +91,16 @@ def generate_launch_description():
         executable='bt_navigator',
         name='bt_navigator',
         output='screen',
-        parameters=[os.path.join(share_dir, 'config', 'bt_navigator.yaml')]
+        parameters=[bt_navigator_params_file]
+    )
+    
+    # Create the behavior server node
+    behavior_server_node = Node(
+        package='nav2_behaviors',
+        executable='behavior_server',
+        name='behavior_server',
+        output='screen',
+        parameters=[behavior_params_file]
     )
 
     return LaunchDescription([
@@ -100,5 +111,6 @@ def generate_launch_description():
         planner_node,
         controller_node,
         bt_navigator_node,
+        behavior_server_node,
         lifecycle_manager_node
     ])
