@@ -6,7 +6,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: false
-      footprint: [[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]
+      footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
       resolution: 0.05
       track_unknown_space: true        # Now unknown areas are treated as obstacles
       unknown_cost_value: 255          # Unknown cells set to a lethal cost
@@ -32,7 +32,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        inflation_radius: 0.2
       always_send_full_costmap: True
 
 local_costmap:
@@ -47,7 +47,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      footprint: [[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]
+      footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
       track_unknown_space: true        # Ensure unknown space is considered as obstacles
       unknown_cost_value: 255          # Unknown cells get a lethal cost value
       plugins: ["obstacle_layer", "inflation_layer"]
@@ -68,5 +68,5 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        inflation_radius: 0.1
       always_send_full_costmap: True
