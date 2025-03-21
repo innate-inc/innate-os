@@ -9,7 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     # Use the map file located at ~/maurice-prod/maps/map.yaml
-    default_map_path = os.path.expanduser('~/maurice-prod/maps/home/home.yaml')
+    default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
     
     # Get the share directory of the maurice_nav package where the AMCL config is stored
     maurice_nav_share_dir = get_package_share_directory('maurice_nav')
@@ -45,11 +45,24 @@ def generate_launch_description():
         parameters=[LaunchConfiguration('amcl_params_file')]
     )
     
+    # Add the lifecycle manager to automatically transition the nodes
+    lifecycle_manager_node = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager',
+        output='screen',
+        parameters=[{
+            'autostart': True,
+            'node_names': ['map_server', 'amcl']
+        }]
+    )
+    
     return LaunchDescription([
         map_arg,
         amcl_params_arg,
         map_server_node,
-        amcl_node
+        amcl_node,
+        lifecycle_manager_node
     ])
 
 if __name__ == '__main__':

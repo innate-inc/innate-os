@@ -17,13 +17,13 @@ amcl:
     laser_min_range: 0.2      # Updated for your sensor (was -1.0)
     laser_model_type: "likelihood_field"
     max_beams: 60
-    max_particles: 2000
+    max_particles: 4000
     min_particles: 500
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    recovery_alpha_fast: 0.0
-    recovery_alpha_slow: 0.0
+    recovery_alpha_fast: 0.1
+    recovery_alpha_slow: 0.01
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
@@ -38,7 +38,7 @@ amcl:
     z_short: 0.05
     scan_topic: /scan
     map_topic: /map
-    set_initial_pose: false
+    set_initial_pose: true
     always_reset_initial_pose: false
     first_map_only: false
     initial_pose:
