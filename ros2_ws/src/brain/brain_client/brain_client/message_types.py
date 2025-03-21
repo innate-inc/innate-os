@@ -18,6 +18,7 @@ class NavigationToPosition(BaseModel):
 class Task(BaseModel):
     type: TaskType
     inputs: Dict[str, Any]
+    primitive_id: str
 
     @field_serializer("type")
     def serialize_task_type(self, value: TaskType) -> str:

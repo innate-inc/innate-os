@@ -209,7 +209,7 @@ class BrainClientNode(Node):
             # Add other primitives here as they become available
         }
 
-        self.primitive_running = False
+        self.primitive_running = None
         # Add a variable to store the current goal handle
         self._goal_handle = None
 
@@ -368,11 +368,13 @@ class BrainClientNode(Node):
     def _handle_vision_agent_output(self, msg):
         try:
             self.get_logger().debug(f"[BrainClient] VisionAgentOutput: {msg}")
+
             # HOTFIX: If there's a msg.payload["next_task"] with a "name" field, replace it with "type".
             if "next_task" in msg.payload and msg.payload["next_task"] is not None:
                 if "name" in msg.payload["next_task"]:
                     msg.payload["next_task"]["type"] = msg.payload["next_task"]["name"]
                     msg.payload["next_task"].pop("name", None)
+
             payload = VisionAgentOutput.model_validate(msg.payload)
 
             # If log_everything is enabled, send the complete vision agent output as a chat message
@@ -408,7 +410,7 @@ class BrainClientNode(Node):
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
-            self.primitive_running = False
+            self.primitive_running = None
             # Cancel the current goal if it exists
             if self._goal_handle is not None:
                 self.get_logger().info(
@@ -455,10 +457,16 @@ class BrainClientNode(Node):
                 )
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
-                    payload={"primitive_name": payload.next_task.type.value},
+                    payload={
+                        "primitive_name": payload.next_task.type.value,
+                        "primitive_id": payload.next_task.primitive_id,
+                    },
                 )
                 self.ws_bridge.send_message(status_msg)
-                self.primitive_running = True
+                self.primitive_running = {
+                    "primitive_name": payload.next_task.type.value,
+                    "primitive_id": payload.next_task.primitive_id,
+                }
             else:
                 self.get_logger().warn(
                     f"Unknown primitive type: {payload.next_task.type}"
@@ -578,7 +586,7 @@ class BrainClientNode(Node):
         cancel_response = future.result()
         # In ROS2, CancelGoal_Response has return_code instead of accepted
         # Check if the return_code is SUCCESS (1)
-        self.get_logger().debug(f"Cancel response: {cancel_response}")
+        self.get_logger().warn(f"Cancel response: {cancel_response}")
 
         # Check if any goals were canceled, following the ROS2 example
         if (
@@ -593,13 +601,15 @@ class BrainClientNode(Node):
         result = future.result().result
         status_color = "\033[92m" if result.success else "\033[91m"
         self.get_logger().debug(f"Primitive execution result: {result.success}")
+
         # Clear the goal handle since the goal is complete
         self._goal_handle = None
-        # Send a stop command to the robot if the primitive failed.
+
         # Wait 1sec
         time.sleep(
             1
         )  # TODO: Find a better way to do this. And probably only if it was a navigation primitive?
+
         # Note that I think cancelling the goal will also send a stop command, so maybe we can look into that.
         stop_cmd = Twist()
         stop_cmd.linear.x = 0.0
@@ -608,20 +618,29 @@ class BrainClientNode(Node):
 
         self.get_logger().info("Stopping robot")
 
+        # Get primitive info from the primitive_running dictionary
+        primitive_id = None
+        if self.primitive_running:
+            primitive_id = self.primitive_running["primitive_id"]
+
         if result.success:
-            self.primitive_running = False
+            self.primitive_running = None
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_COMPLETED,
-                payload={"primitive_name": result.primitive_type},
+                payload={
+                    "primitive_name": result.primitive_type,
+                    "primitive_id": primitive_id,
+                },
             )
             self.ws_bridge.send_message(outgoing_msg)
-        elif result.success == False:
-            self.primitive_running = False
+        elif not result.success:
+            self.primitive_running = None
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_FAILED,
                 payload={
                     "primitive_name": result.primitive_type,
                     "reason": result.message,
+                    "primitive_id": primitive_id,
                 },
             )
             self.ws_bridge.send_message(outgoing_msg)
@@ -758,7 +777,7 @@ class BrainClientNode(Node):
     def handle_reset_brain(self, request, response):
         """
         Service handler for resetting the brain.
-        Sends a reset message to the agent in the cloud and wipes the local history.
+        Sends a chat message to load the memory instead of a reset message.
         """
         self.get_logger().info("\033[1;92m[BrainClient] Resetting brain\033[0m")
         memory_state = request.memory_state
@@ -774,7 +793,7 @@ class BrainClientNode(Node):
             self.get_logger().info(
                 "\033[1;92m[BrainClient] Stopping running primitive\033[0m"
             )
-            self.primitive_running = False
+            self.primitive_running = None
             # Send a stop command to the robot
             # TODO: This WON'T work, Beeds to be implemented in the primitive action server.
             stop_cmd = Twist()
@@ -782,11 +801,11 @@ class BrainClientNode(Node):
             stop_cmd.angular.z = 0.0
             self.cmd_vel_pub.publish(stop_cmd)
 
-        # Send reset message to the agent in the cloud
-        reset_msg = MessageIn(
-            type=MessageInType.RESET, payload={"memory_state": memory_state}
+        # Send a chat message to load the memory instead of a reset message
+        chat_msg = MessageIn(
+            type=MessageInType.CHAT_IN, payload={"text": f"!load_memory {memory_state}"}
         )
-        self.ws_bridge.send_message(reset_msg)
+        self.ws_bridge.send_message(chat_msg)
 
         # Publish a system message to the chat
         chat_entry = {
