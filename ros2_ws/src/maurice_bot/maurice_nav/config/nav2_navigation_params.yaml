@@ -20,7 +20,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0
-        inflation_radius: 0.35
+        inflation_radius: 0.45
 
 local_costmap:
   local_costmap:
@@ -60,13 +60,13 @@ controller_server:
     controller_plugins: ["FollowPath"]
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
-      min_vel_x: 0.00
-      max_vel_x: 0.26
+      min_vel_x: -0.2
+      max_vel_x: 0.45
       min_vel_y: 0.0
       max_vel_y: 0.0
-      max_vel_theta: 1.82
-      min_speed_xy: 0.0
-      max_speed_xy: 0.26
+      max_vel_theta: 3.0
+      min_speed_xy: -0.2
+      max_speed_xy: 0.45
       min_speed_theta: 0.0
       acc_lim_x: 2.5
       acc_lim_y: 0.0

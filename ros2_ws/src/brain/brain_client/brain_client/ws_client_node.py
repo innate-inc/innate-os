@@ -126,22 +126,37 @@ class WSClientNode(Node):
                 self.get_logger().error(f"Outgoing message missing 'type': {msg.data}")
                 return
 
-            # Try to parse as an internal message first.
-            try:
+            # Check the message type directly before attempting validation
+            message_type = data.get("type")
+
+            # Check if it's an internal message type
+            if message_type in [t.value for t in InternalMessageType]:
                 internal_message = InternalMessage.model_validate(data)
                 self.get_logger().info(f"Internal message: {internal_message}")
                 if internal_message.type == InternalMessageType.READY_FOR_CONNECTION:
                     self.get_logger().debug("Received ready for connection message.")
                     self.ws_thread = threading.Thread(target=self.run_ws_loop)
                     self.ws_thread.start()
-
-            except Exception as e:
-                ## That's normal, it's not an internal message.
+            # Otherwise, assume it's a regular outgoing message
+            elif message_type in [t.value for t in MessageInType]:
                 outgoing_message = MessageIn.model_validate(data)
                 self.get_logger().debug(f"Outgoing message: {outgoing_message.type}")
-                asyncio.run_coroutine_threadsafe(
-                    self.ws_client.send(outgoing_message), self.ws_client.loop
-                )
+
+                # Check if the loop exists and is running before trying to send
+                if self.ws_client.loop.is_running():
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            self.ws_client.send(outgoing_message), self.ws_client.loop
+                        )
+                    except RuntimeError as e:
+                        self.get_logger().error(f"Error sending message: {e}")
+                else:
+                    self.get_logger().warn(
+                        "Cannot send message: WebSocket or event loop not available"
+                    )
+            else:
+                self.get_logger().error(f"Unknown message type: {message_type}")
+
         except Exception as e:
             self.get_logger().error(f"Error processing outgoing message: {e}")
             return
