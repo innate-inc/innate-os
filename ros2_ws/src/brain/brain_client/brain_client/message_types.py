@@ -18,6 +18,7 @@ class NavigationToPosition(BaseModel):
 class Task(BaseModel):
     type: TaskType
     inputs: Dict[str, Any]
+    primitive_id: str
 
     @field_serializer("type")
     def serialize_task_type(self, value: TaskType) -> str:
@@ -36,15 +37,17 @@ class MessageInType(str, Enum):
     PRIMITIVE_INTERRUPTED = "primitive_interrupted"
     PRIMITIVE_FAILED = "primitive_failed"
     REGISTER_PRIMITIVES_AND_DIRECTIVE = "register_primitives_and_directive"
+    RESET = "reset"
 
 
-# These types represent messages sent out by the server/agent (e.g. commands or responses)
+# Outgoing messages from the server/agent
 class MessageOutType(str, Enum):
     READY_FOR_IMAGE = "ready_for_image"
-    ACTION_TO_DO = "action_to_do"
     VISION_AGENT_OUTPUT = "vision_agent_output"
-    DIRECTIVE_ACK = "directive_ack"
     CHAT_OUT = "chat_out"
+    THOUGHTS = "thoughts"
+    ERROR = "error"
+    STOP_AND_GO_BACK = "stop_and_go_back"
     PRIMITIVES_AND_DIRECTIVE_REGISTERED = "primitives_and_directive_registered"
 
 

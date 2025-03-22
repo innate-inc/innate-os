@@ -2,8 +2,7 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import time
-from brain_client.primitives.types import Primitive
+from brain_client.primitives.types import Primitive, PrimitiveResult
 
 
 class SendEmail(Primitive):
@@ -29,7 +28,8 @@ class SendEmail(Primitive):
     def guidelines(self):
         return (
             "Use to send an emergency email notification. Provide a subject and message. "
-            "This should be used when a potential emergency is detected and assistance might be required."
+            "This should be used when a potential emergency is detected and assistance "
+            "might be required."
         )
 
     def execute(self, subject: str, message: str, recipient: str = None):
@@ -42,7 +42,7 @@ class SendEmail(Primitive):
             recipient (str, optional): Email recipient. Defaults to axel@innate.bot if not specified.
 
         Returns:
-            tuple: (confirmation message, success boolean)
+            tuple: (result_message, result_status) where result_status is a PrimitiveResult enum value
         """
         if recipient is None:
             recipient = self.default_recipient
@@ -57,10 +57,10 @@ class SendEmail(Primitive):
         try:
             # Create message
             msg = MIMEMultipart()
-            msg['From'] = self.sender_email
-            msg['To'] = recipient
-            msg['Subject'] = subject
-            msg.attach(MIMEText(message, 'plain'))
+            msg["From"] = self.sender_email
+            msg["To"] = recipient
+            msg["Subject"] = subject
+            msg.attach(MIMEText(message, "plain"))
 
             # Connect to server and send
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
@@ -73,8 +73,25 @@ class SendEmail(Primitive):
             self.logger.info(
                 f"\033[92m[BrainClient] Emergency email notification sent to {recipient}\033[0m"
             )
-            return f"Email sent to {recipient}", True
+            return f"Email sent to {recipient}", PrimitiveResult.SUCCESS
 
         except Exception as e:
             self.logger.error(f"Failed to send email: {str(e)}")
-            return f"Failed to send email: {str(e)}", False
+            return f"Failed to send email: {str(e)}", PrimitiveResult.FAILURE
+
+    def cancel(self):
+        """
+        Cancel the email sending operation.
+
+        Since email sending is typically a quick operation that completes almost instantly,
+        this method doesn't do much. It's implemented to satisfy the Primitive interface.
+
+        Returns:
+            str: A message describing the cancellation result.
+        """
+        self.logger.info(
+            "\033[91m[BrainClient] Email sending operation cannot be canceled once started\033[0m"
+        )
+        return (
+            "Email sending is an atomic operation that cannot be canceled once started"
+        )
