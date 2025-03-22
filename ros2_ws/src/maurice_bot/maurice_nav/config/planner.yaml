@@ -14,15 +14,15 @@ planner_server:
       analytic_expansion_max_length: 3.0  # Maximum length for analytic expansion
       analytic_expansion_max_cost: 200.0  # Maximum cost threshold during analytic expansion
       analytic_expansion_max_cost_override: false
-      reverse_penalty: 2.0               # High penalty for reversing motion
+      reverse_penalty: 3.0               # High penalty for reversing motion
       change_penalty: 0.05                # Penalty for changing direction
       non_straight_penalty: 1.05          # Slight penalty for non-straight paths
-      cost_penalty: 2.5                   # Bias toward the center of passages
-      rotation_penalty: 2.0               # In-place rotation penalty
+      cost_penalty: 3.5                   # Bias toward the center of passages
+      rotation_penalty: 1.2               # In-place rotation penalty
       retrospective_penalty: 0.015        # Additional penalty term
       lookup_table_size: 20.0             # Size of the heuristic lookup table (in meters)
       cache_obstacle_heuristic: false     # Caching disabled by default
-      allow_reverse_expansion: false      # Do not allow reverse expansion
+      allow_reverse_expansion: True      # Do not allow reverse expansion
       smooth_path: True                   # Enable path smoothing
       smoother:
         max_iterations: 500               # Maximum iterations for the smoother

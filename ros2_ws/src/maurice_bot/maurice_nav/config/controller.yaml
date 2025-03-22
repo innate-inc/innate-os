@@ -22,22 +22,22 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
-      min_vel_x: -0.2                    # Allow reverse up to -0.2 m/s
+      min_vel_x: -0.1                    # Allow reverse up to -0.2 m/s
       min_vel_y: 0.0
       max_vel_x: 0.4                     # Maximum forward speed 0.4 m/s
       max_vel_y: 0.0
-      max_vel_theta: 1.0                 # Maximum angular speed 0.1 rad/s
+      max_vel_theta: 0.5                 # Maximum angular speed 0.1 rad/s
       min_speed_xy: 0.0
       max_speed_xy: 0.4
       min_speed_theta: 0.0
       acc_lim_x: 0.2                     # Linear acceleration limit 0.4 m/s²
       acc_lim_y: 0.0
-      acc_lim_theta: 0.5                 # Angular acceleration limit 1.0 rad/s²
+      acc_lim_theta: 0.2                 # Angular acceleration limit 1.0 rad/s²
       decel_lim_x: -0.2                  # Linear deceleration limit -0.4 m/s²
       decel_lim_y: 0.0
-      decel_lim_theta: -0.5              # Angular deceleration limit -1.0 rad/s²
+      decel_lim_theta: -0.2              # Angular deceleration limit -1.0 rad/s²
       vx_samples: 20
-      vy_samples: 5
+      vy_samples: 0
       vtheta_samples: 20
       sim_time: 1.7
       linear_granularity: 0.05
