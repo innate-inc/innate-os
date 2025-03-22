@@ -1,4 +1,4 @@
-from math import atan, tan
+from math import atan, tan, radians, degrees
 import queue
 import numpy as np
 import genesis as gs
@@ -27,14 +27,20 @@ class SimulationNode:
         self.render_interval = 0.5  # Render every 0.5 seconds
 
         self.render_camera_vfov = 40
-        self.render_camera_hfov = 2 * atan(
-            tan(self.render_camera_vfov / 2) * 1280 / 720
+        self.render_camera_hfov = degrees(
+            2 * atan(tan(radians(self.render_camera_vfov) / 2) * 1280 / 720)
         )
         self.render_camera_res = (1280, 720)
 
-        self.robot_camera_vfov = 60
-        self.robot_camera_hfov = 2 * atan(tan(self.robot_camera_vfov / 2) * 640 / 480)
+        self.robot_camera_vfov = 80
+        self.robot_camera_hfov = degrees(
+            2 * atan(tan(radians(self.robot_camera_vfov) / 2) * 640 / 480)
+        )
         self.robot_camera_res = (640, 480)
+
+        print(
+            f"Robot camera FOV (vfov, hfov, res): {self.robot_camera_vfov}, {self.robot_camera_hfov}, {self.robot_camera_res}"
+        )
 
         # Initialize core components
         self._init_genesis()
@@ -467,6 +473,9 @@ class SimulationNode:
                 wy=ang_vel[1],
                 wz=ang_vel[2],
             )
+
+            # Update shared robot position directly (more reliable than waiting for websocket bridge)
+            self.shared_queues.update_robot_position(pos[0], pos[1], pos[2], sim_time)
 
             # Publish the unified RobotStateMsg to the bridge
             try:

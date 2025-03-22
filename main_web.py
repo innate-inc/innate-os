@@ -106,6 +106,21 @@ def main():
         default="",
         help="Auth0 API identifier",
     )
+    # Add logging flag argument
+    parser.add_argument(
+        "--log-everything",
+        action="store_true",
+        default=False,
+        help="Enable logging of all model outputs",
+    )
+    # Add authentication control argument
+    parser.add_argument(
+        "--need-oauth",
+        type=str,
+        choices=["true", "false"],
+        default="true",
+        help="Require OAuth authentication for chat API (default: true)",
+    )
     args = parser.parse_args()
 
     # Set Auth0 environment variables
@@ -114,9 +129,12 @@ def main():
     if args.auth0_audience:
         os.environ["AUTH0_AUDIENCE"] = args.auth0_audience
 
+    # Set authentication requirement flag
+    os.environ["NEED_OAUTH"] = args.need_oauth
+
     # 1) Create shared queues
     global SHARED_QUEUES
-    SHARED_QUEUES = SharedQueues()
+    SHARED_QUEUES = SharedQueues(log_everything=args.log_everything)
     app.state.SHARED_QUEUES = SHARED_QUEUES
 
     # 1b) Start the background frame collector

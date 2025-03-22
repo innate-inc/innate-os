@@ -13,7 +13,13 @@ import cv2
 import numpy as np
 import websockets
 
-from src.agent.types import OccupancyGridMsg, RobotStateMsg, VelocityCmd, DirectiveCmd
+from src.agent.types import (
+    OccupancyGridMsg,
+    RobotStateMsg,
+    VelocityCmd,
+    DirectiveCmd,
+    ResetRobotCmd,
+)
 from src.shared_queues import ChatMessage, ChatSignal
 
 
@@ -165,6 +171,8 @@ async def outbound_loop(ws, shared_queues):
     adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
     adv_chat_in = rosbridge_advertise("/chat_in", "std_msgs/msg/String")
     adv_set_directive = rosbridge_advertise("/set_directive", "std_msgs/msg/String")
+    # Add a new topic for logging configuration
+    adv_logging_config = rosbridge_advertise("/logging_config", "std_msgs/msg/Bool")
 
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
@@ -173,8 +181,11 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_map))
     await ws.send(json.dumps(adv_chat_in))
     await ws.send(json.dumps(adv_set_directive))
+    await ws.send(json.dumps(adv_logging_config))
 
-    print("[ROSBridge] Advertised camera-related topics, /odom, /map, and /chat_in")
+    print(
+        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, and /logging_config"
+    )
 
     # Also subscribe to /cmd_vel, /chat_out
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
@@ -183,6 +194,25 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(sub_chat_out))
     print("[ROSBridge] Subscribed to /cmd_vel and /chat_out")
 
+    # Send the logging configuration immediately after connection
+    if hasattr(shared_queues, "log_everything"):
+        # Method 1: Publish to a topic
+        logging_msg = {"data": shared_queues.log_everything}
+        outbound = rosbridge_publish("/logging_config", logging_msg)
+        await ws.send(json.dumps(outbound))
+
+        # Method 2: Call a service (more reliable for initialization)
+        srv_set_logging = rosbridge_call_service(
+            "/set_logging_config", "std_srvs/srv/SetBool"
+        )
+        # Add the data parameter for the service call
+        srv_set_logging["args"] = {"data": shared_queues.log_everything}
+        await ws.send(json.dumps(srv_set_logging))
+
+        print(
+            f"[ROSBridge] Set logging configuration: log_everything={shared_queues.log_everything}"
+        )
+
     while not shared_queues.exit_event.is_set():
         # a) Check if there's a message from the sim
         try:
@@ -190,14 +220,35 @@ async def outbound_loop(ws, shared_queues):
 
             # We have a message
             if isinstance(msg, RobotStateMsg):
-                await publish_robot_state(ws, msg)
+                await publish_robot_state(ws, msg, shared_queues)
             elif isinstance(msg, OccupancyGridMsg):
-                await publish_occupancy_grid(ws, msg)
+                await publish_occupancy_grid(ws, msg, shared_queues)
             elif isinstance(msg, DirectiveCmd):
                 directive_msg = {"data": msg.directive}
                 outbound = rosbridge_publish("/set_directive", directive_msg)
                 await ws.send(json.dumps(outbound))
                 print(f"[ROSBridge] Published directive: {msg.directive}")
+            elif isinstance(msg, ResetRobotCmd):
+                reset_srv = rosbridge_call_service(
+                    "/reset_brain", "brain_messages/srv/ResetBrain"
+                )
+
+                # Set the memory_state parameter directly (empty string if none provided)
+                # Using dict for clarity when working with the service call params
+                memory_state = ""
+                if msg.memory_state:
+                    memory_state = msg.memory_state
+
+                # This is the correct way to format args for the service call in rosbridge
+                reset_srv["args"] = {"memory_state": memory_state}
+
+                if memory_state:
+                    print(f"[ROSBridge] Reset with memory state: {memory_state}")
+                else:
+                    print("[ROSBridge] Reset without memory state")
+
+                await ws.send(json.dumps(reset_srv))
+
         except queue.Empty:
             # no messages to publish right now
             pass
@@ -241,6 +292,7 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
     two concurrent tasks: inbound_loop & outbound_loop & chat_bridge_loop.
     """
     print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
+
     try:
         async with websockets.connect(rosbridge_uri) as ws:
             print(f"[ROSBridge] Connected to {rosbridge_uri}")
@@ -269,10 +321,13 @@ async def rosbridge_loop(shared_queues, rosbridge_uri: str):
 #   /camera/color/camera_info (sensor_msgs/CameraInfo)
 #   /odom (nav_msgs/Odometry)
 #
-async def publish_robot_state(ws, rsm: RobotStateMsg):
+async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
     now = time.time()
     sec = int(now)
     nsec = int((now - sec) * 1e9)
+
+    # Update the shared robot position for direct access by other components
+    shared_queues.update_robot_position(rsm.px, rsm.py, rsm.pz, now)
 
     # -- 1) COMPRESS COLOR IMAGE --
     if rsm.rgb_frame is not None:
@@ -365,7 +420,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg):
     await ws.send(json.dumps(outbound, default=np_encoder))
 
 
-async def publish_occupancy_grid(ws, og: OccupancyGridMsg):
+async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):
     now = time.time()
     sec = int(now)
     nsec = int((now - sec) * 1e9)

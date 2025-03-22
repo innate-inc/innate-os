@@ -17,6 +17,8 @@ connected_clients: Dict[str, WebSocket] = {}
 user_emails: Dict[str, str] = {}
 # Message queues for each user
 message_queues: Dict[str, asyncio.Queue] = {}
+# Broadcast task
+broadcast_task = None
 
 
 @router.get("/", dependencies=[Depends(get_current_user)])
@@ -48,6 +50,47 @@ async def get_user_info(user_info: Dict[str, Any] = Depends(get_current_user)):
     }
 
 
+# Function to broadcast messages to all connected clients
+async def broadcast_messages(shared_queues: SharedQueues):
+    """Fetch messages from queue and broadcast to all connected clients.
+
+    This ensures all users receive the same messages.
+    """
+    try:
+        while True:
+            try:
+                # Get messages from the queue
+                msg = await asyncio.get_event_loop().run_in_executor(
+                    None, shared_queues.chat_from_bridge.get
+                )
+
+                # Broadcast to all connected clients
+                disconnected_clients = []
+                for user_id, websocket in connected_clients.items():
+                    try:
+                        await websocket.send_json(
+                            {
+                                "sender": msg.sender,
+                                "text": msg.text,
+                                "timestamp": msg.timestamp,
+                            }
+                        )
+                    except Exception:
+                        # Mark client for removal if sending fails
+                        disconnected_clients.append(user_id)
+
+                # Clean up disconnected clients
+                for user_id in disconnected_clients:
+                    if user_id in connected_clients:
+                        del connected_clients[user_id]
+            except Exception:
+                # Don't re-raise the exception to keep the loop running
+                await asyncio.sleep(0.1)
+    except asyncio.CancelledError:
+        # Task was cancelled, clean up
+        pass
+
+
 @router.websocket("/ws/chat")
 async def chat_websocket(websocket: WebSocket, user_id: str = None):
     """WebSocket endpoint for exchanging chat messages with the frontend."""
@@ -71,22 +114,19 @@ async def chat_websocket(websocket: WebSocket, user_id: str = None):
     # Retrieve shared queues from the application's state
     shared_queues: SharedQueues = websocket.app.state.SHARED_QUEUES
 
+    # Start the broadcast task if it's not already running
+    global broadcast_task
+    if broadcast_task is None or broadcast_task.done():
+        broadcast_task = asyncio.create_task(broadcast_messages(shared_queues))
+
     # Upon connection, signal to the bridge that we're ready to receive messages
     shared_queues.chat_to_bridge.put_nowait(
         ChatSignal(signal="ready", timestamp=time.time())
     )
 
     try:
-        # Run both tasks concurrently until WebSocket disconnect or error
-        tasks = [
-            asyncio.create_task(
-                handle_inbound_user(websocket, user_id, email, shared_queues)
-            ),
-            asyncio.create_task(
-                handle_outbound_agent(websocket, user_id, shared_queues)
-            ),
-        ]
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        # Only handle inbound messages from the user
+        await handle_inbound_user(websocket, user_id, email, shared_queues)
     except WebSocketDisconnect:
         # The client disconnected
         pass
@@ -96,8 +136,6 @@ async def chat_websocket(websocket: WebSocket, user_id: str = None):
         # Remove user from connected clients when disconnected
         if user_id in connected_clients:
             del connected_clients[user_id]
-        for t in tasks:
-            t.cancel()
 
 
 async def handle_inbound_user(
@@ -148,37 +186,6 @@ async def handle_inbound_user(
                             "error": True,
                         }
                     )
-            except WebSocketDisconnect:
-                if user_id in connected_clients:
-                    del connected_clients[user_id]
-                break
-            except Exception:
-                # Don't re-raise the exception to keep the loop running
-                pass
-    except Exception:
-        if user_id in connected_clients:
-            del connected_clients[user_id]
-
-
-async def handle_outbound_agent(
-    websocket: WebSocket, user_id: str, shared_queues: SharedQueues
-):
-    """Handle outbound messages from the agent to the user."""
-    try:
-        while True:
-            try:
-                # Get messages from the queue
-                msg = await asyncio.get_event_loop().run_in_executor(
-                    None, shared_queues.chat_from_bridge.get
-                )
-
-                await websocket.send_json(
-                    {
-                        "sender": msg.sender,
-                        "text": msg.text,
-                        "timestamp": msg.timestamp,
-                    }
-                )
             except WebSocketDisconnect:
                 if user_id in connected_clients:
                     del connected_clients[user_id]

@@ -63,6 +63,9 @@ python main_web.py
 Options:
 - `-v` or `--vis`: Enable visualization
 - `--local`: Connect to local agent server instead of cloud
+- `--need-oauth`: Require OAuth authentication for chat API (choices: "true", "false", default: "true")
+- `--auth0-domain`: Auth0 domain for authentication
+- `--auth0-audience`: Auth0 API identifier
 
 ### Start the Frontend Development Server
 
@@ -186,4 +189,17 @@ The application now supports Auth0 authentication, allowing users to:
 - Create and manage their own accounts
 - Securely access the simulator
 
-For detailed setup instructions, see [AUTH0_SETUP.md](AUTH0_SETUP.md). 
+For detailed setup instructions, see [AUTH0_SETUP.md](AUTH0_SETUP.md).
+
+### ⚠️ Security Warning
+
+**IMPORTANT**: The current WebSocket chat API implementation has a critical security vulnerability. It only checks the email provided in the query parameters without verifying ownership of that email. This allows anyone to impersonate authorized users by simply providing their email in the WebSocket connection URL.
+
+This vulnerability needs to be fixed urgently by:
+1. Implementing proper token-based authentication for WebSocket connections
+2. Validating those tokens on the server side
+3. Associating messages with verified user identities
+
+Until this is fixed, be aware that the chat system is not secure against impersonation attacks.
+
+**Note**: For development and testing purposes, you can disable authentication entirely by using the `--need-oauth false` command-line argument. This will allow any user to send messages without authentication, but should NEVER be used in production environments. 

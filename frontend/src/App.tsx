@@ -66,13 +66,16 @@ function SimulatorApp() {
 
   const { isAuthenticated, getAccessTokenSilently } = useAuth0();
 
-  async function handleResetRobot() {
+  async function handleResetRobot(memory_state?: string) {
     try {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
       // Get the access token if authenticated
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
       if (isAuthenticated) {
         try {
           const token = await getAccessTokenSilently();
@@ -82,15 +85,28 @@ function SimulatorApp() {
         }
       }
 
+      // Check if memory_state is a string - if it's an event object or other non-string, don't use it
+      const isValidMemoryState = typeof memory_state === "string";
+
+      // Prepare the request body - always send a JSON object
+      const body = isValidMemoryState
+        ? JSON.stringify({ memory_state })
+        : JSON.stringify({});
+
       const response = await fetch(`${baseUrl}/reset_robot`, {
         method: "POST",
         headers,
+        body,
       });
 
       const data = await response.json();
       console.log("Reset response:", data);
       if (data.status === "reset_enqueued") {
-        alert("Robot reset requested!");
+        if (isValidMemoryState && memory_state) {
+          alert(`Robot reset requested with memory state: ${memory_state}!`);
+        } else {
+          alert("Robot reset requested!");
+        }
       }
     } catch (error) {
       console.error("Error resetting robot:", error);

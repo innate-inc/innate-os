@@ -317,7 +317,7 @@ export function ImageDisplay({
       {/* Only show controls when not in loading state */}
       {!showLoading && (
         <>
-          <ResetButton onClick={onResetRobot}>
+          <ResetButton onClick={() => onResetRobot()}>
             <MdRefresh size={16} /> Reset Robot
           </ResetButton>
 

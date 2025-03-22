@@ -1,0 +1,81 @@
+# Environment section - defines the simulation environment
+environment:
+  name: "office"
+  initial_parameters:
+    - robot_position: [5.0, 2.0, 0.0]
+      robot_orientation: [0, 0, 1, 0]
+      object_positions:
+        whiteboard: [15.0, 8.5, 1.2]
+        desk_chair: [10.0, 5.0, 0.0]
+        filing_cabinet: [18.0, 3.0, 0.0]
+
+# Input section
+name: "navigation_memory_based"
+category: "navigation"
+description: "Tests the robot's ability to navigate to a previously visited location from memory"
+goal: "Robot should navigate back to a previously shown location without explicit coordinates"
+directive: "explore_then_return"
+duration: 900  # 15 minutes
+
+# Enhanced message scheduling
+messages:
+  # Initial exploration phase
+  - trigger_type: "time"
+    time: 30
+    text: "Please explore the office space and remember what you find."
+  
+  # After exploring for a while, ask to find a specific location
+  - trigger_type: "time"
+    time: 300  # 5 minutes
+    text: "Now, can you find your way back to the whiteboard you saw earlier?"
+  
+  # Check if robot is lost
+  - trigger_type: "time"
+    time: 480  # 8 minutes
+    text: "Are you having trouble finding the whiteboard? Do you remember where it was?"
+  
+  # Message triggered when whiteboard area is found
+  - trigger_type: "check"
+    check_id: "whiteboard_area_found"
+    text: "Great! You found the whiteboard. Can you now return to your starting point?"
+
+# Expectations section
+expectations:
+  checks:
+    # Location checks
+    - id: "whiteboard_area"
+      type: "location"
+      coordinates: [14.0, 7.5, 16.0, 9.5]  # Area where whiteboard is located
+    
+    - id: "close_to_whiteboard"
+      type: "location"
+      coordinates: [14.5, 8.0, 15.5, 9.0]  # Closer to whiteboard
+    
+    - id: "starting_point_return"
+      type: "location"
+      coordinates: [4.0, 1.0, 6.0, 3.0]  # Starting area
+    
+    # Location checks for key areas
+    - id: "kitchen_visit"
+      type: "location"
+      coordinates: [12.0, 3.0, 13.0, 4.0]  # Kitchen area
+    
+    - id: "living_room_visit"
+      type: "location"
+      coordinates: [8.0, 6.0, 10.0, 8.0]  # Living room area
+    
+    - id: "bedroom_visit"
+      type: "location"
+      coordinates: [15.0, 8.0, 17.0, 10.0]  # Bedroom area
+    
+    # Sequence checks
+    - id: "navigation_sequence"
+      type: "sequence"
+      order: ["office_explored", "whiteboard_area_found", "return_to_start"]
+      verification_prompt: "Did the robot first explore the office, then find the whiteboard, and finally return to its starting point?"
+
+  # Overall success criterion
+  success_criterion: "Did the robot successfully navigate to the whiteboard from memory after initial exploration, and then return to its starting position? The robot should not have been given explicit coordinates for navigation."
+
+  # Early stop criterion
+  stop_criterion: "Has the robot been unable to find the whiteboard after 10 minutes of searching? Or has it completed both required navigation tasks (finding whiteboard and returning to start)?" 
