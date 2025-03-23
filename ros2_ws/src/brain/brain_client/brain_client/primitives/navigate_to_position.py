@@ -1,10 +1,9 @@
-import rclpy
-import asyncio
 import math
-
+import threading
+import time
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-from brain_client.primitives.types import Primitive
+from brain_client.primitives.types import Primitive, PrimitiveResult
 
 
 class Nav2Controller:
@@ -15,6 +14,8 @@ class Nav2Controller:
         # Create a BasicNavigator instance to communicate with Nav2.
         self.navigator = BasicNavigator()
         self.logger = logger
+        # Add a cancellation flag
+        self._cancel_requested = threading.Event()
 
         # Create a publisher for velocity commands
         # self.cmd_vel_pub = self.navigator.create_publisher(
@@ -37,6 +38,9 @@ class Nav2Controller:
         Returns:
             TaskResult: The result status from the navigator.
         """
+        # Reset cancellation flag
+        self._cancel_requested.clear()
+
         # Create a PoseStamped goal.
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = "map"
@@ -51,12 +55,31 @@ class Nav2Controller:
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
         self.logger.debug("Sending goal pose ...")
+        path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
+
+        # If the path is None, we can't navigate to the goal
+        if path is None:
+            self.logger.error("Failed to get path to goal")
+            return TaskResult.FAILED
+
         self.navigator.goToPose(goal_pose)
 
         self.logger.debug("Waiting for navigation to complete ...")
 
+        # Modified loop to check for cancellation
         while not self.navigator.isTaskComplete():
+            # Check if cancellation was requested
+            if self._cancel_requested.is_set():
+                self.logger.info("Cancellation detected in navigation loop")
+                self.navigator.cancelTask()
+                break
+
+            # Get feedback but don't block for too long
             feedback = self.navigator.getFeedback()
+            if feedback:
+                self.logger.debug(f"Navigation feedback: {feedback}")
+            # Small sleep to prevent CPU hogging
+            time.sleep(0.1)  # 100ms check interval
 
         result = self.navigator.getResult()
 
@@ -75,6 +98,16 @@ class Nav2Controller:
 
         return result
 
+    def cancel_navigation(self):
+        """
+        Cancels the current navigation task.
+        """
+        self.logger.debug("Canceling current navigation task...")
+        # Set the cancellation flag
+        self._cancel_requested.set()
+        # Also call cancelTask directly in case we're not in the loop
+        self.navigator.cancelTask()
+
 
 class NavigateToPosition(Primitive):
     def __init__(self, logger):
@@ -87,21 +120,35 @@ class NavigateToPosition(Primitive):
 
     def guidelines(self):
         return (
-            "Use when you need to navigate the robot to the specified position using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
-            + "Can be used to navigate to a specific point in the map."
+            "Use when you need to navigate the robot to the specified position "
+            "using provided x, y coordinates, and theta (yaw) angle IN RADIANS. "
+            "Can be used to navigate to a specific point in the map."
         )
 
     def execute(self, x: float, y: float, theta: float):
-        # Replace this simulated delay and print statements with actual navigation logic.
         self.logger.info(
-            f"\033[96m[BrainClient] Initiating navigation to position: "
-            f"x={x}, y={y}, theta={theta}\033[0m"
+            f"Initiating navigation to position: x={x}, y={y}, theta={theta}"
         )
 
-        self.nav2_controller.go_to_position(x, y, theta)
+        result = self.nav2_controller.go_to_position(x, y, theta)
 
-        self.logger.info(
-            f"\033[92m[BrainClient] Navigation complete. Arrived at position: "
-            f"x={x}, y={y}, theta={theta}\033[0m"
-        )
-        return f"Reached position ({x}, {y}, {theta})", True
+        # Check if the navigation was canceled
+        if result == TaskResult.CANCELED:
+            self.logger.debug("Navigation was canceled")
+            return "Navigation canceled", PrimitiveResult.CANCELLED
+        elif result == TaskResult.SUCCEEDED:
+            self.logger.info(
+                f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}"
+            )
+            return f"Reached position ({x}, {y}, {theta})", PrimitiveResult.SUCCESS
+        else:
+            self.logger.info(f"Navigation failed with result: {result}")
+            return f"Navigation failed with result: {result}", PrimitiveResult.FAILURE
+
+    def cancel(self):
+        """
+        Cancels the current navigation task.
+        """
+        self.logger.debug("Canceling navigation task")
+        self.nav2_controller.cancel_navigation()
+        return "Navigation canceled"

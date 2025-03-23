@@ -23,6 +23,7 @@ from brain_client.message_types import (
     TaskType,
     VisionAgentOutput,
 )
+from brain_client.primitives.types import PrimitiveResult
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
@@ -31,6 +32,8 @@ from nav_msgs.msg import Odometry
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
+from brain_messages.srv import ResetBrain
+from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
 
@@ -68,6 +71,9 @@ class BrainClientNode(Node):
 
         # New parameter for pose image interval
         self.declare_parameter("pose_image_interval", 0.5)  # 0.5 seconds default
+
+        # Parameter for logging complete vision agent output
+        self.declare_parameter("log_everything", False)  # Default to False
 
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
@@ -120,7 +126,13 @@ class BrainClientNode(Node):
             self.get_parameter("pose_image_interval").get_parameter_value().double_value
         )
 
+        # Flag for logging complete vision agent output
+        self.log_everything = (
+            self.get_parameter("log_everything").get_parameter_value().bool_value
+        )
+
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
+        self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
         # Publishers, Subscribers, and Service
         self.last_image = None
@@ -149,6 +161,16 @@ class BrainClientNode(Node):
         self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
+        )
+
+        # Create service for setting logging configuration
+        self.set_logging_srv = self.create_service(
+            SetBool, "/set_logging_config", self.handle_set_logging_config
+        )
+
+        # Create service for resetting the brain
+        self.reset_srv = self.create_service(
+            ResetBrain, "/reset_brain", self.handle_reset_brain
         )
 
         self.exit_event = threading.Event()
@@ -188,7 +210,9 @@ class BrainClientNode(Node):
             # Add other primitives here as they become available
         }
 
-        self.primitive_running = False
+        self.primitive_running = None
+        # Add a variable to store the current goal handle
+        self._goal_handle = None
 
         # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
@@ -245,6 +269,21 @@ class BrainClientNode(Node):
             f"\033[1;94mReceived get_chat_history request. History: {self.chat_history}\033[0m"
         )
         response.history = json.dumps(self.chat_history)
+        return response
+
+    def handle_set_logging_config(self, request, response):
+        """
+        Service handler for setting the logging configuration.
+        Sets the log_everything flag based on the request data.
+        """
+        self.log_everything = request.data
+        self.get_logger().info(
+            f"\033[1;92m[BrainClient] Set logging configuration: log_everything={self.log_everything}\033[0m"
+        )
+        response.success = True
+        response.message = (
+            f"Logging configuration set: log_everything={self.log_everything}"
+        )
         return response
 
     def image_callback(self, msg: CompressedImage):
@@ -330,12 +369,31 @@ class BrainClientNode(Node):
     def _handle_vision_agent_output(self, msg):
         try:
             self.get_logger().debug(f"[BrainClient] VisionAgentOutput: {msg}")
+
             # HOTFIX: If there's a msg.payload["next_task"] with a "name" field, replace it with "type".
             if "next_task" in msg.payload and msg.payload["next_task"] is not None:
                 if "name" in msg.payload["next_task"]:
                     msg.payload["next_task"]["type"] = msg.payload["next_task"]["name"]
                     msg.payload["next_task"].pop("name", None)
+
             payload = VisionAgentOutput.model_validate(msg.payload)
+
+            # If log_everything is enabled, send the complete vision agent output as a chat message
+            if self.log_everything:
+                self.get_logger().info(
+                    "\033[1;92m[BrainClient] Sending complete vision agent output\033[0m"
+                )
+                # Convert the complete payload to a JSON string for the chat message
+                complete_output_text = json.dumps(msg.payload)
+                chat_entry = {
+                    "sender": "vision_agent_output",
+                    "text": complete_output_text,
+                    "timestamp": time.time(),
+                }
+                self.chat_history.append(chat_entry)
+                out_msg = String(data=json.dumps(chat_entry))
+                self.chat_out_pub.publish(out_msg)
+
             self.handle_vision_agent_output(payload)
         except Exception as e:
             self.get_logger().error(
@@ -346,15 +404,21 @@ class BrainClientNode(Node):
         text = msg.payload.get("text", "")
         chat_entry = {"sender": sender, "text": text, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().info(f"Received chat_out: {chat_entry}")
+        self.get_logger().debug(f"Received chat_out: {chat_entry}")
         out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
-            self.primitive_running = False
-            # self.primitive_action_client.cancel_goal_async()
+
+            # Cancel the current goal if it exists
+            if self._goal_handle is not None:
+                self.get_logger().info(
+                    "\033[91m[BrainClient] Canceling current goal.\033[0m"
+                )
+                cancel_future = self._goal_handle.cancel_goal_async()
+                cancel_future.add_done_callback(self.cancel_response_callback)
             return
 
         if payload.thoughts:
@@ -383,7 +447,9 @@ class BrainClientNode(Node):
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
 
-            self.get_logger().info(f"Primitive task type: {payload.next_task.type.value}")
+            self.get_logger().info(
+                f"Primitive task type: {payload.next_task.type.value}"
+            )
 
             if payload.next_task.type.value in self.primitives_dict:
                 # Handle any task type that exists in the primitives dictionary
@@ -392,12 +458,20 @@ class BrainClientNode(Node):
                 )
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
-                    payload={"primitive_name": payload.next_task.type.value},
+                    payload={
+                        "primitive_name": payload.next_task.type.value,
+                        "primitive_id": payload.next_task.primitive_id,
+                    },
                 )
                 self.ws_bridge.send_message(status_msg)
-                self.primitive_running = True
+                self.primitive_running = {
+                    "primitive_name": payload.next_task.type.value,
+                    "primitive_id": payload.next_task.primitive_id,
+                }
             else:
-                self.get_logger().warn(f"Unknown primitive type: {payload.next_task.type}")
+                self.get_logger().warn(
+                    f"Unknown primitive type: {payload.next_task.type}"
+                )
         else:
             self.get_logger().info(
                 "\033[94m[BrainClient] No next task provided.\033[0m"
@@ -476,9 +550,6 @@ class BrainClientNode(Node):
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
                 self.ws_bridge.send_message(image_msg)
-                self.get_logger().info(
-                    "Published image message with optional depth and robot coordinates."
-                )
 
                 # Reset flags so we do not resend the same images
                 self.ready_for_image = False
@@ -492,13 +563,9 @@ class BrainClientNode(Node):
         goal_msg.primitive_type = task_type.value
         goal_msg.inputs = json.dumps(inputs)
 
-        self.get_logger().info(
-            f"\033[96m[BrainClient] Sending goal for primitive: {goal_msg.primitive_type}\033[0m"
-        )
+        self.get_logger().info(f"Sending goal for primitive: {goal_msg.primitive_type}")
         if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().error(
-                "\033[91m[BrainClient] Primitive execution action server not available!\033[0m"
-            )
+            self.get_logger().error("Primitive execution action server not available!")
             return
 
         send_goal_future = self.primitive_action_client.send_goal_async(goal_msg)
@@ -507,39 +574,90 @@ class BrainClientNode(Node):
     def goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().info(
-                "\033[91m[BrainClient] Primitive execution goal rejected.\033[0m"
-            )
+            self.get_logger().info("Primitive execution goal rejected.")
             return
-        self.get_logger().info(
-            "\033[92m[BrainClient] Primitive execution goal accepted.\033[0m"
-        )
+        # Store the goal handle for potential cancellation, using the same naming as in the example
+        self._goal_handle = goal_handle
+        self.get_logger().info("Primitive execution goal accepted.")
         get_result_future = goal_handle.get_result_async()
         get_result_future.add_done_callback(self.get_result_callback)
+
+    def cancel_response_callback(self, future):
+        """Handle the response from a cancel_goal_async request."""
+        # This is not REALLY necessary, but for logging purposes it's nice to have.
+        cancel_response = future.result()
+
+        # Check if any goals were canceled, following the ROS2 example
+        if (
+            hasattr(cancel_response, "goals_canceling")
+            and len(cancel_response.goals_canceling) > 0
+        ):
+            self.get_logger().debug("Goal cancellation accepted.")
+        else:
+            self.get_logger().error("Goal cancellation rejected.")
 
     def get_result_callback(self, future):
         result = future.result().result
         status_color = "\033[92m" if result.success else "\033[91m"
-        self.get_logger().info(
-            f"{status_color}[BrainClient] Primitive execution result: {result.success}\033[0m"
-        )
-        # Send a stop command to the robot if the primitive failed.
+        self.get_logger().debug(f"Primitive execution result: {result.success}")
+
+        # Clear the goal handle since the goal is complete
+        self._goal_handle = None
+
         # Wait 1sec
-        time.sleep(1)  # TODO: Find a better way to do this.
+        time.sleep(
+            1
+        )  # TODO: Find a better way to do this. And probably only if it was a navigation primitive?
+
+        # Note that I think cancelling the goal will also send a stop command, so maybe we can look into that.
         stop_cmd = Twist()
         stop_cmd.linear.x = 0.0
         stop_cmd.angular.z = 0.0
         self.cmd_vel_pub.publish(stop_cmd)
 
-        self.get_logger().info("\033[92m[BrainClient] Stopping robot\033[0m")
+        self.get_logger().info("Stopping robot")
 
+        # Get primitive info from the primitive_running dictionary
+        primitive_id = None
+        if self.primitive_running:
+            primitive_id = self.primitive_running["primitive_id"]
+
+        # Check the success_type field to determine the appropriate message type
+        self.get_logger().info(f"Primitive result: {result}")
         if result.success:
-            self.primitive_running = False
+            if result.success_type == PrimitiveResult.SUCCESS.value:
+                self.primitive_running = None
+                outgoing_msg = MessageIn(
+                    type=MessageInType.PRIMITIVE_COMPLETED,
+                    payload={
+                        "primitive_name": result.primitive_type,
+                        "primitive_id": primitive_id,
+                    },
+                )
+                self.ws_bridge.send_message(outgoing_msg)
+            elif result.success_type == PrimitiveResult.CANCELLED.value:
+                self.primitive_running = None
+                outgoing_msg = MessageIn(
+                    type=MessageInType.PRIMITIVE_INTERRUPTED,
+                    payload={
+                        "primitive_name": result.primitive_type,
+                        "primitive_id": primitive_id,
+                    },
+                )
+                self.ws_bridge.send_message(outgoing_msg)
+        elif not result.success:
+            self.primitive_running = None
             outgoing_msg = MessageIn(
-                type=MessageInType.PRIMITIVE_COMPLETED,
-                payload={"primitive_name": result.primitive_type},
+                type=MessageInType.PRIMITIVE_FAILED,
+                payload={
+                    "primitive_name": result.primitive_type,
+                    "reason": result.message,
+                    "primitive_id": primitive_id,
+                },
             )
             self.ws_bridge.send_message(outgoing_msg)
+        else:
+            self.get_logger().error(f"Unknown primitive result: {result}")
 
     def _handle_primitives_and_directive_registered(self, msg):
         """
@@ -668,6 +786,55 @@ class BrainClientNode(Node):
         directive_names = list(self.directives.keys())
         response.directives = directive_names
         response.current_directive = self.current_directive.name
+        return response
+
+    def handle_reset_brain(self, request, response):
+        """
+        Service handler for resetting the brain.
+        Sends a chat message to load the memory instead of a reset message.
+        """
+        self.get_logger().info("\033[1;92m[BrainClient] Resetting brain\033[0m")
+        memory_state = request.memory_state
+        self.get_logger().info(
+            f"\033[1;92m[BrainClient] Memory state: {memory_state}\033[0m"
+        )
+
+        # Clear local chat history
+        self.chat_history = []
+
+        # Stop any running primitive
+        if self.primitive_running:
+            self.get_logger().info(
+                "\033[1;92m[BrainClient] Stopping running primitive\033[0m"
+            )
+            self.primitive_running = None
+            # Send a stop command to the robot
+            # TODO: This WON'T work, Beeds to be implemented in the primitive action server.
+            stop_cmd = Twist()
+            stop_cmd.linear.x = 0.0
+            stop_cmd.angular.z = 0.0
+            self.cmd_vel_pub.publish(stop_cmd)
+
+        # Send a chat message to load the memory instead of a reset message
+        chat_msg = MessageIn(
+            type=MessageInType.CHAT_IN, payload={"text": f"!load_memory {memory_state}"}
+        )
+        self.ws_bridge.send_message(chat_msg)
+
+        # Publish a system message to the chat
+        chat_entry = {
+            "sender": "system",
+            "text": f"Brain has been reset with memory state: {memory_state}",
+            "timestamp": time.time(),
+        }
+        self.chat_history.append(chat_entry)
+        out_msg = String(data=json.dumps(chat_entry))
+        self.chat_out_pub.publish(out_msg)
+
+        # Re-register primitives and directive with the server
+        self.register_primitives_and_directive()
+
+        response.success = True
         return response
 
     def destroy_node(self):

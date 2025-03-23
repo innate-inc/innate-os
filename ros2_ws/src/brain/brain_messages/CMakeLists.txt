@@ -19,6 +19,7 @@ set(srv_files
   "srv/ManipulationTask.srv"
   "srv/GetChatHistory.srv"
   "srv/GetAvailableDirectives.srv"
+  "srv/ResetBrain.srv"
 )
 
 set(msg_files
