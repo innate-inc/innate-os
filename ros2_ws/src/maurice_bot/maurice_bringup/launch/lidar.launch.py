@@ -13,7 +13,7 @@ def generate_launch_description():
             'channel_type': 'serial',
             'serial_port': '/dev/ttyUSB0',
             'serial_baudrate': 115200,
-            'frame_id': 'base_scan',
+            'frame_id': 'base_laser',
             'inverted': False,
             'angle_compensate': True,
             'scan_mode': 'Sensitivity'
@@ -29,7 +29,7 @@ def generate_launch_description():
         arguments=[
             "-0.0764", "0.0", "0.17165",  # Translation: X, Y, Z (in meters)
             "0", "0", "0",                # Rotation: roll, pitch, yaw (in radians)
-            "base_link", "base_scan"      # Parent and child frames
+            "base_link", "base_laser"      # Parent and child frames
         ]
     )
 
