@@ -55,7 +55,7 @@
                   <joint name="joint5" type="hinge" axis="1 0 0" limited="true" range="-3.14 3.14" damping="20"/>
                   <geom name="link5_geom" type="mesh" mesh="link5_mesh"/>
                   
-                  <body name="link6" pos="14 -7.5 0">
+                  <body name="link6" pos="0.014 -0.0075 0">
                     <inertial pos="0 0 0" mass="0.012" diaginertia="0.00002 0.00002 0.00002"/>
                     <joint name="joint6" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="20"/>
                     <geom name="link6_geom" type="mesh" mesh="link6_mesh"/>
