@@ -62,51 +62,60 @@ class MauriceBotNode(Node):
             self.viewer_handle.sync()
 
     def publish_timer_callback(self):
-        # Base control
-        self.data.ctrl[0] = self.twist_cmd.linear.x     # base_x
-        self.data.ctrl[1] = self.twist_cmd.angular.z    # base_yaw
+        # ---- Base Control ----
+        # Assume qpos order: [base_x, base_y, base_yaw, joint1, joint2, ...]
+        # Use current yaw (qpos[2]) to transform the robot-frame linear velocity into
+        # world-frame components for the x and y actuators.
+        current_yaw = self.data.qpos[2]
+        v_cmd = self.twist_cmd.linear.x  # Commanded forward velocity in robot frame
+        vx_world = v_cmd * np.cos(current_yaw)
+        vy_world = v_cmd * np.sin(current_yaw)
 
-        # Arm control
+        # Assign world-frame velocity commands to the actuators:
+        self.data.ctrl[0] = vx_world              # base_x actuator
+        self.data.ctrl[1] = vy_world              # base_y actuator
+        self.data.ctrl[2] = self.twist_cmd.angular.z  # base_yaw actuator
+
+        # ---- Arm Control ----
+        # Assume arm joint actuators start at index 3 in the control vector.
         if self.arm_commands:
             n = min(len(self.arm_commands), 6)
-            self.data.ctrl[2:2+n] = self.arm_commands[:n]
+            self.data.ctrl[3:3+n] = self.arm_commands[:n]
 
-        # Get global position and orientation of base_link
-        base_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
-        pos = self.data.xpos[base_id]        # [x, y, z]
-        mat = self.data.xmat[base_id].copy()  # 3x3 rotation matrix (flattened)
-
-        # Calculate yaw angle from rotation matrix
-        theta = np.arctan2(mat[3], mat[0])
-        quat = self._mat_to_quat(mat)
-
+        # ---- Odometry Publishing ----
+        # Use qpos directly. The first three entries are [base_x, base_y, base_yaw].
         odom_msg = Odometry()
         odom_msg.header.stamp = self.get_clock().now().to_msg()
         odom_msg.header.frame_id = "odom"
         odom_msg.child_frame_id = "base_link"
 
-        odom_msg.pose.pose.position.x = pos[0]
-        odom_msg.pose.pose.position.y = pos[1]
-        odom_msg.pose.pose.position.z = pos[2]
-        odom_msg.pose.pose.orientation.x = quat[0]
-        odom_msg.pose.pose.orientation.y = quat[1]
-        odom_msg.pose.pose.orientation.z = quat[2]
-        odom_msg.pose.pose.orientation.w = quat[3]
+        odom_msg.pose.pose.position.x = self.data.qpos[0]
+        odom_msg.pose.pose.position.y = self.data.qpos[1]
+        odom_msg.pose.pose.position.z = 0.0  # Assuming flat ground
 
-        # Base velocity from qvel
-        vx = self.data.qvel[1]       # base_x
-        vtheta = self.data.qvel[0]   # base_yaw
-        odom_msg.twist.twist.linear.x = vx
-        odom_msg.twist.twist.angular.z = vtheta
+        # Convert yaw to a quaternion (2D rotation)
+        yaw = self.data.qpos[2]
+        qz = np.sin(yaw / 2.0)
+        qw = np.cos(yaw / 2.0)
+        odom_msg.pose.pose.orientation.x = 0.0
+        odom_msg.pose.pose.orientation.y = 0.0
+        odom_msg.pose.pose.orientation.z = qz
+        odom_msg.pose.pose.orientation.w = qw
+
+        # Publish base velocities using qvel. Assumed qvel order: [base_x, base_y, base_yaw, ...]
+        odom_msg.twist.twist.linear.x = self.data.qvel[0]
+        odom_msg.twist.twist.linear.y = self.data.qvel[1]
+        odom_msg.twist.twist.angular.z = self.data.qvel[2]
 
         self.odom_pub.publish(odom_msg)
 
-        # Arm joint states
+        # ---- Arm Joint States Publishing ----
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
         joint_state_msg.name = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
-        if len(self.data.qpos) >= 8:
-            joint_state_msg.position = self.data.qpos[2:8].tolist()
+        # qpos indices: [0: base_x, 1: base_y, 2: base_yaw, 3: joint1, ...]
+        if len(self.data.qpos) >= 9:
+            joint_state_msg.position = self.data.qpos[3:9].tolist()
         else:
             joint_state_msg.position = [0.0] * 6
 
@@ -116,9 +125,7 @@ class MauriceBotNode(Node):
         """
         Convert a 3x3 rotation matrix (flattened) to quaternion [x, y, z, w]
         """
-        # Create output array for the quaternion
         quat = np.zeros(4)
-        # Use mujoco's function to convert matrix to quaternion
         mujoco.mju_mat2Quat(quat, mat)
         return quat.tolist()
 
