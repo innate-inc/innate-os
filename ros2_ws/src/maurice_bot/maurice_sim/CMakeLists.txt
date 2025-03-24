@@ -39,6 +39,18 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Install mjcf files
+install(
+  DIRECTORY mjcf
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# Install programs
+install(
+  PROGRAMS
+    maurice_sim/sim.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 # Tests
 if(BUILD_TESTING)

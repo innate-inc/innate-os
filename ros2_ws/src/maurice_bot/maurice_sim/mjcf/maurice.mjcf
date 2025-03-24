@@ -1,0 +1,89 @@
+<mujoco model="maurice_bot">
+  <compiler angle="radian" coordinate="local" meshdir="/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/meshes"/>
+  <option gravity="0 0 -9.81" />
+
+  <asset>
+    <mesh name="base_mesh"   file="base.STL" scale="1 1 1"/>
+    <mesh name="link1_mesh"  file="link1.STL" scale="1 1 1"/>
+    <mesh name="link2_mesh"  file="link2.STL" scale="1 1 1"/>
+    <mesh name="link3_mesh"  file="link3.STL" scale="1 1 1"/>
+    <mesh name="link4_mesh"  file="link4.STL" scale="1 1 1"/>
+    <mesh name="link5_mesh"  file="link5.STL" scale="1 1 1"/>
+    <mesh name="link6_mesh"  file="link6.STL" scale="1 1 1"/>
+  </asset>
+
+  <worldbody>
+    <!-- Ground plane -->
+    <geom name="floor" type="plane" pos="0 0 0" size="10 10 0.1" rgba="0.8 0.9 0.8 1"/>
+
+    <!-- Planar base: Use a chain of joints (slide in x, slide in y, hinge for yaw) -->
+    <body name="base_root" pos="0 0 0">
+      <!-- Allow translation in x -->
+      <joint name="base_x" type="slide" axis="1 0 0"/>
+      <body name="base_y_body" pos="0 0 0">
+        <!-- Allow translation in y -->
+        <joint name="base_y" type="slide" axis="0 1 0"/>
+        <body name="base_yaw_body" pos="0 0 0">
+          <!-- Allow rotation (yaw) about z -->
+          <joint name="base_yaw" type="hinge" axis="0 0 1" range="-3.14 3.14"/>
+          <!-- The actual base_link -->
+          <body name="base_link" pos="0 0 0">
+            <inertial pos="0 0 0" mass="0.89" diaginertia="0.001 0.001 0.001" />
+            <geom type="mesh" mesh="base_mesh" />
+            <!-- Camera attached to base_link -->
+            <camera name="camera_base" pos="0.0197 0 0.19663" 
+                    quat="0.9961947 0 0.0871557 0" mode="fixed" 
+                    fovy="80"/>
+
+            <!-- Robot kinematic chain -->
+            <body name="link1" pos="0.0845 -0.0597 0.0583">
+              <inertial pos="0 0 0" mass="0.065" diaginertia="0.0001 0.0001 0.0001" />
+              <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" />
+              <geom type="mesh" mesh="link1_mesh" />
+              <body name="link2" pos="0 0 0.01825">
+                <inertial pos="0 0 0" mass="0.080" diaginertia="0.0001 0.0001 0.0001" />
+                <joint name="joint2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" />
+                <geom type="mesh" mesh="link2_mesh" />
+                <body name="link3" pos="0.034 0 0.11825">
+                  <inertial pos="0 0 0" mass="0.055" diaginertia="0.0001 0.0001 0.0001" />
+                  <joint name="joint3" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" />
+                  <geom type="mesh" mesh="link3_mesh" />
+                  <body name="link4" pos="0.13609 0 0.00025">
+                    <inertial pos="0 0 0" mass="0.022" diaginertia="0.00005 0.00005 0.00005" />
+                    <joint name="joint4" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" />
+                    <geom type="mesh" mesh="link4_mesh" />
+                    <body name="link5" pos="0.045 0.002 0">
+                      <inertial pos="0 0 0" mass="0.050" diaginertia="0.00005 0.00005 0.00005" />
+                      <joint name="joint5" type="hinge" axis="1 0 0" limited="true" range="-3.14 3.14" />
+                      <geom type="mesh" mesh="link5_mesh" />
+                      <body name="link6" pos="0.059 -0.0055 0">
+                        <inertial pos="0 0 0" mass="0.012" diaginertia="0.00002 0.00002 0.00002" />
+                        <joint name="joint6" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" />
+                        <geom type="mesh" mesh="link6_mesh" />
+                      </body>
+                      <!-- Fixed attachment for the arm camera -->
+                      <body name="arm_camera_link" pos="0.00454 0 0.05448">
+                        <inertial pos="0 0 0" mass="0.01" diaginertia="1e-4 1e-4 1e-4" />
+                        <camera name="camera_arm" mode="fixed" fovy="160"/>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- Actuators for the robot joints -->
+  <actuator>
+    <position joint="joint1" kp="100"/>
+    <position joint="joint2" kp="100"/>
+    <position joint="joint3" kp="100"/>
+    <position joint="joint4" kp="100"/>
+    <position joint="joint5" kp="100"/>
+    <position joint="joint6" kp="100"/>
+  </actuator>
+</mujoco>
