@@ -7,8 +7,8 @@ bt_navigator:
     filter_duration: 0.3
 
     # Use your custom Behavior Tree XML for navigate-to-pose
-    default_nav_to_pose_bt_xml: "/home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_nav/config/nav_to_pose.xml"
-    default_nav_through_poses_bt_xml: "/home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_nav/config/nav_through_poses.xml"
+    default_nav_to_pose_bt_xml: "/root/maurice-prod/ros2_ws/src/maurice_bot/maurice_nav/config/nav_to_pose.xml"
+    default_nav_through_poses_bt_xml: "/root/maurice-prod/ros2_ws/src/maurice_bot/maurice_nav/config/nav_through_poses.xml"
 
     always_reload_bt_xml: true
     goal_blackboard_id: goal
