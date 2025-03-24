@@ -50,23 +50,20 @@ local_costmap:
       footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
       track_unknown_space: true        # Ensure unknown space is considered as obstacles
       unknown_cost_value: 255          # Unknown cells get a lethal cost value
-      plugins: ["obstacle_layer", "inflation_layer"]
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: True
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
-          clearing: True
-          marking: True
-          data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
+      plugins: ["static_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.2
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.45
       always_send_full_costmap: True
+
+      goal_checker:
+        plugin: "nav2_controller::SimpleGoalChecker"
+        xy_goal_tolerance: 0.05
+        yaw_goal_tolerance: 0.10
+        stateful: true
