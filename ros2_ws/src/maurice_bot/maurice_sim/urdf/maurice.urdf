@@ -216,4 +216,20 @@
       </geometry>
     </collision>
   </link>
+
+  <!-- Joint: Fixed joint from link5 to arm_camera_link -->
+  <joint name="arm_camera_joint" type="fixed">
+    <origin xyz="0.00454 0 0.05448" rpy="0 0.802851 0"/>
+    <parent link="link5"/>
+    <child link="arm_camera_link"/>
+  </joint>
+
+  <!-- Link: Arm camera (no visuals or collision) -->
+  <link name="arm_camera_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+    </inertial>
+  </link>
 </robot>
