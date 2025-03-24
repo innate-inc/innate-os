@@ -398,6 +398,15 @@ class SimulationNode:
             # --- (C) Render cameras based on time interval
             sim_time += dt
 
+            # --- Publish Clock Message
+            sec_clock = int(sim_time)
+            nsec_clock = int((sim_time - sec_clock) * 1e9)
+            clock_msg = {"clock": {"sec": sec_clock, "nanosec": nsec_clock}}
+            try:
+                self.shared_queues.sim_to_agent.put_nowait(clock_msg)
+            except queue.Full:
+                pass
+
             # Check if enough time has passed since last render
             if sim_time - self.last_render_time >= self.render_interval:
                 camera_link = self.robot.get_link("camera_link")
@@ -510,6 +519,7 @@ class SimulationNode:
                 if isinstance(cmd, VelocityCmd):
                     linear_vel = cmd.linear_x
                     angular_vel = cmd.angular_z
+                    print(f"linear_vel: {linear_vel}, angular_vel: {angular_vel}")
                     left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
                         linear_vel, angular_vel
                     )
