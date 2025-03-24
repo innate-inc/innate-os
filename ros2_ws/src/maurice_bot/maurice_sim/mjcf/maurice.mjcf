@@ -18,12 +18,15 @@
 
     <!-- Planar base: Use a chain of joints (slide in x, slide in y, hinge for yaw) -->
     <body name="base_root" pos="0 0 0">
+      <inertial pos="0 0 0" mass="1e-4" diaginertia="1e-4 1e-4 1e-4" />
       <!-- Allow translation in x -->
       <joint name="base_x" type="slide" axis="1 0 0"/>
       <body name="base_y_body" pos="0 0 0">
+        <inertial pos="0 0 0" mass="1e-4" diaginertia="1e-4 1e-4 1e-4" />
         <!-- Allow translation in y -->
         <joint name="base_y" type="slide" axis="0 1 0"/>
         <body name="base_yaw_body" pos="0 0 0">
+          <inertial pos="0 0 0" mass="1e-4" diaginertia="1e-4 1e-4 1e-4" />
           <!-- Allow rotation (yaw) about z -->
           <joint name="base_yaw" type="hinge" axis="0 0 1" range="-3.14 3.14"/>
           <!-- The actual base_link -->

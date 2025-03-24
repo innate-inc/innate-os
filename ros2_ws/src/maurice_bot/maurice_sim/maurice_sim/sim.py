@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import time
+import threading
+
 import rclpy
 from rclpy.node import Node
 
@@ -7,9 +10,9 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray
 
-# Import MuJoCo (using mujoco_py as an example)
 import mujoco
 import numpy as np
+from mujoco import viewer  # Import the viewer module
 
 class MauriceBotNode(Node):
     def __init__(self):
@@ -34,20 +37,30 @@ class MauriceBotNode(Node):
         # Timer for publishing topics and setting control signals at 30 Hz
         self.publish_timer = self.create_timer(1.0 / 30.0, self.publish_timer_callback)
 
-        # Timer for rendering the simulation at 10 Hz
-        self.viewer_timer = self.create_timer(1.0 / 10.0, self.viewer_timer_callback)
-
         # Load the MuJoCo model from the parameter provided.
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
 
-        # Create a viewer for rendering the simulation.
-        # Note: This requires a valid display environment.
-        self.viewer = mujoco.Viewer(self.model, self.data)
-
         # Variables to hold the latest command messages
         self.twist_cmd = Twist()   # For base movement
         self.arm_commands = []     # For arm joints (float array)
+
+        # Launch the passive viewer in a separate thread.
+        self.viewer_handle = None
+        self.viewer_thread = threading.Thread(target=self.launch_passive_viewer)
+        self.viewer_thread.daemon = True  # Ensures thread exits with the node.
+        self.viewer_thread.start()
+
+    def launch_passive_viewer(self):
+        """
+        Launch the passive viewer which returns a viewer handle.
+        This viewer will update its display when sync() is called.
+        """
+        self.viewer_handle = viewer.launch_passive(self.model, self.data)
+        # Keep the thread alive while the viewer window is open.
+        while self.viewer_handle.is_running():
+            time.sleep(0.01)
+        self.get_logger().info("Viewer closed.")
 
     def cmd_vel_callback(self, msg: Twist):
         self.twist_cmd = msg
@@ -60,6 +73,9 @@ class MauriceBotNode(Node):
     def simulation_timer_callback(self):
         # Advance the simulation by one internal timestep (0.002 sec)
         mujoco.mj_step(self.model, self.data)
+        # Update the viewer display by synchronizing its state.
+        if self.viewer_handle is not None and self.viewer_handle.is_running():
+            self.viewer_handle.sync()
 
     def publish_timer_callback(self):
         # --- Set control values based on received commands ---
@@ -73,7 +89,7 @@ class MauriceBotNode(Node):
         odom_msg.header.frame_id = "odom"
         odom_msg.child_frame_id = "base_link"
 
-        # Extract position and orientation from qpos (adjust indices to your model)
+        # Extract position and orientation from qpos (adjust indices as needed)
         if len(self.data.qpos) >= 7:
             pos = self.data.qpos[:3]
             quat = self.data.qpos[3:7]
@@ -98,11 +114,6 @@ class MauriceBotNode(Node):
         else:
             joint_state_msg.position = [0.0] * 6
         self.joint_state_pub.publish(joint_state_msg)
-
-    def viewer_timer_callback(self):
-        # Render the simulation at 10 Hz.
-        # This updates the display window.
-        self.viewer.render()
 
 def main(args=None):
     rclpy.init(args=args)
