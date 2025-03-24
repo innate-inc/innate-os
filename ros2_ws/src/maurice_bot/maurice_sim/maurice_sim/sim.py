@@ -5,10 +5,12 @@ import threading
 import rclpy
 from rclpy.node import Node
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray
+
+import tf2_ros  # Import tf2_ros for publishing transforms
 
 import mujoco
 import numpy as np
@@ -37,6 +39,9 @@ class MauriceBotNode(Node):
         self.twist_cmd = Twist()
         self.arm_commands = []
 
+        # Initialize the tf broadcaster
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+
         self.viewer_handle = None
         self.viewer_thread = threading.Thread(target=self.launch_passive_viewer)
         self.viewer_thread.daemon = True
@@ -63,27 +68,21 @@ class MauriceBotNode(Node):
 
     def publish_timer_callback(self):
         # ---- Base Control ----
-        # Assume qpos order: [base_x, base_y, base_yaw, joint1, joint2, ...]
-        # Use current yaw (qpos[2]) to transform the robot-frame linear velocity into
-        # world-frame components for the x and y actuators.
         current_yaw = self.data.qpos[2]
-        v_cmd = self.twist_cmd.linear.x  # Commanded forward velocity in robot frame
+        v_cmd = self.twist_cmd.linear.x
         vx_world = v_cmd * np.cos(current_yaw)
         vy_world = v_cmd * np.sin(current_yaw)
 
-        # Assign world-frame velocity commands to the actuators:
-        self.data.ctrl[0] = vx_world              # base_x actuator
-        self.data.ctrl[1] = vy_world              # base_y actuator
-        self.data.ctrl[2] = self.twist_cmd.angular.z  # base_yaw actuator
+        self.data.ctrl[0] = vx_world
+        self.data.ctrl[1] = vy_world
+        self.data.ctrl[2] = self.twist_cmd.angular.z
 
         # ---- Arm Control ----
-        # Assume arm joint actuators start at index 3 in the control vector.
         if self.arm_commands:
             n = min(len(self.arm_commands), 6)
             self.data.ctrl[3:3+n] = self.arm_commands[:n]
 
         # ---- Odometry Publishing ----
-        # Use qpos directly. The first three entries are [base_x, base_y, base_yaw].
         odom_msg = Odometry()
         odom_msg.header.stamp = self.get_clock().now().to_msg()
         odom_msg.header.frame_id = "odom"
@@ -91,9 +90,8 @@ class MauriceBotNode(Node):
 
         odom_msg.pose.pose.position.x = self.data.qpos[0]
         odom_msg.pose.pose.position.y = self.data.qpos[1]
-        odom_msg.pose.pose.position.z = 0.0  # Assuming flat ground
+        odom_msg.pose.pose.position.z = 0.0
 
-        # Convert yaw to a quaternion (2D rotation)
         yaw = self.data.qpos[2]
         qz = np.sin(yaw / 2.0)
         qw = np.cos(yaw / 2.0)
@@ -102,18 +100,31 @@ class MauriceBotNode(Node):
         odom_msg.pose.pose.orientation.z = qz
         odom_msg.pose.pose.orientation.w = qw
 
-        # Publish base velocities using qvel. Assumed qvel order: [base_x, base_y, base_yaw, ...]
         odom_msg.twist.twist.linear.x = self.data.qvel[0]
         odom_msg.twist.twist.linear.y = self.data.qvel[1]
         odom_msg.twist.twist.angular.z = self.data.qvel[2]
 
         self.odom_pub.publish(odom_msg)
 
+        # ---- Publish TF from "odom" to "base_link" ----
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = "odom"
+        transform.child_frame_id = "base_link"
+        transform.transform.translation.x = self.data.qpos[0]
+        transform.transform.translation.y = self.data.qpos[1]
+        transform.transform.translation.z = 0.0
+        transform.transform.rotation.x = 0.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = qz
+        transform.transform.rotation.w = qw
+
+        self.tf_broadcaster.sendTransform(transform)
+
         # ---- Arm Joint States Publishing ----
         joint_state_msg = JointState()
         joint_state_msg.header.stamp = self.get_clock().now().to_msg()
         joint_state_msg.name = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']
-        # qpos indices: [0: base_x, 1: base_y, 2: base_yaw, 3: joint1, ...]
         if len(self.data.qpos) >= 9:
             joint_state_msg.position = self.data.qpos[3:9].tolist()
         else:
@@ -122,9 +133,6 @@ class MauriceBotNode(Node):
         self.joint_state_pub.publish(joint_state_msg)
 
     def _mat_to_quat(self, mat):
-        """
-        Convert a 3x3 rotation matrix (flattened) to quaternion [x, y, z, w]
-        """
         quat = np.zeros(4)
         mujoco.mju_mat2Quat(quat, mat)
         return quat.tolist()
