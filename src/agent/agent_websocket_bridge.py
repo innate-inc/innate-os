@@ -249,6 +249,10 @@ async def outbound_loop(ws, shared_queues):
 
                 await ws.send(json.dumps(reset_srv))
 
+            elif isinstance(msg, dict) and "clock" in msg:
+                outbound = rosbridge_publish("/clock", msg)
+                await ws.send(json.dumps(outbound))
+
         except queue.Empty:
             # no messages to publish right now
             pass
@@ -480,6 +484,7 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):
 def parse_twist(msg: dict) -> VelocityCmd | None:
     lin = msg.get("linear", {})
     ang = msg.get("angular", {})
+
     try:
         vx = float(lin.get("x", 0.0))
         vz = float(ang.get("z", 0.0))
