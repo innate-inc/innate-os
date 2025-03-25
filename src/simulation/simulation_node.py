@@ -26,6 +26,10 @@ class SimulationNode:
         self.last_render_time = 0
         self.render_interval = 0.5  # Render every 0.5 seconds
 
+        # Store commanded velocities for odometry
+        self.commanded_lin_vel = np.zeros(3)  # [vx, vy, vz]
+        self.commanded_ang_vel = np.zeros(3)  # [wx, wy, wz]
+
         self.render_camera_vfov = 40
         self.render_camera_hfov = degrees(
             2 * atan(tan(radians(self.render_camera_vfov) / 2) * 1280 / 720)
@@ -388,11 +392,88 @@ class SimulationNode:
         last_step_time = time.time()
 
         while not self.shared_queues.exit_event.is_set():
-            # --- (B) Gather robot pose, velocity
+            # --- (A) Handle velocity commands from agent -> sim first
+            try:
+                # Process all messages in queue and keep track of latest commands
+                latest_velocity_cmd = None
+                latest_reset_cmd = None
+
+                while True:
+                    try:
+                        cmd = self.shared_queues.agent_to_sim.get_nowait()
+                        if isinstance(cmd, VelocityCmd):
+                            latest_velocity_cmd = cmd
+                        elif isinstance(cmd, ResetRobotCmd):
+                            latest_reset_cmd = cmd
+                    except queue.Empty:
+                        break
+
+                # Apply latest commands if they exist
+                if latest_reset_cmd is not None:
+                    print("[SimulationNode] Resetting robot pose to origin.")
+                    self.robot.set_pos(ROBOT_INIT_POS)
+                    self.robot.set_quat(ROBOT_INIT_QUAT)
+                    # Reset commanded velocities
+                    self.commanded_lin_vel = np.zeros(3)
+                    self.commanded_ang_vel = np.zeros(3)
+                elif latest_velocity_cmd is not None:
+                    linear_vel = latest_velocity_cmd.linear_x
+                    angular_vel = latest_velocity_cmd.angular_z
+
+                    # Convert desired velocities to robot position update
+                    current_pos = self.robot.get_pos().cpu().numpy()
+                    current_quat = self.robot.get_quat().cpu().numpy()
+
+                    # Update position based on linear velocity and current orientation
+                    dt = self.scene.sim_options.dt
+                    # Convert current quaternion to rotation matrix to get forward direction
+                    current_rot = R.from_quat(
+                        [
+                            current_quat[1],
+                            current_quat[2],
+                            current_quat[3],
+                            current_quat[0],
+                        ]
+                    )
+                    forward_dir = current_rot.apply(
+                        [1, 0, 0]
+                    )  # Transform x-axis by current rotation
+
+                    # Move in the forward direction
+                    new_pos = current_pos + forward_dir * linear_vel * dt
+
+                    # Update orientation based on angular velocity
+                    angle = angular_vel * dt
+                    delta_rot = R.from_euler("z", angle)
+                    new_rot = delta_rot * current_rot
+                    new_quat = new_rot.as_quat()  # Returns [x, y, z, w]
+                    new_quat = np.array(
+                        [new_quat[3], new_quat[0], new_quat[1], new_quat[2]]
+                    )  # Convert to Genesis format
+
+                    # Set the new position and orientation
+                    self.robot.set_pos(new_pos)
+                    self.robot.set_quat(new_quat)
+
+                    # Store commanded velocities in world frame for odometry
+                    # MULTIPLY BY 0 TO DISABLE MESSING WITH TH EACTUAL ROBOT
+                    # ON ROS
+                    self.commanded_lin_vel = forward_dir * linear_vel * 0
+                    self.commanded_ang_vel = np.array([0, 0, angular_vel])
+
+                    print(
+                        f"Commanded vel: linear={linear_vel:.3f}, angular={angular_vel:.3f}"
+                    )
+            except Exception as e:
+                print(f"Error processing commands: {e}")
+
+            # --- (B) Gather robot pose, velocity (after applying commands)
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
-            lin_vel = self.robot.get_vel().cpu().numpy()
-            ang_vel = self.robot.get_ang().cpu().numpy()
+
+            # Use commanded velocities for odometry
+            lin_vel = self.commanded_lin_vel
+            ang_vel = self.commanded_ang_vel
 
             # --- (C) Render cameras based on time interval
             sim_time += dt
@@ -450,11 +531,11 @@ class SimulationNode:
                 rgb_to_send = None
                 depth_to_send = None
 
-            # --- (D) Build RobotStateMsg
+            # --- (D) Build and publish RobotStateMsg with latest state
             state_msg = RobotStateMsg(
                 # camera data
-                rgb_frame=rgb_to_send,
-                depth_frame=depth_to_send,
+                rgb_frame=rgb_to_send if "rgb_to_send" in locals() else None,
+                depth_frame=depth_to_send if "depth_to_send" in locals() else None,
                 # camera intrinsics
                 width=self.width,
                 height=self.height,
@@ -512,86 +593,12 @@ class SimulationNode:
                     pass
                 self.last_map_publish_step = step_count
 
-            # --- (F) Handle velocity commands from agent -> sim
-            try:
-                # Process all messages in queue and keep track of latest commands
-                latest_velocity_cmd = None
-                latest_reset_cmd = None
-
-                while True:
-                    try:
-                        cmd = self.shared_queues.agent_to_sim.get_nowait()
-                        if isinstance(cmd, VelocityCmd):
-                            latest_velocity_cmd = cmd
-                        elif isinstance(cmd, ResetRobotCmd):
-                            latest_reset_cmd = cmd
-                    except queue.Empty:
-                        break
-
-                # Apply latest commands if they exist
-                if latest_reset_cmd is not None:
-                    print("[SimulationNode] Resetting robot pose to origin.")
-                    self.robot.set_pos(ROBOT_INIT_POS)
-                    self.robot.set_quat(ROBOT_INIT_QUAT)
-                    self.robot.control_dofs_velocity(
-                        [0.0, 0.0], [self.left_idx, self.right_idx]
-                    )
-                elif latest_velocity_cmd is not None:
-                    linear_vel = latest_velocity_cmd.linear_x
-                    angular_vel = latest_velocity_cmd.angular_z
-
-                    # Calculate odometry velocity norm
-                    odom_vel_norm = np.linalg.norm([lin_vel[0], lin_vel[1], lin_vel[2]])
-                    print(
-                        f"Velocity comparison - Odom norm: {odom_vel_norm:.3f}, Cmd x: {linear_vel:.3f}"
-                    )
-
-                    # Convert desired velocities to robot position update
-                    current_pos = self.robot.get_pos().cpu().numpy()
-                    current_quat = self.robot.get_quat().cpu().numpy()
-
-                    # Update position based on linear velocity and current orientation
-                    dt = self.scene.sim_options.dt
-                    # Convert current quaternion to rotation matrix to get forward direction
-                    current_rot = R.from_quat(
-                        [
-                            current_quat[1],
-                            current_quat[2],
-                            current_quat[3],
-                            current_quat[0],
-                        ]
-                    )
-                    forward_dir = current_rot.apply(
-                        [1, 0, 0]
-                    )  # Transform x-axis by current rotation
-
-                    # Move in the forward direction
-                    new_pos = current_pos + forward_dir * linear_vel * dt
-
-                    # Update orientation based on angular velocity
-                    angle = angular_vel * dt
-                    # Create rotation quaternion for the angular velocity (around Z axis)
-                    delta_rot = R.from_euler("z", angle)
-                    # Combine with current rotation
-                    new_rot = delta_rot * current_rot
-                    new_quat = new_rot.as_quat()  # Returns [x, y, z, w]
-                    # Convert to Genesis format [w, x, y, z]
-                    new_quat = np.array(
-                        [new_quat[3], new_quat[0], new_quat[1], new_quat[2]]
-                    )
-
-                    # Set the new position and orientation
-                    self.robot.set_pos(new_pos)
-                    self.robot.set_quat(new_quat)
-            except Exception as e:
-                print(f"Error processing commands: {e}")
-
-            # --- (G) Step the physics
+            # --- (F) Step the physics
             try:
                 self.scene.step()
                 step_count += 1
 
-                # --- (H) Sleep to maintain real-time simulation
+                # --- (G) Sleep to maintain real-time simulation
                 current_time = time.time()
                 elapsed = current_time - last_step_time
                 sleep_time = dt - elapsed
