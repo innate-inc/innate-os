@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    rendering_resolution: 640
+    cameras:
+      base:
+        vertical_fov: 80.0
+        aspect_ratio: 4.44
+        resolution:
+          width: 1280
+          height: 800
+      
+      arm:
+        vertical_fov: 150.0
+        aspect_ratio: 1.33
+        resolution:
+          width: 640
+          height: 480

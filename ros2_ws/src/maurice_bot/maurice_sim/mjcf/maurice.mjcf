@@ -38,7 +38,7 @@
             <inertial pos="0 0 0" mass="0.89" diaginertia="0.001 0.001 0.001"/>
             <geom name="base_geom" type="mesh" mesh="base_mesh"/>
             <camera name="camera_base" pos="0.0197 0 0.19663" 
-                    quat="0.9961947 0 0.0871557 0" mode="fixed" fovy="80"/>
+                    quat="0.5416752 0.4545195 -0.4545195 -0.5416752" mode="fixed" fovy="80"/>
 
             <body name="link1" pos="0.0845 -0.0597 0.0583">
               <inertial pos="0 0 0" mass="0.065" diaginertia="0.0001 0.0001 0.0001"/>

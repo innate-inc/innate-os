@@ -11,6 +11,9 @@ def generate_launch_description():
     package_name = 'maurice_sim'
     pkg_share = get_package_share_directory(package_name)
     model_path = os.path.join(pkg_share, 'mjcf', 'maurice.mjcf')
+    
+    # Add path to the cameras config file
+    cameras_config = os.path.join(pkg_share, 'config', 'cameras.yaml')
 
     return LaunchDescription([
         # Declare a launch argument for the model path (default provided)
@@ -25,7 +28,10 @@ def generate_launch_description():
             executable='sim.py',  # Updated to the correct node executable name
             name='maurice_sim_node',
             output='screen',
-            parameters=[{'model_path': LaunchConfiguration('model_path')}]
+            parameters=[
+                {'model_path': LaunchConfiguration('model_path')},
+                cameras_config  # Add the cameras config file
+            ]
         )
     ])
 
