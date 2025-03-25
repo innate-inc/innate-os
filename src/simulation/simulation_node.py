@@ -546,12 +546,43 @@ class SimulationNode:
                         f"Velocity comparison - Odom norm: {odom_vel_norm:.3f}, Cmd x: {linear_vel:.3f}"
                     )
 
-                    left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
-                        linear_vel, angular_vel
+                    # Convert desired velocities to robot position update
+                    current_pos = self.robot.get_pos().cpu().numpy()
+                    current_quat = self.robot.get_quat().cpu().numpy()
+
+                    # Update position based on linear velocity and current orientation
+                    dt = self.scene.sim_options.dt
+                    # Convert current quaternion to rotation matrix to get forward direction
+                    current_rot = R.from_quat(
+                        [
+                            current_quat[1],
+                            current_quat[2],
+                            current_quat[3],
+                            current_quat[0],
+                        ]
                     )
-                    self.robot.control_dofs_velocity(
-                        [left_vel, right_vel], [self.left_idx, self.right_idx]
+                    forward_dir = current_rot.apply(
+                        [1, 0, 0]
+                    )  # Transform x-axis by current rotation
+
+                    # Move in the forward direction
+                    new_pos = current_pos + forward_dir * linear_vel * dt
+
+                    # Update orientation based on angular velocity
+                    angle = angular_vel * dt
+                    # Create rotation quaternion for the angular velocity (around Z axis)
+                    delta_rot = R.from_euler("z", angle)
+                    # Combine with current rotation
+                    new_rot = delta_rot * current_rot
+                    new_quat = new_rot.as_quat()  # Returns [x, y, z, w]
+                    # Convert to Genesis format [w, x, y, z]
+                    new_quat = np.array(
+                        [new_quat[3], new_quat[0], new_quat[1], new_quat[2]]
                     )
+
+                    # Set the new position and orientation
+                    self.robot.set_pos(new_pos)
+                    self.robot.set_quat(new_quat)
             except Exception as e:
                 print(f"Error processing commands: {e}")
 
