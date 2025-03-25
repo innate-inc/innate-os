@@ -39,7 +39,7 @@
             <geom name="base_geom" type="mesh" mesh="base_mesh"/>
             <camera name="camera_base" pos="0.0197 0 0.19663" 
                     quat="0.5416752 0.4545195 -0.4545195 -0.5416752" mode="fixed" fovy="80"/>
-
+            
             <body name="link1" pos="0.0845 -0.0597 0.0583">
               <inertial pos="0 0 0" mass="0.065" diaginertia="0.0001 0.0001 0.0001"/>
               <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="20"/>
@@ -73,7 +73,7 @@
                       
                       <body name="arm_camera_link" pos="0.00454 0 0.05448">
                         <inertial pos="0 0 0" mass="0.01" diaginertia="1e-4 1e-4 1e-4"/>
-                        <camera name="camera_arm" mode="fixed" fovy="160"/>
+                        <camera name="camera_arm" mode="fixed" fovy="80" quat="0.6532815 0.2705981 -0.2705981 -0.6532815"/>
                       </body>
                     </body>
                   </body>

@@ -2,6 +2,7 @@
 import time
 import threading
 import numpy as np
+import cv2  # Used for resizing images
 
 import rclpy
 from rclpy.node import Node
@@ -24,6 +25,42 @@ class MauriceBotNode(Node):
         self.declare_parameter('model_path', 'path/to/your/maurice_model.xml')
         model_path = self.get_parameter('model_path').value
         self.get_logger().info(f"Using model file: {model_path}")
+
+        # Declare rendering resolution
+        self.declare_parameter('rendering_resolution', 640)
+
+        # Declare camera parameters individually instead of a nested dict
+        self.declare_parameter('cameras.base.vertical_fov', 80.0)
+        self.declare_parameter('cameras.base.aspect_ratio', 4.44)
+        self.declare_parameter('cameras.base.resolution.width', 1280)
+        self.declare_parameter('cameras.base.resolution.height', 800)
+
+        self.declare_parameter('cameras.arm.vertical_fov', 150.0)
+        self.declare_parameter('cameras.arm.aspect_ratio', 1.33)
+        self.declare_parameter('cameras.arm.resolution.width', 640)
+        self.declare_parameter('cameras.arm.resolution.height', 480)
+
+        self.rendering_resolution = self.get_parameter('rendering_resolution').value
+
+        # Assemble camera parameters into a nested dict for easier access later.
+        self.camera_params = {
+            'base': {
+                'vertical_fov': self.get_parameter('cameras.base.vertical_fov').value,
+                'aspect_ratio': self.get_parameter('cameras.base.aspect_ratio').value,
+                'resolution': {
+                    'width': self.get_parameter('cameras.base.resolution.width').value,
+                    'height': self.get_parameter('cameras.base.resolution.height').value,
+                }
+            },
+            'arm': {
+                'vertical_fov': self.get_parameter('cameras.arm.vertical_fov').value,
+                'aspect_ratio': self.get_parameter('cameras.arm.aspect_ratio').value,
+                'resolution': {
+                    'width': self.get_parameter('cameras.arm.resolution.width').value,
+                    'height': self.get_parameter('cameras.arm.resolution.height').value,
+                }
+            }
+        }
 
         # --- Publishers & Subscribers ---
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
@@ -59,10 +96,13 @@ class MauriceBotNode(Node):
         self.viewer_handle = viewer.launch_passive(self.model, self.data)
 
         # --- Offscreen Rendering Setup (executed in the viewer thread) ---
-        offscreen_width = 640
-        offscreen_height = 480
+        # Compute each camera's offscreen height using the fixed rendering_resolution (width)
+        base_offscreen_height = int(self.rendering_resolution / self.camera_params['base']['aspect_ratio'])
+        arm_offscreen_height = int(self.rendering_resolution / self.camera_params['arm']['aspect_ratio'])
 
-        # Create an offscreen GL context and make it current in this thread
+        # Create a single offscreen GL context with the common width and maximum required height
+        offscreen_width = self.rendering_resolution
+        offscreen_height = max(base_offscreen_height, arm_offscreen_height)
         offscreen_ctx = mujoco.GLContext(offscreen_width, offscreen_height)
         offscreen_ctx.make_current()
 
@@ -80,11 +120,13 @@ class MauriceBotNode(Node):
         mujoco.mjv_defaultCamera(offscreen_camera_base)
         offscreen_camera_base.type = mujoco.mjtCamera.mjCAMERA_FIXED
         offscreen_camera_base.fixedcamid = camera_base_id
+        # Rely on MJCF settings; no need to override FOV here
 
         offscreen_camera_arm = mujoco.MjvCamera()
         mujoco.mjv_defaultCamera(offscreen_camera_arm)
         offscreen_camera_arm.type = mujoco.mjtCamera.mjCAMERA_FIXED
         offscreen_camera_arm.fixedcamid = camera_arm_id
+        # Rely on MJCF settings; no need to override FOV here
 
         # Render offscreen images at ~30 Hz in this thread
         last_time = time.time()
@@ -94,50 +136,64 @@ class MauriceBotNode(Node):
             now = time.time()
             if now - last_time >= rate:
                 last_time = now
-                self.render_offscreen_images(offscreen_width, offscreen_height,
-                                             mjr_context, mjv_scene, mjv_option,
-                                             offscreen_camera_base, offscreen_camera_arm)
+                self.render_offscreen_images(mjr_context, mjv_scene, mjv_option,
+                                             offscreen_camera_base, offscreen_camera_arm,
+                                             base_offscreen_height, arm_offscreen_height)
         self.get_logger().info("Viewer closed.")
 
-    def render_offscreen_images(self, width, height, mjr_context, mjv_scene, mjv_option,
-                                camera_base, camera_arm):
-        # Create a viewport covering the entire offscreen area
-        viewport = mujoco.MjrRect(0, 0, width, height)
+    def render_offscreen_images(self, mjr_context, mjv_scene, mjv_option,
+                                camera_base, camera_arm, base_offscreen_height, arm_offscreen_height):
+        offscreen_width = self.rendering_resolution
+
+        # Create viewports for each camera using their computed offscreen dimensions
+        viewport_base = mujoco.MjrRect(0, 0, offscreen_width, base_offscreen_height)
+        viewport_arm  = mujoco.MjrRect(0, 0, offscreen_width, arm_offscreen_height)
 
         # ----- Render from the base camera -----
         mujoco.mjv_updateScene(self.model, self.data, mjv_option, None,
                                camera_base, mujoco.mjtCatBit.mjCAT_ALL, mjv_scene)
         mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, mjr_context)
-        mujoco.mjr_render(viewport, mjv_scene, mjr_context)
-        img_base = np.empty((height, width, 3), dtype=np.uint8)
-        mujoco.mjr_readPixels(img_base, None, viewport, mjr_context)
+        mujoco.mjr_render(viewport_base, mjv_scene, mjr_context)
+        img_base = np.empty((base_offscreen_height, offscreen_width, 3), dtype=np.uint8)
+        mujoco.mjr_readPixels(img_base, None, viewport_base, mjr_context)
 
-        # Convert and publish the base camera image as a ROS Image message
+        # Resize the base image to the final resolution from parameters
+        final_base_width = self.camera_params['base']['resolution']['width']
+        final_base_height = self.camera_params['base']['resolution']['height']
+        img_base_resized = cv2.resize(img_base, (final_base_width, final_base_height))
+
+        # Build and publish the ROS Image message for the base camera
         img_msg_base = Image()
         img_msg_base.header.stamp = self.get_clock().now().to_msg()
-        img_msg_base.height = height
-        img_msg_base.width = width
+        img_msg_base.height = final_base_height
+        img_msg_base.width = final_base_width
         img_msg_base.encoding = "rgb8"
         img_msg_base.is_bigendian = 0
-        img_msg_base.step = width * 3
-        img_msg_base.data = img_base.tobytes()
+        img_msg_base.step = final_base_width * 3
+        img_msg_base.data = img_base_resized.tobytes()
         self.get_logger().info(f"Published base camera image: {img_msg_base.header.stamp}")
         self.camera_base_pub.publish(img_msg_base)
 
         # ----- Render from the arm camera -----
         mujoco.mjv_updateScene(self.model, self.data, mjv_option, None,
                                camera_arm, mujoco.mjtCatBit.mjCAT_ALL, mjv_scene)
-        mujoco.mjr_render(viewport, mjv_scene, mjr_context)
-        img_arm = np.empty((height, width, 3), dtype=np.uint8)
-        mujoco.mjr_readPixels(img_arm, None, viewport, mjr_context)
+        mujoco.mjr_render(viewport_arm, mjv_scene, mjr_context)
+        img_arm = np.empty((arm_offscreen_height, offscreen_width, 3), dtype=np.uint8)
+        mujoco.mjr_readPixels(img_arm, None, viewport_arm, mjr_context)
+
+        # Resize the arm image to the final resolution from parameters
+        final_arm_width = self.camera_params['arm']['resolution']['width']
+        final_arm_height = self.camera_params['arm']['resolution']['height']
+        img_arm_resized = cv2.resize(img_arm, (final_arm_width, final_arm_height))
+
         img_msg_arm = Image()
         img_msg_arm.header.stamp = self.get_clock().now().to_msg()
-        img_msg_arm.height = height
-        img_msg_arm.width = width
+        img_msg_arm.height = final_arm_height
+        img_msg_arm.width = final_arm_width
         img_msg_arm.encoding = "rgb8"
         img_msg_arm.is_bigendian = 0
-        img_msg_arm.step = width * 3
-        img_msg_arm.data = img_arm.tobytes()
+        img_msg_arm.step = final_arm_width * 3
+        img_msg_arm.data = img_arm_resized.tobytes()
         self.get_logger().info(f"Published arm camera image: {img_msg_arm.header.stamp}")
         self.camera_arm_pub.publish(img_msg_arm)
 
