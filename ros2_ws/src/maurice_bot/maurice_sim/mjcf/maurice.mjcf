@@ -10,11 +10,21 @@
     <mesh name="link4_mesh" file="link4.STL" scale="1 1 1"/>
     <mesh name="link5_mesh" file="link5.STL" scale="1 1 1"/>
     <mesh name="link6_mesh" file="link6.STL" scale="1 1 1"/>
+    
+    <!-- Add grid texture and material -->
+    <texture type="2d" name="grid" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" width="512" height="512" mark="edge" markrgb=".8 .8 .8"/>
+    <material name="grid_material" texture="grid" texrepeat="5 5" texuniform="true" reflectance=".0"/>
   </asset>
 
   <worldbody>
-    <!-- Ground plane -->
-    <geom name="floor" type="plane" pos="0 0 0" size="10 10 0.1" rgba="0.8 0.9 0.8 1"/>
+    <!-- Standard lighting setup -->
+    <light name="spotlight" mode="targetbody" target="base_link" diffuse=".8 .8 .8" specular="0.3 0.3 0.3" pos="0 -1 2" cutoff="30"/>
+    <light name="top" pos="0 0 10" dir="0 0 -1" diffuse=".7 .7 .7" specular="0.3 0.3 0.3"/>
+    <light name="side1" pos="2 0 1" dir="-1 0 -0.5" diffuse=".5 .5 .5" specular="0.2 0.2 0.2"/>
+    <light name="side2" pos="-2 0 1" dir="1 0 -0.5" diffuse=".5 .5 .5" specular="0.2 0.2 0.2"/>
+
+    <!-- Ground plane with grid material -->
+    <geom name="floor" type="plane" pos="0 0 0" size="10 10 0.1" material="grid_material"/>
 
     <!-- Reordering: x and y translations before yaw rotation -->
     <body name="base_root" pos="0 0 0">
