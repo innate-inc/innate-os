@@ -14,6 +14,10 @@
     <!-- Add grid texture and material -->
     <texture type="2d" name="grid" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" width="512" height="512" mark="edge" markrgb=".8 .8 .8"/>
     <material name="grid_material" texture="grid" texrepeat="5 5" texuniform="true" reflectance=".0"/>
+    
+    <!-- New materials -->
+    <material name="matt_black" rgba="0.05 0.05 0.05 1"/>
+    <material name="bright_orange" rgba="1.0 0.5 0.0 1"/>
   </asset>
 
   <worldbody>
@@ -46,39 +50,39 @@
           <!-- Base link and the rest of the arm -->
           <body name="base_link" pos="0 0 0">
             <inertial pos="0 0 0" mass="0.89" diaginertia="0.001 0.001 0.001"/>
-            <geom name="base_geom" type="mesh" mesh="base_mesh"/>
+            <geom name="base_geom" type="mesh" mesh="base_mesh" material="matt_black"/>
             <camera name="camera_base" pos="0.0197 0 0.19663" 
                     quat="0.5416752 0.4545195 -0.4545195 -0.5416752" mode="fixed" fovy="80"/>
             
             <body name="link1" pos="0.0845 -0.0597 0.0583">
               <inertial pos="0 0 0" mass="0.065" diaginertia="0.0001 0.0001 0.0001"/>
               <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="20"/>
-              <geom name="link1_geom" type="mesh" mesh="link1_mesh"/>
+              <geom name="link1_geom" type="mesh" mesh="link1_mesh" material="bright_orange"/>
               
               <body name="link2" pos="0 0 0.01825">
                 <inertial pos="0 0 0" mass="0.080" diaginertia="0.0001 0.0001 0.0001"/>
                 <joint name="joint2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="20"/>
-                <geom name="link2_geom" type="mesh" mesh="link2_mesh"/>
+                <geom name="link2_geom" type="mesh" mesh="link2_mesh" material="matt_black"/>
                 
                 <body name="link3" pos="0.034 0 0.11825">
                   <inertial pos="0 0 0" mass="0.055" diaginertia="0.0001 0.0001 0.0001"/>
                   <joint name="joint3" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="20"/>
-                  <geom name="link3_geom" type="mesh" mesh="link3_mesh"/>
+                  <geom name="link3_geom" type="mesh" mesh="link3_mesh" material="bright_orange"/>
                   
                   <body name="link4" pos="0.13609 0 0.00025">
                     <inertial pos="0 0 0" mass="0.022" diaginertia="0.00005 0.00005 0.00005"/>
                     <joint name="joint4" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="20"/>
-                    <geom name="link4_geom" type="mesh" mesh="link4_mesh"/>
+                    <geom name="link4_geom" type="mesh" mesh="link4_mesh" material="matt_black"/>
                     
                     <body name="link5" pos="0.045 0.002 0">
                       <inertial pos="0 0 0" mass="0.050" diaginertia="0.00005 0.00005 0.00005"/>
                       <joint name="joint5" type="hinge" axis="1 0 0" limited="true" range="-3.14 3.14" damping="20"/>
-                      <geom name="link5_geom" type="mesh" mesh="link5_mesh"/>
+                      <geom name="link5_geom" type="mesh" mesh="link5_mesh" material="bright_orange"/>
                       
                       <body name="link6" pos="0.014 -0.0075 0">
                         <inertial pos="0 0 0" mass="0.012" diaginertia="0.00002 0.00002 0.00002"/>
                         <joint name="joint6" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="20"/>
-                        <geom name="link6_geom" type="mesh" mesh="link6_mesh"/>
+                        <geom name="link6_geom" type="mesh" mesh="link6_mesh" material="matt_black"/>
                       </body>
                       
                       <body name="arm_camera_link" pos="0.00454 0 0.05448">

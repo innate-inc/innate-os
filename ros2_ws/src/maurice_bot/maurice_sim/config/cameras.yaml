@@ -3,14 +3,14 @@
     rendering_resolution: 640
     cameras:
       base:
-        vertical_fov: 80.0
-        aspect_ratio: 4.44
+        vertical_fov: 40.0
+        aspect_ratio: 2.5
         resolution:
           width: 1280
           height: 800
       
       arm:
-        vertical_fov: 150.0
+        vertical_fov: 80.0
         aspect_ratio: 1.33
         resolution:
           width: 640

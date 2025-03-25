@@ -161,6 +161,8 @@ class MauriceBotNode(Node):
         final_base_width = self.camera_params['base']['resolution']['width']
         final_base_height = self.camera_params['base']['resolution']['height']
         img_base_resized = cv2.resize(img_base, (final_base_width, final_base_height))
+        # Flip the base image horizontally instead of rotating
+        img_base_flipped = cv2.flip(img_base_resized, 0)  # 0 means vertical flip
 
         # Build and publish the ROS Image message for the base camera
         img_msg_base = Image()
@@ -170,7 +172,7 @@ class MauriceBotNode(Node):
         img_msg_base.encoding = "rgb8"
         img_msg_base.is_bigendian = 0
         img_msg_base.step = final_base_width * 3
-        img_msg_base.data = img_base_resized.tobytes()
+        img_msg_base.data = img_base_flipped.tobytes()
         self.get_logger().info(f"Published base camera image: {img_msg_base.header.stamp}")
         self.camera_base_pub.publish(img_msg_base)
 
@@ -185,6 +187,8 @@ class MauriceBotNode(Node):
         final_arm_width = self.camera_params['arm']['resolution']['width']
         final_arm_height = self.camera_params['arm']['resolution']['height']
         img_arm_resized = cv2.resize(img_arm, (final_arm_width, final_arm_height))
+        # Flip the arm image horizontally instead of rotating
+        img_arm_flipped = cv2.flip(img_arm_resized, 1)  # 1 means horizontal flip
 
         img_msg_arm = Image()
         img_msg_arm.header.stamp = self.get_clock().now().to_msg()
@@ -193,7 +197,7 @@ class MauriceBotNode(Node):
         img_msg_arm.encoding = "rgb8"
         img_msg_arm.is_bigendian = 0
         img_msg_arm.step = final_arm_width * 3
-        img_msg_arm.data = img_arm_resized.tobytes()
+        img_msg_arm.data = img_arm_flipped.tobytes()
         self.get_logger().info(f"Published arm camera image: {img_msg_arm.header.stamp}")
         self.camera_arm_pub.publish(img_msg_arm)
 
