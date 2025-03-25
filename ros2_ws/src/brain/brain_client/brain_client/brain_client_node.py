@@ -423,6 +423,12 @@ class BrainClientNode(Node):
         self.chat_out_pub.publish(out_msg)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
+        if not self.primitives_registered:
+            self.get_logger().warn(
+                "\033[93m[BrainClient] Primitives not registered. Skipping VisionAgentOutput.\033[0m"
+            )
+            return
+
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
 
@@ -433,7 +439,6 @@ class BrainClientNode(Node):
                 )
                 cancel_future = self._goal_handle.cancel_goal_async()
                 cancel_future.add_done_callback(self.cancel_response_callback)
-            return
 
         if payload.thoughts:
             chat_entry = MessageOut(
@@ -499,8 +504,6 @@ class BrainClientNode(Node):
 
         if self.ready_for_image and self.last_image is not None:
             try:
-                self.get_logger().info("Agent loop: sending image")
-
                 # Compress the RGB image as JPEG (70% quality)
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
                 success, encoded_img = cv2.imencode(
