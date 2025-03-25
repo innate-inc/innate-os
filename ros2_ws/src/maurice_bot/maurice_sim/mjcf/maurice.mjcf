@@ -32,20 +32,20 @@
 
     <!-- Reordering: x and y translations before yaw rotation -->
     <body name="base_root" pos="0 0 0">
-      <inertial pos="0 0 0" mass="1.0" diaginertia="0.1 0.1 0.1"/>
+      <inertial pos="0 0 0" mass="0.01" diaginertia="0.1 0.1 0.1"/>
       
       <!-- First, translation along the x-axis -->
-      <joint name="base_x" type="slide" axis="1 0 0" damping="20"/>
+      <joint name="base_x" type="slide" axis="1 0 0" damping="5"/>
       
       <body name="base_x" pos="0 0 0">
-        <inertial pos="0 0 0" mass="1.0" diaginertia="0.1 0.1 0.1"/>
+        <inertial pos="0 0 0" mass="0.01" diaginertia="0.1 0.1 0.1"/>
         <!-- Then, translation along the y-axis -->
-        <joint name="base_y" type="slide" axis="0 1 0" damping="20"/>
+        <joint name="base_y" type="slide" axis="0 1 0" damping="5"/>
         
         <body name="base_y" pos="0 0 0">
-          <inertial pos="0 0 0" mass="1.0" diaginertia="0.1 0.1 0.1"/>
+          <inertial pos="0 0 0" mass="0.01" diaginertia="0.1 0.1 0.1"/>
           <!-- Finally, apply yaw rotation -->
-          <joint name="base_yaw" type="hinge" axis="0 0 1" damping="20"/>
+          <joint name="base_yaw" type="hinge" axis="0 0 1" damping="5"/>
           
           <!-- Base link and the rest of the arm -->
           <body name="base_link" pos="0 0 0">
@@ -56,32 +56,32 @@
             
             <body name="link1" pos="0.0845 -0.0597 0.0583">
               <inertial pos="0 0 0" mass="0.065" diaginertia="0.0001 0.0001 0.0001"/>
-              <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="20"/>
+              <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="5"/>
               <geom name="link1_geom" type="mesh" mesh="link1_mesh" material="bright_orange"/>
               
               <body name="link2" pos="0 0 0.01825">
                 <inertial pos="0 0 0" mass="0.080" diaginertia="0.0001 0.0001 0.0001"/>
-                <joint name="joint2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="20"/>
+                <joint name="joint2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                 <geom name="link2_geom" type="mesh" mesh="link2_mesh" material="matt_black"/>
                 
                 <body name="link3" pos="0.034 0 0.11825">
                   <inertial pos="0 0 0" mass="0.055" diaginertia="0.0001 0.0001 0.0001"/>
-                  <joint name="joint3" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="20"/>
+                  <joint name="joint3" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                   <geom name="link3_geom" type="mesh" mesh="link3_mesh" material="bright_orange"/>
                   
                   <body name="link4" pos="0.13609 0 0.00025">
                     <inertial pos="0 0 0" mass="0.022" diaginertia="0.00005 0.00005 0.00005"/>
-                    <joint name="joint4" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="20"/>
+                    <joint name="joint4" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                     <geom name="link4_geom" type="mesh" mesh="link4_mesh" material="matt_black"/>
                     
                     <body name="link5" pos="0.045 0.002 0">
                       <inertial pos="0 0 0" mass="0.050" diaginertia="0.00005 0.00005 0.00005"/>
-                      <joint name="joint5" type="hinge" axis="1 0 0" limited="true" range="-3.14 3.14" damping="20"/>
+                      <joint name="joint5" type="hinge" axis="1 0 0" limited="true" range="-3.14 3.14" damping="5"/>
                       <geom name="link5_geom" type="mesh" mesh="link5_mesh" material="bright_orange"/>
                       
                       <body name="link6" pos="0.014 -0.0075 0">
                         <inertial pos="0 0 0" mass="0.012" diaginertia="0.00002 0.00002 0.00002"/>
-                        <joint name="joint6" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="20"/>
+                        <joint name="joint6" type="hinge" axis="0 0 -1" limited="true" range="-3.14 3.14" damping="5"/>
                         <geom name="link6_geom" type="mesh" mesh="link6_mesh" material="matt_black"/>
                       </body>
                       
@@ -112,16 +112,16 @@
 
   <actuator>
     <!-- Velocity control actuators -->
-    <velocity joint="base_x" kv="10"/>
-    <velocity joint="base_y" kv="10"/>
-    <velocity joint="base_yaw" kv="10"/>
+    <velocity joint="base_x" kv="100"/>
+    <velocity joint="base_y" kv="100"/>
+    <velocity joint="base_yaw" kv="100"/>
     
     <!-- Position control actuators for the arm joints -->
-    <position joint="joint1" kp="100"/>
-    <position joint="joint2" kp="100"/>
-    <position joint="joint3" kp="100"/>
-    <position joint="joint4" kp="100"/>
-    <position joint="joint5" kp="100"/>
-    <position joint="joint6" kp="100"/>
+    <position joint="joint1" kp="1000"/>
+    <position joint="joint2" kp="1000"/>
+    <position joint="joint3" kp="1000"/>
+    <position joint="joint4" kp="1000"/>
+    <position joint="joint5" kp="1000"/>
+    <position joint="joint6" kp="1000"/>
   </actuator>
 </mujoco>

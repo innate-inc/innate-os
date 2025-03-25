@@ -10,7 +10,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState, Image
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float64MultiArray
 
 import tf2_ros
 
@@ -70,7 +70,7 @@ class MauriceBotNode(Node):
         self.camera_arm_pub  = self.create_publisher(Image, '/camera_arm/image_raw', 10)
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
-        self.create_subscription(Float32MultiArray, '/maurice_arm/commands', self.arm_commands_callback, 10)
+        self.create_subscription(Float64MultiArray, '/maurice_arm/commands', self.arm_commands_callback, 10)
 
         # --- Timers for simulation and publishing ---
         self.simulation_timer = self.create_timer(0.002, self.simulation_timer_callback)
@@ -200,7 +200,7 @@ class MauriceBotNode(Node):
         self.twist_cmd = msg
         self.get_logger().info(f"Received /cmd_vel: linear={msg.linear.x}, angular={msg.angular.z}")
 
-    def arm_commands_callback(self, msg: Float32MultiArray):
+    def arm_commands_callback(self, msg: Float64MultiArray):
         self.arm_commands = msg.data
         self.get_logger().info(f"Received /maurice_arm/commands: {self.arm_commands}")
 

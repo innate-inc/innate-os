@@ -12,7 +12,7 @@ class LeaderArmNode(Node):
         super().__init__('leader_arm')
         
         # Declare and get parameters
-        self.declare_parameter('device_name', '/dev/arm')
+        self.declare_parameter('device_name', '/dev/ttyACM0')
         self.declare_parameter('baud_rate', 1000000)
         self.declare_parameter('control_frequency', 100.0)
         self.declare_parameter('servo_ids', [1, 2, 3, 4, 5, 6])

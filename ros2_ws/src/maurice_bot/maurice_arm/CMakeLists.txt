@@ -10,13 +10,20 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
 
-# Install all Python files to the same directory
 install(FILES
   maurice_arm/__init__.py
   maurice_arm/dynamixel.py
   maurice_arm/robot.py
   maurice_arm/maurice_arm.py
   DESTINATION lib/${PROJECT_NAME}
+)
+# Set Python version
+set(PYTHON_VERSION "python3.10")
+
+# Install Python module to site-packages
+install(
+  DIRECTORY maurice_arm/
+  DESTINATION lib/${PYTHON_VERSION}/site-packages/maurice_arm
 )
 
 # Make maurice_arm.py executable
