@@ -1,6 +1,6 @@
 amcl:
   ros__parameters:
-    use_sim_time: False
+    use_sim_time: True
 
 global_costmap:
   global_costmap:
@@ -9,7 +9,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: "map"
       robot_base_frame: "base_link"
-      use_sim_time: False
+      use_sim_time: True
       robot_radius: 0.105
       resolution: 0.05
       track_unknown_space: true
@@ -29,7 +29,7 @@ local_costmap:
       publish_frequency: 2.0
       global_frame: "odom"
       robot_base_frame: "base_link"
-      use_sim_time: False
+      use_sim_time: True
       rolling_window: true
       width: 3
       height: 3
@@ -58,46 +58,44 @@ planner_server:
 controller_server:
   ros__parameters:
     controller_plugins: ["FollowPath"]
+    controller_frequency: 10.0
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
-      min_vel_x: -0.2
+      min_vel_x: 0.0
       max_vel_x: 0.45
       min_vel_y: 0.0
       max_vel_y: 0.0
-      max_vel_theta: 3.0
-      min_speed_xy: -0.2
+      min_vel_theta: -1.5
+      max_vel_theta: 1.5
+      min_speed_xy: 0.0
       max_speed_xy: 0.45
-      min_speed_theta: 0.0
       acc_lim_x: 2.5
-      acc_lim_y: 0.0
-      acc_lim_theta: 3.2
+      acc_lim_theta: 1.0
       decel_lim_x: -2.5
-      decel_lim_theta: -3.2
+      decel_lim_theta: -1.5
       vx_samples: 20
       vy_samples: 0
       vtheta_samples: 20
       sim_time: 1.5
       linear_granularity: 0.05
-      angular_granularity: 0.025
+      angular_granularity: 0.01
       xy_goal_tolerance: 0.05
       yaw_goal_tolerance: 0.10
       trans_stopped_velocity: 0.1
       theta_stopped_velocity: 0.1
       short_circuit_trajectory_evaluation: true
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle:
-        scale: 0.02
-      PathAlign:
+      critics: ["PathDist", "GoalDist", "RotateToGoal", "PathAlign", "GoalAlign"]
+      PathDist:
         scale: 64.0
       GoalAlign:
-        scale: 0.02
-      PathDist:
-        scale: 0.02
+        scale: 12.0
+      PathAlign:
+        scale: 64.0
       GoalDist:
-        scale: 0.02
+        scale: 64.0
       RotateToGoal:
-        scale: 0.02
-        slowing_factor: 5.0
+        scale: 16.0
+        slowing_factor: 1.0
         lookahead_time: -1.0
       debug_trajectory_details: false
 
