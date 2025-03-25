@@ -177,7 +177,9 @@ class InferenceNode(Node):
 
         # Run the policy to predict the future actions
         with torch.no_grad():
+            start_time = time.time()
             output = self.policy(qpos_tensor, images)
+            print(f"Policy time: {time.time() - start_time:.3f} seconds")
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
                 action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=output.dtype, device=self.device)
                 action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
