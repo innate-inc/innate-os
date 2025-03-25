@@ -366,7 +366,6 @@ class SimulationNode:
     def init_movement(self):
         """Initialize robot movement"""
         self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
-        self.auto_movement_delay = 30  # 3 seconds at dt=0.1
 
     def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
         """Convert linear and angular velocity to left and right wheel velocities."""
@@ -515,26 +514,46 @@ class SimulationNode:
 
             # --- (F) Handle velocity commands from agent -> sim
             try:
-                cmd = self.shared_queues.agent_to_sim.get_nowait()
-                if isinstance(cmd, VelocityCmd):
-                    linear_vel = cmd.linear_x
-                    angular_vel = cmd.angular_z
-                    print(f"linear_vel: {linear_vel}, angular_vel: {angular_vel}")
-                    left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
-                        linear_vel, angular_vel
-                    )
-                    self.robot.control_dofs_velocity(
-                        [left_vel, right_vel], [self.left_idx, self.right_idx]
-                    )
-                elif isinstance(cmd, ResetRobotCmd):
+                # Process all messages in queue and keep track of latest commands
+                latest_velocity_cmd = None
+                latest_reset_cmd = None
+
+                while True:
+                    try:
+                        cmd = self.shared_queues.agent_to_sim.get_nowait()
+                        if isinstance(cmd, VelocityCmd):
+                            latest_velocity_cmd = cmd
+                        elif isinstance(cmd, ResetRobotCmd):
+                            latest_reset_cmd = cmd
+                    except queue.Empty:
+                        break
+
+                # Apply latest commands if they exist
+                if latest_reset_cmd is not None:
                     print("[SimulationNode] Resetting robot pose to origin.")
                     self.robot.set_pos(ROBOT_INIT_POS)
                     self.robot.set_quat(ROBOT_INIT_QUAT)
                     self.robot.control_dofs_velocity(
                         [0.0, 0.0], [self.left_idx, self.right_idx]
                     )
-            except queue.Empty:
-                pass
+                elif latest_velocity_cmd is not None:
+                    linear_vel = latest_velocity_cmd.linear_x
+                    angular_vel = latest_velocity_cmd.angular_z
+
+                    # Calculate odometry velocity norm
+                    odom_vel_norm = np.linalg.norm([lin_vel[0], lin_vel[1], lin_vel[2]])
+                    print(
+                        f"Velocity comparison - Odom norm: {odom_vel_norm:.3f}, Cmd x: {linear_vel:.3f}"
+                    )
+
+                    left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
+                        linear_vel, angular_vel
+                    )
+                    self.robot.control_dofs_velocity(
+                        [left_vel, right_vel], [self.left_idx, self.right_idx]
+                    )
+            except Exception as e:
+                print(f"Error processing commands: {e}")
 
             # --- (G) Step the physics
             try:
