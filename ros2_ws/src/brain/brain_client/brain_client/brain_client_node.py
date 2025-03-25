@@ -850,6 +850,10 @@ class BrainClientNode(Node):
 
         # Clear local chat history
         self.chat_history = []
+        # As long as we don't have 
+        # confirmation that the new primitives have been registered, we should not
+        # accept new VisionAgentOutput messages.
+        self.primitives_registered = False
 
         # Stop any running primitive
         if self.primitive_running:
@@ -858,17 +862,20 @@ class BrainClientNode(Node):
             )
             self.primitive_running = None
             # Send a stop command to the robot
-            # TODO: This WON'T work, Beeds to be implemented in the primitive action server.
+            self._goal_handle.cancel_goal_async()
+            
             stop_cmd = Twist()
             stop_cmd.linear.x = 0.0
             stop_cmd.angular.z = 0.0
             self.cmd_vel_pub.publish(stop_cmd)
 
-        # Send a chat message to load the memory instead of a reset message
-        chat_msg = MessageIn(
-            type=MessageInType.CHAT_IN, payload={"text": f"!load_memory {memory_state}"}
+        # Send a reset message to the robot
+        reset_msg = MessageIn(
+            type=MessageInType.RESET, payload={"memory_state": memory_state}
         )
-        self.ws_bridge.send_message(chat_msg)
+        self.ws_bridge.send_message(reset_msg)
+
+        
 
         # Publish a system message to the chat
         chat_entry = {
