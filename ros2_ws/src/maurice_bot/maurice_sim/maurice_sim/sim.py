@@ -129,14 +129,9 @@ class MauriceBotNode(Node):
         # Rely on MJCF settings; no need to override FOV here
 
         # Render offscreen images at ~30 Hz in this thread
-        last_time = time.time()
-        rate = 1.0 / 30.0
         while self.viewer_handle.is_running():
             time.sleep(0.005)
-            now = time.time()
-            if now - last_time >= rate:
-                last_time = now
-                self.render_offscreen_images(mjr_context, mjv_scene, mjv_option,
+            self.render_offscreen_images(mjr_context, mjv_scene, mjv_option,
                                              offscreen_camera_base, offscreen_camera_arm,
                                              base_offscreen_height, arm_offscreen_height)
         self.get_logger().info("Viewer closed.")
