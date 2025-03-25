@@ -3,6 +3,7 @@
     rendering_resolution: 640
     cameras:
       base:
+        topic: /color/image
         vertical_fov: 40.0
         aspect_ratio: 2.5
         resolution:
@@ -10,6 +11,7 @@
           height: 800
       
       arm:
+        topic: /image_raw
         vertical_fov: 80.0
         aspect_ratio: 1.33
         resolution:

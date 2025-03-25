@@ -34,11 +34,13 @@ class MauriceBotNode(Node):
         self.declare_parameter('cameras.base.aspect_ratio', 4.44)
         self.declare_parameter('cameras.base.resolution.width', 1280)
         self.declare_parameter('cameras.base.resolution.height', 800)
+        self.declare_parameter('cameras.base.topic', '/camera_base/image_raw')
 
         self.declare_parameter('cameras.arm.vertical_fov', 150.0)
         self.declare_parameter('cameras.arm.aspect_ratio', 1.33)
         self.declare_parameter('cameras.arm.resolution.width', 640)
         self.declare_parameter('cameras.arm.resolution.height', 480)
+        self.declare_parameter('cameras.arm.topic', '/camera_arm/image_raw')
 
         self.rendering_resolution = self.get_parameter('rendering_resolution').value
 
@@ -50,7 +52,8 @@ class MauriceBotNode(Node):
                 'resolution': {
                     'width': self.get_parameter('cameras.base.resolution.width').value,
                     'height': self.get_parameter('cameras.base.resolution.height').value,
-                }
+                },
+                'topic': self.get_parameter('cameras.base.topic').value
             },
             'arm': {
                 'vertical_fov': self.get_parameter('cameras.arm.vertical_fov').value,
@@ -58,7 +61,8 @@ class MauriceBotNode(Node):
                 'resolution': {
                     'width': self.get_parameter('cameras.arm.resolution.width').value,
                     'height': self.get_parameter('cameras.arm.resolution.height').value,
-                }
+                },
+                'topic': self.get_parameter('cameras.arm.topic').value
             }
         }
 
@@ -66,8 +70,8 @@ class MauriceBotNode(Node):
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.joint_state_pub = self.create_publisher(JointState, 'maurice_arm/state', 10)
         # Publishers for offscreen camera images
-        self.camera_base_pub = self.create_publisher(Image, '/camera_base/image_raw', 10)
-        self.camera_arm_pub  = self.create_publisher(Image, '/camera_arm/image_raw', 10)
+        self.camera_base_pub = self.create_publisher(Image, self.camera_params['base']['topic'], 10)
+        self.camera_arm_pub  = self.create_publisher(Image, self.camera_params['arm']['topic'], 10)
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.create_subscription(Float64MultiArray, '/maurice_arm/commands', self.arm_commands_callback, 10)
@@ -182,8 +186,8 @@ class MauriceBotNode(Node):
         final_arm_width = self.camera_params['arm']['resolution']['width']
         final_arm_height = self.camera_params['arm']['resolution']['height']
         img_arm_resized = cv2.resize(img_arm, (final_arm_width, final_arm_height))
-        # Flip the arm image horizontally instead of rotating
-        img_arm_flipped = cv2.flip(img_arm_resized, 1)  # 1 means horizontal flip
+        # Flip the arm image vertically instead of rotating 180 degrees
+        img_arm_flipped = cv2.flip(img_arm_resized, 0)  # 0 means vertical flip
 
         img_msg_arm = Image()
         img_msg_arm.header.stamp = self.get_clock().now().to_msg()
