@@ -142,6 +142,7 @@ class MauriceBotNode(Node):
 
     def render_offscreen_images(self, mjr_context, mjv_scene, mjv_option,
                                 camera_base, camera_arm, base_offscreen_height, arm_offscreen_height):
+        start_time = time.time()
         offscreen_width = self.rendering_resolution
 
         # Create viewports for each camera using their computed offscreen dimensions
@@ -149,12 +150,16 @@ class MauriceBotNode(Node):
         viewport_arm  = mujoco.MjrRect(0, 0, offscreen_width, arm_offscreen_height)
 
         # ----- Render from the base camera -----
+        t1 = time.time()
         mujoco.mjv_updateScene(self.model, self.data, mjv_option, None,
                                camera_base, mujoco.mjtCatBit.mjCAT_ALL, mjv_scene)
+        t2 = time.time()
         mujoco.mjr_setBuffer(mujoco.mjtFramebuffer.mjFB_OFFSCREEN, mjr_context)
         mujoco.mjr_render(viewport_base, mjv_scene, mjr_context)
+        t3 = time.time()
         img_base = np.empty((base_offscreen_height, offscreen_width, 3), dtype=np.uint8)
         mujoco.mjr_readPixels(img_base, None, viewport_base, mjr_context)
+        t4 = time.time()
 
         # Resize the base image to the final resolution from parameters
         final_base_width = self.camera_params['base']['resolution']['width']
@@ -162,6 +167,7 @@ class MauriceBotNode(Node):
         img_base_resized = cv2.resize(img_base, (final_base_width, final_base_height))
         # Flip the base image horizontally instead of rotating
         img_base_flipped = cv2.flip(img_base_resized, 0)  # 0 means vertical flip
+        t5 = time.time()
 
         # Build and publish the ROS Image message for the base camera
         img_msg_base = Image()
@@ -172,15 +178,19 @@ class MauriceBotNode(Node):
         img_msg_base.is_bigendian = 0
         img_msg_base.step = final_base_width * 3
         img_msg_base.data = img_base_flipped.tobytes()
-        self.get_logger().info(f"Published base camera image: {img_msg_base.header.stamp}")
+        t6 = time.time()
         self.camera_base_pub.publish(img_msg_base)
+        t7 = time.time()
 
         # ----- Render from the arm camera -----
         mujoco.mjv_updateScene(self.model, self.data, mjv_option, None,
                                camera_arm, mujoco.mjtCatBit.mjCAT_ALL, mjv_scene)
+        t8 = time.time()
         mujoco.mjr_render(viewport_arm, mjv_scene, mjr_context)
+        t9 = time.time()
         img_arm = np.empty((arm_offscreen_height, offscreen_width, 3), dtype=np.uint8)
         mujoco.mjr_readPixels(img_arm, None, viewport_arm, mjr_context)
+        t10 = time.time()
 
         # Resize the arm image to the final resolution from parameters
         final_arm_width = self.camera_params['arm']['resolution']['width']
@@ -188,6 +198,7 @@ class MauriceBotNode(Node):
         img_arm_resized = cv2.resize(img_arm, (final_arm_width, final_arm_height))
         # Flip the arm image vertically instead of rotating 180 degrees
         img_arm_flipped = cv2.flip(img_arm_resized, 0)  # 0 means vertical flip
+        t11 = time.time()
 
         img_msg_arm = Image()
         img_msg_arm.header.stamp = self.get_clock().now().to_msg()
@@ -197,8 +208,20 @@ class MauriceBotNode(Node):
         img_msg_arm.is_bigendian = 0
         img_msg_arm.step = final_arm_width * 3
         img_msg_arm.data = img_arm_flipped.tobytes()
-        self.get_logger().info(f"Published arm camera image: {img_msg_arm.header.stamp}")
+        t12 = time.time()
         self.camera_arm_pub.publish(img_msg_arm)
+        t13 = time.time()
+
+        # Log timing information
+        self.get_logger().info(f"Base camera: updateScene={1000*(t2-t1):.1f}ms, render={1000*(t3-t2):.1f}ms, " +
+                              f"readPixels={1000*(t4-t3):.1f}ms, resize/flip={1000*(t5-t4):.1f}ms, " +
+                              f"msg_prep={1000*(t6-t5):.1f}ms, publish={1000*(t7-t6):.1f}ms")
+        
+        self.get_logger().info(f"Arm camera: updateScene={1000*(t8-t7):.1f}ms, render={1000*(t9-t8):.1f}ms, " +
+                              f"readPixels={1000*(t10-t9):.1f}ms, resize/flip={1000*(t11-t10):.1f}ms, " +
+                              f"msg_prep={1000*(t12-t11):.1f}ms, publish={1000*(t13-t12):.1f}ms")
+        
+        self.get_logger().info(f"Total rendering time: {1000*(t13-start_time):.1f}ms")
 
     def cmd_vel_callback(self, msg: Twist):
         self.twist_cmd = msg
