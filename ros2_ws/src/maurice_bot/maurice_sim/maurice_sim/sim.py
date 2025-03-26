@@ -109,6 +109,13 @@ class MauriceBotNode(Node):
         offscreen_height = max(base_offscreen_height, arm_offscreen_height)
         offscreen_ctx = mujoco.GLContext(offscreen_width, offscreen_height)
         offscreen_ctx.make_current()
+        
+        # Log GPU information for debugging
+        from OpenGL.GL import glGetString, GL_VENDOR, GL_RENDERER, GL_VERSION
+        vendor = glGetString(GL_VENDOR).decode('utf-8')
+        renderer = glGetString(GL_RENDERER).decode('utf-8')
+        version = glGetString(GL_VERSION).decode('utf-8')
+        self.get_logger().info(f"OpenGL Context Info - Vendor: {vendor}, Renderer: {renderer}, Version: {version}")
 
         # Create the offscreen rendering context, scene, and visualization options
         mjr_context = mujoco.MjrContext(self.model, mujoco.mjtFontScale.mjFONTSCALE_100)
