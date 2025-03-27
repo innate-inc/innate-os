@@ -32,6 +32,7 @@ endif()
 rosidl_generate_interfaces(${PROJECT_NAME}
   # Add your message files here
   "srv/LightCommand.srv"
+  "srv/GotoJS.srv"
   DEPENDENCIES
     std_msgs
     std_srvs

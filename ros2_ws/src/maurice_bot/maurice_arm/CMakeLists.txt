@@ -15,6 +15,7 @@ install(FILES
   maurice_arm/dynamixel.py
   maurice_arm/robot.py
   maurice_arm/maurice_arm.py
+  maurice_arm/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 # Set Python version
@@ -29,6 +30,7 @@ install(
 # Make maurice_arm.py executable
 install(PROGRAMS
   maurice_arm/maurice_arm.py
+  maurice_arm/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
