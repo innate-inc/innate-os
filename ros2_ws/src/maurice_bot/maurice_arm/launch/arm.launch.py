@@ -35,7 +35,16 @@ def generate_launch_description():
         output='screen'
     )
 
+    # Create the arm utils node
+    arm_utils_node = Node(
+        package='maurice_arm',
+        executable='arm_utils.py',
+        name='arm_utils',
+        output='screen'
+    )
+
     return LaunchDescription([
         maurice_arm_node,
-        camera_node
+        camera_node,
+        arm_utils_node
     ])
