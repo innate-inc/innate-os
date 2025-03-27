@@ -1,4 +1,4 @@
-maurice_arm:
+arm:
   ros__parameters:
     device_name: "/dev/ttyACM0"
     baud_rate: 1000000

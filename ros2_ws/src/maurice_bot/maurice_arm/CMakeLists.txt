@@ -14,7 +14,7 @@ install(FILES
   maurice_arm/__init__.py
   maurice_arm/dynamixel.py
   maurice_arm/robot.py
-  maurice_arm/maurice_arm.py
+  maurice_arm/arm.py
   maurice_arm/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -29,7 +29,7 @@ install(
 
 # Make maurice_arm.py executable
 install(PROGRAMS
-  maurice_arm/maurice_arm.py
+  maurice_arm/arm.py
   maurice_arm/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
