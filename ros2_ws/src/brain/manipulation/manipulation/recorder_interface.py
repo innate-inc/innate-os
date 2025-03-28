@@ -23,7 +23,7 @@ class TerminalInterface(Node):
 
         # Create subscription for recorder status.
         self.create_subscription(
-            RecorderStatus, '/recorder_status', self.status_callback, 10
+            RecorderStatus, '/recorder/status', self.status_callback, 10
         )
 
         # Variable to store latest status info.
