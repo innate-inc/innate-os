@@ -145,6 +145,7 @@ class TaskManager:
         self.current_task_dir = None
         self.metadata = None  # Will hold the task metadata
         self.episodes = []    # List of EpisodeData objects
+        self.is_mobile_task = None  # Flag to track if current task is mobile, None if no active task
 
     def start_new_task(self, task_name, task_description, mobile_flag, data_frequency):
         """
@@ -160,6 +161,7 @@ class TaskManager:
         """
         self.current_task_name = task_name
         self.current_task_dir = os.path.join(self.base_data_directory, task_name)
+        self.is_mobile_task = mobile_flag  # Set the mobile flag
         metadata_path = os.path.join(self.current_task_dir, "metadata.json")
 
         if os.path.exists(metadata_path):
@@ -238,6 +240,7 @@ class TaskManager:
         self._save_metadata()
         self.current_task_name = None
         self.current_task_dir = None
+        self.is_mobile_task = None
         self.metadata = None
         self.episodes = []
 

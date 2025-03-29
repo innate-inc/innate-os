@@ -157,15 +157,23 @@ class RecorderNode(Node):
                 self.get_logger().warn(f"Incomplete sensor data; missing image from topic {topic}. Skipping timestep.")
                 return
         
-        if self.latest_arm_state is None or self.latest_leader_command is None or self.latest_cmd_vel is None:
-            self.get_logger().warn("Incomplete sensor data; skipping timestep.")
+        # Check for arm_state and leader_command which are always required
+        if self.latest_arm_state is None or self.latest_leader_command is None:
+            self.get_logger().warn("Incomplete sensor data; missing arm state or leader command. Skipping timestep.")
+            return
+        
+        # Only check for cmd_vel if the current task is mobile
+        is_mobile = self.task_manager.is_mobile_task
+        if is_mobile and self.latest_cmd_vel is None:
+            self.get_logger().warn("Incomplete sensor data; missing cmd_vel for mobile task. Skipping timestep.")
             return
         
         # Build action data starting with leader command
         action_data = list(self.latest_leader_command.data)  # leader_command is a list of floats
-        # Add only forward speed and yaw rate from cmd_vel
-        twist = self.latest_cmd_vel
-        action_data.extend([twist.linear.x, twist.angular.z])
+        # Add only forward speed and yaw rate from cmd_vel if task is mobile
+        if is_mobile and self.latest_cmd_vel is not None:
+            twist = self.latest_cmd_vel
+            action_data.extend([twist.linear.x, twist.angular.z])
         
         # Get joint positions and velocities from the arm state message.
         qpos = list(self.latest_arm_state.position)
