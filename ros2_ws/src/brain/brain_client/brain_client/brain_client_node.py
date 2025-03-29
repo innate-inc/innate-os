@@ -580,6 +580,7 @@ class BrainClientNode(Node):
                     self.get_logger().warn(
                         "\033[93m[BrainClient] No map data available.\033[0m"
                     )
+                    return
 
                 # Include robot coordinates (if available) in the payload.
                 if self.last_odom is not None:
