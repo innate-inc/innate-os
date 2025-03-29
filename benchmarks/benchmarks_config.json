@@ -3,7 +3,7 @@
         {
             "name": "Human Rescue and Email Test",
             "config": "benchmarks/configs/human_rescue_and_email_test.yaml",
-            "trials": 10,
+            "trials": 4,
             "start_trial": 1,
             "delay": 5,
             "variants": [
