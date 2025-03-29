@@ -172,3 +172,28 @@ async def set_directive(request: Request, directive: dict):
         return {"status": "directive_enqueued"}
     else:
         return {"status": "no_shared_queues"}
+
+
+@router.post("/shutdown")
+def shutdown_simulator(request: Request):
+    """
+    Endpoint to gracefully shut down the simulator.
+    Sets the exit event in shared queues to signal all threads to stop.
+
+    Returns:
+        JSON response confirming shutdown has been initiated
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    # Check if we have valid shared_queues
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    # Set the exit event to signal all threads to stop
+    print("[API] Shutdown requested via API endpoint")
+    shared_queues.exit_event.set()
+
+    return JSONResponse({"status": "success", "message": "Shutdown initiated"})

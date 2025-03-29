@@ -6,6 +6,7 @@ import os
 import sys
 import yaml
 import json
+import requests
 
 
 def run_benchmark(
@@ -283,6 +284,22 @@ def run_benchmarks_from_config(
     return successful_benchmarks == total_benchmarks
 
 
+def stop_simulator(base_url="http://localhost:8000"):
+    """Stop the simulator by sending a shutdown request to the API."""
+    try:
+        print("Sending shutdown request to simulator...")
+        response = requests.post(f"{base_url}/shutdown")
+        if response.status_code == 200:
+            print("Successfully requested simulator shutdown.")
+            return True
+        else:
+            print(f"Failed to stop simulator. Status code: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"Error stopping simulator: {e}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run benchmarks for the robot simulation"
@@ -343,6 +360,11 @@ def main():
             default=1.0,
             help="Frame capture interval in seconds (default: 1.0)",
         )
+        subparser.add_argument(
+            "--stop-simulator",
+            action="store_true",
+            help="Stop the simulator after benchmarks are completed",
+        )
 
     args = parser.parse_args()
 
@@ -355,13 +377,14 @@ def main():
             # Set default values for common arguments
             args.url = "http://localhost:8000"
             args.interval = 1.0
+            args.stop_simulator = True
         else:
             parser.print_help()
             sys.exit(1)
 
     # Run the appropriate command
     if args.command == "run":
-        run_multiple_trials(
+        success = run_multiple_trials(
             config_file=args.config,
             num_trials=args.trials,
             base_url=args.url,
@@ -370,12 +393,18 @@ def main():
             delay_between_trials=args.delay,
             variant=None,
         )
+        # Stop simulator if requested
+        if args.stop_simulator:
+            stop_simulator(args.url)
     elif args.command == "all":
-        run_benchmarks_from_config(
+        success = run_benchmarks_from_config(
             config_file=args.config,
             base_url=args.url,
             interval=args.interval,
         )
+        # Stop simulator if requested
+        if args.stop_simulator:
+            stop_simulator(args.url)
 
 
 if __name__ == "__main__":
