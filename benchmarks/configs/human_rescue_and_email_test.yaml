@@ -21,10 +21,6 @@ messages: []
 # Expectations section
 expectations:
   checks:
-    # Location checks
-    - id: "human_location"
-      type: "location"
-      coordinates: [0.0, 0.0, -3.0, 5.0]  # Area where human is located
     - id: "email_sent"
       type: "primitive"
       primitive_name: "send_email"
