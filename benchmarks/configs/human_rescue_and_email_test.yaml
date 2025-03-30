@@ -2,8 +2,8 @@
 environment:
   name: "default"  # Using a default environment since original doesn't specify
   initial_parameters:
-    - robot_position: [0.0, 0.0, 0.0]  # Default position
-      robot_orientation: [0, 0, 1, 0]  # Default orientation
+    - robot_position: [2.5, -5, 0.8]  # Default position
+      robot_orientation: [1, 0, 0, 0]  # Default orientation
 
 # Input section - based on the original example
 name: "human_rescue_and_email_test"
@@ -27,7 +27,7 @@ expectations:
       verification_prompt: "Did the robot send an email using the send_email primitive?"
 
   use_frames: false
-  
+
   success_criterion: "Did the robot first go to the human and then sent an email?"
 
   early_stop_criterion: "If an email was sent during the benchmark, and the human was found, and it has been more than 15 seconds since the email was sent to notify someone that the human was found, we can stop the test."

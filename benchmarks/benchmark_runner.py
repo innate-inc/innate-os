@@ -227,27 +227,45 @@ class DirectiveBenchmark:
     def _reset_robot(self):
         """
         Reset the robot to its starting position.
-        If init_memory is specified in the config, it will be used to
-        initialize robot memory.
+        If init_memory is specified in the config, it will be used to initialize robot memory.
+        If robot_position and robot_orientation are specified in current_parameters,
+        they will be used to set the robot's initial pose.
         """
         try:
             # Check if init_memory is present in the config
             memory_state = self.config.get("init_memory")
 
-            # Use the requests library to send a POST request with proper JSON
-            headers = {"Content-Type": "application/json"}
+            # Create the request data object
+            data = {}
 
+            # Add memory_state if available
             if memory_state:
                 print(f"Resetting robot with memory state: {memory_state}")
-                data = {"memory_state": memory_state}
-                response = requests.post(
-                    f"{self.base_url}/reset_robot", json=data, headers=headers
-                )
-            else:
-                # Even with no memory state, still send proper JSON format
-                response = requests.post(
-                    f"{self.base_url}/reset_robot", json={}, headers=headers
-                )
+                data["memory_state"] = memory_state
+
+            # Add position and orientation if available in current parameters
+            if self.current_parameters:
+                if (
+                    "robot_position" in self.current_parameters
+                    and "robot_orientation" in self.current_parameters
+                ):
+                    position = self.current_parameters["robot_position"]
+                    orientation = self.current_parameters["robot_orientation"]
+                    print(
+                        f"Setting robot position to: {position} and orientation to: {orientation}"
+                    )
+                    data["position"] = position
+                    data["orientation"] = orientation
+                else:
+                    print(
+                        "No position and orientation specified together in current parameters"
+                    )
+
+            # Use the requests library to send a POST request with proper JSON
+            headers = {"Content-Type": "application/json"}
+            response = requests.post(
+                f"{self.base_url}/reset_robot", json=data, headers=headers
+            )
 
             return response.json().get("status") == "reset_enqueued"
         except Exception as e:
