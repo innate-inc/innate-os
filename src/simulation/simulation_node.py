@@ -410,9 +410,26 @@ class SimulationNode:
 
                 # Apply latest commands if they exist
                 if latest_reset_cmd is not None:
-                    print("[SimulationNode] Resetting robot pose to origin.")
-                    self.robot.set_pos(ROBOT_INIT_POS)
-                    self.robot.set_quat(ROBOT_INIT_QUAT)
+                    if (
+                        hasattr(latest_reset_cmd, "pose")
+                        and latest_reset_cmd.pose is not None
+                    ):
+                        # Use custom position and orientation
+                        custom_position, custom_orientation = latest_reset_cmd.pose
+                        print(
+                            f"[SimulationNode] Resetting robot to custom pose: "
+                            f"pos={custom_position}, quat={custom_orientation}"
+                        )
+                        self.robot.set_pos(custom_position)
+                        self.robot.set_quat(custom_orientation)
+                    else:
+                        # Use default position and orientation
+                        print(
+                            "[SimulationNode] Resetting robot pose to default origin."
+                        )
+                        self.robot.set_pos(ROBOT_INIT_POS)
+                        self.robot.set_quat(ROBOT_INIT_QUAT)
+
                     # Reset commanded velocities
                     self.commanded_lin_vel = np.zeros(3)
                     self.commanded_ang_vel = np.zeros(3)
