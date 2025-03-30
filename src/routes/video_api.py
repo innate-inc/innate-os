@@ -13,6 +13,8 @@ router = APIRouter()
 # Create a model for the reset robot request
 class ResetRobotRequest(BaseModel):
     memory_state: Optional[str] = None
+    position: Optional[list[float]] = None
+    orientation: Optional[list[float]] = None
 
 
 def mjpeg_generator(shared_queues, camera_name="first_person"):
@@ -129,28 +131,50 @@ async def reset_robot(
     request: Request, reset_request: Optional[ResetRobotRequest] = None
 ):
     """
-    Enqueues a reset command to move the robot back to its origin.
+    Enqueues a reset command to move the robot back to its origin or to a specified pose.
     Optionally specifies a memory state to load.
     Retrieves the shared queues from the application's state.
 
-    The memory_state can be specified in the JSON body:
-    {"memory_state": "init_mem_human_rescue_and_email_test"}
+    Request body can include:
+    - memory_state: string identifier for memory state to load
+    - position: [x, y, z] coordinates for robot position
+    - orientation: [w, x, y, z] quaternion for robot orientation
+
+    If position and orientation are both provided, they will be used as the new pose.
+    Otherwise, the default pose will be used.
     """
     shared_queues = request.app.state.SHARED_QUEUES
 
     # Get memory_state from request body if provided
     memory_state = None
+    pose = None
+
     if reset_request is not None:
         memory_state = reset_request.memory_state
 
+        # If both position and orientation are provided, combine them into pose
+        if reset_request.position is not None and reset_request.orientation is not None:
+            position = tuple(reset_request.position)
+            orientation = tuple(reset_request.orientation)
+            pose = (position, orientation)
+
     if shared_queues is not None:
         try:
-            reset_cmd = ResetRobotCmd(memory_state=memory_state)
+            reset_cmd = ResetRobotCmd(memory_state=memory_state, pose=pose)
             shared_queues.agent_to_sim.put_nowait(reset_cmd)
             shared_queues.sim_to_agent.put_nowait(reset_cmd)
         except Exception:
             return {"status": "queue_full"}
-        return {"status": "reset_enqueued", "memory_state": memory_state}
+
+        response = {"status": "reset_enqueued", "memory_state": memory_state}
+
+        if pose:
+            response["pose"] = {
+                "position": reset_request.position,
+                "orientation": reset_request.orientation,
+            }
+
+        return response
     else:
         return {"status": "no_shared_queues"}
 
