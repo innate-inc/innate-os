@@ -14,7 +14,11 @@ from src.shared_queues import SharedQueues
 
 
 ROBOT_INIT_POS = (2, -5, 0.8)
-ROBOT_INIT_QUAT = (1, 0, 0, 0)
+ROBOT_INIT_QUAT = (0, 0, 0, 1)
+
+
+def xyzw_to_wxyz(xyzw):
+    return (xyzw[3], xyzw[0], xyzw[1], xyzw[2])
 
 
 class SimulationNode:
@@ -316,7 +320,7 @@ class SimulationNode:
             gs.morphs.URDF(
                 file="data/urdf/turtlebot3_burger.urdf",
                 pos=ROBOT_INIT_POS,
-                quat=ROBOT_INIT_QUAT,
+                quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
             )
         )
 
@@ -418,17 +422,17 @@ class SimulationNode:
                         custom_position, custom_orientation = latest_reset_cmd.pose
                         print(
                             f"[SimulationNode] Resetting robot to custom pose: "
-                            f"pos={custom_position}, quat={custom_orientation}"
+                            f"pos={custom_position}, quat={xyzw_to_wxyz(custom_orientation)} (w, x, y, z)"
                         )
                         self.robot.set_pos(custom_position)
-                        self.robot.set_quat(custom_orientation)
+                        self.robot.set_quat(xyzw_to_wxyz(custom_orientation))
                     else:
                         # Use default position and orientation
                         print(
                             "[SimulationNode] Resetting robot pose to default origin."
                         )
                         self.robot.set_pos(ROBOT_INIT_POS)
-                        self.robot.set_quat(ROBOT_INIT_QUAT)
+                        self.robot.set_quat(xyzw_to_wxyz(ROBOT_INIT_QUAT))
 
                     # Reset commanded velocities
                     self.commanded_lin_vel = np.zeros(3)
