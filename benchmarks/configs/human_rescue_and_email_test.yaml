@@ -2,8 +2,10 @@
 environment:
   name: "default"  # Using a default environment since original doesn't specify
   initial_parameters:
-    - robot_position: [2.5, -5, 0.8]  # Default position
-      robot_orientation: [1, 0, 0, 0]  # Default orientation
+    - robot_position: [2.5, -5, 0.3]  # Near the TV
+      robot_orientation: [0, 0, 0, 1]  #  Oriented towards the furniture beige
+    - robot_position: [0, 0, 0.3]  # At the origin near the white shelf
+      robot_orientation: [0, 0, -0.7, 0.7]  # Oriented towards the TV far away
 
 # Input section - based on the original example
 name: "human_rescue_and_email_test"
