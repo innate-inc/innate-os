@@ -36,7 +36,19 @@ class BLEProvisioner(Node):
         
         # Create a Bluezero Peripheral instance.
         self.ble_peripheral = peripheral.Peripheral(adapter_addr,
-                                                    local_name='ROS2_BLE_Provisioner')
+                                                    local_name='ROS2_BLE_Provisioner',
+                                                    appearance=0)  # Generic device (0)
+
+        # Set advertising parameters explicitly
+        self.ble_peripheral.add_advertise_service_uuid(self.service_uuid)
+        self.ble_peripheral.add_advertise_name()
+        
+        # Increase advertising interval (if supported)
+        # lower numbers mean more frequent advertising
+        # Default min/max typically 1.28s/2.56s (0x0800/0x1000)
+        # Try more aggressive values like 0x00A0/0x00F0 (100ms/150ms)
+        if hasattr(self.ble_peripheral, 'set_advertising_interval'):
+            self.ble_peripheral.set_advertising_interval(0x00A0, 0x00F0)
 
         # Add a service (srv_id can be any integer identifier)
         self.ble_peripheral.add_service(srv_id=1, uuid=self.service_uuid, primary=True)
