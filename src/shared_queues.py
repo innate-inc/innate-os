@@ -26,10 +26,10 @@ class SharedQueues:
     """
 
     def __init__(self, log_everything=False):
-        self.sim_to_agent = queue.Queue(maxsize=10)
-        self.agent_to_sim = queue.Queue(maxsize=10)
+        self.sim_to_agent = queue.Queue(maxsize=100)
+        self.agent_to_sim = queue.Queue(maxsize=100)
         self.sim_to_web = queue.Queue(
-            maxsize=10
+            maxsize=100
         )  # Will now contain dicts of named images
         self.latest_frames = {}
         self.exit_event = threading.Event()
@@ -38,8 +38,8 @@ class SharedQueues:
         self.log_everything = log_everything
 
         # Queues specifically for chat messages
-        self.chat_to_bridge = queue.Queue(maxsize=500)
-        self.chat_from_bridge = queue.Queue(maxsize=500)
+        self.chat_to_bridge = queue.Queue(maxsize=5000)
+        self.chat_from_bridge = queue.Queue(maxsize=5000)
 
         # Store the latest robot position for direct access
         # Format: [x, y, z]
