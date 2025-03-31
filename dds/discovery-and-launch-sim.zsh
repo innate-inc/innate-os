@@ -22,7 +22,7 @@ sleep 2  # Give rosbridge time to start up
 
 # Create a new pane and run the nav system
 tmux split-window -t maurice:0.1 -h
-tmux send-keys -t maurice:0.2 "ros2 launch maurice_nav maurice_nav_launch.py" C-m
+tmux send-keys -t maurice:0.2 "ros2 launch maurice_nav navigation_sim.launch.py" C-m
 echo "Started navigation system..."
 sleep 2  # Give nav system time to start up
 
