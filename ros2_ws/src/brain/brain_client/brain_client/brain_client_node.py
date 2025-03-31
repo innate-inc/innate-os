@@ -387,6 +387,12 @@ class BrainClientNode(Node):
         try:
             self.get_logger().info(f"[BrainClient] Received VisionAgentOutput")
 
+            if not self.primitives_registered:
+                self.get_logger().warn(
+                    "\033[93m[BrainClient] Primitives not registered. Skipping VisionAgentOutput.\033[0m"
+                )
+                return
+
             # HOTFIX: If there's a msg.payload["next_task"] with a "name" field, replace it with "type".
             if "next_task" in msg.payload and msg.payload["next_task"] is not None:
                 if "name" in msg.payload["next_task"]:
@@ -423,12 +429,6 @@ class BrainClientNode(Node):
         self.chat_out_pub.publish(out_msg)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
-        if not self.primitives_registered:
-            self.get_logger().warn(
-                "\033[93m[BrainClient] Primitives not registered. Skipping VisionAgentOutput.\033[0m"
-            )
-            return
-
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
 
@@ -849,12 +849,13 @@ class BrainClientNode(Node):
             f"\033[1;92m[BrainClient] Memory state: {memory_state}\033[0m"
         )
 
-        # Clear local chat history
-        self.chat_history = []
-        # As long as we don't have 
+        # As long as we don't have
         # confirmation that the new primitives have been registered, we should not
         # accept new VisionAgentOutput messages.
         self.primitives_registered = False
+
+        # Clear local chat history
+        self.chat_history = []
 
         # Stop any running primitive
         if self.primitive_running:
@@ -864,7 +865,7 @@ class BrainClientNode(Node):
             self.primitive_running = None
             # Send a stop command to the robot
             self._goal_handle.cancel_goal_async()
-            
+
             stop_cmd = Twist()
             stop_cmd.linear.x = 0.0
             stop_cmd.angular.z = 0.0
@@ -875,8 +876,6 @@ class BrainClientNode(Node):
             type=MessageInType.RESET, payload={"memory_state": memory_state}
         )
         self.ws_bridge.send_message(reset_msg)
-
-        
 
         # Publish a system message to the chat
         chat_entry = {
