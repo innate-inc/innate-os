@@ -21,7 +21,7 @@ from trajectory import cubic_trajectory
 policy_config = {
     'lr': 5e-5,
     'weight_decay': 1e-4,
-    'num_queries': 100,
+    'num_queries': 30,
     'kl_weight': 100,
     'hidden_dim': 512,
     'dim_feedforward': 3200,
@@ -52,7 +52,7 @@ class InferenceNode(Node):
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.policy = ACTPolicy(policy_config).to(self.device)
-        checkpoint_path = '/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Paper_4_20250312_0345/policy_epoch_20000_seed_100.ckpt'
+        checkpoint_path = '/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         # Load normalization stats and metadata from the same directory as checkpoint
         checkpoint_dir = os.path.dirname(checkpoint_path)
@@ -100,7 +100,7 @@ class InferenceNode(Node):
 
 
         # Timer to run the publishing loop at 30 Hz (every ~0.033 seconds)
-        self.timer = self.create_timer(1/30.0, self.inference_loop)
+        self.timer = self.create_timer(1/10.0, self.inference_loop)
 
         # Create publishers for cmd_vel and arm state command
         
