@@ -1,7 +1,7 @@
 # File: brain/manipulation/config/recorder.yaml
 /**:
   ros__parameters:
-    data_directory: "~/maurice-prod/data"       # Directory where data will be saved
+    data_directory: "/media/vignesh/TOSHIBA EXT/static_dataset/"       # Directory where data will be saved
     data_frequency: 30                    # Frequency (e.g., Hz) at which data is recorded
     image_topics:                         # List of image topic names
       - "/color/image"
