@@ -37,7 +37,7 @@ policy_config = {
     'dropout': 0.1,
     'pre_norm': False,
     'state_dim': 6,
-    'action_dim': 8  # Adjust if needed
+    'action_dim': 8  # Adjust icamera_namesf needed
 }
 
 class InferenceNode(Node):
@@ -52,7 +52,7 @@ class InferenceNode(Node):
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.policy = ACTPolicy(policy_config).to(self.device)
-        checkpoint_path = '/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt'
+        checkpoint_path = '~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         # Load normalization stats and metadata from the same directory as checkpoint
         checkpoint_dir = os.path.dirname(checkpoint_path)
@@ -159,6 +159,7 @@ class InferenceNode(Node):
             img1_tensor = torch.tensor(img1).to(self.device)
             img2_tensor = torch.tensor(img2).to(self.device)
             images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
+            self.get_logger().info(f"images.shape: {images.shape}")
         except Exception as e:
             self.get_logger().error(f"Error processing images: {e}")
             return None
@@ -211,15 +212,15 @@ class InferenceNode(Node):
         twist_msg.linear.x = next_action[-2]/2
         twist_msg.angular.z = next_action[-1]/2
         self.cmd_vel_pub.publish(twist_msg)
-        self.get_logger().info(f"Published Twist: linear.x={twist_msg.linear.x}, angular.z={twist_msg.angular.z}")
+        #self.get_logger().info(f"Published Twist: linear.x={twist_msg.linear.x}, angular.z={twist_msg.angular.z}")
 
         # The arm command is taken from the first six elements.
         arm_msg = Float64MultiArray()
         arm_msg.data = next_action[:6]
         self.arm_state_pub.publish(arm_msg)
-        self.get_logger().info(f"Published Arm Command: {arm_msg.data}")
+        #self.get_logger().info(f"Published Arm Command: {arm_msg.data}")
 
-        print(f"Cycle time: {time.time() - start_time:.3f} seconds")
+        #print(f"Cycle time: {time.time() - start_time:.3f} seconds")
 
 def main(args=None):
     rclpy.init(args=args)
