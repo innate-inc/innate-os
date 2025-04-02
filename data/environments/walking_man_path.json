@@ -1,0 +1,82 @@
+{
+    "environment_name": "Baked_sc0_staging_00",
+    "entities": [
+        {
+            "name": "walker_1",
+            "asset_path": "data/assets/walking_man/man.obj",
+            "poses": [
+                {
+                    "time": 0.0,
+                    "position": [
+                        0.0,
+                        0.0,
+                        0.10
+                    ],
+                    "orientation": [
+                        0.0,
+                        0.7071,
+                        0.0,
+                        0.7071
+                    ]
+                },
+                {
+                    "time": 5.0,
+                    "position": [
+                        3.0,
+                        0.0,
+                        0.10
+                    ],
+                    "orientation": [
+                        0.0,
+                        0.7071,
+                        0.0,
+                        0.7071
+                    ]
+                },
+                {
+                    "time": 10.0,
+                    "position": [
+                        3.0,
+                        3.0,
+                        0.10
+                    ],
+                    "orientation": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                    ]
+                },
+                {
+                    "time": 15.0,
+                    "position": [
+                        0.0,
+                        3.0,
+                        0.10
+                    ],
+                    "orientation": [
+                        0.0,
+                        -0.7071,
+                        0.0,
+                        0.7071
+                    ]
+                },
+                {
+                    "time": 20.0,
+                    "position": [
+                        0.0,
+                        0.0,
+                        0.10
+                    ],
+                    "orientation": [
+                        0.0,
+                        -0.7071,
+                        0.0,
+                        0.7071
+                    ]
+                }
+            ],
+            "loop": true
+        }
+    ]
+}
