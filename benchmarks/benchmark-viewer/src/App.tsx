@@ -24,15 +24,15 @@ const Description = styled.p`
   line-height: 1.5;
 `;
 
-const TrialDetails = styled.div<{ success: boolean }>`
+const TrialDetails = styled.div<{ $success: boolean }>`
   background: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.large};
   padding: ${({ theme }) => theme.spacing.xl};
   margin-top: ${({ theme }) => theme.spacing.xl};
   box-shadow: ${({ theme }) => theme.shadows.card};
   border-left: 4px solid
-    ${({ theme, success }) =>
-      success ? theme.colors.success : theme.colors.error};
+    ${({ theme, $success }) =>
+      $success ? theme.colors.success : theme.colors.error};
 `;
 
 const TrialTitle = styled.h2`
@@ -100,14 +100,14 @@ const LoadingOverlay = styled.div`
   color: ${({ theme }) => theme.colors.textLight};
 `;
 
-const StatusTag = styled.div<{ success: boolean }>`
+const StatusTag = styled.div<{ $success: boolean }>`
   display: inline-block;
   padding: ${({ theme }) => `${theme.spacing.xs} ${theme.spacing.sm}`};
   border-radius: ${({ theme }) => theme.borderRadius.small};
-  background: ${({ theme, success }) =>
-    success ? theme.colors.success + "20" : theme.colors.error + "20"};
-  color: ${({ theme, success }) =>
-    success ? theme.colors.success : theme.colors.error};
+  background: ${({ theme, $success }) =>
+    $success ? theme.colors.success + "20" : theme.colors.error + "20"};
+  color: ${({ theme, $success }) =>
+    $success ? theme.colors.success : theme.colors.error};
   font-weight: bold;
   font-size: 0.875rem;
   margin-bottom: ${({ theme }) => theme.spacing.md};
@@ -139,13 +139,22 @@ const loadBenchmarkData = async (benchmarkName: string): Promise<Benchmark> => {
         const [metadata, metrics, chatLog] = await Promise.all([
           fetch(
             `/results/${benchmarkName}/${taskName}/trial_${trialNum}/metadata.json`
-          ).then((r) => r.json()),
+          ).then((r) => {
+            if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+            return r.json();
+          }),
           fetch(
             `/results/${benchmarkName}/${taskName}/trial_${trialNum}/metrics.json`
-          ).then((r) => r.json()),
+          ).then((r) => {
+            if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+            return r.json();
+          }),
           fetch(
             `/results/${benchmarkName}/${taskName}/trial_${trialNum}/chat_log.json`
-          ).then((r) => r.json()),
+          ).then((r) => {
+            if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+            return r.json();
+          }),
         ]);
 
         const trial: Trial = {
@@ -328,11 +337,11 @@ const App: React.FC = () => {
                       onTrialClick={handleTrialClick}
                     />
                     {selectedTrial && (
-                      <TrialDetails success={selectedTrial.success}>
+                      <TrialDetails $success={selectedTrial.success}>
                         <TrialTitle>
                           Trial {selectedTrial.id} Details
                         </TrialTitle>
-                        <StatusTag success={selectedTrial.success}>
+                        <StatusTag $success={selectedTrial.success}>
                           {selectedTrial.success ? "Success" : "Failed"}
                         </StatusTag>
                         <MetricGrid>
