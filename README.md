@@ -97,10 +97,15 @@ Environment configurations are stored as JSON files in the `data/environments/` 
           "time": 0.0, // Simulation time for this keyframe
           "position": [x, y, z],
           "orientation": [w, x, y, z] // Quaternion
+        },
+        {
+          "time": 10.0, // Simulation time for the next keyframe
+          "position": [x2, y2, z2],
+          "orientation": [w2, x2, y2, z2]
         }
-        // Add more poses here for movement (future implementation)
+        // Add more poses here...
       ],
-      "scale": [sx, sy, sz] // Optional, defaults to [1, 1, 1]
+      "loop": false // Optional, defaults to false. If true, trajectory restarts after the last pose.
     }
     // Add more entities...
   ]
@@ -108,7 +113,7 @@ Environment configurations are stored as JSON files in the `data/environments/` 
 ```
 
 *   **Fixed Entities:** An entity with only one pose in the `poses` list will be considered fixed at that position/orientation.
-*   **Moving Entities:** (Future) Entities with multiple poses will interpolate between them based on the `time` field.
+*   **Moving Entities:** Entities with multiple poses will linearly interpolate (LERP for position, SLERP for orientation) between consecutive poses based on the current simulation time. The `loop` parameter determines if the trajectory restarts from the beginning after reaching the last pose's time.
 
 ### Authentication (Auth0)
 
