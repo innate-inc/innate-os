@@ -7,9 +7,16 @@ import json
 from scipy.spatial.transform import Rotation as R
 import time  # Add import for time functions
 import os  # Add os import for path joining
+from typing import Dict, Any  # Add typing imports
 
 from src.simulation.stl_slicing import slice_stl
-from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd, ResetRobotCmd
+from src.agent.types import (
+    RobotStateMsg,
+    OccupancyGridMsg,
+    VelocityCmd,
+    ResetRobotCmd,
+    SetEnvironmentCmd,
+)
 from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
@@ -34,6 +41,7 @@ class SimulationNode:
         self.env_config_path = env_config_path
         self.env_config = None
         self.loaded_entities = {}  # To store references to loaded entities
+        self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
 
         # Load environment configuration
         self._load_environment_config()
@@ -99,13 +107,13 @@ class SimulationNode:
                     f"[SimulationNode] Error: Environment config file not found "
                     f"at {config_path}. Proceeding without entities."
                 )
-                self.env_config = None  # Ensure config is None if file not found
+                self.env_config = None
             except json.JSONDecodeError:
                 print(
-                    f"[SimulationNode] Error: Invalid JSON in environment config file "
+                    f"[SimulationNode] Error: Invalid JSON in config file "
                     f"{config_path}. Proceeding without entities."
                 )
-                self.env_config = None  # Ensure config is None if JSON is invalid
+                self.env_config = None
         else:
             print(
                 "[SimulationNode] No environment config path provided. "
@@ -142,7 +150,7 @@ class SimulationNode:
         base_scene_collision_config = "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
 
         # Option 1: Load base scene without convexification
-        # Keep reference for potential future use, prefix with _ to ignore unused lint
+        # Prefix with _ to ignore unused lint error
         _replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
                 file=base_scene_path,
@@ -160,72 +168,8 @@ class SimulationNode:
         # Add separate collision geometry based on the stage config file
         self._add_collision_from_stage_config(base_scene_collision_config)
 
-        # --- Load entities from config ---
-        if self.env_config and "entities" in self.env_config:
-            num_entities = len(self.env_config["entities"])
-            print(f"[SimulationNode] Loading {num_entities} entities from config...")
-            for entity_data in self.env_config["entities"]:
-                name = entity_data.get("name")
-                asset_path = entity_data.get("asset_path")
-                poses = entity_data.get("poses", [])
-                scale = entity_data.get("scale", [1.0, 1.0, 1.0])
-
-                if not name or not asset_path:
-                    print(
-                        f"[SimulationNode] Skipping entity due to missing "
-                        f"name or asset_path: {entity_data}"
-                    )
-                    continue
-
-                # For now, only handle fixed entities (single pose)
-                if len(poses) == 1:
-                    pose = poses[0]
-                    position = pose.get("position")
-                    # Orientation is [w, x, y, z], which matches gs.morphs.Mesh 'quat' parameter
-                    orientation = pose.get("orientation")
-
-                    if position is None or orientation is None:
-                        print(
-                            f"[SimulationNode] Skipping entity '{name}' due to missing "
-                            f"position or orientation in pose: {pose}"
-                        )
-                        continue
-
-                    print(f"[SimulationNode] Adding fixed entity: {name} at {position}")
-                    try:
-                        entity_obj = self.scene.add_entity(
-                            gs.morphs.Mesh(
-                                file=asset_path,
-                                pos=position,
-                                quat=orientation,  # Use directly as it's [w, x, y, z]
-                                scale=scale,
-                                fixed=True,  # Derived: single pose means fixed
-                                collision=False,  # Defaulting to False as discussed
-                                convexify=False,  # Defaulting to False as discussed
-                            )
-                        )
-                        self.loaded_entities[name] = entity_obj
-                    except Exception as e:
-                        print(
-                            f"[SimulationNode] Error adding entity '{name}' from "
-                            f"path '{asset_path}': {e}"
-                        )
-
-                elif len(poses) > 1:
-                    # TODO: Implement logic for moving entities later
-                    print(
-                        f"[SimulationNode] Skipping entity '{name}' - multi-pose "
-                        f"entities not yet implemented."
-                    )
-                else:
-                    print(
-                        f"[SimulationNode] Skipping entity '{name}' - no poses defined."
-                    )
-        else:
-            print(
-                "[SimulationNode] No entities found in environment config "
-                "or config not loaded."
-            )
+        # --- Load INITIAL entities from config ---
+        self._apply_environment_config(self.env_config)
 
         # Export as STL (should probably only include static geometry here)
         # TODO: Revisit STL export - might not be needed or should exclude dynamic entities
@@ -486,6 +430,95 @@ class SimulationNode:
         ) / self.wheel_radius
         return left_vel, right_vel
 
+    def _apply_environment_config(self, config: Dict[str, Any]):
+        """Clears existing dynamic entities and loads new ones from config."""
+        print("[SimulationNode] Applying new environment configuration...")
+
+        # 1. Clear previously loaded dynamic entities
+        num_existing = len(self.loaded_dynamic_entities)
+        print(f"[SimulationNode] Removing {num_existing} existing dynamic entities...")
+        for name, entity_obj in self.loaded_dynamic_entities.items():
+            try:
+                self.scene.remove_entity(entity_obj)
+                print(f"[SimulationNode] Removed entity: {name}")
+            except Exception as e:
+                print(f"[SimulationNode] Error removing entity {name}: {e}")
+        self.loaded_dynamic_entities.clear()
+
+        # 2. Load new entities from the provided config
+        if config and "entities" in config:
+            num_entities = len(config["entities"])
+            print(
+                f"[SimulationNode] Loading {num_entities} new entities from config..."
+            )
+            for entity_data in config["entities"]:
+                name = entity_data.get("name")
+                asset_path = entity_data.get("asset_path")
+                poses = entity_data.get("poses", [])
+                scale = entity_data.get("scale", [1.0, 1.0, 1.0])
+
+                if not name or not asset_path:
+                    print(
+                        f"[SimulationNode] Skipping entity: missing name/asset_path "
+                        f"in {entity_data}"
+                    )
+                    continue
+
+                # Handle fixed entities (single pose)
+                if len(poses) == 1:
+                    pose = poses[0]
+                    position = pose.get("position")
+                    orientation = pose.get("orientation")  # Assumed [w, x, y, z]
+
+                    if position is None or orientation is None:
+                        print(
+                            f"[SimulationNode] Skipping entity '{name}': missing "
+                            f"pos/orient in pose: {pose}"
+                        )
+                        continue
+
+                    print(
+                        f"[SimulationNode] Adding fixed entity: '{name}' at {position}"
+                    )
+                    try:
+                        # Construct absolute asset path relative to project root
+                        project_root = os.path.dirname(
+                            os.path.dirname(os.path.dirname(__file__))
+                        )
+                        full_asset_path = os.path.join(project_root, asset_path)
+
+                        entity_obj = self.scene.add_entity(
+                            gs.morphs.Mesh(
+                                file=full_asset_path,
+                                pos=position,
+                                quat=orientation,  # Use directly as it's [w, x, y, z]
+                                scale=scale,
+                                fixed=True,  # Derived: single pose means fixed
+                                collision=False,  # Defaulting to False as discussed
+                                convexify=False,  # Defaulting to False as discussed
+                            )
+                        )
+                        # Store reference to the newly loaded entity
+                        self.loaded_dynamic_entities[name] = entity_obj
+                    except Exception as e:
+                        print(
+                            f"[SimulationNode] Error adding entity '{name}' from "
+                            f"path '{asset_path}': {e}"
+                        )
+
+                elif len(poses) > 1:
+                    # TODO: Implement logic for moving entities later
+                    print(
+                        f"[SimulationNode] Skipping '{name}': multi-pose entities "
+                        f"not yet implemented."
+                    )
+                else:
+                    print(
+                        f"[SimulationNode] Skipping entity '{name}': no poses defined."
+                    )
+        else:
+            print("[SimulationNode] No entities found in new environment config.")
+
     def run(self):
         local_forward = np.array([1.0, 0.0, 0.0])
         step_count = 0
@@ -501,6 +534,7 @@ class SimulationNode:
                 # Process all messages in queue and keep track of latest commands
                 latest_velocity_cmd = None
                 latest_reset_cmd = None
+                latest_set_env_cmd = None  # Variable to hold the latest env command
 
                 while True:
                     try:
@@ -509,10 +543,20 @@ class SimulationNode:
                             latest_velocity_cmd = cmd
                         elif isinstance(cmd, ResetRobotCmd):
                             latest_reset_cmd = cmd
+                        elif isinstance(
+                            cmd, SetEnvironmentCmd
+                        ):  # Check for new command
+                            latest_set_env_cmd = cmd
                     except queue.Empty:
                         break
 
-                # Apply latest commands if they exist
+                # Apply latest SetEnvironmentCmd FIRST if it exists
+                if latest_set_env_cmd is not None:
+                    print("[SimulationNode] Received SetEnvironmentCmd.")
+                    self._apply_environment_config(latest_set_env_cmd.config)
+                    # We might want to reset robot pose after env change, TBD
+
+                # Apply latest ResetRobotCmd if it exists (after potential env change)
                 if latest_reset_cmd is not None:
                     if (
                         hasattr(latest_reset_cmd, "pose")
