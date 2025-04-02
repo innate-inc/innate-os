@@ -30,21 +30,12 @@ def xyzw_to_wxyz(xyzw):
 
 
 class SimulationNode:
-    def __init__(
-        self,
-        shared_queues: SharedQueues,
-        enable_vis: bool = True,
-        env_config_path: str = None,
-    ):
+    def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
-        self.env_config_path = env_config_path
-        self.env_config = None
         self.loaded_entities = {}  # To store references to loaded entities
         self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
-
-        # Load environment configuration
-        self._load_environment_config()
+        self.managed_entities: Dict[str, gs.Entity] = {}
 
         # Add timing variables for real-time simulation
         self.last_render_time = 0
@@ -88,37 +79,6 @@ class SimulationNode:
         self.init_movement()
 
         print("SimulationNode initialized.")
-
-    def _load_environment_config(self):
-        """Loads the environment configuration from the specified JSON file."""
-        if self.env_config_path:
-            # Construct absolute path assuming env_config_path is relative to project root
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            config_path = os.path.join(project_root, self.env_config_path)
-            try:
-                with open(config_path, "r") as f:
-                    self.env_config = json.load(f)
-                print(
-                    f"[SimulationNode] Loaded environment config from: "
-                    f"{config_path}"
-                )
-            except FileNotFoundError:
-                print(
-                    f"[SimulationNode] Error: Environment config file not found "
-                    f"at {config_path}. Proceeding without entities."
-                )
-                self.env_config = None
-            except json.JSONDecodeError:
-                print(
-                    f"[SimulationNode] Error: Invalid JSON in config file "
-                    f"{config_path}. Proceeding without entities."
-                )
-                self.env_config = None
-        else:
-            print(
-                "[SimulationNode] No environment config path provided. "
-                "Proceeding without extra entities."
-            )
 
     def _init_genesis(self):
         """Initialize Genesis backend"""
@@ -168,8 +128,12 @@ class SimulationNode:
         # Add separate collision geometry based on the stage config file
         self._add_collision_from_stage_config(base_scene_collision_config)
 
-        # --- Load INITIAL entities from config ---
-        self._apply_environment_config(self.env_config)
+        # --- Pre-load all potential dynamic entities ---
+        self._preload_dynamic_entities()
+
+        # --- Apply an initial empty/default config to hide all preloaded entities initially? ---
+        # Or handle this in _preload_dynamic_entities by placing them far away.
+        # Let's place them far away during preload.
 
         # Export as STL (should probably only include static geometry here)
         # TODO: Revisit STL export - might not be needed or should exclude dynamic entities
@@ -431,38 +395,43 @@ class SimulationNode:
         return left_vel, right_vel
 
     def _apply_environment_config(self, config: Dict[str, Any]):
-        """Clears existing dynamic entities and loads new ones from config."""
-        print("[SimulationNode] Applying new environment configuration...")
+        """Activates and positions managed entities based on config, hides others."""
+        print(
+            "[SimulationNode] Applying environment configuration "
+            "via entity placement..."
+        )
 
-        # 1. Clear previously loaded dynamic entities
-        num_existing = len(self.loaded_dynamic_entities)
-        print(f"[SimulationNode] Removing {num_existing} existing dynamic entities...")
-        for name, entity_obj in self.loaded_dynamic_entities.items():
-            try:
-                self.scene.remove_entity(entity_obj)
-                print(f"[SimulationNode] Removed entity: {name}")
-            except Exception as e:
-                print(f"[SimulationNode] Error removing entity {name}: {e}")
-        self.loaded_dynamic_entities.clear()
-
-        # 2. Load new entities from the provided config
-        if config and "entities" in config:
-            num_entities = len(config["entities"])
+        if not self.managed_entities:
             print(
-                f"[SimulationNode] Loading {num_entities} new entities from config..."
+                "[SimulationNode] No managed entities were pre-loaded. "
+                "Cannot apply config."
             )
+            return
+
+        # Set of entity names specified in the current config
+        active_entity_names = set()
+        if config and "entities" in config:
             for entity_data in config["entities"]:
                 name = entity_data.get("name")
-                asset_path = entity_data.get("asset_path")
-                poses = entity_data.get("poses", [])
-                scale = entity_data.get("scale", [1.0, 1.0, 1.0])
+                if name:
+                    active_entity_names.add(name)
 
-                if not name or not asset_path:
+        # Iterate through all potentially active entities defined in the config
+        if config and "entities" in config:
+            for entity_data in config["entities"]:
+                name = entity_data.get("name")
+                poses = entity_data.get("poses", [])
+                # Optional scale override from config, otherwise use preload scale
+                scale_override = entity_data.get("scale")
+
+                if name not in self.managed_entities:
                     print(
-                        f"[SimulationNode] Skipping entity: missing name/asset_path "
-                        f"in {entity_data}"
+                        f"[SimulationNode] Warning: Entity '{name}' in config "
+                        f"was not pre-loaded. Skipping."
                     )
                     continue
+
+                entity_obj = self.managed_entities[name]
 
                 # Handle fixed entities (single pose)
                 if len(poses) == 1:
@@ -475,36 +444,21 @@ class SimulationNode:
                             f"[SimulationNode] Skipping entity '{name}': missing "
                             f"pos/orient in pose: {pose}"
                         )
+                        # Move it out of the way just in case
+                        entity_obj.set_pos([0, 0, -1000])
                         continue
 
-                    print(
-                        f"[SimulationNode] Adding fixed entity: '{name}' at {position}"
-                    )
+                    print(f"[SimulationNode] Placing entity: '{name}' at {position}")
                     try:
-                        # Construct absolute asset path relative to project root
-                        project_root = os.path.dirname(
-                            os.path.dirname(os.path.dirname(__file__))
-                        )
-                        full_asset_path = os.path.join(project_root, asset_path)
-
-                        entity_obj = self.scene.add_entity(
-                            gs.morphs.Mesh(
-                                file=full_asset_path,
-                                pos=position,
-                                quat=orientation,  # Use directly as it's [w, x, y, z]
-                                scale=scale,
-                                fixed=True,  # Derived: single pose means fixed
-                                collision=False,  # Defaulting to False as discussed
-                                convexify=False,  # Defaulting to False as discussed
-                            )
-                        )
-                        # Store reference to the newly loaded entity
-                        self.loaded_dynamic_entities[name] = entity_obj
+                        entity_obj.set_pos(position)
+                        entity_obj.set_quat(orientation)  # set_quat uses w,x,y,z
+                        if scale_override:
+                            # Apply scale override if provided in config
+                            entity_obj.set_scale(scale_override)
+                        # Ensure entity is visible (might not be strictly needed if just moving)
+                        # entity_obj.set_visibility(True) # If visibility API exists
                     except Exception as e:
-                        print(
-                            f"[SimulationNode] Error adding entity '{name}' from "
-                            f"path '{asset_path}': {e}"
-                        )
+                        print(f"[SimulationNode] Error placing entity '{name}': {e}")
 
                 elif len(poses) > 1:
                     # TODO: Implement logic for moving entities later
@@ -512,12 +466,79 @@ class SimulationNode:
                         f"[SimulationNode] Skipping '{name}': multi-pose entities "
                         f"not yet implemented."
                     )
+                    # Move it out of the way for now
+                    entity_obj.set_pos([0, 0, -1000])
                 else:
                     print(
                         f"[SimulationNode] Skipping entity '{name}': no poses defined."
                     )
-        else:
-            print("[SimulationNode] No entities found in new environment config.")
+                    # Move it out of the way
+                    entity_obj.set_pos([0, 0, -1000])
+
+        # Hide entities that were pre-loaded but are NOT in the current config
+        hide_pos = [0, 0, -1000]
+        for name, entity_obj in self.managed_entities.items():
+            if name not in active_entity_names:
+                print(f"[SimulationNode] Hiding unused entity: '{name}'")
+                try:
+                    entity_obj.set_pos(hide_pos)
+                    # entity_obj.set_visibility(False) # If visibility API exists
+                except Exception as e:
+                    print(f"[SimulationNode] Error hiding entity '{name}': {e}")
+
+    def _preload_dynamic_entities(self):
+        """Pre-loads all known dynamic entities into the scene initially."""
+        print("[SimulationNode] Pre-loading dynamic entities...")
+        # Define potential entities here (name, path, default scale)
+        potential_entities = [
+            {
+                "name": "walker_1",
+                "asset_path": "data/assets/walking_man/man.obj",
+                "scale": [1.0, 1.0, 1.0],
+            },
+            {
+                "name": "casualty_1",
+                "asset_path": "data/assets/lying_man/Lying_man_0127.obj",
+                "scale": [0.010, 0.010, 0.010],
+            },
+            # Add other potential entities here in the future
+        ]
+
+        initial_hide_pos = [0, 0, -1000]  # Position to hide entities initially
+        default_quat = [1.0, 0.0, 0.0, 0.0]  # Default orientation (w,x,y,z)
+
+        for entity_data in potential_entities:
+            name = entity_data["name"]
+            asset_path = entity_data["asset_path"]
+            scale = entity_data["scale"]
+            print(f"[SimulationNode] Pre-loading: {name} from {asset_path}")
+
+            try:
+                # Construct absolute asset path relative to project root
+                project_root = os.path.dirname(
+                    os.path.dirname(os.path.dirname(__file__))
+                )
+                full_asset_path = os.path.join(project_root, asset_path)
+
+                entity_obj = self.scene.add_entity(
+                    gs.morphs.Mesh(
+                        file=full_asset_path,
+                        pos=initial_hide_pos,  # Start hidden
+                        quat=default_quat,
+                        scale=scale,
+                        fixed=True,  # Treat as fixed kinematic objects
+                        collision=False,
+                        convexify=False,
+                    )
+                )
+                # Store reference
+                self.managed_entities[name] = entity_obj
+                print(f"[SimulationNode] Pre-loaded '{name}' successfully.")
+            except Exception as e:
+                print(
+                    f"[SimulationNode] Error pre-loading entity '{name}' from "
+                    f"path '{asset_path}': {e}"
+                )
 
     def run(self):
         local_forward = np.array([1.0, 0.0, 0.0])
