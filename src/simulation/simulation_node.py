@@ -6,6 +6,7 @@ import cv2  # for potential image saving/processing
 import json
 from scipy.spatial.transform import Rotation as R
 import time  # Add import for time functions
+import os  # Add os import for path joining
 
 from src.simulation.stl_slicing import slice_stl
 from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd, ResetRobotCmd
@@ -22,9 +23,20 @@ def xyzw_to_wxyz(xyzw):
 
 
 class SimulationNode:
-    def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
+    def __init__(
+        self,
+        shared_queues: SharedQueues,
+        enable_vis: bool = True,
+        env_config_path: str = None,
+    ):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
+        self.env_config_path = env_config_path
+        self.env_config = None
+        self.loaded_entities = {}  # To store references to loaded entities
+
+        # Load environment configuration
+        self._load_environment_config()
 
         # Add timing variables for real-time simulation
         self.last_render_time = 0
@@ -69,6 +81,37 @@ class SimulationNode:
 
         print("SimulationNode initialized.")
 
+    def _load_environment_config(self):
+        """Loads the environment configuration from the specified JSON file."""
+        if self.env_config_path:
+            # Construct absolute path assuming env_config_path is relative to project root
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            config_path = os.path.join(project_root, self.env_config_path)
+            try:
+                with open(config_path, "r") as f:
+                    self.env_config = json.load(f)
+                print(
+                    f"[SimulationNode] Loaded environment config from: "
+                    f"{config_path}"
+                )
+            except FileNotFoundError:
+                print(
+                    f"[SimulationNode] Error: Environment config file not found "
+                    f"at {config_path}. Proceeding without entities."
+                )
+                self.env_config = None  # Ensure config is None if file not found
+            except json.JSONDecodeError:
+                print(
+                    f"[SimulationNode] Error: Invalid JSON in environment config file "
+                    f"{config_path}. Proceeding without entities."
+                )
+                self.env_config = None  # Ensure config is None if JSON is invalid
+        else:
+            print(
+                "[SimulationNode] No environment config path provided. "
+                "Proceeding without extra entities."
+            )
+
     def _init_genesis(self):
         """Initialize Genesis backend"""
         gs.init(backend=gs.gpu)
@@ -94,10 +137,15 @@ class SimulationNode:
 
     def _init_environment(self):
         """Initialize the environment meshes and process occupancy grid"""
-        # Option 1: Load scene without convexification, then add individual collision objects
-        replica_scene = self.scene.add_entity(
+        # TODO: Make the base scene path configurable via env_config["environment_name"]
+        base_scene_path = "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb"
+        base_scene_collision_config = "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
+
+        # Option 1: Load base scene without convexification
+        # Keep reference for potential future use, prefix with _ to ignore unused lint
+        _replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
-                file="data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
+                file=base_scene_path,
                 fixed=True,
                 euler=(90, 0, 0),
                 pos=(0, 0, 0),
@@ -106,42 +154,82 @@ class SimulationNode:
             )
         )
 
-        # Initialize scene_objects list
+        # Initialize scene_objects list (for collision objects)
         self.scene_objects = []
 
         # Add separate collision geometry based on the stage config file
-        self._add_collision_from_stage_config(
-            "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
-        )
+        self._add_collision_from_stage_config(base_scene_collision_config)
 
-        # Add human model lying on the ground
-        self.human = self.scene.add_entity(
-            gs.morphs.Mesh(
-                file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
-                fixed=True,  # Make it static
-                euler=(180, 180, 0),  # Rotate to lie flat
-                pos=(-1.5, 1.5, 0.10),  # Position as requested (with slight z-offset)
-                scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
-                convexify=False,
-                collision=False,  # Enable collision for robot interaction
+        # --- Load entities from config ---
+        if self.env_config and "entities" in self.env_config:
+            num_entities = len(self.env_config["entities"])
+            print(f"[SimulationNode] Loading {num_entities} entities from config...")
+            for entity_data in self.env_config["entities"]:
+                name = entity_data.get("name")
+                asset_path = entity_data.get("asset_path")
+                poses = entity_data.get("poses", [])
+                scale = entity_data.get("scale", [1.0, 1.0, 1.0])
+
+                if not name or not asset_path:
+                    print(
+                        f"[SimulationNode] Skipping entity due to missing "
+                        f"name or asset_path: {entity_data}"
+                    )
+                    continue
+
+                # For now, only handle fixed entities (single pose)
+                if len(poses) == 1:
+                    pose = poses[0]
+                    position = pose.get("position")
+                    # Orientation is [w, x, y, z], which matches gs.morphs.Mesh 'quat' parameter
+                    orientation = pose.get("orientation")
+
+                    if position is None or orientation is None:
+                        print(
+                            f"[SimulationNode] Skipping entity '{name}' due to missing "
+                            f"position or orientation in pose: {pose}"
+                        )
+                        continue
+
+                    print(f"[SimulationNode] Adding fixed entity: {name} at {position}")
+                    try:
+                        entity_obj = self.scene.add_entity(
+                            gs.morphs.Mesh(
+                                file=asset_path,
+                                pos=position,
+                                quat=orientation,  # Use directly as it's [w, x, y, z]
+                                scale=scale,
+                                fixed=True,  # Derived: single pose means fixed
+                                collision=False,  # Defaulting to False as discussed
+                                convexify=False,  # Defaulting to False as discussed
+                            )
+                        )
+                        self.loaded_entities[name] = entity_obj
+                    except Exception as e:
+                        print(
+                            f"[SimulationNode] Error adding entity '{name}' from "
+                            f"path '{asset_path}': {e}"
+                        )
+
+                elif len(poses) > 1:
+                    # TODO: Implement logic for moving entities later
+                    print(
+                        f"[SimulationNode] Skipping entity '{name}' - multi-pose "
+                        f"entities not yet implemented."
+                    )
+                else:
+                    print(
+                        f"[SimulationNode] Skipping entity '{name}' - no poses defined."
+                    )
+        else:
+            print(
+                "[SimulationNode] No entities found in environment config "
+                "or config not loaded."
             )
-        )
 
-        # Add walking man at the origin
-        self.walking_man = self.scene.add_entity(
-            gs.morphs.Mesh(
-                file="data/assets/walking_man/man.obj",  # Use the walking man OBJ file
-                fixed=True,  # Make it static
-                euler=(90, 0, 90),  # Rotate 90 degrees around x-axis
-                pos=(0, 0, 0.10),  # Position at origin with slight z-offset
-                convexify=False,
-                collision=False,  # No collision for now
-            )
-        )
-
-        # Export as STL
+        # Export as STL (should probably only include static geometry here)
+        # TODO: Revisit STL export - might not be needed or should exclude dynamic entities
         file_path = "data/replica_scene.stl"
-
         self._process_occupancy_grid(file_path)
 
     def _add_collision_from_stage_config(self, config_path):
