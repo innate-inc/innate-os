@@ -15,10 +15,12 @@ import json
 
 # Import your policy class and trajectory generator.
 from InnateACT.policy import ACTPolicy
-from trajectory import cubic_trajectory
 
 # Import the TemporalEnsembler from a separate file.
 from manipulation.ensemble import ACTTemporalEnsembler
+
+# Import the new service type.
+from maurice_msgs.srv import GotoJS
 
 # Define the policy configuration (ensure these match your training configuration)
 policy_config = {
@@ -47,9 +49,9 @@ policy_config = {
 # Temporal Ensembling Configuration
 ####################################################
 # Global variables for temporal ensembling
-USE_TEMPORAL_ENSEMBLING = True
+USE_TEMPORAL_ENSEMBLING = False
 TEMPORAL_ENSEMBLE_COEFF = 0.3
-CHUNK_SIZE = 30
+CHUNK_SIZE = 10
 
 class InferenceNode(Node):
     def __init__(self):
@@ -107,7 +109,6 @@ class InferenceNode(Node):
 
         # Action buffer for storing predicted actions
         self.action_buffer = []
-        self.first_step = True
 
         # If using temporal ensembling, create an ensembler instance
         if USE_TEMPORAL_ENSEMBLING:
@@ -115,6 +116,9 @@ class InferenceNode(Node):
             self.get_logger().info("Temporal ensembling enabled.")
         else:
             self.temporal_ensembler = None
+
+        # Call the /maurice_arm/goto_js service at startup
+        self.call_goto_js_service()
 
     ####################################################
     # Callback Methods for Sensor Data
@@ -135,6 +139,36 @@ class InferenceNode(Node):
         self.latest_joint_state = msg
 
     ####################################################
+    # Service Call for Initial Joint State
+    ####################################################
+    def call_goto_js_service(self):
+        self.goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
+        while not self.goto_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Waiting for /maurice_arm/goto_js service to become available...")
+        req = GotoJS.Request()
+        # Use metadata if available to set the initial joint state; otherwise, use zeros.
+        if self.metadata and 'average_first_step_action' in self.metadata:
+            joint_data = self.metadata['average_first_step_action'][:6]
+            req.data = Float64MultiArray(data=joint_data)
+            req.time = 1  # for example, 1 second to reach the target state
+        else:
+            self.get_logger().warn("Metadata not available for initial joint state. Using default zeros.")
+            req.data = Float64MultiArray(data=[0.0] * 6)
+            req.time = 1
+        future = self.goto_client.call_async(req)
+        future.add_done_callback(self.goto_response_callback)
+
+    def goto_response_callback(self, future):
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info("GotoJS service call succeeded.")
+            else:
+                self.get_logger().warn("GotoJS service call failed.")
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
+
+    ####################################################
     # Policy Inference
     ####################################################
     def run_inference(self):
@@ -142,19 +176,6 @@ class InferenceNode(Node):
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
             self.get_logger().info("Waiting for all topics to be received...")
             return None
-
-        # On the first step, optionally use a precomputed trajectory
-        if self.first_step:
-            qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
-            if self.metadata and 'average_first_step_action' in self.metadata:
-                start_pos = np.array(self.metadata['average_first_step_action'])[:6]
-                _, base_trajectory = cubic_trajectory(qpos, start_pos, total_time=1.0, freq=20)
-                padded_trajectory = np.pad(base_trajectory, ((0, 0), (0, 2)), mode='constant', constant_values=0)
-                self.first_step = False
-                return padded_trajectory.tolist()
-            else:
-                self.first_step = False
-                return None
 
         # Preprocess images
         try:
@@ -216,17 +237,19 @@ class InferenceNode(Node):
                 # Update the temporal ensembler with the new chunk.
                 ensembled_action_tensor = self.temporal_ensembler.update(actions)
                 self.get_logger().info(f"ensembled_action_tensor: {ensembled_action_tensor.shape}")
-                ensembled_action = ensembled_action_tensor.cpu().numpy().tolist()
+                ensembled_action = ensembled_action_tensor.squeeze(0).cpu().numpy().tolist()
 
                 # In temporal ensembling mode, we produce one ensembled action per inference cycle.
                 self.action_buffer.append(ensembled_action)
             else:
                 # In raw mode, fill the buffer with all predicted actions.
-                self.action_buffer = actions.cpu().numpy().tolist()
+                #self.get_logger().info(f"actions: {actions.shape}")
+                self.action_buffer = actions.squeeze(0).cpu().numpy().tolist()
                 self.get_logger().info("New action buffer computed with raw predictions.")
 
         # Pop the next action from the buffer and publish it.
         next_action = self.action_buffer.pop(0)
+        self.get_logger().info(f"next_action: {next_action}")
 
         # Extract and publish the twist command (last two elements).
         twist_msg = Twist()
