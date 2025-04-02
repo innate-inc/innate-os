@@ -3,6 +3,10 @@ export interface Trial {
   success: boolean;
   reason: string;
   timestamp: string;
+  metadata?: {
+    description?: string;
+    goal?: string;
+  };
   metrics: {
     duration: number;
     chatMessages: number;
@@ -19,9 +23,19 @@ export interface Trial {
   }>;
 }
 
-export interface Benchmark {
+export interface Task {
   name: string;
   trials: Trial[];
+  totalTrials: number;
+  successCount: number;
+  description?: string;
+  goal?: string;
+}
+
+export interface Benchmark {
+  name: string;
+  tasks: Task[];
+  totalTasks: number;
   totalTrials: number;
   successCount: number;
   description?: string;
