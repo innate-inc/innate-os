@@ -4,7 +4,7 @@ import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
 import json
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R, Slerp
 import time  # Add import for time functions
 import os  # Add os import for path joining
 from typing import Dict, Any  # Add typing imports
@@ -36,6 +36,9 @@ class SimulationNode:
         self.loaded_entities = {}  # To store references to loaded entities
         self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
         self.managed_entities: Dict[str, gs.Entity] = {}
+        self.env_config = None
+        # Store trajectory data for managed entities
+        self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
         # Add timing variables for real-time simulation
         self.last_render_time = 0
@@ -110,7 +113,7 @@ class SimulationNode:
         base_scene_collision_config = "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
 
         # Option 1: Load base scene without convexification
-        # Prefix with _ to ignore unused lint error
+        # Prefix with _ to indicate it might be unused currently
         _replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
                 file=base_scene_path,
@@ -401,6 +404,9 @@ class SimulationNode:
             "via entity placement..."
         )
 
+        # Clear previous trajectory data
+        self.entity_trajectories.clear()
+
         if not self.managed_entities:
             print(
                 "[SimulationNode] No managed entities were pre-loaded. "
@@ -421,8 +427,8 @@ class SimulationNode:
             for entity_data in config["entities"]:
                 name = entity_data.get("name")
                 poses = entity_data.get("poses", [])
-                # Optional scale override from config, otherwise use preload scale
-                scale_override = entity_data.get("scale")
+                # Get loop parameter, default to False
+                loop = entity_data.get("loop", False)
 
                 if name not in self.managed_entities:
                     print(
@@ -452,22 +458,22 @@ class SimulationNode:
                     try:
                         entity_obj.set_pos(position)
                         entity_obj.set_quat(orientation)  # set_quat uses w,x,y,z
-                        if scale_override:
-                            # Apply scale override if provided in config
-                            entity_obj.set_scale(scale_override)
-                        # Ensure entity is visible (might not be strictly needed if just moving)
-                        # entity_obj.set_visibility(True) # If visibility API exists
                     except Exception as e:
                         print(f"[SimulationNode] Error placing entity '{name}': {e}")
 
                 elif len(poses) > 1:
-                    # TODO: Implement logic for moving entities later
+                    # Store trajectory data for update loop
+                    # Sort poses by time just in case they aren't ordered
+                    sorted_poses = sorted(poses, key=lambda p: p["time"])
+                    self.entity_trajectories[name] = {
+                        "poses": sorted_poses,
+                        "loop": loop,
+                    }
+                    # Initial placement will be handled by the update loop
                     print(
-                        f"[SimulationNode] Skipping '{name}': multi-pose entities "
-                        f"not yet implemented."
+                        f"[SimulationNode] Trajectory defined for '{name}'. Initial pose set by run loop."
                     )
-                    # Move it out of the way for now
-                    entity_obj.set_pos([0, 0, -1000])
+
                 else:
                     print(
                         f"[SimulationNode] Skipping entity '{name}': no poses defined."
@@ -485,6 +491,94 @@ class SimulationNode:
                     # entity_obj.set_visibility(False) # If visibility API exists
                 except Exception as e:
                     print(f"[SimulationNode] Error hiding entity '{name}': {e}")
+
+    def _update_entity_poses(self, sim_time: float):
+        """Updates positions of entities based on their trajectories and sim_time."""
+        for name, trajectory_data in self.entity_trajectories.items():
+            if name not in self.managed_entities:
+                continue  # Should not happen, but safety check
+
+            entity_obj = self.managed_entities[name]
+            poses = trajectory_data["poses"]
+            loop = trajectory_data["loop"]
+
+            if not poses:
+                continue
+
+            # Determine current segment based on time
+            current_time = sim_time
+            start_pose = poses[0]
+            end_pose = poses[-1]
+            trajectory_duration = end_pose["time"] - start_pose["time"]
+
+            if loop and trajectory_duration > 1e-6:  # Avoid division by zero
+                if current_time >= end_pose["time"]:
+                    # Wrap time for looping trajectory
+                    current_time = (
+                        current_time - start_pose["time"]
+                    ) % trajectory_duration + start_pose["time"]
+
+            # Find the two keyframes surrounding the current time
+            p1 = None
+            p2 = None
+            for i in range(len(poses) - 1):
+                if poses[i]["time"] <= current_time < poses[i + 1]["time"]:
+                    p1 = poses[i]
+                    p2 = poses[i + 1]
+                    break
+
+            # Handle edge cases: before first pose or after last pose (non-looping)
+            if p1 is None:
+                if current_time < poses[0]["time"]:
+                    p1 = p2 = poses[0]  # Stay at first pose
+                else:  # After last pose (and not looping or duration is zero)
+                    p1 = p2 = poses[-1]  # Stay at last pose
+
+            # Calculate interpolation factor (alpha)
+            segment_duration = p2["time"] - p1["time"]
+            alpha = 0.0
+            if segment_duration > 1e-6:
+                alpha = (current_time - p1["time"]) / segment_duration
+            alpha = np.clip(alpha, 0.0, 1.0)  # Clamp between 0 and 1
+
+            # Interpolate position (LERP)
+            pos1 = np.array(p1["position"])
+            pos2 = np.array(p2["position"])
+            interp_pos = pos1 + alpha * (pos2 - pos1)
+
+            # Interpolate orientation (SLERP)
+            # Need orientations in [x, y, z, w] format for Slerp
+            # Input quat is [w, x, y, z]
+            quat1_wxyz = p1["orientation"]
+            quat2_wxyz = p2["orientation"]
+            quat1_xyzw = np.array(
+                [quat1_wxyz[1], quat1_wxyz[2], quat1_wxyz[3], quat1_wxyz[0]]
+            )
+            quat2_xyzw = np.array(
+                [quat2_wxyz[1], quat2_wxyz[2], quat2_wxyz[3], quat2_wxyz[0]]
+            )
+
+            try:
+                key_rots = R.from_quat([quat1_xyzw, quat2_xyzw])
+                slerp = Slerp([p1["time"], p2["time"]], key_rots)
+                interp_rot = slerp([current_time])[0]  # Slerp expects array of times
+                # Convert back to [w, x, y, z] for Genesis
+                interp_quat_xyzw = interp_rot.as_quat()
+                interp_quat_wxyz = [
+                    interp_quat_xyzw[3],
+                    interp_quat_xyzw[0],
+                    interp_quat_xyzw[1],
+                    interp_quat_xyzw[2],
+                ]
+            except Exception as e:
+                # Fallback to p1 orientation if slerp fails (e.g., identical quats)
+                # print(f"SLERP failed for {name} at time {current_time}: {e}. "
+                #       f"Using start orientation.")
+                interp_quat_wxyz = quat1_wxyz
+
+            # Apply interpolated pose (scale is already set)
+            entity_obj.set_pos(interp_pos.tolist())
+            entity_obj.set_quat(interp_quat_wxyz)
 
     def _preload_dynamic_entities(self):
         """Pre-loads all known dynamic entities into the scene initially."""
@@ -653,7 +747,10 @@ class SimulationNode:
             except Exception as e:
                 print(f"Error processing commands: {e}")
 
-            # --- (B) Gather robot pose, velocity (after applying commands)
+            # --- (B) Update moving entities ---
+            self._update_entity_poses(sim_time)
+
+            # --- (C) Gather robot pose, velocity (after applying commands)
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
 
@@ -661,7 +758,7 @@ class SimulationNode:
             lin_vel = self.commanded_lin_vel
             ang_vel = self.commanded_ang_vel
 
-            # --- (C) Render cameras based on time interval
+            # --- (D) Render cameras based on time interval
             sim_time += dt
 
             # --- Publish Clock Message
