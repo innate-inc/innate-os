@@ -127,6 +127,18 @@ class SimulationNode:
             )
         )
 
+        # Add walking man at the origin
+        self.walking_man = self.scene.add_entity(
+            gs.morphs.Mesh(
+                file="data/assets/walking_man/man.obj",  # Use the walking man OBJ file
+                fixed=True,  # Make it static
+                euler=(90, 0, 90),  # Rotate 90 degrees around x-axis
+                pos=(0, 0, 0.10),  # Position at origin with slight z-offset
+                convexify=False,
+                collision=False,  # No collision for now
+            )
+        )
+
         # Export as STL
         file_path = "data/replica_scene.stl"
 
