@@ -1,7 +1,8 @@
+#!/usr/bin/env python3
+
 import torch
 from torch import Tensor
-
-class TemporalEnsembler:
+class ACTTemporalEnsembler:
     def __init__(self, temporal_ensemble_coeff: float, chunk_size: int) -> None:
         """Temporal ensembling as described in Algorithm 2 of https://arxiv.org/abs/2304.13705.
 
@@ -11,13 +12,16 @@ class TemporalEnsembler:
             - Setting it to 0 uniformly weighs all actions.
             - Setting it positive gives more weight to older actions.
             - Setting it negative gives more weight to newer actions.
-        NOTE: The default value for temporal_ensemble_coeff used by the original ACT work is 0.01. This
+        NOTE: The default value for `temporal_ensemble_coeff` used by the original ACT work is 0.01. This
         results in older actions being weighed more highly than newer actions (the experiments documented in
         https://github.com/huggingface/lerobot/pull/319 hint at why highly weighing new actions might be
         detrimental: doing so aggressively may diminish the benefits of action chunking).
 
         Here we use an online method for computing the average rather than caching a history of actions in
         order to compute the average offline. For a simple 1D sequence it looks something like:
+
+        ```
+        import torch
 
         seq = torch.linspace(8, 8.5, 100)
         print(seq)
@@ -39,7 +43,7 @@ class TemporalEnsembler:
             avg += item * exp_weights[i]
             avg /= exp_weights[:i+1].sum()
         print("online", avg)
-
+        ```
         """
         self.chunk_size = chunk_size
         self.ensemble_weights = torch.exp(-temporal_ensemble_coeff * torch.arange(chunk_size))
@@ -60,7 +64,7 @@ class TemporalEnsembler:
         self.ensemble_weights = self.ensemble_weights.to(device=actions.device)
         self.ensemble_weights_cumsum = self.ensemble_weights_cumsum.to(device=actions.device)
         if self.ensembled_actions is None:
-            # Initializes self._ensembled_action to the sequence of actions predicted during the first
+            # Initializes `self._ensembled_action` to the sequence of actions predicted during the first
             # time step of the episode.
             self.ensembled_actions = actions.clone()
             # Note: The last dimension is unsqueeze to make sure we can broadcast properly for tensor
@@ -87,3 +91,22 @@ class TemporalEnsembler:
             self.ensembled_actions_count[1:],
         )
         return action
+
+def main():
+    # Initialize the ACTTemporalEnsembler with temporal_ensemble_coeff=0.01 and chunk_size=30
+    ensembler = ACTTemporalEnsembler(temporal_ensemble_coeff=0, chunk_size=30)
+    
+    # Loop 50 times
+    for i in range(50):
+        # Create a tensor of shape [1, 30, 8] filled with the value i
+        actions = torch.full((1, 30, 8), float(i), dtype=torch.float32)
+        
+        # Call update and get the result
+        result = ensembler.update(actions)
+        
+        # Print the result
+        print(f"Iteration {i}, Result shape: {result.shape}, First value: {result[0, 0]}")
+
+if __name__ == "__main__":
+    main()
+    
