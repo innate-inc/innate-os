@@ -2,11 +2,13 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
+import time  # Add time import for timestamp
 
 from src.middleware.auth import get_current_user
 
 # ResetRobotCmd is used by the /reset_robot route
-from src.agent.types import ResetRobotCmd
+# SetEnvironmentCmd is used to send the config to the simulation node
+from src.agent.types import ResetRobotCmd, SetEnvironmentCmd
 
 router = APIRouter()
 
@@ -45,19 +47,23 @@ async def set_environment(request: Request, env_config: Dict[str, Any]):
     # This logic would parse the `env_config` dictionary and modify the
     # simulation state accordingly (e.g., add/remove assets, change properties).
     # It might need to send a specific command object via shared_queues.agent_to_sim.
-    print(f"[ConfigAPI] Received environment configuration: {env_config}")
+    # print(f"[ConfigAPI] Received environment configuration: {env_config}")
 
     # Example: Send the raw config to the simulation node via a queue
-    # try:
-    #     # Define a command type for environment configuration if needed
-    #     # Example: env_update_cmd = EnvironmentUpdateCmd(config=env_config)
-    #     # shared_queues.agent_to_sim.put_nowait(env_update_cmd)
-    #     pass # Replace with actual command sending
-    # except Exception as e:
-    #     return JSONResponse(
-    #         {"status": "error", "message": f"Failed queue environment update: {e}"},
-    #         status_code=500,
-    #     )
+    try:
+        # Define a command type for environment configuration if needed
+        # Example: env_update_cmd = EnvironmentUpdateCmd(config=env_config)
+        # shared_queues.agent_to_sim.put_nowait(env_update_cmd)
+        # pass # Replace with actual command sending
+        set_env_cmd = SetEnvironmentCmd(config=env_config, timestamp=time.time())
+        shared_queues.agent_to_sim.put_nowait(set_env_cmd)
+        print(f"[ConfigAPI] Enqueued SetEnvironmentCmd: {env_config}")
+
+    except Exception as e:
+        return JSONResponse(
+            {"status": "error", "message": f"Failed queue environment update: {e}"},
+            status_code=500,
+        )
 
     return JSONResponse(
         {
