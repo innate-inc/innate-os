@@ -147,12 +147,8 @@ def main():
     )
     collector_thread.start()
 
-    # 2) Start the simulation node
-    sim_node = SimulationNode(
-        SHARED_QUEUES,
-        enable_vis=args.vis,
-        env_config_path="data/environments/lying_man_corner.json",
-    )
+    # 2) Start the simulation node (no initial config path needed now)
+    sim_node = SimulationNode(SHARED_QUEUES, enable_vis=args.vis)
 
     # 3) Start the agent (async) in a separate thread
     agent_thread = run_agent_async(

@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, root_validator
 import time  # Add time import for timestamp
+import os  # Need os for path joining
+import json  # Need json for loading file
 
 from src.middleware.auth import get_current_user
 
@@ -20,57 +22,105 @@ class ResetRobotRequest(BaseModel):
     orientation: Optional[list[float]] = None
 
 
-@router.post("/set_environment", dependencies=[Depends(get_current_user)])
-async def set_environment(request: Request, env_config: Dict[str, Any]):
-    """
-    Set the environment configuration based on the provided dictionary.
+# Pydantic model for the set environment request body
+class SetEnvironmentRequest(BaseModel):
+    config: Optional[Dict[str, Any]] = None
+    config_name: Optional[str] = None
 
-    This endpoint allows configuring the simulation environment.
-    The exact structure of `env_config` is flexible for now.
+    @root_validator(pre=True)
+    def check_config_or_name_provided(cls, values):
+        config, config_name = values.get("config"), values.get("config_name")
+        if config is not None and config_name is not None:
+            raise ValueError("Provide either 'config' or 'config_name', not both.")
+        if config is None and config_name is None:
+            raise ValueError("Either 'config' or 'config_name' must be provided.")
+        return values
+
+
+@router.post("/set_environment", dependencies=[Depends(get_current_user)])
+# Update signature to use the new request model
+async def set_environment(request: Request, body: SetEnvironmentRequest):
+    """
+    Set the environment configuration either by providing a full configuration
+    dictionary directly or by specifying the name of a config file to load.
 
     Args:
-        env_config: A dictionary representing the desired environment configuration.
+        body: Request body containing either `config` (Dict) or `config_name` (str).
 
     Returns:
         JSON response confirming the environment configuration request was received.
     """
     shared_queues = request.app.state.SHARED_QUEUES
+    env_config = None
 
     # Check if we have valid shared_queues
     if shared_queues is None:
-        return JSONResponse(
-            {"status": "error", "message": "Simulation not initialized"},
-            status_code=500,
+        # Use HTTPException for standard FastAPI error handling
+        raise HTTPException(status_code=500, detail="Simulation not initialized")
+
+    # Determine the config dictionary (load from file or use directly)
+    if body.config_name:
+        config_name = body.config_name
+        print(f"[ConfigAPI] Loading environment config file: {config_name}.json")
+        try:
+            # Construct path relative to project root
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            config_path = os.path.join(
+                project_root, "data", "environments", f"{config_name}.json"
+            )
+
+            with open(config_path, "r") as f:
+                env_config = json.load(f)
+            print(f"[ConfigAPI] Successfully loaded config from {config_path}")
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Configuration file '{config_name}.json' not found.",
+            )
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid JSON in configuration file '{config_name}.json'.",
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Error loading configuration file: {e}"
+            )
+
+    elif body.config:
+        print("[ConfigAPI] Using direct environment configuration from request body.")
+        env_config = body.config
+
+    # This case should be caught by Pydantic validation, but double-check
+    if env_config is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Internal error: Could not determine environment configuration.",
         )
 
-    # TODO: Implement actual environment update logic in the SimulationNode.
-    # This logic would parse the `env_config` dictionary and modify the
-    # simulation state accordingly (e.g., add/remove assets, change properties).
-    # It might need to send a specific command object via shared_queues.agent_to_sim.
-    # print(f"[ConfigAPI] Received environment configuration: {env_config}")
-
-    # Example: Send the raw config to the simulation node via a queue
+    # --- Send the command to the simulation ---
     try:
-        # Define a command type for environment configuration if needed
-        # Example: env_update_cmd = EnvironmentUpdateCmd(config=env_config)
-        # shared_queues.agent_to_sim.put_nowait(env_update_cmd)
-        # pass # Replace with actual command sending
         set_env_cmd = SetEnvironmentCmd(config=env_config, timestamp=time.time())
         shared_queues.agent_to_sim.put_nowait(set_env_cmd)
-        print(f"[ConfigAPI] Enqueued SetEnvironmentCmd: {env_config}")
+        # Don't log full config here for brevity/security
+        print("[ConfigAPI] Enqueued SetEnvironmentCmd")
 
     except Exception as e:
-        return JSONResponse(
-            {"status": "error", "message": f"Failed queue environment update: {e}"},
-            status_code=500,
+        # Re-raise as HTTPException for consistent API error handling
+        raise HTTPException(
+            status_code=500, detail=f"Failed to queue environment update: {e}"
         )
 
     return JSONResponse(
         {
             "status": "success",
-            "message": "Environment configuration request received. "
-            "Processing will occur in simulation node.",
-            "received_config": env_config,  # Echoing back the received config
+            "message": "Environment configuration command sent to simulation.",
+            # Optionally include name if loaded from file
+            "source": (
+                f"file: {body.config_name}.json"
+                if body.config_name
+                else "direct config"
+            ),
         }
     )
 
