@@ -1,7 +1,8 @@
 # intypes.py
 
-from typing import NamedTuple
+from typing import NamedTuple, Dict, Any
 import numpy as np
+import time
 
 
 class RobotStateMsg(NamedTuple):
@@ -100,3 +101,10 @@ class DirectiveCmd(NamedTuple):
     """
 
     directive: str
+
+
+class SetEnvironmentCmd(NamedTuple):
+    """Command to set the simulation environment from a configuration dict."""
+
+    config: Dict[str, Any]
+    timestamp: float = time.time()
