@@ -20,11 +20,6 @@
                     ]
                 }
             ],
-            "scale": [
-                1.0,
-                1.0,
-                1.0
-            ],
             "fixed": true,
             "collision": false,
             "convexify": false
