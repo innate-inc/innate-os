@@ -28,7 +28,7 @@ from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, OccupancyGrid
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
@@ -60,6 +60,9 @@ class BrainClientNode(Node):
         # New parameters for optional depth processing:
         self.declare_parameter("depth_image_topic", "/camera/depth/image_raw")
 
+        # New parameter for the map topic
+        self.declare_parameter("map_topic", "/map")
+
         # Set to True if you wish to receive and forward depth images as well
         self.declare_parameter("send_depth", True)
         self.declare_parameter("odom_topic", "/odom")
@@ -87,6 +90,9 @@ class BrainClientNode(Node):
         )
         self.depth_image_topic = (
             self.get_parameter("depth_image_topic").get_parameter_value().string_value
+        )
+        self.map_topic = (
+            self.get_parameter("map_topic").get_parameter_value().string_value
         )
         self.send_depth = (
             self.get_parameter("send_depth").get_parameter_value().bool_value
@@ -137,10 +143,16 @@ class BrainClientNode(Node):
         # Publishers, Subscribers, and Service
         self.last_image = None
         self.last_depth_image = None
+        self.last_map = None  # Store the latest map data
 
         # RGB image subscription remains unchanged.
         self.image_sub = self.create_subscription(
             CompressedImage, self.image_topic, self.image_callback, 1
+        )
+
+        # Subscribe to the map topic
+        self.map_sub = self.create_subscription(
+            OccupancyGrid, self.map_topic, self.map_callback, 1
         )
 
         # Optionally subscribe to the depth image topic if required.
@@ -314,6 +326,11 @@ class BrainClientNode(Node):
     def odom_callback(self, msg: Odometry):
         self.last_odom = msg
 
+    def map_callback(self, msg: OccupancyGrid):
+        """Store the latest map data."""
+        self.last_map = msg
+        self.get_logger().debug("Received map update")
+
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
         self.ready_for_image = True
@@ -368,7 +385,13 @@ class BrainClientNode(Node):
 
     def _handle_vision_agent_output(self, msg):
         try:
-            self.get_logger().debug(f"[BrainClient] VisionAgentOutput: {msg}")
+            self.get_logger().info(f"[BrainClient] Received VisionAgentOutput")
+
+            if not self.primitives_registered:
+                self.get_logger().warn(
+                    "\033[93m[BrainClient] Primitives not registered. Skipping VisionAgentOutput.\033[0m"
+                )
+                return
 
             # HOTFIX: If there's a msg.payload["next_task"] with a "name" field, replace it with "type".
             if "next_task" in msg.payload and msg.payload["next_task"] is not None:
@@ -380,9 +403,6 @@ class BrainClientNode(Node):
 
             # If log_everything is enabled, send the complete vision agent output as a chat message
             if self.log_everything:
-                self.get_logger().info(
-                    "\033[1;92m[BrainClient] Sending complete vision agent output\033[0m"
-                )
                 # Convert the complete payload to a JSON string for the chat message
                 complete_output_text = json.dumps(msg.payload)
                 chat_entry = {
@@ -419,7 +439,6 @@ class BrainClientNode(Node):
                 )
                 cancel_future = self._goal_handle.cancel_goal_async()
                 cancel_future.add_done_callback(self.cancel_response_callback)
-            return
 
         if payload.thoughts:
             chat_entry = MessageOut(
@@ -485,8 +504,6 @@ class BrainClientNode(Node):
 
         if self.ready_for_image and self.last_image is not None:
             try:
-                self.get_logger().info("Agent loop: sending image")
-
                 # Compress the RGB image as JPEG (70% quality)
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
                 success, encoded_img = cv2.imencode(
@@ -531,6 +548,39 @@ class BrainClientNode(Node):
                     "data": base64.b64encode(depth_data).decode("utf-8"),
                 }
                 payload["depth"] = depth_payload
+
+                # Include map data if available
+                if self.last_map is not None:
+                    # Create a simplified map payload with only the necessary information
+                    map_data = self.last_map.data
+
+                    # Convert quaternion to yaw
+                    ori = self.last_map.info.origin.orientation
+                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+                    map_payload = {
+                        "resolution": self.last_map.info.resolution,
+                        "width": self.last_map.info.width,
+                        "height": self.last_map.info.height,
+                        "origin_x": self.last_map.info.origin.position.x,
+                        "origin_y": self.last_map.info.origin.position.y,
+                        "origin_z": self.last_map.info.origin.position.z,
+                        "origin_yaw": yaw,
+                        "frame_id": self.last_map.header.frame_id,
+                        "data": base64.b64encode(np.array(map_data).tobytes()).decode(
+                            "utf-8"
+                        ),
+                    }
+                    payload["map"] = map_payload
+                    self.get_logger().debug("Including map data in image message")
+
+                else:
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No map data available.\033[0m"
+                    )
+                    return
 
                 # Include robot coordinates (if available) in the payload.
                 if self.last_odom is not None:
@@ -799,6 +849,11 @@ class BrainClientNode(Node):
             f"\033[1;92m[BrainClient] Memory state: {memory_state}\033[0m"
         )
 
+        # As long as we don't have
+        # confirmation that the new primitives have been registered, we should not
+        # accept new VisionAgentOutput messages.
+        self.primitives_registered = False
+
         # Clear local chat history
         self.chat_history = []
 
@@ -809,17 +864,18 @@ class BrainClientNode(Node):
             )
             self.primitive_running = None
             # Send a stop command to the robot
-            # TODO: This WON'T work, Beeds to be implemented in the primitive action server.
+            self._goal_handle.cancel_goal_async()
+
             stop_cmd = Twist()
             stop_cmd.linear.x = 0.0
             stop_cmd.angular.z = 0.0
             self.cmd_vel_pub.publish(stop_cmd)
 
-        # Send a chat message to load the memory instead of a reset message
-        chat_msg = MessageIn(
-            type=MessageInType.CHAT_IN, payload={"text": f"!load_memory {memory_state}"}
+        # Send a reset message to the robot
+        reset_msg = MessageIn(
+            type=MessageInType.RESET, payload={"memory_state": memory_state}
         )
-        self.ws_bridge.send_message(chat_msg)
+        self.ws_bridge.send_message(reset_msg)
 
         # Publish a system message to the chat
         chat_entry = {

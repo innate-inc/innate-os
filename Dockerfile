@@ -32,6 +32,8 @@ RUN apt-get install -y \
     ros-humble-navigation2 \
     ros-humble-demo-nodes-cpp \
     ros-humble-nav2-bringup \
+    ros-humble-depthai-ros \
+    ros-humble-rqt-plot \
     ros-humble-rviz2
 
 # 1c. Install Python packages and pip
