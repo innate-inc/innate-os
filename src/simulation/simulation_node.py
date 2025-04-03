@@ -620,7 +620,6 @@ class SimulationNode:
                         pos=initial_hide_pos,  # Start hidden
                         quat=default_quat,
                         scale=scale,
-                        fixed=True,  # Treat as fixed kinematic objects
                         collision=False,
                         convexify=False,
                     )
