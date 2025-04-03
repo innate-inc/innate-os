@@ -5,7 +5,7 @@ import cv2
 from typing import Optional
 from pydantic import BaseModel
 
-from src.agent.types import ResetRobotCmd, DirectiveCmd
+from src.agent.types import DirectiveCmd
 
 router = APIRouter()
 
@@ -13,6 +13,8 @@ router = APIRouter()
 # Create a model for the reset robot request
 class ResetRobotRequest(BaseModel):
     memory_state: Optional[str] = None
+    position: Optional[list[float]] = None
+    orientation: Optional[list[float]] = None
 
 
 def mjpeg_generator(shared_queues, camera_name="first_person"):
@@ -122,37 +124,6 @@ def get_robot_position(request: Request):
             "timestamp": float(timestamp),  # Ensure timestamp is also a Python float
         }
     )
-
-
-@router.post("/reset_robot")
-async def reset_robot(
-    request: Request, reset_request: Optional[ResetRobotRequest] = None
-):
-    """
-    Enqueues a reset command to move the robot back to its origin.
-    Optionally specifies a memory state to load.
-    Retrieves the shared queues from the application's state.
-
-    The memory_state can be specified in the JSON body:
-    {"memory_state": "init_mem_human_rescue_and_email_test"}
-    """
-    shared_queues = request.app.state.SHARED_QUEUES
-
-    # Get memory_state from request body if provided
-    memory_state = None
-    if reset_request is not None:
-        memory_state = reset_request.memory_state
-
-    if shared_queues is not None:
-        try:
-            reset_cmd = ResetRobotCmd(memory_state=memory_state)
-            shared_queues.agent_to_sim.put_nowait(reset_cmd)
-            shared_queues.sim_to_agent.put_nowait(reset_cmd)
-        except Exception:
-            return {"status": "queue_full"}
-        return {"status": "reset_enqueued", "memory_state": memory_state}
-    else:
-        return {"status": "no_shared_queues"}
 
 
 @router.post("/set_directive")

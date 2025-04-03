@@ -4,27 +4,49 @@ import numpy as np
 import genesis as gs
 import cv2  # for potential image saving/processing
 import json
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R, Slerp
 import time  # Add import for time functions
+import os  # Add os import for path joining
+from typing import Dict, Any  # Add typing imports
 
 from src.simulation.stl_slicing import slice_stl
-from src.agent.types import RobotStateMsg, OccupancyGridMsg, VelocityCmd, ResetRobotCmd
+from src.agent.types import (
+    RobotStateMsg,
+    OccupancyGridMsg,
+    VelocityCmd,
+    ResetRobotCmd,
+    SetEnvironmentCmd,
+)
 from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
 ROBOT_INIT_POS = (2, -5, 0.8)
-ROBOT_INIT_QUAT = (1, 0, 0, 0)
+ROBOT_INIT_QUAT = (0, 0, 0, 1)
+
+
+def xyzw_to_wxyz(xyzw):
+    return (xyzw[3], xyzw[0], xyzw[1], xyzw[2])
 
 
 class SimulationNode:
     def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
+        self.loaded_entities = {}  # To store references to loaded entities
+        self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
+        self.managed_entities: Dict[str, gs.Entity] = {}
+        self.env_config = None
+        # Store trajectory data for managed entities
+        self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
         # Add timing variables for real-time simulation
         self.last_render_time = 0
         self.render_interval = 0.5  # Render every 0.5 seconds
+
+        # Store commanded velocities for odometry
+        self.commanded_lin_vel = np.zeros(3)  # [vx, vy, vz]
+        self.commanded_ang_vel = np.zeros(3)  # [wx, wy, wz]
 
         self.render_camera_vfov = 40
         self.render_camera_hfov = degrees(
@@ -86,10 +108,15 @@ class SimulationNode:
 
     def _init_environment(self):
         """Initialize the environment meshes and process occupancy grid"""
-        # Option 1: Load scene without convexification, then add individual collision objects
-        replica_scene = self.scene.add_entity(
+        # TODO: Make the base scene path configurable via env_config["environment_name"]
+        base_scene_path = "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb"
+        base_scene_collision_config = "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
+
+        # Option 1: Load base scene without convexification
+        # Prefix with _ to indicate it might be unused currently
+        _replica_scene = self.scene.add_entity(
             gs.morphs.Mesh(
-                file="data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
+                file=base_scene_path,
                 fixed=True,
                 euler=(90, 0, 0),
                 pos=(0, 0, 0),
@@ -98,30 +125,22 @@ class SimulationNode:
             )
         )
 
-        # Initialize scene_objects list
+        # Initialize scene_objects list (for collision objects)
         self.scene_objects = []
 
         # Add separate collision geometry based on the stage config file
-        self._add_collision_from_stage_config(
-            "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
-        )
+        self._add_collision_from_stage_config(base_scene_collision_config)
 
-        # Add human model lying on the ground
-        self.human = self.scene.add_entity(
-            gs.morphs.Mesh(
-                file="data/assets/lying_man/Lying_man_0127.obj",  # Use the OBJ file
-                fixed=True,  # Make it static
-                euler=(180, 180, 0),  # Rotate to lie flat
-                pos=(-1.5, 1.5, 0.10),  # Position as requested (with slight z-offset)
-                scale=(0.010, 0.010, 0.010),  # Adjust scale if needed
-                convexify=False,
-                collision=False,  # Enable collision for robot interaction
-            )
-        )
+        # --- Pre-load all potential dynamic entities ---
+        self._preload_dynamic_entities()
 
-        # Export as STL
+        # --- Apply an initial empty/default config to hide all preloaded entities initially? ---
+        # Or handle this in _preload_dynamic_entities by placing them far away.
+        # Let's place them far away during preload.
+
+        # Export as STL (should probably only include static geometry here)
+        # TODO: Revisit STL export - might not be needed or should exclude dynamic entities
         file_path = "data/replica_scene.stl"
-
         self._process_occupancy_grid(file_path)
 
     def _add_collision_from_stage_config(self, config_path):
@@ -312,7 +331,7 @@ class SimulationNode:
             gs.morphs.URDF(
                 file="data/urdf/turtlebot3_burger.urdf",
                 pos=ROBOT_INIT_POS,
-                quat=ROBOT_INIT_QUAT,
+                quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
             )
         )
 
@@ -366,7 +385,6 @@ class SimulationNode:
     def init_movement(self):
         """Initialize robot movement"""
         self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
-        self.auto_movement_delay = 30  # 3 seconds at dt=0.1
 
     def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
         """Convert linear and angular velocity to left and right wheel velocities."""
@@ -379,6 +397,242 @@ class SimulationNode:
         ) / self.wheel_radius
         return left_vel, right_vel
 
+    def _apply_environment_config(self, config: Dict[str, Any]):
+        """Activates and positions managed entities based on config, hides others."""
+        print(
+            "[SimulationNode] Applying environment configuration "
+            "via entity placement..."
+        )
+
+        # Clear previous trajectory data
+        self.entity_trajectories.clear()
+
+        if not self.managed_entities:
+            print(
+                "[SimulationNode] No managed entities were pre-loaded. "
+                "Cannot apply config."
+            )
+            return
+
+        # Set of entity names specified in the current config
+        active_entity_names = set()
+        if config and "entities" in config:
+            for entity_data in config["entities"]:
+                name = entity_data.get("name")
+                if name:
+                    active_entity_names.add(name)
+
+        # Iterate through all potentially active entities defined in the config
+        if config and "entities" in config:
+            for entity_data in config["entities"]:
+                name = entity_data.get("name")
+                poses = entity_data.get("poses", [])
+                # Get loop parameter, default to False
+                loop = entity_data.get("loop", False)
+
+                if name not in self.managed_entities:
+                    print(
+                        f"[SimulationNode] Warning: Entity '{name}' in config "
+                        f"was not pre-loaded. Skipping."
+                    )
+                    continue
+
+                entity_obj = self.managed_entities[name]
+
+                # Handle fixed entities (single pose)
+                if len(poses) == 1:
+                    pose = poses[0]
+                    position = pose.get("position")
+                    orientation = pose.get("orientation")  # Assumed [w, x, y, z]
+
+                    if position is None or orientation is None:
+                        print(
+                            f"[SimulationNode] Skipping entity '{name}': missing "
+                            f"pos/orient in pose: {pose}"
+                        )
+                        # Move it out of the way just in case
+                        entity_obj.set_pos([0, 0, -1000])
+                        continue
+
+                    print(f"[SimulationNode] Placing entity: '{name}' at {position}")
+                    try:
+                        entity_obj.set_pos(position)
+                        entity_obj.set_quat(orientation)  # set_quat uses w,x,y,z
+                    except Exception as e:
+                        print(f"[SimulationNode] Error placing entity '{name}': {e}")
+
+                elif len(poses) > 1:
+                    # Store trajectory data for update loop
+                    # Sort poses by time just in case they aren't ordered
+                    sorted_poses = sorted(poses, key=lambda p: p["time"])
+                    self.entity_trajectories[name] = {
+                        "poses": sorted_poses,
+                        "loop": loop,
+                    }
+                    # Initial placement will be handled by the update loop
+                    print(
+                        f"[SimulationNode] Trajectory defined for '{name}'. Initial pose set by run loop."
+                    )
+
+                else:
+                    print(
+                        f"[SimulationNode] Skipping entity '{name}': no poses defined."
+                    )
+                    # Move it out of the way
+                    entity_obj.set_pos([0, 0, -1000])
+
+        # Hide entities that were pre-loaded but are NOT in the current config
+        hide_pos = [0, 0, -1000]
+        for name, entity_obj in self.managed_entities.items():
+            if name not in active_entity_names:
+                print(f"[SimulationNode] Hiding unused entity: '{name}'")
+                try:
+                    entity_obj.set_pos(hide_pos)
+                    # entity_obj.set_visibility(False) # If visibility API exists
+                except Exception as e:
+                    print(f"[SimulationNode] Error hiding entity '{name}': {e}")
+
+    def _update_entity_poses(self, sim_time: float):
+        """Updates positions of entities based on their trajectories and sim_time."""
+        for name, trajectory_data in self.entity_trajectories.items():
+            if name not in self.managed_entities:
+                continue  # Should not happen, but safety check
+
+            entity_obj = self.managed_entities[name]
+            poses = trajectory_data["poses"]
+            loop = trajectory_data["loop"]
+
+            if not poses:
+                continue
+
+            # Determine current segment based on time
+            current_time = sim_time
+            start_pose = poses[0]
+            end_pose = poses[-1]
+            trajectory_duration = end_pose["time"] - start_pose["time"]
+
+            if loop and trajectory_duration > 1e-6:  # Avoid division by zero
+                if current_time >= end_pose["time"]:
+                    # Wrap time for looping trajectory
+                    current_time = (
+                        current_time - start_pose["time"]
+                    ) % trajectory_duration + start_pose["time"]
+
+            # Find the two keyframes surrounding the current time
+            p1 = None
+            p2 = None
+            for i in range(len(poses) - 1):
+                if poses[i]["time"] <= current_time < poses[i + 1]["time"]:
+                    p1 = poses[i]
+                    p2 = poses[i + 1]
+                    break
+
+            # Handle edge cases: before first pose or after last pose (non-looping)
+            if p1 is None:
+                if current_time < poses[0]["time"]:
+                    p1 = p2 = poses[0]  # Stay at first pose
+                else:  # After last pose (and not looping or duration is zero)
+                    p1 = p2 = poses[-1]  # Stay at last pose
+
+            # Calculate interpolation factor (alpha)
+            segment_duration = p2["time"] - p1["time"]
+            alpha = 0.0
+            if segment_duration > 1e-6:
+                alpha = (current_time - p1["time"]) / segment_duration
+            alpha = np.clip(alpha, 0.0, 1.0)  # Clamp between 0 and 1
+
+            # Interpolate position (LERP)
+            pos1 = np.array(p1["position"])
+            pos2 = np.array(p2["position"])
+            interp_pos = pos1 + alpha * (pos2 - pos1)
+
+            # Interpolate orientation (SLERP)
+            # Need orientations in [x, y, z, w] format for Slerp
+            # Input quat is [w, x, y, z]
+            quat1_wxyz = p1["orientation"]
+            quat2_wxyz = p2["orientation"]
+            quat1_xyzw = np.array(
+                [quat1_wxyz[1], quat1_wxyz[2], quat1_wxyz[3], quat1_wxyz[0]]
+            )
+            quat2_xyzw = np.array(
+                [quat2_wxyz[1], quat2_wxyz[2], quat2_wxyz[3], quat2_wxyz[0]]
+            )
+
+            try:
+                key_rots = R.from_quat([quat1_xyzw, quat2_xyzw])
+                slerp = Slerp([p1["time"], p2["time"]], key_rots)
+                interp_rot = slerp([current_time])[0]  # Slerp expects array of times
+                # Convert back to [w, x, y, z] for Genesis
+                interp_quat_xyzw = interp_rot.as_quat()
+                interp_quat_wxyz = [
+                    interp_quat_xyzw[3],
+                    interp_quat_xyzw[0],
+                    interp_quat_xyzw[1],
+                    interp_quat_xyzw[2],
+                ]
+            except Exception as e:
+                # Fallback to p1 orientation if slerp fails (e.g., identical quats)
+                # print(f"SLERP failed for {name} at time {current_time}: {e}. "
+                #       f"Using start orientation.")
+                interp_quat_wxyz = quat1_wxyz
+
+            # Apply interpolated pose (scale is already set)
+            entity_obj.set_pos(interp_pos.tolist())
+            entity_obj.set_quat(interp_quat_wxyz)
+
+    def _preload_dynamic_entities(self):
+        """Pre-loads all known dynamic entities into the scene initially."""
+        print("[SimulationNode] Pre-loading dynamic entities...")
+        # Define potential entities here (name, path, default scale)
+        potential_entities = [
+            {
+                "name": "walker_1",
+                "asset_path": "data/assets/walking_man/man.obj",
+                "scale": [1.0, 1.0, 1.0],
+            },
+            {
+                "name": "casualty_1",
+                "asset_path": "data/assets/lying_man/Lying_man_0127.obj",
+                "scale": [0.010, 0.010, 0.010],
+            },
+            # Add other potential entities here in the future
+        ]
+
+        initial_hide_pos = [0, 0, -1000]  # Position to hide entities initially
+        default_quat = [1.0, 0.0, 0.0, 0.0]  # Default orientation (w,x,y,z)
+
+        for entity_data in potential_entities:
+            name = entity_data["name"]
+            asset_path = entity_data["asset_path"]
+            scale = entity_data["scale"]
+            print(f"[SimulationNode] Pre-loading: {name} from {asset_path}")
+
+            try:
+                # Construct absolute asset path relative to project root
+                project_root = os.path.dirname(
+                    os.path.dirname(os.path.dirname(__file__))
+                )
+                full_asset_path = os.path.join(project_root, asset_path)
+
+                entity_obj = self.scene.add_entity(
+                    gs.morphs.Mesh(
+                        file=full_asset_path,
+                        pos=initial_hide_pos,  # Start hidden
+                        quat=default_quat,
+                        scale=scale,
+                        collision=False,
+                        convexify=False,
+                    )
+                )
+                # Store reference
+                self.managed_entities[name] = entity_obj
+                print(f"[SimulationNode] Pre-loaded '{name}' successfully.")
+            except Exception as e:
+                print(
+                    f"[SimulationNode] Error pre-loading entity '{name}' from "
+                    f"path '{asset_path}': {e}"
+                )
+
     def run(self):
         local_forward = np.array([1.0, 0.0, 0.0])
         step_count = 0
@@ -389,14 +643,131 @@ class SimulationNode:
         last_step_time = time.time()
 
         while not self.shared_queues.exit_event.is_set():
-            # --- (B) Gather robot pose, velocity
+            # --- (A) Handle velocity commands from agent -> sim first
+            try:
+                # Process all messages in queue and keep track of latest commands
+                latest_velocity_cmd = None
+                latest_reset_cmd = None
+                latest_set_env_cmd = None  # Variable to hold the latest env command
+
+                while True:
+                    try:
+                        cmd = self.shared_queues.agent_to_sim.get_nowait()
+                        if isinstance(cmd, VelocityCmd):
+                            latest_velocity_cmd = cmd
+                        elif isinstance(cmd, ResetRobotCmd):
+                            latest_reset_cmd = cmd
+                        elif isinstance(
+                            cmd, SetEnvironmentCmd
+                        ):  # Check for new command
+                            latest_set_env_cmd = cmd
+                    except queue.Empty:
+                        break
+
+                # Apply latest SetEnvironmentCmd FIRST if it exists
+                if latest_set_env_cmd is not None:
+                    print("[SimulationNode] Received SetEnvironmentCmd.")
+                    self._apply_environment_config(latest_set_env_cmd.config)
+                    # We might want to reset robot pose after env change, TBD
+
+                # Apply latest ResetRobotCmd if it exists (after potential env change)
+                if latest_reset_cmd is not None:
+                    if (
+                        hasattr(latest_reset_cmd, "pose")
+                        and latest_reset_cmd.pose is not None
+                    ):
+                        # Use custom position and orientation
+                        custom_position, custom_orientation = latest_reset_cmd.pose
+                        print(
+                            f"[SimulationNode] Resetting robot to custom pose: "
+                            f"pos={custom_position}, quat={xyzw_to_wxyz(custom_orientation)} (w, x, y, z)"
+                        )
+                        self.robot.set_pos(custom_position)
+                        self.robot.set_quat(xyzw_to_wxyz(custom_orientation))
+                    else:
+                        # Use default position and orientation
+                        print(
+                            "[SimulationNode] Resetting robot pose to default origin."
+                        )
+                        self.robot.set_pos(ROBOT_INIT_POS)
+                        self.robot.set_quat(xyzw_to_wxyz(ROBOT_INIT_QUAT))
+
+                    # Reset commanded velocities
+                    self.commanded_lin_vel = np.zeros(3)
+                    self.commanded_ang_vel = np.zeros(3)
+                elif latest_velocity_cmd is not None:
+                    linear_vel = latest_velocity_cmd.linear_x
+                    angular_vel = latest_velocity_cmd.angular_z
+
+                    # Convert desired velocities to robot position update
+                    current_pos = self.robot.get_pos().cpu().numpy()
+                    current_quat = self.robot.get_quat().cpu().numpy()
+
+                    # Update position based on linear velocity and current orientation
+                    dt = self.scene.sim_options.dt
+                    # Convert current quaternion to rotation matrix to get forward direction
+                    current_rot = R.from_quat(
+                        [
+                            current_quat[1],
+                            current_quat[2],
+                            current_quat[3],
+                            current_quat[0],
+                        ]
+                    )
+                    forward_dir = current_rot.apply(
+                        [1, 0, 0]
+                    )  # Transform x-axis by current rotation
+
+                    # Move in the forward direction
+                    new_pos = current_pos + forward_dir * linear_vel * dt
+
+                    # Update orientation based on angular velocity
+                    angle = angular_vel * dt
+                    delta_rot = R.from_euler("z", angle)
+                    new_rot = delta_rot * current_rot
+                    new_quat = new_rot.as_quat()  # Returns [x, y, z, w]
+                    new_quat = np.array(
+                        [new_quat[3], new_quat[0], new_quat[1], new_quat[2]]
+                    )  # Convert to Genesis format
+
+                    # Set the new position and orientation
+                    self.robot.set_pos(new_pos)
+                    self.robot.set_quat(new_quat)
+
+                    # Store commanded velocities in world frame for odometry
+                    # MULTIPLY BY 0 TO DISABLE MESSING WITH TH EACTUAL ROBOT
+                    # ON ROS
+                    self.commanded_lin_vel = forward_dir * linear_vel * 0
+                    self.commanded_ang_vel = np.array([0, 0, angular_vel])
+
+                    print(
+                        f"Commanded vel: linear={linear_vel:.3f}, angular={angular_vel:.3f}"
+                    )
+            except Exception as e:
+                print(f"Error processing commands: {e}")
+
+            # --- (B) Update moving entities ---
+            self._update_entity_poses(sim_time)
+
+            # --- (C) Gather robot pose, velocity (after applying commands)
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
-            lin_vel = self.robot.get_vel().cpu().numpy()
-            ang_vel = self.robot.get_ang().cpu().numpy()
 
-            # --- (C) Render cameras based on time interval
+            # Use commanded velocities for odometry
+            lin_vel = self.commanded_lin_vel
+            ang_vel = self.commanded_ang_vel
+
+            # --- (D) Render cameras based on time interval
             sim_time += dt
+
+            # --- Publish Clock Message
+            sec_clock = int(sim_time)
+            nsec_clock = int((sim_time - sec_clock) * 1e9)
+            clock_msg = {"clock": {"sec": sec_clock, "nanosec": nsec_clock}}
+            try:
+                self.shared_queues.sim_to_agent.put_nowait(clock_msg)
+            except queue.Full:
+                pass
 
             # Check if enough time has passed since last render
             if sim_time - self.last_render_time >= self.render_interval:
@@ -442,11 +813,11 @@ class SimulationNode:
                 rgb_to_send = None
                 depth_to_send = None
 
-            # --- (D) Build RobotStateMsg
+            # --- (D) Build and publish RobotStateMsg with latest state
             state_msg = RobotStateMsg(
                 # camera data
-                rgb_frame=rgb_to_send,
-                depth_frame=depth_to_send,
+                rgb_frame=rgb_to_send if "rgb_to_send" in locals() else None,
+                depth_frame=depth_to_send if "depth_to_send" in locals() else None,
                 # camera intrinsics
                 width=self.width,
                 height=self.height,
@@ -504,34 +875,12 @@ class SimulationNode:
                     pass
                 self.last_map_publish_step = step_count
 
-            # --- (F) Handle velocity commands from agent -> sim
-            try:
-                cmd = self.shared_queues.agent_to_sim.get_nowait()
-                if isinstance(cmd, VelocityCmd):
-                    linear_vel = cmd.linear_x
-                    angular_vel = cmd.angular_z
-                    left_vel, right_vel = self.cmd_vel_to_wheel_velocities(
-                        linear_vel, angular_vel
-                    )
-                    self.robot.control_dofs_velocity(
-                        [left_vel, right_vel], [self.left_idx, self.right_idx]
-                    )
-                elif isinstance(cmd, ResetRobotCmd):
-                    print("[SimulationNode] Resetting robot pose to origin.")
-                    self.robot.set_pos(ROBOT_INIT_POS)
-                    self.robot.set_quat(ROBOT_INIT_QUAT)
-                    self.robot.control_dofs_velocity(
-                        [0.0, 0.0], [self.left_idx, self.right_idx]
-                    )
-            except queue.Empty:
-                pass
-
-            # --- (G) Step the physics
+            # --- (F) Step the physics
             try:
                 self.scene.step()
                 step_count += 1
 
-                # --- (H) Sleep to maintain real-time simulation
+                # --- (G) Sleep to maintain real-time simulation
                 current_time = time.time()
                 elapsed = current_time - last_step_time
                 sleep_time = dt - elapsed

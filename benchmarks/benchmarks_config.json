@@ -1,16 +1,23 @@
 {
     "benchmarks": [
         {
-            "name": "Human Rescue and Email Test",
-            "config": "benchmarks/configs/human_rescue_and_email_test.yaml",
-            "trials": 10,
+            "name": "Quick Response Test",
+            "config": "benchmarks/configs/quick_response_test.yaml",
+            "trials": 40,
             "start_trial": 1,
             "delay": 5,
             "variants": [
-                "gemini1",
-                "gemini2",
-                "gemini3",
-                "gemini4"
+                "gemini1"
+            ]
+        },
+        {
+            "name": "Human Rescue and Email Test",
+            "config": "benchmarks/configs/human_rescue_and_email_test.yaml",
+            "trials": 40,
+            "start_trial": 1,
+            "delay": 5,
+            "variants": [
+                "gemini1"
             ]
         }
     ]

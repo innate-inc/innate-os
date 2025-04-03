@@ -1,0 +1,28 @@
+{
+    "environment_name": "Baked_sc0_staging_00",
+    "entities": [
+        {
+            "name": "walker_1",
+            "asset_path": "data/assets/walking_man/man.obj",
+            "poses": [
+                {
+                    "time": 0.0,
+                    "position": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "orientation": [
+                        0.5,
+                        0.5,
+                        0.5,
+                        0.5
+                    ]
+                }
+            ],
+            "fixed": true,
+            "collision": false,
+            "convexify": false
+        }
+    ]
+}

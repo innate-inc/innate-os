@@ -173,6 +173,7 @@ async def outbound_loop(ws, shared_queues):
     adv_set_directive = rosbridge_advertise("/set_directive", "std_msgs/msg/String")
     # Add a new topic for logging configuration
     adv_logging_config = rosbridge_advertise("/logging_config", "std_msgs/msg/Bool")
+    adv_clock = rosbridge_advertise("/clock", "rosgraph_msgs/Clock")
 
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
@@ -182,7 +183,7 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_chat_in))
     await ws.send(json.dumps(adv_set_directive))
     await ws.send(json.dumps(adv_logging_config))
-
+    await ws.send(json.dumps(adv_clock))
     print(
         "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, and /logging_config"
     )
@@ -248,6 +249,10 @@ async def outbound_loop(ws, shared_queues):
                     print("[ROSBridge] Reset without memory state")
 
                 await ws.send(json.dumps(reset_srv))
+
+            elif isinstance(msg, dict) and "clock" in msg:
+                outbound = rosbridge_publish("/clock", msg)
+                await ws.send(json.dumps(outbound))
 
         except queue.Empty:
             # no messages to publish right now
@@ -480,6 +485,7 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):
 def parse_twist(msg: dict) -> VelocityCmd | None:
     lin = msg.get("linear", {})
     ang = msg.get("angular", {})
+
     try:
         vx = float(lin.get("x", 0.0))
         vz = float(ang.get("z", 0.0))

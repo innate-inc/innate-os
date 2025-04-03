@@ -17,6 +17,7 @@ from src.agent.agent_websocket_bridge import run_agent_async
 # Import the new video & reset endpoints router
 from src.routes.video_api import router as video_api_router
 from src.routes.chat_api import router as chat_api_router
+from src.routes.config_api import router as config_api_router
 
 # Load environment variables from .env file
 load_dotenv()
@@ -52,6 +53,9 @@ app.include_router(video_api_router)
 # except for the WebSocket endpoint which handles authentication separately
 # The WebSocket endpoint will handle authentication on its own
 app.include_router(chat_api_router)
+
+# Add the config_api router with authentication
+app.include_router(config_api_router)
 
 # Initialize a placeholder on the application's state so that downstream
 # routers can retrieve SHARED_QUEUES.
@@ -143,7 +147,7 @@ def main():
     )
     collector_thread.start()
 
-    # 2) Start the simulation node
+    # 2) Start the simulation node (no initial config path needed now)
     sim_node = SimulationNode(SHARED_QUEUES, enable_vis=args.vis)
 
     # 3) Start the agent (async) in a separate thread

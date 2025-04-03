@@ -1,7 +1,8 @@
 # intypes.py
 
-from typing import NamedTuple
+from typing import NamedTuple, Dict, Any
 import numpy as np
+import time
 
 
 class RobotStateMsg(NamedTuple):
@@ -73,19 +74,25 @@ class VelocityCmd(NamedTuple):
 
 class ResetRobotCmd:
     """
-    A command telling the simulator to reset the robot's pose to the origin.
+    A command telling the simulator to reset the robot's pose.
     Optionally includes memory state information to be loaded by the robot.
+    Optionally includes pose (position and orientation) to reset the robot to.
     """
 
-    def __init__(self, memory_state: str = None):
+    def __init__(self, memory_state: str = None, pose: tuple = None):
         """
-        Initialize a reset command with optional memory state information.
+        Initialize a reset command with optional memory state and pose information.
 
         Args:
             memory_state: Identifier for the memory state to load,
                          e.g., "init_mem_human_rescue_and_email_test"
+            pose: Tuple containing (position, orientation) where:
+                 - position is a tuple of (x, y, z) coordinates
+                 - orientation is a tuple of (w, x, y, z) quaternion values
+                 If None, the default position and orientation will be used.
         """
         self.memory_state = memory_state
+        self.pose = pose
 
 
 class DirectiveCmd(NamedTuple):
@@ -94,3 +101,10 @@ class DirectiveCmd(NamedTuple):
     """
 
     directive: str
+
+
+class SetEnvironmentCmd(NamedTuple):
+    """Command to set the simulation environment from a configuration dict."""
+
+    config: Dict[str, Any]
+    timestamp: float = time.time()

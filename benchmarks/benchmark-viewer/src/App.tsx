@@ -6,7 +6,7 @@ import { AppLayout, Sidebar, MainContent } from "./components/layout/AppLayout";
 import { BenchmarkCard } from "./components/benchmark/BenchmarkCard";
 import { TrialGrid } from "./components/trial/TrialGrid";
 import GlobalStyle from "./styles/GlobalStyle";
-import { Benchmark, Trial } from "./types/benchmark";
+import { Benchmark, Trial, Task } from "./types/benchmark";
 import styled from "styled-components";
 
 const PageTitle = styled.h1`
@@ -24,15 +24,15 @@ const Description = styled.p`
   line-height: 1.5;
 `;
 
-const TrialDetails = styled.div`
+const TrialDetails = styled.div<{ $success: boolean }>`
   background: ${({ theme }) => theme.colors.surface};
   border-radius: ${({ theme }) => theme.borderRadius.large};
   padding: ${({ theme }) => theme.spacing.xl};
   margin-top: ${({ theme }) => theme.spacing.xl};
   box-shadow: ${({ theme }) => theme.shadows.card};
   border-left: 4px solid
-    ${({ theme, success }) =>
-      success ? theme.colors.success : theme.colors.error};
+    ${({ theme, $success }) =>
+      $success ? theme.colors.success : theme.colors.error};
 `;
 
 const TrialTitle = styled.h2`
@@ -100,69 +100,119 @@ const LoadingOverlay = styled.div`
   color: ${({ theme }) => theme.colors.textLight};
 `;
 
-const StatusTag = styled.div<{ success: boolean }>`
+const StatusTag = styled.div<{ $success: boolean }>`
   display: inline-block;
   padding: ${({ theme }) => `${theme.spacing.xs} ${theme.spacing.sm}`};
   border-radius: ${({ theme }) => theme.borderRadius.small};
-  background: ${({ theme, success }) =>
-    success ? theme.colors.success + "20" : theme.colors.error + "20"};
-  color: ${({ theme, success }) =>
-    success ? theme.colors.success : theme.colors.error};
+  background: ${({ theme, $success }) =>
+    $success ? theme.colors.success + "20" : theme.colors.error + "20"};
+  color: ${({ theme, $success }) =>
+    $success ? theme.colors.success : theme.colors.error};
   font-weight: bold;
   font-size: 0.875rem;
   margin-bottom: ${({ theme }) => theme.spacing.md};
 `;
 
 const loadBenchmarkData = async (benchmarkName: string): Promise<Benchmark> => {
-  const trials: Trial[] = [];
-  let successCount = 0;
+  const tasks: Task[] = [];
+  let totalSuccessCount = 0;
+  let totalTrials = 0;
 
-  const trialNumbers = Array.from({ length: 10 }, (_, i) => i + 1);
+  // Known task names based on the directory structure
+  const taskNames = [
+    "human_rescue_and_email_test",
+    "quick_response_test",
+    "send_email_on_request",
+    "quick_response_test_sonnet",
+    "quick_response_test_gemini",
+  ];
 
-  for (const trialNum of trialNumbers) {
-    try {
-      const [metadata, metrics, chatLog] = await Promise.all([
-        fetch(`/results/${benchmarkName}/trial_${trialNum}/metadata.json`).then(
-          (r) => r.json()
-        ),
-        fetch(`/results/${benchmarkName}/trial_${trialNum}/metrics.json`).then(
-          (r) => r.json()
-        ),
-        fetch(`/results/${benchmarkName}/trial_${trialNum}/chat_log.json`).then(
-          (r) => r.json()
-        ),
-      ]);
+  for (const taskName of taskNames) {
+    const trials: Trial[] = [];
+    let taskSuccessCount = 0;
 
-      const trial: Trial = {
-        id: String(trialNum),
-        success: metrics.success?.success || false,
-        reason: metrics.success?.reason || "No reason provided",
-        timestamp: metadata.timestamp,
-        metrics: {
-          duration:
-            (new Date(metrics.end_time).getTime() -
-              new Date(metrics.start_time).getTime()) /
-            1000,
-          chatMessages: metrics.chat_messages,
-          frames_captured: metrics.frames_captured,
-        },
-        chat_log: chatLog,
+    // Get the list of trials for this task
+    const trialNumbers = Array.from({ length: 40 }, (_, i) => i + 1);
+
+    for (const trialNum of trialNumbers) {
+      try {
+        const [metadata, metrics, chatLog] = await Promise.all([
+          fetch(
+            `/results/${benchmarkName}/${taskName}/trial_${trialNum}/metadata.json`
+          ).then((r) => {
+            if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+            return r.json();
+          }),
+          fetch(
+            `/results/${benchmarkName}/${taskName}/trial_${trialNum}/metrics.json`
+          ).then((r) => {
+            if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+            return r.json();
+          }),
+          fetch(
+            `/results/${benchmarkName}/${taskName}/trial_${trialNum}/chat_log.json`
+          ).then((r) => {
+            if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+            return r.json();
+          }),
+        ]);
+
+        const trial: Trial = {
+          id: String(trialNum),
+          success: metrics.success?.success || false,
+          reason: metrics.success?.reason || "No reason provided",
+          timestamp: metadata.timestamp,
+          metadata: {
+            description: metadata.description,
+            goal: metadata.goal,
+          },
+          metrics: {
+            duration:
+              (new Date(metrics.end_time).getTime() -
+                new Date(metrics.start_time).getTime()) /
+              1000,
+            chatMessages: metrics.chat_messages,
+            frames_captured: metrics.frames_captured,
+          },
+          chat_log: chatLog,
+        };
+
+        if (trial.success) taskSuccessCount++;
+        trials.push(trial);
+      } catch (error) {
+        // If we get a 404 error, this trial doesn't exist, so we can skip it
+        if (error instanceof Error && error.message.includes("404")) {
+          continue;
+        }
+        console.error(`Error loading trial ${trialNum}:`, error);
+      }
+    }
+
+    // Only add the task if we found any trials
+    if (trials.length > 0) {
+      const task: Task = {
+        name: taskName,
+        trials,
+        totalTrials: trials.length,
+        successCount: taskSuccessCount,
+        description: trials[0]?.metadata?.description || "",
+        goal: trials[0]?.metadata?.goal || "",
       };
 
-      if (trial.success) successCount++;
-      trials.push(trial);
-    } catch (error) {
-      console.error(`Error loading trial ${trialNum}:`, error);
+      totalSuccessCount += taskSuccessCount;
+      totalTrials += trials.length;
+      tasks.push(task);
     }
   }
 
   return {
     name: benchmarkName,
-    trials,
-    totalTrials: trials.length,
-    successCount,
-    description: trials[0]?.metadata?.description || "",
-    goal: trials[0]?.metadata?.goal || "",
+    tasks,
+    totalTasks: tasks.length,
+    totalTrials,
+    successCount: totalSuccessCount,
+    description: tasks[0]?.description || "",
+    goal: tasks[0]?.goal || "",
   };
 };
 
@@ -171,13 +221,13 @@ const App: React.FC = () => {
   const [selectedBenchmark, setSelectedBenchmark] = useState<Benchmark | null>(
     null
   );
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedTrial, setSelectedTrial] = useState<Trial | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        // First get the list of benchmarks from index.json
         const indexResponse = await fetch("/results/index.json");
         const indexData = await indexResponse.json();
         const benchmarkNames = indexData.benchmarks;
@@ -185,7 +235,7 @@ const App: React.FC = () => {
         console.log("Loading benchmarks:", benchmarkNames);
 
         const loadedBenchmarks = await Promise.all(
-          benchmarkNames.map((name) => loadBenchmarkData(name))
+          benchmarkNames.map((name: string) => loadBenchmarkData(name))
         );
 
         console.log("Loaded benchmarks:", loadedBenchmarks);
@@ -193,6 +243,9 @@ const App: React.FC = () => {
         setBenchmarks(loadedBenchmarks);
         if (loadedBenchmarks.length > 0) {
           setSelectedBenchmark(loadedBenchmarks[0]);
+          if (loadedBenchmarks[0].tasks.length > 0) {
+            setSelectedTask(loadedBenchmarks[0].tasks[0]);
+          }
         }
         setLoading(false);
       } catch (error) {
@@ -206,6 +259,12 @@ const App: React.FC = () => {
 
   const handleBenchmarkClick = (benchmark: Benchmark) => {
     setSelectedBenchmark(benchmark);
+    setSelectedTask(benchmark.tasks[0] || null);
+    setSelectedTrial(null);
+  };
+
+  const handleTaskClick = (task: Task) => {
+    setSelectedTask(task);
     setSelectedTrial(null);
   };
 
@@ -243,58 +302,95 @@ const App: React.FC = () => {
                 {selectedBenchmark.description && (
                   <Description>{selectedBenchmark.description}</Description>
                 )}
-                <TrialGrid
-                  trials={selectedBenchmark.trials}
-                  onTrialClick={handleTrialClick}
-                />
-                {selectedTrial && (
-                  <TrialDetails success={selectedTrial.success}>
-                    <TrialTitle>Trial {selectedTrial.id} Details</TrialTitle>
-                    <StatusTag success={selectedTrial.success}>
-                      {selectedTrial.success ? "Success" : "Failed"}
-                    </StatusTag>
-                    <MetricGrid>
-                      <Metric>
-                        <MetricLabel>Duration</MetricLabel>
-                        <MetricValue>
-                          {selectedTrial.metrics.duration.toFixed(1)}s
-                        </MetricValue>
-                      </Metric>
-                      <Metric>
-                        <MetricLabel>Chat Messages</MetricLabel>
-                        <MetricValue>
-                          {selectedTrial.metrics.chatMessages}
-                        </MetricValue>
-                      </Metric>
-                      <Metric>
-                        <MetricLabel>First Person Frames</MetricLabel>
-                        <MetricValue>
-                          {selectedTrial.metrics.frames_captured.first_person}
-                        </MetricValue>
-                      </Metric>
-                      <Metric>
-                        <MetricLabel>Chase Frames</MetricLabel>
-                        <MetricValue>
-                          {selectedTrial.metrics.frames_captured.chase}
-                        </MetricValue>
-                      </Metric>
-                    </MetricGrid>
-                    <Description>{selectedTrial.reason}</Description>
-                    <ChatLog>
-                      <TrialTitle>Chat Log</TrialTitle>
-                      {selectedTrial.chat_log.map((msg, i) => (
-                        <ChatMessage key={i}>
-                          <ChatSender>{msg.sender}:</ChatSender>
-                          {msg.text}
-                          {msg.time_since_start !== undefined && (
-                            <ChatTime>
-                              (at {msg.time_since_start.toFixed(1)}s)
-                            </ChatTime>
-                          )}
-                        </ChatMessage>
-                      ))}
-                    </ChatLog>
-                  </TrialDetails>
+                <div style={{ marginBottom: "2rem" }}>
+                  <h2>Tasks</h2>
+                  <div
+                    style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}
+                  >
+                    {selectedBenchmark.tasks.map((task) => (
+                      <div
+                        key={task.name}
+                        onClick={() => handleTaskClick(task)}
+                        style={{
+                          padding: "1rem",
+                          background:
+                            selectedTask?.name === task.name
+                              ? theme.colors.success
+                              : theme.colors.surface,
+                          borderRadius: theme.borderRadius.medium,
+                          cursor: "pointer",
+                          color:
+                            selectedTask?.name === task.name
+                              ? theme.colors.background
+                              : theme.colors.text,
+                        }}
+                      >
+                        {task.name}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {selectedTask && (
+                  <>
+                    <TrialGrid
+                      trials={selectedTask.trials}
+                      onTrialClick={handleTrialClick}
+                    />
+                    {selectedTrial && (
+                      <TrialDetails $success={selectedTrial.success}>
+                        <TrialTitle>
+                          Trial {selectedTrial.id} Details
+                        </TrialTitle>
+                        <StatusTag $success={selectedTrial.success}>
+                          {selectedTrial.success ? "Success" : "Failed"}
+                        </StatusTag>
+                        <MetricGrid>
+                          <Metric>
+                            <MetricLabel>Duration</MetricLabel>
+                            <MetricValue>
+                              {selectedTrial.metrics.duration.toFixed(1)}s
+                            </MetricValue>
+                          </Metric>
+                          <Metric>
+                            <MetricLabel>Chat Messages</MetricLabel>
+                            <MetricValue>
+                              {selectedTrial.metrics.chatMessages}
+                            </MetricValue>
+                          </Metric>
+                          <Metric>
+                            <MetricLabel>First Person Frames</MetricLabel>
+                            <MetricValue>
+                              {
+                                selectedTrial.metrics.frames_captured
+                                  .first_person
+                              }
+                            </MetricValue>
+                          </Metric>
+                          <Metric>
+                            <MetricLabel>Chase Frames</MetricLabel>
+                            <MetricValue>
+                              {selectedTrial.metrics.frames_captured.chase}
+                            </MetricValue>
+                          </Metric>
+                        </MetricGrid>
+                        <Description>{selectedTrial.reason}</Description>
+                        <ChatLog>
+                          <TrialTitle>Chat Log</TrialTitle>
+                          {selectedTrial.chat_log.map((msg, i) => (
+                            <ChatMessage key={i}>
+                              <ChatSender>{msg.sender}:</ChatSender>
+                              {msg.text}
+                              {msg.time_since_start !== undefined && (
+                                <ChatTime>
+                                  (at {msg.time_since_start.toFixed(1)}s)
+                                </ChatTime>
+                              )}
+                            </ChatMessage>
+                          ))}
+                        </ChatLog>
+                      </TrialDetails>
+                    )}
+                  </>
                 )}
               </>
             )}

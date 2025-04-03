@@ -1,205 +1,250 @@
-# Genesis Simulation Tests
+# Innate Simulator
 
 This repository contains a simulation environment built with Genesis, featuring a web interface for visualization and interaction.
 
 ## Overview
 
 This project integrates:
-- Genesis simulation environment
-- FastAPI backend server
-- React frontend
-- WebSocket communication for real-time agent interaction
-- Auth0 authentication for secure access
 
-## Prerequisites
-
-### macOS Requirements
-- Node.js v18.x
-- Python 3.8+
-- Yarn package manager
+*   **Genesis:** For the core physics simulation and rendering.
+*   **FastAPI:** As the backend web server.
+*   **React:** For the frontend user interface.
+*   **WebSockets:** For real-time communication between the frontend, backend, and agent.
+*   **Auth0:** For secure user authentication.
 
 ## Installation
 
-### Backend Setup (macOS)
+### Prerequisites
 
-1. Clone the repository:
-```zsh
-git clone <repository-url>
-cd genesis-sim-tests
-```
+*   Node.js v18.x
+*   Python 3.8+
+*   Yarn package manager
 
-2. Create and activate a virtual environment:
-```zsh
-python -m venv venv
-source venv/bin/activate
-```
+### Backend Setup
 
-3. Install dependencies:
-```zsh
-pip install -r requirements.macos.txt
-```
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository-url> # Replace with your repo URL
+    cd <repository-directory>
+    ```
+2.  **Create and activate a virtual environment:**
+    ```bash
+    python -m venv venv
+    source venv/bin/activate # On Windows use `venv\Scripts\activate`
+    ```
+3.  **Install dependencies:**
+    *   **macOS:** `pip install -r requirements.macos.txt`
+    *   **Other OS:** (You might need to adjust dependencies) `pip install -r requirements.txt` *(Assuming a requirements.txt exists or needs creation)*
 
 ### Frontend Setup
 
-1. Navigate to the frontend directory:
-```zsh
-cd frontend
-```
-
-2. Install dependencies:
-```zsh
-yarn install
-```
+1.  **Navigate to the frontend directory:**
+    ```bash
+    cd frontend
+    ```
+2.  **Install dependencies:**
+    ```bash
+    yarn install
+    ```
 
 ## Running the Application
 
-### Start the Backend
+### 1. Start the Backend Server
 
-Run the main web application:
-```zsh
-python main_web.py
+From the project root directory:
+
+```bash
+python main_web.py [OPTIONS]
 ```
 
-Options:
-- `-v` or `--vis`: Enable visualization
-- `--local`: Connect to local agent server instead of cloud
-- `--need-oauth`: Require OAuth authentication for chat API (choices: "true", "false", default: "true")
-- `--auth0-domain`: Auth0 domain for authentication
-- `--auth0-audience`: Auth0 API identifier
+**Common Options:**
 
-### Start the Frontend Development Server
+*   `-v` or `--vis`: Enable the Genesis simulation visualization window.
+*   `--local`: Connect to a local agent server (e.g., ROS bridge running on `ws://localhost:9090`) instead of the cloud service.
+*   `--need-oauth <true|false>`: Require OAuth authentication (default: `true`). Set to `false` for development **only** if Auth0 is not configured.
+*   `--auth0-domain <your-domain>`: Your Auth0 domain (required if `--need-oauth true`).
+*   `--auth0-audience <your-audience>`: Your Auth0 API identifier/audience (required if `--need-oauth true`).
+*   `--log-everything`: Enable verbose logging for all agent model inputs/outputs.
 
-In a separate terminal:
-```zsh
+### 2. Start the Frontend Development Server
+
+In a *separate* terminal, from the `frontend` directory:
+
+```bash
 cd frontend
 yarn dev
 ```
 
-The frontend will be available at http://localhost:5173 by default.
+The frontend will typically be available at `http://localhost:5173`.
 
-## Project Structure
+## Configuration
 
-- `main_web.py`: Main entry point for the web application
-- `src/`: Backend source code
-  - `agent/`: Agent-related code and WebSocket bridge
-  - `routes/`: API endpoints (video and chat)
-  - `simulation/`: Simulation node and related components
-  - `webrtc/`: WebRTC implementation for video streaming
-  - `shared_queues.py`: Shared queue implementation for inter-process communication
-- `frontend/`: React frontend application
-  - `src/`: Frontend source code
-  - `dist/`: Built frontend (served by the backend)
-- `data/`: Data files for the simulation
-- `requirements.macos.txt`: macOS-specific Python dependencies
+### Environment Configuration Files
+
+Environment configurations are stored as JSON files in the `data/environments/` directory. These files define the base scene and the dynamic entities present within it.
+
+**Structure:**
+
+```json
+{
+  "environment_name": "Baked_sc0_staging_00", // Base static scene name
+  "entities": [
+    {
+      "name": "unique_entity_name", // e.g., "walker_1", "casualty_1"
+      "asset_path": "path/to/model.obj", // Relative to project root
+      "poses": [
+        {
+          "time": 0.0, // Simulation time for this keyframe
+          "position": [x, y, z],
+          "orientation": [w, x, y, z] // Quaternion
+        },
+        {
+          "time": 10.0, // Simulation time for the next keyframe
+          "position": [x2, y2, z2],
+          "orientation": [w2, x2, y2, z2]
+        }
+        // Add more poses here...
+      ],
+      "loop": false // Optional, defaults to false. If true, trajectory restarts after the last pose.
+    }
+    // Add more entities...
+  ]
+}
+```
+
+*   **Fixed Entities:** An entity with only one pose in the `poses` list will be considered fixed at that position/orientation.
+*   **Moving Entities:** Entities with multiple poses will linearly interpolate (LERP for position, SLERP for orientation) between consecutive poses based on the current simulation time. The `loop` parameter determines if the trajectory restarts from the beginning after reaching the last pose's time.
+
+### Authentication (Auth0)
+
+This application uses Auth0 for handling user logins and securing API endpoints.
+
+*   **Setup:** See [AUTH0_SETUP.md](AUTH0_SETUP.md) for detailed instructions on configuring your Auth0 tenant, application, and API.
+*   **Development:** For local development without requiring login, start the backend with the `--need-oauth false` flag.
 
 ## API Endpoints
 
-The application exposes several API endpoints:
-- Video streaming endpoints
-- Chat API for agent interaction
+The backend exposes several API endpoints for controlling the simulation and interacting with the agent. Most configuration endpoints require authentication (an Auth0 Bearer token).
+
+**Base URL:** `http://localhost:8000` (unless configured differently)
+
+### Configuration & Control (`/config_api`)
+
+*   **`POST /set_environment`**
+    *   Sets the active environment by positioning pre-loaded entities.
+    *   **Requires Auth Token.**
+    *   **Request Body:** JSON object containing *either*:
+        *   `config_name`: (String) The name of a configuration file (without `.json`) in `data/environments/`.
+        *   `config`: (Object) A full environment configuration dictionary (matching the structure described above).
+    *   **Example (using `config_name`):**
+        ```bash
+        curl -X POST http://localhost:8000/set_environment \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer YOUR_AUTH0_TOKEN" \
+        -d '{
+          "config_name": "lying_man_corner"
+        }'
+        ```
+    *   **Example (using `config` object):**
+        ```bash
+        curl -X POST http://localhost:8000/set_environment \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer YOUR_AUTH0_TOKEN" \
+        -d '{
+          "config": {
+            "environment_name": "Baked_sc0_staging_00",
+            "entities": [
+              {
+                "name": "walker_1",
+                "asset_path": "data/assets/walking_man/man.obj",
+                "poses": [
+                  {"time": 0.0, "position": [0.0, 0.0, 0.10], "orientation": [0.0, 0.7071, 0.0, 0.7071]}
+                ],
+                "scale": [1.0, 1.0, 1.0]
+              }
+            ]
+          }
+        }'
+        ```
+
+*   **`POST /reset_robot`**
+    *   Resets the robot's position and orientation.
+    *   **Requires Auth Token.**
+    *   **Request Body (Optional):** JSON object
+        ```json
+        {
+          "memory_state": "optional_state_to_load",
+          "position": [x, y, z],
+          "orientation": [w, x, y, z]
+        }
+        ```
+        *   If `position` and `orientation` are provided, the robot resets to that pose.
+        *   Otherwise, it resets to the default initial pose.
+        *   `memory_state` can be used to load a specific agent memory state (if implemented).
+
+*   **`POST /shutdown`**
+    *   Gracefully shuts down the simulation backend.
+    *   **Requires Auth Token.**
+
+### Video & State (`/video_api`)
+
+*   **`GET /video_feed`**: MJPEG stream of the robot's first-person camera.
+*   **`GET /video_feed_chase`**: MJPEG stream of the chase camera.
+*   **`GET /video_feeds_ready`**: Checks if the simulation and video feeds are initialized. Returns `{"ready": true/false, "message": "..."}`.
+*   **`GET /get_robot_position`**: Returns the robot's current position and timestamp. `{"position": [x,y,z], "timestamp": float}`.
+*   **`POST /set_directive`**: Sends a natural language directive to the agent. Request body: `{"text": "Your directive here"}`.
+
+### Chat (`/chat_api`)
+
+*   **`GET /`**: Serves the main React frontend (`index.html`).
+*   **`GET /auth/user-info`**: Gets authenticated user details (ID, email, authorization status). Requires Auth token.
+*   **`GET /is-connected/{user_id}`**: Checks if a user is connected via WebSocket. Requires Auth token.
+*   **`WS /ws/chat`**: WebSocket endpoint for real-time chat between frontend and agent. Handles its own authentication via query parameters during connection setup.
+
+## Project Structure
+
+```
+├── data/
+│   ├── environments/      # Environment config JSON files
+│   └── assets/            # 3D models for dynamic entities
+│   └── ...                # Other simulation data (URDF, scene files)
+├── frontend/
+│   ├── src/               # React frontend source code
+│   └── dist/              # Built frontend (served by backend)
+│   └── ...                # Config files (package.json, vite.config.js, .env)
+├── src/
+│   ├── agent/             # Agent communication types, WebSocket bridge
+│   ├── middleware/        # Authentication middleware
+│   ├── routes/            # FastAPI API route definitions (config, video, chat)
+│   ├── simulation/        # SimulationNode, utilities
+│   └── shared_queues.py   # Inter-process/thread communication queues
+├── venv/                  # Virtual environment (ignored by git)
+├── .gitignore
+├── AUTH0_SETUP.md         # Auth0 setup guide
+├── main_web.py            # Main FastAPI application entry point
+├── README.md              # This file
+├── requirements.macos.txt # Python dependencies for macOS
+└── requirements.txt       # Python dependencies (if needed for other OS)
+```
 
 ## Development Notes
 
-- The backend serves the frontend from the `frontend/dist` directory
-- For local development, run the frontend dev server separately
-- The application uses shared queues for communication between components
-- On macOS, the simulation runs in a separate thread
+*   **Backend Serves Frontend:** In the standard setup, the FastAPI backend serves the built React frontend from `frontend/dist/`.
+*   **Frontend Dev Server:** For easier frontend development, run `yarn dev` in the `frontend` directory. This provides hot reloading but requires the backend to be running separately.
+*   **Communication:** Components (simulation, agent bridge, web API) communicate via thread-safe queues defined in `src/shared_queues.py`.
+*   **macOS Threading:** On macOS, the Genesis simulation runs in a separate thread managed by `gs.tools.run_in_another_thread` in `main_web.py`.
 
 ## Troubleshooting
 
-- If you encounter issues with the Genesis viewer, try running with the `-v` flag
-- For WebSocket connection issues, use the `--local` flag to connect to a local agent server 
+*   **Genesis Viewer Issues:** If the visualization window doesn't appear or behaves strangely, try running `main_web.py` with the `-v` flag.
+*   **WebSocket Connection:** If the frontend cannot connect to the agent: 
+    *   Ensure the backend is running.
+    *   If using a local agent bridge, ensure it's running and start the backend with `--local`.
+    *   Check browser console logs for errors.
+*   **Authentication Errors:** Verify Auth0 configuration in `.env` (frontend) and command-line arguments or environment variables (backend). Ensure the audience and domain match.
 
 ## VM Deployment
 
-### Prerequisites
-- Virtual Machine with access to sim.innate.bot domain
-- Docker installed
-- tmux for managing multiple sessions
-- nginx for web server configuration
+For specific instructions on deploying this application to the `sim.innate.bot` VM environment (including `nginx` configuration and process management with `tmux`), please refer to the dedicated guide:
 
-### Deployment Process
-
-1. **Import Genesis Simulation and Maurice Production Version**
-
-   Clone both repositories to the VM:
-   ```zsh
-   git clone <genesis-sim-repo-url>
-   git clone <maurice-prod-repo-url>
-   ```
-
-2. **Start Maurice Prod**
-
-   In the first ssh connection:
-   ```zsh
-   # Navigate to Maurice production directory
-   cd <maurice-prod-directory>
-   
-   # Start the Docker container with brain components
-   docker-compose -f docker-compose.prod.yml up -d
-   docker compose -f docker-compose.dev.yml exec maurice zsh -l
-
-   # Then follow the process in the repo to start the bridge and brain
-   ```
-
-3. **Setup Genesis Simulation Environment**
-
-   In another ssh connection:
-   ```zsh
-   # Create a new tmux window
-   tmux new
-   
-   # Navigate to Genesis simulation directory
-   cd <genesis-sim-directory>
-   
-   # Start the simulation with local agent server and no visualization
-   python main_web.py --local
-   ```
-
-4. **Nginx Configuration**
-
-   Configure nginx to serve the application at sim.innate.bot:
-   ```zsh
-   # Edit nginx configuration
-   sudo nano /etc/nginx/sites-available/default
-
-   # Add the config from nginx/default.conf
-
-   # Enable the site and restart nginx
-   sudo ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/
-   sudo nginx -t  # Test the configuration
-   sudo systemctl restart nginx
-   ```
-
-5. **Access the Simulation**
-
-   The simulation should now be accessible at http://sim.innate.bot
-
-### Managing the Deployment
-
-- To detach from a tmux session: Press `Ctrl+B` then `D`
-- To reattach to a tmux session: `tmux attach -t session-name`
-- To list all tmux sessions: `tmux ls`
-- To stop the services, reattach to the respective tmux sessions and press `Ctrl+C` 
-
-## Authentication
-
-The application now supports Auth0 authentication, allowing users to:
-- Sign in with Google accounts
-- Create and manage their own accounts
-- Securely access the simulator
-
-For detailed setup instructions, see [AUTH0_SETUP.md](AUTH0_SETUP.md).
-
-### ⚠️ Security Warning
-
-**IMPORTANT**: The current WebSocket chat API implementation has a critical security vulnerability. It only checks the email provided in the query parameters without verifying ownership of that email. This allows anyone to impersonate authorized users by simply providing their email in the WebSocket connection URL.
-
-This vulnerability needs to be fixed urgently by:
-1. Implementing proper token-based authentication for WebSocket connections
-2. Validating those tokens on the server side
-3. Associating messages with verified user identities
-
-Until this is fixed, be aware that the chat system is not secure against impersonation attacks.
-
-**Note**: For development and testing purposes, you can disable authentication entirely by using the `--need-oauth false` command-line argument. This will allow any user to send messages without authentication, but should NEVER be used in production environments. 
+[**docs/DEPLOYMENT.md**](docs/DEPLOYMENT.md) 
