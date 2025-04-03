@@ -16,7 +16,7 @@ ament_python_install_package(${PROJECT_NAME}
 
 # Install Python executables
 install(PROGRAMS
-  maurice_bt_provisioner/bt_service.py
+  maurice_bt_provisioner/simple_bt_service.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

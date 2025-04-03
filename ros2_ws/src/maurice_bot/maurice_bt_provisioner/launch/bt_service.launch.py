@@ -7,7 +7,7 @@ def generate_launch_description():
         [
             Node(
                 package="maurice_bt_provisioner",
-                executable="bt_service.py",
+                executable="simple_bt_service.py",
                 name="bt_service",
                 output="screen",
             ),
