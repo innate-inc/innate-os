@@ -52,28 +52,56 @@ def _run_nmcli(command_list, timeout=10, check=True, capture_output=True):
         return False, None, f"Unexpected error: {str(e)}" # Other error
 
 def nmcli_get_wifi_connections():
-    """Retrieves a list of configured Wi-Fi connections."""
-    success, stdout, stderr = _run_nmcli(['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'])
-    if not success:
-        return False, [], f"Failed to retrieve connections: {stderr or 'Unknown error'}"
+    """Retrieves a list of configured Wi-Fi connections with their priorities."""
+    # Step 1: Get Name, Type, and UUID of all connections
+    success_list, stdout_list, stderr_list = _run_nmcli(['nmcli', '-t', '-f', 'NAME,TYPE,UUID', 'connection', 'show'])
+    if not success_list:
+        return False, [], f"Failed to retrieve connection list: {stderr_list or 'Unknown error'}"
     
     networks = []
+    wifi_connections_to_query = [] # Store (name, uuid) tuples
+
     try:
-        output_lines = stdout.strip().split('\n') if stdout else []
-        for line in output_lines:
+        list_lines = stdout_list.strip().split('\n') if stdout_list else []
+        for line in list_lines:
             if not line:
                 continue
             parts = line.split(':')
-            if len(parts) == 2:
-                name, type = parts
+            if len(parts) == 3:
+                name, type, uuid = parts
                 if type == '802-11-wireless':
-                    networks.append({'ssid': name}) 
+                    wifi_connections_to_query.append((name, uuid))
             else:
-                nm_logger.warning(f"Could not parse nmcli output line: {line}")
-        return True, networks, None
+                nm_logger.warning(f"Could not parse nmcli connection list line: {line}")
     except Exception as e:
-        nm_logger.error(f"Error parsing nmcli output for connections: {e}", exc_info=True)
+        nm_logger.error(f"Error parsing nmcli connection list output: {e}", exc_info=True)
         return False, [], f"Error parsing connection list: {str(e)}"
+
+    # Step 2: Query priority for each Wi-Fi connection using its UUID
+    for name, uuid in wifi_connections_to_query:
+        priority = 0 # Default priority if lookup fails or not set
+        success_detail, stdout_detail, stderr_detail = _run_nmcli(
+            ['nmcli', '-t', '-f', 'connection.priority', 'connection', 'show', uuid]
+        )
+        
+        if success_detail and stdout_detail:
+            try:
+                # Output is 'connection.priority:<value>', extract value
+                priority_str = stdout_detail.strip().split(':')[-1]
+                priority = int(priority_str) if priority_str else 0
+            except (ValueError, IndexError) as e:
+                nm_logger.warning(f"Could not parse priority for connection {name} (UUID: {uuid}): {stdout_detail}. Error: {e}. Using default priority 0.")
+                priority = 0 # Fallback to default
+        else:
+            nm_logger.warning(f"Failed to get priority for connection {name} (UUID: {uuid}). Error: {stderr_detail or 'Unknown error'}. Using default priority 0.")
+            priority = 0 # Fallback to default
+        
+        networks.append({'ssid': name, 'priority': priority})
+
+    # Sort networks by priority (descending) then SSID (ascending) for consistent output
+    networks.sort(key=lambda x: (-x['priority'], x['ssid']))
+    
+    return True, networks, None
 
 def nmcli_connection_exists(ssid):
     """Checks if a NetworkManager connection profile exists for the given SSID."""
