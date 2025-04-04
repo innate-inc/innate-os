@@ -54,6 +54,72 @@ def save_networks():
     except Exception as e:
         logger.error(f"Error saving networks: {e}")
 
+# Command handlers
+def handle_get_status(data):
+    """Handle get_status command"""
+    logger.info("Handling get_status command")
+    return {"status": "success", "networks": networks}
+
+def handle_update_network(data):
+    """Handle update_network command"""
+    logger.info("Handling update_network command")
+    network_data = data.get('data', {})
+    ssid = network_data.get('ssid')
+    
+    if ssid:
+        # Check if network exists, update it or add new one
+        found = False
+        for net in networks:
+            if net['ssid'] == ssid:
+                net['priority'] = network_data.get('priority', 10)
+                found = True
+                break
+        
+        if not found:
+            networks.append({
+                'ssid': ssid,
+                'priority': network_data.get('priority', 10)
+            })
+        
+        # Save networks to file after updating
+        save_networks()
+        
+        return {"status": "success", "message": f"Network {ssid} updated"}
+    else:
+        return {"status": "error", "message": "SSID required"}
+
+def handle_connect_network(data):
+    """Handle connect_network command"""
+    logger.info("Handling connect_network command")
+    return {"status": "success", "message": "Connecting to highest priority network"}
+
+def handle_unknown_command(command):
+    """Handle unknown commands"""
+    logger.warning(f"Unknown command: {command}")
+    return {"status": "error", "message": "Unknown command"}
+
+def handle_remove_network(data):
+    """Handle remove_network command"""
+    logger.info("Handling remove_network command")
+
+    ssid = data.get('ssid')
+
+    found = False
+
+    if ssid:
+        # Check if network exists, remove it
+        for net in networks:
+            if net['ssid'] == ssid:
+                networks.remove(net)
+                save_networks()
+                found = True
+                break
+    
+    if not found:
+        return {"status": "error", "message": "Network not found"}
+
+    return {"status": "success", "message": "Removing network"}
+
 def write_callback(value, options=None):
     """Handle write requests from clients"""
     logger.info(f"write_callback invoked with value (type {type(value)}): {value}")
@@ -67,46 +133,17 @@ def write_callback(value, options=None):
         data = json.loads(value_str)
         command = data.get('command')
         
-        response = None
-        
+        # Use command handlers to process the request
         if command == 'get_status':
-            logger.info("Handling get_status command")
-            response = {"status": "success", "networks": networks}
-        
+            response = handle_get_status(data)
         elif command == 'update_network':
-            logger.info("Handling update_network command")
-            network_data = data.get('data', {})
-            ssid = network_data.get('ssid')
-            
-            if ssid:
-                # Check if network exists, update it or add new one
-                found = False
-                for net in networks:
-                    if net['ssid'] == ssid:
-                        net['priority'] = network_data.get('priority', 10)
-                        found = True
-                        break
-                
-                if not found:
-                    networks.append({
-                        'ssid': ssid,
-                        'priority': network_data.get('priority', 10)
-                    })
-                
-                # Save networks to file after updating
-                save_networks()
-                
-                response = {"status": "success", "message": f"Network {ssid} updated"}
-            else:
-                response = {"status": "error", "message": "SSID required"}
-        
+            response = handle_update_network(data)
         elif command == 'connect_network':
-            logger.info("Handling connect_network command")
-            response = {"status": "success", "message": "Connecting to highest priority network"}
-        
+            response = handle_connect_network(data)
+        elif command == 'remove_network':
+            response = handle_remove_network(data)
         else:
-            logger.warning(f"Unknown command: {command}")
-            response = {"status": "error", "message": "Unknown command"}
+            response = handle_unknown_command(command)
         
         if response:
             logger.info(f"Response: {response}")
