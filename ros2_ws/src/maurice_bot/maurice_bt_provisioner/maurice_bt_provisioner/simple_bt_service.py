@@ -3,7 +3,9 @@ import logging
 import json
 import signal
 import sys
+import os
 
+from ament_index_python.packages import get_package_share_directory
 from bluezero import async_tools
 from bluezero import adapter
 from bluezero import peripheral
@@ -18,14 +20,39 @@ logger = logging.getLogger('BLE_Server')
 SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0'
 CHARACTERISTIC_UUID = 'abcdef01-1234-5678-1234-56789abcdef0'
 
-# Mock network data
-networks = [
-    {"ssid": "Home_WiFi", "priority": 10},
-    {"ssid": "Office_Network", "priority": 5}
-]
+# Get package share directory for storing networks file
+pkg_share = get_package_share_directory('maurice_bt_provisioner')
+NETWORKS_FILE = os.path.join(pkg_share, 'wifi_networks.json')
+
+# Initialize networks list
+networks = []
 
 # Store the characteristic object for sending notifications
 _ble_characteristic = None
+
+def load_networks():
+    """Load networks from the JSON file"""
+    global networks
+    try:
+        if os.path.exists(NETWORKS_FILE):
+            with open(NETWORKS_FILE, 'r') as f:
+                networks = json.load(f)
+                logger.info(f"Loaded {len(networks)} networks from file")
+        else:
+            logger.info("No networks file found, starting with empty list")
+            networks = []
+    except Exception as e:
+        logger.error(f"Error loading networks: {e}")
+        networks = []
+
+def save_networks():
+    """Save networks to the JSON file"""
+    try:
+        with open(NETWORKS_FILE, 'w') as f:
+            json.dump(networks, f, indent=2)
+            logger.info(f"Saved {len(networks)} networks to file")
+    except Exception as e:
+        logger.error(f"Error saving networks: {e}")
 
 def write_callback(value, options=None):
     """Handle write requests from clients"""
@@ -65,6 +92,9 @@ def write_callback(value, options=None):
                         'ssid': ssid,
                         'priority': network_data.get('priority', 10)
                     })
+                
+                # Save networks to file after updating
+                save_networks()
                 
                 response = {"status": "success", "message": f"Network {ssid} updated"}
             else:
@@ -123,6 +153,9 @@ def main(adapter: adapter.Adapter):
     """Initialize and run the BLE server"""
     logger.info("Starting BLE WiFi Provisioner Server")
 
+    # Load networks from file at startup
+    load_networks()
+
     adapter_address = adapter.address
     
     # Print adapter address
@@ -171,6 +204,8 @@ def main(adapter: adapter.Adapter):
     # Set up signal handler for graceful shutdown
     def signal_handler(sig, frame):
         logger.info("Stopping BLE service...")
+        # Save networks before shutting down
+        save_networks()
         wifi_provisioner.mainloop.quit()
 
     signal.signal(signal.SIGINT, signal_handler)
