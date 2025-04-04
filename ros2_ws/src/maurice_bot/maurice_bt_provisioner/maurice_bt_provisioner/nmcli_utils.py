@@ -199,4 +199,67 @@ def nmcli_get_active_wifi_ssid():
         return None
     except Exception as e:
         nm_logger.error(f"Error parsing nmcli dev wifi list output: {e}", exc_info=True)
-        return None # Indicate error 
+        return None # Indicate error
+
+def nmcli_get_active_ipv4_address():
+    """Gets the IPv4 address of the currently active network connection device."""
+    # Step 1: Find the active device
+    success_dev, stdout_dev, stderr_dev = _run_nmcli([
+        'nmcli', '-t', '-f', 'DEVICE,TYPE,STATE', 'device', 'status'
+    ])
+    if not success_dev:
+        nm_logger.error(f"Failed to get device status: {stderr_dev or 'Unknown error'}")
+        return None
+    
+    active_device = None
+    try:
+        lines = stdout_dev.strip().split('\n') if stdout_dev else []
+        for line in lines:
+            if not line:
+                continue
+            parts = line.split(':')
+            if len(parts) == 3:
+                device, type, state = parts
+                # Look for a connected Wi-Fi or Ethernet device
+                if state.lower() == 'connected' and ('wifi' in type.lower() or 'ethernet' in type.lower()):
+                    active_device = device
+                    nm_logger.info(f"Found active device: {active_device} (Type: {type})")
+                    break # Found the first connected device
+            else:
+                nm_logger.warning(f"Could not parse nmcli device status line: {line}")
+    except Exception as e:
+        nm_logger.error(f"Error parsing nmcli device status output: {e}", exc_info=True)
+        return None
+
+    if not active_device:
+        nm_logger.info("No active connected network device found.")
+        return None
+
+    # Step 2: Get the IP address for the active device
+    success_ip, stdout_ip, stderr_ip = _run_nmcli([
+        'nmcli', '-t', '-f', 'IP4.ADDRESS', 'device', 'show', active_device
+    ])
+    if not success_ip:
+        nm_logger.error(f"Failed to get IP address for device {active_device}: {stderr_ip or 'Unknown error'}")
+        return None
+
+    ipv4_address = None
+    try:
+        ip_output = stdout_ip.strip()
+        if ip_output:
+            # Output is 'IP4.ADDRESS:<ip>/<prefixlen>', extract just the IP
+            # Handle cases with multiple IPs (take the first one) and potential lack of prefix
+            address_part = ip_output.split(':')[-1]
+            if '/' in address_part:
+                 ipv4_address = address_part.split('/')[0]
+            else:
+                 ipv4_address = address_part # No prefix found
+            nm_logger.info(f"Found IPv4 address for {active_device}: {ipv4_address}")
+        else:
+            nm_logger.info(f"No IPv4 address found for active device {active_device}.")
+
+    except Exception as e:
+        nm_logger.error(f"Error parsing IP address output for {active_device}: {e}", exc_info=True)
+        return None
+
+    return ipv4_address 
