@@ -14,7 +14,8 @@ from nmcli_utils import (
     nmcli_delete_connection,
     nmcli_scan_for_ssid,
     nmcli_connect,
-    nmcli_get_active_wifi_ssid
+    nmcli_get_active_wifi_ssid,
+    nmcli_get_active_ipv4_address
 )
 
 # Set up logging
@@ -47,13 +48,18 @@ class BleProvisionerServer:
         # Get active network
         active_ssid = nmcli_get_active_wifi_ssid()
         # Note: nmcli_get_active_wifi_ssid handles its own logging/errors, returns None on failure
+        
+        # Get active IPv4 address
+        active_ip = nmcli_get_active_ipv4_address()
+        # Note: nmcli_get_active_ipv4_address handles its own logging/errors, returns None on failure
 
         if success_list:
             # Include both configured list and active SSID in success response
             return {
                 "status": "success", 
                 "networks": networks, 
-                "active_ssid": active_ssid # Will be SSID string or None
+                "active_ssid": active_ssid, # Will be SSID string or None
+                "active_ip": active_ip # Will be IPv4 string or None
             }
         else:
              # If fetching the list failed, report that error, but still include active SSID if found
@@ -61,7 +67,8 @@ class BleProvisionerServer:
                  "status": "error", 
                  "message": error_msg_list,
                  "networks": [], # Return empty list on error
-                 "active_ssid": active_ssid
+                 "active_ssid": active_ssid,
+                 "active_ip": active_ip
              }
 
     def handle_update_network(self, data):
