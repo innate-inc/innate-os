@@ -3,11 +3,8 @@ import logging
 import json
 import signal
 import sys
-import os
 import subprocess
 
-from ament_index_python.packages import get_package_share_directory
-from bluezero import async_tools
 from bluezero import adapter
 from bluezero import peripheral
 
@@ -25,41 +22,9 @@ class BleProvisionerServer:
     def __init__(self, adapter_obj: adapter.Adapter, package_name='maurice_bt_provisioner'):
         """Initialize the BLE Provisioner Server."""
         self.adapter = adapter_obj
-        self.package_name = package_name
-        self.networks = []
         self._ble_characteristic = None
         self.peripheral = None
 
-        # Get package share directory for storing networks file
-        try:
-            pkg_share = get_package_share_directory(self.package_name)
-            self.networks_file = os.path.join(pkg_share, 'wifi_networks.json')
-        except Exception as e:
-            logger.error(f"Could not find package '{self.package_name}'. Storing networks file in current directory. Error: {e}")
-            self.networks_file = 'wifi_networks.json' # Fallback
-
-    def load_networks(self):
-        """Load networks from the JSON file."""
-        try:
-            if os.path.exists(self.networks_file):
-                with open(self.networks_file, 'r') as f:
-                    self.networks = json.load(f)
-                    logger.info(f"Loaded {len(self.networks)} networks from {self.networks_file}")
-            else:
-                logger.info(f"No networks file found at {self.networks_file}, starting with empty list")
-                self.networks = []
-        except Exception as e:
-            logger.error(f"Error loading networks from {self.networks_file}: {e}")
-            self.networks = []
-
-    def save_networks(self):
-        """Save networks to the JSON file."""
-        try:
-            with open(self.networks_file, 'w') as f:
-                json.dump(self.networks, f, indent=2)
-                logger.info(f"Saved {len(self.networks)} networks to {self.networks_file}")
-        except Exception as e:
-            logger.error(f"Error saving networks to {self.networks_file}: {e}")
 
     # --- Command Handlers ---
     def handle_get_status(self, data):
@@ -146,18 +111,6 @@ class BleProvisionerServer:
                     cmd_add.extend(['wifi-sec.key-mgmt', 'none'])
                 subprocess.run(cmd_add, check=True)
 
-            # --- Update Internal List ---
-            found_internal = False
-            for net in self.networks:
-                if net['ssid'] == ssid:
-                    net['priority'] = priority
-                    # Optionally store password hash or indication if needed, omitted for simplicity
-                    found_internal = True
-                    break
-            if not found_internal:
-                self.networks.append({'ssid': ssid, 'priority': priority})
-            self.save_networks() # Save internal list change
-
             # --- Scan and Attempt Connection ---
             logger.info("Performing Wi-Fi scan...")
             try:
@@ -204,13 +157,13 @@ class BleProvisionerServer:
         """Handle remove_network command."""
         logger.info("Handling remove_network command")
         ssid = data.get('data', {}).get('ssid')
-        initial_length = len(self.networks)
-        
+        # initial_length = len(self.networks) # Removed
+
         if not ssid:
             return {"status": "error", "message": "SSID required for removal"}
 
-        logger.info(f"Attempting to remove network: {ssid}")
-
+        logger.info(f"Attempting to remove network profile: {ssid}")
+        network_existed_in_nmcli = False
         # --- NetworkManager Interaction ---
         try:
             # Check if connection profile exists before attempting delete
@@ -218,37 +171,28 @@ class BleProvisionerServer:
             existing_connections = result.stdout.strip().split('\n')
 
             if ssid in existing_connections:
+                network_existed_in_nmcli = True
                 logger.info(f"Deleting NetworkManager connection profile: {ssid}")
                 subprocess.run(['nmcli', 'connection', 'delete', ssid], check=True)
+                logger.info(f"Successfully deleted NetworkManager profile: {ssid}")
+                # If deletion successful, return success
+                return {"status": "success", "message": f"Network profile {ssid} removed"}
             else:
                 logger.warning(f"NetworkManager profile '{ssid}' not found for deletion.")
-                # Proceed to remove from internal list anyway
+                # If profile wasn't there to begin with, report as an error/warning?
+                # Let's treat this as "not found" error from client perspective.
+                return {"status": "error", "message": f"Network profile '{ssid}' not found"}
 
         except subprocess.CalledProcessError as e:
             logger.error(f"nmcli command failed during delete: {e.cmd} - {e.stderr}")
-            # Decide if this is a critical error or if we should still remove from internal list
-            # For now, let's report error but still try to remove internally
-            # return {"status": "error", "message": f"Failed to delete network profile: {e.stderr}"}
+            # If delete command failed specifically
+            return {"status": "error", "message": f"Failed to delete network profile '{ssid}': {e.stderr}"}
         except FileNotFoundError:
              logger.error("nmcli command not found. Is NetworkManager installed and in PATH?")
              return {"status": "error", "message": "nmcli command not found."}
         except Exception as e:
              logger.error(f"Error during network removal for {ssid}: {e}", exc_info=True)
-             # return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
-
-        # --- Update Internal List ---
-        initial_length_internal = len(self.networks)
-        self.networks = [net for net in self.networks if net['ssid'] != ssid]
-
-        if len(self.networks) < initial_length_internal:
-            self.save_networks()
-            logger.info(f"Removed network {ssid} from internal list.")
-            return {"status": "success", "message": f"Network {ssid} removed"}
-        else:
-            logger.warning(f"Network {ssid} not found in internal list for removal.")
-            # If nmcli delete succeeded but internal list didn't have it, still report success?
-            # Or maybe it failed nmcli delete and wasn't in list either.
-            return {"status": "error", "message": "Network not found"}
+             return {"status": "error", "message": f"An unexpected error occurred during removal: {str(e)}"}
 
     def handle_unknown_command(self, command):
         """Handle unknown commands."""
@@ -298,8 +242,46 @@ class BleProvisionerServer:
 
     def read_callback(self):
         """Handle read requests from BLE clients."""
-        logger.info("Read request received")
-        response = {"status": "connected", "networks": self.networks}
+        logger.info("Read request received - fetching networks from NetworkManager")
+        nmcli_networks = []
+        response_status = "connected"
+        error_message = None
+
+        try:
+            # Use same logic as handle_get_status to fetch networks
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'],
+                capture_output=True, text=True, check=True
+            )
+            output_lines = result.stdout.strip().split('\n')
+            for line in output_lines:
+                if not line:
+                    continue
+                parts = line.split(':')
+                if len(parts) == 2:
+                    name, type = parts
+                    if type == '802-11-wireless':
+                        nmcli_networks.append({'ssid': name})
+                else:
+                    logger.warning(f"Could not parse nmcli output line in read_callback: {line}")
+            logger.info(f"Read callback returning {len(nmcli_networks)} Wi-Fi networks from nmcli.")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"nmcli command failed during read_callback: {e.cmd} - {e.stderr}")
+            response_status = "error"
+            error_message = f"Failed to retrieve networks: {e.stderr}"
+        except FileNotFoundError:
+            logger.error("nmcli command not found during read_callback.")
+            response_status = "error"
+            error_message = "nmcli command not found."
+        except Exception as e:
+            logger.error(f"Error parsing nmcli output during read_callback: {e}", exc_info=True)
+            response_status = "error"
+            error_message = f"An unexpected error occurred: {str(e)}"
+
+        response = {"status": response_status, "networks": nmcli_networks}
+        if error_message:
+            response["message"] = error_message
+
         return bytes(json.dumps(response), 'utf-8')
 
     def notify_callback(self, notifying, characteristic):
@@ -322,7 +304,7 @@ class BleProvisionerServer:
     def start(self):
         """Initialize and run the BLE server."""
         logger.info("Starting BLE WiFi Provisioner Server")
-        self.load_networks() # Load networks at startup
+        # self.load_networks() # Removed call
 
         adapter_address = self.adapter.address
         logger.info(f"Using adapter at address: {adapter_address}")
@@ -391,7 +373,7 @@ class BleProvisionerServer:
             # self.peripheral.remove_service(1) # Example cleanup if needed
             self.peripheral = None # Clear reference
         
-        self.save_networks() # Save networks before exiting
+        # self.save_networks() # Removed call
         logger.info("BLE Provisioner Server stopped.")
 
 # --- Main Execution Block ---
