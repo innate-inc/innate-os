@@ -184,6 +184,36 @@ def nmcli_connect(ssid):
     nm_logger.info(f"Connection attempt output: {confirmation}")
     return True, confirmation # Success, return confirmation message
 
+def nmcli_get_active_wifi_ssid():
+    """Gets the SSID of the currently active Wi-Fi connection."""
+    # Use 'nmcli dev wifi list' as it directly shows active state
+    success, stdout, stderr = _run_nmcli(['nmcli', '-t', '-f', 'ACTIVE,SSID', 'dev', 'wifi', 'list'])
+    if not success:
+        nm_logger.error(f"Failed to get active Wi-Fi status: {stderr or 'Unknown error'}")
+        return None # Indicate error or inability to determine
+
+    try:
+        lines = stdout.strip().split('\n') if stdout else []
+        for line in lines:
+            if not line:
+                continue
+            parts = line.split(':')
+            if len(parts) == 2:
+                active, ssid = parts
+                # ACTIVE field is 'yes' or 'no' in terse mode
+                if active.lower() == 'yes':
+                    nm_logger.info(f"Currently active Wi-Fi network: {ssid}")
+                    return ssid
+            else:
+                 nm_logger.warning(f"Could not parse nmcli dev wifi list line: {line}")
+        
+        # If loop finishes without finding an active network
+        nm_logger.info("No active Wi-Fi network found.")
+        return None
+    except Exception as e:
+        nm_logger.error(f"Error parsing nmcli dev wifi list output: {e}", exc_info=True)
+        return None # Indicate error
+
 # --- BLE Server Class ---
 class BleProvisionerServer:
     def __init__(self, adapter_obj: adapter.Adapter):
@@ -197,11 +227,29 @@ class BleProvisionerServer:
     def handle_get_status(self, data):
         """Handle get_status command."""
         logger.info("Handling get_status command")
-        success, networks, error_msg = nmcli_get_wifi_connections()
-        if success:
-            return {"status": "success", "networks": networks}
+        
+        # Get configured networks
+        success_list, networks, error_msg_list = nmcli_get_wifi_connections()
+        
+        # Get active network
+        active_ssid = nmcli_get_active_wifi_ssid()
+        # Note: nmcli_get_active_wifi_ssid handles its own logging/errors, returns None on failure
+
+        if success_list:
+            # Include both configured list and active SSID in success response
+            return {
+                "status": "success", 
+                "networks": networks, 
+                "active_ssid": active_ssid # Will be SSID string or None
+            }
         else:
-             return {"status": "error", "message": error_msg}
+             # If fetching the list failed, report that error, but still include active SSID if found
+             return {
+                 "status": "error", 
+                 "message": error_msg_list,
+                 "networks": [], # Return empty list on error
+                 "active_ssid": active_ssid
+             }
 
     def handle_update_network(self, data):
         """Handle update_network command."""
