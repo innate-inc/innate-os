@@ -4,6 +4,7 @@ import json
 import signal
 import sys
 import os
+import subprocess
 
 from ament_index_python.packages import get_package_share_directory
 from bluezero import async_tools
@@ -64,38 +65,140 @@ class BleProvisionerServer:
     def handle_get_status(self, data):
         """Handle get_status command."""
         logger.info("Handling get_status command")
-        return {"status": "success", "networks": self.networks}
+        # Fetch networks directly from NetworkManager
+        nmcli_networks = []
+        try:
+            # Get connection names and types, terse format
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'],
+                capture_output=True, text=True, check=True
+            )
+            output_lines = result.stdout.strip().split('\n')
+            logger.debug(f"nmcli connection show output: {output_lines}")
+
+            for line in output_lines:
+                if not line:
+                    continue
+                parts = line.split(':')
+                if len(parts) == 2:
+                    name, type = parts
+                    # NetworkManager uses '802-11-wireless' for Wi-Fi type
+                    if type == '802-11-wireless':
+                        # Here, we just add the SSID (connection name)
+                        # If priority or other details are needed, 
+                        # we would need additional nmcli calls per connection.
+                        nmcli_networks.append({'ssid': name})
+                else:
+                    logger.warning(f"Could not parse nmcli output line: {line}")
+
+            # Extract SSIDs for logging
+            nmcli_ssids = [n['ssid'] for n in nmcli_networks]
+            logger.info(f"Found {len(nmcli_networks)} Wi-Fi networks via nmcli: {nmcli_ssids}")
+            return {"status": "success", "networks": nmcli_networks}
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"nmcli command failed during get_status: {e.cmd} - {e.stderr}")
+            return {"status": "error", "message": f"Failed to retrieve networks from NetworkManager: {e.stderr}"}
+        except FileNotFoundError:
+            logger.error("nmcli command not found. Is NetworkManager installed and in PATH?")
+            return {"status": "error", "message": "nmcli command not found."}
+        except Exception as e:
+            logger.error(f"Error parsing nmcli output during get_status: {e}", exc_info=True)
+            return {"status": "error", "message": f"An unexpected error occurred while retrieving networks: {str(e)}"}
 
     def handle_update_network(self, data):
         """Handle update_network command."""
         logger.info("Handling update_network command")
         network_data = data.get('data', {})
         ssid = network_data.get('ssid')
-        
-        if ssid:
-            found = False
-            for net in self.networks:
-                if net['ssid'] == ssid:
-                    net['priority'] = network_data.get('priority', 10)
-                    found = True
-                    break
-            
-            if not found:
-                self.networks.append({
-                    'ssid': ssid,
-                    'priority': network_data.get('priority', 10)
-                })
-            
-            self.save_networks()
-            return {"status": "success", "message": f"Network {ssid} updated"}
-        else:
+        password = network_data.get('password')
+        priority = network_data.get('priority', 10)
+
+        if not ssid:
             return {"status": "error", "message": "SSID required"}
 
-    def handle_connect_network(self, data):
-        """Handle connect_network command."""
-        logger.info("Handling connect_network command")
-        # TODO: Implement actual network connection logic here
-        return {"status": "success", "message": "Connecting to highest priority network (simulation)"}
+        # --- NetworkManager Interaction ---
+        connection_exists = False
+        try:
+            # Check if connection profile already exists
+            result = subprocess.run(['nmcli', '-g', 'NAME', 'connection', 'show'], capture_output=True, text=True, check=True)
+            existing_connections = result.stdout.strip().split('\n')
+            connection_exists = ssid in existing_connections
+            logger.info(f"Existing connections: {existing_connections}, Checking for: {ssid}, Exists: {connection_exists}")
+
+            if connection_exists:
+                logger.info(f"Modifying existing NetworkManager connection: {ssid}")
+                # Modify existing connection (ensure SSID and set priority, autoconnect)
+                cmd_modify = ['nmcli', 'connection', 'modify', ssid, 'connection.autoconnect', 'yes', 'connection.priority', str(priority)]
+                if password:
+                     cmd_modify.extend(['wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', password])
+                else: # Handle open networks
+                    cmd_modify.extend(['wifi-sec.key-mgmt', 'none'])
+                subprocess.run(cmd_modify, check=True)
+            else:
+                logger.info(f"Adding new NetworkManager connection: {ssid}")
+                # Add new connection
+                cmd_add = ['nmcli', 'connection', 'add', 'type', 'wifi', 'con-name', ssid, 'ifname', 'wlan0', 'ssid', ssid]
+                cmd_add.extend(['connection.autoconnect', 'yes', 'connection.priority', str(priority)])
+                if password:
+                    cmd_add.extend(['wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', password])
+                else: # Handle open networks
+                    cmd_add.extend(['wifi-sec.key-mgmt', 'none'])
+                subprocess.run(cmd_add, check=True)
+
+            # --- Update Internal List ---
+            found_internal = False
+            for net in self.networks:
+                if net['ssid'] == ssid:
+                    net['priority'] = priority
+                    # Optionally store password hash or indication if needed, omitted for simplicity
+                    found_internal = True
+                    break
+            if not found_internal:
+                self.networks.append({'ssid': ssid, 'priority': priority})
+            self.save_networks() # Save internal list change
+
+            # --- Scan and Attempt Connection ---
+            logger.info("Performing Wi-Fi scan...")
+            try:
+                # Use --rescan yes to force a new scan
+                scan_result = subprocess.run(['nmcli', '--terse', '--fields', 'SSID', 'device', 'wifi', 'list', '--rescan', 'yes'], capture_output=True, text=True, check=True, timeout=15)
+                visible_ssids = scan_result.stdout.strip().split('\n')
+                logger.info(f"Visible SSIDs: {visible_ssids}")
+
+                if ssid in visible_ssids:
+                    logger.info(f"Target network '{ssid}' is visible. Attempting connection...")
+                    try:
+                        # Attempt to bring the connection up
+                        connect_result = subprocess.run(['nmcli', 'connection', 'up', ssid], capture_output=True, text=True, check=True, timeout=30)
+                        logger.info(f"Connection attempt output for {ssid}: {connect_result.stdout.strip()}")
+                        return {"status": "success", "message": f"Network {ssid} updated and connection initiated."}
+                    except subprocess.CalledProcessError as connect_e:
+                        logger.error(f"Failed to connect to {ssid}: {connect_e.stderr}")
+                        return {"status": "warning", "message": f"Network {ssid} updated, but connection attempt failed: {connect_e.stderr}"}
+                    except subprocess.TimeoutExpired:
+                         logger.error(f"Connection attempt to {ssid} timed out.")
+                         return {"status": "warning", "message": f"Network {ssid} updated, but connection attempt timed out."}
+                else:
+                    logger.info(f"Target network '{ssid}' not visible after scan. Profile saved.")
+                    return {"status": "success", "message": f"Network {ssid} updated. Network not currently visible for connection."}
+
+            except subprocess.CalledProcessError as scan_e:
+                logger.error(f"Wi-Fi scan failed: {scan_e.stderr}")
+                return {"status": "warning", "message": f"Network {ssid} updated, but Wi-Fi scan failed: {scan_e.stderr}"}
+            except subprocess.TimeoutExpired:
+                 logger.error("Wi-Fi scan timed out.")
+                 return {"status": "warning", "message": f"Network {ssid} updated, but Wi-Fi scan timed out."}
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"nmcli command failed: {e.cmd} - {e.stderr}")
+            return {"status": "error", "message": f"Failed to update network profile: {e.stderr}"}
+        except FileNotFoundError:
+            logger.error("nmcli command not found. Is NetworkManager installed and in PATH?")
+            return {"status": "error", "message": "nmcli command not found."}
+        except Exception as e:
+            logger.error(f"Error during network update for {ssid}: {e}", exc_info=True)
+            return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
 
     def handle_remove_network(self, data):
         """Handle remove_network command."""
@@ -103,19 +206,49 @@ class BleProvisionerServer:
         ssid = data.get('data', {}).get('ssid')
         initial_length = len(self.networks)
         
-        logger.info(f"Removing network: {ssid} and networks are now: {self.networks}")
-        
-        if ssid:
-            self.networks = [net for net in self.networks if net['ssid'] != ssid]
-            if len(self.networks) < initial_length:
-                self.save_networks()
-                logger.info(f"Removed network: {ssid}")
-                return {"status": "success", "message": f"Network {ssid} removed"}
+        if not ssid:
+            return {"status": "error", "message": "SSID required for removal"}
+
+        logger.info(f"Attempting to remove network: {ssid}")
+
+        # --- NetworkManager Interaction ---
+        try:
+            # Check if connection profile exists before attempting delete
+            result = subprocess.run(['nmcli', '-g', 'NAME', 'connection', 'show'], capture_output=True, text=True, check=True)
+            existing_connections = result.stdout.strip().split('\n')
+
+            if ssid in existing_connections:
+                logger.info(f"Deleting NetworkManager connection profile: {ssid}")
+                subprocess.run(['nmcli', 'connection', 'delete', ssid], check=True)
             else:
-                logger.warning(f"Network not found for removal: {ssid}")
-                return {"status": "error", "message": "Network not found"}
+                logger.warning(f"NetworkManager profile '{ssid}' not found for deletion.")
+                # Proceed to remove from internal list anyway
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"nmcli command failed during delete: {e.cmd} - {e.stderr}")
+            # Decide if this is a critical error or if we should still remove from internal list
+            # For now, let's report error but still try to remove internally
+            # return {"status": "error", "message": f"Failed to delete network profile: {e.stderr}"}
+        except FileNotFoundError:
+             logger.error("nmcli command not found. Is NetworkManager installed and in PATH?")
+             return {"status": "error", "message": "nmcli command not found."}
+        except Exception as e:
+             logger.error(f"Error during network removal for {ssid}: {e}", exc_info=True)
+             # return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+
+        # --- Update Internal List ---
+        initial_length_internal = len(self.networks)
+        self.networks = [net for net in self.networks if net['ssid'] != ssid]
+
+        if len(self.networks) < initial_length_internal:
+            self.save_networks()
+            logger.info(f"Removed network {ssid} from internal list.")
+            return {"status": "success", "message": f"Network {ssid} removed"}
         else:
-             return {"status": "error", "message": "SSID required for removal"}
+            logger.warning(f"Network {ssid} not found in internal list for removal.")
+            # If nmcli delete succeeded but internal list didn't have it, still report success?
+            # Or maybe it failed nmcli delete and wasn't in list either.
+            return {"status": "error", "message": "Network not found"}
 
     def handle_unknown_command(self, command):
         """Handle unknown commands."""
@@ -139,8 +272,6 @@ class BleProvisionerServer:
                 response = self.handle_get_status(data)
             elif command == 'update_network':
                 response = self.handle_update_network(data)
-            elif command == 'connect_network':
-                response = self.handle_connect_network(data)
             elif command == 'remove_network':
                 response = self.handle_remove_network(data)
             else:
