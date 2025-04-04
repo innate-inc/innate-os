@@ -100,8 +100,10 @@ class BleProvisionerServer:
     def handle_remove_network(self, data):
         """Handle remove_network command."""
         logger.info("Handling remove_network command")
-        ssid = data.get('ssid')
+        ssid = data.get('data', {}).get('ssid')
         initial_length = len(self.networks)
+        
+        logger.info(f"Removing network: {ssid} and networks are now: {self.networks}")
         
         if ssid:
             self.networks = [net for net in self.networks if net['ssid'] != ssid]
