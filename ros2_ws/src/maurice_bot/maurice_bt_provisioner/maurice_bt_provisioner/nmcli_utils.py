@@ -51,7 +51,9 @@ def nmcli_get_wifi_connections():
         for line in list_lines:
             if not line:
                 continue
-            parts = line.split(':')
+            # Split into at most 3 parts: NAME, TYPE, UUID
+            # UUID might contain colons, so it gets the remainder
+            parts = line.split(':', 2) 
             if len(parts) == 3:
                 name, type, uuid = parts
                 if type == '802-11-wireless':

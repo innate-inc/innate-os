@@ -8,7 +8,7 @@ from bluezero import adapter
 from bluezero import peripheral
 
 # Import NetworkManager utilities
-from .nmcli_utils import (
+from nmcli_utils import (
     nmcli_get_wifi_connections,
     nmcli_add_or_modify_connection,
     nmcli_delete_connection,
