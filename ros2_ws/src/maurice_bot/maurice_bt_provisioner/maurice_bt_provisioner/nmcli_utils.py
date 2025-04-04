@@ -201,6 +201,31 @@ def nmcli_get_active_wifi_ssid():
         nm_logger.error(f"Error parsing nmcli dev wifi list output: {e}", exc_info=True)
         return None # Indicate error
 
+def nmcli_scan_for_visible_ssids(timeout=15):
+    """Performs a Wi-Fi scan and returns a list of visible SSIDs."""
+    nm_logger.info("Performing Wi-Fi scan to list visible networks...")
+    # Use --rescan yes to ensure a fresh scan
+    # Get only the SSID field, ignore empty lines
+    success, stdout, stderr = _run_nmcli(
+        ['nmcli', '-t', '-f', 'SSID', 'device', 'wifi', 'list', '--rescan', 'yes'],
+        timeout=timeout
+    )
+    if not success:
+        nm_logger.error(f"Wi-Fi scan failed: {stderr or 'Unknown error'}")
+        return False, [], f"Wi-Fi scan failed: {stderr or 'Unknown error'}"
+    
+    visible_ssids = []
+    try:
+        lines = stdout.strip().split('\n') if stdout else []
+        # Filter out empty strings which can occur if a network has no SSID
+        visible_ssids = [ssid for ssid in lines if ssid] 
+        nm_logger.info(f"Visible SSIDs found: {visible_ssids}")
+    except Exception as e:
+        nm_logger.error(f"Error parsing scan results: {e}", exc_info=True)
+        return False, [], f"Error parsing scan results: {str(e)}"
+        
+    return True, visible_ssids, None # Success, list of SSIDs, no error message
+
 def nmcli_get_active_ipv4_address():
     """Gets the IPv4 address of the currently active network connection device."""
     # Step 1: Find the active device

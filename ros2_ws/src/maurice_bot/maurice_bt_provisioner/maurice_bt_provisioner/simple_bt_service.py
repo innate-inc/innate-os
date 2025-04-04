@@ -15,7 +15,8 @@ from nmcli_utils import (
     nmcli_scan_for_ssid,
     nmcli_connect,
     nmcli_get_active_wifi_ssid,
-    nmcli_get_active_ipv4_address
+    nmcli_get_active_ipv4_address,
+    nmcli_scan_for_visible_ssids
 )
 
 # Set up logging
@@ -40,7 +41,8 @@ class BleProvisionerServer:
     # --- Command Handlers ---
     def handle_get_status(self, data):
         """Handle get_status command."""
-        logger.info("Handling get_status command")
+        command = data.get('command')
+        logger.info(f"Handling {command} command")
         
         # Get configured networks
         success_list, networks, error_msg_list = nmcli_get_wifi_connections()
@@ -56,6 +58,7 @@ class BleProvisionerServer:
         if success_list:
             # Include both configured list and active SSID in success response
             return {
+                "command": command,
                 "status": "success", 
                 "networks": networks, 
                 "active_ssid": active_ssid, # Will be SSID string or None
@@ -64,6 +67,7 @@ class BleProvisionerServer:
         else:
              # If fetching the list failed, report that error, but still include active SSID if found
              return {
+                 "command": command,
                  "status": "error", 
                  "message": error_msg_list,
                  "networks": [], # Return empty list on error
@@ -73,19 +77,20 @@ class BleProvisionerServer:
 
     def handle_update_network(self, data):
         """Handle update_network command."""
-        logger.info("Handling update_network command")
+        command = data.get('command')
+        logger.info(f"Handling {command} command")
         network_data = data.get('data', {})
         ssid = network_data.get('ssid')
         password = network_data.get('password') # Get password if provided
         priority = network_data.get('priority', 10) # Default priority
 
         if not ssid:
-            return {"status": "error", "message": "SSID required"}
+            return {"command": command, "status": "error", "message": "SSID required"}
 
         # Step 1: Add or Modify the connection profile
         success_update, err_update = nmcli_add_or_modify_connection(ssid, password, priority)
         if not success_update:
-            return {"status": "error", "message": err_update}
+            return {"command": command, "status": "error", "message": err_update}
         
         # If update succeeded, proceed to scan and connect
         logger.info(f"Network profile '{ssid}' updated successfully.")
@@ -94,45 +99,61 @@ class BleProvisionerServer:
         success_scan, visible, err_scan = nmcli_scan_for_ssid(ssid)
         if not success_scan:
             # Report as warning: profile saved, but scan failed
-            return {"status": "warning", "message": f"Network {ssid} updated, but scan failed: {err_scan}"}
+            return {"command": command, "status": "warning", "message": f"Network {ssid} updated, but scan failed: {err_scan}"}
 
         if not visible:
              logger.info(f"Target network '{ssid}' not visible after scan. Profile saved.")
-             return {"status": "success", "message": f"Network {ssid} updated. Network not currently visible for connection."}
+             return {"command": command, "status": "success", "message": f"Network {ssid} updated. Network not currently visible for connection."}
 
         # Step 3: Attempt connection if visible
         logger.info(f"Target network '{ssid}' is visible. Attempting connection...")
         success_connect, connect_msg_or_err = nmcli_connect(ssid)
         if success_connect:
             logger.info(f"Connection initiated for {ssid}. Details: {connect_msg_or_err}")
-            return {"status": "success", "message": f"Network {ssid} updated and connection initiated."}
+            return {"command": command, "status": "success", "message": f"Network {ssid} updated and connection initiated."}
         else:
             logger.error(f"Connection attempt failed for {ssid}: {connect_msg_or_err}")
-            return {"status": "warning", "message": f"Network {ssid} updated, but connection attempt failed: {connect_msg_or_err}"}
+            return {"command": command, "status": "warning", "message": f"Network {ssid} updated, but connection attempt failed: {connect_msg_or_err}"}
 
     def handle_remove_network(self, data):
         """Handle remove_network command."""
-        logger.info("Handling remove_network command")
+        command = data.get('command')
+        logger.info(f"Handling {command} command")
         ssid = data.get('data', {}).get('ssid')
 
         if not ssid:
-            return {"status": "error", "message": "SSID required for removal"}
+            return {"command": command, "status": "error", "message": "SSID required for removal"}
 
         logger.info(f"Attempting to remove network profile: {ssid}")
         success, error_msg = nmcli_delete_connection(ssid)
 
         if success:
             logger.info(f"Successfully deleted NetworkManager profile: {ssid}")
-            return {"status": "success", "message": f"Network profile {ssid} removed"}
+            return {"command": command, "status": "success", "message": f"Network profile {ssid} removed"}
         else:
             logger.warning(f"Failed to remove network profile '{ssid}': {error_msg}")
             # Pass the error message from the utility function back to the client
-            return {"status": "error", "message": error_msg}
+            return {"command": command, "status": "error", "message": error_msg}
+
+    def handle_scan_wifi(self, data):
+        """Handle scan_wifi command.
+        Performs a scan and returns a list of visible SSIDs.
+        """
+        command = data.get('command')
+        logger.info(f"Handling {command} command")
+
+        success, ssids, error_msg = nmcli_scan_for_visible_ssids()
+
+        if success:
+            return {"command": command, "status": "success", "visible_ssids": ssids}
+        else:
+            return {"command": command, "status": "error", "message": error_msg, "visible_ssids": []}
 
     def handle_unknown_command(self, command):
         """Handle unknown commands."""
         logger.warning(f"Unknown command received: {command}")
-        return {"status": "error", "message": "Unknown command"}
+        # Use the received command string, or 'unknown' if None
+        return {"command": command or "unknown", "status": "error", "message": "Unknown command"}
 
     # --- BLE Callbacks ---
     def write_callback(self, value, options=None):
@@ -144,8 +165,23 @@ class BleProvisionerServer:
             value_str = bytes(value).decode('utf-8')
             logger.info(f"Received write: {value_str}")
             
-            data = json.loads(value_str)
-            command = data.get('command')
+            # Load JSON data first to get the command, even for error reporting
+            try:
+                data = json.loads(value_str)
+                command = data.get('command')
+            except json.JSONDecodeError:
+                logger.error(f"Failed to decode JSON: {value_str}")
+                # Respond with error, indicating unknown command due to parse failure
+                response = {"command": "unknown", "status": "error", "message": "Invalid JSON format"}
+                # Jump to sending response directly
+                if self._ble_characteristic and self._ble_characteristic.is_notifying:
+                    logger.info(f"Sending notification response: {response}")
+                    try:
+                        response_bytes = bytes(json.dumps(response), 'utf-8')
+                        self._ble_characteristic.set_value(list(response_bytes))
+                    except Exception as e:
+                        logger.error(f"Error sending notification: {e}")
+                return bytes(json.dumps(response), 'utf-8') if response else b''
             
             if command == 'get_status':
                 response = self.handle_get_status(data)
@@ -153,15 +189,21 @@ class BleProvisionerServer:
                 response = self.handle_update_network(data)
             elif command == 'remove_network':
                 response = self.handle_remove_network(data)
+            elif command == 'scan_wifi':
+                response = self.handle_scan_wifi(data)
             else:
                 response = self.handle_unknown_command(command)
             
         except json.JSONDecodeError:
             logger.error(f"Failed to decode JSON: {value_str}")
-            response = {"status": "error", "message": "Invalid JSON format"}
+            # This block should technically not be reached due to inner try-except,
+            # but included for safety.
+            response = {"command": "unknown", "status": "error", "message": "Invalid JSON format"}
         except Exception as e:
-            logger.error(f"Error processing command '{command if 'command' in locals() else 'unknown'}': {e}", exc_info=True)
-            response = {"status": "error", "message": f"Server error: {str(e)}"}
+            # Try to get command from data if available, otherwise use 'unknown'
+            cmd_for_log = data.get('command', 'unknown') if 'data' in locals() else 'unknown'
+            logger.error(f"Error processing command '{cmd_for_log}': {e}", exc_info=True)
+            response = {"command": cmd_for_log, "status": "error", "message": f"Server error: {str(e)}"}
         
         # Send response via notification if possible
         if response and self._ble_characteristic and self._ble_characteristic.is_notifying:
@@ -181,7 +223,8 @@ class BleProvisionerServer:
         success, networks, error_msg = nmcli_get_wifi_connections()
 
         response_status = "success" if success else "error"
-        response = {"status": response_status, "networks": networks}
+        # Add a command field to read response as well for consistency, e.g., 'read_status'
+        response = {"command": "read_status", "status": response_status, "networks": networks}
         if error_msg:
             response["message"] = error_msg
         
