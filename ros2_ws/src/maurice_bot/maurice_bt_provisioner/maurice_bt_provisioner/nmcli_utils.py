@@ -223,6 +223,9 @@ def nmcli_scan_for_visible_ssids(timeout=15):
     except Exception as e:
         nm_logger.error(f"Error parsing scan results: {e}", exc_info=True)
         return False, [], f"Error parsing scan results: {str(e)}"
+    
+    # Remove duplicates
+    visible_ssids = list(set([ssid for ssid in lines if ssid]))
         
     return True, visible_ssids, None # Success, list of SSIDs, no error message
 
