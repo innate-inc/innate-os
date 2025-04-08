@@ -73,12 +73,12 @@ def nmcli_get_wifi_connections():
     for name, uuid in wifi_connections_to_query:
         priority = 0 # Default priority if lookup fails or not set
         success_detail, stdout_detail, stderr_detail = _run_nmcli(
-            ['nmcli', '-t', '-f', 'connection.priority', 'connection', 'show', uuid]
+            ['nmcli', '-t', '-f', 'connection.autoconnect-priority', 'connection', 'show', uuid]
         )
         
         if success_detail and stdout_detail:
             try:
-                # Output is 'connection.priority:<value>', extract value
+                # Output is 'connection.autoconnect-priority:<value>', extract value
                 priority_str = stdout_detail.strip().split(':')[-1]
                 priority = int(priority_str) if priority_str else 0
             except (ValueError, IndexError) as e:
