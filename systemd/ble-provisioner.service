@@ -1,0 +1,33 @@
+[Unit]
+Description=BLE WiFi Provisioning Service
+# Start after the network stack is ready, but doesn't require full network connection
+After=network.target bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+# Run service manager as root, but execute command as jetson1 via sudo
+# User=jetson1 # Removed
+# Group=jetson1 # Removed
+
+# Set working directory if the script relies on relative paths
+# WorkingDirectory=/home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner # Removed for testing
+
+# Path to the Python executable and the script, run via sudo -u
+# Use the specific Python environment if necessary (e.g., virtualenv)
+# Ensure the command path is absolute if using sudo
+# Preserve common environment variables that might be needed
+ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,PYTHONPATH,LD_LIBRARY_PATH -- /usr/bin/env python3 /home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py
+
+# --- Simplified ExecStart for debugging USER directive (Commented out) ---
+# ExecStart=/bin/echo "BLE Service Test Execution"
+
+# Restart the service if it crashes
+Restart=on-failure
+RestartSec=5
+
+# Log output to journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target 

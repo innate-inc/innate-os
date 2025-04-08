@@ -3,6 +3,8 @@ import logging
 import json
 import signal
 import sys
+import subprocess
+import time
 
 from bluezero import adapter
 from bluezero import peripheral
@@ -29,6 +31,9 @@ logger = logging.getLogger('BLE_Server')
 SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0'
 CHARACTERISTIC_UUID = 'abcdef01-1234-5678-1234-56789abcdef0'
 
+# Path to the helper script for restarting services (adjust if moved)
+RESTART_SCRIPT_PATH = "/usr/local/bin/restart_robot_networking.sh"
+
 # --- BLE Server Class ---
 class BleProvisionerServer:
     def __init__(self, adapter_obj: adapter.Adapter):
@@ -36,7 +41,41 @@ class BleProvisionerServer:
         self.adapter = adapter_obj
         self._ble_characteristic = None
         self.peripheral = None
-        # self.nm_interface = NetworkManagerInterface() # Removed instantiation
+        self._current_ip_address = nmcli_get_active_ipv4_address() # Store initial IP
+        logger.info(f"Initial IPv4 address: {self._current_ip_address}")
+
+    # --- Helper to Trigger Service Restart ---
+    def _trigger_service_restart(self):
+        """Calls the restart script via sudo if the IP address has changed."""
+        new_ip = nmcli_get_active_ipv4_address()
+        logger.info(f"Checking for IP change. Current: {self._current_ip_address}, New: {new_ip}")
+
+        if new_ip != self._current_ip_address:
+            logger.warning(f"IP address changed from {self._current_ip_address} to {new_ip}. Triggering service restarts.")
+            try:
+                # Use run with check=True to raise an exception if the script fails
+                # Use capture_output=True to get stdout/stderr
+                # Use text=True for easier handling of stdout/stderr
+                result = subprocess.run(['sudo', RESTART_SCRIPT_PATH], 
+                                        check=True, 
+                                        capture_output=True, 
+                                        text=True, 
+                                        timeout=30) # Add a timeout
+                logger.info(f"Service restart script executed successfully. Output:\n{result.stdout}")
+                self._current_ip_address = new_ip # Update stored IP only on success
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to execute restart script '{RESTART_SCRIPT_PATH}': {e}")
+                logger.error(f"stdout: {e.stdout}")
+                logger.error(f"stderr: {e.stderr}")
+                # Decide if you want to update self._current_ip_address here or retry
+            except FileNotFoundError:
+                 logger.error(f"Error: Restart script '{RESTART_SCRIPT_PATH}' not found. Ensure it's installed correctly and the path is right.")
+            except subprocess.TimeoutExpired:
+                logger.error(f"Error: Restart script '{RESTART_SCRIPT_PATH}' timed out after 30 seconds.")
+            except Exception as e:
+                 logger.error(f"An unexpected error occurred during restart script execution: {e}", exc_info=True)
+        else:
+            logger.info("IP address unchanged. No service restart needed.")
 
     # --- Command Handlers ---
     def handle_get_status(self, data):
@@ -87,12 +126,15 @@ class BleProvisionerServer:
         if not ssid:
             return {"command": command, "status": "error", "message": "SSID required"}
 
+        # --- Store current IP before attempting changes --- 
+        self._current_ip_address = nmcli_get_active_ipv4_address() 
+        logger.info(f"IP before update/connect attempt: {self._current_ip_address}")
+
         # Step 1: Add or Modify the connection profile
         success_update, err_update = nmcli_add_or_modify_connection(ssid, password, priority)
         if not success_update:
             return {"command": command, "status": "error", "message": err_update}
         
-        # If update succeeded, proceed to scan and connect
         logger.info(f"Network profile '{ssid}' updated successfully.")
 
         # Step 2: Scan for the network
@@ -103,16 +145,22 @@ class BleProvisionerServer:
 
         if not visible:
              logger.info(f"Target network '{ssid}' not visible after scan. Profile saved.")
+             # Even if not visible now, the profile is saved. Don't trigger restart yet.
              return {"command": command, "status": "success", "message": f"Network {ssid} updated. Network not currently visible for connection."}
 
         # Step 3: Attempt connection if visible
         logger.info(f"Target network '{ssid}' is visible. Attempting connection...")
         success_connect, connect_msg_or_err = nmcli_connect(ssid)
+        
+        # --- Check IP and restart services AFTER connection attempt --- 
         if success_connect:
-            logger.info(f"Connection initiated for {ssid}. Details: {connect_msg_or_err}")
+            logger.info(f"Connection initiated for {ssid}. Waiting briefly for network stabilization...")
+            time.sleep(5) # Give the network/DHCP some time
+            self._trigger_service_restart() # Check IP and restart if needed
             return {"command": command, "status": "success", "message": f"Network {ssid} updated and connection initiated."}
         else:
             logger.error(f"Connection attempt failed for {ssid}: {connect_msg_or_err}")
+            # Don't trigger restart if connection failed
             return {"command": command, "status": "warning", "message": f"Network {ssid} updated, but connection attempt failed: {connect_msg_or_err}"}
 
     def handle_remove_network(self, data):
@@ -165,29 +213,31 @@ class BleProvisionerServer:
             return {"command": command, "status": "error", "message": "SSID required for connection"}
 
         logger.info(f"Attempting to connect to network: {ssid}")
-        # Note: update_network already adds/modifies and scans. 
-        # This command just initiates the connection attempt for an *existing* profile.
-        # If the profile doesn't exist, nmcli connect might fail or prompt, 
-        # depending on system config. Assuming profile exists.
+        
+        # --- Store current IP before attempting changes --- 
+        self._current_ip_address = nmcli_get_active_ipv4_address() 
+        logger.info(f"IP before connect attempt: {self._current_ip_address}")
 
-        # First, check if the network is visible
+        # Check if the network is visible (optional but good practice)
         success_scan, visible, err_scan = nmcli_scan_for_ssid(ssid)
         if not success_scan:
-            # Log the scan error but proceed to attempt connection anyway, 
-            # as the network might be hidden or the scan might have failed transiently.
             logger.warning(f"Scan for '{ssid}' failed before connection attempt: {err_scan}")
         elif not visible:
             logger.warning(f"Network '{ssid}' not visible, connection attempt might fail.")
-            # Proceed to attempt connection anyway.
+            # Allow connection attempt anyway
 
         # Attempt connection
         success_connect, connect_msg_or_err = nmcli_connect(ssid)
 
+        # --- Check IP and restart services AFTER connection attempt --- 
         if success_connect:
-            logger.info(f"Connection initiated for {ssid}. Details: {connect_msg_or_err}")
+            logger.info(f"Connection initiated for {ssid}. Waiting briefly for network stabilization...")
+            time.sleep(5) # Give the network/DHCP some time
+            self._trigger_service_restart() # Check IP and restart if needed
             return {"command": command, "status": "success", "message": f"Connection initiated for {ssid}"}
         else:
             logger.error(f"Connection attempt failed for {ssid}: {connect_msg_or_err}")
+            # Don't trigger restart if connection failed
             return {"command": command, "status": "error", "message": f"Connection attempt failed for {ssid}: {connect_msg_or_err}"}
 
     # --- BLE Callbacks ---
