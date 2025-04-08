@@ -155,6 +155,41 @@ class BleProvisionerServer:
         # Use the received command string, or 'unknown' if None
         return {"command": command or "unknown", "status": "error", "message": "Unknown command"}
 
+    def handle_connect_network(self, data):
+        """Handle connect_network command."""
+        command = data.get('command')
+        logger.info(f"Handling {command} command")
+        ssid = data.get('data', {}).get('ssid')
+
+        if not ssid:
+            return {"command": command, "status": "error", "message": "SSID required for connection"}
+
+        logger.info(f"Attempting to connect to network: {ssid}")
+        # Note: update_network already adds/modifies and scans. 
+        # This command just initiates the connection attempt for an *existing* profile.
+        # If the profile doesn't exist, nmcli connect might fail or prompt, 
+        # depending on system config. Assuming profile exists.
+
+        # First, check if the network is visible
+        success_scan, visible, err_scan = nmcli_scan_for_ssid(ssid)
+        if not success_scan:
+            # Log the scan error but proceed to attempt connection anyway, 
+            # as the network might be hidden or the scan might have failed transiently.
+            logger.warning(f"Scan for '{ssid}' failed before connection attempt: {err_scan}")
+        elif not visible:
+            logger.warning(f"Network '{ssid}' not visible, connection attempt might fail.")
+            # Proceed to attempt connection anyway.
+
+        # Attempt connection
+        success_connect, connect_msg_or_err = nmcli_connect(ssid)
+
+        if success_connect:
+            logger.info(f"Connection initiated for {ssid}. Details: {connect_msg_or_err}")
+            return {"command": command, "status": "success", "message": f"Connection initiated for {ssid}"}
+        else:
+            logger.error(f"Connection attempt failed for {ssid}: {connect_msg_or_err}")
+            return {"command": command, "status": "error", "message": f"Connection attempt failed for {ssid}: {connect_msg_or_err}"}
+
     # --- BLE Callbacks ---
     def write_callback(self, value, options=None):
         """Handle write requests from BLE clients."""
@@ -189,6 +224,8 @@ class BleProvisionerServer:
                 response = self.handle_update_network(data)
             elif command == 'remove_network':
                 response = self.handle_remove_network(data)
+            elif command == 'connect_network':
+                response = self.handle_connect_network(data)
             elif command == 'scan_wifi':
                 response = self.handle_scan_wifi(data)
             else:
