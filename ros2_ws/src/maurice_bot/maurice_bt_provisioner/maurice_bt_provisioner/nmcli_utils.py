@@ -1,5 +1,6 @@
 import logging
 import subprocess
+import time # Added import
 
 # Dedicated logger for NM interactions
 nm_logger = logging.getLogger('NetworkManager') 
@@ -203,29 +204,41 @@ def nmcli_get_active_wifi_ssid():
 
 def nmcli_scan_for_visible_ssids(timeout=15):
     """Performs a Wi-Fi scan and returns a list of visible SSIDs."""
-    nm_logger.info("Performing Wi-Fi scan to list visible networks...")
-    # Use --rescan yes to ensure a fresh scan
-    # Get only the SSID field, ignore empty lines
-    success, stdout, stderr = _run_nmcli(
-        ['nmcli', '-t', '-f', 'SSID', 'device', 'wifi', 'list', '--rescan', 'yes'],
-        timeout=timeout
+    nm_logger.info("Triggering Wi-Fi rescan...")
+    # Step 1: Trigger rescan (don't strictly check, list command is the source of truth)
+    success_rescan, _, stderr_rescan = _run_nmcli(
+        ['nmcli', 'device', 'wifi', 'rescan'], 
+        check=False, # Don't fail if rescan itself reports an error, list command is key
+        timeout=10 # Shorter timeout for the trigger
     )
-    if not success:
-        nm_logger.error(f"Wi-Fi scan failed: {stderr or 'Unknown error'}")
-        return False, [], f"Wi-Fi scan failed: {stderr or 'Unknown error'}"
+    if not success_rescan:
+        nm_logger.warning(f"nmcli rescan command finished with an issue: {stderr_rescan or 'Unknown error'}")
+        # Proceed anyway, the list command might still work
+
+    nm_logger.info("Waiting 5 seconds for scan results...")
+    time.sleep(5)
+    
+    nm_logger.info("Listing visible Wi-Fi networks...")
+    # Step 2: List the networks found by the rescan
+    success_list, stdout_list, stderr_list = _run_nmcli(
+        ['nmcli', '-t', '-f', 'SSID', 'device', 'wifi', 'list'], 
+        timeout=timeout # Use original timeout for list
+    )
+    if not success_list:
+        nm_logger.error(f"Wi-Fi list after rescan failed: {stderr_list or 'Unknown error'}")
+        return False, [], f"Wi-Fi list failed: {stderr_list or 'Unknown error'}"
     
     visible_ssids = []
     try:
-        lines = stdout.strip().split('\n') if stdout else []
+        # Use stdout_list from the second command
+        lines = stdout_list.strip().split('\n') if stdout_list else [] 
         # Filter out empty strings which can occur if a network has no SSID
-        visible_ssids = [ssid for ssid in lines if ssid] 
+        # Also remove duplicates immediately
+        visible_ssids = list(set([ssid for ssid in lines if ssid])) 
         nm_logger.info(f"Visible SSIDs found: {visible_ssids}")
     except Exception as e:
         nm_logger.error(f"Error parsing scan results: {e}", exc_info=True)
         return False, [], f"Error parsing scan results: {str(e)}"
-    
-    # Remove duplicates
-    visible_ssids = list(set([ssid for ssid in lines if ssid]))
         
     return True, visible_ssids, None # Success, list of SSIDs, no error message
 

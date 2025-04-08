@@ -67,3 +67,27 @@ ros2 launch brain_client brain_client.launch.py
 ```
 
 
+## System setup
+
+On the robot, make sure to execute the following to setup the system properly:
+
+#### To allow the normal user to scan for wifis:
+
+zsh
+```
+sudo mkdir -p /etc/polkit-1/localauthority/50-local.d/
+sudo nano /etc/polkit-1/localauthority/50-local.d/10-networkmanager-wifi-scan.pkla
+sudo systemctl restart polkit
+```
+
+And in the .pkla file:
+
+```
+[Allow WiFi Scanning]
+Identity=unix-user:*
+Action=org.freedesktop.NetworkManager.wifi.scan;org.freedesktop.NetworkManager.enable-disable-wifi;org.freedesktop.NetworkManager.settings.modify.system
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes
+```
+
