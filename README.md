@@ -85,9 +85,8 @@ And in the .pkla file:
 ```
 [Allow WiFi Scanning]
 Identity=unix-user:*
-Action=org.freedesktop.NetworkManager.wifi.scan;org.freedesktop.NetworkManager.enable-disable-wifi;org.freedesktop.NetworkManager.settings.modify.system
+Action=org.freedesktop.NetworkManager.wifi.scan;org.freedesktop.NetworkManager.enable-disable-wifi;org.freedesktop.NetworkManager.settings.modify.system;org.freedesktop.NetworkManager.network-control
 ResultAny=yes
 ResultInactive=yes
 ResultActive=yes
 ```
-

@@ -5,6 +5,10 @@ import time # Added import
 # Dedicated logger for NM interactions
 nm_logger = logging.getLogger('NetworkManager') 
 
+# Default WiFi interface name for the target hardware (e.g., Jetson Nano)
+# TODO: Use a config file to set this
+DEFAULT_WIFI_INTERFACE = 'wlP1p1s0'
+
 # --- NetworkManager Utility Functions ---
 
 def _run_nmcli(command_list, timeout=10, check=True, capture_output=True):
@@ -161,15 +165,37 @@ def nmcli_scan_for_ssid(target_ssid):
     nm_logger.info(f"Visible SSIDs: {visible_ssids}")
     return True, target_ssid in visible_ssids, None
 
-def nmcli_connect(ssid):
-    """Attempts to activate (connect to) a given network profile."""
-    nm_logger.info(f"Attempting to connect to network: {ssid}")
+def nmcli_connect(ssid, ifname=DEFAULT_WIFI_INTERFACE):
+    """Attempts to activate (connect to) a given network profile.
+
+    Uses the DEFAULT_WIFI_INTERFACE constant if no interface is specified.
+    Relies on Polkit rules for permissions (no sudo).
+
+    Args:
+        ssid (str): The name of the connection profile (SSID).
+        ifname (str, optional): The specific interface name to use. 
+                                Defaults to DEFAULT_WIFI_INTERFACE.
+    """
+    # Use the provided or default interface name
+    target_interface = ifname if ifname else DEFAULT_WIFI_INTERFACE 
+    
+    nm_logger.info(f"Attempting to connect to network profile: {ssid}{f' on interface {target_interface}' if target_interface else ''}")
+    
+    # Base command - relies on Polkit rule, no sudo needed
+    cmd = ['nmcli', 'connection', 'up', ssid] 
+    
+    # Add ifname if specified (or defaulted)
+    if target_interface:
+        cmd.extend(['ifname', target_interface])
+        
     success, stdout, stderr = _run_nmcli(
-        ['nmcli', 'connection', 'up', ssid],
+        cmd, # Use the constructed command list
         timeout=30
     )
     if not success:
-         return False, f"Connection attempt failed: {stderr or 'Unknown error'}"
+         # Provide more context in the error
+         error_iface_part = f' on interface {target_interface}' if target_interface else ''
+         return False, f"Connection attempt for '{ssid}'{error_iface_part} failed: {stderr or 'Unknown error'}"
     
     # Check stdout for confirmation message (optional, but can be useful)
     confirmation = stdout.strip() if stdout else "No output."
