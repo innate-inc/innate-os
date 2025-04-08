@@ -52,7 +52,7 @@ def nmcli_get_wifi_connections():
     wifi_connections_to_query = [] # Store (name, uuid) tuples
 
     try:
-        list_lines = stdout_list.strip().split('\\n') if stdout_list else []
+        list_lines = stdout_list.strip().split('\n') if stdout_list else []
         for line in list_lines:
             if not line:
                 continue
@@ -101,7 +101,7 @@ def nmcli_connection_exists(ssid):
     if not success:
          return False, False, f"Failed check existence: {stderr or 'Unknown error'}"
     
-    existing_connections = stdout.strip().split('\\n') if stdout else []
+    existing_connections = stdout.strip().split('\n') if stdout else []
     return True, ssid in existing_connections, None
     
 def nmcli_add_or_modify_connection(ssid, password, priority):
@@ -211,7 +211,7 @@ def nmcli_get_active_wifi_ssid():
         return None # Indicate error or inability to determine
 
     try:
-        lines = stdout.strip().split('\\n') if stdout else []
+        lines = stdout.strip().split('\n') if stdout else []
         for line in lines:
             if not line:
                 continue
