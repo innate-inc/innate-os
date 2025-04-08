@@ -116,7 +116,7 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
         cmd = base_cmd + ['add', 'type', 'wifi', 'con-name', ssid, 'ifname', 'wlan0', 'ssid', ssid]
     
     # Common settings
-    cmd.extend(['connection.autoconnect', 'yes', 'connection.priority', str(priority)])
+    cmd.extend(['connection.autoconnect', 'yes', 'connection.autoconnect-priority', str(priority)])
 
     # Security settings
     if password:
@@ -153,7 +153,11 @@ def nmcli_scan_for_ssid(target_ssid):
     if not success:
         return False, False, f"Wi-Fi scan failed: {stderr or 'Unknown error'}"
     
-    visible_ssids = stdout.strip().split('\\n') if stdout else []
+    visible_ssids = stdout.strip().replace("[", "").replace("]", "").split("\n")
+
+    # Remove empty strings from the list
+    visible_ssids = [ssid for ssid in visible_ssids if ssid]
+
     nm_logger.info(f"Visible SSIDs: {visible_ssids}")
     return True, target_ssid in visible_ssids, None
 
