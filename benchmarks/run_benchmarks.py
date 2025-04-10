@@ -288,7 +288,9 @@ def stop_simulator(base_url="http://localhost:8000"):
     """Stop the simulator by sending a shutdown request to the API."""
     try:
         print("Sending shutdown request to simulator...")
-        response = requests.post(f"{base_url}/shutdown")
+        headers = {}
+        headers["Authorization"] = f"Bearer NOT_NEEDED"
+        response = requests.post(f"{base_url}/shutdown", headers=headers)
         if response.status_code == 200:
             print("Successfully requested simulator shutdown.")
             return True
