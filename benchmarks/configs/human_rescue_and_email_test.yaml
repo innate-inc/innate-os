@@ -1,6 +1,6 @@
 # Environment section - defines the simulation environment
 environment:
-  name: "default"  # Using a default environment since original doesn't specify
+  name: "laying_man_corner"  # Using a default environment since original doesn't specify
   initial_parameters:
     - robot_position: [2.5, -5, 0.3]  # Near the TV
       robot_orientation: [0, 0, 0, 1]  #  Oriented towards the furniture beige
