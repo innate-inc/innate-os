@@ -1,12 +1,9 @@
 # Environment section - defines the simulation environment
 environment:
-  name: "default"  # Using a default environment
+  name: "walking_man_path"  # Using a default environment
   initial_parameters:
-    # Define starting positions suitable for a patrol scenario
-    - robot_position: [0, 0, 0.3]  # Start at origin
-      robot_orientation: [0, 0, 0, 1]  # Facing one direction
-    - robot_position: [5, 5, 0.3]  # Start somewhere else in the environment
-      robot_orientation: [0, 0, -0.7, 0.7] # Facing another direction
+    - robot_position: [2.5, -5, 0.3]  # Near the TV
+      robot_orientation: [0, 0, 0, 1] # Facing another direction
 
 # Input section - defines the benchmark parameters
 name: "security_patrol_human_interruption_test"
