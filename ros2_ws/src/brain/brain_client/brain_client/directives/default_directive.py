@@ -15,7 +15,10 @@ class DefaultDirective(Directive):
 
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
-        return [TaskType.NAVIGATE_TO_POSITION.value]
+        return [
+            TaskType.NAVIGATE_TO_POSITION.value,
+            TaskType.SEND_EMAIL.value,
+        ]
 
     def get_prompt(self) -> None:
         return None
