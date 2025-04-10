@@ -262,10 +262,18 @@ class DirectiveBenchmark:
                     )
 
             # Use the requests library to send a POST request with proper JSON
-            headers = {"Content-Type": "application/json"}
+            headers = {}
+            headers["Authorization"] = f"Bearer NOT_NEEDED"
+            print(f"DEBUG: Request URL: {self.base_url}/reset_robot")
+            print(f"DEBUG: Request Headers: {headers}")
+            print(f"DEBUG: Request Data: {data}")
+
             response = requests.post(
                 f"{self.base_url}/reset_robot", json=data, headers=headers
             )
+            # You might also want to print the response status and content
+            print(f"DEBUG: Response Status Code: {response.status_code}")
+            print(f"DEBUG: Response Text: {response.text}")
 
             return response.json().get("status") == "reset_enqueued"
         except Exception as e:
