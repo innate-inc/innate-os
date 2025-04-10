@@ -55,7 +55,7 @@ class PrimitiveExecutionActionServer(Node):
         """
         Handle cancellation requests by calling the cancel method on the primitive.
         """
-        self.get_logger().debug("Received cancel request.")
+        self.get_logger().info("Received cancel request.")
 
         try:
             # Get the primitive type from the goal handle
@@ -134,7 +134,7 @@ class PrimitiveExecutionActionServer(Node):
                 self.get_logger().info(
                     f"Primitive '{primitive_type}' cancelled: {result_message}"
                 )
-                goal_handle.canceled()
+                goal_handle.succeed()
                 return ExecutePrimitive.Result(
                     success=True,
                     message=result_message,
