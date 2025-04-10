@@ -23,8 +23,10 @@ RUN apt-get update && apt-get install -y \
     libudev-dev
 
 # 1b. Install ROS-related packages
-RUN apt-get install -y \
-    python3-colcon-common-extensions \
+RUN apt-get update && apt-get install -y \
+    python3-colcon-common-extensions
+
+RUN apt-get update && apt-get install -y \
     ros-humble-fastrtps \
     ros-humble-rosbridge-suite \
     ros-humble-launch-xml \
