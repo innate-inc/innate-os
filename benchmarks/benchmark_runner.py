@@ -227,9 +227,9 @@ class DirectiveBenchmark:
     def _reset_robot(self):
         """
         Reset the robot to its starting position.
-        If init_memory is specified in the config, it will be used to initialize robot memory.
-        If robot_position and robot_orientation are specified in current_parameters,
-        they will be used to set the robot's initial pose.
+        If init_memory is specified in the config, it will be used to initialize
+        robot memory. If robot_position and robot_orientation are specified in
+        current_parameters, they will be used to set the robot's initial pose.
         """
         try:
             # Check if init_memory is present in the config
@@ -252,18 +252,20 @@ class DirectiveBenchmark:
                     position = self.current_parameters["robot_position"]
                     orientation = self.current_parameters["robot_orientation"]
                     print(
-                        f"Setting robot position to: {position} and orientation to: {orientation}"
+                        f"Setting robot position to: {position} and "
+                        f"orientation to: {orientation}"
                     )
                     data["position"] = position
                     data["orientation"] = orientation
                 else:
                     print(
-                        "No position and orientation specified together in current parameters"
+                        "No position and orientation specified together in "
+                        "current parameters"
                     )
 
             # Use the requests library to send a POST request with proper JSON
             headers = {}
-            headers["Authorization"] = f"Bearer NOT_NEEDED"
+            headers["Authorization"] = "Bearer NOT_NEEDED"
             print(f"DEBUG: Request URL: {self.base_url}/reset_robot")
             print(f"DEBUG: Request Headers: {headers}")
             print(f"DEBUG: Request Data: {data}")
@@ -278,6 +280,41 @@ class DirectiveBenchmark:
             return response.json().get("status") == "reset_enqueued"
         except Exception as e:
             print(f"Error resetting robot: {e}")
+            return False
+
+    def _set_environment(self):
+        """Set the simulation environment using the specified config name."""
+        try:
+            url = f"{self.base_url}/set_environment"
+            data = {"config_name": self.env_name}
+            headers = {"Authorization": "Bearer NOT_NEEDED"}
+
+            print(f"Setting environment to: '{self.env_name}'")
+            print(f"DEBUG: Request URL: {url}")
+            print(f"DEBUG: Request Headers: {headers}")
+            print(f"DEBUG: Request Data: {data}")
+
+            response = requests.post(url, json=data, headers=headers)
+            response.raise_for_status()  # Raise HTTPError for bad responses
+
+            result = response.json()
+            status = result.get("status")
+
+            print(f"DEBUG: Response Status Code: {response.status_code}")
+            print(f"DEBUG: Response Text: {response.text}")
+
+            if status == "success":
+                print(f"Successfully set environment to '{self.env_name}'.")
+                return True
+            else:
+                print(f"Failed to set environment. Status: {status}")
+                return False
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error setting environment: {e}")
+            return False
+        except Exception as e:
+            print(f"An unexpected error occurred while " f"setting environment: {e}")
             return False
 
     def _send_directive(self):
@@ -635,6 +672,20 @@ class DirectiveBenchmark:
 
         # Wait for reset to complete
         time.sleep(2)
+
+        # Set environment if specified and not default
+        if self.env_name and self.env_name != "default":
+            print(f"Attempting to set environment to: {self.env_name}")
+            if not self._set_environment():
+                print(
+                    f"Failed to set environment '{self.env_name}'. Aborting benchmark."
+                )
+                return False
+            # Wait for environment change to potentially take effect
+            print("Waiting 2 seconds for environment change to take effect...")
+            time.sleep(2)
+        else:
+            print("Using default environment.")
 
         # If a variant is specified, send a message to switch to it
         if self.variant:
