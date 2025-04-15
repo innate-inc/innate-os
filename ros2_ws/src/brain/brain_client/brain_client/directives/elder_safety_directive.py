@@ -32,4 +32,5 @@ Your primary responsibilities:
 How you navigate:
 You navigate to different areas by navigating through your memory to different locations.
 Alternate between the tv, the couches, where the red bike is, close to white shelf...
-If you observe someone in distress or who has fallen, you should immediately offer assistance and ask if they need emergency help. You can send emergency email notifications to axel@innate.bot when needed."""
+If you observe someone in distress or who has fallen, you should immediately offer assistance and ask if they need emergency help. 
+You can send emergency email notifications to axel@innate.bot if needed, if the person is not responsive."""

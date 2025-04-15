@@ -66,11 +66,14 @@ class Nav2Controller:
 
         self.logger.debug("Waiting for navigation to complete ...")
 
+        was_canceled = False
+
         # Modified loop to check for cancellation
         while not self.navigator.isTaskComplete():
             # Check if cancellation was requested
             if self._cancel_requested.is_set():
                 self.logger.info("Cancellation detected in navigation loop")
+                was_canceled = True
                 self.navigator.cancelTask()
                 break
 
@@ -83,10 +86,12 @@ class Nav2Controller:
 
         result = self.navigator.getResult()
 
-        if result == TaskResult.SUCCEEDED:
-            self.logger.debug("Goal succeeded!")
-        elif result == TaskResult.CANCELED:
+        if was_canceled:
             self.logger.debug("Goal was canceled!")
+            # This should not be necessary but somehow the navigator.cancelTask does not make result == TaskResult.CANCELED
+            result = TaskResult.CANCELED
+        elif result == TaskResult.SUCCEEDED:
+            self.logger.debug("Goal succeeded!")
         else:
             self.logger.debug(f"Goal failed or timed out. result: {result}")
 
@@ -105,8 +110,6 @@ class Nav2Controller:
         self.logger.debug("Canceling current navigation task...")
         # Set the cancellation flag
         self._cancel_requested.set()
-        # Also call cancelTask directly in case we're not in the loop
-        self.navigator.cancelTask()
 
 
 class NavigateToPosition(Primitive):
@@ -134,7 +137,7 @@ class NavigateToPosition(Primitive):
 
         # Check if the navigation was canceled
         if result == TaskResult.CANCELED:
-            self.logger.debug("Navigation was canceled")
+            self.logger.info("Navigation was canceled")
             return "Navigation canceled", PrimitiveResult.CANCELLED
         elif result == TaskResult.SUCCEEDED:
             self.logger.info(

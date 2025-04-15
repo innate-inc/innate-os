@@ -8,7 +8,6 @@ import time
 import cv2
 import base64
 import numpy as np
-import asyncio
 from rclpy.action import ActionClient
 import math
 import inspect
@@ -256,14 +255,11 @@ class BrainClientNode(Node):
 
         # Flag to keep track of primitive registration status
         self.primitives_registered = False
+        self._pending_next_task = None
 
         # After initializing the primitive_action_client
         # Register the primitives with the server
         self.register_primitives_and_directive()
-
-        self.async_loop = asyncio.new_event_loop()
-        thread = threading.Thread(target=self.async_loop.run_forever, daemon=True)
-        thread.start()
 
         self.get_logger().info(
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
@@ -429,6 +425,8 @@ class BrainClientNode(Node):
         self.chat_out_pub.publish(out_msg)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
+        execute_next_task_immediately = True
+
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
 
@@ -437,8 +435,22 @@ class BrainClientNode(Node):
                 self.get_logger().info(
                     "\033[91m[BrainClient] Canceling current goal.\033[0m"
                 )
+
+                # Store the next task if it exists, prevent immediate execution
+                if payload.next_task is not None:
+                    self.get_logger().info(
+                        f"Storing pending task: {payload.next_task.type.value}"
+                    )
+                    self._pending_next_task = payload.next_task
+                    execute_next_task_immediately = False  # Don't execute now
+
+                # Request cancellation
                 cancel_future = self._goal_handle.cancel_goal_async()
                 cancel_future.add_done_callback(self.cancel_response_callback)
+            else:
+                self.get_logger().info(
+                    "\033[93m[BrainClient] Stop received but no goal handle active.\033[0m"
+                )
 
         if payload.thoughts:
             chat_entry = MessageOut(
@@ -461,17 +473,19 @@ class BrainClientNode(Node):
             )
             self._handle_chat_out(chat_entry, sender="robot_anticipation")
 
-        if payload.next_task is not None:
+        # Only execute the next task immediately if not stopping/pending
+        if execute_next_task_immediately and payload.next_task is not None:
+            # Ensure any previously pending task is cleared if we are executing a new one directly
+            self._pending_next_task = None
+
             self.get_logger().info(
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
-
             self.get_logger().info(
                 f"Primitive task type: {payload.next_task.type.value}"
             )
 
             if payload.next_task.type.value in self.primitives_dict:
-                # Handle any task type that exists in the primitives dictionary
                 self.send_primitive_goal(
                     payload.next_task.type, payload.next_task.inputs
                 )
@@ -491,9 +505,15 @@ class BrainClientNode(Node):
                 self.get_logger().warn(
                     f"Unknown primitive type: {payload.next_task.type}"
                 )
-        else:
+        elif not execute_next_task_immediately and payload.next_task is not None:
             self.get_logger().info(
-                "\033[94m[BrainClient] No next task provided.\033[0m"
+                "\033[94m[BrainClient] Next task stored, waiting for cancellation to complete.\033[0m"
+            )
+        else:
+            # Ensure pending task is cleared if no next task is given
+            self._pending_next_task = None
+            self.get_logger().info(
+                "\033[94m[BrainClient] No next task provided or task is pending.\033[0m"
             )
 
     def agent_loop_callback(self):
@@ -637,77 +657,125 @@ class BrainClientNode(Node):
         # This is not REALLY necessary, but for logging purposes it's nice to have.
         cancel_response = future.result()
 
+        self.get_logger().info("\033[92m[BrainClient] Cancel response received.\033[0m")
+
         # Check if any goals were canceled, following the ROS2 example
         if (
             hasattr(cancel_response, "goals_canceling")
             and len(cancel_response.goals_canceling) > 0
         ):
-            self.get_logger().debug("Goal cancellation accepted.")
+            self.get_logger().info("Goal cancellation accepted.")
         else:
             self.get_logger().error("Goal cancellation rejected.")
 
     def get_result_callback(self, future):
+        self.get_logger().info(" [92m[BrainClient] Get result callback. [0m")
         result = future.result().result
+
         status_color = "\033[92m" if result.success else "\033[91m"
-        self.get_logger().debug(f"Primitive execution result: {result.success}")
+        self.get_logger().info(
+            f"{status_color}Primitive execution result: {result.success}, Type: {result.success_type}\033[0m"
+        )
 
         # Clear the goal handle since the goal is complete
         self._goal_handle = None
 
-        # Wait 1sec
-        time.sleep(
-            1
-        )  # TODO: Find a better way to do this. And probably only if it was a navigation primitive?
-
+        # Stop the robot (consider moving this if primitives should stop themselves)
         # Note that I think cancelling the goal will also send a stop command, so maybe we can look into that.
         stop_cmd = Twist()
         stop_cmd.linear.x = 0.0
         stop_cmd.angular.z = 0.0
         self.cmd_vel_pub.publish(stop_cmd)
 
-        self.get_logger().info("Stopping robot")
-
+        # --- Send status message FIRST ---
         # Get primitive info from the primitive_running dictionary
         primitive_id = None
-        if self.primitive_running:
+        primitive_name = result.primitive_type  # Use name from result
+        if (
+            self.primitive_running
+            and self.primitive_running["primitive_name"] == primitive_name
+        ):
             primitive_id = self.primitive_running["primitive_id"]
+        elif self.primitive_running:
+            self.get_logger().warn(
+                f"Primitive name mismatch in result ({primitive_name}) and running ({self.primitive_running['primitive_name']})"
+            )
+            primitive_id = self.primitive_running[
+                "primitive_id"
+            ]  # Use stored ID anyway?
 
-        # Check the success_type field to determine the appropriate message type
-        self.get_logger().info(f"Primitive result: {result}")
-        if result.success:
-            if result.success_type == PrimitiveResult.SUCCESS.value:
-                self.primitive_running = None
-                outgoing_msg = MessageIn(
-                    type=MessageInType.PRIMITIVE_COMPLETED,
-                    payload={
-                        "primitive_name": result.primitive_type,
-                        "primitive_id": primitive_id,
-                    },
-                )
-                self.ws_bridge.send_message(outgoing_msg)
-            elif result.success_type == PrimitiveResult.CANCELLED.value:
-                self.primitive_running = None
-                outgoing_msg = MessageIn(
-                    type=MessageInType.PRIMITIVE_INTERRUPTED,
-                    payload={
-                        "primitive_name": result.primitive_type,
-                        "primitive_id": primitive_id,
-                    },
-                )
-                self.ws_bridge.send_message(outgoing_msg)
-        elif not result.success:
-            self.primitive_running = None
+        self.primitive_running = None  # Clear running state
+
+        # Determine the appropriate message type based on the result
+        self.get_logger().info(f"Primitive result details: {result}")
+        outgoing_msg = None
+        if result.success and result.success_type == PrimitiveResult.SUCCESS.value:
+            outgoing_msg = MessageIn(
+                type=MessageInType.PRIMITIVE_COMPLETED,
+                payload={
+                    "primitive_name": primitive_name,
+                    "primitive_id": primitive_id,
+                },
+            )
+        elif result.success_type == PrimitiveResult.CANCELLED.value:
+            outgoing_msg = MessageIn(
+                type=MessageInType.PRIMITIVE_INTERRUPTED,
+                payload={
+                    "primitive_name": primitive_name,
+                    "primitive_id": primitive_id,
+                },
+            )
+        elif not result.success or result.success_type == PrimitiveResult.FAILURE.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_FAILED,
                 payload={
-                    "primitive_name": result.primitive_type,
+                    "primitive_name": primitive_name,
                     "reason": result.message,
                     "primitive_id": primitive_id,
                 },
             )
-            self.ws_bridge.send_message(outgoing_msg)
         else:
-            self.get_logger().error(f"Unknown primitive result: {result}")
+            # Log success status as well for debugging unknown cases
+            self.get_logger().error(
+                f"Unknown primitive result combination: success={result.success}, type={result.success_type}"
+            )
+
+        # Send the determined status message
+        if outgoing_msg:
+            self.ws_bridge.send_message(outgoing_msg)
+            self.get_logger().info(
+                f"Sent primitive status message: {outgoing_msg.type.name}"
+            )
+
+        # --- THEN, check and execute pending task if previous was cancelled ---
+        if (
+            result.success_type == PrimitiveResult.CANCELLED.value
+            and self._pending_next_task is not None
+        ):
+            self.get_logger().info(
+                f"Executing pending task after internal cancellation: {self._pending_next_task.type.value}"
+            )
+            pending_task = self._pending_next_task
+            self._pending_next_task = None  # Clear before sending new goal
+            status_msg = MessageIn(
+                type=MessageInType.PRIMITIVE_ACTIVATED,
+                payload={
+                    "primitive_name": pending_task.type.value,
+                    "primitive_id": pending_task.primitive_id,
+                },
+            )
+            self.ws_bridge.send_message(status_msg)
+            self.primitive_running = {
+                "primitive_name": pending_task.type.value,
+                "primitive_id": pending_task.primitive_id,
+            }
+            self.send_primitive_goal(pending_task.type, pending_task.inputs)
+        elif self._pending_next_task is not None:
+            # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
+            self.get_logger().warn(
+                f"Clearing pending task {self._pending_next_task.type.value} because previous task finished with type {result.success_type}"
+            )
+            self._pending_next_task = None
 
     def _handle_primitives_and_directive_registered(self, msg):
         """
@@ -864,7 +932,8 @@ class BrainClientNode(Node):
             )
             self.primitive_running = None
             # Send a stop command to the robot
-            self._goal_handle.cancel_goal_async()
+            if self._goal_handle:
+                self._goal_handle.cancel_goal_async()
 
             stop_cmd = Twist()
             stop_cmd.linear.x = 0.0
