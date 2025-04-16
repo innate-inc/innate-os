@@ -174,7 +174,7 @@ class InferenceNode(Node):
     def run_inference(self):
         """Run the policy network to predict actions."""
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
-            self.get_logger().info("Waiting for all topics to be received...")
+            # self.get_logger().info("Waiting for all topics to be received...")
             return None
 
         # Preprocess images
@@ -188,7 +188,7 @@ class InferenceNode(Node):
             img1_tensor = torch.tensor(img1).to(self.device)
             img2_tensor = torch.tensor(img2).to(self.device)
             images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
-            self.get_logger().info(f"images.shape: {images.shape}")
+            # self.get_logger().info(f"images.shape: {images.shape}")
         except Exception as e:
             self.get_logger().error(f"Error processing images: {e}")
             return None
@@ -216,7 +216,7 @@ class InferenceNode(Node):
                 unnormalized_actions = output * action_std + action_mean
                 # Here, we use the first 10 predicted actions as our chunk
                 actions = unnormalized_actions[:, :CHUNK_SIZE, :].cpu()
-                self.get_logger().info(f"actions: {actions.shape}")
+                # self.get_logger().info(f"actions: {actions.shape}")
                 return actions
             else:
                 return None
@@ -236,20 +236,19 @@ class InferenceNode(Node):
                 # Convert the list of predicted actions into a tensor of shape (1, chunk_size, action_dim)
                 # Update the temporal ensembler with the new chunk.
                 ensembled_action_tensor = self.temporal_ensembler.update(actions)
-                self.get_logger().info(f"ensembled_action_tensor: {ensembled_action_tensor.shape}")
+                # self.get_logger().info(f"ensembled_action_tensor: {ensembled_action_tensor.shape}")
                 ensembled_action = ensembled_action_tensor.squeeze(0).cpu().numpy().tolist()
 
                 # In temporal ensembling mode, we produce one ensembled action per inference cycle.
                 self.action_buffer.append(ensembled_action)
             else:
                 # In raw mode, fill the buffer with all predicted actions.
-                #self.get_logger().info(f"actions: {actions.shape}")
                 self.action_buffer = actions.squeeze(0).cpu().numpy().tolist()
-                self.get_logger().info("New action buffer computed with raw predictions.")
+                # self.get_logger().info("New action buffer computed with raw predictions.")
 
         # Pop the next action from the buffer and publish it.
         next_action = self.action_buffer.pop(0)
-        self.get_logger().info(f"next_action: {next_action}")
+        # self.get_logger().info(f"next_action: {next_action}")
 
         # Extract and publish the twist command (last two elements).
         twist_msg = Twist()
@@ -262,7 +261,7 @@ class InferenceNode(Node):
         arm_msg.data = next_action[:6]
         self.arm_state_pub.publish(arm_msg)
 
-        self.get_logger().info(f"Inference cycle time: {time.time() - start_time:.3f} seconds")
+        # self.get_logger().info(f"Inference cycle time: {time.time() - start_time:.3f} seconds")
 
 def main(args=None):
     rclpy.init(args=args)
