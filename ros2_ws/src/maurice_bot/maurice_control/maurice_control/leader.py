@@ -43,7 +43,7 @@ class LeaderArmNode(Node):
             # Read current positions and velocities
             positions = self.robot.read_position()
             velocities = self.robot.read_velocity()
-            positions=np.array(positions)+np.array([-1024,1024,0,-1024,-1024,0])
+            # positions=np.array(positions)+np.array([-1024,1024,0,-1024,-1024,0])  # Commented out offsets
             # Convert to radians (positions are in range [0, 4096])
             positions_rad = [(pos - 2048) * (2 * np.pi / 4096) for pos in positions]
             velocities_rad = [vel * (2 * np.pi / 4096) for vel in velocities]
