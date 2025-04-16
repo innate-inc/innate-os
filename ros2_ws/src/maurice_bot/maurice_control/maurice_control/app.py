@@ -71,10 +71,12 @@ class AppControl(Node):
 
     def leader_positions_callback(self, msg: Int32MultiArray):
         """
-        Receives leader positions, applies an offset and converts to radians:
-          - Offsets: [-1024, 1024, 0, -1024, -1024, 0]
+        Receives leader positions and converts to radians:
           - Conversion: (position - 2048) * (2 * pi / 4096)
         Then publishes the transformed values as commands.
+        
+        Note: Offset application is currently disabled:
+          - Offsets: [-1024, 1024, 0, -1024, -1024, 0]
         """
         expected_length = 6  # Adjust if your leader arm has a different number of joints
         if len(msg.data) != expected_length:
@@ -83,11 +85,14 @@ class AppControl(Node):
         
         # Convert positions to a NumPy array for easy math.
         positions = np.array(msg.data, dtype=float)
-        offsets = np.array([-1024, 1024, 0, -1024, -1024, 0], dtype=float)
-        positions_corrected = positions + offsets
+        
+        # Offset application (currently disabled)
+        # offsets = np.array([-1024, 1024, 0, -1024, -1024, 0], dtype=float)
+        # positions_corrected = positions + offsets
         
         # Convert to radians:
-        positions_rad = (positions_corrected - 2048) * (2 * math.pi / 4096)
+        # positions_rad = (positions_corrected - 2048) * (2 * math.pi / 4096)
+        positions_rad = (positions - 2048) * (2 * math.pi / 4096)
         
         # Publish the transformed command
         cmd_msg = Float64MultiArray()
