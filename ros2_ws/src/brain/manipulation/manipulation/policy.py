@@ -12,6 +12,7 @@ import os
 import cv2
 from geometry_msgs.msg import Twist
 import json
+import torch.amp
 
 # Import your policy class and trajectory generator.
 from InnateACT.policy import ACTPolicy
@@ -62,7 +63,7 @@ class InferenceNode(Node):
 
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.policy = ACTPolicy(policy_config).to(self.device)
+        self.policy = ACTPolicy(policy_config).to(self.device).half()  # Convert model to half precision
         checkpoint_path = '~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
@@ -185,8 +186,8 @@ class InferenceNode(Node):
             img2 = img2.astype(np.float32) / 255.0
             img1 = np.transpose(img1, (2, 0, 1))
             img2 = np.transpose(img2, (2, 0, 1))
-            img1_tensor = torch.tensor(img1).to(self.device)
-            img2_tensor = torch.tensor(img2).to(self.device)
+            img1_tensor = torch.tensor(img1).to(self.device).half()  # Convert to half precision
+            img2_tensor = torch.tensor(img2).to(self.device).half()  # Convert to half precision
             images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
             # self.get_logger().info(f"images.shape: {images.shape}")
         except Exception as e:
@@ -196,10 +197,10 @@ class InferenceNode(Node):
         # Process the joint state
         try:
             qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
-            qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device)
+            qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device).half()  # Convert to half precision
             if self.norm_stats is not None:
-                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=qpos_tensor.dtype, device=self.device)
-                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=qpos_tensor.dtype, device=self.device)
+                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=torch.float16, device=self.device)  # Use float16
+                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=torch.float16, device=self.device)  # Use float16
                 qpos_tensor = (qpos_tensor - qpos_mean) / qpos_std
         except Exception as e:
             self.get_logger().error(f"Error processing joint state: {e}")
@@ -208,11 +209,12 @@ class InferenceNode(Node):
         # Run the policy network
         with torch.no_grad():
             start_time = time.time()
+            # Run directly in half precision without autocast
             output = self.policy(qpos_tensor, images)
             self.get_logger().info(f"Policy time: {time.time() - start_time:.3f} seconds")
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
-                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=output.dtype, device=self.device)
-                action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
+                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=torch.float16, device=self.device)  # Use float16
+                action_std = torch.tensor(self.norm_stats["action_std"], dtype=torch.float16, device=self.device)  # Use float16
                 unnormalized_actions = output * action_std + action_mean
                 # Here, we use the first 10 predicted actions as our chunk
                 actions = unnormalized_actions[:, :CHUNK_SIZE, :].cpu()
