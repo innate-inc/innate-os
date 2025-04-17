@@ -88,6 +88,10 @@ class InferenceNode(Node):
             self.policy.load_state_dict(state_dict)
             self.policy.eval()
             self.get_logger().info("Policy loaded successfully.")
+            
+            # Compiled model will be initialized on first inference
+            self.compiled_policy = None
+            self.get_logger().info("Model will be compiled with float16 support on first inference.")
         except Exception as e:
             self.get_logger().error(f"Failed to load policy checkpoint: {e}")
 
@@ -199,8 +203,8 @@ class InferenceNode(Node):
             qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
             qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device).half()  # Convert to half precision
             if self.norm_stats is not None:
-                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=torch.float16, device=self.device)  # Use float16
-                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=torch.float16, device=self.device)  # Use float16
+                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=torch.float16, device=self.device)
+                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=torch.float16, device=self.device)
                 qpos_tensor = (qpos_tensor - qpos_mean) / qpos_std
         except Exception as e:
             self.get_logger().error(f"Error processing joint state: {e}")
@@ -209,12 +213,37 @@ class InferenceNode(Node):
         # Run the policy network
         with torch.no_grad():
             start_time = time.time()
-            # Run directly in half precision without autocast
-            output = self.policy(qpos_tensor, images)
+            
+            # Initialize compiled model on first inference
+            if self.compiled_policy is None:
+                self.get_logger().info("Compiling the policy model with float16 support...")
+                try:
+                    # First trace the model with float16 inputs
+                    # Make sure inputs are explicitly half precision
+                    example_qpos = qpos_tensor.clone().detach().half()
+                    example_images = images.clone().detach().half()
+                    
+                    # Trace the model with half precision inputs
+                    scripted = torch.jit.trace(self.policy, (example_qpos, example_images))
+                    
+                    # Then compile for low overhead with float16 support
+                    self.compiled_policy = torch.compile(
+                        scripted,
+                        backend="inductor",
+                        mode="reduce-overhead"  # minimize launch checks
+                    )
+                    self.get_logger().info("Model compilation with float16 support successful!")
+                except Exception as e:
+                    self.get_logger().error(f"Model compilation failed: {e}")
+                    self.compiled_policy = self.policy  # Fallback to original model
+            
+            # Use the compiled model for inference
+            output = self.compiled_policy(qpos_tensor, images)
+            
             self.get_logger().info(f"Policy time: {time.time() - start_time:.3f} seconds")
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
-                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=torch.float16, device=self.device)  # Use float16
-                action_std = torch.tensor(self.norm_stats["action_std"], dtype=torch.float16, device=self.device)  # Use float16
+                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=torch.float16, device=self.device)
+                action_std = torch.tensor(self.norm_stats["action_std"], dtype=torch.float16, device=self.device)
                 unnormalized_actions = output * action_std + action_mean
                 # Here, we use the first 10 predicted actions as our chunk
                 actions = unnormalized_actions[:, :CHUNK_SIZE, :].cpu()
