@@ -14,6 +14,10 @@ from geometry_msgs.msg import Twist
 import json
 import torch.amp
 
+# Enable CUDNN for better performance
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
+
 # Import your policy class and trajectory generator.
 from InnateACT.policy import ACTPolicy
 
@@ -235,7 +239,7 @@ class InferenceNode(Node):
                     self.get_logger().info("Compiling model...")
                     self.compiled_policy = torch.compile(
                         scripted,
-                        backend="cudagraphs",
+                        backend="inductor",
                         mode="reduce-overhead"  # minimize launch checks
                     )
                     self.get_logger().info("Model compilation with float16 support successful!")
