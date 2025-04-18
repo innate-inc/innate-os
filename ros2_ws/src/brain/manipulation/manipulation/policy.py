@@ -218,18 +218,24 @@ class InferenceNode(Node):
             if self.compiled_policy is None:
                 self.get_logger().info("Compiling the policy model with float16 support...")
                 try:
-                    # First trace the model with float16 inputs
-                    # Make sure inputs are explicitly half precision
+                    # First warm up the model with a few forward passes
+                    self.get_logger().info("Warming up model before tracing...")
                     example_qpos = qpos_tensor.clone().detach().half()
                     example_images = images.clone().detach().half()
                     
-                    # Trace the model with half precision inputs
+                    # Run a few forward passes to warm up the model
+                    for _ in range(3):
+                        _ = self.policy(example_qpos, example_images)
+                    
+                    # Now trace the model with float16 inputs
+                    self.get_logger().info("Tracing model...")
                     scripted = torch.jit.trace(self.policy, (example_qpos, example_images))
                     
                     # Then compile for low overhead with float16 support
+                    self.get_logger().info("Compiling model...")
                     self.compiled_policy = torch.compile(
                         scripted,
-                        backend="inductor",
+                        backend="cudagraphs",
                         mode="reduce-overhead"  # minimize launch checks
                     )
                     self.get_logger().info("Model compilation with float16 support successful!")
