@@ -12,6 +12,11 @@ import os
 import cv2
 from geometry_msgs.msg import Twist
 import json
+import torch.amp
+
+# Enable CUDNN for better performance
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
 
 # Import your policy class and trajectory generator.
 from InnateACT.policy import ACTPolicy
@@ -62,7 +67,7 @@ class InferenceNode(Node):
 
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.policy = ACTPolicy(policy_config).to(self.device)
+        self.policy = ACTPolicy(policy_config).to(self.device).half()  # Convert model to half precision
         checkpoint_path = '~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
@@ -87,6 +92,10 @@ class InferenceNode(Node):
             self.policy.load_state_dict(state_dict)
             self.policy.eval()
             self.get_logger().info("Policy loaded successfully.")
+            
+            # Compiled model will be initialized on first inference
+            self.compiled_policy = None
+            self.get_logger().info("Model will be compiled with float16 support on first inference.")
         except Exception as e:
             self.get_logger().error(f"Failed to load policy checkpoint: {e}")
 
@@ -174,7 +183,7 @@ class InferenceNode(Node):
     def run_inference(self):
         """Run the policy network to predict actions."""
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
-            self.get_logger().info("Waiting for all topics to be received...")
+            # self.get_logger().info("Waiting for all topics to be received...")
             return None
 
         # Preprocess images
@@ -185,10 +194,10 @@ class InferenceNode(Node):
             img2 = img2.astype(np.float32) / 255.0
             img1 = np.transpose(img1, (2, 0, 1))
             img2 = np.transpose(img2, (2, 0, 1))
-            img1_tensor = torch.tensor(img1).to(self.device)
-            img2_tensor = torch.tensor(img2).to(self.device)
+            img1_tensor = torch.tensor(img1).to(self.device).half()  # Convert to half precision
+            img2_tensor = torch.tensor(img2).to(self.device).half()  # Convert to half precision
             images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
-            self.get_logger().info(f"images.shape: {images.shape}")
+            # self.get_logger().info(f"images.shape: {images.shape}")
         except Exception as e:
             self.get_logger().error(f"Error processing images: {e}")
             return None
@@ -196,10 +205,10 @@ class InferenceNode(Node):
         # Process the joint state
         try:
             qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
-            qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device)
+            qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device).half()  # Convert to half precision
             if self.norm_stats is not None:
-                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=qpos_tensor.dtype, device=self.device)
-                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=qpos_tensor.dtype, device=self.device)
+                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=torch.float16, device=self.device)
+                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=torch.float16, device=self.device)
                 qpos_tensor = (qpos_tensor - qpos_mean) / qpos_std
         except Exception as e:
             self.get_logger().error(f"Error processing joint state: {e}")
@@ -208,15 +217,47 @@ class InferenceNode(Node):
         # Run the policy network
         with torch.no_grad():
             start_time = time.time()
-            output = self.policy(qpos_tensor, images)
+            
+            # Initialize compiled model on first inference
+            if self.compiled_policy is None:
+                self.get_logger().info("Compiling the policy model with float16 support...")
+                try:
+                    # First warm up the model with a few forward passes
+                    self.get_logger().info("Warming up model before tracing...")
+                    example_qpos = qpos_tensor.clone().detach().half()
+                    example_images = images.clone().detach().half()
+                    
+                    # Run a few forward passes to warm up the model
+                    for _ in range(3):
+                        _ = self.policy(example_qpos, example_images)
+                    
+                    # Now trace the model with float16 inputs
+                    self.get_logger().info("Tracing model...")
+                    scripted = torch.jit.trace(self.policy, (example_qpos, example_images))
+                    
+                    # Then compile for low overhead with float16 support
+                    self.get_logger().info("Compiling model...")
+                    self.compiled_policy = torch.compile(
+                        scripted,
+                        backend="inductor",
+                        mode="reduce-overhead"  # minimize launch checks
+                    )
+                    self.get_logger().info("Model compilation with float16 support successful!")
+                except Exception as e:
+                    self.get_logger().error(f"Model compilation failed: {e}")
+                    self.compiled_policy = self.policy  # Fallback to original model
+            
+            # Use the compiled model for inference
+            output = self.compiled_policy(qpos_tensor, images)
+            
             self.get_logger().info(f"Policy time: {time.time() - start_time:.3f} seconds")
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
-                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=output.dtype, device=self.device)
-                action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
+                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=torch.float16, device=self.device)
+                action_std = torch.tensor(self.norm_stats["action_std"], dtype=torch.float16, device=self.device)
                 unnormalized_actions = output * action_std + action_mean
                 # Here, we use the first 10 predicted actions as our chunk
                 actions = unnormalized_actions[:, :CHUNK_SIZE, :].cpu()
-                self.get_logger().info(f"actions: {actions.shape}")
+                # self.get_logger().info(f"actions: {actions.shape}")
                 return actions
             else:
                 return None
@@ -236,20 +277,19 @@ class InferenceNode(Node):
                 # Convert the list of predicted actions into a tensor of shape (1, chunk_size, action_dim)
                 # Update the temporal ensembler with the new chunk.
                 ensembled_action_tensor = self.temporal_ensembler.update(actions)
-                self.get_logger().info(f"ensembled_action_tensor: {ensembled_action_tensor.shape}")
+                # self.get_logger().info(f"ensembled_action_tensor: {ensembled_action_tensor.shape}")
                 ensembled_action = ensembled_action_tensor.squeeze(0).cpu().numpy().tolist()
 
                 # In temporal ensembling mode, we produce one ensembled action per inference cycle.
                 self.action_buffer.append(ensembled_action)
             else:
                 # In raw mode, fill the buffer with all predicted actions.
-                #self.get_logger().info(f"actions: {actions.shape}")
                 self.action_buffer = actions.squeeze(0).cpu().numpy().tolist()
-                self.get_logger().info("New action buffer computed with raw predictions.")
+                # self.get_logger().info("New action buffer computed with raw predictions.")
 
         # Pop the next action from the buffer and publish it.
         next_action = self.action_buffer.pop(0)
-        self.get_logger().info(f"next_action: {next_action}")
+        # self.get_logger().info(f"next_action: {next_action}")
 
         # Extract and publish the twist command (last two elements).
         twist_msg = Twist()
@@ -262,7 +302,7 @@ class InferenceNode(Node):
         arm_msg.data = next_action[:6]
         self.arm_state_pub.publish(arm_msg)
 
-        self.get_logger().info(f"Inference cycle time: {time.time() - start_time:.3f} seconds")
+        # self.get_logger().info(f"Inference cycle time: {time.time() - start_time:.3f} seconds")
 
 def main(args=None):
     rclpy.init(args=args)
