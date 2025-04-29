@@ -1,19 +1,77 @@
+<?xml version="1.0"?>
 <robot name="maurice_bot">
-  <!-- World link -->
-  <link name="world" />
+  <!-- Materials -->
+  <material name="matt_black">
+    <color rgba="0.05 0.05 0.05 1.0"/>
+  </material>
+  <material name="bright_orange">
+    <color rgba="1.0 0.5 0.0 1.0"/>
+  </material>
 
-  <!-- Base Link -->
+  <!-- base_root link -->
+  <link name="base_root">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1"/>
+    </inertial>
+  </link>
+
+  <!-- prismatic X -->
+  <joint name="base_x" type="prismatic">
+    <parent link="base_root"/>
+    <child  link="base_x"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis  xyz="1 0 0"/>
+    <dynamics damping="5"/>
+    <limit lower="0" upper="0" effort="0" velocity="0"/>
+  </joint>
+  <link name="base_x">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1"/>
+    </inertial>
+  </link>
+
+  <!-- prismatic Y -->
+  <joint name="base_y" type="prismatic">
+    <parent link="base_x"/>
+    <child  link="base_y"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis  xyz="0 1 0"/>
+    <dynamics damping="5"/>
+    <limit lower="0" upper="0" effort="0" velocity="0"/>
+  </joint>
+  <link name="base_y">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1"/>
+    </inertial>
+  </link>
+
+  <!-- yaw rotation -->
+  <joint name="base_yaw" type="revolute">
+    <parent link="base_y"/>
+    <child  link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis  xyz="0 0 1"/>
+    <dynamics damping="5"/>
+    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+  </joint>
   <link name="base_link">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0.89"/>
-      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/base.STL" scale="1 1 1"/>
       </geometry>
+      <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -23,26 +81,16 @@
     </collision>
   </link>
 
-  <!-- Fixed joint from world to base_link -->
-  <joint name="base_joint" type="fixed">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <parent link="world"/>
-    <child link="base_link"/>
-  </joint>
-
-  <!-- Joint 1: Connects base_link to link1 -->
+  <!-- joint1 → link1 -->
   <joint name="joint1" type="revolute">
-    <!-- Absolute offset from base_link -->
-    <origin xyz="0.0845 -0.0597 0.0583" rpy="0 0 0"/>
     <parent link="base_link"/>
-    <child link="link1"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="1.5" velocity="1.0" lower="-3.14" upper="3.14"/>
+    <child  link="link1"/>
+    <origin xyz="0.0845 -0.0597 0.0583" rpy="0 0 0"/>
+    <axis  xyz="0 0 1"/>
+    <dynamics damping="5"/>
+    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
   </joint>
-
-  <!-- Link 1 -->
   <link name="link1">
-    <!-- The link frame is defined at joint1 so we set origins to 0 -->
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0.065"/>
@@ -53,6 +101,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link1.STL" scale="1 1 1"/>
       </geometry>
+      <material name="bright_orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -62,17 +111,15 @@
     </collision>
   </link>
 
-  <!-- Joint 2: Connects link1 to link2 -->
+  <!-- joint2 → link2 -->
   <joint name="joint2" type="revolute">
-    <!-- Relative offset: 0.01825 m in z -->
-    <origin xyz="0 0 0.01825" rpy="0 0 0"/>
     <parent link="link1"/>
-    <child link="link2"/>
-    <axis xyz="0 1 0"/>
-    <limit effort="1.5" velocity="1.0" lower="-3.14" upper="3.14"/>
+    <child  link="link2"/>
+    <origin xyz="0 0 0.01825" rpy="0 0 0"/>
+    <axis  xyz="0 1 0"/>
+    <dynamics damping="5"/>
+    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
   </joint>
-
-  <!-- Link 2 -->
   <link name="link2">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -84,6 +131,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link2.STL" scale="1 1 1"/>
       </geometry>
+      <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -93,17 +141,15 @@
     </collision>
   </link>
 
-  <!-- Joint 3: Connects link2 to link3 -->
+  <!-- joint3 → link3 -->
   <joint name="joint3" type="revolute">
-    <!-- Relative offset: (0.034, 0, 0.11825) -->
-    <origin xyz="0.034 0 0.11825" rpy="0 0 0"/>
     <parent link="link2"/>
-    <child link="link3"/>
-    <axis xyz="0 1 0"/>
-    <limit effort="1.5" velocity="1.0" lower="-3.14" upper="3.14"/>
+    <child  link="link3"/>
+    <origin xyz="0.034 0 0.11825" rpy="0 0 0"/>
+    <axis  xyz="0 1 0"/>
+    <dynamics damping="5"/>
+    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
   </joint>
-
-  <!-- Link 3 -->
   <link name="link3">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -115,6 +161,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link3.STL" scale="1 1 1"/>
       </geometry>
+      <material name="bright_orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -124,17 +171,15 @@
     </collision>
   </link>
 
-  <!-- Joint 4: Connects link3 to link4 -->
+  <!-- joint4 → link4 -->
   <joint name="joint4" type="revolute">
-    <!-- Relative offset: (0.13609, 0, 0.00025) -->
-    <origin xyz="0.13609 0 0.00025" rpy="0 0 0"/>
     <parent link="link3"/>
-    <child link="link4"/>
-    <axis xyz="0 1 0"/>
-    <limit effort="0.6" velocity="1.0" lower="-3.14" upper="3.14"/>
+    <child  link="link4"/>
+    <origin xyz="0.13609 0 0.00025" rpy="0 0 0"/>
+    <axis  xyz="0 1 0"/>
+    <dynamics damping="5"/>
+    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
   </joint>
-
-  <!-- Link 4 -->
   <link name="link4">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -146,6 +191,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link4.STL" scale="1 1 1"/>
       </geometry>
+      <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -155,17 +201,15 @@
     </collision>
   </link>
 
-  <!-- Joint 5: Connects link4 to link5 -->
+  <!-- joint5 → link5 -->
   <joint name="joint5" type="revolute">
-    <!-- Relative offset: (0.045, 0.002, 0) -->
-    <origin xyz="0.045 0.002 0" rpy="0 0 0"/>
     <parent link="link4"/>
-    <child link="link5"/>
-    <axis xyz="1 0 0"/>
-    <limit effort="0.6" velocity="1.0" lower="-3.14" upper="3.14"/>
+    <child  link="link5"/>
+    <origin xyz="0.045 0.002 0" rpy="0 0 0"/>
+    <axis  xyz="1 0 0"/>
+    <dynamics damping="5"/>
+    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
   </joint>
-
-  <!-- Link 5 -->
   <link name="link5">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -177,6 +221,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
       </geometry>
+      <material name="bright_orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -186,17 +231,15 @@
     </collision>
   </link>
 
-  <!-- Joint 6: Connects link5 to link6 -->
+  <!-- joint6 → link6 -->
   <joint name="joint6" type="revolute">
-    <!-- Relative offset: (0.059, -0.0055, 0) as per the table -->
-    <origin xyz="0.059 -0.0055 0" rpy="0 0 0"/>
     <parent link="link5"/>
-    <child link="link6"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="0.6" velocity="1.0" lower="-3.14" upper="3.14"/>
+    <child  link="link6"/>
+    <origin xyz="0.014 -0.0075 0" rpy="0 0 0"/>
+    <axis  xyz="0 0 -1"/>
+    <dynamics damping="5"/>
+    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
   </joint>
-
-  <!-- Link 6 -->
   <link name="link6">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -208,6 +251,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link6.STL" scale="1 1 1"/>
       </geometry>
+      <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -217,19 +261,19 @@
     </collision>
   </link>
 
-  <!-- Joint: Fixed joint from link5 to arm_camera_link -->
-  <joint name="arm_camera_joint" type="fixed">
-    <origin xyz="0.00454 0 0.05448" rpy="0 0.802851 0"/>
+  <!-- fixed camera link -->
+  <joint name="fixed_arm_camera_link" type="fixed">
     <parent link="link5"/>
-    <child link="arm_camera_link"/>
+    <child  link="arm_camera_link"/>
+    <origin xyz="0.00454 0 0.05448" rpy="0 0 0"/>
   </joint>
-
-  <!-- Link: Arm camera (no visuals or collision) -->
   <link name="arm_camera_link">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0.01"/>
-      <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
+    <!-- for simulation you can attach a Gazebo camera plugin here -->
   </link>
+
 </robot>
