@@ -7,17 +7,21 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
 from urdf_parser_py.urdf import URDF
 from maurice_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
 import PyKDL as kdl
+from PyKDL import SolverI
 from ament_index_python.packages import get_package_share_directory
+import time # Import the time module
+import copy # Import the copy module
 
 class KDLIKNode(Node):
     def __init__(self):
         super().__init__('kdl_ik_from_file')
         # 1) declare & read solver parameters
-        self.declare_parameter('search_resolution', 0.005)
-        self.declare_parameter('timeout', 0.1)
+        self.declare_parameter('search_resolution', 0.001)
+        self.declare_parameter('timeout', 0.2)
         eps     = self.get_parameter('search_resolution').value
         timeout = self.get_parameter('timeout').value
         maxiter = max(1, int(timeout / eps))
@@ -46,7 +50,7 @@ class KDLIKNode(Node):
 
         # 5) prepare joint array and names
         nj = self.chain.getNrOfJoints()
-        self.current_q = kdl.JntArray(nj)
+        self.current_q = kdl.JntArray(nj) # Initialized to zeros
 
         # Get joint names directly from the KDL chain segments
         self.joint_names = []
@@ -63,40 +67,89 @@ class KDLIKNode(Node):
 
         self.get_logger().info(f"IK using joints: {self.joint_names}")
 
-        # 6) publisher and subscription
-        self.joint_pub = self.create_publisher(JointState, 'ik_solution', 10)
-        self.create_subscription(Twist, 'ik_delta', self.on_delta, 10)
-
-        # Calculate and print initial FK pose
-        initial_fk_frame = kdl.Frame()
-        fk_result = self.fksolver.JntToCart(self.current_q, initial_fk_frame)
+        # Calculate and store initial FK pose (corresponding to q=0)
+        self.initial_frame = kdl.Frame()
+        fk_result = self.fksolver.JntToCart(self.current_q, self.initial_frame)
         if fk_result >= 0:
-            pos = initial_fk_frame.p
-            rot = initial_fk_frame.M.GetRPY()
+            pos = self.initial_frame.p
+            rot = self.initial_frame.M.GetRPY()
             self.get_logger().info(f"Initial FK pose (link5 relative to base_link):")
             self.get_logger().info(f"  Position (x,y,z): ({pos.x():.4f}, {pos.y():.4f}, {pos.z():.4f})")
             self.get_logger().info(f"  Orientation (r,p,y): ({rot[0]:.4f}, {rot[1]:.4f}, {rot[2]:.4f})")
         else:
             self.get_logger().warn(f"Initial FK calculation failed with code: {fk_result}")
+            # Handle error appropriately, maybe raise exception or set a flag
+            self.initial_frame = None # Indicate failure
+
+        # 6) publisher and subscription
+        self.joint_pub = self.create_publisher(JointState, 'ik_solution', 10)
+        self.command_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+        self.create_subscription(Twist, 'ik_delta', self.on_delta, 10)
 
         self.get_logger().info(f"KDL IK node ready (eps={eps}, maxiter={maxiter})")
 
     def on_delta(self, delta: Twist):
-        # forward kinematics
-        end_frame = kdl.Frame()
-        self.fksolver.JntToCart(self.current_q, end_frame)
+        if self.initial_frame is None:
+             self.get_logger().error("Cannot process delta, initial frame calculation failed.")
+             return
 
-        # apply delta position
-        end_frame.p.x(end_frame.p.x() + delta.linear.x)
-        end_frame.p.y(end_frame.p.y() + delta.linear.y)
-        end_frame.p.z(end_frame.p.z() + delta.linear.z)
-        # orientation deltas can be added here if needed
+        # Start from a copy of the initial frame
+        target_frame = copy.deepcopy(self.initial_frame)
 
-        # solve IK
+        # apply delta position relative to initial frame
+        target_frame.p.x(target_frame.p.x() + delta.linear.x)
+        target_frame.p.y(target_frame.p.y() + delta.linear.y)
+        target_frame.p.z(target_frame.p.z() + delta.linear.z)
+
+        # apply delta orientation relative to initial frame
+        delta_rot = kdl.Rotation.RPY(delta.angular.x, delta.angular.y, delta.angular.z)
+        target_frame.M = target_frame.M * delta_rot # Combine rotations
+
+        # Log the target frame before IK
+        target_pos = target_frame.p
+        target_rot = target_frame.M.GetRPY()
+        self.get_logger().info(
+            f"IK Target - Pos (x,y,z): ({target_pos.x():.4f}, {target_pos.y():.4f}, {target_pos.z():.4f}), "
+            f"RPY: ({target_rot[0]:.4f}, {target_rot[1]:.4f}, {target_rot[2]:.4f})"
+        )
+
+        # solve IK - seed with current_q, target target_frame
         q_out = kdl.JntArray(self.chain.getNrOfJoints())
-        if self.ik_solver.CartToJnt(self.current_q, end_frame, q_out) < 0:
-            self.get_logger().warn('KDL IK failed')
-            return
+        start_time = time.perf_counter() # Start timer
+        # Use self.current_q as the initial guess (seed)
+        ik_result = self.ik_solver.CartToJnt(self.current_q, target_frame, q_out)
+        end_time = time.perf_counter() # End timer
+        solve_time_ms = (end_time - start_time) * 1000 # Calculate duration in ms
+
+        # Check the ik_result based on observed behavior and KDL definitions
+        if ik_result >= 0:
+            # Successful convergence (ik_result == SolverI.NoError, which is 0)
+             self.get_logger().info(f'KDL IK solved successfully (took {solve_time_ms:.2f} ms)')
+        elif ik_result == -100: # KDL::ChainIkSolverPos_LMA::E_GRADIENT_JOINTS_TOO_SMALL
+            # Gradient too small (local minimum / flat region) - accept result
+            self.get_logger().warn(
+                f'KDL IK gradient too small (solver returned {ik_result}), using approximate result. '
+                f'(Took {solve_time_ms:.2f} ms)'
+            )
+            # Proceed with the potentially approximate result in q_out
+        elif ik_result == -101: # KDL::ChainIkSolverPos_LMA::E_INCREMENT_JOINTS_TOO_SMALL
+            # Joint increments too small - accept result
+             self.get_logger().warn(
+                f'KDL IK joint increments too small (solver returned {ik_result}), using approximate result. '
+                f'(Took {solve_time_ms:.2f} ms)'
+            )
+             # Proceed with the potentially approximate result in q_out
+        elif ik_result == SolverI.E_MAX_ITERATIONS_EXCEEDED: # Typically -5
+            # Max iterations exceeded - accept result (as per previous logic if desired)
+            self.get_logger().warn(
+                f'KDL IK max iterations exceeded (solver returned {ik_result}), using approximate result. '
+                f'(Took {solve_time_ms:.2f} ms)'
+            )
+            # Proceed with the potentially approximate result in q_out
+        else:
+            # Treat other negative results as unrecoverable errors
+            self.get_logger().error(f'KDL IK failed with unexpected error code {ik_result} (took {solve_time_ms:.2f} ms)')
+            return # Do not proceed
 
         # publish JointState
         js = JointState()
@@ -105,7 +158,16 @@ class KDLIKNode(Node):
         js.position = [q_out[i] for i in range(q_out.rows())]
         self.joint_pub.publish(js)
 
-        # seed next solve
+        # Publish command for the arm
+        cmd_msg = Float64MultiArray()
+        # Get the 5 joint values from IK solution
+        ik_positions = [q_out[i] for i in range(q_out.rows())]
+        # Append 0.0 for the 6th joint (joint6)
+        ik_positions.append(0.0)
+        cmd_msg.data = ik_positions
+        self.command_pub.publish(cmd_msg)
+
+        # seed next solve with the result
         self.current_q = q_out
 
 
