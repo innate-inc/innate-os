@@ -10,6 +10,9 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclpy</depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>moveit_py</exec_depend>      <!-- in maurice_arm -->
+  <exec_depend>moveit_ros_move_group</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
