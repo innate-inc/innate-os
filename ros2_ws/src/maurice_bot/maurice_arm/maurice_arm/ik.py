@@ -139,16 +139,9 @@ class KDLIKNode(Node):
                 f'(Took {solve_time_ms:.2f} ms)'
             )
              # Proceed with the potentially approximate result in q_out
-        elif ik_result == SolverI.E_MAX_ITERATIONS_EXCEEDED: # Typically -5
-            # Max iterations exceeded - accept result (as per previous logic if desired)
-            self.get_logger().warn(
-                f'KDL IK max iterations exceeded (solver returned {ik_result}), using approximate result. '
-                f'(Took {solve_time_ms:.2f} ms)'
-            )
-            # Proceed with the potentially approximate result in q_out
         else:
-            # Treat other negative results as unrecoverable errors
-            self.get_logger().error(f'KDL IK failed with unexpected error code {ik_result} (took {solve_time_ms:.2f} ms)')
+            # Treat ALL other negative results (including max iterations exceeded) as unrecoverable errors
+            self.get_logger().error(f'KDL IK failed with error code {ik_result} (took {solve_time_ms:.2f} ms)')
             return # Do not proceed
 
         # publish JointState
