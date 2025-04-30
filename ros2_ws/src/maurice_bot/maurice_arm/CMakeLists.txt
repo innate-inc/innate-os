@@ -31,6 +31,7 @@ install(
 install(PROGRAMS
   maurice_arm/arm.py
   maurice_arm/arm_utils.py
+  maurice_arm/ik.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
