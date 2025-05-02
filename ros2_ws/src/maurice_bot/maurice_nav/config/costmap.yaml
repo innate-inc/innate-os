@@ -48,13 +48,24 @@ local_costmap:
       height: 3
       resolution: 0.05
       footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
-      track_unknown_space: true        # Ensure unknown space is considered as obstacles
+      track_unknown_space: false        # Ensure unknown space is considered as obstacles
       unknown_cost_value: 255          # Unknown cells get a lethal cost value
-      plugins: ["static_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer"]
 
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
       
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"

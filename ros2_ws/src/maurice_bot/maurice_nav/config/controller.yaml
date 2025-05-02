@@ -22,20 +22,20 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
-      min_vel_x: -0.2                   # Allow reverse up to -0.2 m/s
+      min_vel_x: -0.0                   # Allow reverse up to -0.2 m/s
       min_vel_y: 0.0
-      max_vel_x: 0.7                     # Maximum forward speed 0.4 m/s
+      max_vel_x: 0.4                     # Maximum forward speed 0.4 m/s
       max_vel_y: 0.0
-      max_vel_theta: 3.0                 # Maximum angular speed 0.1 rad/s
-      min_speed_xy: -0.2
-      max_speed_xy: 0.7
+      max_vel_theta: 0.5                 # Maximum angular speed 0.1 rad/s
+      min_speed_xy: 0.0
+      max_speed_xy: 0.4
       min_speed_theta: 0.0
-      acc_lim_x: 0.5                     # Linear acceleration limit 0.4 m/s²
+      acc_lim_x: 0.2                     # Linear acceleration limit 0.4 m/s²
       acc_lim_y: 0.0
-      acc_lim_theta: 1.5                 # Angular acceleration limit 1.0 rad/s²
-      decel_lim_x: -2.5                  # Linear deceleration limit -0.4 m/s²
+      acc_lim_theta: 0.5                # Angular acceleration limit 1.0 rad/s²
+      decel_lim_x: -0.2                  # Linear deceleration limit -0.4 m/s²
       decel_lim_y: 0.0
-      decel_lim_theta: -2.5              # Angular deceleration limit -1.0 rad/s²
+      decel_lim_theta: -0.5             # Angular deceleration limit -1.0 rad/s²
       vx_samples: 20
       vy_samples: 0
       vtheta_samples: 20
@@ -46,15 +46,15 @@ controller_server:
       xy_goal_tolerance: 0.25
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
-      limit_vel_cmd_in_traj: False
+      limit_vel_cmd_in_traj: True
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
-      PathAlign.scale: 3600.0
-      GoalAlign.scale: 24.0
+      PathAlign.scale: 64.0
+      GoalAlign.scale: 12.0
       PathAlign.forward_point_distance: 0.1
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 2400.0
+      PathDist.scale: 64.0
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
