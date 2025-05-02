@@ -2,9 +2,9 @@ controller_server:
   ros__parameters:
     use_sim_time: false
     controller_frequency: 20.0
-    min_x_velocity_threshold: 0.001
+    min_x_velocity_threshold: 0.02
     min_y_velocity_threshold: 0.0         # Differential drive: no lateral motion
-    min_theta_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.05
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -15,7 +15,7 @@ controller_server:
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.1
       stateful: True
 
     # DWB controller parameters for the "FollowPath" plugin
@@ -24,26 +24,26 @@ controller_server:
       debug_trajectory_details: True
       min_vel_x: -0.0                   # Allow reverse up to -0.2 m/s
       min_vel_y: 0.0
-      max_vel_x: 0.4                     # Maximum forward speed 0.4 m/s
+      max_vel_x: 0.5                     # Maximum forward speed 0.4 m/s
       max_vel_y: 0.0
-      max_vel_theta: 0.5                 # Maximum angular speed 0.1 rad/s
+      max_vel_theta: 0.8                 # Maximum angular speed 0.1 rad/s
       min_speed_xy: 0.0
-      max_speed_xy: 0.4
+      max_speed_xy: 0.5
       min_speed_theta: 0.0
-      acc_lim_x: 0.2                     # Linear acceleration limit 0.4 m/s²
+      acc_lim_x: 0.3                     # Linear acceleration limit 0.4 m/s²
       acc_lim_y: 0.0
       acc_lim_theta: 0.5                # Angular acceleration limit 1.0 rad/s²
-      decel_lim_x: -0.2                  # Linear deceleration limit -0.4 m/s²
+      decel_lim_x: -0.3                  # Linear deceleration limit -0.4 m/s²
       decel_lim_y: 0.0
       decel_lim_theta: -0.5             # Angular deceleration limit -1.0 rad/s²
-      vx_samples: 20
+      vx_samples: 40
       vy_samples: 0
-      vtheta_samples: 20
-      sim_time: 1.7
+      vtheta_samples: 100
+      sim_time: 5.0
       linear_granularity: 0.05
-      angular_granularity: 0.025
+      angular_granularity: 0.05
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.2
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       limit_vel_cmd_in_traj: True
@@ -51,8 +51,8 @@ controller_server:
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
       PathAlign.scale: 64.0
-      GoalAlign.scale: 12.0
-      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 5.0
+      PathAlign.forward_point_distance: 0.3
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 64.0
       GoalDist.scale: 24.0

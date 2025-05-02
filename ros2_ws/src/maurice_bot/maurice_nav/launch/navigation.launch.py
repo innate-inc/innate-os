@@ -20,6 +20,7 @@ def generate_launch_description():
     amcl_params_file = os.path.join(share_dir, 'config', 'amcl.yaml')
     bt_navigator_params_file = os.path.join(share_dir, 'config', 'bt_navigator.yaml')
     behavior_params_file = os.path.join(share_dir, 'config', 'behavior.yaml')
+    smoother_params_file = os.path.join(share_dir, 'config', 'velocity_smoother.yaml')
 
     # Use the map file located at ~/maurice-prod/maps/map.yaml
     default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
@@ -70,9 +71,21 @@ def generate_launch_description():
         executable='controller_server',
         name='controller_server',
         output='screen',
-        parameters=[controller_params_file, costmap_params_file]
+        parameters=[controller_params_file, costmap_params_file],
+        remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
     
+    # Create the velocity smoother node
+    velocity_smoother_node = Node(
+        package='nav2_velocity_smoother',
+        executable='velocity_smoother',
+        name='velocity_smoother',
+        output='screen',
+        parameters=[smoother_params_file],
+        remappings=[('cmd_vel', '/cmd_vel_raw'),
+                    ('cmd_vel_smoothed', '/cmd_vel')]
+    )
+
     # Create the lifecycle manager node to manage all nodes
     lifecycle_manager_node = Node(
         package='nav2_lifecycle_manager',
@@ -81,7 +94,15 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'autostart': True,
-            'node_names': ['map_server', 'amcl', 'planner_server', 'controller_server', 'bt_navigator', 'behavior_server']
+            'node_names': [
+                'map_server', 
+                'amcl', 
+                'planner_server', 
+                'controller_server', 
+                'bt_navigator', 
+                'behavior_server',
+                'velocity_smoother'
+                ]
         }]
     )
 
@@ -110,6 +131,7 @@ def generate_launch_description():
         amcl_node,
         planner_node,
         controller_node,
+        velocity_smoother_node,
         bt_navigator_node,
         behavior_server_node,
         lifecycle_manager_node
