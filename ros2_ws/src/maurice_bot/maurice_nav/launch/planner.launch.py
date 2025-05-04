@@ -12,31 +12,38 @@ def generate_launch_description():
     # Get the package share directory for your package
     package_name = 'maurice_nav'
     share_dir = get_package_share_directory(package_name)
+    # We no longer need nav2_bt_navigator share dir for this file
 
     # Define the paths to your YAML files
     planner_params_file = os.path.join(share_dir, 'config', 'planner.yaml')
-    controller_params_file = os.path.join(share_dir, 'config', 'controller.yaml')
-    costmap_params_file = os.path.join(share_dir, 'config', 'costmap.yaml')
+    costmap_params_file = os.path.join(share_dir, 'config', 'costmap.yaml') # Planner might need costmap params
     amcl_params_file = os.path.join(share_dir, 'config', 'amcl.yaml')
     bt_navigator_params_file = os.path.join(share_dir, 'config', 'bt_navigator.yaml')
     behavior_params_file = os.path.join(share_dir, 'config', 'behavior.yaml')
-    smoother_params_file = os.path.join(share_dir, 'config', 'velocity_smoother.yaml')
 
-    # Use the map file located at ~/maurice-prod/maps/map.yaml
+    # Define the path to the compute_path_to_pose BT XML within our package
+    compute_path_bt_xml_path = os.path.join(
+        share_dir, # Use our package's share dir
+        'config',
+        'compute_path_to_pose.xml')
+
+    # Define the default map path
     default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
-    
-    # Declare launch arguments so that these paths can be overridden if needed
+
+    # Declare launch arguments
     map_arg = DeclareLaunchArgument(
         'map',
         default_value=default_map_path,
         description='Full path to the map file to load'
     )
-    
+
     amcl_params_arg = DeclareLaunchArgument(
         'amcl_params_file',
         default_value=amcl_params_file,
         description='Full path to the AMCL parameters file'
     )
+
+    # We don't need the bt_xml_arg anymore if we hardcode the path below
 
     # Create the map server node
     map_server_node = Node(
@@ -46,7 +53,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{'yaml_filename': LaunchConfiguration('map')}]
     )
-    
+
     # Create the AMCL node
     amcl_node = Node(
         package='nav2_amcl',
@@ -65,56 +72,19 @@ def generate_launch_description():
         parameters=[planner_params_file, costmap_params_file]
     )
 
-    # Create the controller node
-    controller_node = Node(
-        package='nav2_controller',
-        executable='controller_server',
-        name='controller_server',
-        output='screen',
-        parameters=[controller_params_file, costmap_params_file],
-        remappings=[('cmd_vel', 'cmd_vel_raw')]
-    )
-    
-    # Create the velocity smoother node
-    velocity_smoother_node = Node(
-        package='nav2_velocity_smoother',
-        executable='velocity_smoother',
-        name='velocity_smoother',
-        output='screen',
-        parameters=[smoother_params_file],
-        remappings=[('cmd_vel', '/cmd_vel_raw'),
-                    ('cmd_vel_smoothed', '/cmd_vel')]
-    )
-
-    # Create the lifecycle manager node to manage all nodes
-    lifecycle_manager_node = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager',
-        output='screen',
-        parameters=[{
-            'autostart': True,
-            'node_names': [
-                'map_server', 
-                'amcl', 
-                'planner_server', 
-                'controller_server', 
-                'bt_navigator', 
-                'behavior_server',
-                'velocity_smoother'
-                ]
-        }]
-    )
-
     # Create the BT Navigator node
     bt_navigator_node = Node(
         package='nav2_bt_navigator',
         executable='bt_navigator',
         name='bt_navigator',
         output='screen',
-        parameters=[bt_navigator_params_file]
+        parameters=[
+            bt_navigator_params_file,
+            # Point to the BT XML in our package's config directory
+            {'default_nav_to_pose_bt_xml': compute_path_bt_xml_path}
+        ]
     )
-    
+
     # Create the behavior server node
     behavior_server_node = Node(
         package='nav2_behaviors',
@@ -124,14 +94,25 @@ def generate_launch_description():
         parameters=[behavior_params_file]
     )
 
+    # Create the lifecycle manager node to manage the included nodes
+    lifecycle_manager_node = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager',
+        output='screen',
+        parameters=[{
+            'autostart': True,
+            'node_names': ['map_server', 'amcl', 'planner_server', 'bt_navigator', 'behavior_server']
+        }]
+    )
+
     return LaunchDescription([
         map_arg,
         amcl_params_arg,
+        # Removed bt_xml_arg
         map_server_node,
         amcl_node,
         planner_node,
-        controller_node,
-        velocity_smoother_node,
         bt_navigator_node,
         behavior_server_node,
         lifecycle_manager_node

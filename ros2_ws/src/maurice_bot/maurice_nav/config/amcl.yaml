@@ -1,10 +1,10 @@
 amcl:
   ros__parameters:
-    alpha1: 0.8            # Consider increasing if odometry is unreliable
-    alpha2: 0.8            # Consider increasing if odometry is unreliable
-    alpha3: 0.8            # Consider increasing if odometry is unreliable
-    alpha4: 0.8            # Consider increasing if odometry is unreliable
-    alpha5: 0.8            # Consider increasing if odometry is unreliable
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
     base_frame_id: "base_footprint"
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
@@ -13,8 +13,8 @@ amcl:
     global_frame_id: "map"
     lambda_short: 0.1
     laser_likelihood_max_dist: 2.0
-    laser_max_range: 10.0     # Updated for your sensor (was 100.0)
-    laser_min_range: 0.2      # Updated for your sensor (was -1.0)
+    laser_max_range: 10.0     
+    laser_min_range: 0.2     
     laser_model_type: "likelihood_field"
     max_beams: 60
     max_particles: 6000
@@ -23,7 +23,7 @@ amcl:
     pf_err: 0.05
     pf_z: 0.99
     recovery_alpha_fast: 0.1
-    recovery_alpha_slow: 0.01
+    recovery_alpha_slow: 0.001
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
