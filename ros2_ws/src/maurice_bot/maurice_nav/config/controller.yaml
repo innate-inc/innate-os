@@ -1,7 +1,7 @@
 controller_server:
   ros__parameters:
     use_sim_time: false
-    controller_frequency: 20.0
+    controller_frequency: 5.0
     min_x_velocity_threshold: 0.02
     min_y_velocity_threshold: 0.0         # Differential drive: no lateral motion
     min_theta_velocity_threshold: 0.05
@@ -39,22 +39,23 @@ controller_server:
       vx_samples: 40
       vy_samples: 0
       vtheta_samples: 100
-      sim_time: 5.0
+      sim_time: 2.5
       linear_granularity: 0.05
       angular_granularity: 0.05
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.2
+      xy_goal_tolerance: 0.25
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
       limit_vel_cmd_in_traj: True
       stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.5
+      ObstacleFootprint.scale: 0.5
       PathAlign.scale: 64.0
       GoalAlign.scale: 5.0
-      PathAlign.forward_point_distance: 0.3
+      PathAlign.forward_point_distance: 0.2
       GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 64.0
+      PathDist.scale: 128.0
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 5.0
