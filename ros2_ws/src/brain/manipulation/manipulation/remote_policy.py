@@ -11,7 +11,7 @@ from geometry_msgs.msg import Twist
 import argparse
 
 # Import the remote inference client
-from manipulation.remote_inference_service import StandaloneRobotClient
+from remote_inference_service import StandaloneRobotClient
 
 # Import the service type for initial pose
 from maurice_msgs.srv import GotoJS

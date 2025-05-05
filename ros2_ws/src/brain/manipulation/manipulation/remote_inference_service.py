@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict
 import numpy as np
 import torch
 import zmq
-
+import traceback
 
 class TorchSerializer:
     @staticmethod
@@ -147,6 +147,7 @@ class BaseInferenceClient:
             print(
                 f"Unexpected error during call_endpoint: {e}. Re-initializing socket."
             )
+            print(traceback.format_exc())
             self._init_socket()  # Recreate socket for next attempt
             raise e  # Re-raise the exception
 
