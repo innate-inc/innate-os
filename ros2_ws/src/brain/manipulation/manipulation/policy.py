@@ -24,25 +24,25 @@ from maurice_msgs.srv import GotoJS
 
 # Define the policy configuration (ensure these match your training configuration)
 policy_config = {
-    'lr': 5e-5,
-    'weight_decay': 1e-4,
-    'num_queries': 30,
-    'kl_weight': 100,
-    'hidden_dim': 512,
-    'dim_feedforward': 3200,
-    'lr_backbone': 5e-5,
-    'backbone': 'resnet18',
-    'enc_layers': 4,
-    'dec_layers': 7,
-    'nheads': 8,
-    'camera_names': ['camera_1', 'camera_2'],
-    'position_embedding': "sine",
-    'masks': False,
-    'dilation': False,
-    'dropout': 0.1,
-    'pre_norm': False,
-    'state_dim': 6,
-    'action_dim': 8
+    "lr": 5e-5,
+    "weight_decay": 1e-4,
+    "num_queries": 30,
+    "kl_weight": 100,
+    "hidden_dim": 512,
+    "dim_feedforward": 3200,
+    "lr_backbone": 5e-5,
+    "backbone": "resnet18",
+    "enc_layers": 4,
+    "dec_layers": 7,
+    "nheads": 8,
+    "camera_names": ["camera_1", "camera_2"],
+    "position_embedding": "sine",
+    "masks": False,
+    "dilation": False,
+    "dropout": 0.1,
+    "pre_norm": False,
+    "state_dim": 6,
+    "action_dim": 8,
 }
 
 ####################################################
@@ -53,30 +53,34 @@ USE_TEMPORAL_ENSEMBLING = False
 TEMPORAL_ENSEMBLE_COEFF = 0.3
 CHUNK_SIZE = 10
 
+
 class InferenceNode(Node):
     def __init__(self):
-        super().__init__('inference_node')
+        super().__init__("inference_node")
         self.get_logger().info("Inference node started.")
         self.bridge = CvBridge()
         self.image_size = (640, 480)
 
         # Set device and load the policy model
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.policy = ACTPolicy(policy_config).to(self.device)
-        checkpoint_path = '~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt'
+        checkpoint_path = (
+            "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/"
+            "Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt"
+        )
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
-        stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
-        metadata_path = os.path.join(checkpoint_dir, 'metadata.json')
+        stats_path = os.path.join(checkpoint_dir, "dataset_stats.pkl")
+        metadata_path = os.path.join(checkpoint_dir, "metadata.json")
         try:
-            with open(stats_path, 'rb') as f:
+            with open(stats_path, "rb") as f:
                 self.norm_stats = pickle.load(f)
             self.get_logger().info("Normalization stats loaded.")
         except Exception as e:
             self.get_logger().error(f"Failed to load normalization stats: {e}")
             self.norm_stats = None
         try:
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path, "r") as f:
                 self.metadata = json.load(f)
             self.get_logger().info("Metadata loaded successfully.")
         except Exception as e:
@@ -96,23 +100,29 @@ class InferenceNode(Node):
         self.latest_joint_state = None
 
         # Subscribers for images and joint state
-        self.create_subscription(Image, '/color/image', self.image1_callback, 10)
-        self.create_subscription(Image, '/image_raw', self.image2_callback, 10)
-        self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
+        self.create_subscription(Image, "/color/image", self.image1_callback, 10)
+        self.create_subscription(Image, "/image_raw", self.image2_callback, 10)
+        self.create_subscription(
+            JointState, "/maurice_arm/state", self.joint_state_callback, 10
+        )
 
         # Publishers for twist and arm commands
-        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+        self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.arm_state_pub = self.create_publisher(
+            Float64MultiArray, "/maurice_arm/commands", 10
+        )
 
         # Timer to run the inference loop at 10 Hz
-        self.timer = self.create_timer(1/30.0, self.inference_loop)
+        self.timer = self.create_timer(1 / 30.0, self.inference_loop)
 
         # Action buffer for storing predicted actions
         self.action_buffer = []
 
         # If using temporal ensembling, create an ensembler instance
         if USE_TEMPORAL_ENSEMBLING:
-            self.temporal_ensembler = ACTTemporalEnsembler(TEMPORAL_ENSEMBLE_COEFF, CHUNK_SIZE)
+            self.temporal_ensembler = ACTTemporalEnsembler(
+                TEMPORAL_ENSEMBLE_COEFF, CHUNK_SIZE
+            )
             self.get_logger().info("Temporal ensembling enabled.")
         else:
             self.temporal_ensembler = None
@@ -125,13 +135,17 @@ class InferenceNode(Node):
     ####################################################
     def image1_callback(self, msg: Image):
         try:
-            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            self.latest_image1 = self.bridge.imgmsg_to_cv2(
+                msg, desired_encoding="passthrough"
+            )
         except Exception as e:
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
         try:
-            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            self.latest_image2 = self.bridge.imgmsg_to_cv2(
+                msg, desired_encoding="passthrough"
+            )
         except Exception as e:
             self.get_logger().error(f"Error converting image2: {e}")
 
@@ -142,17 +156,21 @@ class InferenceNode(Node):
     # Service Call for Initial Joint State
     ####################################################
     def call_goto_js_service(self):
-        self.goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
+        self.goto_client = self.create_client(GotoJS, "/maurice_arm/goto_js")
         while not self.goto_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Waiting for /maurice_arm/goto_js service to become available...")
+            self.get_logger().info(
+                "Waiting for /maurice_arm/goto_js service to become available..."
+            )
         req = GotoJS.Request()
-        # Use metadata if available to set the initial joint state; otherwise, use zeros.
-        if self.metadata and 'average_first_step_action' in self.metadata:
-            joint_data = self.metadata['average_first_step_action'][:6]
+        # Use metadata if available for initial state; otherwise, use zeros.
+        if self.metadata and "average_first_step_action" in self.metadata:
+            joint_data = self.metadata["average_first_step_action"][:6]
             req.data = Float64MultiArray(data=joint_data)
             req.time = 1  # for example, 1 second to reach the target state
         else:
-            self.get_logger().warn("Metadata not available for initial joint state. Using default zeros.")
+            self.get_logger().warn(
+                "Metadata not available for initial joint state. Using zeros."
+            )
             req.data = Float64MultiArray(data=[0.0] * 6)
             req.time = 1
         future = self.goto_client.call_async(req)
@@ -173,7 +191,11 @@ class InferenceNode(Node):
     ####################################################
     def run_inference(self):
         """Run the policy network to predict actions."""
-        if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
+        if (
+            self.latest_image1 is None
+            or self.latest_image2 is None
+            or self.latest_joint_state is None
+        ):
             self.get_logger().info("Waiting for all topics to be received...")
             return None
 
@@ -198,8 +220,16 @@ class InferenceNode(Node):
             qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
             qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device)
             if self.norm_stats is not None:
-                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=qpos_tensor.dtype, device=self.device)
-                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=qpos_tensor.dtype, device=self.device)
+                qpos_mean = torch.tensor(
+                    self.norm_stats["qpos_mean"],
+                    dtype=qpos_tensor.dtype,
+                    device=self.device,
+                )
+                qpos_std = torch.tensor(
+                    self.norm_stats["qpos_std"],
+                    dtype=qpos_tensor.dtype,
+                    device=self.device,
+                )
                 qpos_tensor = (qpos_tensor - qpos_mean) / qpos_std
         except Exception as e:
             self.get_logger().error(f"Error processing joint state: {e}")
@@ -209,10 +239,20 @@ class InferenceNode(Node):
         with torch.no_grad():
             start_time = time.time()
             output = self.policy(qpos_tensor, images)
-            self.get_logger().info(f"Policy time: {time.time() - start_time:.3f} seconds")
+            self.get_logger().info(
+                f"Policy time: {time.time() - start_time:.3f} seconds"
+            )
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
-                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=output.dtype, device=self.device)
-                action_std = torch.tensor(self.norm_stats["action_std"], dtype=output.dtype, device=self.device)
+                action_mean = torch.tensor(
+                    self.norm_stats["action_mean"],
+                    dtype=output.dtype,
+                    device=self.device,
+                )
+                action_std = torch.tensor(
+                    self.norm_stats["action_std"],
+                    dtype=output.dtype,
+                    device=self.device,
+                )
                 unnormalized_actions = output * action_std + action_mean
                 # Here, we use the first 10 predicted actions as our chunk
                 actions = unnormalized_actions[:, :CHUNK_SIZE, :].cpu()
@@ -233,19 +273,25 @@ class InferenceNode(Node):
                 return
 
             if USE_TEMPORAL_ENSEMBLING:
-                # Convert the list of predicted actions into a tensor of shape (1, chunk_size, action_dim)
-                # Update the temporal ensembler with the new chunk.
+                # Convert the predicted actions tensor to the required shape
+                # and update the temporal ensembler.
                 ensembled_action_tensor = self.temporal_ensembler.update(actions)
-                self.get_logger().info(f"ensembled_action_tensor: {ensembled_action_tensor.shape}")
-                ensembled_action = ensembled_action_tensor.squeeze(0).cpu().numpy().tolist()
+                self.get_logger().info(
+                    f"ensembled_action_tensor: {ensembled_action_tensor.shape}"
+                )
+                ensembled_action = (
+                    ensembled_action_tensor.squeeze(0).cpu().numpy().tolist()
+                )
 
-                # In temporal ensembling mode, we produce one ensembled action per inference cycle.
+                # Ensembling produces one action per inference cycle.
                 self.action_buffer.append(ensembled_action)
             else:
-                # In raw mode, fill the buffer with all predicted actions.
-                #self.get_logger().info(f"actions: {actions.shape}")
+                # In raw mode, fill buffer with all predicted actions.
+                # self.get_logger().info(f"actions: {actions.shape}")
                 self.action_buffer = actions.squeeze(0).cpu().numpy().tolist()
-                self.get_logger().info("New action buffer computed with raw predictions.")
+                self.get_logger().info(
+                    "New action buffer computed with raw predictions."
+                )
 
         # Pop the next action from the buffer and publish it.
         next_action = self.action_buffer.pop(0)
@@ -262,7 +308,10 @@ class InferenceNode(Node):
         arm_msg.data = next_action[:6]
         self.arm_state_pub.publish(arm_msg)
 
-        self.get_logger().info(f"Inference cycle time: {time.time() - start_time:.3f} seconds")
+        self.get_logger().info(
+            f"Inference cycle time: {time.time() - start_time:.3f} seconds"
+        )
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -275,5 +324,6 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
