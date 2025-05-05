@@ -29,7 +29,7 @@ class RemoteInferenceNode(Node):
             f"Remote Inference node started. Connecting to {host}:{port}"
         )
         self.bridge = CvBridge()
-        self.image_size = (256, 256)  # Assuming the remote policy expects this size
+        self.image_size = (640, 480)  # Assuming the remote policy expects this size
         self.gripper_image_size = (128, 128)  # Assuming a gripper view is also needed
 
         # Initialize the policy client
@@ -57,8 +57,20 @@ class RemoteInferenceNode(Node):
 
         # Variables to hold the latest sensor data
         self.latest_image1 = None  # e.g., 'video.ego_view'
-        self.latest_image2 = None  # e.g., 'video.gripper_view'
-        self.latest_joint_state = None  # 'state.qpos' and 'state.qvel'
+        self.latest_image2 = np.zeros((480, 640, 3), dtype=np.uint8)  # Mock image for gripper view
+        # Mock joint state with 6 positions and velocities initialized to zero
+        self.latest_joint_state = JointState(
+            position=[0.0] * 6,  # 6 joint positions
+            velocity=[0.0] * 6   # 6 joint velocities
+        ) # TODO: THIS IS MOCKED AND NEEDS TO BE REPLACED WITH THE REAL JOINT STATE
+        # CRITICAL ERROR: Mock joint state is being used! This needs to be replaced with real joint state ASAP
+        # This is a temporary mock that will cause incorrect behavior - high priority to fix
+        self.get_logger().error(
+            "\033[1;31m"  # Red text
+            "CRITICAL: Using mock joint state data - this must be replaced with real joint state immediately! "
+            "Current implementation will cause incorrect robot behavior."
+            "\033[0m"  # Reset color
+        )
 
         # Subscribers for images and joint state
         # Adapt topics based on actual setup and modality config
@@ -112,6 +124,7 @@ class RemoteInferenceNode(Node):
     ####################################################
     def call_goto_js_service(self):
         self.goto_client = self.create_client(GotoJS, "/maurice_arm/goto_js")
+
         while not self.goto_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info(
                 "Waiting for /maurice_arm/goto_js service to become available..."
@@ -185,56 +198,86 @@ class RemoteInferenceNode(Node):
             # Consider more specific error handling or reconnection logic
             return
 
-        if action_dict is None or "action" not in action_dict:
-            self.get_logger().error("Invalid action received from server.")
+        if action_dict is None or not all(k in action_dict for k in ["action.single_arm", "action.gripper", "action.base_motion"]):
+            self.get_logger().error("Invalid or incomplete action received from server.")
             return
 
         # --- Process and Publish Action ---
         try:
-            # Assuming the action is returned under the key 'action'
-            # and is a numpy array [batch, action_dim]
-            next_action = action_dict["action"]
-            if isinstance(next_action, np.ndarray):
-                # Remove batch dimension if present
-                if next_action.ndim > 1:
-                    next_action = next_action.squeeze(0)
-                next_action = next_action.tolist()  # Convert to list
-            else:
-                # Handle non-numpy array actions
-                self.get_logger().warn(f"Action not numpy array: {type(next_action)}")
-                if not isinstance(next_action, list):
-                    self.get_logger().error("Action format unusable.")
-                    return
+            # Extract actions based on the new keys
+            single_arm_action = action_dict["action.single_arm"]
+            gripper_action = action_dict["action.gripper"] # Gripper action might need separate handling
+            base_action = action_dict["action.base_motion"]
 
-            # Ensure the action has the expected dimension (e.g., 8 for 6DoF + base)
-            # This depends heavily on the remote policy output spec
-            expected_dim = 8  # Example: 6 arm joints + linear_x + angular_z
-            if len(next_action) != expected_dim:
-                self.get_logger().error(
-                    f"Received action has wrong dimension: {len(next_action)}, expected {expected_dim}"
-                )
-                return
+            # --- Helper to process potential numpy arrays ---
+            def process_action_array(action_array):
+                """Process action array (NumPy or list) to get the 1D list for the first time step."""
+                processed_list = None
+                if isinstance(action_array, np.ndarray):
+                    if action_array.ndim >= 1:
+                        # Select the first element along the first dimension (time step)
+                        first_step_action = action_array[0]
+                        if isinstance(first_step_action, np.ndarray):
+                             processed_list = first_step_action.tolist() # Convert the selected array to list
+                        else: # Handle case where slicing results in a scalar
+                             processed_list = [float(first_step_action)] # Wrap scalar in list
+                    else:
+                        # Handle 0-dimensional array? Log error for now.
+                        self.get_logger().error(f"Action part is a 0-dimensional numpy array: {action_array}")
+                        return None # Indicate error
+                elif isinstance(action_array, list):
+                    if action_array and isinstance(action_array[0], list): # Check if it's a list of lists
+                        # Select the first inner list (first time step)
+                        processed_list = action_array[0]
+                    elif action_array: # It's likely a 1D list already
+                        processed_list = action_array
+                    else: # Empty list
+                        processed_list = [] # Return empty list
+                else:
+                    self.get_logger().error(f"Action part is not a list or numpy array: {type(action_array)}")
+                    return None # Indicate error
 
-            self.get_logger().debug(
-                f"Received action: {next_action}"
-            )  # Use debug level
+                # Final check if the result is a list
+                if not isinstance(processed_list, list):
+                     self.get_logger().error(f"Failed to process action part into a list. Result: {processed_list}")
+                     return None
 
-            # Extract and publish the twist command (last two elements)
+                return processed_list
+
+            single_arm_list = process_action_array(single_arm_action)
+            gripper_list = process_action_array(gripper_action) # Process gripper
+            base_list = process_action_array(base_action)
+
+            # --- Arm Command ---
+            # Assuming single_arm_list contains the 6 DoF commands
+            arm_msg = Float64MultiArray()
+            # Take the first 6 elements for the arm
+            arm_msg.data = [float(a) for a in single_arm_list[:6]] # Directly use 6
+            self.arm_state_pub.publish(arm_msg)
+            self.get_logger().debug(f"Published arm command: {arm_msg.data}")
+
+            # --- Gripper Command (Example: log it for now) ---
+            gripper_command = float(gripper_list[0]) # Directly access first element
+            self.get_logger().debug(f"Received gripper command: {gripper_command}")
+            # TODO: Publish gripper command if needed, e.g., to a separate topic or service
+
+
+            # --- Base Command ---
+            # Assuming base_list contains [linear_x, angular_z]
             twist_msg = Twist()
             # Apply scaling if needed, based on policy training/output range
-            twist_msg.linear.x = float(next_action[-2])  # / 2 # Example scaling
-            twist_msg.angular.z = float(next_action[-1])  # / 2 # Example scaling
+            twist_msg.linear.x = float(base_list[0]) # Directly access first element
+            twist_msg.angular.z = float(base_list[1]) # Directly access second element
             self.cmd_vel_pub.publish(twist_msg)
+            self.get_logger().debug(f"Published twist command: linear.x={twist_msg.linear.x}, angular.z={twist_msg.angular.z}")
 
-            # Extract and publish the arm command (first six elements)
-            arm_msg = Float64MultiArray()
-            arm_msg.data = [float(a) for a in next_action[:6]]
-            self.arm_state_pub.publish(arm_msg)
 
+        except KeyError as e:
+            self.get_logger().error(f"Error processing action: Missing expected key {e}")
         except IndexError:
-            self.get_logger().error("Error processing action: Index out of bounds.")
-        except TypeError:
-            self.get_logger().error("Error processing action: Type mismatch.")
+            self.get_logger().error("Error processing action: Index out of bounds (check action dimensions).")
+        except TypeError as e:
+            self.get_logger().error(f"Error processing action: Type mismatch ({e}).")
         except Exception as e:
             self.get_logger().error(f"Unexpected error processing action: {e}")
 
