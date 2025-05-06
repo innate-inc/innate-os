@@ -5,15 +5,15 @@ Wants=network-online.target
 
 [Service]
 # Consider running as a non-root user if possible, adjusting permissions as needed
-# User=your_user
-# Group=your_group
+User=jetson1
+Group=jetson1
 
 # Environment variables for FastDDS (if needed, though usually configured via XML)
 # Environment="FASTRTPS_DEFAULT_PROFILES_FILE=/path/to/your/profile.xml"
 
 # Source the ROS environment first, then execute the discovery server wrapper script using sh
 # Binds to all interfaces on port 11811, using domain ID 0
-ExecStart=/bin/sh -c ". /opt/ros/humble/setup.sh && /opt/ros/humble/bin/fastdds discovery -i 0 -p 11811"
+ExecStart=/bin/zsh -c ". ~/.zshrc && . /opt/ros/humble/setup.sh && /opt/ros/humble/bin/fastdds discovery -i 0 -p 11811"
 
 # Restart the service if it fails
 Restart=on-failure

@@ -13,8 +13,7 @@ DDS_SETUP_SCRIPT="$HOME/maurice-prod/dds/setup_dds.zsh" # Path to the DDS setup 
 ROS_LAUNCH_COMMANDS=(
     "ros2 launch maurice_control app.launch.py"
     "ros2 launch maurice_bringup maurice_bringup.launch.py" # Example: Add another launch file
-    # Add more commands here as needed:
-    # "ros2 launch your_package another_launch.launch.py"
+    "ros2 launch maurice_arm arm.launch.py"
 )
 # ------
 
@@ -59,7 +58,7 @@ fi
 
 # Create new detached session, starting with just a shell
 echo "Creating new detached tmux session '$SESSION_NAME'..."
-tmux new-session -d -s $SESSION_NAME # Start default shell
+tmux new-session -d -s $SESSION_NAME -c ~ # Start default shell
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to create tmux session '$SESSION_NAME'." >&2
@@ -93,7 +92,7 @@ for i in $(seq 2 ${#ROS_LAUNCH_COMMANDS[@]}); do
     PANE_INDEX=$((i - 1)) # Pane index is 0-based (0, 1, 2...)
 
     echo "Creating pane $PANE_INDEX and sending command: $CMD_RAW"
-    tmux split-window -h -t $SESSION_NAME:0 # Create a new horizontal pane
+    tmux split-window -h -c ~ -t $SESSION_NAME:0 # Create a new horizontal pane
     if [ $? -ne 0 ]; then
         echo "ERROR: Failed to split window for pane $PANE_INDEX." >&2
         continue # Try next command
