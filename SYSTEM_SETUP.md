@@ -2,6 +2,10 @@
 
 This document outlines the setup required to manage the Fast DDS discovery server and ROS 2 application using `systemd`, allowing for automatic restarts when the robot's IP address changes (e.g., due to Wi-Fi network changes triggered via the BLE provisioner service).
 
+## Todo
+
+Write a script that for a new robot installs everything where it needs to be
+
 ## Overview
 
 The system uses `systemd` to manage three main services:
