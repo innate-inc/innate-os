@@ -119,7 +119,10 @@ class BaseInferenceClient:
 
         try:
             print(f"Sending request to endpoint '{endpoint}'...")
+            time_start = time.time()
             self.socket.send(TorchSerializer.to_bytes(request))
+            time_end = time.time()
+            print(f"Serialization complete in {(time_end - time_start) * 1000:.4f} ms.")
 
             print("Waiting for reply...")
             message = self.socket.recv()
@@ -129,8 +132,10 @@ class BaseInferenceClient:
                 raise RuntimeError("Server error")
 
             print("Reply received, deserializing...")
+            time_start = time.time()
             result = TorchSerializer.from_bytes(message)
-            print("Deserialization complete.")
+            time_end = time.time()
+            print(f"Deserialization complete in {(time_end - time_start) * 1000:.4f} ms.")
             return result
 
         except zmq.error.Again:  # Handle timeout

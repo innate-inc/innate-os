@@ -11,7 +11,7 @@ use_complex_image = False  # Set to True to use random noise images
 
 ctx = zmq.Context()
 sock = ctx.socket(zmq.REQ)
-sock.connect("tcp://35.212.160.113:5555")
+sock.connect("tcp://34.1.29.95:5555")
 
 # dummy images
 if use_complex_image:
@@ -32,6 +32,8 @@ jpg1_bytes = None
 jpg2_bytes = None
 
 if encode_before_loop:
+    print("Shape of img1:", img1.shape)
+    print("Shape of img2:", img2.shape)
     _, jpg1 = cv2.imencode(".jpg", img1, [cv2.IMWRITE_JPEG_QUALITY, ENC_Q])
     _, jpg2 = cv2.imencode(".jpg", img2, [cv2.IMWRITE_JPEG_QUALITY, ENC_Q])
     jpg1_bytes = jpg1.tobytes()
@@ -52,6 +54,7 @@ else:
 if encode_before_loop:
     warmup_msg = msg_parts
 else:
+
     _, jpg1 = cv2.imencode(".jpg", img1, [cv2.IMWRITE_JPEG_QUALITY, ENC_Q])
     _, jpg2 = cv2.imencode(".jpg", img2, [cv2.IMWRITE_JPEG_QUALITY, ENC_Q])
     warmup_msg = [jpg1.tobytes(), jpg2.tobytes(), vec_bytes]
