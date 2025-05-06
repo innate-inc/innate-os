@@ -15,6 +15,9 @@ def generate_launch_description():
     # Add path to the cameras config file
     cameras_config = os.path.join(pkg_share, 'config', 'cameras.yaml')
 
+    # Define the package name for maurice_arm
+    arm_package_name = 'maurice_arm'
+
     return LaunchDescription([
         # Set NVIDIA GPU offloading environment variables
         SetEnvironmentVariable(name='__NV_PRIME_RENDER_OFFLOAD', value='1'),
@@ -36,8 +39,14 @@ def generate_launch_description():
                 {'model_path': LaunchConfiguration('model_path')},
                 cameras_config  # Add the cameras config file
             ]
-        )
-    ])
+        ),
+        # Launch the arm_utils.py node
+        Node(
+            package=arm_package_name,
+            executable='arm_utils.py',
+            name='arm_utils_node',
+            output='screen'
+        )    ])
 
 if __name__ == '__main__':
     generate_launch_description()
