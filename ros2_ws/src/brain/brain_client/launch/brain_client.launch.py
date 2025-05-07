@@ -18,7 +18,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "websocket_uri": "ws://https://innate-agent-websocket-service-533276562345.us-central1.run.app:8765",
+                        "websocket_uri": "wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
                         "token": "MY_HARDCODED_TOKEN",
                         "image_topic": "/color/image/compressed",
                         "cmd_vel_topic": "/cmd_vel",
@@ -35,7 +35,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "websocket_uri": "ws://https://innate-agent-websocket-service-533276562345.us-central1.run.app:8765",
+                        "websocket_uri": "wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
                         "token": "MY_HARDCODED_TOKEN",
                     }
                 ],
