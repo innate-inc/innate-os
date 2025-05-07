@@ -135,8 +135,11 @@ class WSClientNode(Node):
                 self.get_logger().info(f"Internal message: {internal_message}")
                 if internal_message.type == InternalMessageType.READY_FOR_CONNECTION:
                     self.get_logger().debug("Received ready for connection message.")
-                    self.ws_thread = threading.Thread(target=self.run_ws_loop)
-                    self.ws_thread.start()
+                    if self.ws_thread is None or not self.ws_thread.is_alive():
+                        self.ws_thread = threading.Thread(target=self.run_ws_loop)
+                        self.ws_thread.start()
+                    else:
+                        self.get_logger().debug("WebSocket thread is already running.")
             # Otherwise, assume it's a regular outgoing message
             elif message_type in [t.value for t in MessageInType]:
                 outgoing_message = MessageIn.model_validate(data)
