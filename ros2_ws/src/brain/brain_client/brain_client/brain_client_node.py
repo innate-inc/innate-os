@@ -520,9 +520,15 @@ class BrainClientNode(Node):
         # This callback will send the RGB image and, if allowed, the depth image
         if not self.primitives_registered:
             # If primitives are not yet registered, don't send images
+            self.get_logger().info(
+                "\033[93m[BrainClient] Primitives not registered. Skipping image callback.\033[0m"
+            )
             return
 
         if self.ready_for_image and self.last_image is not None:
+            self.get_logger().info(
+                "\033[93m[BrainClient] Sending image callback.\033[0m"
+            )
             try:
                 # Compress the RGB image as JPEG (70% quality)
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
@@ -547,27 +553,27 @@ class BrainClientNode(Node):
                         "\033[93m[BrainClient] No depth image available.\033[0m"
                     )
                     return
-
-                depth_frame = self.last_depth_image
-                depth_data = depth_frame.tobytes()
-                if depth_frame.dtype == np.uint16:
-                    encoding = "16UC1"
-                    bytes_per_pixel = 2
-                elif depth_frame.dtype == np.float32:
-                    encoding = "32FC1"
-                    bytes_per_pixel = 4
-                else:
-                    encoding = "8UC1"
-                    bytes_per_pixel = 1
-                depth_payload = {
-                    "height": int(depth_frame.shape[0]),
-                    "width": int(depth_frame.shape[1]),
-                    "encoding": encoding,
-                    "is_bigendian": 0,
-                    "step": int(depth_frame.shape[1] * bytes_per_pixel),
-                    "data": base64.b64encode(depth_data).decode("utf-8"),
-                }
-                payload["depth"] = depth_payload
+                elif self.send_depth and self.last_depth_image is not None:
+                    depth_frame = self.last_depth_image
+                    depth_data = depth_frame.tobytes()
+                    if depth_frame.dtype == np.uint16:
+                        encoding = "16UC1"
+                        bytes_per_pixel = 2
+                    elif depth_frame.dtype == np.float32:
+                        encoding = "32FC1"
+                        bytes_per_pixel = 4
+                    else:
+                        encoding = "8UC1"
+                        bytes_per_pixel = 1
+                    depth_payload = {
+                        "height": int(depth_frame.shape[0]),
+                        "width": int(depth_frame.shape[1]),
+                        "encoding": encoding,
+                        "is_bigendian": 0,
+                        "step": int(depth_frame.shape[1] * bytes_per_pixel),
+                        "data": base64.b64encode(depth_data).decode("utf-8"),
+                    }
+                    payload["depth"] = depth_payload
 
                 # Include map data if available
                 if self.last_map is not None:
