@@ -19,6 +19,10 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(depthai_examples REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(camera_info_manager REQUIRED)
+find_package(depthai REQUIRED)
+find_package(depthai_bridge REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -53,6 +57,26 @@ install(DIRECTORY
 install(DIRECTORY
   config
   DESTINATION share/${PROJECT_NAME}
+)
+
+# --- Build and install camera_driver C++ node ---
+# Assuming camera.cpp is directly in a subdirectory named 'maurice_bringup' 
+# under your package root (e.g., src/maurice_bot/maurice_bringup/maurice_bringup/camera.cpp).
+# If camera.cpp is in src/ (e.g. src/maurice_bot/maurice_bringup/src/camera.cpp), then use src/camera.cpp
+add_executable(camera_driver maurice_bringup/camera.cpp) 
+# Or if in src/: add_executable(camera_driver src/camera.cpp)
+
+ament_target_dependencies(camera_driver
+    rclcpp                # Core ROS 2 C++ client library
+    sensor_msgs           # For sensor_msgs::msg::Image and CameraInfo
+    camera_info_manager   # For CameraInfoManager
+    depthai               # Core DepthAI library
+    depthai_bridge        # For DepthAI to ROS message conversion utilities
+)
+
+install(TARGETS
+  camera_driver
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()
