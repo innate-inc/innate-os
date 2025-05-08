@@ -23,7 +23,7 @@ class DataViewerNode(Node):
         super().__init__('data_viewer')
         # Declare parameters with defaults
         self.declare_parameter('data_directory', '/home/vignesh/maurice-prod/data')
-        self.declare_parameter('data_frequency', 10)
+        self.declare_parameter('data_frequency', 30)
         self.declare_parameter('image_topics', ["/color/image", "/image_raw"])
         self.declare_parameter('arm_state_topic', "/arm/state")
         self.declare_parameter('leader_command_topic', "/leader/command")
