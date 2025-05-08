@@ -131,13 +131,13 @@ def generate_launch_description():
     # Custom Camera Driver Node
     # -------------------------------------------------------
     camera_driver_node = launch_ros.actions.Node(
-        package='maurice_bringup',      # Your package name
-        executable='camera_driver',     # Your executable name
-        name='camera_driver',           # ROS Node name
+        package='maurice_bringup',
+        executable='camera_driver',
+        name='camera_driver',
         output='screen',
         parameters=[{
             'tf_prefix': tf_prefix_lc,
-            'camera_model': camera_model_lc, # For CameraInfoManager
+            'camera_model': camera_model_lc,
             'color_resolution': LaunchConfiguration('color_resolution'),
             'fps': LaunchConfiguration('fps'),
             'use_video': LaunchConfiguration('use_video'),

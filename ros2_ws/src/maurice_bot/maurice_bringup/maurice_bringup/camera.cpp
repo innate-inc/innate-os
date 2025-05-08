@@ -203,18 +203,18 @@ private:
         rgb_publisher_ = std::make_unique<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>>(
             video_queue_,
             shared_from_this(),
-            std::string(tf_prefix_ + "/color/image_raw"),
+            std::string("color/image"),
             std::bind(&dai::rosBridge::ImageConverter::toRosMsg,
                         rgb_converter_.get(),
                         std::placeholders::_1,
                         std::placeholders::_2),
             30,
             *rgb_cam_info_,
-            tf_prefix_ + "/color"
+            std::string("color")
         );
         rgb_publisher_->addPublisherCallback();
-        RCLCPP_INFO(this->get_logger(), "RGB video stream will be published on: %s", (tf_prefix_ + "/color/image_raw").c_str());
-        RCLCPP_INFO(this->get_logger(), "RGB CameraInfo will be published on: %s", (tf_prefix_ + "/color/camera_info").c_str());
+        RCLCPP_INFO(this->get_logger(), "RGB video stream will be published on: %s", "color/image");
+        RCLCPP_INFO(this->get_logger(), "RGB CameraInfo will be published on: %s", "color/camera_info");
     }
 
     void setup_preview_publisher() {
@@ -234,17 +234,18 @@ private:
         preview_publisher_ = std::make_unique<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>>(
             preview_queue_,
             shared_from_this(),
-            std::string(tf_prefix_ + "/color/preview/image_raw"),
+            std::string("color/preview/image_raw"),
             std::bind(&dai::rosBridge::ImageConverter::toRosMsg,
                         rgb_converter_.get(),
                         std::placeholders::_1,
                         std::placeholders::_2),
             30,
             *preview_cam_info_,
-            tf_prefix_ + "/color/preview"
+            std::string("color/preview")
         );
         preview_publisher_->addPublisherCallback();
-        RCLCPP_INFO(this->get_logger(), "RGB preview stream will be published on: %s", (tf_prefix_ + "/color/preview/image_raw").c_str());
+        RCLCPP_INFO(this->get_logger(), "RGB preview stream will be published on: %s", "color/preview/image_raw");
+        RCLCPP_INFO(this->get_logger(), "RGB preview CameraInfo will be published on: %s", "color/preview/camera_info");
     }
 
     std::string tf_prefix_;
