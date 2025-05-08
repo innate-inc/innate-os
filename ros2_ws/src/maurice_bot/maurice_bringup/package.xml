@@ -3,9 +3,9 @@
 <package format="3">
   <name>maurice_bringup</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="vignesh.anand.1503@gmail.com">vignesh</maintainer>
-  <license>TODO: License declaration</license>
+  <description>Bringup scripts and configurations for Maurice Bot.</description>
+  <maintainer email="your_email@example.com">Your Name</maintainer>
+  <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -19,6 +19,13 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>depthai_examples</depend>
+  <depend>camera_info_manager</depend>
+  <depend>sensor_msgs</depend>
+  <depend>depthai</depend>
+  <depend>depthai_bridge</depend>
+  <depend>ament_index_python</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
