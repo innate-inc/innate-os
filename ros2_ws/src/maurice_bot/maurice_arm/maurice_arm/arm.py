@@ -9,8 +9,8 @@ import time
 import json
 
 # Import our Dynamixel and Robot classes
-from maurice_arm.dynamixel import Dynamixel, OperatingMode
-from maurice_arm.robot import Robot
+from dynamixel import Dynamixel, OperatingMode
+from robot import Robot
 
 class MauriceArmNode(Node):
     def __init__(self):
