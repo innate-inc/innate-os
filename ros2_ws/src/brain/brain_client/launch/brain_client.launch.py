@@ -21,6 +21,7 @@ def generate_launch_description():
                         "websocket_uri": "wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
                         "token": "MY_HARDCODED_TOKEN",
                         "image_topic": "/color/image/compressed",
+                        "map_topic": "/map",
                         "cmd_vel_topic": "/cmd_vel",
                         "pose_image_interval": 0.5,  # Send pose images every 0.5 seconds
                         "log_everything": True,  # Flag to enable complete vision agent output logging

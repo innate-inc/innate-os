@@ -14,6 +14,7 @@ ROS_LAUNCH_COMMANDS=(
     "ros2 launch maurice_control app.launch.py"
     "ros2 launch maurice_bringup maurice_bringup.launch.py" # Example: Add another launch file
     "ros2 launch maurice_arm arm.launch.py"
+    "sleep 20 && ros2 service call /maurice_arm/goto_js maurice_msgs/srv/GotoJS '{data: {data: [0.8528933180644165, -0.45712627478992107, 1.2946797849754812, -0.9326603190344698, -0.04908738521234052, 0.8881748761857863]}, time: 5}'"
 )
 # ------
 
@@ -27,6 +28,10 @@ DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
 ROS_SOURCE_CMD="source $ROS_WS_PATH/install/setup.zsh"
 
 echo "Attempting to launch ROS commands in tmux session '$SESSION_NAME'..."
+
+# Add a 10-second delay before starting
+echo "Sleeping for 10 seconds before starting..."
+sleep 10
 
 # Source environment *before* tmux as well (might help tmux itself)
 echo "Sourcing DDS setup (pre-tmux): $DDS_SETUP_SCRIPT"
