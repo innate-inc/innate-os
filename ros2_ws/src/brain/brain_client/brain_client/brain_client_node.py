@@ -590,7 +590,7 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Primitives not registered. Skipping image callback.\033[0m"
             )
             return
-
+        
         if self.ready_for_image and self.last_image is not None:
             self.get_logger().info(
                 "\033[93m[BrainClient] Sending image callback.\033[0m"
@@ -689,6 +689,11 @@ class BrainClientNode(Node):
                         "theta": theta,
                         "frame_id": self.last_odom.header.frame_id
                     }
+                else:
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No odometry data available.\033[0m"
+                    )
+                    return
 
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
