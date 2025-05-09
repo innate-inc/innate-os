@@ -2,6 +2,7 @@
 import traceback
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 import threading
 import json
 import time
@@ -336,21 +337,21 @@ class BrainClientNode(Node):
 
     def fetch_transform_callback(self):
         try:
-            target_frame = "base_link"
-            source_frame = "map"
-            when = self.get_clock().now()
+            robot_base_frame = "base_link"  # The frame whose pose we want
+            map_frame = "map"            # The frame in which we want the pose expressed
+            when = rclpy.time.Time()
 
             if self.tf_buffer.can_transform(
-                target_frame,
-                source_frame,
+                map_frame,        # Target frame ("map")
+                robot_base_frame, # Source frame ("base_link")
                 when,
-                timeout=rclpy.duration.Duration(seconds=0.1) # Short timeout for can_transform
+                timeout=Duration(seconds=0.1) # Short timeout for can_transform
             ):
                 transform_stamped = self.tf_buffer.lookup_transform(
-                    target_frame,
-                    source_frame,
+                    map_frame,        # Target frame ("map")
+                    robot_base_frame, # Source frame ("base_link")
                     when,
-                    timeout=rclpy.duration.Duration(seconds=0.1) # Shorter timeout as can_transform likely passed
+                    timeout=Duration(seconds=0.1) # Shorter timeout as can_transform likely passed
                 )
 
                 # Create an Odometry message to store the pose (or a simpler structure if preferred)
@@ -359,8 +360,8 @@ class BrainClientNode(Node):
                 # This part might need adjustment based on how self.last_odom is used elsewhere.
                 odom_msg = Odometry()
                 odom_msg.header.stamp = self.get_clock().now().to_msg() # Use current time for the header
-                odom_msg.header.frame_id = source_frame # The pose is of 'base_link' relative to 'map'
-                odom_msg.child_frame_id = target_frame
+                odom_msg.header.frame_id = map_frame        # "map"
+                odom_msg.child_frame_id = robot_base_frame # "base_link"
 
                 odom_msg.pose.pose.position.x = transform_stamped.transform.translation.x
                 odom_msg.pose.pose.position.y = transform_stamped.transform.translation.y
@@ -371,13 +372,26 @@ class BrainClientNode(Node):
                 # For simplicity, let's zero them or leave them default for now.
 
                 self.last_odom = odom_msg
-                # self.get_logger().debug(f"Successfully fetched and stored transform from {source_frame} to {target_frame}")
+                
+                # Calculate yaw (theta) from quaternion
+                ori = odom_msg.pose.pose.orientation
+                siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                theta_radians = math.atan2(siny_cosp, cosy_cosp)
+                theta_degrees = math.degrees(theta_radians)
+
+                self.get_logger().info(
+                    f"Robot pose in '{map_frame}': x={odom_msg.pose.pose.position.x:.2f} m, "
+                    f"y={odom_msg.pose.pose.position.y:.2f} m, "
+                    f"theta={theta_degrees:.2f} degrees"
+                )
             else:
                 self.get_logger().warn(
-                    f"Could not transform {source_frame} to {target_frame} at time {when.nanoseconds / 1e9:.3f}s. Waiting for transform..."
+                    f"Could not get transform from '{robot_base_frame}' to '{map_frame}' at time {when.nanoseconds / 1e9:.3f}s. Waiting for transform..."
                 )
         except TransformException as ex:
-            self.get_logger().error(f"TransformException in fetch_transform_callback for {source_frame} to {target_frame}: {ex}")
+            # Adjusted error message to reflect the intended transformation
+            self.get_logger().error(f"TransformException looking up transform from '{robot_base_frame}' to '{map_frame}': {ex}")
         except Exception as e:
             self.get_logger().error(f"Error in fetch_transform_callback: {e}, {traceback.format_exc()}")
 
