@@ -379,12 +379,6 @@ class BrainClientNode(Node):
                 cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
                 theta_radians = math.atan2(siny_cosp, cosy_cosp)
                 theta_degrees = math.degrees(theta_radians)
-
-                self.get_logger().info(
-                    f"Robot pose in '{map_frame}': x={odom_msg.pose.pose.position.x:.2f} m, "
-                    f"y={odom_msg.pose.pose.position.y:.2f} m, "
-                    f"theta={theta_degrees:.2f} degrees"
-                )
             else:
                 self.get_logger().warn(
                     f"Could not get transform from '{robot_base_frame}' to '{map_frame}' at time {when.nanoseconds / 1e9:.3f}s. Waiting for transform..."
@@ -398,7 +392,6 @@ class BrainClientNode(Node):
     def map_callback(self, msg: OccupancyGrid):
         """Store the latest map data."""
         self.last_map = msg
-        self.get_logger().info("Received map update")
 
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
