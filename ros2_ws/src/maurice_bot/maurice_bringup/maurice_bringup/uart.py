@@ -19,11 +19,13 @@ class UartManager:
     CMD_MOVE   = 0x01
     CMD_LED    = 0x02
     CMD_STATUS = 0x03
+    CMD_CALIBRATE = 0x04
 
     # Response IDs (microcontroller replies with CMD+0x80)
     RESP_MOVE   = 0x81  # Position update
     RESP_LED    = 0x82  # LED status feedback
     RESP_STATUS = 0x83  # Health (status) feedback
+    RESP_CALIBRATE = 0x84 # Calibration status feedback
 
     def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, update_frequency=30.0, debug=False):
         self.node = node
@@ -39,6 +41,8 @@ class UartManager:
         self.latest_led = None
         # Flag indicating a new status request is pending.
         self.status_requested = False
+        # Flag indicating a new calibration request is pending.
+        self.calibration_requested = False
 
         # -------------------------
         # Stored responses
@@ -49,6 +53,7 @@ class UartManager:
         self.battery_voltage = 0.0                      # Latest battery voltage
         self.motor_temperature = 0.0                    # Latest motor temperature
         self.fault_code = 0                           # Latest fault code
+        self.calibration_status = None                # Latest calibration status (0: Success, 1: In Progress, 2: Failure)
 
         # -------------------------
         # UART configuration
@@ -132,6 +137,11 @@ class UartManager:
         payload = bytes([0x00] * 6)
         self._send_command(self.CMD_STATUS, payload)
 
+    def _send_calibrate_command(self):
+        # All 6 bytes reserved (zero)
+        payload = bytes([0x00] * 6)
+        self._send_command(self.CMD_CALIBRATE, payload)
+
     # --- Communication Loop (50Hz) ---
     def _communication_loop(self):
         while self.running:
@@ -150,6 +160,12 @@ class UartManager:
                 self._send_status_request()
                 self._read_response()  # Process health feedback
                 self.status_requested = False
+            
+            # Send calibration request only if one was triggered
+            if self.calibration_requested:
+                self._send_calibrate_command()
+                self._read_response() # Process calibration feedback
+                self.calibration_requested = False
 
             time.sleep(1 / self.update_frequency)  # 50Hz loop
 
@@ -294,6 +310,25 @@ class UartManager:
                 self.logger.debug(f"Status - Battery: {self.battery_voltage}V, Motor Temp: {temp}°C, Fault: {fault}")
             self.logger.info(f"Status - Battery: {self.battery_voltage}V, Motor Temp: {temp}°C, Fault: {fault}")
             self.logger.info(f"Status - Battery: {self.battery_voltage}V, Motor Temp: {temp}°C, Fault: {fault}")
+        elif msg_id == self.RESP_CALIBRATE:
+            try:
+                # Status (1 byte), Reserved (5 bytes)
+                status, _, _, _, _, _ = struct.unpack(">BBBBBB", data) # Unpack as 6 bytes, use only the first
+            except struct.error as e:
+                self.logger.error(f"Failed to unpack calibration response: {e}")
+                return
+            self.calibration_status = status
+            status_str = "Unknown"
+            if status == 0:
+                status_str = "Success"
+            elif status == 1:
+                status_str = "In Progress"
+            elif status == 2:
+                status_str = "Failure"
+            
+            if self.debug:
+                self.logger.debug(f"Calibration Status: {status_str} ({status})")
+            self.logger.info(f"Calibration Status: {status_str} ({status})")
         else:
             self.logger.warning(f"Unknown Response ID: {msg_id}")
 
@@ -319,6 +354,12 @@ class UartManager:
         Triggers a status request to obtain health feedback (battery voltage, motor temperature, fault code).
         """
         self.status_requested = True
+
+    def request_calibration(self):
+        """
+        Triggers a calibration command.
+        """
+        self.calibration_requested = True
 
     # --- Destructor ---
     def __del__(self):

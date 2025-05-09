@@ -9,6 +9,7 @@ from nav_msgs.msg import Odometry
 from maurice_msgs.srv import LightCommand
 from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import BatteryState
+from std_srvs.srv import Trigger
 import time
 
 class Bringup(Node):
@@ -32,8 +33,12 @@ class Bringup(Node):
         self._setup_services_and_topics()
 
         self.uart_manager.set_light_command(mode=1, r=255, g=255, b=255, interval=100)
-        time.sleep(10)
+        time.sleep(5)
         self.uart_manager.set_light_command(mode=0, r=0, g=0, b=0, interval=0)
+        # Request calibration at startup
+        time.sleep(10)
+        self.get_logger().info('Requesting initial calibration. Ensure robot is stationary.')
+        self.uart_manager.request_calibration()
 
     def _get_parameters(self):
         """Declare and get all node parameters."""
@@ -101,6 +106,13 @@ class Bringup(Node):
             LightCommand,  # Service type
             '/light_command',  # Service name
             self._handle_light_command  # Callback function
+        )
+
+        # Add the calibrate service
+        self.calibrate_srv = self.create_service(
+            Trigger,
+            '/calibrate',
+            self._handle_calibrate_request
         )
 
         # Create odometry publisher
@@ -186,6 +198,26 @@ class Bringup(Node):
         
         if self.debug:
             self.get_logger().debug(f"Light command response: {response.success}, {response.message}")
+        
+        return response
+
+    def _handle_calibrate_request(self, request, response):
+        """Handle incoming calibration requests."""
+        if self.debug:
+            self.get_logger().debug('Received calibrate request')
+        
+        try:
+            self.uart_manager.request_calibration()
+            response.success = True
+            response.message = "Calibration triggered successfully"
+            if self.debug:
+                self.get_logger().debug(f"Calibration response: {response.success}, {response.message}")
+        except Exception as e:
+            response.success = False
+            response.message = f"Error triggering calibration: {str(e)}"
+            self.get_logger().error(f"Error triggering calibration: {str(e)}")
+            if self.debug:
+                self.get_logger().debug(f"Calibration response: {response.success}, {response.message}")
         
         return response
 
