@@ -12,6 +12,14 @@ from rclpy.action import ActionClient
 import math
 import inspect
 
+# TF2 imports
+import tf2_ros
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from tf2_geometry_msgs import do_transform_pose # For transforming poses
+from geometry_msgs.msg import PoseStamped # For easier pose transformation
+
 from brain_client.message_types import (
     InternalMessage,
     InternalMessageType,
@@ -64,7 +72,7 @@ class BrainClientNode(Node):
 
         # Set to True if you wish to receive and forward depth images as well
         self.declare_parameter("send_depth", True)
-        self.declare_parameter("odom_topic", "/odom")
+        # self.declare_parameter("odom_topic", "/odom") # Removed odom_topic
 
         # New parameters for camera FOV
         self.declare_parameter("vertical_fov", 60.0)
@@ -96,13 +104,16 @@ class BrainClientNode(Node):
         self.send_depth = (
             self.get_parameter("send_depth").get_parameter_value().bool_value
         )
-        self.odom_topic = (
-            self.get_parameter("odom_topic").get_parameter_value().string_value
-        )
+        # self.odom_topic = (
+        #     self.get_parameter("odom_topic").get_parameter_value().string_value
+        # ) # Removed odom_topic
         self.last_odom = None
-        self.odom_sub = self.create_subscription(
-            Odometry, self.odom_topic, self.odom_callback, 10
-        )
+        # self.odom_sub = self.create_subscription(
+        #     Odometry, self.odom_topic, self.odom_callback, 10
+        # ) # Removed odom_sub
+
+        # Create a timer to fetch the transform at 30 Hz
+        self.transform_timer = self.create_timer(1.0 / 30.0, self.fetch_transform_callback)
 
         self.vertical_fov = (
             self.get_parameter("vertical_fov").get_parameter_value().double_value
@@ -138,6 +149,10 @@ class BrainClientNode(Node):
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
+
+        # Initialize TF2 buffer and listener
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Publishers, Subscribers, and Service
         self.last_image = None
@@ -319,13 +334,57 @@ class BrainClientNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to decode depth image: {e}")
 
-    def odom_callback(self, msg: Odometry):
-        self.last_odom = msg
+    def fetch_transform_callback(self):
+        try:
+            target_frame = "base_link"
+            source_frame = "map"
+            when = self.get_clock().now()
+
+            if self.tf_buffer.can_transform(
+                target_frame,
+                source_frame,
+                when,
+                timeout=rclpy.duration.Duration(seconds=0.1) # Short timeout for can_transform
+            ):
+                transform_stamped = self.tf_buffer.lookup_transform(
+                    target_frame,
+                    source_frame,
+                    when,
+                    timeout=rclpy.duration.Duration(seconds=0.1) # Shorter timeout as can_transform likely passed
+                )
+
+                # Create an Odometry message to store the pose (or a simpler structure if preferred)
+                # For now, let's try to populate an Odometry message similarly to before,
+                # but using the transform directly.
+                # This part might need adjustment based on how self.last_odom is used elsewhere.
+                odom_msg = Odometry()
+                odom_msg.header.stamp = self.get_clock().now().to_msg() # Use current time for the header
+                odom_msg.header.frame_id = source_frame # The pose is of 'base_link' relative to 'map'
+                odom_msg.child_frame_id = target_frame
+
+                odom_msg.pose.pose.position.x = transform_stamped.transform.translation.x
+                odom_msg.pose.pose.position.y = transform_stamped.transform.translation.y
+                odom_msg.pose.pose.position.z = transform_stamped.transform.translation.z
+                odom_msg.pose.pose.orientation = transform_stamped.transform.rotation
+                # Covariance and Twist are not directly available from lookup_transform
+                # and might need to be handled differently or zeroed out if not critical.
+                # For simplicity, let's zero them or leave them default for now.
+
+                self.last_odom = odom_msg
+                # self.get_logger().debug(f"Successfully fetched and stored transform from {source_frame} to {target_frame}")
+            else:
+                self.get_logger().warn(
+                    f"Could not transform {source_frame} to {target_frame} at time {when.nanoseconds / 1e9:.3f}s. Waiting for transform..."
+                )
+        except TransformException as ex:
+            self.get_logger().error(f"TransformException in fetch_transform_callback for {source_frame} to {target_frame}: {ex}")
+        except Exception as e:
+            self.get_logger().error(f"Error in fetch_transform_callback: {e}, {traceback.format_exc()}")
 
     def map_callback(self, msg: OccupancyGrid):
         """Store the latest map data."""
         self.last_map = msg
-        self.get_logger().debug("Received map update")
+        self.get_logger().info("Received map update")
 
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
@@ -621,6 +680,7 @@ class BrainClientNode(Node):
                         "y": pos.y,
                         "z": pos.z,
                         "theta": theta,
+                        "frame_id": self.last_odom.header.frame_id
                     }
 
                 # Build and send the message
