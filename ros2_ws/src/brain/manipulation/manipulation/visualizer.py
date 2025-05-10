@@ -24,19 +24,22 @@ class DataViewerNode(Node):
         # Declare parameters with defaults
         self.declare_parameter('data_directory', '/home/vignesh/maurice-prod/data')
         self.declare_parameter('data_frequency', 30)
-        self.declare_parameter('image_topics', ["/color/image", "/image_raw"])
-        self.declare_parameter('arm_state_topic', "/arm/state")
-        self.declare_parameter('leader_command_topic', "/leader/command")
-        self.declare_parameter('velocity_topic', "/cmd_vel")
         self.declare_parameter('image_size', [640, 480])
         # Retrieve parameters
-        self.base_data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
         self.data_frequency = self.get_parameter('data_frequency').value
-        self.image_topics = self.get_parameter('image_topics').value
-        self.arm_state_topic = self.get_parameter('arm_state_topic').value
-        self.leader_command_topic = self.get_parameter('leader_command_topic').value
-        self.velocity_topic = self.get_parameter('velocity_topic').value
         self.image_size = self.get_parameter('image_size').value
+
+        # Attempt to get directory via GUI first
+        selected_dir_gui = self.prompt_directory_selection_gui()
+
+        if selected_dir_gui:
+            self.base_data_directory = selected_dir_gui
+        else:
+            # Fallback to ROS parameter if GUI selection is cancelled or fails
+            default_data_dir = self.get_parameter('data_directory').value
+            self.base_data_directory = os.path.expanduser(default_data_dir)
+            self.get_logger().info(f"GUI selection cancelled or failed. Using data directory from parameter: {self.base_data_directory}")
+        
         self.get_logger().info(f"Using data directory: {self.base_data_directory}")
         self.get_logger().info(f"Playback frequency: {self.data_frequency} Hz")
 
@@ -200,6 +203,46 @@ class DataViewerNode(Node):
 
         hf.close()
         cv2.destroyAllWindows()
+
+    def prompt_directory_selection_gui(self):
+        """
+        Opens a GUI dialog for the user to select a directory.
+        Returns the selected path or None if cancelled or an error occurs.
+        """
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            # Set up the root window
+            root = tk.Tk()
+            root.withdraw()  # Hide the main tkinter window
+            root.attributes('-topmost', True) # Make the dialog appear on top of other windows
+
+            # Open the directory selection dialog
+            self.get_logger().info("Opening file explorer to select data directory...")
+            dir_path = filedialog.askdirectory(
+                title="Select Data Directory",
+                initialdir=os.path.expanduser("~") # Start in user's home directory
+            )
+            
+            root.destroy() # Clean up the tkinter root window
+
+            if dir_path:
+                self.get_logger().info(f"Directory selected via GUI: {dir_path}")
+                return os.path.expanduser(dir_path)
+            else:
+                self.get_logger().info("Directory selection via GUI was cancelled.")
+                return None
+        except ImportError:
+            self.get_logger().warn(
+                "tkinter library not found. Cannot show GUI for directory selection. "
+                "Please install it (e.g., 'sudo apt-get install python3-tk'). "
+                "Falling back to ROS parameter for data directory."
+            )
+            return None
+        except Exception as e:
+            self.get_logger().error(f"Error during GUI directory selection: {e}")
+            return None
 
 def main(args=None):
     rclpy.init(args=args)
