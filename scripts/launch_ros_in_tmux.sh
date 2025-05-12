@@ -15,7 +15,7 @@ ROS_LAUNCH_COMMANDS=(
     "ros2 launch maurice_bringup maurice_bringup.launch.py"
     "ros2 launch maurice_arm arm.launch.py"
     "sleep 15 && ros2 service call /maurice_arm/goto_js maurice_msgs/srv/GotoJS '{data: {data: [0.8528933180644165, -0.45712627478992107, 1.2946797849754812, -0.9326603190344698, -0.04908738521234052, 0.8881748761857863]}, time: 5}'"
-    "sleep 10 && ros2 service call /calibrate std_srvs/srv/Trigger && ros2 launch maurice_navigation navigation.launch.py"
+    "sleep 10 && ros2 service call /calibrate std_srvs/srv/Trigger && ros2 launch maurice_nav navigation.launch.py"
 )
 # ------
 
