@@ -150,66 +150,75 @@ class DataViewerNode(Node):
         num_timesteps = actions.shape[0]
         self.get_logger().info(f"Loaded {num_timesteps} timesteps")
 
-        for t in range(num_timesteps):
-            # Broadcast transforms
-            self.broadcast_tf(qpos[t])
+        # Create window once at the start
+        cv2.namedWindow("Episode Playback", cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty("Episode Playback", cv2.WND_PROP_TOPMOST, 1)
+        cv2.moveWindow("Episode Playback", 100, 100)
 
-            # Publish joint states for RViz visualization
-            joint_state_msg = JointState()
-            joint_state_msg.header.stamp = self.get_clock().now().to_msg()
-            joint_state_msg.name = self.joint_names
-            joint_state_msg.position = qpos[t].tolist()
-            joint_state_msg.velocity = qvel[t].tolist()
-            self.joint_state_pub.publish(joint_state_msg)
+        try:
+            for t in range(num_timesteps):
+                # Broadcast transforms
+                self.broadcast_tf(qpos[t])
 
-            img_list = []
-            for cam in camera_names:
-                # Get the t-th image for each camera.
-                img = images_group[cam][t]
-                # Convert image color if needed.
-                if len(img.shape) == 3 and img.shape[2] == 3:
-                    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                # Resize to common dimensions (e.g., 640x480)
-                img = cv2.resize(img, (self.image_size[0], self.image_size[1]))
-                img_list.append(img)
+                # Publish joint states for RViz visualization
+                joint_state_msg = JointState()
+                joint_state_msg.header.stamp = self.get_clock().now().to_msg()
+                joint_state_msg.name = self.joint_names
+                joint_state_msg.position = qpos[t].tolist()
+                joint_state_msg.velocity = qvel[t].tolist()
+                self.joint_state_pub.publish(joint_state_msg)
 
-            # Combine images side-by-side.
-            if img_list:
-                try:
-                    disp_img = cv2.hconcat(img_list)
-                except Exception:
-                    disp_img = img_list[0]
-            else:
-                disp_img = np.zeros((480, 640, 3), dtype=np.uint8)
+                img_list = []
+                for cam in camera_names:
+                    img = images_group[cam][t]
+                    if len(img.shape) == 3 and img.shape[2] == 3:
+                        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    img = cv2.resize(img, (self.image_size[0], self.image_size[1]))
+                    img_list.append(img)
 
-            # Set font parameters
-            font_scale = 0.5
-            thickness = 1
-            line_height = 20
-            x, y0 = 10, 30
+                if img_list:
+                    try:
+                        disp_img = cv2.hconcat(img_list)
+                    except Exception:
+                        disp_img = img_list[0]
+                else:
+                    disp_img = np.zeros((480, 640, 3), dtype=np.uint8)
 
-            # Draw three lines of text
-            cv2.putText(disp_img, f"qpos: {qpos[t]}", (x, y0), cv2.FONT_HERSHEY_SIMPLEX, 
-                       font_scale, (0, 255, 0), thickness)
-            cv2.putText(disp_img, f"cmd_vel: {qvel[t]}", (x, y0 + line_height), 
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
-            cv2.putText(disp_img, f"action: {actions[t]}", (x, y0 + 2*line_height), 
-                       cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
+                # Set font parameters
+                font_scale = 0.5
+                thickness = 1
+                line_height = 20
+                x, y0 = 10, 30
 
-            cv2.imshow("Episode Playback", disp_img)
-            key = cv2.waitKey(int(1000/self.data_frequency))  # ~30 Hz playback
-            if key == ord('q'):
-                break
+                # Draw three lines of text
+                cv2.putText(disp_img, f"qpos: {qpos[t]}", (x, y0), cv2.FONT_HERSHEY_SIMPLEX, 
+                           font_scale, (0, 255, 0), thickness)
+                cv2.putText(disp_img, f"cmd_vel: {qvel[t]}", (x, y0 + line_height), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
+                cv2.putText(disp_img, f"action: {actions[t]}", (x, y0 + 2*line_height), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
 
-            # Add a small delay to maintain the desired frequency
-            time.sleep(1.0/self.data_frequency)
+                # Add a visual indicator that window is active
+                cv2.putText(disp_img, "Window Active - Press 'q' to quit", (10, disp_img.shape[0] - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                
+                cv2.imshow("Episode Playback", disp_img)
+                key = cv2.waitKey(int(1000/self.data_frequency))
+                if key == ord('q'):
+                    break
 
-            if t % 30 == 0:  # Log every 30 frames to avoid too much output
-                self.get_logger().info(f"Processed frame {t}/{num_timesteps}")
+                # Add a small delay to maintain the desired frequency
+                time.sleep(1.0/self.data_frequency)
+
+                if t % 30 == 0:  # Log every 30 frames to avoid too much output
+                    self.get_logger().info(f"Processed frame {t}/{num_timesteps}")
+
+        finally:
+            # Clean up
+            cv2.destroyWindow("Episode Playback")
+            hf.close()
 
         self.get_logger().info("Finished playing episode")
-        hf.close()
-        cv2.destroyAllWindows()
 
     def prompt_directory_selection_gui(self):
         """
