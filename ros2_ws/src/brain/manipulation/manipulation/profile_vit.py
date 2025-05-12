@@ -110,6 +110,13 @@ def benchmark(model, img1, img2, proprio, device, warmup=10, iters=100):
         print()
     return (t1 - t0) * 1000.0 / iters  # ms per inference
 
+def print_model_size(model):
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Size in MB: {total_params * 4 / (1024 * 1024):.2f}")  # Assuming float32 (4 bytes)
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_names = [
@@ -125,9 +132,11 @@ def main():
     print(f"Running on {device}\n")
     print("Testing DINO ViT variants...")
     for i, name in enumerate(model_names, 1):
-        print(f"\r[{i}/{len(model_names)}] Testing {name}...", end="", flush=True)
+        print(f"\n[{i}/{len(model_names)}] Testing {name}...")
         model = DinoMLP(name)
-        ms    = benchmark(model, img1, img2, proprio, device)
+        print("\nModel size information:")
+        print_model_size(model)
+        ms = benchmark(model, img1, img2, proprio, device)
         print(f"\r[{i}/{len(model_names)}] {name:32s} → {ms:6.2f} ms  ({1000.0/ms:6.1f} FPS)")
 
 if __name__ == "__main__":
