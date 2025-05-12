@@ -18,7 +18,8 @@ def generate_launch_description():
             'angle_compensate': True,
             'scan_mode': 'Sensitivity'
         }],
-        output='screen'
+        output='screen',
+        remappings=[('scan', 'scan_fast')]
     )
 
     # Node to publish a static transform from base_link to laser_frame
@@ -33,7 +34,17 @@ def generate_launch_description():
         ]
     )
 
+    # Node to throttle scan_fast into scan
+    throttle_node = Node(
+        package='topic_tools',
+        executable='throttle',
+        name='scan_throttle',
+        arguments=['messages', '/scan_fast', '3.0', '/scan'],
+        output='screen'
+    )
+
     return LaunchDescription([
         lidar_node,
         static_tf_node,
+        throttle_node,
     ])
