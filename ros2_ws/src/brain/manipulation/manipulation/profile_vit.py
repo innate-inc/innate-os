@@ -67,20 +67,44 @@ class DinoMLP(nn.Module):
         return self.mlp(x)        # (B, action_dim)
 
 def benchmark(model, img1, img2, proprio, device, warmup=10, iters=100):
+    # Convert model to float16
+    model = model.half()
     model.to(device).eval()
-    img1, img2, proprio = img1.to(device), img2.to(device), proprio.to(device)
+    
+    # Convert inputs to float16
+    img1 = img1.half().to(device)
+    img2 = img2.half().to(device)
+    proprio = proprio.half().to(device)
+    
+    # First warm up the model with a few forward passes
+    print("Warming up model before tracing...")
+    for _ in range(3):
+        _ = model(img1, img2, proprio)
+    
+    # Now trace the model with float16 inputs
+    print("Tracing model...")
+    scripted = torch.jit.trace(model, (img1, img2, proprio))
+    
+    # Then compile for low overhead with float16 support
+    print("Compiling model...")
+    compiled_model = torch.compile(
+        scripted,
+        backend="inductor",
+        mode="reduce-overhead"  # minimize launch checks
+    )
+    
     with torch.no_grad():
         print("Warming up...")
         for i in range(warmup):
             print(f"\rWarmup iteration {i+1}/{warmup}", end="", flush=True)
-            _ = model(img1, img2, proprio)
+            _ = compiled_model(img1, img2, proprio)
         print("\nRunning benchmark...")
 
         torch.cuda.synchronize()
         t0 = time.time()
         for i in range(iters):
             print(f"\rBenchmark iteration {i+1}/{iters}", end="", flush=True)
-            _ = model(img1, img2, proprio)
+            _ = compiled_model(img1, img2, proprio)
         torch.cuda.synchronize()
         t1 = time.time()
         print()
@@ -90,9 +114,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_names = [
         'vit_base_patch14_dinov2',
-        'vit_base_patch14_reg4_dinov2',
-        'vit_small_patch14_dinov2',
-        'vit_small_patch14_reg4_dinov2'
+        'vit_small_patch14_dinov2'
     ]  # base and small variants only
 
     # synthetic inputs
