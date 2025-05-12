@@ -146,7 +146,7 @@ class WSClientNode(Node):
                 self.get_logger().debug(f"Outgoing message: {outgoing_message.type}")
 
                 # Check if the loop exists and is running before trying to send
-                if self.ws_client.loop.is_running():
+                if self.ws_client.loop and self.ws_client.loop.is_running():
                     try:
                         asyncio.run_coroutine_threadsafe(
                             self.ws_client.send(outgoing_message), self.ws_client.loop
