@@ -145,25 +145,6 @@ def generate_launch_description():
         }]
     )
 
-    # Add the image republisher node
-    image_republisher_node = launch_ros.actions.Node(
-        package='image_transport',
-        executable='republish',
-        name='image_republisher',
-        arguments=['raw', 'compressed'], # Input transport, output transport
-        remappings=[
-            ('in', 'color/image'),  # Subscribe to the raw image from your camera_driver
-            ('out', 'color/image/compressed') # Base topic for the compressed output
-        ],
-        parameters=[{
-            # You can set compression parameters here if supported by the underlying plugin
-            # For 'compressed' (which usually means JPEG):
-            'jpeg_quality': 80,  # Example: 0-100
-            # For 'compressedDepth' or if you switch to PNG for color:
-            # 'png_level': 5, # Example: 0-9 for PNG compression
-        }]
-    )
-
     # -------------------------------------------------------
     # Assemble the Launch Description
     # -------------------------------------------------------
@@ -193,7 +174,6 @@ def generate_launch_description():
     ld.add_action(urdf_launch)
     ld.add_action(static_tf_action)
     ld.add_action(camera_driver_node)
-    ld.add_action(image_republisher_node)
 
     return ld
 
