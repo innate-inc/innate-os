@@ -23,6 +23,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(depthai REQUIRED)
 find_package(depthai_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -73,6 +74,8 @@ ament_target_dependencies(camera_driver
     depthai               # Core DepthAI library
     depthai_bridge        # For DepthAI to ROS message conversion utilities
 )
+
+target_link_libraries(camera_driver ${OpenCV_LIBS})
 
 install(TARGETS
   camera_driver
