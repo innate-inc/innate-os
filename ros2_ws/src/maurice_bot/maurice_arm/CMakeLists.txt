@@ -5,11 +5,36 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
+# Find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
 
+# Add C++ executable
+add_executable(camera_node maurice_arm/camera.cpp)
+
+# Link C++ dependencies
+ament_target_dependencies(camera_node
+  rclcpp
+  sensor_msgs
+  cv_bridge
+)
+
+target_link_libraries(camera_node
+  ${OpenCV_LIBS}
+)
+
+# Install C++ targets
+install(TARGETS
+  camera_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install Python files
 install(FILES
   maurice_arm/__init__.py
   maurice_arm/dynamixel.py
@@ -18,6 +43,7 @@ install(FILES
   maurice_arm/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
 # Set Python version
 set(PYTHON_VERSION "python3.10")
 
@@ -27,7 +53,7 @@ install(
   DESTINATION lib/${PYTHON_VERSION}/site-packages/maurice_arm
 )
 
-# Make maurice_arm.py executable
+# Make Python files executable
 install(PROGRAMS
   maurice_arm/arm.py
   maurice_arm/arm_utils.py
