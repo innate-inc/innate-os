@@ -38,12 +38,25 @@ public:
         RCLCPP_INFO(this->get_logger(), "  FPS: %d", fps_);
         RCLCPP_INFO(this->get_logger(), "  Pixel Format: YUYV");
 
-        // Create publishers
-        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("camera/image_raw", 10);
-        compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("camera/image_compressed", 10);
-        RCLCPP_INFO(this->get_logger(), "Created publishers:");
+        // Create publishers with sensor data QoS profile
+        rclcpp::QoS qos = rclcpp::SensorDataQoS()
+            .keep_last(10)  // Keep last 10 messages
+            .best_effort()  // Best effort delivery for real-time data
+            .durability_volatile();  // Volatile durability
+
+        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("camera/image_raw", qos);
+        compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("camera/image_compressed", qos);
+        
+        RCLCPP_INFO(this->get_logger(), "Created publishers with sensor data QoS:");
         RCLCPP_INFO(this->get_logger(), "  Raw image: /camera/image_raw");
         RCLCPP_INFO(this->get_logger(), "  Compressed image: /camera/image_compressed");
+        RCLCPP_INFO(this->get_logger(), "  QoS Settings:");
+        RCLCPP_INFO(this->get_logger(), "    - Reliability: BEST_EFFORT");
+        RCLCPP_INFO(this->get_logger(), "    - Durability: VOLATILE");
+        RCLCPP_INFO(this->get_logger(), "    - History: KEEP_LAST (10)");
+        RCLCPP_INFO(this->get_logger(), "    - Deadline: Default");
+        RCLCPP_INFO(this->get_logger(), "    - Lifespan: Default");
+        RCLCPP_INFO(this->get_logger(), "    - Liveliness: Default");
 
         // Initialize camera
         if (!init_camera()) {
