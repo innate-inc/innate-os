@@ -176,29 +176,79 @@ private:
             RCLCPP_ERROR(this->get_logger(), "Video queue is not initialized. Cannot setup video publisher.");
             return;
         }
-        if (!rgb_cam_info_) {
-            RCLCPP_ERROR(this->get_logger(), "RGB CameraInfo is not initialized. Cannot setup video publisher.");
-            return;
-        }
 
-        RCLCPP_INFO(this->get_logger(), "Setting up video publisher...");
-
-        // Setup raw image publisher
-        rgb_publisher_ = std::make_unique<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>>(
-            video_queue_,
-            shared_from_this(),
-            std::string("color/image"),
-            std::bind(&dai::rosBridge::ImageConverter::toRosMsg,
-                        rgb_converter_.get(),
-                        std::placeholders::_1,
-                        std::placeholders::_2),
-            30,
-            *rgb_cam_info_,
-            std::string("color")
+        // Create publishers with sensor QoS profile
+        std::string raw_topic = "/color/image";
+        std::string compressed_topic = "/color/image/compressed";
+        
+        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+            raw_topic,
+            rclcpp::SensorDataQoS()
         );
-        rgb_publisher_->addPublisherCallback();
-        RCLCPP_INFO(this->get_logger(), "Raw image publisher setup complete");
+        
+        compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+            compressed_topic,
+            rclcpp::SensorDataQoS()
+        );
+
+        RCLCPP_INFO(this->get_logger(), "Created publishers on topics: %s and %s", 
+            raw_topic.c_str(), compressed_topic.c_str());
+
+        // Create timer for 30Hz publishing
+        publish_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(33),
+            std::bind(&CameraDriverNode::publish_frame, this)
+        );
     }
+
+    void publish_frame() {
+        auto frame = video_queue_->get<dai::ImgFrame>();
+        if (frame) {
+            try {
+                auto imgData = frame->getData();
+                if (!imgData.empty()) {
+                    // Convert to OpenCV Mat
+                    cv::Mat cvFrame(frame->getHeight(), frame->getWidth(), CV_8UC3, imgData.data());
+                    
+                    // Create and publish raw image message
+                    sensor_msgs::msg::Image rosImage;
+                    rosImage.header.stamp = this->now();
+                    rosImage.header.frame_id = tf_prefix_ + "_rgb_camera_optical_frame";
+                    rosImage.height = frame->getHeight();
+                    rosImage.width = frame->getWidth();
+                    rosImage.encoding = "bgr8";
+                    rosImage.is_bigendian = false;
+                    rosImage.step = frame->getWidth() * 3;
+                    rosImage.data = std::vector<uint8_t>(imgData.begin(), imgData.end());
+                    image_pub_->publish(rosImage);
+
+                    // Create and publish compressed image message
+                    sensor_msgs::msg::CompressedImage compressed_msg;
+                    compressed_msg.header = rosImage.header;
+                    compressed_msg.format = "jpeg";
+                    
+                    // Compress the image using OpenCV
+                    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};  // 80% quality
+                    cv::imencode(".jpg", cvFrame, compressed_msg.data, params);
+                    
+                    compressed_pub_->publish(compressed_msg);
+
+                    // Log frame details periodically
+                    static int frame_count = 0;
+                    if (++frame_count % 30 == 0) {
+                        RCLCPP_INFO(this->get_logger(), "Published frame %d - Raw size: %zu bytes, Compressed size: %zu bytes",
+                            frame_count, rosImage.data.size(), compressed_msg.data.size());
+                    }
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to publish frame: %s", e.what());
+            }
+        }
+    }
+
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
+    rclcpp::TimerBase::SharedPtr publish_timer_;
 
     std::string tf_prefix_;
     std::string camera_model_;
@@ -213,8 +263,6 @@ private:
 
     camera_info_manager::CameraInfoManager cinfo_manager_;
     std::shared_ptr<sensor_msgs::msg::CameraInfo> rgb_cam_info_;
-
-    std::unique_ptr<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>> rgb_publisher_;
 };
 
 int main(int argc, char** argv) {
