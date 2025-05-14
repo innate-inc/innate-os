@@ -44,7 +44,6 @@ std::tuple<dai::Pipeline, ImageDimensions> create_rgb_pipeline(
     xlinkOutVideo->setStreamName("rgb_video");
 
     dai::ColorCameraProperties::SensorResolution dai_color_resolution;
-    ImageDimensions video_dimensions = {640, 480};  // Output resolution
     ImageDimensions preview_dimensions = {640, 480};  // Preview/output resolution
 
     if (color_resolution_str == "800p") {
