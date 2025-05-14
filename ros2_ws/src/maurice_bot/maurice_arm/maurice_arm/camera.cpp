@@ -44,18 +44,17 @@ public:
             .best_effort()  // Best effort delivery for real-time data
             .durability_volatile();  // Volatile durability
 
-        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("camera/image_raw", qos);
-        compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("camera/image_compressed", qos);
+        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("image_raw", qos);
+        compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("image_raw/compressed", qos);
         
         RCLCPP_INFO(this->get_logger(), "Created publishers with sensor data QoS:");
-        RCLCPP_INFO(this->get_logger(), "  Raw image: /camera/image_raw");
-        RCLCPP_INFO(this->get_logger(), "  Compressed image: /camera/image_compressed");
+        RCLCPP_INFO(this->get_logger(), "  Raw image: /image_raw");
+        RCLCPP_INFO(this->get_logger(), "  Compressed image: /image_raw/compressed");
         RCLCPP_INFO(this->get_logger(), "  QoS Settings:");
         RCLCPP_INFO(this->get_logger(), "    - Reliability: BEST_EFFORT");
         RCLCPP_INFO(this->get_logger(), "    - Durability: VOLATILE");
         RCLCPP_INFO(this->get_logger(), "    - History: KEEP_LAST (10)");
         RCLCPP_INFO(this->get_logger(), "    - Deadline: Default");
-        RCLCPP_INFO(this->get_logger(), "    - Lifespan: Default");
         RCLCPP_INFO(this->get_logger(), "    - Liveliness: Default");
 
         // Initialize camera
