@@ -27,7 +27,7 @@ def generate_launch_description():
         executable='v4l2_camera_node',
         name='v4l2_camera',
         parameters=[{
-            'device': '/dev/video0',
+            'video_device': '/dev/video0',
             'width': 640,
             'height': 480,
             'fps': 30

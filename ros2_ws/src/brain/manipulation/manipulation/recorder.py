@@ -322,8 +322,13 @@ class RecorderNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = RecorderNode()
+    
+    # Create a MultiThreadedExecutor
+    executor = rclpy.executors.MultiThreadedExecutor()
+    executor.add_node(node)
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         node.get_logger().info("Recorder Node shutting down.")
     finally:
