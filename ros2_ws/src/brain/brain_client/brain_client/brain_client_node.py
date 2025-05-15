@@ -3,6 +3,7 @@ import traceback
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 import threading
 import json
 import time
@@ -53,6 +54,7 @@ from brain_client.directives.sassy_directive import SassyDirective
 from brain_client.directives.friendly_guide_directive import FriendlyGuideDirective
 from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
 from brain_client.directives.elder_safety_directive import ElderSafetyDirective
+from brain_client.directives.house_joker_directive import HouseJokerDirective
 
 
 class BrainClientNode(Node):
@@ -160,9 +162,11 @@ class BrainClientNode(Node):
         self.last_depth_image = None
         self.last_map = None  # Store the latest map data
 
+        image_qos = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT, history=QoSHistoryPolicy.KEEP_LAST, depth=10)
+
         # RGB image subscription remains unchanged.
         self.image_sub = self.create_subscription(
-            CompressedImage, self.image_topic, self.image_callback, 1
+            CompressedImage, self.image_topic, self.image_callback, image_qos
         )
 
         # Subscribe to the map topic
@@ -253,6 +257,7 @@ class BrainClientNode(Node):
                 FriendlyGuideDirective(),
                 SecurityPatrolDirective(),
                 ElderSafetyDirective(),
+                HouseJokerDirective(),
             ]
         }
         self.current_directive = self.directives["default_directive"]
