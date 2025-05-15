@@ -214,9 +214,14 @@ private:
         image_pub_->publish(*img_msg);
 
         // Create and publish compressed image message
-        auto compressed_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", bgr).toCompressedImageMsg();
-        compressed_msg->header = img_msg->header;
-        compressed_pub_->publish(*compressed_msg);
+        sensor_msgs::msg::CompressedImage compressed_msg;
+        compressed_msg.header = img_msg->header;
+        compressed_msg.format = "jpeg";
+
+        // Compress the image using OpenCV with explicit quality settings
+        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};  // 80% quality
+        cv::imencode(".jpg", bgr, compressed_msg.data, params);
+        compressed_pub_->publish(compressed_msg);
 
         // Requeue the buffer
         if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
