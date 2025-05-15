@@ -3,7 +3,7 @@
 <package format="3">
   <name>maurice_arm</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Camera driver and arm control for Maurice robot</description>
   <maintainer email="your-email@example.com">Your Name</maintainer>
   <license>TODO: License declaration</license>
 
@@ -16,6 +16,11 @@
   <exec_depend>moveit_py</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>kdl_parser_py</exec_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>libopencv-dev</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

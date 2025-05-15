@@ -1,7 +1,9 @@
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess
+from datetime import datetime
 
 def generate_launch_description():
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     return LaunchDescription([
         ExecuteProcess(
             cmd=[
@@ -13,7 +15,7 @@ def generate_launch_description():
                 '/maurice_arm/commands',
                 '/chat_in',
                 '/chat_out',
-                '-o', 'recorder'
+                '-o', f'/home/jetson1/maurice-prod/ros2_ws/recorder_{timestamp}'
             ],
             output='screen'
         ),

@@ -5,11 +5,13 @@
 #include <tuple>
 #include <string>
 #include <vector>
+#include <deque>
 
 #include "rclcpp/rclcpp.hpp"
 #include "camera_info_manager/camera_info_manager.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
+#include "sensor_msgs/msg/compressed_image.hpp"
 
 // DepthAI specific includes
 #include "depthai/device/DataQueue.hpp"
@@ -19,6 +21,8 @@
 #include "depthai/pipeline/node/XLinkOut.hpp"
 #include "depthai_bridge/BridgePublisher.hpp"
 #include "depthai_bridge/ImageConverter.hpp"
+
+#include <opencv2/opencv.hpp>
 
 using namespace std::chrono_literals;
 
@@ -31,10 +35,7 @@ struct ImageDimensions {
 // Creates the DepthAI pipeline for RGB camera output
 std::tuple<dai::Pipeline, ImageDimensions> create_rgb_pipeline(
     std::string color_resolution_str,
-    float fps,
-    bool use_preview,
-    int preview_width,
-    int preview_height) {
+    float fps) {
 
     dai::Pipeline pipeline;
     auto colorCam = pipeline.create<dai::node::ColorCamera>();
@@ -43,39 +44,36 @@ std::tuple<dai::Pipeline, ImageDimensions> create_rgb_pipeline(
     xlinkOutVideo->setStreamName("rgb_video");
 
     dai::ColorCameraProperties::SensorResolution dai_color_resolution;
-    ImageDimensions video_dimensions;
+    ImageDimensions preview_dimensions = {640, 480};  // Preview/output resolution
 
     if (color_resolution_str == "800p") {
         dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_800_P;
-        video_dimensions = {1280, 800};
         RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 800P (1280x800)");
     } else if (color_resolution_str == "720p") {
         dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_720_P;
-        video_dimensions = {1280, 720};
         RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 720P (1280x720)");
     } else {
         RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Invalid color_resolution parameter: %s. Supported: 800p, 720p.", color_resolution_str.c_str());
         throw std::runtime_error("Invalid color camera resolution provided to pipeline creation.");
     }
 
-    colorCam->setBoardSocket(dai::CameraBoardSocket::CAM_A); // RGB camera is typically CAM_A
+    colorCam->setBoardSocket(dai::CameraBoardSocket::CAM_A);
     colorCam->setResolution(dai_color_resolution);
-    colorCam->setVideoSize(video_dimensions.width, video_dimensions.height);
-    colorCam->setInterleaved(false);
-    colorCam->setColorOrder(dai::ColorCameraProperties::ColorOrder::BGR); // Common for depthai_bridge
+    colorCam->setPreviewSize(preview_dimensions.width, preview_dimensions.height);  // Set output resolution
+    colorCam->setInterleaved(true);
+    colorCam->setColorOrder(dai::ColorCameraProperties::ColorOrder::BGR);
     colorCam->setFps(fps);
 
-    colorCam->video.link(xlinkOutVideo->input);
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Camera configured with:");
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Native Resolution: %s", color_resolution_str.c_str());
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Output Resolution: %dx%d", preview_dimensions.width, preview_dimensions.height);
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Interleaved: true");
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Color Order: BGR");
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  FPS: %.2f", fps);
 
-    if (use_preview) {
-        auto xlinkOutPreview = pipeline.create<dai::node::XLinkOut>();
-        xlinkOutPreview->setStreamName("rgb_preview");
-        colorCam->setPreviewSize(preview_width, preview_height);
-        colorCam->preview.link(xlinkOutPreview->input);
-        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Preview stream enabled with size: %dx%d", preview_width, preview_height);
-    }
+    colorCam->preview.link(xlinkOutVideo->input);  // Use preview output instead of video
 
-    return std::make_tuple(pipeline, video_dimensions);
+    return std::make_tuple(pipeline, preview_dimensions);
 }
 
 class CameraDriverNode : public rclcpp::Node {
@@ -84,18 +82,13 @@ public:
                          cinfo_manager_(this) {
         // Declare parameters
         this->declare_parameter<std::string>("tf_prefix", "oak");
-        this->declare_parameter<std::string>("camera_model", "OAK-D"); // For CameraInfoManager
+        this->declare_parameter<std::string>("camera_model", "OAK-D");
         this->declare_parameter<std::string>("color_resolution", "800p");
         this->declare_parameter<double>("fps", 30.0);
         this->declare_parameter<bool>("use_video", true);
-        this->declare_parameter<bool>("use_preview", false);
-        this->declare_parameter<int>("preview_width", 300);
-        this->declare_parameter<int>("preview_height", 300);
         // Device specific parameters
         this->declare_parameter<std::string>("mxId", "");
         this->declare_parameter<bool>("usb2Mode", false);
-        // poeMode is typically handled by device detection or not explicitly set for basic RGB
-        // Removed IR Emitter parameters
 
         // Get parameters
         tf_prefix_ = this->get_parameter("tf_prefix").as_string();
@@ -103,9 +96,6 @@ public:
         std::string color_resolution_str = this->get_parameter("color_resolution").as_string();
         double fps_val = this->get_parameter("fps").as_double();
         use_video_ = this->get_parameter("use_video").as_bool();
-        use_preview_ = this->get_parameter("use_preview").as_bool();
-        preview_width_val_ = this->get_parameter("preview_width").as_int();
-        preview_height_val_ = this->get_parameter("preview_height").as_int();
         
         std::string mxId_str = this->get_parameter("mxId").as_string();
         bool usb2Mode_val = this->get_parameter("usb2Mode").as_bool();
@@ -116,17 +106,13 @@ public:
         RCLCPP_INFO(this->get_logger(), "  Color Resolution: %s", color_resolution_str.c_str());
         RCLCPP_INFO(this->get_logger(), "  FPS: %.2f", fps_val);
         RCLCPP_INFO(this->get_logger(), "  Use Video: %s", use_video_ ? "true" : "false");
-        RCLCPP_INFO(this->get_logger(), "  Use Preview: %s", use_preview_ ? "true" : "false");
-        if(use_preview_){
-            RCLCPP_INFO(this->get_logger(), "  Preview Size: %dx%d", preview_width_val_, preview_height_val_);
-        }
 
         // Now that tf_prefix_ is available, initialize rgb_converter_
         rgb_converter_ = std::make_unique<dai::rosBridge::ImageConverter>(tf_prefix_ + "_rgb_camera_optical_frame", false);
 
         ImageDimensions video_dims;
         std::tie(pipeline_, video_dims) = create_rgb_pipeline(
-            color_resolution_str, fps_val, use_preview_, preview_width_val_, preview_height_val_);
+            color_resolution_str, fps_val);
 
         // Initialize device
         dai::DeviceInfo deviceInfo; // Default constructor for first available device
@@ -161,9 +147,6 @@ public:
         if (use_video_) {
             video_queue_ = device_->getOutputQueue("rgb_video", 8, false);
         }
-        if (use_preview_) {
-            preview_queue_ = device_->getOutputQueue("rgb_preview", 8, false);
-        }
 
         // Calibration and CameraInfo
         calibrationHandler_ = device_->readCalibration();
@@ -183,10 +166,6 @@ public:
         if (use_video_) {
             setup_video_publisher();
         }
-
-        if (use_preview_) {
-            setup_preview_publisher();
-        }
         RCLCPP_INFO(this->get_logger(), "Camera publishers initialized successfully.");
     }
 
@@ -196,79 +175,93 @@ private:
             RCLCPP_ERROR(this->get_logger(), "Video queue is not initialized. Cannot setup video publisher.");
             return;
         }
-        if (!rgb_cam_info_) {
-            RCLCPP_ERROR(this->get_logger(), "RGB CameraInfo is not initialized. Cannot setup video publisher.");
-            return;
-        }
-        rgb_publisher_ = std::make_unique<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>>(
-            video_queue_,
-            shared_from_this(),
-            std::string("color/image"),
-            std::bind(&dai::rosBridge::ImageConverter::toRosMsg,
-                        rgb_converter_.get(),
-                        std::placeholders::_1,
-                        std::placeholders::_2),
-            30,
-            *rgb_cam_info_,
-            std::string("color")
+
+        // Create publishers with sensor QoS profile
+        std::string raw_topic = "/color/image";
+        std::string compressed_topic = "/color/image/compressed";
+        
+        image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+            raw_topic,
+            rclcpp::SensorDataQoS()
         );
-        rgb_publisher_->addPublisherCallback();
-        RCLCPP_INFO(this->get_logger(), "RGB video stream will be published on: %s", "color/image");
-        RCLCPP_INFO(this->get_logger(), "RGB CameraInfo will be published on: %s", "color/camera_info");
+        
+        compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+            compressed_topic,
+            rclcpp::SensorDataQoS()
+        );
+
+        RCLCPP_INFO(this->get_logger(), "Created publishers on topics: %s and %s", 
+            raw_topic.c_str(), compressed_topic.c_str());
+
+        // Create timer for 30Hz publishing
+        publish_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(33),
+            std::bind(&CameraDriverNode::publish_frame, this)
+        );
     }
 
-    void setup_preview_publisher() {
-        if (!preview_queue_) {
-            RCLCPP_ERROR(this->get_logger(), "Preview queue is not initialized. Cannot setup preview publisher.");
-            return;
-        }
-        // Create CameraInfo for preview
-        preview_cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(
-            rgb_converter_->calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_A, preview_width_val_, preview_height_val_)
-        );
-         if (!preview_cam_info_) {
-            RCLCPP_ERROR(this->get_logger(), "Preview CameraInfo is not initialized. Cannot setup preview publisher.");
-            return;
-        }
+    void publish_frame() {
+        auto frame = video_queue_->get<dai::ImgFrame>();
+        if (frame) {
+            try {
+                auto imgData = frame->getData();
+                if (!imgData.empty()) {
+                    // Convert to OpenCV Mat
+                    cv::Mat cvFrame(frame->getHeight(), frame->getWidth(), CV_8UC3, imgData.data());
+                    
+                    // Create and publish raw image message
+                    sensor_msgs::msg::Image rosImage;
+                    rosImage.header.stamp = this->now();
+                    rosImage.header.frame_id = tf_prefix_ + "_rgb_camera_optical_frame";
+                    rosImage.height = frame->getHeight();
+                    rosImage.width = frame->getWidth();
+                    rosImage.encoding = "bgr8";
+                    rosImage.is_bigendian = false;
+                    rosImage.step = frame->getWidth() * 3;
+                    rosImage.data = std::vector<uint8_t>(imgData.begin(), imgData.end());
+                    image_pub_->publish(rosImage);
 
-        preview_publisher_ = std::make_unique<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>>(
-            preview_queue_,
-            shared_from_this(),
-            std::string("color/preview/image_raw"),
-            std::bind(&dai::rosBridge::ImageConverter::toRosMsg,
-                        rgb_converter_.get(),
-                        std::placeholders::_1,
-                        std::placeholders::_2),
-            30,
-            *preview_cam_info_,
-            std::string("color/preview")
-        );
-        preview_publisher_->addPublisherCallback();
-        RCLCPP_INFO(this->get_logger(), "RGB preview stream will be published on: %s", "color/preview/image_raw");
-        RCLCPP_INFO(this->get_logger(), "RGB preview CameraInfo will be published on: %s", "color/preview/camera_info");
+                    // Create and publish compressed image message
+                    sensor_msgs::msg::CompressedImage compressed_msg;
+                    compressed_msg.header = rosImage.header;
+                    compressed_msg.format = "jpeg";
+                    
+                    // Compress the image using OpenCV
+                    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};  // 80% quality
+                    cv::imencode(".jpg", cvFrame, compressed_msg.data, params);
+                    
+                    compressed_pub_->publish(compressed_msg);
+
+                    // Log frame details periodically
+                    static int frame_count = 0;
+                    if (++frame_count % 30 == 0) {
+                        RCLCPP_INFO(this->get_logger(), "Published frame %d - Raw size: %zu bytes, Compressed size: %zu bytes",
+                            frame_count, rosImage.data.size(), compressed_msg.data.size());
+                    }
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to publish frame: %s", e.what());
+            }
+        }
     }
+
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
+    rclcpp::TimerBase::SharedPtr publish_timer_;
 
     std::string tf_prefix_;
     std::string camera_model_;
     bool use_video_;
-    bool use_preview_;
-    int preview_width_val_;
-    int preview_height_val_;
 
     dai::Pipeline pipeline_;
     std::unique_ptr<dai::Device> device_;
     std::shared_ptr<dai::DataOutputQueue> video_queue_;
-    std::shared_ptr<dai::DataOutputQueue> preview_queue_;
     
     dai::CalibrationHandler calibrationHandler_;
     std::unique_ptr<dai::rosBridge::ImageConverter> rgb_converter_;
 
     camera_info_manager::CameraInfoManager cinfo_manager_;
     std::shared_ptr<sensor_msgs::msg::CameraInfo> rgb_cam_info_;
-    std::shared_ptr<sensor_msgs::msg::CameraInfo> preview_cam_info_;
-
-    std::unique_ptr<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>> rgb_publisher_;
-    std::unique_ptr<dai::rosBridge::BridgePublisher<sensor_msgs::msg::Image, dai::ImgFrame>> preview_publisher_;
 };
 
 int main(int argc, char** argv) {

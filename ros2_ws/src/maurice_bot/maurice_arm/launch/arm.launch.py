@@ -23,15 +23,9 @@ def generate_launch_description():
 
     # Create the camera node
     camera_node = Node(
-        package='v4l2_camera',
-        executable='v4l2_camera_node',
-        name='v4l2_camera',
-        parameters=[{
-            'device': '/dev/video0',
-            'width': 640,
-            'height': 480,
-            'fps': 30
-        }],
+        package='maurice_arm',
+        executable='camera_node',
+        name='camera',
         output='screen'
     )
 

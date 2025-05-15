@@ -15,6 +15,7 @@ import cv2
 # Import RecorderStatus message
 from brain_messages.msg import RecorderStatus
 import os
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 class RecorderNode(Node):
     def __init__(self):
@@ -70,12 +71,19 @@ class RecorderNode(Node):
         self.all_topics_received = False
         
         # Create subscribers for sensor topics.
-        # Subscribe to each image topic provided in the parameters.
+        # Subscribe to each image topic with QoS profile
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
         for topic in self.image_topics:
             self.create_subscription(
-                Image, topic, 
+                Image, 
+                topic, 
                 lambda msg, t=topic: self.image_callback(msg, t), 
-                10
+                image_qos
             )
         self.create_subscription(JointState, self.arm_state_topic, self.arm_state_callback, 10)
         self.create_subscription(Float64MultiArray, self.leader_command_topic, self.leader_command_callback, 10)
@@ -322,8 +330,13 @@ class RecorderNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = RecorderNode()
+    
+    # Create a MultiThreadedExecutor
+    executor = rclpy.executors.MultiThreadedExecutor()
+    executor.add_node(node)
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         node.get_logger().info("Recorder Node shutting down.")
     finally:
