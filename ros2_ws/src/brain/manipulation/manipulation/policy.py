@@ -13,6 +13,7 @@ import cv2
 from geometry_msgs.msg import Twist
 import json
 import torch.amp
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
@@ -68,7 +69,7 @@ class InferenceNode(Node):
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.policy = ACTPolicy(policy_config).to(self.device).half()  # Convert model to half precision
-        checkpoint_path = '~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Tape_20250331_1848/policy_epoch_24000_seed_100.ckpt'
+        checkpoint_path = '/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Axel_wednesday_20250515_0749/policy_epoch_26952_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
@@ -99,14 +100,21 @@ class InferenceNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to load policy checkpoint: {e}")
 
+        # Set up sensor QoS profile
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
         # Variables to hold the latest sensor data
         self.latest_image1 = None
         self.latest_image2 = None
         self.latest_joint_state = None
 
-        # Subscribers for images and joint state
-        self.create_subscription(Image, '/color/image', self.image1_callback, 10)
-        self.create_subscription(Image, '/image_raw', self.image2_callback, 10)
+        # Subscribers for images and joint state with sensor QoS
+        self.create_subscription(Image, '/color/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/image_raw', self.image2_callback, image_qos)
         self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
 
         # Publishers for twist and arm commands
@@ -114,7 +122,7 @@ class InferenceNode(Node):
         self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
 
         # Timer to run the inference loop at 10 Hz
-        self.timer = self.create_timer(1/30.0, self.inference_loop)
+        self.timer = self.create_timer(1/15.0, self.inference_loop)
 
         # Action buffer for storing predicted actions
         self.action_buffer = []
