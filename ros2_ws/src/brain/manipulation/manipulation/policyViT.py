@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+import time
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, JointState
+from std_msgs.msg import Float64MultiArray
+from cv_bridge import CvBridge
+import numpy as np
+import torch
+import pickle
+import os
+import cv2
+from geometry_msgs.msg import Twist
+import json
+import torch.amp
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+
+# Enable CUDNN for better performance
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
+
+# Import ViTPolicy directly from InnateACT
+from InnateACT.policy import ViTPolicy
+
+# Define the policy configuration
+policy_config = {
+    'lr': 5e-5,
+    'weight_decay': 1e-4,
+    'num_queries': 50,
+    'camera_names': ['camera_1', 'camera_2'],
+    'state_dim': 6,
+    'action_dim': 8
+}
+
+####################################################
+# Temporal Ensembling Configuration
+####################################################
+USE_TEMPORAL_ENSEMBLING = True
+TEMPORAL_ENSEMBLE_COEFF = 0.3
+CHUNK_SIZE = 30
+
+# Add after the ViTPolicy import:
+from manipulation.ensemble import ACTTemporalEnsembler
+
+class InferenceNode(Node):
+    def __init__(self):
+        super().__init__('inference_node')
+        self.get_logger().info("Inference node started.")
+        self.bridge = CvBridge()
+        self.image_size = (640, 480)
+
+        # Set device and load the policy model
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.policy = ViTPolicy(policy_config).to(self.device).half()
+        
+        # Load checkpoint and stats
+        checkpoint_path = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Axel_wednesday_20250517_1828/policy_epoch_9895_seed_100.ckpt'
+        checkpoint_path = os.path.expanduser(checkpoint_path)
+        checkpoint_dir = os.path.dirname(checkpoint_path)
+        stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
+        metadata_path = os.path.join(checkpoint_dir, 'metadata.json')
+        
+        try:
+            with open(stats_path, 'rb') as f:
+                self.norm_stats = pickle.load(f)
+            self.get_logger().info("Normalization stats loaded.")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load normalization stats: {e}")
+            self.norm_stats = None
+            
+        try:
+            with open(metadata_path, 'r') as f:
+                self.metadata = json.load(f)
+            self.get_logger().info("Metadata loaded successfully.")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load metadata: {e}")
+            self.metadata = None
+            
+        try:
+            state_dict = torch.load(checkpoint_path, map_location=self.device)
+            self.policy.load_state_dict(state_dict)
+            self.policy.eval()
+            self.get_logger().info("Policy loaded successfully.")
+            self.compiled_policy = None
+        except Exception as e:
+            self.get_logger().error(f"Failed to load policy checkpoint: {e}")
+
+        # Set up sensor QoS profile
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
+        # Variables to hold the latest sensor data
+        self.latest_image1 = None
+        self.latest_image2 = None
+        self.latest_joint_state = None
+
+        # Subscribers
+        self.create_subscription(Image, '/color/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/image_raw', self.image2_callback, image_qos)
+        self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
+
+        # Publishers
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+
+        # Timer for inference loop
+        self.timer = self.create_timer(1/30.0, self.inference_loop)
+        self.action_buffer = []
+
+        # If using temporal ensembling, create an ensembler instance
+        if USE_TEMPORAL_ENSEMBLING:
+            self.temporal_ensembler = ACTTemporalEnsembler(TEMPORAL_ENSEMBLE_COEFF, CHUNK_SIZE)
+            self.get_logger().info("Temporal ensembling enabled.")
+        else:
+            self.temporal_ensembler = None
+
+    def image1_callback(self, msg: Image):
+        try:
+            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        except Exception as e:
+            self.get_logger().error(f"Error converting image1: {e}")
+
+    def image2_callback(self, msg: Image):
+        try:
+            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        except Exception as e:
+            self.get_logger().error(f"Error converting image2: {e}")
+
+    def joint_state_callback(self, msg: JointState):
+        self.latest_joint_state = msg
+
+    def run_inference(self):
+        """Run the policy network to predict actions."""
+        if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
+            return None
+
+        # Preprocess images
+        try:
+            img1 = cv2.resize(self.latest_image1, self.image_size)
+            img2 = cv2.resize(self.latest_image2, self.image_size)
+            img1 = img1.astype(np.float32) / 255.0
+            img2 = img2.astype(np.float32) / 255.0
+            img1 = np.transpose(img1, (2, 0, 1))
+            img2 = np.transpose(img2, (2, 0, 1))
+            img1_tensor = torch.tensor(img1).to(self.device).half()
+            img2_tensor = torch.tensor(img2).to(self.device).half()
+            images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
+        except Exception as e:
+            self.get_logger().error(f"Error processing images: {e}")
+            return None
+
+        # Process the joint state
+        try:
+            qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
+            qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device).half()
+            if self.norm_stats is not None:
+                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=torch.float16, device=self.device)
+                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=torch.float16, device=self.device)
+                qpos_tensor = (qpos_tensor - qpos_mean) / qpos_std
+        except Exception as e:
+            self.get_logger().error(f"Error processing joint state: {e}")
+            return None
+
+        # Run the policy network
+        with torch.no_grad():
+            start_time = time.time()
+            
+            # Initialize compiled model on first inference
+            if self.compiled_policy is None:
+                self.get_logger().info("Compiling the policy model with float16 support...")
+                try:
+                    # First warm up the model with a few forward passes
+                    self.get_logger().info("Warming up model before tracing...")
+                    example_qpos = qpos_tensor.clone().detach().half()
+                    example_images = images.clone().detach().half()
+                    
+                    # Run a few forward passes to warm up the model
+                    for _ in range(3):
+                        _ = self.policy(example_qpos, example_images)
+                    
+                    # Now trace the model with float16 inputs
+                    self.get_logger().info("Tracing model...")
+                    scripted = torch.jit.trace(self.policy, (example_qpos, example_images))
+                    
+                    # Then compile for low overhead with float16 support
+                    self.get_logger().info("Compiling model...")
+                    self.compiled_policy = torch.compile(
+                        scripted,
+                        backend="inductor",
+                        mode="reduce-overhead"
+                    )
+                    self.get_logger().info("Model compilation with float16 support successful!")
+                except Exception as e:
+                    self.get_logger().error(f"Model compilation failed: {e}")
+                    self.compiled_policy = self.policy  # Fallback to original model
+            
+            # Use the compiled model for inference
+            output = self.compiled_policy(qpos_tensor, images)
+            
+            self.get_logger().info(f"Policy time: {time.time() - start_time:.3f} seconds")
+            if self.norm_stats is not None and "action_mean" in self.norm_stats:
+                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=torch.float16, device=self.device)
+                action_std = torch.tensor(self.norm_stats["action_std"], dtype=torch.float16, device=self.device)
+                unnormalized_actions = output * action_std + action_mean
+                actions = unnormalized_actions[:, :CHUNK_SIZE, :].cpu()
+                return actions
+            else:
+                return None
+
+    def inference_loop(self):
+        start_time = time.time()
+        # If the action buffer is empty, run inference to get a new sequence of actions.
+        if not self.action_buffer:
+            actions = self.run_inference()
+            if actions is None:
+                return
+
+            if USE_TEMPORAL_ENSEMBLING:
+                # Convert the list of predicted actions into a tensor of shape (1, chunk_size, action_dim)
+                # Update the temporal ensembler with the new chunk.
+                ensembled_action_tensor = self.temporal_ensembler.update(actions)
+                ensembled_action = ensembled_action_tensor.squeeze(0).cpu().numpy().tolist()
+
+                # In temporal ensembling mode, we produce one ensembled action per inference cycle.
+                self.action_buffer.append(ensembled_action)
+            else:
+                # In raw mode, fill the buffer with all predicted actions.
+                self.action_buffer = actions.squeeze(0).cpu().numpy().tolist()
+
+        # Pop the next action from the buffer and publish it.
+        next_action = self.action_buffer.pop(0)
+
+        # Extract and publish the twist command (last two elements).
+        twist_msg = Twist()
+        twist_msg.linear.x = next_action[-2] / 2
+        twist_msg.angular.z = next_action[-1] / 2
+        self.cmd_vel_pub.publish(twist_msg)
+
+        # Extract and publish the arm command (first six elements).
+        arm_msg = Float64MultiArray()
+        arm_msg.data = next_action[:6]
+        self.arm_state_pub.publish(arm_msg)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = InferenceNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info("Inference node shutting down.")
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main() 
