@@ -50,5 +50,6 @@ install(
     manipulation/test.py
     manipulation/policy.py
     manipulation/trajectory.py
+    manipulation/policyViT.py
   DESTINATION lib/${PROJECT_NAME}
 )
