@@ -27,10 +27,16 @@ class UartManager:
     RESP_STATUS = 0x83  # Health (status) feedback
     RESP_CALIBRATE = 0x84 # Calibration status feedback
 
-    def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, update_frequency=30.0, debug=False):
+    def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, update_frequency=30.0, debug=False, speed_command_timeout=5.0):
         self.node = node
         self.debug = debug
         self.logger = self.node.get_logger()
+        
+        # Add speed command timeout (in seconds)
+        self.speed_command_timeout = speed_command_timeout  # Default 5 seconds timeout
+        
+        # Add timestamp for last speed command
+        self.last_speed_command_time = 0.0
         
         # -------------------------
         # Stored command values
@@ -118,7 +124,13 @@ class UartManager:
         self.ser.write(packet)
 
     def _send_speed_command(self):
-        forward_speed, turn_rate = self.latest_speed
+        current_time = time.time()
+        if current_time - self.last_speed_command_time > self.speed_command_timeout:
+            # If timeout exceeded, send zero speed
+            forward_speed, turn_rate = (0.0, 0.0)
+        else:
+            forward_speed, turn_rate = self.latest_speed
+            
         speed_int = int(forward_speed * 100)
         turn_int = int(turn_rate * 100)
         # Pack: 2 bytes forward speed, 2 bytes turn rate, 2 bytes reserved (0)
@@ -340,6 +352,8 @@ class UartManager:
           omega: angular speed in rad/s (e.g., ±2.56)
         """
         self.latest_speed = (v, omega)
+        self.last_speed_command_time = time.time()  # Record timestamp when command is received
+
     def set_light_command(self, mode: int, r: int, g: int, b: int, interval: int = 1000):
         """
         Sets the LED command.
