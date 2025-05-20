@@ -21,6 +21,10 @@ from nmcli_utils import (
     nmcli_scan_for_visible_ssids
 )
 
+# IMPORTANT NOTES
+# 1. Don't forget to set the conf file (sudo nano /etc/bluetooth/main.conf) with ControllerMode on "le", not "dual". It's a HUGE reason why it might not work or very rarely.
+
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,6 +37,9 @@ CHARACTERISTIC_UUID = 'abcdef01-1234-5678-1234-56789abcdef0'
 
 # Path to the helper script for restarting services (adjust if moved)
 RESTART_SCRIPT_PATH = "/usr/local/bin/restart_robot_networking.sh"
+
+# Robot name
+ROBOT_NAME = "Maurice"
 
 # --- BLE Server Class ---
 class BleProvisionerServer:
@@ -346,7 +353,7 @@ class BleProvisionerServer:
 
         try:
             self.peripheral = peripheral.Peripheral(adapter_address,
-                                                 local_name='ROS2_BLE_Provisioner',
+                                                 local_name=ROBOT_NAME,
                                                  appearance=192) # 192: Generic Computer
 
             # Set connection callbacks
@@ -385,6 +392,7 @@ class BleProvisionerServer:
             # Start advertising
             logger.info("Starting BLE advertisement...")
             self.peripheral.publish()
+            self.adapter.discoverable = True
             logger.info("BLE Server is running. Press Ctrl+C to stop.")
         
         except Exception as e:
@@ -402,10 +410,11 @@ class BleProvisionerServer:
                     logger.info("Main event loop stopped.")
                 except Exception as e:
                     logger.error(f"Error stopping mainloop: {e}")
-            # Clean up peripheral resources (disconnect, remove services etc.)
-            # Note: bluezero might handle some of this implicitly on mainloop quit
-            # self.peripheral.remove_service(1) # Example cleanup if needed
-            self.peripheral = None # Clear reference
+
+                # Note: bluezero might handle some of this implicitly on mainloop quit
+                self.peripheral = None # Clear reference
+            else:
+                logger.info("Peripheral not found, skipping cleanup. We are also not stopping the mainloop.")
         
         # self.save_networks() # Removed call
         logger.info("BLE Provisioner Server stopped.")
