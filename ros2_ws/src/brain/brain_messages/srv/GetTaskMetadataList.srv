@@ -1,0 +1,7 @@
+# GetTaskMetadataList.srv
+# Request (empty, as we want all recorded task metadata)
+---
+# Response
+bool success         # True if metadata retrieval was successful, False otherwise
+string message       # Informational message (e.g., "Metadata retrieved", "No tasks found", "Error accessing data directory")
+string json_metadata # A JSON string containing the list of all tasks and their episode metadata. 

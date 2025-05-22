@@ -278,3 +278,76 @@ class TaskManager:
         msg.episode_number = episode_number
         msg.status = status
         return msg
+
+    def get_all_tasks_summary(self):
+        """
+        Scans the base_data_directory for all tasks and compiles a summary
+        of each task and its episodes, including the number of timesteps per episode.
+
+        Returns:
+            list: A list of dictionaries, where each dictionary represents a task
+                  and contains its metadata and a list of its episodes with their details.
+                  Returns an empty list if no tasks are found or if the base directory doesn't exist.
+        """
+        all_tasks_summary = []
+        if not os.path.exists(self.base_data_directory) or not os.path.isdir(self.base_data_directory):
+            # print(f"Base data directory {self.base_data_directory} does not exist or is not a directory.") # Optional: for server-side logging
+            return all_tasks_summary
+
+        for task_dir_name in os.listdir(self.base_data_directory):
+            task_path = os.path.join(self.base_data_directory, task_dir_name)
+            if not os.path.isdir(task_path):
+                continue
+
+            metadata_path = os.path.join(task_path, "metadata.json")
+            if not os.path.exists(metadata_path):
+                # print(f"Metadata.json not found in {task_path}, skipping.") # Optional: for server-side logging
+                continue
+
+            try:
+                with open(metadata_path, 'r') as f:
+                    task_metadata = json.load(f)
+
+                processed_episodes = []
+                if "episodes" in task_metadata and isinstance(task_metadata["episodes"], list):
+                    for episode_info in task_metadata["episodes"]:
+                        num_timesteps = 0 # Default to 0 if not found or error
+                        episode_file_path = os.path.join(task_path, episode_info.get("file_name", ""))
+                        
+                        if os.path.exists(episode_file_path):
+                            try:
+                                with h5py.File(episode_file_path, 'r') as hf:
+                                    if '/action' in hf:
+                                        num_timesteps = len(hf['/action'])
+                                    # else: print(f"/action dataset not found in {episode_file_path}") # Optional
+                            except Exception as e:
+                                # print(f"Error reading HDF5 file {episode_file_path}: {e}") # Optional
+                                pass # Keep num_timesteps as 0 or previous value
+                        # else: print(f"Episode file {episode_file_path} not found.") # Optional
+
+                        processed_episodes.append({
+                            "episode_id": f"episode_{episode_info.get('episode_id', 'N/A')}",
+                            "start_time": episode_info.get("start_timestamp", "N/A"),
+                            "end_time": episode_info.get("end_timestamp", "N/A"),
+                            "num_timesteps": num_timesteps,
+                            "data_file_name": episode_info.get("file_name", "N/A")
+                        })
+                
+                task_summary = {
+                    "task_name": task_metadata.get("task_name", task_dir_name),
+                    "task_description": task_metadata.get("task_description", "N/A"),
+                    "mobile_task": task_metadata.get("mobile_task", False),
+                    "data_frequency": task_metadata.get("data_frequency", 0),
+                    "task_directory": task_path, # Absolute path to the task's root folder
+                    "episodes": processed_episodes
+                }
+                all_tasks_summary.append(task_summary)
+
+            except json.JSONDecodeError as e:
+                # print(f"Error decoding metadata.json in {task_path}: {e}") # Optional
+                continue # Skip this task directory
+            except Exception as e:
+                # print(f"An unexpected error occurred while processing {task_path}: {e}") # Optional
+                continue # Skip this task directory
+                
+        return all_tasks_summary
