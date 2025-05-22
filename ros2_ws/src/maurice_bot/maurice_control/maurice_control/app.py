@@ -3,13 +3,20 @@ import rclpy
 from rclpy.node import Node
 import math
 import numpy as np
+import os
+import json
 
 from geometry_msgs.msg import Vector3, Twist
-from std_msgs.msg import Int32MultiArray, Float64MultiArray
+from std_msgs.msg import Int32MultiArray, Float64MultiArray, String
 
 class AppControl(Node):
+    KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract here
+
     def __init__(self):
         super().__init__('app_control_node')
+        
+        # Declare parameters
+        self.declare_parameter('data_directory', os.path.expanduser('~/maurice-prod/data'))
         
         # Subscribe to joystick messages (Vector3)
         self.joystick_sub = self.create_subscription(
@@ -40,6 +47,16 @@ class AppControl(Node):
             '/maurice_arm/commands',
             10
         )
+        
+        # Publisher for robot info
+        self.robot_info_pub = self.create_publisher(
+            String,
+            '/robot/info',
+            10
+        )
+        
+        # Timer for publishing robot info
+        self.robot_info_timer = self.create_timer(1.0, self.publish_robot_info_callback)
         
         self.get_logger().info("AppControl node started.")
 
@@ -102,6 +119,43 @@ class AppControl(Node):
         self.get_logger().info(
             f"Leader positions: {msg.data} -> Transformed (rad): {cmd_msg.data}"
         )
+
+    def publish_robot_info_callback(self):
+        """
+        Reads robot_info.json, extracts specified keys, and publishes them as a JSON string.
+        Logs errors if file/JSON processing fails or keys are missing.
+        Publishes "{}" if no keys are found or an error occurs.
+        """
+        data_directory_param = self.get_parameter('data_directory').get_parameter_value().string_value
+        data_dir = os.path.expanduser(data_directory_param)
+        robot_info_file_path = os.path.join(data_dir, 'robot_info.json')
+
+        data_to_publish_dict = {}
+        final_json_string_to_publish = "{}"
+
+        try:
+            with open(robot_info_file_path, 'r') as f:
+                content = json.load(f)
+            
+            for key in self.KEYS_TO_EXTRACT:
+                if key in content:
+                    data_to_publish_dict[key] = content[key]
+                else:
+                    self.get_logger().warn(f"Key '{key}' not found in {robot_info_file_path}.")
+            
+            if data_to_publish_dict:
+                final_json_string_to_publish = json.dumps(data_to_publish_dict)
+
+        except Exception as e:
+            self.get_logger().error(f"Error processing robot info from {robot_info_file_path}: {str(e)}")
+            # final_json_string_to_publish remains "{}" as initialized
+
+        msg = String()
+        msg.data = final_json_string_to_publish
+        self.robot_info_pub.publish(msg)
+        # Optional: log what was published if it's not an empty dict or if debugging
+        # if final_json_string_to_publish != "{}":
+        #     self.get_logger().info(f"Published robot data: {final_json_string_to_publish}")
 
 def main(args=None):
     rclpy.init(args=args)

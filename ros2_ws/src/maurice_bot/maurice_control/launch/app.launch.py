@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
+import os # Added for os.path.expanduser
 
 def generate_launch_description():
     # Create rosbridge websocket node
@@ -16,7 +17,10 @@ def generate_launch_description():
         package='maurice_control',
         executable='app.py',
         name='maurice_app',
-        output='screen'
+        output='screen',
+        parameters=[{
+            'data_directory': os.path.expanduser('~/maurice-prod/data')
+        }]
     )
 
     # Return LaunchDescription with both nodes
