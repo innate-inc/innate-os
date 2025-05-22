@@ -279,98 +279,115 @@ class TaskManager:
         msg.status = status
         return msg
 
+    def _get_enriched_metadata_for_task(self, task_directory):
+        """
+        Loads, enriches (with episode num_timesteps), and returns metadata for a single task
+        using its absolute directory path.
+
+        Args:
+            task_directory (str): Absolute path to the task directory.
+
+        Returns:
+            tuple: (dict_or_None, error_message_or_None)
+                   - dict_or_None: The enriched task metadata.
+                   - error_message_or_None: Description of error if any.
+        """
+        metadata_file_path = os.path.join(task_directory, "metadata.json")
+        # Extract task name from directory path for fallback if not in metadata
+        task_name_for_fallback = os.path.basename(task_directory) 
+
+        if not os.path.exists(task_directory) or not os.path.isdir(task_directory):
+            return None, f"Task directory {task_directory} not found or is not a directory."
+        
+        if not os.path.exists(metadata_file_path):
+            return None, f"Metadata.json not found in {task_directory}."
+
+        try:
+            with open(metadata_file_path, 'r') as f:
+                task_metadata = json.load(f)
+        except json.JSONDecodeError as e:
+            return None, f"Error decoding metadata.json in {task_directory}: {e}"
+        except Exception as e:
+            return None, f"Error reading metadata.json in {task_directory}: {e}"
+
+        processed_episodes = []
+        if "episodes" in task_metadata and isinstance(task_metadata["episodes"], list):
+            for episode_info in task_metadata["episodes"]:
+                num_timesteps = 0
+                episode_file_name = episode_info.get("file_name", "")
+                episode_file_path = os.path.join(task_directory, episode_file_name)
+                
+                if episode_file_name and os.path.exists(episode_file_path):
+                    try:
+                        with h5py.File(episode_file_path, 'r') as hf:
+                            if '/action' in hf:
+                                num_timesteps = len(hf['/action'])
+                    except Exception as e:
+                        print(f"Error reading HDF5 file {episode_file_path} for timesteps: {e}")
+                
+                processed_episodes.append({
+                    "episode_id": f"episode_{episode_info.get('episode_id', 'N/A')}",
+                    "start_time": episode_info.get("start_timestamp", "N/A"),
+                    "end_time": episode_info.get("end_timestamp", "N/A"),
+                    "num_timesteps": num_timesteps,
+                    "data_file_name": episode_file_name
+                })
+        
+        enriched_metadata = {
+            "task_name": task_metadata.get("task_name", task_name_for_fallback),
+            "task_description": task_metadata.get("task_description", "N/A"),
+            "mobile_task": task_metadata.get("mobile_task", False),
+            "data_frequency": task_metadata.get("data_frequency", 0),
+            "task_directory": task_directory, 
+            "episodes": processed_episodes,
+            **{k: v for k, v in task_metadata.items() if k not in ["task_name", "task_description", "mobile_task", "data_frequency", "task_directory", "episodes"]}
+        }
+        
+        return enriched_metadata, None
+
     def get_all_tasks_summary(self):
         """
         Scans the base_data_directory for all tasks and compiles a summary
         of each task and its episodes, including the number of timesteps per episode.
-
-        Returns:
-            list: A list of dictionaries, where each dictionary represents a task
-                  and contains its metadata and a list of its episodes with their details.
-                  Returns an empty list if no tasks are found or if the base directory doesn't exist.
+        Uses the _get_enriched_metadata_for_task helper.
         """
         all_tasks_summary = []
         if not os.path.exists(self.base_data_directory) or not os.path.isdir(self.base_data_directory):
-            # print(f"Base data directory {self.base_data_directory} does not exist or is not a directory.") # Optional: for server-side logging
+            print(f"Base data directory {self.base_data_directory} does not exist or is not a directory.")
             return all_tasks_summary
 
         for task_dir_name in os.listdir(self.base_data_directory):
-            task_path = os.path.join(self.base_data_directory, task_dir_name)
-            if not os.path.isdir(task_path):
+            current_task_directory = os.path.join(self.base_data_directory, task_dir_name)
+            if not os.path.isdir(current_task_directory): 
                 continue
 
-            metadata_path = os.path.join(task_path, "metadata.json")
-            if not os.path.exists(metadata_path):
-                # print(f"Metadata.json not found in {task_path}, skipping.") # Optional: for server-side logging
-                continue
-
-            try:
-                with open(metadata_path, 'r') as f:
-                    task_metadata = json.load(f)
-
-                processed_episodes = []
-                if "episodes" in task_metadata and isinstance(task_metadata["episodes"], list):
-                    for episode_info in task_metadata["episodes"]:
-                        num_timesteps = 0 # Default to 0 if not found or error
-                        episode_file_path = os.path.join(task_path, episode_info.get("file_name", ""))
-                        
-                        if os.path.exists(episode_file_path):
-                            try:
-                                with h5py.File(episode_file_path, 'r') as hf:
-                                    if '/action' in hf:
-                                        num_timesteps = len(hf['/action'])
-                                    # else: print(f"/action dataset not found in {episode_file_path}") # Optional
-                            except Exception as e:
-                                # print(f"Error reading HDF5 file {episode_file_path}: {e}") # Optional
-                                pass # Keep num_timesteps as 0 or previous value
-                        # else: print(f"Episode file {episode_file_path} not found.") # Optional
-
-                        processed_episodes.append({
-                            "episode_id": f"episode_{episode_info.get('episode_id', 'N/A')}",
-                            "start_time": episode_info.get("start_timestamp", "N/A"),
-                            "end_time": episode_info.get("end_timestamp", "N/A"),
-                            "num_timesteps": num_timesteps,
-                            "data_file_name": episode_info.get("file_name", "N/A")
-                        })
-                
-                task_summary = {
-                    "task_name": task_metadata.get("task_name", task_dir_name),
-                    "task_description": task_metadata.get("task_description", "N/A"),
-                    "mobile_task": task_metadata.get("mobile_task", False),
-                    "data_frequency": task_metadata.get("data_frequency", 0),
-                    "task_directory": task_path, # Absolute path to the task's root folder
-                    "episodes": processed_episodes
-                }
-                all_tasks_summary.append(task_summary)
-
-            except json.JSONDecodeError as e:
-                # print(f"Error decoding metadata.json in {task_path}: {e}") # Optional
-                continue # Skip this task directory
-            except Exception as e:
-                # print(f"An unexpected error occurred while processing {task_path}: {e}") # Optional
-                continue # Skip this task directory
+            metadata_obj, error_msg = self._get_enriched_metadata_for_task(current_task_directory)
+            
+            if metadata_obj:
+                all_tasks_summary.append(metadata_obj)
+            elif error_msg:
+                print(f"Skipping task directory {task_dir_name} due to error: {error_msg}")
                 
         return all_tasks_summary
 
-    def update_task_metadata(self, task_name: str, json_metadata_update: str):
+    def update_task_metadata_by_directory(self, task_directory: str, json_metadata_update: str):
         """
-        Updates the metadata for a given task.
+        Updates the metadata for a given task using its absolute directory path.
 
         Args:
-            task_name (str): The name of the task to update.
+            task_directory (str): The absolute path of the task directory to update.
             json_metadata_update (str): A JSON string containing the metadata fields to update.
 
         Returns:
             tuple: (bool, str) indicating success status and a message.
         """
-        task_path = os.path.join(self.base_data_directory, task_name)
-        metadata_file_path = os.path.join(task_path, 'metadata.json')
+        metadata_file_path = os.path.join(task_directory, 'metadata.json')
 
-        if not os.path.exists(task_path):
-            return False, f"Task '{task_name}' not found."
+        if not os.path.exists(task_directory) or not os.path.isdir(task_directory):
+            return False, f"Task directory '{task_directory}' not found or is not a directory."
         
         if not os.path.exists(metadata_file_path):
-            return False, f"Metadata file for task '{task_name}' not found."
+            return False, f"Metadata file for task at '{task_directory}' not found."
 
         try:
             update_data = json.loads(json_metadata_update)
@@ -380,13 +397,35 @@ class TaskManager:
         try:
             with open(metadata_file_path, 'r+') as f:
                 metadata = json.load(f)
-                # Update existing metadata with new data
                 for key, value in update_data.items():
                     metadata[key] = value
                 
-                f.seek(0)  # Go to the beginning of the file
+                f.seek(0)  
                 json.dump(metadata, f, indent=4)
-                f.truncate() # Remove any stale data if new data is shorter
+                f.truncate() 
             return True, "Metadata updated successfully."
         except Exception as e:
-            return False, f"Failed to read or write metadata: {str(e)}"
+            return False, f"Failed to read or write metadata at {task_directory}: {str(e)}"
+
+    def get_task_metadata_by_directory(self, task_directory: str):
+        """
+        Retrieves the enriched metadata for a specific task using its absolute directory path.
+        Uses the _get_enriched_metadata_for_task helper.
+
+        Args:
+            task_directory (str): The absolute path to the task directory.
+
+        Returns:
+            tuple: (bool, str, str) with success, message, and JSON metadata.
+        """
+        metadata_obj, error_msg = self._get_enriched_metadata_for_task(task_directory)
+        
+        if metadata_obj:
+            try:
+                return True, "Metadata retrieved successfully.", json.dumps(metadata_obj, indent=4)
+            except TypeError as e: 
+                 return False, f"Error serializing metadata for task at '{task_directory}': {str(e)}", "{}"
+        else:
+            if f"Task directory {task_directory} not found" in error_msg:
+                 return False, f"Task at directory '{task_directory}' not found.", "{}"
+            return False, error_msg, "{}"

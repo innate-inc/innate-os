@@ -19,7 +19,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import json # Added for JSON manipulation
 
 # Assuming you will create this service in brain_messages/srv:
-from brain_messages.srv import GetTaskMetadataList, UpdateTaskMetadata # Placeholder for actual import
+from brain_messages.srv import GetTaskMetadataList, UpdateTaskMetadata, GetTaskMetadata # Placeholder for actual import
 
 class RecorderNode(Node):
     def __init__(self):
@@ -107,6 +107,7 @@ class RecorderNode(Node):
         self.end_task_srv = self.create_service(Trigger, 'recorder/end_task', self.handle_end_task)
         self.get_task_metadata_list_srv = self.create_service(GetTaskMetadataList, 'recorder/get_task_metadata_list', self.handle_get_task_metadata_list)
         self.update_task_metadata_srv = self.create_service(UpdateTaskMetadata, 'recorder/update_task_metadata', self.handle_update_task_metadata)
+        self.get_task_metadata_srv = self.create_service(GetTaskMetadata, 'recorder/get_task_metadata', self.handle_get_task_metadata)
         
         # Log the services it is hosting
         self.get_logger().info("Hosting services:")
@@ -117,6 +118,7 @@ class RecorderNode(Node):
         self.get_logger().info("  recorder/end_task")
         self.get_logger().info("  recorder/get_task_metadata_list")
         self.get_logger().info("  recorder/update_task_metadata")
+        self.get_logger().info("  recorder/get_task_metadata")
         
         # Create a publisher for recorder status
         self.status_pub = self.create_publisher(RecorderStatus, 'recorder/status', 10)
@@ -363,26 +365,53 @@ class RecorderNode(Node):
         return response
 
     def handle_update_task_metadata(self, request, response):
-        self.get_logger().info(f"Received request to update metadata for task: {request.task_name}")
+        self.get_logger().info(f"Received request to update metadata for task directory: {request.task_directory}")
         try:
-            if not hasattr(self.task_manager, 'update_task_metadata'):
-                self.get_logger().error("TaskManager does not have 'update_task_metadata' method.")
+            if not hasattr(self.task_manager, 'update_task_metadata_by_directory'):
+                self.get_logger().error("TaskManager does not have 'update_task_metadata_by_directory' method.")
                 response.success = False
-                response.message = "Internal server error: TaskManager cannot update task metadata."
+                response.message = "Internal server error: TaskManager cannot update task metadata by directory."
                 return response
 
-            success, message = self.task_manager.update_task_metadata(request.task_name, request.json_metadata_update)
+            success, message = self.task_manager.update_task_metadata_by_directory(request.task_directory, request.json_metadata_update)
             response.success = success
             response.message = message
             if success:
-                self.get_logger().info(f"Successfully updated metadata for task: {request.task_name}")
+                self.get_logger().info(f"Successfully updated metadata for task directory: {request.task_directory}")
             else:
-                self.get_logger().error(f"Failed to update metadata for task {request.task_name}: {message}")
+                self.get_logger().error(f"Failed to update metadata for task directory {request.task_directory}: {message}")
             
         except Exception as e:
-            self.get_logger().error(f"Exception while updating task metadata for {request.task_name}: {str(e)}")
+            self.get_logger().error(f"Exception while updating task metadata for directory {request.task_directory}: {str(e)}")
             response.success = False
             response.message = f"Error updating task metadata: {str(e)}"
+        return response
+
+    def handle_get_task_metadata(self, request, response):
+        self.get_logger().info(f"Received request to get metadata for task directory: {request.task_directory}")
+        try:
+            if not hasattr(self.task_manager, 'get_task_metadata_by_directory'):
+                self.get_logger().error("TaskManager does not have 'get_task_metadata_by_directory' method.")
+                response.success = False
+                response.message = "Internal server error: TaskManager cannot provide task metadata by directory."
+                response.json_metadata = "{}"
+                return response
+
+            success, message, metadata_json = self.task_manager.get_task_metadata_by_directory(request.task_directory)
+            response.success = success
+            response.message = message
+            response.json_metadata = metadata_json
+
+            if success:
+                self.get_logger().info(f"Successfully retrieved metadata for task directory: {request.task_directory}")
+            else:
+                self.get_logger().error(f"Failed to retrieve metadata for task directory {request.task_directory}: {message}")
+            
+        except Exception as e:
+            self.get_logger().error(f"Exception while retrieving task metadata for directory {request.task_directory}: {str(e)}")
+            response.success = False
+            response.message = f"Error retrieving task metadata: {str(e)}"
+            response.json_metadata = "{}"
         return response
 
     def publish_status(self, status: str, episode_number: str = "", current_task_name: str = ""):

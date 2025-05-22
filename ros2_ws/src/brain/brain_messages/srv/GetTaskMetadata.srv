@@ -1,0 +1,7 @@
+# Request
+string task_directory     # The absolute path of the task to retrieve metadata for
+---
+# Response
+bool success              # True if the retrieval was successful
+string message            # Optional message, e.g., error details or 'Task not found'
+string json_metadata      # JSON string containing the task's metadata 
