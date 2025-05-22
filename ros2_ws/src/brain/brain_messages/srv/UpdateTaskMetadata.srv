@@ -1,5 +1,5 @@
 # Request
-string task_name          # The name of the task to update
+string task_directory     # The absolute path of the task to update
 string json_metadata_update # A JSON string containing the metadata fields to update
 ---
 # Response
