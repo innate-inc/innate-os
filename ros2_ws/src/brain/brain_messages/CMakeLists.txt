@@ -10,9 +10,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
 
 # List your service and message files
 set(srv_files
@@ -20,6 +17,7 @@ set(srv_files
   "srv/GetChatHistory.srv"
   "srv/GetTaskMetadataList.srv"
   "srv/GetAvailableDirectives.srv"
+  "srv/UpdateTaskMetadata.srv"
   "srv/ResetBrain.srv"
 )
 

@@ -351,3 +351,42 @@ class TaskManager:
                 continue # Skip this task directory
                 
         return all_tasks_summary
+
+    def update_task_metadata(self, task_name: str, json_metadata_update: str):
+        """
+        Updates the metadata for a given task.
+
+        Args:
+            task_name (str): The name of the task to update.
+            json_metadata_update (str): A JSON string containing the metadata fields to update.
+
+        Returns:
+            tuple: (bool, str) indicating success status and a message.
+        """
+        task_path = os.path.join(self.base_data_directory, task_name)
+        metadata_file_path = os.path.join(task_path, 'metadata.json')
+
+        if not os.path.exists(task_path):
+            return False, f"Task '{task_name}' not found."
+        
+        if not os.path.exists(metadata_file_path):
+            return False, f"Metadata file for task '{task_name}' not found."
+
+        try:
+            update_data = json.loads(json_metadata_update)
+        except json.JSONDecodeError as e:
+            return False, f"Invalid JSON format in update: {str(e)}"
+
+        try:
+            with open(metadata_file_path, 'r+') as f:
+                metadata = json.load(f)
+                # Update existing metadata with new data
+                for key, value in update_data.items():
+                    metadata[key] = value
+                
+                f.seek(0)  # Go to the beginning of the file
+                json.dump(metadata, f, indent=4)
+                f.truncate() # Remove any stale data if new data is shorter
+            return True, "Metadata updated successfully."
+        except Exception as e:
+            return False, f"Failed to read or write metadata: {str(e)}"
