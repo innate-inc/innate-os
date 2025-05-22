@@ -16,6 +16,10 @@ import cv2
 from brain_messages.msg import RecorderStatus
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+import json # Added for JSON manipulation
+
+# Assuming you will create this service in brain_messages/srv:
+from brain_messages.srv import GetTaskMetadataList # Placeholder for actual import
 
 class RecorderNode(Node):
     def __init__(self):
@@ -101,6 +105,7 @@ class RecorderNode(Node):
         self.save_episode_srv = self.create_service(Trigger, 'recorder/save_episode', self.handle_save_episode)
         self.cancel_episode_srv = self.create_service(Trigger, 'recorder/cancel_episode', self.handle_cancel_episode)
         self.end_task_srv = self.create_service(Trigger, 'recorder/end_task', self.handle_end_task)
+        self.get_task_metadata_list_srv = self.create_service(GetTaskMetadataList, 'recorder/get_task_metadata_list', self.handle_get_task_metadata_list)
         
         # Log the services it is hosting
         self.get_logger().info("Hosting services:")
@@ -109,6 +114,7 @@ class RecorderNode(Node):
         self.get_logger().info("  recorder/save_episode")
         self.get_logger().info("  recorder/cancel_episode")
         self.get_logger().info("  recorder/end_task")
+        self.get_logger().info("  recorder/get_task_metadata_list")
         
         # Create a publisher for recorder status
         self.status_pub = self.create_publisher(RecorderStatus, 'recorder/status', 10)
@@ -318,6 +324,40 @@ class RecorderNode(Node):
         self.episode_count = 0
         response.success = True
         response.message = "Task ended."
+        return response
+
+    def handle_get_task_metadata_list(self, request, response):
+        self.get_logger().info("Received request to get task metadata list.")
+        try:
+            # This method is hypothetical and needs to be implemented in your TaskManager class
+            # It should scan the data_directory and return a list of dictionaries
+            # conforming to the structure expected for the JSON output.
+            if not hasattr(self.task_manager, 'get_all_tasks_summary'):
+                self.get_logger().error("TaskManager does not have 'get_all_tasks_summary' method.")
+                response.success = False
+                response.message = "Internal server error: TaskManager cannot provide task summaries."
+                response.json_metadata = "{}"
+                return response
+
+            all_tasks_summary = self.task_manager.get_all_tasks_summary()
+            
+            if not all_tasks_summary:
+                self.get_logger().info("No tasks found by TaskManager.")
+                response.success = True # Success, but no data
+                response.message = "No tasks recorded yet."
+                response.json_metadata = "[]" # Empty JSON array
+                return response
+
+            response.json_metadata = json.dumps(all_tasks_summary, indent=2)
+            response.success = True
+            response.message = "Successfully retrieved task metadata list."
+            self.get_logger().info("Successfully prepared task metadata list.")
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to get task metadata list: {str(e)}")
+            response.success = False
+            response.message = f"Error retrieving task metadata: {str(e)}"
+            response.json_metadata = "{}" # Empty JSON object on error
         return response
 
     def publish_status(self, status: str, episode_number: str = "", current_task_name: str = ""):

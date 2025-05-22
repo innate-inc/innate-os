@@ -18,6 +18,7 @@ find_package(std_msgs REQUIRED)
 set(srv_files
   "srv/ManipulationTask.srv"
   "srv/GetChatHistory.srv"
+  "srv/GetTaskMetadataList.srv"
   "srv/GetAvailableDirectives.srv"
   "srv/ResetBrain.srv"
 )
