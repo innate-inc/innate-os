@@ -74,7 +74,7 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
             print(f"[ConfigAPI] Successfully loaded config from {config_path}")
         except FileNotFoundError:
             raise HTTPException(
-                status_code=404,
+                status_code=400,
                 detail=f"Configuration file '{config_name}.json' not found.",
             )
         except json.JSONDecodeError:
@@ -133,7 +133,7 @@ async def reset_robot(
     request: Request, reset_request: Optional[ResetRobotRequest] = None
 ):
     """
-    Enqueues a reset command to move the robot back to its origin or to a specified pose.
+    Enqueues a command to reset the robot to its origin or a specified pose.
     Optionally specifies a memory state to load.
     Retrieves the shared queues from the application's state.
 
