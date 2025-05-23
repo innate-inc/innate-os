@@ -45,7 +45,7 @@ class RecorderNode(Node):
         # Initialize TaskManager and internal state
         self.task_manager = TaskManager(data_directory)
         self.current_episode = None  # Holds an EpisodeData instance when an episode is active
-        self.state = "IDLE"          # Possible states: "IDLE", "TASK_ACTIVE", "EPISODE_ACTIVE"
+        self.state = "IDLE"          # Possible states: "IDLE", "TASK_ACTIVE", "EPISODE_ACTIVE", "EPISODE_STOPPED"
         self.episode_start_time = None
         
         # Internal variables to track current task and episode number
@@ -104,6 +104,7 @@ class RecorderNode(Node):
         self.new_episode_srv = self.create_service(Trigger, 'recorder/new_episode', self.handle_new_episode)
         self.save_episode_srv = self.create_service(Trigger, 'recorder/save_episode', self.handle_save_episode)
         self.cancel_episode_srv = self.create_service(Trigger, 'recorder/cancel_episode', self.handle_cancel_episode)
+        self.stop_episode_srv = self.create_service(Trigger, 'recorder/stop_episode', self.handle_stop_episode)
         self.end_task_srv = self.create_service(Trigger, 'recorder/end_task', self.handle_end_task)
         self.get_task_metadata_list_srv = self.create_service(GetTaskMetadataList, 'recorder/get_task_metadata_list', self.handle_get_task_metadata_list)
         self.update_task_metadata_srv = self.create_service(UpdateTaskMetadata, 'recorder/update_task_metadata', self.handle_update_task_metadata)
@@ -115,6 +116,7 @@ class RecorderNode(Node):
         self.get_logger().info("  recorder/new_episode")
         self.get_logger().info("  recorder/save_episode")
         self.get_logger().info("  recorder/cancel_episode")
+        self.get_logger().info("  recorder/stop_episode")
         self.get_logger().info("  recorder/end_task")
         self.get_logger().info("  recorder/get_task_metadata_list")
         self.get_logger().info("  recorder/update_task_metadata")
@@ -208,15 +210,19 @@ class RecorderNode(Node):
 
     # Service handlers.
     def handle_new_task(self, request, response):
-        if self.state == "EPISODE_ACTIVE":
-            self.get_logger().warn("New task requested during an active episode; canceling current episode.")
+        if self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
+            self.get_logger().warn(f"New task requested during an {self.state.lower()} episode; canceling current episode.")
             # Publish status update for cancelled episode
-            self.publish_status(status="failed - episode active", episode_number=str(self.episode_count))
+            self.publish_status(status="cancelled", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            if self.current_episode:
+                self.current_episode.clear()
             self.current_episode = None
-            self.state = "TASK_ACTIVE"
+            # self.state will be set to TASK_ACTIVE by the rest of the method.
+            # Episode count for the new task will effectively start fresh.
         self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
         self.current_task_name = request.task_name
         self.state = "TASK_ACTIVE"
+        self.episode_count = 0 # Reset episode count for the new task
         self.get_logger().info(f"New task '{request.task_name}' started.")
         # Publish status update for new task
         self.publish_status(status="active", episode_number="", current_task_name=self.current_task_name)
@@ -230,11 +236,11 @@ class RecorderNode(Node):
             response.success = False
             response.message = "No active task. Please start a task first."
             return response
-        elif self.state == "EPISODE_ACTIVE":
-            self.get_logger().error("Cannot start a new episode while another episode is active.")
-            self.publish_status(status="failed - episode active", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+        elif self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
+            self.get_logger().error(f"Cannot start a new episode while an episode is {self.state.lower()}.")
+            self.publish_status(status=f"failed - episode {self.state.lower()}", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
             response.success = False
-            response.message = "An episode is already active. Please save or cancel the current episode first."
+            response.message = f"An episode is already {self.state.lower()}. Please save or cancel the current episode first."
             return response
         
         self.current_episode = EpisodeData()
@@ -249,15 +255,15 @@ class RecorderNode(Node):
         return response
 
     def handle_save_episode(self, request, response):
-        if self.state != "EPISODE_ACTIVE" or self.current_episode is None:
-            self.get_logger().error("No active episode to save.")
+        if self.state not in ["EPISODE_ACTIVE", "EPISODE_STOPPED"] or self.current_episode is None:
+            self.get_logger().error("No active or stopped episode to save.")
             # Publish appropriate status based on current state
             if self.state == "TASK_ACTIVE":
-                self.publish_status(status="failed - no active episode", episode_number="", current_task_name=self.current_task_name)
+                self.publish_status(status="failed - no active/stopped episode to save", episode_number="", current_task_name=self.current_task_name)
             else:  # IDLE state
                 self.publish_status(status="failed - no active task", episode_number="", current_task_name="")
             response.success = False
-            response.message = "No active episode."
+            response.message = "No active or stopped episode to save."
             return response
 
         # Check if episode has any timesteps
@@ -285,15 +291,15 @@ class RecorderNode(Node):
         return response
 
     def handle_cancel_episode(self, request, response):
-        if self.state != "EPISODE_ACTIVE" or self.current_episode is None:
-            self.get_logger().error("No active episode to cancel.")
+        if self.state not in ["EPISODE_ACTIVE", "EPISODE_STOPPED"] or self.current_episode is None:
+            self.get_logger().error("No active or stopped episode to cancel.")
             # Publish appropriate status based on current state
             if self.state == "TASK_ACTIVE":
-                self.publish_status(status="failed - no active episode", episode_number="", current_task_name=self.current_task_name)
+                self.publish_status(status="failed - no active/stopped episode to cancel", episode_number="", current_task_name=self.current_task_name)
             else:  # IDLE state
                 self.publish_status(status="failed - no active task", episode_number="", current_task_name="")
             response.success = False
-            response.message = "No active episode."
+            response.message = "No active or stopped episode to cancel."
             return response
 
         self.current_episode.clear()
@@ -310,13 +316,38 @@ class RecorderNode(Node):
         response.message = "Episode canceled."
         return response
 
-    def handle_end_task(self, request, response):
+    def handle_stop_episode(self, request, response):
         if self.state == "EPISODE_ACTIVE":
-            self.get_logger().warn("Ending task during an active episode; canceling current episode first.")
+            self.state = "EPISODE_STOPPED"
+            self.get_logger().info("Episode recording stopped. Waiting for save or cancel command.")
+            self.publish_status(status="stopped", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            response.success = True
+            response.message = "Episode recording stopped. Awaiting save or cancel."
+        elif self.state == "EPISODE_STOPPED":
+            self.get_logger().warn("Stop episode requested, but episode is already stopped.")
+            self.publish_status(status="failed - episode already stopped", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "Episode is already stopped."
+        elif self.state == "TASK_ACTIVE":
+            self.get_logger().error("Stop episode requested, but no episode is active.")
+            self.publish_status(status="failed - no active episode", episode_number="", current_task_name=self.current_task_name) # Assuming episode_count is not relevant if no episode active
+            response.success = False
+            response.message = "No active episode to stop."
+        else:  # IDLE
+            self.get_logger().error("Stop episode requested, but no task is active.")
+            self.publish_status(status="failed - no active task", episode_number="", current_task_name="")
+            response.success = False
+            response.message = "No active task or episode to stop."
+        return response
+
+    def handle_end_task(self, request, response):
+        if self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
+            self.get_logger().warn(f"Ending task during an {self.state.lower()} episode; canceling current episode first.")
             # Publish status update for cancelled episode
             episode_str = str(self.episode_count)
             self.publish_status(status="cancelled", episode_number=episode_str, current_task_name=self.current_task_name)
-            self.current_episode.clear()
+            if self.current_episode:
+                self.current_episode.clear()
             self.current_episode = None
         self.task_manager.end_task()
         self.state = "IDLE"
