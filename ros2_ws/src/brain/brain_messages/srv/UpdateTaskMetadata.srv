@@ -1,0 +1,7 @@
+# Request
+string task_directory     # The absolute path of the task to update
+string json_metadata_update # A JSON string containing the metadata fields to update
+---
+# Response
+bool success              # True if the update was successful
+string message            # Optional message, e.g., error details 

@@ -12,9 +12,11 @@ DDS_SETUP_SCRIPT="$HOME/maurice-prod/dds/setup_dds.zsh" # Path to the DDS setup 
 # Define the ROS launch commands to run, each in its own pane (ZSH arrays are 1-based)
 ROS_LAUNCH_COMMANDS=(
     "ros2 launch maurice_control app.launch.py"
-    "ros2 launch maurice_bringup maurice_bringup.launch.py" # Example: Add another launch file
-    # Add more commands here as needed:
-    # "ros2 launch your_package another_launch.launch.py"
+    "ros2 launch maurice_bringup maurice_bringup.launch.py"
+    "ros2 launch maurice_arm arm.launch.py"
+    "ros2 launch manipulation recorder.launch.py"
+    "sleep 15 && ros2 service call /maurice_arm/goto_js maurice_msgs/srv/GotoJS '{data: {data: [0.8528933180644165, -0.45712627478992107, 1.2946797849754812, -0.9326603190344698, -0.04908738521234052, 0.8881748761857863]}, time: 5}'"
+    "sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav navigation.launch.py"
 )
 # ------
 
@@ -28,6 +30,10 @@ DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
 ROS_SOURCE_CMD="source $ROS_WS_PATH/install/setup.zsh"
 
 echo "Attempting to launch ROS commands in tmux session '$SESSION_NAME'..."
+
+# Add a 10-second delay before starting
+echo "Sleeping for 10 seconds before starting..."
+sleep 10
 
 # Source environment *before* tmux as well (might help tmux itself)
 echo "Sourcing DDS setup (pre-tmux): $DDS_SETUP_SCRIPT"
@@ -59,7 +65,7 @@ fi
 
 # Create new detached session, starting with just a shell
 echo "Creating new detached tmux session '$SESSION_NAME'..."
-tmux new-session -d -s $SESSION_NAME # Start default shell
+tmux new-session -d -s $SESSION_NAME -c ~ # Start default shell
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to create tmux session '$SESSION_NAME'." >&2
@@ -93,7 +99,7 @@ for i in $(seq 2 ${#ROS_LAUNCH_COMMANDS[@]}); do
     PANE_INDEX=$((i - 1)) # Pane index is 0-based (0, 1, 2...)
 
     echo "Creating pane $PANE_INDEX and sending command: $CMD_RAW"
-    tmux split-window -h -t $SESSION_NAME:0 # Create a new horizontal pane
+    tmux split-window -h -c ~ -t $SESSION_NAME:0 # Create a new horizontal pane
     if [ $? -ne 0 ]; then
         echo "ERROR: Failed to split window for pane $PANE_INDEX." >&2
         continue # Try next command
