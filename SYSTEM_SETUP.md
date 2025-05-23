@@ -2,6 +2,10 @@
 
 This document outlines the setup required to manage the Fast DDS discovery server and ROS 2 application using `systemd`, allowing for automatic restarts when the robot's IP address changes (e.g., due to Wi-Fi network changes triggered via the BLE provisioner service).
 
+## Todo
+
+Write a script that for a new robot installs everything where it needs to be
+
 ## Overview
 
 The system uses `systemd` to manage three main services:
@@ -111,3 +115,4 @@ When the BLE service connects the robot to a new network and detects an IP addre
 *   **ROS Nodes Don't Start:** Check `journalctl -u ros-app.service`. Ensure environment sourcing works (`setup_dds.zsh`, ROS workspace `setup.zsh`). Verify the `ROS_LAUNCH_PACKAGE` and `ROS_LAUNCH_FILE` in `launch_ros_in_tmux.sh` are correct. Check permissions on the ROS workspace files.
 *   **Tmux Session Issues:** Make sure `tmux` is installed. Check logs (`journalctl -u ros-app.service`). Try running `launch_ros_in_tmux.sh` manually as the correct user to debug.
 *   **IP Address Not Updating:** Verify `hostname -I` gives the expected IP in `setup_dds.zsh`. Check `journalctl -u ble-provisioner.service` to see if the IP change is detected and the restart script is called. 
+*   **Unable to read the topics / discovery server seemingly not working:** Make sure you import the .zshrc properly and if you zsh with oh-my-zsh, make sure you import the right .zshrc (pre-omz) like in the `zhrcs` folder. The .zshrc there imports the thing that has the right ros2 workspace stuff. TODO: Make a good .zshrc for everyone seriously. Not this janky stuff.
