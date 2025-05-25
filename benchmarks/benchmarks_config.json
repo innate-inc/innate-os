@@ -39,6 +39,16 @@
             "variants": [
                 "gemini1"
             ]
+        },
+        {
+            "name": "Navigation in Sight to TV Complex Test",
+            "config": "benchmarks/configs/navigation_in_sight_complex_test.yaml",
+            "trials": 10,
+            "start_trial": 1,
+            "delay": 5,
+            "variants": [
+                "gemini1"
+            ]
         }
     ]
 }

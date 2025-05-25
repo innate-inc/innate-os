@@ -3,21 +3,21 @@ environment:
   name: "default"  # Using a default environment
   initial_parameters:
     # User will define the starting position
-    - robot_position: [10.0, 10.0, 0.25]  # Starting in a different room
-      robot_orientation: [0, 0, -0.7, 0.7] # Default orientation
+    - robot_position: [1, 2, 0.25]  # Starting in a different room
+      robot_orientation: [0, 0, 1, 0] # Default orientation
 
 # Input section
 name: "navigation_in_sight_to_tv_complex_test"
 description: "Test if the robot can navigate from a different room to the TV using only navigation_in_sight primitive, based on a single initial instruction."
 goal: "Robot should navigate from a different room to the vicinity of the TV by repeatedly calling navigation_in_sight and never using navigation_history, after being told once to go to the other room and navigate to the TV."
 directive: "default_directive" # Simple, direct instruction
-duration: 600  # seconds, increased duration for a more complex task
+duration: 300  # seconds, increased duration for a more complex task
 
 # Messages - Single instruction to go to another room and find the TV
 messages:
   - trigger_type: "time"
     time: 10  # seconds after start
-    text: "Go to the other room and find the TV"
+    text: "Go in the corridor then go in the living room and find the TV, and then go to it."
 
 # Expectations section
 expectations:
@@ -36,7 +36,6 @@ expectations:
 
   use_frames: false # As per previous structure, can be adjusted if VLM for success_criterion needs it
 
-  success_criterion: "Success is if the robot, starting from a different room, reached the designated area near the TV. The navigation must have been achieved by making multiple calls to the navigation_in_sight primitive, and the navigation_history primitive must not have been used at all during the test, based on chat log analysis and a single initial instruction."
+  success_criterion: "Success is if the robot, starting from a different room, reached the designated area near the TV. The navigation must have been achieved by making multiple calls to the navigation_in_sight primitive, and the navigate_through_memory primitive must not have been used at all during the test.."
 
   early_stop_criterion: "If the robot has reached the target area near the TV, the test can conclude." 
-  
