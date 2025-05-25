@@ -673,19 +673,19 @@ class DirectiveBenchmark:
         # Wait for reset to complete
         time.sleep(2)
 
-        # Set environment if specified and not default
-        if self.env_name and self.env_name != "default":
-            print(f"Attempting to set environment to: {self.env_name}")
-            if not self._set_environment():
-                print(
-                    f"Failed to set environment '{self.env_name}'. Aborting benchmark."
-                )
-                return False
-            # Wait for environment change to potentially take effect
-            print("Waiting 2 seconds for environment change to take effect...")
-            time.sleep(2)
-        else:
+        # Set environment (default if none specified)
+        if not self.env_name:
+            self.env_name = "default"
             print("Using default environment.")
+        else:
+            print(f"Attempting to set environment to: {self.env_name}")
+
+        if not self._set_environment():
+            print(f"Failed to set environment '{self.env_name}'. Aborting benchmark.")
+            return False
+
+        print("Waiting for environment change to take effect...")
+        time.sleep(2)
 
         # If a variant is specified, send a message to switch to it
         if self.variant:
