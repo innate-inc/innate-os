@@ -218,10 +218,10 @@ Chat logs now include a `time_since_start` field that shows seconds elapsed sinc
 
 Benchmark results are stored in the `benchmarks/results/` directory, organized by benchmark name and trial number.
 
-To analyze results:
+To analyze results, do it from within the current directory:
 
 ```bash
-python benchmarks/analyze_results.py --benchmark benchmark_name
+python analyze_results.py --benchmark benchmark_name
 ```
 
 This will generate reports and visualizations based on the benchmark results.
