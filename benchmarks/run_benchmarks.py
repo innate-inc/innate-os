@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 from datetime import datetime
 from pathlib import Path
 
+from analyze_full_run import generate_report
+
 
 def send_email_summary(
     subject,
@@ -206,13 +208,13 @@ def run_benchmarks_from_config(
             benchmarks_config = yaml.safe_load(f)
     else:
         print(f"Unsupported config file format: {config_file}")
-        return False, []  # Return empty list for results
+        return False, [], None  # Return None for main_output_directory path
 
     # Extract benchmarks to run
     benchmarks = benchmarks_config.get("benchmarks", [])
     if not benchmarks:
         print("No benchmarks defined in configuration file.")
-        return False, []  # Return empty list for results
+        return False, [], None  # Return None for main_output_directory path
 
     print(f"Found {len(benchmarks)} benchmarks to run")
 
@@ -225,6 +227,7 @@ def run_benchmarks_from_config(
     main_output_directory = Path("benchmarks/runs") / timestamp_str
     main_output_directory.mkdir(parents=True, exist_ok=True)
     print(f"Saving all benchmark data for this run to: {main_output_directory}")
+    main_output_directory_str = str(main_output_directory)  # Store as string for return
 
     # Run each benchmark
     for i, benchmark in enumerate(benchmarks):
@@ -349,7 +352,11 @@ def run_benchmarks_from_config(
     print(f"COMPLETED {successful_benchmarks} OUT OF {total_benchmarks} BENCHMARKS")
     print(f"{'#'*80}")
 
-    return successful_benchmarks == total_benchmarks, benchmark_results_summary
+    return (
+        successful_benchmarks == total_benchmarks,
+        benchmark_results_summary,
+        main_output_directory_str,
+    )
 
 
 def stop_simulator(base_url="http://localhost:8000"):
@@ -507,10 +514,12 @@ def main():
             print(f"Benchmark {args.config} failed/interrupted.")
 
     elif args.command == "all":
-        overall_success, results_summary = run_benchmarks_from_config(
-            config_file=args.config,
-            base_url=args.url,
-            interval=args.interval,
+        overall_success, results_summary, main_run_output_dir = (
+            run_benchmarks_from_config(
+                config_file=args.config,
+                base_url=args.url,
+                interval=args.interval,
+            )
         )
         # Stop simulator if requested
         if args.stop_simulator:
@@ -522,24 +531,40 @@ def main():
         else:
             print("Some benchmarks failed.")
 
-        # Send email summary if requested
         if args.send_email:
             email_subject = "Benchmark Run Summary"
-            email_body = "Benchmark run completed.\n\nSummary:\n"
-            email_body += "\n".join(results_summary)
-            num_successful = sum(
-                1
-                for r in results_summary
-                if "all" in r.lower() and "successful" in r.lower()
+            analysis_report = (
+                "Analysis script failed, no data found, or error in generation."
             )
-            total_benchmarks_in_summary = len(results_summary)
-            overall_summary_line1 = f"\n\nOverall: {num_successful}"
-            overall_summary_line2 = (
-                f"/{total_benchmarks_in_summary} benchmarks successful."
-            )
-            email_body += overall_summary_line1 + overall_summary_line2
 
-            # Use environment variables as fallback for email config if args not provided
+            if main_run_output_dir and Path(main_run_output_dir).is_dir():
+                try:
+                    print(f"Generating analysis report for: {main_run_output_dir}")
+                    analysis_report = generate_report(str(main_run_output_dir))
+                    print("Analysis report generated successfully.")
+                except Exception as e:
+                    print(f"Error generating analysis report: {e}")
+                    analysis_report = (
+                        f"Failed to generate analysis report: {str(e)[:300]}"
+                    )
+            elif main_run_output_dir:
+                analysis_report = (
+                    f"Run output dir for analysis invalid: {main_run_output_dir}"
+                )
+            else:
+                analysis_report = (
+                    "Could not determine run output directory for analysis."
+                )
+
+            email_body = "Benchmark run completed.\n\nRaw Summary:\n"
+            email_body += "\n".join(results_summary)
+            email_body += "\n\n" + "=" * 40
+            email_body += "\n\nDetailed Analysis Report:\n"
+            email_body += "=" * 40
+            email_body += "\n"
+            email_body += analysis_report
+
+            # Fallback to .env for email config
             to_email = args.to_email or os.getenv("TO_EMAIL")
             from_email = args.from_email or os.getenv("FROM_EMAIL")
             smtp_server = args.smtp_server or os.getenv("SMTP_SERVER")
