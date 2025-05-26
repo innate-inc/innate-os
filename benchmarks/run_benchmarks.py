@@ -7,15 +7,51 @@ import sys
 import yaml
 import json
 import requests
+import smtplib
+from email.mime.text import MIMEText
+from dotenv import load_dotenv
+from datetime import datetime
+from pathlib import Path
+
+
+def send_email_summary(
+    subject,
+    body,
+    to_email,
+    from_email,
+    smtp_server,
+    smtp_port,
+    smtp_user,
+    smtp_password,
+):
+    """Sends an email with the benchmark summary."""
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = to_email
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()  # Use TLS encryption
+            server.login(smtp_user, smtp_password)
+            server.sendmail(from_email, to_email, msg.as_string())
+        print(f"Email summary sent successfully to {to_email}")
+    except Exception as e:
+        print(f"Error sending email: {e}")
 
 
 def run_benchmark(
-    config_file, trial=1, base_url="http://localhost:8000", interval=1.0, variant=None
+    config_file,
+    trial=1,
+    base_url="http://localhost:8000",
+    interval=1.0,
+    variant=None,
+    output_dir_base=None,
 ):
     """Run a single benchmark with the given config file."""
     cmd = [
         "python",
-        "benchmarks/benchmark_runner.py",
+        "benchmark_runner.py",
         "--config",
         config_file,
         "--trial",
@@ -29,6 +65,10 @@ def run_benchmark(
     # Add variant parameter if provided
     if variant:
         cmd.extend(["--variant", variant])
+
+    # Add output directory parameter if provided
+    if output_dir_base:
+        cmd.extend(["--output-dir", output_dir_base])
 
     config_name = os.path.basename(config_file)
     print(f"\n{'='*80}")
@@ -56,6 +96,7 @@ def run_multiple_trials(
     start_trial=1,
     delay_between_trials=5,
     variant=None,
+    output_dir_base=None,
 ):
     """
     Run multiple trials of a benchmark in sequence
@@ -116,6 +157,7 @@ def run_multiple_trials(
             base_url=base_url,
             interval=interval,
             variant=variant,
+            output_dir_base=output_dir_base,
         )
 
         if success:
@@ -164,23 +206,31 @@ def run_benchmarks_from_config(
             benchmarks_config = yaml.safe_load(f)
     else:
         print(f"Unsupported config file format: {config_file}")
-        return False
+        return False, []  # Return empty list for results
 
     # Extract benchmarks to run
     benchmarks = benchmarks_config.get("benchmarks", [])
     if not benchmarks:
         print("No benchmarks defined in configuration file.")
-        return False
+        return False, []  # Return empty list for results
 
     print(f"Found {len(benchmarks)} benchmarks to run")
 
     total_benchmarks = len(benchmarks)
     successful_benchmarks = 0
+    benchmark_results_summary = []  # To store summary of each benchmark
+
+    # Create a timestamped base directory for all benchmarks in this run
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    main_output_directory = Path("benchmarks/runs") / timestamp_str
+    main_output_directory.mkdir(parents=True, exist_ok=True)
+    print(f"Saving all benchmark data for this run to: {main_output_directory}")
 
     # Run each benchmark
     for i, benchmark in enumerate(benchmarks):
+        benchmark_name = benchmark.get("name", f"Unnamed Benchmark {i+1}")
         print(f"\n{'#'*80}")
-        print(f"BENCHMARK {i+1}/{total_benchmarks}: {benchmark.get('name', 'Unnamed')}")
+        print(f"BENCHMARK {i+1}/{total_benchmarks}: {benchmark_name}")
         print(f"{'#'*80}\n")
 
         config_path = benchmark.get("config")
@@ -238,6 +288,7 @@ def run_benchmarks_from_config(
                     start_trial=current_trial,
                     delay_between_trials=delay,
                     variant=variant,
+                    output_dir_base=str(main_output_directory),
                 )
 
                 if success:
@@ -249,6 +300,14 @@ def run_benchmarks_from_config(
             # Check if all trials across all variants were successful
             if variant_successful_trials == total_trials:
                 successful_benchmarks += 1
+                benchmark_results_summary.append(
+                    f"{benchmark_name}: All {total_trials} trials successful (var)."
+                )
+            else:
+                benchmark_results_summary.append(
+                    f"{benchmark_name}: {variant_successful_trials}/{total_trials} "
+                    f"trials (across variants) successful."
+                )
 
             print(f"\n{'='*60}")
             print(
@@ -267,10 +326,19 @@ def run_benchmarks_from_config(
                 start_trial=start_trial,
                 delay_between_trials=delay,
                 variant=None,
+                output_dir_base=str(main_output_directory),
             )
 
             if success:
                 successful_benchmarks += 1
+                benchmark_results_summary.append(
+                    f"{benchmark_name}: All {trials} trials successful."
+                )
+            else:
+                benchmark_results_summary.append(
+                    f"{benchmark_name}: Failed after {trials} trials "
+                    f"(or fewer if interrupted)."
+                )
 
         # Add a delay between benchmarks
         if i < total_benchmarks - 1:
@@ -281,7 +349,7 @@ def run_benchmarks_from_config(
     print(f"COMPLETED {successful_benchmarks} OUT OF {total_benchmarks} BENCHMARKS")
     print(f"{'#'*80}")
 
-    return successful_benchmarks == total_benchmarks
+    return successful_benchmarks == total_benchmarks, benchmark_results_summary
 
 
 def stop_simulator(base_url="http://localhost:8000"):
@@ -289,7 +357,7 @@ def stop_simulator(base_url="http://localhost:8000"):
     try:
         print("Sending shutdown request to simulator...")
         headers = {}
-        headers["Authorization"] = f"Bearer NOT_NEEDED"
+        headers["Authorization"] = "Bearer NOT_NEEDED"
         response = requests.post(f"{base_url}/shutdown", headers=headers)
         if response.status_code == 200:
             print("Successfully requested simulator shutdown.")
@@ -344,9 +412,9 @@ def main():
     )
     all_parser.add_argument(
         "--config",
-        default="benchmarks/benchmarks_config.json",
+        default="benchmarks_config.json",
         help="Path to benchmarks configuration file"
-        " (default: benchmarks/benchmarks_config.json)",
+        " (default: benchmarks_config.json)",
     )
 
     # Common arguments for both commands
@@ -367,15 +435,42 @@ def main():
             action="store_true",
             help="Stop the simulator after benchmarks are completed",
         )
+        # Email arguments - common to both, but only used by 'all'
+        subparser.add_argument(
+            "--send-email",
+            action="store_true",
+            help=(
+                "Send an email summary after benchmarks are completed "
+                "(only for 'all' command)"
+            ),
+        )
+        subparser.add_argument(
+            "--to-email", help="Email address to send the summary to"
+        )
+        subparser.add_argument(
+            "--from-email", help="Email address to send the summary from"
+        )
+        subparser.add_argument("--smtp-server", help="SMTP server address")
+        subparser.add_argument(
+            "--smtp-port",
+            type=int,
+            default=587,
+            help="SMTP server port (default: 587 for TLS)",
+        )
+        subparser.add_argument("--smtp-user", help="SMTP username")
+        subparser.add_argument("--smtp-password", help="SMTP password")
 
     args = parser.parse_args()
+
+    # Load .env file
+    load_dotenv()
 
     # Default to 'all' command if no command specified
     if not args.command:
         print("No command specified, running all benchmarks from default config...\n")
-        if os.path.exists("benchmarks/benchmarks_config.json"):
+        if os.path.exists("benchmarks_config.json"):
             args.command = "all"
-            args.config = "benchmarks/benchmarks_config.json"
+            args.config = "benchmarks_config.json"
             # Set default values for common arguments
             args.url = "http://localhost:8000"
             args.interval = 1.0
@@ -386,6 +481,12 @@ def main():
 
     # Run the appropriate command
     if args.command == "run":
+        if args.send_email:
+            print(
+                "Warning: Email sending is only supported with the 'all' command. "
+                "Email will not be sent."
+            )
+
         success = run_multiple_trials(
             config_file=args.config,
             num_trials=args.trials,
@@ -394,12 +495,19 @@ def main():
             start_trial=args.start,
             delay_between_trials=args.delay,
             variant=None,
+            output_dir_base=None,
         )
         # Stop simulator if requested
         if args.stop_simulator:
             stop_simulator(args.url)
+
+        if success:
+            print(f"Benchmark {args.config} ({args.trials} trials) successful.")
+        else:
+            print(f"Benchmark {args.config} failed/interrupted.")
+
     elif args.command == "all":
-        success = run_benchmarks_from_config(
+        overall_success, results_summary = run_benchmarks_from_config(
             config_file=args.config,
             base_url=args.url,
             interval=args.interval,
@@ -407,6 +515,68 @@ def main():
         # Stop simulator if requested
         if args.stop_simulator:
             stop_simulator(args.url)
+
+        # Print overall status
+        if overall_success:
+            print("All benchmarks completed successfully.")
+        else:
+            print("Some benchmarks failed.")
+
+        # Send email summary if requested
+        if args.send_email:
+            email_subject = "Benchmark Run Summary"
+            email_body = "Benchmark run completed.\n\nSummary:\n"
+            email_body += "\n".join(results_summary)
+            num_successful = sum(
+                1
+                for r in results_summary
+                if "all" in r.lower() and "successful" in r.lower()
+            )
+            total_benchmarks_in_summary = len(results_summary)
+            overall_summary_line1 = f"\n\nOverall: {num_successful}"
+            overall_summary_line2 = (
+                f"/{total_benchmarks_in_summary} benchmarks successful."
+            )
+            email_body += overall_summary_line1 + overall_summary_line2
+
+            # Use environment variables as fallback for email config if args not provided
+            to_email = args.to_email or os.getenv("TO_EMAIL")
+            from_email = args.from_email or os.getenv("FROM_EMAIL")
+            smtp_server = args.smtp_server or os.getenv("SMTP_SERVER")
+            smtp_port_env = os.getenv("SMTP_PORT")
+            if args.smtp_port:
+                smtp_port = args.smtp_port
+            elif smtp_port_env:
+                smtp_port = int(smtp_port_env)
+            else:
+                smtp_port = 587
+            smtp_user = args.smtp_user or os.getenv("SMTP_USER")
+            smtp_password = args.smtp_password or os.getenv("SMTP_PASSWORD")
+
+            required_params = [
+                to_email,
+                from_email,
+                smtp_server,
+                smtp_user,
+                smtp_password,
+            ]
+            if not all(required_params):
+                print("Error: Missing email parameters (CLI or .env). Email not sent.")
+                print(
+                    "Required: TO_EMAIL, FROM_EMAIL, SMTP_SERVER, "
+                    + "SMTP_USER, SMTP_PASSWORD"
+                )
+            else:
+                send_email_summary(
+                    subject=email_subject,
+                    body=email_body,
+                    to_email=to_email,
+                    from_email=from_email,
+                    smtp_server=smtp_server,
+                    smtp_port=smtp_port,
+                    smtp_user=smtp_user,
+                    smtp_password=smtp_password,
+                )
 
 
 if __name__ == "__main__":

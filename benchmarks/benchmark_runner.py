@@ -30,6 +30,7 @@ class DirectiveBenchmark:
         base_url="http://localhost:8000",
         frame_capture_interval=1.0,  # seconds between frame captures
         variant=None,  # Gemini variant to use
+        output_dir_base=None,  # Base directory for output
     ):
         # Load configuration
         with open(config_file, "r") as f:
@@ -110,7 +111,12 @@ class DirectiveBenchmark:
         output_base = self._sanitize_filename(self.config_name)
 
         # Store results in a dedicated results directory
-        self.output_dir = Path(f"benchmarks/results/{output_base}/trial_{trial_num}")
+        if output_dir_base:
+            self.output_dir = Path(output_dir_base) / output_base / f"trial_{trial_num}"
+        else:
+            self.output_dir = Path(
+                f"benchmarks/results/{output_base}/trial_{trial_num}"
+            )
         self.images_dir = self.output_dir / "images"
         self.first_person_dir = self.images_dir / "first_person"
         self.chase_dir = self.images_dir / "chase"
@@ -821,6 +827,11 @@ def main():
         "--variant",
         help="Gemini variant to use",
     )
+    parser.add_argument(
+        "--output-dir",
+        help="Base directory to store benchmark results",
+        default=None,
+    )
 
     args = parser.parse_args()
 
@@ -830,6 +841,7 @@ def main():
         base_url=args.url,
         frame_capture_interval=args.interval,
         variant=args.variant,
+        output_dir_base=args.output_dir,
     )
 
     benchmark.run()
