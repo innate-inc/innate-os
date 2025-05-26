@@ -595,6 +595,11 @@ class SimulationNode:
                 "asset_path": "data/assets/lying_man/Lying_man_0127.obj",
                 "scale": [0.010, 0.010, 0.010],
             },
+            # {
+            #     "name": "banana_peel",
+            #     "asset_path": "data/assets/palatial_asset_bef5/bef5.xml",
+            #     "scale": 1.0,
+            # },
             # Add other potential entities here in the future
         ]
 
@@ -623,6 +628,17 @@ class SimulationNode:
                         collision=False,
                         convexify=False,
                     )
+                    # if asset_path.endswith((".obj", ".glb", ".gltf", ".stl"))
+                    # else gs.morphs.MJCF(
+                    #     file=full_asset_path,
+                    #     pos=initial_hide_pos,  # Start hidden
+                    #     quat=default_quat,
+                    #     scale=scale,
+                    #     collision=False,
+                    #     convexify=False,
+                    #     visualization=True,
+                    #     requires_jac_and_IK=True,
+                    # )
                 )
                 # Store reference
                 self.managed_entities[name] = entity_obj
