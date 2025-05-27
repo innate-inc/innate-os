@@ -467,9 +467,7 @@ class BrainClientNode(Node):
             # Compute yaw from quaternion
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
             cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-            theta_radians = math.atan2(siny_cosp, cosy_cosp)
-            theta_degrees = math.degrees(theta_radians)
-            theta = math.atan2(ori.z, ori.w)
+            theta = math.atan2(siny_cosp, cosy_cosp)
 
             # Create and send the pose_image message
             # No user_token is needed as the server will use the connection_id
@@ -723,15 +721,9 @@ class BrainClientNode(Node):
                     pos = self.last_odom.pose.pose.position
                     ori = self.last_odom.pose.pose.orientation
                     # Compute yaw from quaternion:
-                    siny_cosp = 2.0 * (
-                        ori.w * ori.z + ori.x * ori.y
-                    )  # Unused due to theta_degrees being unused
-                    cosy_cosp = 1.0 - 2.0 * (
-                        ori.y * ori.y + ori.z * ori.z
-                    )  # Unused due to theta_degrees being unused
-                    theta_radians = math.atan2(siny_cosp, cosy_cosp)  # Unused
-                    theta = math.degrees(theta_radians)
-                    # theta = math.atan2(ori.z, ori.w) # This was the simplified version
+                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                    theta = math.atan2(siny_cosp, cosy_cosp)
                     payload["robot_coords"] = {
                         "x": pos.x,
                         "y": pos.y,
