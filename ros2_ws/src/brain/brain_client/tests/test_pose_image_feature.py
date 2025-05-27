@@ -135,7 +135,10 @@ sys.modules["rclpy.node"] = MagicMock()
 sys.modules["rclpy.node"].Node = MockNode
 sys.modules["rclpy.action"] = MagicMock()
 sys.modules["rclpy.duration"] = MagicMock()
-
+sys.modules["rclpy.qos"] = MagicMock()
+sys.modules["tf2_ros"] = MagicMock()
+sys.modules["tf2_ros.buffer"] = MagicMock()
+sys.modules["tf2_ros.transform_listener"] = MagicMock()
 sys.modules["sensor_msgs"] = MagicMock()
 sys.modules["sensor_msgs.msg"] = MagicMock()
 sys.modules["sensor_msgs.msg"].CompressedImage = MockCompressedImage
