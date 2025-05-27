@@ -19,8 +19,8 @@ import tf2_ros
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
-from tf2_geometry_msgs import do_transform_pose # For transforming poses
-from geometry_msgs.msg import PoseStamped # For easier pose transformation
+from tf2_geometry_msgs import do_transform_pose  # For transforming poses
+from geometry_msgs.msg import PoseStamped  # For easier pose transformation
 
 from brain_client.message_types import (
     InternalMessage,
@@ -116,7 +116,9 @@ class BrainClientNode(Node):
         # ) # Removed odom_sub
 
         # Create a timer to fetch the transform at 30 Hz
-        self.transform_timer = self.create_timer(1.0 / 30.0, self.fetch_transform_callback)
+        self.transform_timer = self.create_timer(
+            1.0 / 30.0, self.fetch_transform_callback
+        )
 
         self.vertical_fov = (
             self.get_parameter("vertical_fov").get_parameter_value().double_value
@@ -162,7 +164,11 @@ class BrainClientNode(Node):
         self.last_depth_image = None
         self.last_map = None  # Store the latest map data
 
-        image_qos = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT, history=QoSHistoryPolicy.KEEP_LAST, depth=10)
+        image_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
 
         # RGB image subscription remains unchanged.
         self.image_sub = self.create_subscription(
@@ -307,7 +313,8 @@ class BrainClientNode(Node):
         """
         self.log_everything = request.data
         self.get_logger().info(
-            f"\033[1;92m[BrainClient] Set logging configuration: log_everything={self.log_everything}\033[0m"
+            f"\033[1;92m[BrainClient] Set logging configuration: "
+            f"log_everything={self.log_everything}\\033[0m"
         )
         response.success = True
         response.message = (
@@ -333,6 +340,10 @@ class BrainClientNode(Node):
                 dtype = np.float32
             else:
                 # Fallback to uint8 if the encoding is unexpected.
+                self.get_logger().warn(
+                    f"Unexpected depth image encoding: {msg.encoding}, "
+                    f"defaulting to uint8"
+                )
                 dtype = np.uint8
             depth_array = np.frombuffer(msg.data, dtype=dtype)
             depth_array = depth_array.reshape((msg.height, msg.width))
@@ -343,20 +354,22 @@ class BrainClientNode(Node):
     def fetch_transform_callback(self):
         try:
             robot_base_frame = "base_link"  # The frame whose pose we want
-            map_frame = "map"            # The frame in which we want the pose expressed
+            map_frame = "map"  # The frame in which we want the pose expressed
             when = rclpy.time.Time()
 
             if self.tf_buffer.can_transform(
-                map_frame,        # Target frame ("map")
-                robot_base_frame, # Source frame ("base_link")
+                map_frame,  # Target frame ("map")
+                robot_base_frame,  # Source frame ("base_link")
                 when,
-                timeout=Duration(seconds=0.1) # Short timeout for can_transform
+                timeout=Duration(seconds=0.1),  # Short timeout for can_transform
             ):
                 transform_stamped = self.tf_buffer.lookup_transform(
-                    map_frame,        # Target frame ("map")
-                    robot_base_frame, # Source frame ("base_link")
+                    map_frame,  # Target frame ("map")
+                    robot_base_frame,  # Source frame ("base_link")
                     when,
-                    timeout=Duration(seconds=0.1) # Shorter timeout as can_transform likely passed
+                    timeout=Duration(
+                        seconds=0.1
+                    ),  # Shorter timeout as can_transform likely passed
                 )
 
                 # Create an Odometry message to store the pose (or a simpler structure if preferred)
@@ -364,20 +377,28 @@ class BrainClientNode(Node):
                 # but using the transform directly.
                 # This part might need adjustment based on how self.last_odom is used elsewhere.
                 odom_msg = Odometry()
-                odom_msg.header.stamp = self.get_clock().now().to_msg() # Use current time for the header
-                odom_msg.header.frame_id = map_frame        # "map"
-                odom_msg.child_frame_id = robot_base_frame # "base_link"
+                odom_msg.header.stamp = (
+                    self.get_clock().now().to_msg()
+                )  # Use current time for the header
+                odom_msg.header.frame_id = map_frame  # "map"
+                odom_msg.child_frame_id = robot_base_frame  # "base_link"
 
-                odom_msg.pose.pose.position.x = transform_stamped.transform.translation.x
-                odom_msg.pose.pose.position.y = transform_stamped.transform.translation.y
-                odom_msg.pose.pose.position.z = transform_stamped.transform.translation.z
+                odom_msg.pose.pose.position.x = (
+                    transform_stamped.transform.translation.x
+                )
+                odom_msg.pose.pose.position.y = (
+                    transform_stamped.transform.translation.y
+                )
+                odom_msg.pose.pose.position.z = (
+                    transform_stamped.transform.translation.z
+                )
                 odom_msg.pose.pose.orientation = transform_stamped.transform.rotation
                 # Covariance and Twist are not directly available from lookup_transform
                 # and might need to be handled differently or zeroed out if not critical.
                 # For simplicity, let's zero them or leave them default for now.
 
                 self.last_odom = odom_msg
-                
+
                 # Calculate yaw (theta) from quaternion
                 ori = odom_msg.pose.pose.orientation
                 siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
@@ -386,13 +407,19 @@ class BrainClientNode(Node):
                 theta_degrees = math.degrees(theta_radians)
             else:
                 self.get_logger().warn(
-                    f"Could not get transform from '{robot_base_frame}' to '{map_frame}' at time {when.nanoseconds / 1e9:.3f}s. Waiting for transform..."
+                    f"Could not get transform from '{robot_base_frame}' to "
+                    f"{map_frame}' at time {when.nanoseconds / 1e9:.3f}s. Waiting..."
                 )
         except TransformException as ex:
             # Adjusted error message to reflect the intended transformation
-            self.get_logger().error(f"TransformException looking up transform from '{robot_base_frame}' to '{map_frame}': {ex}")
+            self.get_logger().error(
+                f"TransformException looking up transform from "
+                f"'{robot_base_frame}' to '{map_frame}': {ex}"
+            )
         except Exception as e:
-            self.get_logger().error(f"Error in fetch_transform_callback: {e}, {traceback.format_exc()}")
+            self.get_logger().error(
+                f"Error in fetch_transform_callback: {e}, " f"{traceback.format_exc()}"
+            )
 
     def map_callback(self, msg: OccupancyGrid):
         """Store the latest map data."""
@@ -595,7 +622,7 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Primitives not registered. Skipping image callback.\033[0m"
             )
             return
-        
+
         if self.ready_for_image and self.last_image is not None:
             self.get_logger().info(
                 "\033[93m[BrainClient] Sending image callback.\033[0m"
@@ -692,7 +719,7 @@ class BrainClientNode(Node):
                         "y": pos.y,
                         "z": pos.z,
                         "theta": theta,
-                        "frame_id": self.last_odom.header.frame_id
+                        "frame_id": self.last_odom.header.frame_id,
                     }
                 else:
                     self.get_logger().warn(
