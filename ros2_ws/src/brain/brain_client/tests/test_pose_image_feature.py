@@ -6,16 +6,6 @@ import numpy as np
 import cv2
 from unittest.mock import MagicMock
 
-# Add the parent directory to the path so we can import the brain_client module
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from brain_client.brain_client_node import BrainClientNode
-from brain_client.message_types import (
-    MessageInType,
-    MessageOut,
-    MessageOutType,
-)
-
 
 # Create mocks for all the ROS2 dependencies
 class MockNode:
@@ -140,7 +130,6 @@ class MockDirective:
         return self._prompt
 
 
-# Set up the mocks before importing
 sys.modules["rclpy"] = MagicMock()
 sys.modules["rclpy.node"] = MagicMock()
 sys.modules["rclpy.node"].Node = MockNode
@@ -174,6 +163,7 @@ sys.modules["nav2_simple_commander"] = MagicMock()
 sys.modules["nav2_simple_commander.robot_navigator"] = MagicMock()
 sys.modules["nav2_simple_commander.robot_navigator"].BasicNavigator = MagicMock()
 sys.modules["nav2_simple_commander.robot_navigator"].TaskResult = MagicMock()
+
 
 # Mock the primitives
 mock_navigate = MockPrimitive("navigate_to_position", "Navigate to a position")
@@ -228,6 +218,17 @@ sys.modules["brain_client.directives.elder_safety_directive"].ElderSafetyDirecti
 # Mock the WSBridge
 sys.modules["brain_client.ws_bridge"] = MagicMock()
 sys.modules["brain_client.ws_bridge"].WSBridge = MockWSBridge
+
+# Add the parent directory to the path so we can import the brain_client module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from brain_client.brain_client_node import BrainClientNode
+from brain_client.message_types import (
+    MessageInType,
+    MessageOut,
+    MessageOutType,
+)
+
 
 # Now we can import the BrainClientNode
 
