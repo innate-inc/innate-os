@@ -8,8 +8,8 @@ from brain_client.primitives.types import Primitive, PrimitiveResult
 class SendEmail(Primitive):
     """
     Primitive for sending emails for emergency notifications.
-    This is a simplified version that logs the email content rather than actually sending.
-    In a production environment, you would configure proper SMTP settings.
+    This is a simplified version that logs the email content rather than actually
+    sending. In a production environment, you would configure proper SMTP settings.
     """
 
     def __init__(self, logger):
@@ -27,9 +27,9 @@ class SendEmail(Primitive):
 
     def guidelines(self):
         return (
-            "Use to send an emergency email notification. Provide a subject and message. "
-            "This should be used when a potential emergency is detected and assistance "
-            "might be required."
+            "Use to send an emergency email notification. Provide a subject and "
+            "message. This should be used when a potential emergency is detected "
+            "and assistance might be required."
         )
 
     def execute(self, subject: str, message: str, recipient: str = None):
@@ -39,10 +39,12 @@ class SendEmail(Primitive):
         Args:
             subject (str): Email subject line
             message (str): Email body content
-            recipient (str, optional): Email recipient. Defaults to axel@innate.bot if not specified.
+            recipient (str, optional): Email recipient. Defaults to axel@innate.bot
+                                     if not specified.
 
         Returns:
-            tuple: (result_message, result_status) where result_status is a PrimitiveResult enum value
+            tuple: (result_message, result_status) where result_status is a
+                   PrimitiveResult enum value
         """
         if recipient is None:
             recipient = self.default_recipient
@@ -71,7 +73,7 @@ class SendEmail(Primitive):
 
             # Log success message
             self.logger.info(
-                f"\033[92m[BrainClient] Emergency email notification sent to {recipient}\033[0m"
+                f"\033[92m[BrainClient] Emergency email sent to {recipient}" "\033[0m"
             )
             return f"Email sent to {recipient}", PrimitiveResult.SUCCESS
 
@@ -83,14 +85,16 @@ class SendEmail(Primitive):
         """
         Cancel the email sending operation.
 
-        Since email sending is typically a quick operation that completes almost instantly,
-        this method doesn't do much. It's implemented to satisfy the Primitive interface.
+        Since email sending is typically a quick operation that completes almost
+        instantly, this method doesn't do much. It's implemented to satisfy the
+        Primitive interface.
 
         Returns:
             str: A message describing the cancellation result.
         """
         self.logger.info(
-            "\033[91m[BrainClient] Email sending operation cannot be canceled once started\033[0m"
+            "\033[91m[BrainClient] Email sending operation cannot be canceled "
+            "once started\033[0m"
         )
         return (
             "Email sending is an atomic operation that cannot be canceled once started"
