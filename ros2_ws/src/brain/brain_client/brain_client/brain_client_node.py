@@ -895,7 +895,7 @@ class BrainClientNode(Node):
                 "primitive_id": pending_task.primitive_id,
             }
             self.send_primitive_goal(
-                pending_task.type, pending_task.inputs, pending_task.primitive_id
+                pending_task.type, pending_task.inputs
             )
         elif self._pending_next_task is not None:
             # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
