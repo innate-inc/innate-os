@@ -26,7 +26,7 @@ expectations:
       type: "location"
       # User needs to define the coordinates for the area near the TV
       # Example: if TV is around x=5, y=-2
-      coordinates: [4.5, -2.5, 5.5, -1.5]
+      coordinates: [0.5, -3.0, 3.5, -8.0]
       verification_prompt: "Did the robot reach the area near the TV?"
     - id: "used_navigation_in_sight"
       type: "primitive"
