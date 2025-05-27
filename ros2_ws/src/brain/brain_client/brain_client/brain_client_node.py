@@ -13,6 +13,8 @@ import numpy as np
 from rclpy.action import ActionClient
 import math
 import inspect
+import types
+import typing
 
 # TF2 imports
 # import tf2_ros # Reverted by user, then identified as unused by linter
@@ -956,7 +958,17 @@ class BrainClientNode(Node):
                     # Get parameter type from annotation if available
                     param_type = "any"
                     if param.annotation != inspect.Parameter.empty:
-                        param_type = str(param.annotation.__name__)
+                        # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
+                        if isinstance(param.annotation, (types.UnionType, types.GenericAlias)) or \
+                           hasattr(param.annotation, '_name') and param.annotation._name in ['List', 'Optional', 'Dict', 'Tuple', 'Union']: # Covers typing.List, typing.Optional etc.
+                            param_type = str(param.annotation)
+                        elif hasattr(param.annotation, '__name__'):
+                            param_type = param.annotation.__name__
+                        else:
+                            # Fallback for other complex types, str() might be a reasonable default
+                            param_type = str(param.annotation)
+                        # Clean up "typing." prefix if present
+                        param_type = param_type.replace("typing.", "")
 
                     params[param_name] = f"{param_type}"
 
