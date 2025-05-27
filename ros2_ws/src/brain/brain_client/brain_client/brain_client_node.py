@@ -409,11 +409,11 @@ class BrainClientNode(Node):
                 self.last_odom = odom_msg
 
                 # Calculate yaw (theta) from quaternion - this theta_degrees is not used here
-                # ori = odom_msg.pose.pose.orientation
-                # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                # theta_radians = math.atan2(siny_cosp, cosy_cosp)
-                # theta_degrees = math.degrees(theta_radians)
+                ori = odom_msg.pose.pose.orientation
+                siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                theta_radians = math.atan2(siny_cosp, cosy_cosp)
+                theta_degrees = math.degrees(theta_radians)
             else:
                 self.get_logger().warn(
                     f"Could not get transform from '{robot_base_frame}' to "
@@ -465,10 +465,10 @@ class BrainClientNode(Node):
             ori = self.last_odom.pose.pose.orientation
 
             # Compute yaw from quaternion
-            # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y) # Unused due to theta_degrees being unused
-            # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z) # Unused due to theta_degrees being unused
-            # theta_radians = math.atan2(siny_cosp, cosy_cosp) # Unused precursor
-            # theta_degrees = math.degrees(theta_radians) # Unused
+            siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+            cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+            theta_radians = math.atan2(siny_cosp, cosy_cosp)
+            theta_degrees = math.degrees(theta_radians)
             theta = math.atan2(ori.z, ori.w)
 
             # Create and send the pose_image message
@@ -692,10 +692,9 @@ class BrainClientNode(Node):
 
                     # Convert quaternion to yaw
                     ori = self.last_map.info.origin.orientation
-                    # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y) # Unused due to theta_degrees being unused
-                    # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z) # Unused due to theta_degrees being unused
-                    # yaw = math.atan2(siny_cosp, cosy_cosp) # Unused
-                    yaw = math.atan2(ori.z, ori.w)
+                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                    yaw = math.atan2(siny_cosp, cosy_cosp)
 
                     map_payload = {
                         "resolution": self.last_map.info.resolution,
@@ -724,10 +723,15 @@ class BrainClientNode(Node):
                     pos = self.last_odom.pose.pose.position
                     ori = self.last_odom.pose.pose.orientation
                     # Compute yaw from quaternion:
-                    # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y) # Unused due to theta_degrees being unused
-                    # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z) # Unused due to theta_degrees being unused
-                    # theta = math.atan2(siny_cosp, cosy_cosp) # Unused
-                    theta = math.atan2(ori.z, ori.w)
+                    siny_cosp = 2.0 * (
+                        ori.w * ori.z + ori.x * ori.y
+                    )  # Unused due to theta_degrees being unused
+                    cosy_cosp = 1.0 - 2.0 * (
+                        ori.y * ori.y + ori.z * ori.z
+                    )  # Unused due to theta_degrees being unused
+                    theta_radians = math.atan2(siny_cosp, cosy_cosp)  # Unused
+                    theta = math.degrees(theta_radians)
+                    # theta = math.atan2(ori.z, ori.w) # This was the simplified version
                     payload["robot_coords"] = {
                         "x": pos.x,
                         "y": pos.y,
