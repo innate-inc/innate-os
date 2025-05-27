@@ -15,12 +15,13 @@ import math
 import inspect
 
 # TF2 imports
-import tf2_ros
+# import tf2_ros # Reverted by user, then identified as unused by linter
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
-from tf2_geometry_msgs import do_transform_pose  # For transforming poses
-from geometry_msgs.msg import PoseStamped  # For easier pose transformation
+
+# from tf2_geometry_msgs import do_transform_pose # Reverted by user, then identified as unused by linter
+# from geometry_msgs.msg import PoseStamped # Reverted by user, then identified as unused by linter
 
 from brain_client.message_types import (
     InternalMessage,
@@ -48,13 +49,17 @@ from brain_client.ws_bridge import WSBridge
 
 from brain_client.primitives.navigate_to_position import NavigateToPosition
 from brain_client.primitives.send_email import SendEmail
+from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
 
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.sassy_directive import SassyDirective
 from brain_client.directives.friendly_guide_directive import FriendlyGuideDirective
-from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
 from brain_client.directives.elder_safety_directive import ElderSafetyDirective
 from brain_client.directives.house_joker_directive import HouseJokerDirective
+from brain_client.directives.interior_designer_directive import (
+    InteriorDesignerDirective,
+)
+from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
 
 
 class BrainClientNode(Node):
@@ -244,6 +249,9 @@ class BrainClientNode(Node):
         self.primitives_dict = {
             TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
             TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
+            TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail(
+                self.get_logger()
+            ),
             # Add other primitives here as they become available
         }
 
@@ -262,6 +270,7 @@ class BrainClientNode(Node):
                 SassyDirective(),
                 FriendlyGuideDirective(),
                 SecurityPatrolDirective(),
+                InteriorDesignerDirective(),
                 ElderSafetyDirective(),
                 HouseJokerDirective(),
             ]
@@ -314,7 +323,7 @@ class BrainClientNode(Node):
         self.log_everything = request.data
         self.get_logger().info(
             f"\033[1;92m[BrainClient] Set logging configuration: "
-            f"log_everything={self.log_everything}\\033[0m"
+            f"log_everything={self.log_everything}\033[0m"
         )
         response.success = True
         response.message = (
@@ -399,12 +408,12 @@ class BrainClientNode(Node):
 
                 self.last_odom = odom_msg
 
-                # Calculate yaw (theta) from quaternion
-                ori = odom_msg.pose.pose.orientation
-                siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                theta_radians = math.atan2(siny_cosp, cosy_cosp)
-                theta_degrees = math.degrees(theta_radians)
+                # Calculate yaw (theta) from quaternion - this theta_degrees is not used here
+                # ori = odom_msg.pose.pose.orientation
+                # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                # theta_radians = math.atan2(siny_cosp, cosy_cosp)
+                # theta_degrees = math.degrees(theta_radians)
             else:
                 self.get_logger().warn(
                     f"Could not get transform from '{robot_base_frame}' to "
@@ -456,9 +465,11 @@ class BrainClientNode(Node):
             ori = self.last_odom.pose.pose.orientation
 
             # Compute yaw from quaternion
-            siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-            cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-            theta = math.atan2(siny_cosp, cosy_cosp)
+            # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y) # Unused due to theta_degrees being unused
+            # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z) # Unused due to theta_degrees being unused
+            # theta_radians = math.atan2(siny_cosp, cosy_cosp) # Unused precursor
+            # theta_degrees = math.degrees(theta_radians) # Unused
+            theta = math.atan2(ori.z, ori.w)
 
             # Create and send the pose_image message
             # No user_token is needed as the server will use the connection_id
@@ -479,7 +490,7 @@ class BrainClientNode(Node):
 
     def _handle_vision_agent_output(self, msg):
         try:
-            self.get_logger().info(f"[BrainClient] Received VisionAgentOutput")
+            self.get_logger().info("[BrainClient] Received VisionAgentOutput")
 
             if not self.primitives_registered:
                 self.get_logger().warn(
@@ -585,7 +596,8 @@ class BrainClientNode(Node):
 
             if payload.next_task.type.value in self.primitives_dict:
                 self.send_primitive_goal(
-                    payload.next_task.type, payload.next_task.inputs
+                    payload.next_task.type,
+                    payload.next_task.inputs,
                 )
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
@@ -680,9 +692,10 @@ class BrainClientNode(Node):
 
                     # Convert quaternion to yaw
                     ori = self.last_map.info.origin.orientation
-                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                    yaw = math.atan2(siny_cosp, cosy_cosp)
+                    # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y) # Unused due to theta_degrees being unused
+                    # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z) # Unused due to theta_degrees being unused
+                    # yaw = math.atan2(siny_cosp, cosy_cosp) # Unused
+                    yaw = math.atan2(ori.z, ori.w)
 
                     map_payload = {
                         "resolution": self.last_map.info.resolution,
@@ -711,9 +724,10 @@ class BrainClientNode(Node):
                     pos = self.last_odom.pose.pose.position
                     ori = self.last_odom.pose.pose.orientation
                     # Compute yaw from quaternion:
-                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                    theta = math.atan2(siny_cosp, cosy_cosp)
+                    # siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y) # Unused due to theta_degrees being unused
+                    # cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z) # Unused due to theta_degrees being unused
+                    # theta = math.atan2(siny_cosp, cosy_cosp) # Unused
+                    theta = math.atan2(ori.z, ori.w)
                     payload["robot_coords"] = {
                         "x": pos.x,
                         "y": pos.y,
@@ -741,9 +755,14 @@ class BrainClientNode(Node):
     def send_primitive_goal(self, task_type, inputs):
         goal_msg = ExecutePrimitive.Goal()
         goal_msg.primitive_type = task_type.value
-        goal_msg.inputs = json.dumps(inputs)
 
-        self.get_logger().info(f"Sending goal for primitive: {goal_msg.primitive_type}")
+        # Inputs are now only the direct arguments for the primitive's execute method.
+        # Robot state injection is handled by the PrimitiveExecutionActionServer.
+        goal_msg.inputs = json.dumps(inputs if inputs is not None else {})
+
+        self.get_logger().info(
+            f"Sending goal for primitive: {goal_msg.primitive_type} with inputs: {goal_msg.inputs}"
+        )
         if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().error("Primitive execution action server not available!")
             return
@@ -879,7 +898,9 @@ class BrainClientNode(Node):
                 "primitive_name": pending_task.type.value,
                 "primitive_id": pending_task.primitive_id,
             }
-            self.send_primitive_goal(pending_task.type, pending_task.inputs)
+            self.send_primitive_goal(
+                pending_task.type, pending_task.inputs, pending_task.primitive_id
+            )
         elif self._pending_next_task is not None:
             # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
             self.get_logger().warn(
