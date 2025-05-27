@@ -4,13 +4,17 @@ import sys
 import os
 import numpy as np
 import cv2
-import math
-import base64
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Add the parent directory to the path so we can import the brain_client module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from brain_client.brain_client_node import BrainClientNode
+from brain_client.message_types import (
+    MessageInType,
+    MessageOut,
+    MessageOutType,
+)
 
 
 # Create mocks for all the ROS2 dependencies
@@ -141,6 +145,8 @@ sys.modules["rclpy"] = MagicMock()
 sys.modules["rclpy.node"] = MagicMock()
 sys.modules["rclpy.node"].Node = MockNode
 sys.modules["rclpy.action"] = MagicMock()
+sys.modules["rclpy.duration"] = MagicMock()
+
 sys.modules["sensor_msgs"] = MagicMock()
 sys.modules["sensor_msgs.msg"] = MagicMock()
 sys.modules["sensor_msgs.msg"].CompressedImage = MockCompressedImage
@@ -224,17 +230,10 @@ sys.modules["brain_client.ws_bridge"] = MagicMock()
 sys.modules["brain_client.ws_bridge"].WSBridge = MockWSBridge
 
 # Now we can import the BrainClientNode
-from brain_client.brain_client_node import BrainClientNode
-from brain_client.message_types import (
-    MessageIn,
-    MessageInType,
-    MessageOut,
-    MessageOutType,
-)
 
 
 def test_brain_client_node_initialization():
-    """Test that the BrainClientNode initializes correctly with the pose image feature."""
+    """Test BrainClientNode initializes correctly with the pose image feature."""
     # Create a BrainClientNode instance
     node = BrainClientNode()
 
@@ -326,7 +325,7 @@ def test_pose_image_flow():
 
 
 def test_pose_image_starts_after_registration():
-    """Test that the pose image timer starts after both ready_for_image and primitives registration."""
+    """Test pose image timer starts after ready_for_image and primitives reg."""
     # Create a BrainClientNode instance
     node = BrainClientNode()
 
@@ -361,7 +360,7 @@ def test_pose_image_starts_after_registration():
 
 
 def test_pose_image_starts_after_ready_for_image():
-    """Test that the pose image timer starts after both primitives registration and ready_for_image."""
+    """Test pose image timer starts after primitives reg and ready_for_image."""
     # Create a BrainClientNode instance
     node = BrainClientNode()
 
@@ -396,7 +395,7 @@ def test_pose_image_starts_after_ready_for_image():
 
 
 def test_pose_image_skips_when_data_missing():
-    """Test that the pose image callback skips sending when image or odometry data is missing."""
+    """Test pose image callback skips when image or odom data is missing."""
     # Create a BrainClientNode instance
     node = BrainClientNode()
 
