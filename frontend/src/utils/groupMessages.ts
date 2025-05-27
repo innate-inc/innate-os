@@ -57,35 +57,68 @@ export function groupMessages(messages: Message[]): DisplayMessage[] {
       msg.sender === "robot_thoughts" ||
       msg.sender === "robot_anticipation"
     ) {
-      const extras: { text: string; timestamp: number }[] = [];
+      const displayedGroupedTexts: string[] = [];
       const groupStartTimestamp = msg.timestamp;
+      let latestTimestampInThisGroup = msg.timestamp; // Tracks the actual last timestamp for duration
 
-      // Collect contiguous robot_thoughts or robot_anticipation messages.
+      let lastSeenRobotThoughtsText: string | null = null;
+      let lastSeenRobotAnticipationText: string | null = null;
+
+      const initialIndexOfGroup = i; // To check if any messages were processed for this group
+
+      // Collect contiguous robot_thoughts or robot_anticipation messages
       while (
         i < messages.length &&
         (messages[i].sender === "robot_thoughts" ||
           messages[i].sender === "robot_anticipation")
       ) {
-        extras.push({
-          text: messages[i].text,
-          timestamp: messages[i].timestamp,
-        });
-        i++;
+        const currentProcessingMessage = messages[i];
+        latestTimestampInThisGroup = currentProcessingMessage.timestamp; // Always update with the current message's timestamp
+
+        let addTextToDisplay = true;
+
+        if (currentProcessingMessage.sender === "robot_thoughts") {
+          if (currentProcessingMessage.text === lastSeenRobotThoughtsText) {
+            addTextToDisplay = false;
+          }
+          // Always update lastSeenRobotThoughtsText with the current message's text for the next comparison
+          lastSeenRobotThoughtsText = currentProcessingMessage.text;
+        } else if (currentProcessingMessage.sender === "robot_anticipation") {
+          if (currentProcessingMessage.text === lastSeenRobotAnticipationText) {
+            addTextToDisplay = false;
+          }
+          // Always update lastSeenRobotAnticipationText with the current message's text for the next comparison
+          lastSeenRobotAnticipationText = currentProcessingMessage.text;
+        }
+
+        if (addTextToDisplay) {
+          displayedGroupedTexts.push(currentProcessingMessage.text);
+        }
+
+        i++; // Move to the next message
       }
 
-      // Calculate duration based on the last message timestamp
+      // Calculate duration based on the actual latest timestamp in the group
+      // and the timestamp of the message before this group started.
       let durationSeconds = 0;
-      if (lastMessageTimestamp !== undefined && extras.length > 0) {
-        const lastExtraTimestamp = extras[extras.length - 1].timestamp;
-        durationSeconds = Math.ceil(lastExtraTimestamp - lastMessageTimestamp);
+      if (lastMessageTimestamp !== undefined && initialIndexOfGroup < i) {
+        // Ensure group had messages
+        durationSeconds = Math.ceil(
+          latestTimestampInThisGroup - lastMessageTimestamp
+        );
       }
 
-      grouped.push({
-        sender: "robot_grouped",
-        groupedExtras: extras.map((e) => e.text),
-        durationSeconds,
-        timestamp: groupStartTimestamp,
-      });
+      // Only add the group if there are texts to display or if you always want to show a group placeholder
+      // For now, we add if there are texts. If no texts were added (all duplicates), this group won't appear.
+      // This might need adjustment based on whether an empty group (with duration) is desired.
+      if (displayedGroupedTexts.length > 0) {
+        grouped.push({
+          sender: "robot_grouped",
+          groupedExtras: displayedGroupedTexts,
+          durationSeconds,
+          timestamp: groupStartTimestamp, // Timestamp of the first message that started this group
+        });
+      }
     } else {
       // Any other message type is handled directly.
       grouped.push(msg);

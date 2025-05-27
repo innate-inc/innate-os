@@ -10,6 +10,7 @@ import {
   IoHardwareChip,
   IoMic,
   IoMicOff,
+  IoBrush,
 } from "react-icons/io5";
 // Import directive icons
 import {
@@ -302,6 +303,12 @@ const DIRECTIVES: Directive[] = [
     title: "Elder Care",
     subtitle: "Proactively cares for users",
     icon: <IoHeart size={16} />,
+  },
+  {
+    id: "interior_designer_directive",
+    title: "Interior Designer",
+    subtitle: "Designs your home",
+    icon: <IoBrush size={16} />,
   },
 ];
 
