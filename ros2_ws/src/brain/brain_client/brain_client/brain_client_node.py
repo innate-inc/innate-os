@@ -52,7 +52,7 @@ from brain_client.ws_bridge import WSBridge
 from brain_client.primitives.navigate_to_position import NavigateToPosition
 from brain_client.primitives.send_email import SendEmail
 from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
-
+from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.sassy_directive import SassyDirective
 from brain_client.directives.friendly_guide_directive import FriendlyGuideDirective
@@ -255,6 +255,7 @@ class BrainClientNode(Node):
             TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail(
                 self.get_logger()
             ),
+            TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
             # Add other primitives here as they become available
         }
 

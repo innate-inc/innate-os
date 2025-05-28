@@ -18,6 +18,7 @@ class DefaultDirective(Directive):
         return [
             TaskType.NAVIGATE_TO_POSITION.value,
             TaskType.SEND_EMAIL.value,
+            TaskType.PICK_UP_TRASH.value,
         ]
 
     def get_prompt(self) -> None:

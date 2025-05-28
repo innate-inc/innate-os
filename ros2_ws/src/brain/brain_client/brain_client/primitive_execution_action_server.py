@@ -26,6 +26,7 @@ from brain_client.primitives.send_picture_via_email import (
     SendPictureViaEmail,
 )  # Import new primitive
 from brain_client.message_types import TaskType
+from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.types import (
     PrimitiveResult,
     RobotStateType,
@@ -69,6 +70,7 @@ class PrimitiveExecutionActionServer(Node):
             TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail(
                 self.get_logger()
             ),  # Add new primitive
+            TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
         }
 
         self._action_server = ActionServer(

@@ -9,7 +9,8 @@ class TaskType(Enum):
     NAVIGATE_TO_POSITION = "navigate_to_position"
     SEND_EMAIL = "send_email"
     SEND_PICTURE_VIA_EMAIL = "send_picture_via_email"
-
+    PICK_UP_TRASH = "pick_up_trash"
+    
 
 class NavigationToPosition(BaseModel):
     x: float
