@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import time
+import threading
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray  # For arm commands
 from std_srvs.srv import Trigger  # Simple service
 from maurice_msgs.srv import GotoJS  # Add this import for arm service
+from brain_messages.action import ExecutePolicy  # Add this import for action
+from rclpy.action import ActionServer
 from cv_bridge import CvBridge
 import numpy as np
 import torch
@@ -16,6 +19,7 @@ from geometry_msgs.msg import Twist
 import json
 import torch.amp
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.executors import MultiThreadedExecutor
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
@@ -78,6 +82,8 @@ policy_config = create_act_config()
 class InferenceNode(Node):
     def __init__(self):
         super().__init__('inference_node')
+        # Enable debug logging
+        self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Inference node started.")
         self.bridge = CvBridge()
         self.image_size = (640, 480)
@@ -123,11 +129,16 @@ class InferenceNode(Node):
         self.latest_image1 = None
         self.latest_image2 = None
         self.latest_joint_state = None
+        # Add timestamp tracking
+        self.latest_image1_timestamp = None
+        self.latest_image2_timestamp = None  
+        self.latest_joint_timestamp = None
 
         # Inference control variables
         self.inference_running = False
         self.inference_start_time = None
         self.inference_duration = 20.0  # 20 seconds
+        self.current_goal_handle = None  # Track current action goal
         
         # Arm positions for start and end
         self.start_position = [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
@@ -145,39 +156,122 @@ class InferenceNode(Node):
         # Service client for arm positioning
         self.arm_goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
         
-        # Service server for starting inference
-        self.run_service = self.create_service(Trigger, '/policy/run', self.run_policy_callback)
+        # Action server for policy execution (replaces service server)
+        self.action_server = ActionServer(
+            self,
+            ExecutePolicy,
+            '/policy/execute',
+            self.execute_policy_callback
+        )
         
-        # Timer to run the inference loop at 15 Hz (but only when active)
-        self.timer = self.create_timer(1/15.0, self.inference_loop)
+        # Desired inference frequency (Hz). The policy loop now lives
+        # directly in the action thread instead of a separate timer.
+        self.inference_hz = 15.0
         
-        self.get_logger().info("Policy loaded and ready. Call '/policy/run' service to start inference.")
+        self.get_logger().info("Policy loaded and ready. Call '/policy/execute' action to start inference.")
 
-    def run_policy_callback(self, request, response):
-        """Service callback to start/restart policy inference for fixed duration."""
+    def execute_policy_callback(self, goal_handle):
+        """Action callback to execute complete policy workflow."""
         if self.inference_running:
-            response.success = False
-            response.message = "Policy is already running"
-            self.get_logger().warn("Policy run requested but already running")
-        else:
-            # First, move arm to start position
-            self.get_logger().info("Moving arm to start position...")
-            if self.call_arm_goto_service(self.start_position, 5):
-                # Wait for arm movement to complete
-                time.sleep(5.0)
-                
-                # Now start inference
-                self.inference_running = True
-                self.inference_start_time = time.time()
-                response.success = True
-                response.message = f"Arm moved to start position. Policy started for {self.inference_duration} seconds"
-                self.get_logger().info(f"Policy inference started for {self.inference_duration} seconds")
-            else:
-                response.success = False
-                response.message = "Failed to move arm to start position"
-                self.get_logger().error("Failed to move arm to start position")
+            result = ExecutePolicy.Result()
+            result.success = False
+            self.get_logger().warn("Policy execution requested but already running")
+            goal_handle.abort()
+            return result
         
-        return response
+        # Execute the complete policy workflow
+        success = self._execute_complete_policy(goal_handle)
+        
+        # Set the goal state and return result
+        result = ExecutePolicy.Result()
+        result.success = success
+        
+        if success:
+            goal_handle.succeed()
+            self.get_logger().info("Policy execution succeeded")
+        else:
+            goal_handle.abort()
+            self.get_logger().error("Policy execution failed")
+            
+        return result
+
+    def _execute_complete_policy(self, goal_handle):
+        """Execute complete policy workflow: arm move -> inference -> arm move."""
+        try:
+            # Set up execution state
+            self.current_goal_handle = goal_handle
+            self.inference_running = True
+            
+            # Step 1: Move arm to start position
+            self.get_logger().info("Moving arm to start position...")
+            if not self.call_arm_goto_service(self.start_position, 5):
+                self.get_logger().error("Failed to move arm to start position")
+                return False
+                
+            # Wait for arm movement to complete
+            time.sleep(5.0)
+            
+            # Step 2: Run inference for specified duration
+            self.inference_start_time = time.time()
+            self.get_logger().info(
+                f"Policy inference started for {self.inference_duration} seconds "
+                f"at ≈{self.inference_hz} Hz"
+            )
+
+            period = 1.0 / self.inference_hz
+            while rclpy.ok():
+                loop_start = time.time()
+
+                # Check for cancellation
+                if goal_handle.is_cancel_requested:
+                    self.get_logger().info("Policy execution canceled")
+                    self._stop_robot()
+                    return False
+
+                # One inference step
+                self._run_inference_once()
+
+                # Feedback
+                elapsed_time = loop_start - self.inference_start_time
+                remaining_time = max(0.0, self.inference_duration - elapsed_time)
+                feedback_msg = ExecutePolicy.Feedback()
+                feedback_msg.elapsed_time = float(elapsed_time)
+                feedback_msg.remaining_time = float(remaining_time)
+                goal_handle.publish_feedback(feedback_msg)
+
+                # Stop after the allotted duration
+                if elapsed_time >= self.inference_duration:
+                    break
+
+                # Sleep to maintain the desired loop rate
+                sleep_time = period - (time.time() - loop_start)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+            
+            # Step 3: Stop robot and move arm to end position
+            self._stop_robot()
+            self.get_logger().info("Moving arm to end position...")
+            self.call_arm_goto_service(self.end_position, 5)
+            
+            self.get_logger().info("Policy execution completed successfully")
+            return True
+            
+        except Exception as e:
+            self.get_logger().error(f"Error during policy execution: {e}")
+            self._stop_robot()
+            return False
+            
+        finally:
+            # Clean up state
+            self.inference_running = False
+            self.current_goal_handle = None
+
+    def _stop_robot(self):
+        """Stop the robot by sending zero commands."""
+        twist_msg = Twist()
+        twist_msg.linear.x = 0.0
+        twist_msg.angular.z = 0.0
+        self.cmd_vel_pub.publish(twist_msg)
 
     def call_arm_goto_service(self, position, time_duration=5):
         """Call the arm goto service with specified position."""
@@ -203,117 +297,129 @@ class InferenceNode(Node):
     ####################################################
     def image1_callback(self, msg: Image):
         try:
-            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            # Specify encoding explicitly instead of passthrough
+            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.latest_image1_timestamp = msg.header.stamp
+            # self.get_logger().debug(f"Received image1 at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}")
         except Exception as e:
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
         try:
-            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            # Specify encoding explicitly instead of passthrough  
+            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.latest_image2_timestamp = msg.header.stamp
+            # self.get_logger().debug(f"Received image2 at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}")
         except Exception as e:
             self.get_logger().error(f"Error converting image2: {e}")
 
     def joint_state_callback(self, msg: JointState):
         self.latest_joint_state = msg
+        self.latest_joint_timestamp = msg.header.stamp
+        # self.get_logger().debug(f"Received joint state at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}")
 
     ####################################################
-    # Simplified Inference Loop
+    # Single-step Inference (called from the action loop)
     ####################################################
-    def inference_loop(self):
-        """Simplified inference that runs for fixed duration when triggered."""
-        if not self.inference_running:
-            return
-            
-        # Check if inference duration has expired
-        if time.time() - self.inference_start_time > self.inference_duration:
-            self.inference_running = False
-            self.get_logger().info("Policy inference stopped after timeout")
-            
-            # Send zero commands to stop the robot
-            twist_msg = Twist()
-            twist_msg.linear.x = 0.0
-            twist_msg.angular.z = 0.0
-            self.cmd_vel_pub.publish(twist_msg)
-            
-            # Move arm to end position
-            self.get_logger().info("Moving arm to end position...")
-            self.call_arm_goto_service(self.end_position, 5)
-            
-            return
-
+    def _run_inference_once(self):
+        """
+        Run one forward pass of the policy and publish the resulting
+        base and arm commands. Returns immediately if any sensor data
+        is still missing.
+        """
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
+            # self.get_logger().warn("Missing sensor data - skipping inference")
             return
 
-        start_time = time.time()
+        # Check how recent the data is (commented out for now)
+        # current_time = self.get_clock().now()
+        # if self.latest_image1_timestamp:
+        #     img1_age = (current_time - self.latest_image1_timestamp).nanoseconds / 1e9
+        #     self.get_logger().debug(f"Image1 age: {img1_age:.3f}s")
+        # if self.latest_image2_timestamp:
+        #     img2_age = (current_time - self.latest_image2_timestamp).nanoseconds / 1e9  
+        #     self.get_logger().debug(f"Image2 age: {img2_age:.3f}s")
 
-        # Preprocess images
+        # --- image preprocessing ---
         try:
-            img1 = cv2.resize(self.latest_image1, self.image_size)
-            img2 = cv2.resize(self.latest_image2, self.image_size)
+            # Convert from BGR to RGB if needed (OpenCV uses BGR, neural nets often expect RGB)
+            img1_rgb = cv2.cvtColor(self.latest_image1, cv2.COLOR_BGR2RGB)
+            img2_rgb = cv2.cvtColor(self.latest_image2, cv2.COLOR_BGR2RGB)
+            
+            img1 = cv2.resize(img1_rgb, self.image_size)
+            img2 = cv2.resize(img2_rgb, self.image_size)
             img1 = img1.astype(np.float32) / 255.0
             img2 = img2.astype(np.float32) / 255.0
             img1 = np.transpose(img1, (2, 0, 1))
             img2 = np.transpose(img2, (2, 0, 1))
-            img1_tensor = torch.tensor(img1).to(self.device).unsqueeze(0)
-            img2_tensor = torch.tensor(img2).to(self.device).unsqueeze(0)
+            img1_tensor = torch.tensor(img1, device=self.device).unsqueeze(0)
+            img2_tensor = torch.tensor(img2, device=self.device).unsqueeze(0)
+            
+            # self.get_logger().debug(f"Processed images - img1 shape: {img1_tensor.shape}, img2 shape: {img2_tensor.shape}")
         except Exception as e:
             self.get_logger().error(f"Error processing images: {e}")
             return
 
-        # Process the joint state
+        # --- joint-state preprocessing ---
         try:
-            qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
-            qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device)
+            qpos = np.asarray(self.latest_joint_state.position, dtype=np.float32)
+            qpos_tensor = torch.tensor(qpos, device=self.device).unsqueeze(0)
+            # self.get_logger().debug(f"Joint state: {qpos}")
         except Exception as e:
             self.get_logger().error(f"Error processing joint state: {e}")
             return
 
-        # Create batch dictionary for the new API
         batch = {
             "observation.image_camera_1": img1_tensor,
             "observation.image_camera_2": img2_tensor,
             "observation.state": qpos_tensor
         }
 
-        # Get next action from policy (handles all buffering/ensembling internally)
+        # --- policy forward pass ---
         with torch.no_grad():
             try:
-                action = self.policy.select_action(batch)  # Returns a single action tensor
-                action_np = action.cpu().numpy()
-                
-                # Squeeze batch dimension if present
-                if action_np.ndim > 1:
-                    action_np = action_np.squeeze(0)  # Remove batch dimension
-                
-                # Check if action has the expected dimensions
-                if len(action_np) < 8:
-                    self.get_logger().error(f"Action has wrong dimensions. Expected 8, got {len(action_np)}")
+                action = self.policy.select_action(batch)
+                action_np = action.cpu().numpy().squeeze(0)
+
+                if action_np.shape[0] < 8:
+                    self.get_logger().error(
+                        f"Action has wrong dimensions. Expected 8, got {action_np.shape[0]}"
+                    )
                     return
-                
-                # Extract and publish the twist command (last two elements)
+
+                # Base command – last two values
                 twist_msg = Twist()
                 twist_msg.linear.x = float(action_np[-2]) / 2
                 twist_msg.angular.z = float(action_np[-1]) / 2
                 self.cmd_vel_pub.publish(twist_msg)
 
-                # Extract and publish the arm command (first six elements)
+                # Arm command – first six values
                 arm_msg = Float64MultiArray()
-                arm_msg.data = [float(x) for x in action_np[:6]]
+                arm_msg.data = [float(v) for v in action_np[:6]]
                 self.arm_state_pub.publish(arm_msg)
 
-                self.get_logger().info(f"Inference cycle time: {time.time() - start_time:.3f} seconds")
-                
+                # Reduce this to just basic info
+                self.get_logger().info(
+                    f"Published cmds – twist: [{twist_msg.linear.x:.3f}, {twist_msg.angular.z:.3f}], "
+                    f"arm: {arm_msg.data[:3]}..."
+                )
             except Exception as e:
                 self.get_logger().error(f"Error during inference: {e}")
 
 def main(args=None):
     rclpy.init(args=args)
     node = InferenceNode()
+    
+    # Use MultiThreadedExecutor instead of default single-threaded
+    executor = MultiThreadedExecutor(num_threads=4)  # Adjust thread count as needed
+    executor.add_node(node)
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         node.get_logger().info("Inference node shutting down.")
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
