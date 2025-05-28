@@ -63,6 +63,7 @@ from brain_client.directives.interior_designer_directive import (
 )
 from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
 from brain_client.directives.clean_house_directive import CleanHouseDirective
+from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
 
 class BrainClientNode(Node):
     def __init__(self):
@@ -276,6 +277,7 @@ class BrainClientNode(Node):
                 ElderSafetyDirective(),
                 HouseJokerDirective(),
                 CleanHouseDirective(),
+                HideAndSeekDirective(),
             ]
         }
         self.current_directive = self.directives["default_directive"]
