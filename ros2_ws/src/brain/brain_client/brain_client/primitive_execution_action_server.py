@@ -22,15 +22,16 @@ from brain_messages.action import ExecutePrimitive
 # Import available primitive(s) and any needed types.
 from brain_client.primitives.navigate_to_position import NavigateToPosition
 from brain_client.primitives.send_email import SendEmail
-from brain_client.primitives.send_picture_via_email import (
-    SendPictureViaEmail,
-)  # Import new primitive
-from brain_client.message_types import TaskType
+from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
 from brain_client.primitives.pick_up_trash import PickUpTrash
+from brain_client.primitives.drop_trash import DropTrash
+
 from brain_client.primitives.types import (
     PrimitiveResult,
     RobotStateType,
 )  # Import RobotStateType
+
+from brain_client.message_types import TaskType
 
 # Import ROS message types for subscriptions
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
@@ -71,6 +72,7 @@ class PrimitiveExecutionActionServer(Node):
                 self.get_logger()
             ),  # Add new primitive
             TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
+            TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
         }
 
         self._action_server = ActionServer(
