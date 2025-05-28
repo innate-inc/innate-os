@@ -47,7 +47,7 @@ class PickUpTrash(Primitive):
             self.logger.error("PickUpTrash primitive could not acquire a ROS node.")
             self._action_client = None
         else:
-            self._action_client = ActionClient(self.node, ExecutePolicy, 'execute_policy')
+            self._action_client = ActionClient(self.node, ExecutePolicy, '/policy/execute')
         self._goal_handle = None
         # self.action_result = None # Can be local to execute
         # self.action_success = False # Can be local to execute
