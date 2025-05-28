@@ -4,6 +4,8 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray  # For arm commands
+from std_srvs.srv import Trigger  # Simple service
+from maurice_msgs.srv import GotoJS  # Add this import for arm service
 from cv_bridge import CvBridge
 import numpy as np
 import torch
@@ -38,7 +40,7 @@ def create_act_config():
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,  # num_queries
-        n_action_steps=30,  # CHANGED: Match training config for efficiency
+        n_action_steps=15,  # CHANGED: Match training config for efficiency
         input_shapes=input_shapes,
         output_shapes=output_shapes,
         
@@ -52,7 +54,7 @@ def create_act_config():
         n_heads=8,  # nheads
         dim_feedforward=3200,
         n_encoder_layers=4,  # enc_layers
-        n_decoder_layers=1,  # CHANGED: Match train.py (was 7)
+        n_decoder_layers=4,  # CHANGED: Match train.py (was 7)
         
         # VAE parameters - MATCH TRAINING
         use_vae=True,
@@ -84,7 +86,7 @@ class InferenceNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load normalization stats first
-        checkpoint_path = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/ACT-test/checkpoints/act_policy_epoch_50000.pth'
+        checkpoint_path ='/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/PaperCorner_Filtered_20250526_213031/act_policy_epoch_90000.pth'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pt')
@@ -122,6 +124,15 @@ class InferenceNode(Node):
         self.latest_image2 = None
         self.latest_joint_state = None
 
+        # Inference control variables
+        self.inference_running = False
+        self.inference_start_time = None
+        self.inference_duration = 20.0  # 20 seconds
+        
+        # Arm positions for start and end
+        self.start_position = [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
+        self.end_position = [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+        
         # Subscribers for images and joint state with sensor QoS
         self.create_subscription(Image, '/color/image', self.image1_callback, image_qos)
         self.create_subscription(Image, '/image_raw', self.image2_callback, image_qos)
@@ -131,8 +142,61 @@ class InferenceNode(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
 
-        # Timer to run the inference loop at 15 Hz
+        # Service client for arm positioning
+        self.arm_goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
+        
+        # Service server for starting inference
+        self.run_service = self.create_service(Trigger, '/policy/run', self.run_policy_callback)
+        
+        # Timer to run the inference loop at 15 Hz (but only when active)
         self.timer = self.create_timer(1/15.0, self.inference_loop)
+        
+        self.get_logger().info("Policy loaded and ready. Call '/policy/run' service to start inference.")
+
+    def run_policy_callback(self, request, response):
+        """Service callback to start/restart policy inference for fixed duration."""
+        if self.inference_running:
+            response.success = False
+            response.message = "Policy is already running"
+            self.get_logger().warn("Policy run requested but already running")
+        else:
+            # First, move arm to start position
+            self.get_logger().info("Moving arm to start position...")
+            if self.call_arm_goto_service(self.start_position, 5):
+                # Wait for arm movement to complete
+                time.sleep(5.0)
+                
+                # Now start inference
+                self.inference_running = True
+                self.inference_start_time = time.time()
+                response.success = True
+                response.message = f"Arm moved to start position. Policy started for {self.inference_duration} seconds"
+                self.get_logger().info(f"Policy inference started for {self.inference_duration} seconds")
+            else:
+                response.success = False
+                response.message = "Failed to move arm to start position"
+                self.get_logger().error("Failed to move arm to start position")
+        
+        return response
+
+    def call_arm_goto_service(self, position, time_duration=5):
+        """Call the arm goto service with specified position."""
+        if not self.arm_goto_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().error("Arm goto service not available")
+            return False
+            
+        request = GotoJS.Request()
+        request.data.data = position
+        request.time = time_duration
+        
+        try:
+            future = self.arm_goto_client.call_async(request)
+            self.get_logger().info(f"Arm goto service called with position: {position}")
+            return True
+                
+        except Exception as e:
+            self.get_logger().error(f"Error calling arm goto service: {e}")
+            return False
 
     ####################################################
     # Callback Methods for Sensor Data
@@ -156,7 +220,27 @@ class InferenceNode(Node):
     # Simplified Inference Loop
     ####################################################
     def inference_loop(self):
-        """Simplified inference that lets ACTPolicy handle all the buffering and ensembling."""
+        """Simplified inference that runs for fixed duration when triggered."""
+        if not self.inference_running:
+            return
+            
+        # Check if inference duration has expired
+        if time.time() - self.inference_start_time > self.inference_duration:
+            self.inference_running = False
+            self.get_logger().info("Policy inference stopped after timeout")
+            
+            # Send zero commands to stop the robot
+            twist_msg = Twist()
+            twist_msg.linear.x = 0.0
+            twist_msg.angular.z = 0.0
+            self.cmd_vel_pub.publish(twist_msg)
+            
+            # Move arm to end position
+            self.get_logger().info("Moving arm to end position...")
+            self.call_arm_goto_service(self.end_position, 5)
+            
+            return
+
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
             return
 
@@ -200,9 +284,6 @@ class InferenceNode(Node):
                 # Squeeze batch dimension if present
                 if action_np.ndim > 1:
                     action_np = action_np.squeeze(0)  # Remove batch dimension
-                
-                # Debug: Print action shape and content
-                self.get_logger().info(f"Action shape: {action_np.shape}, Action content: {action_np}")
                 
                 # Check if action has the expected dimensions
                 if len(action_np) < 8:
