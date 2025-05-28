@@ -43,16 +43,16 @@ class PrimitiveExecutionActionServer(Node):
         super().__init__("primitive_execution_action_server")
 
         # Robot state storage
-        self.last_image = None  # Stores cv2 image object
+        self.last_main_camera_image = None  # Stores cv2 image object
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
 
         # Subscribers for robot state
         # TODO: Make topic names configurable if needed (e.g., via parameters)
-        self.image_sub = self.create_subscription(
+        self.main_camera_image_sub = self.create_subscription(
             CompressedImage,
             "/camera/color/image_raw/compressed",
-            self.image_callback,
+            self.main_camera_image_callback,
             10,  # QoS profile depth
         )
         self.odom_sub = self.create_subscription(
@@ -159,31 +159,31 @@ class PrimitiveExecutionActionServer(Node):
             required_states = primitive.get_required_robot_states()
             robot_state_to_inject = {}
 
-            if RobotStateType.LAST_IMAGE_B64 in required_states:
-                if self.last_image is not None:
+            if RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64 in required_states:
+                if self.last_main_camera_image is not None:
                     try:
                         encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
                         success, encoded_img_bytes = cv2.imencode(
-                            ".jpg", self.last_image, encode_params
+                            ".jpg", self.last_main_camera_image, encode_params
                         )
                         if success:
                             robot_state_to_inject[
-                                RobotStateType.LAST_IMAGE_B64.value
+                                RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
                             ] = base64.b64encode(encoded_img_bytes.tobytes()).decode(
                                 "utf-8"
                             )
                         else:
                             self.get_logger().error(
-                                "Failed to encode last_image for primitive state"
+                                "Failed to encode last_main_camera_image for primitive state"
                             )
                     except Exception as e_img:
                         self.get_logger().error(
-                            f"Error encoding last_image for primitive: {e_img}"
+                            f"Error encoding last_main_camera_image for primitive: {e_img}"
                         )
                 else:
                     self.get_logger().warn(
                         f"Primitive {primitive_type} requires "
-                        f"LAST_IMAGE_B64 but none available."
+                        f"LAST_MAIN_CAMERA_IMAGE_B64 but none available."
                     )
 
             if RobotStateType.LAST_ODOM in required_states:
@@ -329,10 +329,10 @@ class PrimitiveExecutionActionServer(Node):
         super().destroy_node()
 
     # Callbacks for state subscriptions
-    def image_callback(self, msg: CompressedImage):
+    def main_camera_image_callback(self, msg: CompressedImage):
         try:
             np_arr = np.frombuffer(msg.data, np.uint8)
-            self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             # self.get_logger().debug('Received and decoded new image for primitives.')
         except Exception as e:
             self.get_logger().error(
