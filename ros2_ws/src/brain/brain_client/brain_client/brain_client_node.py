@@ -242,7 +242,7 @@ class BrainClientNode(Node):
             self._handle_primitives_and_directive_registered,
         )
 
-        for _ in range(3):
+        for _ in range(10):
             self.ws_bridge.send_message(
                 InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
             )
