@@ -16,6 +16,9 @@ import base64  # For encoding
 import numpy as np  # For map data
 import math  # For yaw calculation
 
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+
+
 # Import the action definition – ensure that it is built and available.
 from brain_messages.action import ExecutePrimitive
 
@@ -47,13 +50,22 @@ class PrimitiveExecutionActionServer(Node):
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
 
+        image_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
+        self.image_topic = self.get_parameter("image_topic").value
+
         # Subscribers for robot state
         # TODO: Make topic names configurable if needed (e.g., via parameters)
         self.main_camera_image_sub = self.create_subscription(
             CompressedImage,
-            "/camera/color/image_raw/compressed",
+            self.image_topic,
             self.main_camera_image_callback,
-            10,  # QoS profile depth
+            image_qos
         )
         self.odom_sub = self.create_subscription(
             Odometry, "/odom", self.odom_callback, 10
@@ -358,7 +370,7 @@ class PrimitiveExecutionActionServer(Node):
         try:
             np_arr = np.frombuffer(msg.data, np.uint8)
             self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            # self.get_logger().debug('Received and decoded new image for primitives.')
+            self.get_logger().debug('Received and decoded new image for primitives.')
         except Exception as e:
             self.get_logger().error(
                 f"Failed to decode compressed image for primitive state: {e}"
