@@ -6,6 +6,7 @@ from maurice_msgs.srv import GotoJS
 from brain_client.primitives.types import Primitive, PrimitiveResult
 import threading
 
+
 class DropTrash(Primitive):
     """
     Primitive for commanding the robot arm to drop trash.
@@ -38,8 +39,10 @@ class DropTrash(Primitive):
             self.logger.error("ROS Node not available for GotoJS service client.")
             return False, "ROS Node not available"
 
-        if not self.goto_js_client: # Initialize client if it doesn't exist
-            self.goto_js_client = self.node.create_client(GotoJS, "/maurice_arm/goto_js")
+        if not self.goto_js_client:  # Initialize client if it doesn't exist
+            self.goto_js_client = self.node.create_client(
+                GotoJS, "/maurice_arm/goto_js"
+            )
 
         if not self.goto_js_client:
             self.logger.error("GotoJS service client could not be initialized.")
@@ -87,7 +90,7 @@ class DropTrash(Primitive):
         """
         Executes the trash dropping sequence by making two ROS service calls.
         """
-        if not self.node: # Check if node is set
+        if not self.node:  # Check if node is set
             self.logger.error(
                 "DropTrash primitive is not functional due to missing ROS node."
             )
@@ -98,7 +101,9 @@ class DropTrash(Primitive):
 
         # Initialize client here if not already done, now that we know self.node exists
         if not self.goto_js_client:
-            self.goto_js_client = self.node.create_client(GotoJS, "/maurice_arm/goto_js")
+            self.goto_js_client = self.node.create_client(
+                GotoJS, "/maurice_arm/goto_js"
+            )
             if not self.goto_js_client:
                 self.logger.error(
                     "DropTrash primitive could not create GotoJS service client."

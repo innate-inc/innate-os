@@ -45,6 +45,11 @@ def generate_launch_description():
                 executable="primitive_execution_action_server.py",
                 name="primitive_execution_action_server",
                 output="screen",
+                parameters=[
+                    {
+                        "image_topic": "/camera/color/image_raw/compressed",
+                    }
+                ],
             ),
         ]
     )
