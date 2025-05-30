@@ -862,12 +862,12 @@ class BrainClientNode(Node):
             feedback_text = feedback_msg_wrapper.feedback.feedback 
             self.get_logger().info(f"Received primitive feedback: {feedback_text}")
 
-            # Send this feedback as a chat message
-            # feedback_chat_payload = MessageOut(
-            #     type=MessageOutType.CHAT_OUT,
-            #     payload={"text": f"[Feedback] {feedback_text}"},
-            # )
-            # self._handle_chat_out(feedback_chat_payload, sender="primitive_feedback")
+            # Send this feedback to the server
+            feedback_msg = MessageIn(
+                type=MessageInType.PRIMITIVE_FEEDBACK,
+                payload={"feedback": feedback_text},
+            )
+            self.ws_bridge.send_message(feedback_msg)
         except AttributeError:
             self.get_logger().error(
                 f"Error accessing feedback text. Received feedback structure: {feedback_msg_wrapper}"

@@ -39,6 +39,7 @@ class MessageInType(str, Enum):
     PRIMITIVE_COMPLETED = "primitive_completed"
     PRIMITIVE_INTERRUPTED = "primitive_interrupted"
     PRIMITIVE_FAILED = "primitive_failed"
+    PRIMITIVE_FEEDBACK = "primitive_feedback"
     REGISTER_PRIMITIVES_AND_DIRECTIVE = "register_primitives_and_directive"
     RESET = "reset"
 
