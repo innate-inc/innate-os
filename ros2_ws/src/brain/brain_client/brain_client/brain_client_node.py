@@ -41,6 +41,7 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry, OccupancyGrid
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
@@ -79,6 +80,8 @@ class BrainClientNode(Node):
 
         # New parameters for optional depth processing:
         self.declare_parameter("depth_image_topic", "/camera/depth/image_raw")
+        # New parameter for AMCL pose topic
+        self.declare_parameter("amcl_pose_topic", "/amcl_pose")
 
         # New parameter for the map topic
         self.declare_parameter("map_topic", "/map")
@@ -117,6 +120,9 @@ class BrainClientNode(Node):
         self.map_topic = (
             self.get_parameter("map_topic").get_parameter_value().string_value
         )
+        self.amcl_pose_topic = (
+            self.get_parameter("amcl_pose_topic").get_parameter_value().string_value
+        )
         self.send_depth = (
             self.get_parameter("send_depth").get_parameter_value().bool_value
         )
@@ -124,6 +130,7 @@ class BrainClientNode(Node):
         #     self.get_parameter("odom_topic").get_parameter_value().string_value
         # ) # Removed odom_topic
         self.last_odom = None
+        self.last_amcl_pose = None
         # self.odom_sub = self.create_subscription(
         #     Odometry, self.odom_topic, self.odom_callback, 10
         # ) # Removed odom_sub
@@ -176,6 +183,7 @@ class BrainClientNode(Node):
         self.last_image = None
         self.last_depth_image = None
         self.last_map = None  # Store the latest map data
+        # self.last_amcl_pose = None # Already initialized above
 
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -201,6 +209,19 @@ class BrainClientNode(Node):
             self.depth_image_sub = self.create_subscription(
                 Image, self.depth_image_topic, self.depth_image_callback, 1
             )
+
+        # Subscribe to AMCL pose topic
+        amcl_pose_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        self.amcl_pose_sub = self.create_subscription(
+            PoseWithCovarianceStamped,
+            self.amcl_pose_topic,
+            self.amcl_pose_callback,
+            amcl_pose_qos,
+        )
 
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
@@ -451,6 +472,11 @@ class BrainClientNode(Node):
         """Store the latest map data."""
         self.last_map = msg
 
+    def amcl_pose_callback(self, msg: PoseWithCovarianceStamped):
+        """Store the latest AMCL pose data."""
+        self.last_amcl_pose = msg
+        # self.get_logger().debug(f"Received amcl_pose at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
+
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
         self.ready_for_image = True
@@ -474,6 +500,19 @@ class BrainClientNode(Node):
 
             # Skip if no valid image or odometry data is available
             if self.last_image is None or self.last_odom is None:
+                self.get_logger().warn("Skipping pose_image: No image or odom/amcl_pose.")
+                return
+            
+            # Use self.last_amcl_pose if available, otherwise fallback to self.last_odom (or skip)
+            current_pose_source = None
+            if self.last_amcl_pose:
+                current_pose_source = self.last_amcl_pose.pose
+                # self.get_logger().debug("Using amcl_pose for pose_image_callback")
+            elif self.last_odom: # Fallback, though ideally amcl_pose is what we want for covariance
+                current_pose_source = self.last_odom.pose
+                self.get_logger().warn("Falling back to last_odom for pose_image_callback (no covariance will be sent).")
+            else:
+                self.get_logger().warn("Skipping pose_image: No amcl_pose or odom available.")
                 return
 
             # Compress the image as JPEG
@@ -484,8 +523,8 @@ class BrainClientNode(Node):
                 return
 
             # Extract position and orientation data
-            pos = self.last_odom.pose.pose.position
-            ori = self.last_odom.pose.pose.orientation
+            pos = current_pose_source.pose.position # Use selected source
+            ori = current_pose_source.pose.orientation # Use selected source
 
             # Compute yaw from quaternion
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
@@ -500,6 +539,12 @@ class BrainClientNode(Node):
                 "y": pos.y,
                 "theta": theta,
             }
+            
+            # Add covariance if available (i.e., from amcl_pose)
+            if hasattr(current_pose_source, 'covariance'):
+                payload["cov_x"] = current_pose_source.covariance[0]  # Variance of x
+                payload["cov_y"] = current_pose_source.covariance[7]  # Variance of y
+                payload["cov_yaw"] = current_pose_source.covariance[35] # Variance of yaw (renamed from cov_angle_z)
 
             pose_image_msg = MessageIn(type=MessageInType.POSE_IMAGE, payload=payload)
             self.ws_bridge.send_message(pose_image_msg)
@@ -673,6 +718,13 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Sending image callback.\033[0m"
             )
             try:
+                # Ensure AMCL pose is available before proceeding with image/map data
+                if not self.last_amcl_pose:
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No amcl_pose data available for agent_loop_callback. Skipping image send.\033[0m"
+                    )
+                    return
+
                 # Compress the RGB image as JPEG (70% quality)
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
                 success, encoded_img = cv2.imencode(
@@ -752,33 +804,23 @@ class BrainClientNode(Node):
                     return
 
                 # Include robot coordinates (if available) in the payload.
-                if self.last_odom is not None:
-                    pos = self.last_odom.pose.pose.position
-                    ori = self.last_odom.pose.pose.orientation
-                    # Compute yaw from quaternion:
-                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                    theta = math.atan2(siny_cosp, cosy_cosp)
-                    payload["robot_coords"] = {
-                        "x": pos.x,
-                        "y": pos.y,
-                        "z": pos.z,
-                        "theta": theta,
-                        "frame_id": self.last_odom.header.frame_id,
-                    }
-                else:
-                    self.get_logger().warn(
-                        "\033[93m[BrainClient] No odometry data available.\033[0m"
-                    )
-                    return
-
-                # Build and send the message
-                image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
-                self.ws_bridge.send_message(image_msg)
-
-                # Reset flags so we do not resend the same images
-                self.ready_for_image = False
-                self.last_depth_image = None
+                amcl_pose_data = self.last_amcl_pose.pose
+                pos = amcl_pose_data.pose.position
+                ori = amcl_pose_data.pose.orientation
+                siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                theta = math.atan2(siny_cosp, cosy_cosp)
+                robot_coords_payload = {
+                    "x": pos.x,
+                    "y": pos.y,
+                    "z": pos.z,
+                    "theta": theta,
+                    "frame_id": self.last_amcl_pose.header.frame_id, # Use amcl_pose frame_id
+                    "cov_x": amcl_pose_data.covariance[0], # Variance of x
+                    "cov_y": amcl_pose_data.covariance[7], # Variance of y
+                    "cov_yaw": amcl_pose_data.covariance[35], # Variance of yaw (renamed from cov_angle_z)
+                }
+                payload["robot_coords"] = robot_coords_payload
             except Exception as e:
                 self.get_logger().error(f"Error in agent_loop_callback: {e}")
                 raise
