@@ -84,6 +84,16 @@ class MockCompressedImage:
             self.data = data
 
 
+class MockSetBoolRequest:
+    def __init__(self, data=True):
+        self.data = data
+
+class MockSetBoolResponse:
+    def __init__(self, success=True, message=""):
+        self.success = success
+        self.message = message
+
+
 class MockWSBridge:
     def __init__(
         self, node, incoming_topic="ws_messages", outgoing_topic="ws_outgoing"
@@ -143,6 +153,8 @@ sys.modules["sensor_msgs"] = MagicMock()
 sys.modules["sensor_msgs.msg"] = MagicMock()
 sys.modules["sensor_msgs.msg"].CompressedImage = MockCompressedImage
 sys.modules["sensor_msgs.msg"].Image = MagicMock()
+sys.modules["action_msgs"] = MagicMock()
+sys.modules["action_msgs.msg"] = MagicMock()
 sys.modules["geometry_msgs"] = MagicMock()
 sys.modules["geometry_msgs.msg"] = MagicMock()
 sys.modules["geometry_msgs.msg"].Twist = MagicMock()
@@ -267,6 +279,11 @@ def test_pose_image_flow():
     # Reset the sent messages
     node.ws_bridge.sent_messages = []
 
+    # Step 0: Set the brain to active
+    node.handle_set_brain_active(
+        MockSetBoolRequest(data=True), MockSetBoolResponse()
+    )
+
     # Step 1: Simulate primitives registration
     reg_msg = MessageOut(
         type=MessageOutType.PRIMITIVES_AND_DIRECTIVE_REGISTERED,
@@ -337,6 +354,11 @@ def test_pose_image_starts_after_registration():
     node.ready_for_image = True
     node.primitives_registered = False
 
+    # Set the brain to active
+    node.handle_set_brain_active(
+        MockSetBoolRequest(data=True), MockSetBoolResponse()
+    )
+
     # Simulate receiving ready_for_image message
     ready_msg = MessageOut(
         type=MessageOutType.READY_FOR_IMAGE,
@@ -371,6 +393,11 @@ def test_pose_image_starts_after_ready_for_image():
     # Set primitives_registered but not ready_for_image
     node.ready_for_image = False
     node.primitives_registered = True
+
+    # Set the brain to active
+    node.handle_set_brain_active(
+        MockSetBoolRequest(data=True), MockSetBoolResponse()
+    )
 
     # Simulate primitives registration
     reg_msg = MessageOut(
