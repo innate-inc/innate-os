@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 import time
+import threading
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray  # For arm commands
+from std_srvs.srv import Trigger  # Simple service
+from maurice_msgs.srv import GotoJS  # Add this import for arm service
+from brain_messages.action import ExecutePolicy  # Add this import for action
+from rclpy.action import ActionServer
 from cv_bridge import CvBridge
 import numpy as np
 import torch
@@ -14,89 +19,102 @@ from geometry_msgs.msg import Twist
 import json
 import torch.amp
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.executors import MultiThreadedExecutor
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 # Import your policy class and trajectory generator.
-from InnateACT.policy import ACTPolicy
+from act_test.ACT import ACTPolicy, ACTConfig
 
-# Import the TemporalEnsembler from a separate file.
-from manipulation.ensemble import ACTTemporalEnsembler
+# Convert old policy_config to new ACTConfig format
+def create_act_config():
+    # Define input shapes based on camera setup and state/action dimensions
+    input_shapes = {
+        "observation.image_camera_1": [3, 480, 640],  # [C, H, W]
+        "observation.image_camera_2": [3, 480, 640],  # [C, H, W]
+        "observation.state": [6]  # state_dim
+    }
+    
+    output_shapes = {
+        "action": [8]  # action_dim
+    }
+    
+    return ACTConfig(
+        n_obs_steps=1,
+        chunk_size=30,  # num_queries
+        n_action_steps=15,  # CHANGED: Match training config for efficiency
+        input_shapes=input_shapes,
+        output_shapes=output_shapes,
+        
+        # Architecture parameters - MATCH TRAINING
+        vision_backbone="resnet18",  # backbone
+        replace_final_stride_with_dilation=False,  # not dilation
+        
+        # Transformer parameters - MATCH TRAINING
+        pre_norm=False,
+        dim_model=512,  # hidden_dim
+        n_heads=8,  # nheads
+        dim_feedforward=3200,
+        n_encoder_layers=4,  # enc_layers
+        n_decoder_layers=4,  # CHANGED: Match train.py (was 7)
+        
+        # VAE parameters - MATCH TRAINING
+        use_vae=True,
+        
+        # Training parameters - MATCH TRAINING
+        dropout=0.1,
+        kl_weight=10.0,  # CHANGED: Match train.py (was 100)
+        
+        # Temporal ensembling (enable if desired)
+        temporal_ensemble_coeff=None,  # CHANGED: Match train.py default (was 0.3)
+        
+        # Optimizer settings - MATCH TRAINING
+        optimizer_lr=1e-5,  # CHANGED: Match train.py (was 5e-5)
+        optimizer_weight_decay=1e-4,  # weight_decay
+        optimizer_lr_backbone=1e-5,  # CHANGED: Match train.py (was 5e-5)
+    )
 
-# Import the new service type.
-from maurice_msgs.srv import GotoJS
-
-# Define the policy configuration (ensure these match your training configuration)
-policy_config = {
-    'lr': 5e-5,
-    'weight_decay': 1e-4,
-    'num_queries': 30,
-    'kl_weight': 100,
-    'hidden_dim': 512,
-    'dim_feedforward': 3200,
-    'lr_backbone': 5e-5,
-    'backbone': 'resnet18',
-    'enc_layers': 4,
-    'dec_layers': 7,
-    'nheads': 8,
-    'camera_names': ['camera_1', 'camera_2'],
-    'position_embedding': "sine",
-    'masks': False,
-    'dilation': False,
-    'dropout': 0.1,
-    'pre_norm': False,
-    'state_dim': 6,
-    'action_dim': 8
-}
-
-####################################################
-# Temporal Ensembling Configuration
-####################################################
-# Global variables for temporal ensembling
-USE_TEMPORAL_ENSEMBLING = False
-TEMPORAL_ENSEMBLE_COEFF = 0.3
-CHUNK_SIZE = 10
+# Global configuration
+policy_config = create_act_config()
 
 class InferenceNode(Node):
     def __init__(self):
         super().__init__('inference_node')
+        # Enable debug logging
+        self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Inference node started.")
         self.bridge = CvBridge()
         self.image_size = (640, 480)
 
         # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.policy = ACTPolicy(policy_config).to(self.device).half()  # Convert model to half precision
-        checkpoint_path = '/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Axel_wednesday_20250515_0749/policy_epoch_26952_seed_100.ckpt'
+        
+        # Load normalization stats first
+        checkpoint_path ='/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/PaperCorner_Filtered_20250526_213031/act_policy_epoch_90000.pth'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
-        stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
-        metadata_path = os.path.join(checkpoint_dir, 'metadata.json')
+        stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pt')
+        
+        # Load dataset stats for normalization
+        dataset_stats = None
         try:
-            with open(stats_path, 'rb') as f:
-                self.norm_stats = pickle.load(f)
-            self.get_logger().info("Normalization stats loaded.")
+            # Load from .pt file instead of .pkl
+            dataset_stats = torch.load(stats_path, map_location='cpu')
+            self.get_logger().info("Dataset stats loaded from .pt file.")
         except Exception as e:
-            self.get_logger().error(f"Failed to load normalization stats: {e}")
-            self.norm_stats = None
-        try:
-            with open(metadata_path, 'r') as f:
-                self.metadata = json.load(f)
-            self.get_logger().info("Metadata loaded successfully.")
-        except Exception as e:
-            self.get_logger().error(f"Failed to load metadata: {e}")
-            self.metadata = None
+            self.get_logger().error(f"Failed to load dataset stats: {e}")
+            dataset_stats = None
+        
+        # Initialize policy with config and stats
+        self.policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
+        
         try:
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             self.policy.load_state_dict(state_dict)
             self.policy.eval()
             self.get_logger().info("Policy loaded successfully.")
-            
-            # Compiled model will be initialized on first inference
-            self.compiled_policy = None
-            self.get_logger().info("Model will be compiled with float16 support on first inference.")
         except Exception as e:
             self.get_logger().error(f"Failed to load policy checkpoint: {e}")
 
@@ -111,7 +129,21 @@ class InferenceNode(Node):
         self.latest_image1 = None
         self.latest_image2 = None
         self.latest_joint_state = None
+        # Add timestamp tracking
+        self.latest_image1_timestamp = None
+        self.latest_image2_timestamp = None  
+        self.latest_joint_timestamp = None
 
+        # Inference control variables
+        self.inference_running = False
+        self.inference_start_time = None
+        self.inference_duration = 20.0  # 20 seconds
+        self.current_goal_handle = None  # Track current action goal
+        
+        # Arm positions for start and end
+        self.start_position = [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
+        self.end_position = [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+        
         # Subscribers for images and joint state with sensor QoS
         self.create_subscription(Image, '/color/image', self.image1_callback, image_qos)
         self.create_subscription(Image, '/image_raw', self.image2_callback, image_qos)
@@ -121,205 +153,273 @@ class InferenceNode(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
 
-        # Timer to run the inference loop at 10 Hz
-        self.timer = self.create_timer(1/15.0, self.inference_loop)
+        # Service client for arm positioning
+        self.arm_goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
+        
+        # Action server for policy execution (replaces service server)
+        self.action_server = ActionServer(
+            self,
+            ExecutePolicy,
+            '/policy/execute',
+            self.execute_policy_callback
+        )
+        
+        # Desired inference frequency (Hz). The policy loop now lives
+        # directly in the action thread instead of a separate timer.
+        self.inference_hz = 15.0
+        
+        self.get_logger().info("Policy loaded and ready. Call '/policy/execute' action to start inference.")
 
-        # Action buffer for storing predicted actions
-        self.action_buffer = []
-
-        # If using temporal ensembling, create an ensembler instance
-        if USE_TEMPORAL_ENSEMBLING:
-            self.temporal_ensembler = ACTTemporalEnsembler(TEMPORAL_ENSEMBLE_COEFF, CHUNK_SIZE)
-            self.get_logger().info("Temporal ensembling enabled.")
+    def execute_policy_callback(self, goal_handle):
+        """Action callback to execute complete policy workflow."""
+        if self.inference_running:
+            result = ExecutePolicy.Result()
+            result.success = False
+            self.get_logger().warn("Policy execution requested but already running")
+            goal_handle.abort()
+            return result
+        
+        # Execute the complete policy workflow
+        success = self._execute_complete_policy(goal_handle)
+        
+        # Set the goal state and return result
+        result = ExecutePolicy.Result()
+        result.success = success
+        
+        if success:
+            goal_handle.succeed()
+            self.get_logger().info("Policy execution succeeded")
         else:
-            self.temporal_ensembler = None
+            goal_handle.abort()
+            self.get_logger().error("Policy execution failed")
+            
+        return result
 
-        # Call the /maurice_arm/goto_js service at startup
-        self.call_goto_js_service()
+    def _execute_complete_policy(self, goal_handle):
+        """Execute complete policy workflow: arm move -> inference -> arm move."""
+        try:
+            # Set up execution state
+            self.current_goal_handle = goal_handle
+            self.inference_running = True
+            
+            # Step 1: Move arm to start position
+            self.get_logger().info("Moving arm to start position...")
+            if not self.call_arm_goto_service(self.start_position, 5):
+                self.get_logger().error("Failed to move arm to start position")
+                return False
+                
+            # Wait for arm movement to complete
+            time.sleep(5.0)
+            
+            # Step 2: Run inference for specified duration
+            self.inference_start_time = time.time()
+            self.get_logger().info(
+                f"Policy inference started for {self.inference_duration} seconds "
+                f"at ≈{self.inference_hz} Hz"
+            )
+
+            period = 1.0 / self.inference_hz
+            while rclpy.ok():
+                loop_start = time.time()
+
+                # Check for cancellation
+                if goal_handle.is_cancel_requested:
+                    self.get_logger().info("Policy execution canceled")
+                    self._stop_robot()
+                    return False
+
+                # One inference step
+                self._run_inference_once()
+
+                # Feedback
+                elapsed_time = loop_start - self.inference_start_time
+                remaining_time = max(0.0, self.inference_duration - elapsed_time)
+                feedback_msg = ExecutePolicy.Feedback()
+                feedback_msg.elapsed_time = float(elapsed_time)
+                feedback_msg.remaining_time = float(remaining_time)
+                goal_handle.publish_feedback(feedback_msg)
+
+                # Stop after the allotted duration
+                if elapsed_time >= self.inference_duration:
+                    break
+
+                # Sleep to maintain the desired loop rate
+                sleep_time = period - (time.time() - loop_start)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+            
+            # Step 3: Stop robot and move arm to end position
+            self._stop_robot()
+            self.get_logger().info("Moving arm to end position...")
+            self.call_arm_goto_service(self.end_position, 5)
+            
+            self.get_logger().info("Policy execution completed successfully")
+            return True
+            
+        except Exception as e:
+            self.get_logger().error(f"Error during policy execution: {e}")
+            self._stop_robot()
+            return False
+            
+        finally:
+            # Clean up state
+            self.inference_running = False
+            self.current_goal_handle = None
+
+    def _stop_robot(self):
+        """Stop the robot by sending zero commands."""
+        twist_msg = Twist()
+        twist_msg.linear.x = 0.0
+        twist_msg.angular.z = 0.0
+        self.cmd_vel_pub.publish(twist_msg)
+
+    def call_arm_goto_service(self, position, time_duration=5):
+        """Call the arm goto service with specified position."""
+        if not self.arm_goto_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().error("Arm goto service not available")
+            return False
+            
+        request = GotoJS.Request()
+        request.data.data = position
+        request.time = time_duration
+        
+        try:
+            future = self.arm_goto_client.call_async(request)
+            self.get_logger().info(f"Arm goto service called with position: {position}")
+            return True
+                
+        except Exception as e:
+            self.get_logger().error(f"Error calling arm goto service: {e}")
+            return False
 
     ####################################################
     # Callback Methods for Sensor Data
     ####################################################
     def image1_callback(self, msg: Image):
         try:
-            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            # Specify encoding explicitly instead of passthrough
+            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.latest_image1_timestamp = msg.header.stamp
+            # self.get_logger().debug(f"Received image1 at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}")
         except Exception as e:
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
         try:
-            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            # Specify encoding explicitly instead of passthrough  
+            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.latest_image2_timestamp = msg.header.stamp
+            # self.get_logger().debug(f"Received image2 at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}")
         except Exception as e:
             self.get_logger().error(f"Error converting image2: {e}")
 
     def joint_state_callback(self, msg: JointState):
         self.latest_joint_state = msg
+        self.latest_joint_timestamp = msg.header.stamp
+        # self.get_logger().debug(f"Received joint state at {msg.header.stamp.sec}.{msg.header.stamp.nanosec}")
 
     ####################################################
-    # Service Call for Initial Joint State
+    # Single-step Inference (called from the action loop)
     ####################################################
-    def call_goto_js_service(self):
-        self.goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
-        while not self.goto_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Waiting for /maurice_arm/goto_js service to become available...")
-        req = GotoJS.Request()
-        # Use metadata if available to set the initial joint state; otherwise, use zeros.
-        if self.metadata and 'average_first_step_action' in self.metadata:
-            joint_data = self.metadata['average_first_step_action'][:6]
-            req.data = Float64MultiArray(data=joint_data)
-            req.time = 1  # for example, 1 second to reach the target state
-        else:
-            self.get_logger().warn("Metadata not available for initial joint state. Using default zeros.")
-            req.data = Float64MultiArray(data=[0.0] * 6)
-            req.time = 1
-        future = self.goto_client.call_async(req)
-        future.add_done_callback(self.goto_response_callback)
-
-    def goto_response_callback(self, future):
-        try:
-            response = future.result()
-            if response.success:
-                self.get_logger().info("GotoJS service call succeeded.")
-            else:
-                self.get_logger().warn("GotoJS service call failed.")
-        except Exception as e:
-            self.get_logger().error(f"Service call failed: {e}")
-
-    ####################################################
-    # Policy Inference
-    ####################################################
-    def run_inference(self):
-        """Run the policy network to predict actions."""
+    def _run_inference_once(self):
+        """
+        Run one forward pass of the policy and publish the resulting
+        base and arm commands. Returns immediately if any sensor data
+        is still missing.
+        """
         if self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
-            # self.get_logger().info("Waiting for all topics to be received...")
-            return None
+            # self.get_logger().warn("Missing sensor data - skipping inference")
+            return
 
-        # Preprocess images
+        # Check how recent the data is (commented out for now)
+        # current_time = self.get_clock().now()
+        # if self.latest_image1_timestamp:
+        #     img1_age = (current_time - self.latest_image1_timestamp).nanoseconds / 1e9
+        #     self.get_logger().debug(f"Image1 age: {img1_age:.3f}s")
+        # if self.latest_image2_timestamp:
+        #     img2_age = (current_time - self.latest_image2_timestamp).nanoseconds / 1e9  
+        #     self.get_logger().debug(f"Image2 age: {img2_age:.3f}s")
+
+        # --- image preprocessing ---
         try:
-            img1 = cv2.resize(self.latest_image1, self.image_size)
-            img2 = cv2.resize(self.latest_image2, self.image_size)
+            # Convert from BGR to RGB if needed (OpenCV uses BGR, neural nets often expect RGB)
+            img1_rgb = cv2.cvtColor(self.latest_image1, cv2.COLOR_BGR2RGB)
+            img2_rgb = cv2.cvtColor(self.latest_image2, cv2.COLOR_BGR2RGB)
+            
+            img1 = cv2.resize(img1_rgb, self.image_size)
+            img2 = cv2.resize(img2_rgb, self.image_size)
             img1 = img1.astype(np.float32) / 255.0
             img2 = img2.astype(np.float32) / 255.0
             img1 = np.transpose(img1, (2, 0, 1))
             img2 = np.transpose(img2, (2, 0, 1))
-            img1_tensor = torch.tensor(img1).to(self.device).half()  # Convert to half precision
-            img2_tensor = torch.tensor(img2).to(self.device).half()  # Convert to half precision
-            images = torch.stack([img1_tensor, img2_tensor], dim=0).unsqueeze(0)
-            # self.get_logger().info(f"images.shape: {images.shape}")
+            img1_tensor = torch.tensor(img1, device=self.device).unsqueeze(0)
+            img2_tensor = torch.tensor(img2, device=self.device).unsqueeze(0)
+            
+            # self.get_logger().debug(f"Processed images - img1 shape: {img1_tensor.shape}, img2 shape: {img2_tensor.shape}")
         except Exception as e:
             self.get_logger().error(f"Error processing images: {e}")
-            return None
+            return
 
-        # Process the joint state
+        # --- joint-state preprocessing ---
         try:
-            qpos = np.array(self.latest_joint_state.position, dtype=np.float32)
-            qpos_tensor = torch.tensor(qpos).unsqueeze(0).to(self.device).half()  # Convert to half precision
-            if self.norm_stats is not None:
-                qpos_mean = torch.tensor(self.norm_stats["qpos_mean"], dtype=torch.float16, device=self.device)
-                qpos_std = torch.tensor(self.norm_stats["qpos_std"], dtype=torch.float16, device=self.device)
-                qpos_tensor = (qpos_tensor - qpos_mean) / qpos_std
+            qpos = np.asarray(self.latest_joint_state.position, dtype=np.float32)
+            qpos_tensor = torch.tensor(qpos, device=self.device).unsqueeze(0)
+            # self.get_logger().debug(f"Joint state: {qpos}")
         except Exception as e:
             self.get_logger().error(f"Error processing joint state: {e}")
-            return None
+            return
 
-        # Run the policy network
+        batch = {
+            "observation.image_camera_1": img1_tensor,
+            "observation.image_camera_2": img2_tensor,
+            "observation.state": qpos_tensor
+        }
+
+        # --- policy forward pass ---
         with torch.no_grad():
-            start_time = time.time()
-            
-            # Initialize compiled model on first inference
-            if self.compiled_policy is None:
-                self.get_logger().info("Compiling the policy model with float16 support...")
-                try:
-                    # First warm up the model with a few forward passes
-                    self.get_logger().info("Warming up model before tracing...")
-                    example_qpos = qpos_tensor.clone().detach().half()
-                    example_images = images.clone().detach().half()
-                    
-                    # Run a few forward passes to warm up the model
-                    for _ in range(3):
-                        _ = self.policy(example_qpos, example_images)
-                    
-                    # Now trace the model with float16 inputs
-                    self.get_logger().info("Tracing model...")
-                    scripted = torch.jit.trace(self.policy, (example_qpos, example_images))
-                    
-                    # Then compile for low overhead with float16 support
-                    self.get_logger().info("Compiling model...")
-                    self.compiled_policy = torch.compile(
-                        scripted,
-                        backend="inductor",
-                        mode="reduce-overhead"  # minimize launch checks
+            try:
+                action = self.policy.select_action(batch)
+                action_np = action.cpu().numpy().squeeze(0)
+
+                if action_np.shape[0] < 8:
+                    self.get_logger().error(
+                        f"Action has wrong dimensions. Expected 8, got {action_np.shape[0]}"
                     )
-                    self.get_logger().info("Model compilation with float16 support successful!")
-                except Exception as e:
-                    self.get_logger().error(f"Model compilation failed: {e}")
-                    self.compiled_policy = self.policy  # Fallback to original model
-            
-            # Use the compiled model for inference
-            output = self.compiled_policy(qpos_tensor, images)
-            
-            self.get_logger().info(f"Policy time: {time.time() - start_time:.3f} seconds")
-            if self.norm_stats is not None and "action_mean" in self.norm_stats:
-                action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=torch.float16, device=self.device)
-                action_std = torch.tensor(self.norm_stats["action_std"], dtype=torch.float16, device=self.device)
-                unnormalized_actions = output * action_std + action_mean
-                # Here, we use the first 10 predicted actions as our chunk
-                actions = unnormalized_actions[:, :CHUNK_SIZE, :].cpu()
-                # self.get_logger().info(f"actions: {actions.shape}")
-                return actions
-            else:
-                return None
+                    return
 
-    ####################################################
-    # Inference Loop
-    ####################################################
-    def inference_loop(self):
-        start_time = time.time()
-        # If the action buffer is empty, run inference to get a new sequence of actions.
-        if not self.action_buffer:
-            actions = self.run_inference()
-            if actions is None:
-                return
+                # Base command – last two values
+                twist_msg = Twist()
+                twist_msg.linear.x = float(action_np[-2]) / 2
+                twist_msg.angular.z = float(action_np[-1]) / 2
+                self.cmd_vel_pub.publish(twist_msg)
 
-            if USE_TEMPORAL_ENSEMBLING:
-                # Convert the list of predicted actions into a tensor of shape (1, chunk_size, action_dim)
-                # Update the temporal ensembler with the new chunk.
-                ensembled_action_tensor = self.temporal_ensembler.update(actions)
-                # self.get_logger().info(f"ensembled_action_tensor: {ensembled_action_tensor.shape}")
-                ensembled_action = ensembled_action_tensor.squeeze(0).cpu().numpy().tolist()
+                # Arm command – first six values
+                arm_msg = Float64MultiArray()
+                arm_msg.data = [float(v) for v in action_np[:6]]
+                self.arm_state_pub.publish(arm_msg)
 
-                # In temporal ensembling mode, we produce one ensembled action per inference cycle.
-                self.action_buffer.append(ensembled_action)
-            else:
-                # In raw mode, fill the buffer with all predicted actions.
-                self.action_buffer = actions.squeeze(0).cpu().numpy().tolist()
-                # self.get_logger().info("New action buffer computed with raw predictions.")
-
-        # Pop the next action from the buffer and publish it.
-        next_action = self.action_buffer.pop(0)
-        # self.get_logger().info(f"next_action: {next_action}")
-
-        # Extract and publish the twist command (last two elements).
-        twist_msg = Twist()
-        twist_msg.linear.x = next_action[-2] / 2
-        twist_msg.angular.z = next_action[-1] / 2
-        self.cmd_vel_pub.publish(twist_msg)
-
-        # Extract and publish the arm command (first six elements).
-        arm_msg = Float64MultiArray()
-        arm_msg.data = next_action[:6]
-        self.arm_state_pub.publish(arm_msg)
-
-        # self.get_logger().info(f"Inference cycle time: {time.time() - start_time:.3f} seconds")
+                # Reduce this to just basic info
+                self.get_logger().info(
+                    f"Published cmds – twist: [{twist_msg.linear.x:.3f}, {twist_msg.angular.z:.3f}], "
+                    f"arm: {arm_msg.data[:3]}..."
+                )
+            except Exception as e:
+                self.get_logger().error(f"Error during inference: {e}")
 
 def main(args=None):
     rclpy.init(args=args)
     node = InferenceNode()
+    
+    # Use MultiThreadedExecutor instead of default single-threaded
+    executor = MultiThreadedExecutor(num_threads=4)  # Adjust thread count as needed
+    executor.add_node(node)
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         node.get_logger().info("Inference node shutting down.")
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
