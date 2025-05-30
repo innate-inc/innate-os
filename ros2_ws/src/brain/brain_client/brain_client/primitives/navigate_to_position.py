@@ -80,7 +80,50 @@ class Nav2Controller:
             # Get feedback but don't block for too long
             feedback = self.navigator.getFeedback()
             if feedback:
-                self.logger.debug(f"Navigation feedback: {feedback}")
+                distance_remaining = feedback.distance_remaining
+                estimated_time_remaining = feedback.estimated_time_remaining
+                navigation_time = feedback.navigation_time
+                current_pose = feedback.current_pose.pose
+                current_position = current_pose.position
+                goal_position = goal_pose.pose.position
+                current_orientation = current_pose.orientation
+
+                # Compute the distance to the goal
+                distance_to_goal = math.sqrt(
+                    (current_position.x - goal_position.x) ** 2 +
+                    (current_position.y - goal_position.y) ** 2
+                )
+                # Compute the angle to the goal
+                goal_orientation = math.atan2(goal_position.y - current_position.y, goal_position.x - current_position.x)
+                
+                # Calculate current robot yaw from quaternion
+                # Assuming current_orientation has x, y, z, w attributes
+                q_x = current_orientation.x
+                q_y = current_orientation.y
+                q_z = current_orientation.z
+                q_w = current_orientation.w
+                current_robot_yaw = math.atan2(2.0 * (q_w * q_z + q_x * q_y), 
+                                                 1.0 - 2.0 * (q_y * q_y + q_z * q_z))
+                
+                angle_difference = math.atan2(math.sin(goal_orientation - current_robot_yaw), math.cos(goal_orientation - current_robot_yaw))
+
+                # Compute the
+                self.logger.info(f"Distance remaining: {distance_remaining}, estimated by us: {distance_to_goal}, angle difference: {angle_difference}")
+                self.logger.info(f"Navigation time: {navigation_time}")
+
+                # Here we should basically decide that if we're close enough to the goal, we should send the feedback to the server
+                # It probably is relative to the distance to the goal that was computed by the navigator
+                # Also the angle matters. And it's badly computed right now.
+
+                # If we haven't moved a lot in the past 10 seconds, we should also send that feedback to the server
+                # saying that we're stuck and another primitive should be used to get us unstuck.
+                # Although it's usually the goal of the navigator to get us unstuck...
+                # Let's just say if we're stuck for a while, we need to change the goal.
+
+                # One thing to consider that could be good though is, if we're close enough to the goal,
+                # we can say "I'm close enough to the goal, if I need to navigate again, I should already start doing it now while stopping the current task"
+                # That should really be if we're 95% of the way there, because if what we wanted was a small movement, we don't want to cancel the task.
+
             # Small sleep to prevent CPU hogging
             time.sleep(0.1)  # 100ms check interval
 
