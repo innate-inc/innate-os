@@ -87,12 +87,13 @@ class Primitive(ABC):
     def set_feedback_callback(self, callback):
         """Sets the feedback callback function."""
         self._feedback_callback = callback
-        if self.logger: # Check if logger is available
+        if self.logger:  # Check if logger is available
             self.logger.debug(f"Feedback callback set for primitive {self.name}.")
         else:
             # Consider a simple print or no log if logger isn't guaranteed
-            print(f"DEBUG: Feedback callback set for primitive {self.name} (logger not available).")
-
+            print(
+                f"DEBUG: Feedback callback set for primitive {self.name} (logger not available)."
+            )
 
     def _send_feedback(self, message: str):
         """Sends feedback if the callback is set."""
@@ -101,12 +102,16 @@ class Primitive(ABC):
                 self._feedback_callback(message)
             except Exception as e:
                 if self.logger:
-                    self.logger.error(f"Error sending feedback for primitive {self.name}: {e}")
+                    self.logger.error(
+                        f"Error sending feedback for primitive {self.name}: {e}"
+                    )
                 else:
-                    print(f"ERROR: Error sending feedback for primitive {self.name}: {e} (logger not available).")
+                    print(
+                        f"ERROR: Error sending feedback for primitive {self.name}: {e} (logger not available)."
+                    )
         # else:
-            # Optionally log if feedback is not sent because callback is not set
-            # if self.logger:
-            #     self.logger.debug(f"Feedback callback not set for {self.name}. Message not sent: {message}")
-            # else:
-            #     print(f"DEBUG: Feedback callback not set for {self.name}. Message not sent: {message} (logger not available).")
+        # Optionally log if feedback is not sent because callback is not set
+        # if self.logger:
+        #     self.logger.debug(f"Feedback callback not set for {self.name}. Message not sent: {message}")
+        # else:
+        #     print(f"DEBUG: Feedback callback not set for {self.name}. Message not sent: {message} (logger not available).")

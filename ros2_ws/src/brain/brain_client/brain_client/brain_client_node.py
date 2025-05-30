@@ -68,6 +68,7 @@ from brain_client.directives.security_patrol_directive import SecurityPatrolDire
 from brain_client.directives.clean_house_directive import CleanHouseDirective
 from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
 
+
 class BrainClientNode(Node):
     def __init__(self):
         super().__init__("brain_client_node")
@@ -214,7 +215,7 @@ class BrainClientNode(Node):
         amcl_pose_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=1,
         )
         self.amcl_pose_sub = self.create_subscription(
             PoseWithCovarianceStamped,
@@ -483,7 +484,11 @@ class BrainClientNode(Node):
 
         # Start the pose image timer after the first ready_for_image, if not already started
         # and if the brain is active
-        if self.is_brain_active and not self.pose_image_started and self.primitives_registered:
+        if (
+            self.is_brain_active
+            and not self.pose_image_started
+            and self.primitives_registered
+        ):
             self.get_logger().info("Starting regular pose image transmission")
             self.pose_image_started = True
             self.pose_image_timer = self.create_timer(
@@ -495,24 +500,34 @@ class BrainClientNode(Node):
         try:
             # Skip if brain is not active
             if not self.is_brain_active:
-                self.get_logger().debug("Brain not active, skipping pose_image_callback.")
+                self.get_logger().debug(
+                    "Brain not active, skipping pose_image_callback."
+                )
                 return
 
             # Skip if no valid image or odometry data is available
             if self.last_image is None or self.last_odom is None:
-                self.get_logger().warn("Skipping pose_image: No image or odom/amcl_pose.")
+                self.get_logger().warn(
+                    "Skipping pose_image: No image or odom/amcl_pose."
+                )
                 return
-            
+
             # Use self.last_amcl_pose if available, otherwise fallback to self.last_odom (or skip)
             current_pose_source = None
             if self.last_amcl_pose:
                 current_pose_source = self.last_amcl_pose.pose
                 # self.get_logger().debug("Using amcl_pose for pose_image_callback")
-            elif self.last_odom: # Fallback, though ideally amcl_pose is what we want for covariance
+            elif (
+                self.last_odom
+            ):  # Fallback, though ideally amcl_pose is what we want for covariance
                 current_pose_source = self.last_odom.pose
-                self.get_logger().warn("Falling back to last_odom for pose_image_callback (no covariance will be sent).")
+                self.get_logger().warn(
+                    "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
+                )
             else:
-                self.get_logger().warn("Skipping pose_image: No amcl_pose or odom available.")
+                self.get_logger().warn(
+                    "Skipping pose_image: No amcl_pose or odom available."
+                )
                 return
 
             # Compress the image as JPEG
@@ -523,8 +538,8 @@ class BrainClientNode(Node):
                 return
 
             # Extract position and orientation data
-            pos = current_pose_source.pose.position # Use selected source
-            ori = current_pose_source.pose.orientation # Use selected source
+            pos = current_pose_source.pose.position  # Use selected source
+            ori = current_pose_source.pose.orientation  # Use selected source
 
             # Compute yaw from quaternion
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
@@ -539,12 +554,14 @@ class BrainClientNode(Node):
                 "y": pos.y,
                 "theta": theta,
             }
-            
+
             # Add covariance if available (i.e., from amcl_pose)
-            if hasattr(current_pose_source, 'covariance'):
+            if hasattr(current_pose_source, "covariance"):
                 payload["cov_x"] = current_pose_source.covariance[0]  # Variance of x
                 payload["cov_y"] = current_pose_source.covariance[7]  # Variance of y
-                payload["cov_yaw"] = current_pose_source.covariance[35] # Variance of yaw (renamed from cov_angle_z)
+                payload["cov_yaw"] = current_pose_source.covariance[
+                    35
+                ]  # Variance of yaw (renamed from cov_angle_z)
 
             pose_image_msg = MessageIn(type=MessageInType.POSE_IMAGE, payload=payload)
             self.ws_bridge.send_message(pose_image_msg)
@@ -815,10 +832,12 @@ class BrainClientNode(Node):
                     "y": pos.y,
                     "z": pos.z,
                     "theta": theta,
-                    "frame_id": self.last_amcl_pose.header.frame_id, # Use amcl_pose frame_id
-                    "cov_x": amcl_pose_data.covariance[0], # Variance of x
-                    "cov_y": amcl_pose_data.covariance[7], # Variance of y
-                    "cov_yaw": amcl_pose_data.covariance[35], # Variance of yaw (renamed from cov_angle_z)
+                    "frame_id": self.last_amcl_pose.header.frame_id,  # Use amcl_pose frame_id
+                    "cov_x": amcl_pose_data.covariance[0],  # Variance of x
+                    "cov_y": amcl_pose_data.covariance[7],  # Variance of y
+                    "cov_yaw": amcl_pose_data.covariance[
+                        35
+                    ],  # Variance of yaw (renamed from cov_angle_z)
                 }
                 payload["robot_coords"] = robot_coords_payload
 
@@ -850,7 +869,7 @@ class BrainClientNode(Node):
 
         send_goal_future = self.primitive_action_client.send_goal_async(
             goal_msg,
-            feedback_callback=self.primitive_feedback_callback  # Add feedback callback
+            feedback_callback=self.primitive_feedback_callback,  # Add feedback callback
         )
         send_goal_future.add_done_callback(self.goal_response_callback)
 
@@ -859,7 +878,7 @@ class BrainClientNode(Node):
         try:
             # The actual feedback message is wrapped, access it via the 'feedback' attribute.
             # And the string message itself is in another 'feedback' field within that.
-            feedback_text = feedback_msg_wrapper.feedback.feedback 
+            feedback_text = feedback_msg_wrapper.feedback.feedback
             self.get_logger().info(f"Received primitive feedback: {feedback_text}")
 
             # Send this feedback to the server
@@ -1003,9 +1022,7 @@ class BrainClientNode(Node):
                 "primitive_name": pending_task.type.value,
                 "primitive_id": pending_task.primitive_id,
             }
-            self.send_primitive_goal(
-                pending_task.type, pending_task.inputs
-            )
+            self.send_primitive_goal(pending_task.type, pending_task.inputs)
         elif self._pending_next_task is not None:
             # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
             self.get_logger().warn(
@@ -1066,10 +1083,16 @@ class BrainClientNode(Node):
                     param_type = "any"
                     if param.annotation != inspect.Parameter.empty:
                         # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
-                        if isinstance(param.annotation, (types.UnionType, types.GenericAlias)) or \
-                           hasattr(param.annotation, '_name') and param.annotation._name in ['List', 'Optional', 'Dict', 'Tuple', 'Union']: # Covers typing.List, typing.Optional etc.
+                        if (
+                            isinstance(
+                                param.annotation, (types.UnionType, types.GenericAlias)
+                            )
+                            or hasattr(param.annotation, "_name")
+                            and param.annotation._name
+                            in ["List", "Optional", "Dict", "Tuple", "Union"]
+                        ):  # Covers typing.List, typing.Optional etc.
                             param_type = str(param.annotation)
-                        elif hasattr(param.annotation, '__name__'):
+                        elif hasattr(param.annotation, "__name__"):
                             param_type = param.annotation.__name__
                         else:
                             # Fallback for other complex types, str() might be a reasonable default
@@ -1154,7 +1177,9 @@ class BrainClientNode(Node):
 
     def _unregister_primitives(self):
         """Internal method to unregister primitives."""
-        self.get_logger().info(f"\033[1;92m[BrainClient] Unregistering primitives\033[0m")
+        self.get_logger().info(
+            f"\033[1;92m[BrainClient] Unregistering primitives\033[0m"
+        )
 
         # As long as we don't have
         # confirmation that the new primitives have been registered, we should not
@@ -1166,12 +1191,12 @@ class BrainClientNode(Node):
             self.get_logger().info(
                 "\033[1;92m[BrainClient] Stopping running primitive due to reset\033[0m"
             )
-            if self._goal_handle: # Check if goal_handle exists before trying to cancel
+            if self._goal_handle:  # Check if goal_handle exists before trying to cancel
                 cancel_future = self._goal_handle.cancel_goal_async()
                 # We don't necessarily need to wait for this in a reset context,
                 # but good to be aware it's async.
                 # cancel_future.add_done_callback(self.cancel_response_callback) # Optional: log cancel response
-                self._goal_handle = None # Clear handle after requesting cancel
+                self._goal_handle = None  # Clear handle after requesting cancel
             self.primitive_running = None
 
             stop_cmd = Twist()
@@ -1179,7 +1204,7 @@ class BrainClientNode(Node):
             stop_cmd.angular.z = 0.0
             self.cmd_vel_pub.publish(stop_cmd)
 
-        self._pending_next_task = None # Clear any pending task
+        self._pending_next_task = None  # Clear any pending task
 
     def _perform_brain_reset(self, memory_state: str):
         # Clear local chat history
@@ -1216,9 +1241,13 @@ class BrainClientNode(Node):
         Service handler for resetting the brain.
         Uses the internal _perform_brain_reset method.
         """
-        self.get_logger().info("\033[1;92m[BrainClient] Received /reset_brain request\033[0m")
+        self.get_logger().info(
+            "\033[1;92m[BrainClient] Received /reset_brain request\033[0m"
+        )
         if not self.is_brain_active:
-            self.get_logger().warn("\033[93m[BrainClient] Brain is currently inactive. Reset request will proceed but brain remains inactive until /set_brain_active is called.\033[0m")
+            self.get_logger().warn(
+                "\033[93m[BrainClient] Brain is currently inactive. Reset request will proceed but brain remains inactive until /set_brain_active is called.\033[0m"
+            )
             # Still allow reset even if inactive, as it's an explicit user command.
             # The brain won't *do* anything until reactivated, but its state will be reset.
 
@@ -1240,8 +1269,10 @@ class BrainClientNode(Node):
             self.get_logger().info("Pose image timer cancelled.")
 
         self.ready_for_image = False
-        self.pose_image_started = False # Reset this flag
-        self.primitives_registered = False # Mark primitives as not registered during deactivation
+        self.pose_image_started = False  # Reset this flag
+        self.primitives_registered = (
+            False  # Mark primitives as not registered during deactivation
+        )
 
         # Stop any running primitive
         if self.primitive_running and self._goal_handle:
@@ -1255,10 +1286,10 @@ class BrainClientNode(Node):
             cancel_future = self._goal_handle.cancel_goal_async()
             # We might want to add a callback to confirm or log, but for deactivation, just sending is key.
             # cancel_future.add_done_callback(self.cancel_response_callback)
-            self._goal_handle = None # Clear after requesting cancel
-        
+            self._goal_handle = None  # Clear after requesting cancel
+
         self.primitive_running = None
-        self._pending_next_task = None # Explicitly clear pending task on deactivation
+        self._pending_next_task = None  # Explicitly clear pending task on deactivation
 
         # Stop robot motion
         stop_cmd = Twist()
@@ -1283,14 +1314,18 @@ class BrainClientNode(Node):
         # The pose_image_timer will be started by _handle_ready_for_image or
         # _handle_primitives_and_directive_registered once the server is ready and primitives are registered.
         if self.agent_timer and self.agent_timer.is_canceled():
-             self.agent_timer = self.create_timer(0.1, self.agent_loop_callback) # Re-create timer
-             self.get_logger().info("Agent timer restarted.")
-        elif not self.agent_timer: # If it was never created or somehow None
-             self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
-             self.get_logger().info("Agent timer created and started.")
+            self.agent_timer = self.create_timer(
+                0.1, self.agent_loop_callback
+            )  # Re-create timer
+            self.get_logger().info("Agent timer restarted.")
+        elif not self.agent_timer:  # If it was never created or somehow None
+            self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
+            self.get_logger().info("Agent timer created and started.")
 
         # Send a READY_FOR_CONNECTION message to the server
-        self.get_logger().info("\033[1;92m[BrainClient] Sending READY_FOR_CONNECTION to server.\033[0m")
+        self.get_logger().info(
+            "\033[1;92m[BrainClient] Sending READY_FOR_CONNECTION to server.\033[0m"
+        )
         ready_msg = InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
         self.ws_bridge.send_message(ready_msg)
 
@@ -1300,11 +1335,13 @@ class BrainClientNode(Node):
         self._unregister_primitives()
         self.register_primitives_and_directive()
 
-        self.get_logger().info("\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m")
+        self.get_logger().info(
+            "\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m"
+        )
 
     def handle_set_brain_active(self, request, response):
         """Service handler for activating or deactivating the brain."""
-        if request.data: # True means activate
+        if request.data:  # True means activate
             if self.is_brain_active:
                 msg = "Brain is already active."
                 self.get_logger().info(msg)
@@ -1314,7 +1351,7 @@ class BrainClientNode(Node):
                 self._reactivate_brain()
                 response.success = True
                 response.message = "Brain reactivated and reset initiated."
-        else: # False means deactivate
+        else:  # False means deactivate
             if not self.is_brain_active:
                 msg = "Brain is already inactive."
                 self.get_logger().info(msg)
