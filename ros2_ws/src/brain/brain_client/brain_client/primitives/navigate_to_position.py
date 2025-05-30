@@ -81,8 +81,6 @@ class Nav2Controller:
             feedback = self.navigator.getFeedback()
             if feedback:
                 distance_remaining = feedback.distance_remaining
-                estimated_time_remaining = feedback.estimated_time_remaining
-                navigation_time = feedback.navigation_time
                 current_pose = feedback.current_pose.pose
                 current_position = current_pose.position
                 goal_position = goal_pose.pose.position
@@ -114,11 +112,16 @@ class Nav2Controller:
                     math.cos(goal_orientation - current_robot_yaw),
                 )
 
+                # Now we compute 2 percentages:
+                # 1. The percentage of the path that has been completed
+                # 2. The percentage of the angle that has been completed
+                path_completion = distance_remaining / distance_to_goal * 100
+                angle_completion = abs(angle_difference) / math.pi * 100
+
                 # Compute the
                 self.logger.info(
-                    f"Distance remaining: {distance_remaining}, estimated by us: {distance_to_goal}, angle difference: {angle_difference}"
+                    f"Path completed: {path_completion}%. Angle completed: {angle_completion}%. Average completion: {(path_completion + angle_completion) / 2}%"
                 )
-                self.logger.info(f"Navigation time: {navigation_time}")
 
                 # Here we should basically decide that if we're close enough to the goal, we should send the feedback to the server
                 # It probably is relative to the distance to the goal that was computed by the navigator
