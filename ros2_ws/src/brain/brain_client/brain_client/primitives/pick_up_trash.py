@@ -6,47 +6,6 @@ from action_msgs.msg import GoalStatus  # Corrected import
 from brain_messages.action import (
     ExecutePolicy,
 )  # Assuming the action file is in brain_messages/action
-import threading  # Added import for threading
-
-_rclpy_initialized = False
-_node = None
-_rclpy_init_lock = threading.Lock()
-
-
-def get_ros_node(logger):
-    global _rclpy_initialized, _node
-    with _rclpy_init_lock:
-        if not _rclpy_initialized:
-            if not rclpy.ok():  # Check if rclpy is already initialized externally
-                try:
-                    rclpy.init()
-                    logger.info("RCLPY initialized by PickUpTrash primitive.")
-                except Exception as e:
-                    logger.error(f"Failed to initialize rclpy: {e}")
-                    return None
-            else:
-                logger.info("RCLPY was already initialized.")
-
-            node_name = f"pick_up_trash_primitive_node_{threading.get_ident()}"
-            _node = rclpy.create_node(
-                node_name,
-                allow_undeclared_parameters=True,
-                automatically_declare_parameters_from_overrides=True,
-            )
-            _rclpy_initialized = True
-            logger.info(f"Node '{node_name}' created for PickUpTrash primitive.")
-        elif _node is None:
-            node_name = f"pick_up_trash_primitive_node_{threading.get_ident()}"
-            _node = rclpy.create_node(
-                node_name,
-                allow_undeclared_parameters=True,
-                automatically_declare_parameters_from_overrides=True,
-            )
-            logger.info(
-                f"Node '{node_name}' created for PickUpTrash primitive on pre-initialized rclpy."
-            )
-        return _node
-
 
 class PickUpTrash(Primitive):
     """
@@ -54,16 +13,9 @@ class PickUpTrash(Primitive):
     """
 
     def __init__(self, logger):
-        self.logger = logger
-        self.node = get_ros_node(self.logger)
-        if self.node is None:
-            # This will make the primitive non-functional, execute should handle this
-            self.logger.error("PickUpTrash primitive could not acquire a ROS node.")
-            self._action_client = None
-        else:
-            self._action_client = ActionClient(
-                self.node, ExecutePolicy, "/policy/execute"
-            )
+        super().__init__(logger) # Call superclass __init__
+        # self.node will be set by the PrimitiveExecutionActionServer
+        self._action_client = None # Initialize to None
         self._goal_handle = None
         # self.action_result = None # Can be local to execute
         # self.action_success = False # Can be local to execute
@@ -94,14 +46,22 @@ class PickUpTrash(Primitive):
             tuple: (result_message, result_status) where result_status is a
                    PrimitiveResult enum value
         """
-        if self.node is None or self._action_client is None:
+        if not self.node: # Check if node is set
             self.logger.error(
-                "PickUpTrash primitive is not functional due to missing ROS node or action client."
+                "PickUpTrash primitive is not functional due to missing ROS node."
             )
-            return "Primitive not initialized correctly", PrimitiveResult.FAILURE
+            return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
+
+        if not self._action_client: # Initialize client if it doesn't exist
+            self._action_client = ActionClient(self.node, ExecutePolicy, "/policy/execute")
+            if not self._action_client:
+                self.logger.error(
+                    "PickUpTrash primitive could not create ExecutePolicy action client."
+                )
+                return "Primitive could not create action client", PrimitiveResult.FAILURE
 
         self.logger.info(
-            f" [96m[BrainClient] Calling ExecutePolicy for picking up trash (blocking) [0m"
+            f" \033[96m[BrainClient] Calling ExecutePolicy for picking up trash (blocking)\033[0m"
         )
 
         if not self._action_client.wait_for_server(timeout_sec=5.0):
