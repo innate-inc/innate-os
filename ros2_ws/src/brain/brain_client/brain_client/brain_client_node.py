@@ -848,8 +848,32 @@ class BrainClientNode(Node):
             self.get_logger().error("Primitive execution action server not available!")
             return
 
-        send_goal_future = self.primitive_action_client.send_goal_async(goal_msg)
+        send_goal_future = self.primitive_action_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.primitive_feedback_callback  # Add feedback callback
+        )
         send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def primitive_feedback_callback(self, feedback_msg_wrapper):
+        """Handles feedback messages from the primitive execution action server."""
+        try:
+            # The actual feedback message is wrapped, access it via the 'feedback' attribute.
+            # And the string message itself is in another 'feedback' field within that.
+            feedback_text = feedback_msg_wrapper.feedback.feedback 
+            self.get_logger().info(f"Received primitive feedback: {feedback_text}")
+
+            # Send this feedback as a chat message
+            # feedback_chat_payload = MessageOut(
+            #     type=MessageOutType.CHAT_OUT,
+            #     payload={"text": f"[Feedback] {feedback_text}"},
+            # )
+            # self._handle_chat_out(feedback_chat_payload, sender="primitive_feedback")
+        except AttributeError:
+            self.get_logger().error(
+                f"Error accessing feedback text. Received feedback structure: {feedback_msg_wrapper}"
+            )
+        except Exception as e:
+            self.get_logger().error(f"Error in primitive_feedback_callback: {e}")
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
