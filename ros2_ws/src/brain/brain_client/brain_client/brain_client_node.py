@@ -98,6 +98,9 @@ class BrainClientNode(Node):
         # Parameter for logging complete vision agent output
         self.declare_parameter("log_everything", False)  # Default to False
 
+        # --- New: Brain active state flag ---
+        self.is_brain_active = False  # Brain starts active
+
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
@@ -218,6 +221,11 @@ class BrainClientNode(Node):
         # Create service for resetting the brain
         self.reset_srv = self.create_service(
             ResetBrain, "/reset_brain", self.handle_reset_brain
+        )
+
+        # --- New: Service for activating/deactivating the brain ---
+        self.set_brain_active_srv = self.create_service(
+            SetBool, "/set_brain_active", self.handle_set_brain_active
         )
 
         self.exit_event = threading.Event()
@@ -448,7 +456,8 @@ class BrainClientNode(Node):
         self.ready_for_image = True
 
         # Start the pose image timer after the first ready_for_image, if not already started
-        if not self.pose_image_started and self.primitives_registered:
+        # and if the brain is active
+        if self.is_brain_active and not self.pose_image_started and self.primitives_registered:
             self.get_logger().info("Starting regular pose image transmission")
             self.pose_image_started = True
             self.pose_image_timer = self.create_timer(
@@ -458,6 +467,11 @@ class BrainClientNode(Node):
     def pose_image_callback(self):
         """Send pose images regularly with the robot's current position."""
         try:
+            # Skip if brain is not active
+            if not self.is_brain_active:
+                self.get_logger().debug("Brain not active, skipping pose_image_callback.")
+                return
+
             # Skip if no valid image or odometry data is available
             if self.last_image is None or self.last_odom is None:
                 return
@@ -498,6 +512,12 @@ class BrainClientNode(Node):
     def _handle_vision_agent_output(self, msg):
         try:
             self.get_logger().info("[BrainClient] Received VisionAgentOutput")
+
+            if not self.is_brain_active:
+                self.get_logger().warn(
+                    "\033[93m[BrainClient] Brain is not active. Skipping VisionAgentOutput.\033[0m"
+                )
+                return
 
             if not self.primitives_registered:
                 self.get_logger().warn(
@@ -635,6 +655,12 @@ class BrainClientNode(Node):
 
     def agent_loop_callback(self):
         # This callback will send the RGB image and, if allowed, the depth image
+        if not self.is_brain_active:
+            self.get_logger().debug(
+                "\033[93m[BrainClient] Brain not active. Skipping agent_loop_callback.\033[0m"
+            )
+            return
+
         if not self.primitives_registered:
             # If primitives are not yet registered, don't send images
             self.get_logger().info(
@@ -1052,16 +1078,9 @@ class BrainClientNode(Node):
         response.current_directive = self.current_directive.name
         return response
 
-    def handle_reset_brain(self, request, response):
-        """
-        Service handler for resetting the brain.
-        Sends a chat message to load the memory instead of a reset message.
-        """
-        self.get_logger().info("\033[1;92m[BrainClient] Resetting brain\033[0m")
-        memory_state = request.memory_state
-        self.get_logger().info(
-            f"\033[1;92m[BrainClient] Memory state: {memory_state}\033[0m"
-        )
+    def _perform_brain_reset(self, memory_state: str):
+        """Internal method to perform the brain reset logic."""
+        self.get_logger().info(f"\033[1;92m[BrainClient] Performing brain reset with memory state: {memory_state}\033[0m")
 
         # As long as we don't have
         # confirmation that the new primitives have been registered, we should not
@@ -1074,19 +1093,24 @@ class BrainClientNode(Node):
         # Stop any running primitive
         if self.primitive_running:
             self.get_logger().info(
-                "\033[1;92m[BrainClient] Stopping running primitive\033[0m"
+                "\033[1;92m[BrainClient] Stopping running primitive due to reset\033[0m"
             )
+            if self._goal_handle: # Check if goal_handle exists before trying to cancel
+                cancel_future = self._goal_handle.cancel_goal_async()
+                # We don't necessarily need to wait for this in a reset context,
+                # but good to be aware it's async.
+                # cancel_future.add_done_callback(self.cancel_response_callback) # Optional: log cancel response
+                self._goal_handle = None # Clear handle after requesting cancel
             self.primitive_running = None
-            # Send a stop command to the robot
-            if self._goal_handle:
-                self._goal_handle.cancel_goal_async()
 
             stop_cmd = Twist()
             stop_cmd.linear.x = 0.0
             stop_cmd.angular.z = 0.0
             self.cmd_vel_pub.publish(stop_cmd)
 
-        # Send a reset message to the robot
+        self._pending_next_task = None # Clear any pending task
+
+        # Send a reset message to the server
         reset_msg = MessageIn(
             type=MessageInType.RESET, payload={"memory_state": memory_state}
         )
@@ -1103,16 +1127,128 @@ class BrainClientNode(Node):
         self.chat_out_pub.publish(out_msg)
 
         # Re-register primitives and directive with the server
+        # This will also re-trigger ready_for_image if server responds positively
         self.register_primitives_and_directive()
 
+    def handle_reset_brain(self, request, response):
+        """
+        Service handler for resetting the brain.
+        Uses the internal _perform_brain_reset method.
+        """
+        self.get_logger().info("\033[1;92m[BrainClient] Received /reset_brain request\033[0m")
+        if not self.is_brain_active:
+            self.get_logger().warn("\033[93m[BrainClient] Brain is currently inactive. Reset request will proceed but brain remains inactive until /set_brain_active is called.\033[0m")
+            # Still allow reset even if inactive, as it's an explicit user command.
+            # The brain won't *do* anything until reactivated, but its state will be reset.
+
+        self._perform_brain_reset(request.memory_state)
         response.success = True
+        return response
+
+    def _deactivate_brain(self):
+        """Deactivates the brain's main operational loops and interactions."""
+        self.get_logger().info("\033[1;93m[BrainClient] Deactivating brain...\033[0m")
+        self.is_brain_active = False
+
+        # Stop timers
+        if self.agent_timer and not self.agent_timer.is_canceled():
+            self.agent_timer.cancel()
+            self.get_logger().info("Agent timer cancelled.")
+        if self.pose_image_timer and not self.pose_image_timer.is_canceled():
+            self.pose_image_timer.cancel()
+            self.get_logger().info("Pose image timer cancelled.")
+
+        self.ready_for_image = False
+        self.pose_image_started = False # Reset this flag
+        self.primitives_registered = False # Mark primitives as not registered during deactivation
+
+        # Stop any running primitive
+        if self.primitive_running and self._goal_handle:
+            self.get_logger().info(
+                "\033[91m[BrainClient] Deactivating: Canceling current goal.\033[0m"
+            )
+            # Store the next task if it exists, prevent immediate execution
+            # For a full deactivation, we probably don't want to store a pending task.
+            # self._pending_next_task = None # Ensure it's cleared.
+
+            cancel_future = self._goal_handle.cancel_goal_async()
+            # We might want to add a callback to confirm or log, but for deactivation, just sending is key.
+            # cancel_future.add_done_callback(self.cancel_response_callback)
+            self._goal_handle = None # Clear after requesting cancel
+        
+        self.primitive_running = None
+        self._pending_next_task = None # Explicitly clear pending task on deactivation
+
+        # Stop robot motion
+        stop_cmd = Twist()
+        stop_cmd.linear.x = 0.0
+        stop_cmd.angular.z = 0.0
+        self.cmd_vel_pub.publish(stop_cmd)
+        self.get_logger().info("Stop command sent to robot.")
+
+        # Optionally, send a message to the server indicating deactivation
+        # deactivate_msg = MessageIn(type=MessageInType.CLIENT_DEACTIVATED, payload={})
+        # self.ws_bridge.send_message(deactivate_msg)
+        # For now, we'll rely on the client just going silent.
+
+        self.get_logger().info("\033[1;93m[BrainClient] Brain deactivated.\033[0m")
+
+    def _reactivate_brain(self):
+        """Reactivates the brain and performs a reset."""
+        self.get_logger().info("\033[1;92m[BrainClient] Reactivating brain...\033[0m")
+        self.is_brain_active = True
+
+        # Perform a reset. This will re-register primitives, clear chat, etc.
+        self._perform_brain_reset(memory_state="Brain reactivated after pause")
+
+        # Restart the agent timer (which sends images based on ready_for_image)
+        # The pose_image_timer will be started by _handle_ready_for_image or
+        # _handle_primitives_and_directive_registered once the server is ready and primitives are registered.
+        if self.agent_timer and self.agent_timer.is_canceled():
+             self.agent_timer = self.create_timer(0.1, self.agent_loop_callback) # Re-create timer
+             self.get_logger().info("Agent timer restarted.")
+        elif not self.agent_timer: # If it was never created or somehow None
+             self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
+             self.get_logger().info("Agent timer created and started.")
+
+
+        # The ready_for_image flag will be set by the server after reset and registration.
+        # The pose_image_timer will be started by the existing logic when ready_for_image and primitives_registered are true.
+
+        self.get_logger().info("\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m")
+
+    def handle_set_brain_active(self, request, response):
+        """Service handler for activating or deactivating the brain."""
+        if request.data: # True means activate
+            if self.is_brain_active:
+                msg = "Brain is already active."
+                self.get_logger().info(msg)
+                response.success = True
+                response.message = msg
+            else:
+                self._reactivate_brain()
+                response.success = True
+                response.message = "Brain reactivated and reset initiated."
+        else: # False means deactivate
+            if not self.is_brain_active:
+                msg = "Brain is already inactive."
+                self.get_logger().info(msg)
+                response.success = True
+                response.message = msg
+            else:
+                self._deactivate_brain()
+                response.success = True
+                response.message = "Brain deactivated."
         return response
 
     def destroy_node(self):
         self.exit_event.set()
         # Cancel the pose image timer if it exists
-        if self.pose_image_timer:
+        if self.pose_image_timer and not self.pose_image_timer.is_canceled():
             self.pose_image_timer.cancel()
+        # Cancel the agent timer if it exists
+        if self.agent_timer and not self.agent_timer.is_canceled():
+            self.agent_timer.cancel()
         return super().destroy_node()
 
 
