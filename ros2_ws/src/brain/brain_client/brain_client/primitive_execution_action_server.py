@@ -65,15 +65,20 @@ class PrimitiveExecutionActionServer(Node):
             1,  # QoS profile with transient local durability might be better for map
         )
 
-        self._primitives = {
-            TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
-            TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
-            TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail(
-                self.get_logger()
-            ),  # Add new primitive
-            TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
-            TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
+        # Mapping from TaskType to primitive class
+        primitive_classes = {
+            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition,
+            TaskType.SEND_EMAIL: SendEmail,
+            TaskType.SEND_PICTURE_VIA_EMAIL: SendPictureViaEmail,
+            TaskType.PICK_UP_TRASH: PickUpTrash,
+            TaskType.DROP_TRASH: DropTrash,
         }
+
+        self._primitives = {}
+        for task_type, primitive_class in primitive_classes.items():
+            primitive_instance = primitive_class(self.get_logger())
+            primitive_instance.node = self  # Inject the node
+            self._primitives[task_type.value] = primitive_instance
 
         self._action_server = ActionServer(
             self,

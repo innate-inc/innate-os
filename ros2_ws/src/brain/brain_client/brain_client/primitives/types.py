@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from rclpy.node import Node
 
 
 class PrimitiveResult(Enum):
@@ -26,6 +27,7 @@ class RobotStateType(Enum):
 class Primitive(ABC):
     def __init__(self, logger):
         self.logger = logger
+        self.node: Node | None = None
         self._feedback_callback = None
 
     @property
