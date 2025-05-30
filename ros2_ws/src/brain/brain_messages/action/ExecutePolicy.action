@@ -1,0 +1,8 @@
+# Goal (empty, like trigger)
+---
+# Result  
+bool success
+---
+# Feedback
+float32 elapsed_time
+float32 remaining_time
