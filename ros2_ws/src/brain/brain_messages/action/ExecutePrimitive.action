@@ -10,4 +10,4 @@ string success_type  # One of: "success", "cancelled", "failure"
 ---
 # Feedback definition
 string primitive_type
-float32 progress 
+string feedback 

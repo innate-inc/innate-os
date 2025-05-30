@@ -47,7 +47,7 @@ class DropTrash(Primitive):
     """
 
     def __init__(self, logger):
-        self.logger = logger
+        super().__init__(logger)  # Call superclass __init__
         self.node = get_ros_node_for_drop_trash(self.logger)
         self.goto_js_client = None
 
@@ -126,6 +126,7 @@ class DropTrash(Primitive):
         # It's important that this time.sleep happens *after* the service call has completed.
         # The rclpy.spin_until_future_complete ensures the service call itself is blocking.
         time.sleep(5.0)
+        self._send_feedback("Arm ready to drop object. Dropping now...") # FEEDBACK 1
 
         # Second arm movement: from zero position, adjust last joint
         joint_positions_2 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # Start from zero position
@@ -133,17 +134,18 @@ class DropTrash(Primitive):
         time_2 = int(1.0)
 
         time.sleep(1.0)
+        self._send_feedback("Object dropped, arm returning to original position...") # FEEDBACK 2
 
         success, message = self._call_goto_js_service(joint_positions_2, time_2)
         if not success:
             return f"Failed second arm movement (adjusting last joint): {message}", PrimitiveResult.FAILURE
-
+        
         joint_positions_3 = [0.8528933180644165, -0.45712627478992107, 1.2946797849754812, -0.9326603190344698, -0.04908738521234052, 0.8881748761857863]
         time_3 = int(2.0)
         success, message = self._call_goto_js_service(joint_positions_3, time_3)
         if not success:
             return f"Failed third arm movement (returning to original position): {message}", PrimitiveResult.FAILURE
-
+        
         self.logger.info(
             "\033[92m[BrainClient] Drop trash sequence completed successfully.\033[0m"
         )

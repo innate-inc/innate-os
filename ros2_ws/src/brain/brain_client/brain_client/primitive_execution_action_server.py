@@ -154,6 +154,22 @@ class PrimitiveExecutionActionServer(Node):
             f"Starting primitive '{primitive_type}' with inputs: {inputs}"
         )
 
+        # Define a feedback publisher for the primitive
+        def _publish_feedback(update_message: str):
+            try:
+                # Assuming ExecutePrimitive.Feedback is the correct type
+                # and it has a string field.
+                feedback_msg = ExecutePrimitive.Feedback()
+                feedback_msg.feedback = update_message
+
+                goal_handle.publish_feedback(feedback_msg)
+                self.get_logger().debug(f"Published feedback for '{primitive_type}': {update_message}; feedback_msg: {feedback_msg}")
+            except Exception as e:
+                self.get_logger().error(f"Failed to publish feedback for '{primitive_type}': {e}")
+
+        # Pass the feedback callback to the primitive if it supports it
+        primitive.set_feedback_callback(_publish_feedback)
+
         try:
             # Get required states and inject them into the primitive
             required_states = primitive.get_required_robot_states()
