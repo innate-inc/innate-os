@@ -821,6 +821,14 @@ class BrainClientNode(Node):
                     "cov_yaw": amcl_pose_data.covariance[35], # Variance of yaw (renamed from cov_angle_z)
                 }
                 payload["robot_coords"] = robot_coords_payload
+
+                # Build and send the message
+                image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
+                self.ws_bridge.send_message(image_msg)
+
+                # Reset flags so we do not resend the same images
+                self.ready_for_image = False
+                self.last_depth_image = None
             except Exception as e:
                 self.get_logger().error(f"Error in agent_loop_callback: {e}")
                 raise
