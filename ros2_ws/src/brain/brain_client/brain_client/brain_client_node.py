@@ -1152,17 +1152,14 @@ class BrainClientNode(Node):
         response.current_directive = self.current_directive.name
         return response
 
-    def _perform_brain_reset(self, memory_state: str):
-        """Internal method to perform the brain reset logic."""
-        self.get_logger().info(f"\033[1;92m[BrainClient] Performing brain reset with memory state: {memory_state}\033[0m")
+    def _unregister_primitives(self):
+        """Internal method to unregister primitives."""
+        self.get_logger().info(f"\033[1;92m[BrainClient] Unregistering primitives\033[0m")
 
         # As long as we don't have
         # confirmation that the new primitives have been registered, we should not
         # accept new VisionAgentOutput messages.
         self.primitives_registered = False
-
-        # Clear local chat history
-        self.chat_history = []
 
         # Stop any running primitive
         if self.primitive_running:
@@ -1183,6 +1180,16 @@ class BrainClientNode(Node):
             self.cmd_vel_pub.publish(stop_cmd)
 
         self._pending_next_task = None # Clear any pending task
+
+    def _perform_brain_reset(self, memory_state: str):
+        # Clear local chat history
+        self.get_logger().info("\033[1;92m[BrainClient] Resetting brain\033[0m")
+
+        # Unregister primitives
+        self._unregister_primitives()
+
+        # Clear local chat history
+        self.chat_history = []
 
         # Send a reset message to the server
         reset_msg = MessageIn(
@@ -1272,9 +1279,6 @@ class BrainClientNode(Node):
         self.get_logger().info("\033[1;92m[BrainClient] Reactivating brain...\033[0m")
         self.is_brain_active = True
 
-        # Perform a reset. This will re-register primitives, clear chat, etc.
-        self._perform_brain_reset(memory_state="Brain reactivated after pause")
-
         # Restart the agent timer (which sends images based on ready_for_image)
         # The pose_image_timer will be started by _handle_ready_for_image or
         # _handle_primitives_and_directive_registered once the server is ready and primitives are registered.
@@ -1285,9 +1289,16 @@ class BrainClientNode(Node):
              self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
              self.get_logger().info("Agent timer created and started.")
 
+        # Send a READY_FOR_CONNECTION message to the server
+        self.get_logger().info("\033[1;92m[BrainClient] Sending READY_FOR_CONNECTION to server.\033[0m")
+        ready_msg = InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
+        self.ws_bridge.send_message(ready_msg)
 
-        # The ready_for_image flag will be set by the server after reset and registration.
-        # The pose_image_timer will be started by the existing logic when ready_for_image and primitives_registered are true.
+        # Wait 0.5 seconds to ensure the server has time to process the message
+        time.sleep(0.5)
+
+        self._unregister_primitives()
+        self.register_primitives_and_directive()
 
         self.get_logger().info("\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m")
 
