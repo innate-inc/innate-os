@@ -163,9 +163,13 @@ class PrimitiveExecutionActionServer(Node):
                 feedback_msg.feedback = update_message
 
                 goal_handle.publish_feedback(feedback_msg)
-                self.get_logger().debug(f"Published feedback for '{primitive_type}': {update_message}; feedback_msg: {feedback_msg}")
+                self.get_logger().debug(
+                    f"Published feedback for '{primitive_type}': {update_message}; feedback_msg: {feedback_msg}"
+                )
             except Exception as e:
-                self.get_logger().error(f"Failed to publish feedback for '{primitive_type}': {e}")
+                self.get_logger().error(
+                    f"Failed to publish feedback for '{primitive_type}': {e}"
+                )
 
         # Pass the feedback callback to the primitive if it supports it
         primitive.set_feedback_callback(_publish_feedback)

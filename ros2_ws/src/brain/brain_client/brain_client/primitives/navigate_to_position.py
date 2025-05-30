@@ -90,25 +90,34 @@ class Nav2Controller:
 
                 # Compute the distance to the goal
                 distance_to_goal = math.sqrt(
-                    (current_position.x - goal_position.x) ** 2 +
-                    (current_position.y - goal_position.y) ** 2
+                    (current_position.x - goal_position.x) ** 2
+                    + (current_position.y - goal_position.y) ** 2
                 )
                 # Compute the angle to the goal
-                goal_orientation = math.atan2(goal_position.y - current_position.y, goal_position.x - current_position.x)
-                
+                goal_orientation = math.atan2(
+                    goal_position.y - current_position.y,
+                    goal_position.x - current_position.x,
+                )
+
                 # Calculate current robot yaw from quaternion
                 # Assuming current_orientation has x, y, z, w attributes
                 q_x = current_orientation.x
                 q_y = current_orientation.y
                 q_z = current_orientation.z
                 q_w = current_orientation.w
-                current_robot_yaw = math.atan2(2.0 * (q_w * q_z + q_x * q_y), 
-                                                 1.0 - 2.0 * (q_y * q_y + q_z * q_z))
-                
-                angle_difference = math.atan2(math.sin(goal_orientation - current_robot_yaw), math.cos(goal_orientation - current_robot_yaw))
+                current_robot_yaw = math.atan2(
+                    2.0 * (q_w * q_z + q_x * q_y), 1.0 - 2.0 * (q_y * q_y + q_z * q_z)
+                )
+
+                angle_difference = math.atan2(
+                    math.sin(goal_orientation - current_robot_yaw),
+                    math.cos(goal_orientation - current_robot_yaw),
+                )
 
                 # Compute the
-                self.logger.info(f"Distance remaining: {distance_remaining}, estimated by us: {distance_to_goal}, angle difference: {angle_difference}")
+                self.logger.info(
+                    f"Distance remaining: {distance_remaining}, estimated by us: {distance_to_goal}, angle difference: {angle_difference}"
+                )
                 self.logger.info(f"Navigation time: {navigation_time}")
 
                 # Here we should basically decide that if we're close enough to the goal, we should send the feedback to the server
