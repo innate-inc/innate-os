@@ -1,4 +1,5 @@
 # Goal (empty, like trigger)
+float32 inference_duration
 ---
 # Result  
 bool success
