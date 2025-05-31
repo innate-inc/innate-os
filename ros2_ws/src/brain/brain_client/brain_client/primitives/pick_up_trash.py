@@ -70,6 +70,7 @@ class PickUpTrash(Primitive):
 
         goal_msg = ExecutePolicy.Goal()
         # The goal is empty as per ExecutePolicy.action
+        goal_msg.inference_duration = 30.0 # Set inference duration to 30 seconds
 
         self.logger.info("Sending goal to ExecutePolicy action server...")
         goal_future = self._action_client.send_goal_async(

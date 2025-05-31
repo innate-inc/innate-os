@@ -140,7 +140,6 @@ class InferenceNode(Node):
         # Inference control variables
         self.inference_running = False
         self.inference_start_time = None
-        self.inference_duration = 45.0  # 20 seconds
         self.current_goal_handle = None  # Track current action goal
         
         # Arm positions for start and end
@@ -209,6 +208,14 @@ class InferenceNode(Node):
             self.policy.reset()
             self.get_logger().info("Policy reset completed - starting fresh execution")
             
+            # Get inference duration from the goal
+            inference_duration = goal_handle.request.inference_duration
+            if inference_duration <= 0:
+                self.get_logger().warn(
+                    f"Invalid inference duration {inference_duration}s requested, using default 20s."
+                )
+                inference_duration = 20.0 # Default if not specified or invalid
+
             # Step 1: Move arm to start position
             self.get_logger().info("Moving arm to start position...")
             if not self.call_arm_goto_service(self.start_position, 5):
@@ -221,7 +228,7 @@ class InferenceNode(Node):
             # Step 2: Run inference for specified duration
             self.inference_start_time = time.time()
             self.get_logger().info(
-                f"Policy inference started for {self.inference_duration} seconds "
+                f"Policy inference started for {inference_duration} seconds "
                 f"at ≈{self.inference_hz} Hz"
             )
 
@@ -240,14 +247,14 @@ class InferenceNode(Node):
 
                 # Feedback
                 elapsed_time = loop_start - self.inference_start_time
-                remaining_time = max(0.0, self.inference_duration - elapsed_time)
+                remaining_time = max(0.0, inference_duration - elapsed_time)
                 feedback_msg = ExecutePolicy.Feedback()
                 feedback_msg.elapsed_time = float(elapsed_time)
                 feedback_msg.remaining_time = float(remaining_time)
                 goal_handle.publish_feedback(feedback_msg)
 
                 # Stop after the allotted duration
-                if elapsed_time >= self.inference_duration:
+                if elapsed_time >= inference_duration:
                     break
 
                 # Sleep to maintain the desired loop rate

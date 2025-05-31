@@ -17,11 +17,9 @@ class RobotStateType(Enum):
     """
     Enum representing the types of robot state a primitive might require.
     """
-
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
     LAST_ODOM = "last_odom"
     LAST_MAP = "last_map"
-    # Add more states as needed, e.g., LAST_DEPTH_IMAGE_B64
 
 
 class Primitive(ABC):
