@@ -87,6 +87,12 @@ class BrainClientNode(Node):
         # New parameter for the map topic
         self.declare_parameter("map_topic", "/map")
 
+        # New parameters for arm camera
+        self.declare_parameter(
+            "arm_camera_image_topic", "/image_raw/compressed"
+        )
+        self.declare_parameter("send_arm_camera_image", True)
+
         # Set to True if you wish to receive and forward depth images as well
         self.declare_parameter("send_depth", True)
         # self.declare_parameter("odom_topic", "/odom") # Removed odom_topic
@@ -127,11 +133,20 @@ class BrainClientNode(Node):
         self.send_depth = (
             self.get_parameter("send_depth").get_parameter_value().bool_value
         )
+        self.arm_camera_image_topic = (
+            self.get_parameter("arm_camera_image_topic")
+            .get_parameter_value()
+            .string_value
+        )
+        self.send_arm_camera_image = (
+            self.get_parameter("send_arm_camera_image").get_parameter_value().bool_value
+        )
         # self.odom_topic = (
         #     self.get_parameter("odom_topic").get_parameter_value().string_value
         # ) # Removed odom_topic
         self.last_odom = None
         self.last_amcl_pose = None
+        self.last_arm_camera = None  # Store the latest arm camera image
         # self.odom_sub = self.create_subscription(
         #     Odometry, self.odom_topic, self.odom_callback, 10
         # ) # Removed odom_sub
@@ -184,6 +199,7 @@ class BrainClientNode(Node):
         self.last_image = None
         self.last_depth_image = None
         self.last_map = None  # Store the latest map data
+        self.last_arm_camera = None  # Store the latest arm camera image
         # self.last_amcl_pose = None # Already initialized above
 
         image_qos = QoSProfile(
@@ -209,6 +225,15 @@ class BrainClientNode(Node):
 
             self.depth_image_sub = self.create_subscription(
                 Image, self.depth_image_topic, self.depth_image_callback, 1
+            )
+
+        # Optionally subscribe to the arm camera image topic if required.
+        if self.send_arm_camera_image:
+            self.arm_camera_sub = self.create_subscription(
+                CompressedImage,
+                self.arm_camera_image_topic,
+                self.arm_camera_image_callback,
+                image_qos,  # Using the same QoS as the main camera
             )
 
         # Subscribe to AMCL pose topic
@@ -377,6 +402,14 @@ class BrainClientNode(Node):
             self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         except Exception as e:
             self.get_logger().error(f"Failed to decode compressed image: {e}")
+
+    def arm_camera_image_callback(self, msg: CompressedImage):
+        try:
+            np_arr = np.frombuffer(msg.data, np.uint8)
+            self.last_arm_camera = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            # self.get_logger().info(f"\033[1;92m[BrainClient] Received arm_camera_image_callback\033[0m")
+        except Exception as e:
+            self.get_logger().error(f"Failed to decode compressed arm camera image: {e}")
 
     def depth_image_callback(self, msg):
         try:
@@ -841,16 +874,46 @@ class BrainClientNode(Node):
                 }
                 payload["robot_coords"] = robot_coords_payload
 
+                # Optionally include arm camera image if enabled and available
+                if self.send_arm_camera_image and self.last_arm_camera is not None:
+                    # Compress the arm camera image as JPEG (70% quality)
+                    arm_encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+                    arm_success, arm_encoded_img = cv2.imencode(
+                        ".jpg", self.last_arm_camera, arm_encode_params
+                    )
+                    if arm_success:
+                        arm_rgb_b64 = base64.b64encode(
+                            arm_encoded_img.tobytes()
+                        ).decode("utf-8")
+                        payload["arm_camera"] = {
+                            "image_b64": arm_rgb_b64,
+                            "camera_type": "arm_wrist",
+                        }
+                        self.get_logger().debug("Including arm camera image in message")
+                    else:
+                        self.get_logger().error(
+                            "Failed to encode arm camera image for agent loop"
+                        )
+                elif self.send_arm_camera_image and self.last_arm_camera is None:
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No arm camera image available (send_arm_camera_image is True).\\033[0m"
+                    )
+                    # Decide if we should return here or send the message without arm camera.
+                    # For now, let's allow sending without it if other data is present.
+
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
                 self.ws_bridge.send_message(image_msg)
 
                 # Reset flags so we do not resend the same images
                 self.ready_for_image = False
-                self.last_depth_image = None
+                self.last_depth_image = None # Depth is reset after sending.
+                self.last_arm_camera = None # Arm camera is reset after sending.
             except Exception as e:
                 self.get_logger().error(f"Error in agent_loop_callback: {e}")
-                raise
+                # It's important to re-raise the exception if we are not handling it here,
+                # otherwise, the error might be silently ignored and lead to difficult debugging.
+                raise # Re-raise the caught exception
 
     def send_primitive_goal(self, task_type, inputs):
         goal_msg = ExecutePrimitive.Goal()
