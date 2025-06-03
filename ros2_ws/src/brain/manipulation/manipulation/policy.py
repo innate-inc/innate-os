@@ -8,15 +8,15 @@ from std_msgs.msg import Float64MultiArray  # For arm commands
 from std_srvs.srv import Trigger  # Simple service
 from maurice_msgs.srv import GotoJS  # Add this import for arm service
 from brain_messages.action import ExecutePolicy  # Add this import for action
-from rclpy.action import ActionServer
+from rclpy.action import ActionServer, CancelResponse
 from cv_bridge import CvBridge
 import numpy as np
 import torch
-import pickle
 import os
 import cv2
 from geometry_msgs.msg import Twist
-import json
+import time
+import threading
 import torch.amp
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.executors import MultiThreadedExecutor
@@ -92,7 +92,7 @@ class InferenceNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load normalization stats first
-        checkpoint_path ='/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_20250530_104614/act_policy_epoch_90000.pth'
+        checkpoint_path ='/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/PaperCorner_Filtered_20250526_213031/act_policy_epoch_90000.pth'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pt')
@@ -140,7 +140,6 @@ class InferenceNode(Node):
         # Inference control variables
         self.inference_running = False
         self.inference_start_time = None
-        self.inference_duration = 45.0  # 20 seconds
         self.current_goal_handle = None  # Track current action goal
         
         # Arm positions for start and end
@@ -164,8 +163,10 @@ class InferenceNode(Node):
             self,
             ExecutePolicy,
             '/policy/execute',
-            self.execute_policy_callback
+            execute_callback=self.execute_policy_callback,
+            cancel_callback=self.cancel_policy_callback
         )
+        self._cancel_requested = threading.Event()
         
         # Desired inference frequency (Hz). The policy loop now lives
         # directly in the action thread instead of a separate timer.
@@ -173,6 +174,25 @@ class InferenceNode(Node):
         
         self.get_logger().info("Policy loaded and ready. Call '/policy/execute' action to start inference.")
 
+    def cancel_policy_callback(self, goal_handle_to_cancel):
+        """Handle action cancel requests."""
+        self.get_logger().info(f"Received cancel request...")
+
+        # Check if this is the currently active goal
+        if not self.inference_running or not self.current_goal_handle:
+            self.get_logger().warn(
+                f"Rejecting cancel request. "
+                f"Policy not running. "
+            )
+            return CancelResponse.REJECT
+
+        # If it is the active goal, accept the cancellation.
+        # The execution loop (_execute_complete_policy) will see _cancel_requested
+        # and handle the cleanup and state transition.
+        self.get_logger().info(f"Accepting cancel request.")
+        self._cancel_requested.set()
+        return CancelResponse.ACCEPT
+        
     def execute_policy_callback(self, goal_handle):
         """Action callback to execute complete policy workflow."""
         if self.inference_running:
@@ -182,24 +202,39 @@ class InferenceNode(Node):
             goal_handle.abort()
             return result
         
+        # Reset the cancel flag
+        self._cancel_requested.clear()
+        
         # Execute the complete policy workflow
-        success = self._execute_complete_policy(goal_handle)
+        outcome = self._execute_complete_policy(goal_handle)
         
         # Set the goal state and return result
         result = ExecutePolicy.Result()
-        result.success = success
         
-        if success:
+        if outcome == "SUCCESS":
+            result.success = True
             goal_handle.succeed()
             self.get_logger().info("Policy execution succeeded")
-        else:
+        elif outcome == "CANCELLED":
+            result.success = False # Cancelled is not a success of the primary goal
+            goal_handle.canceled()
+            self.get_logger().info("Policy execution was canceled by request")
+        elif outcome == "FAILURE":
+            result.success = False
             goal_handle.abort()
             self.get_logger().error("Policy execution failed")
+        else: # Should not happen with defined string outcomes
+            result.success = False
+            goal_handle.abort()
+            self.get_logger().error(f"Policy execution failed with unexpected outcome: {outcome}")
             
         return result
 
     def _execute_complete_policy(self, goal_handle):
-        """Execute complete policy workflow: arm move -> inference -> arm move."""
+        """Execute complete policy workflow: arm move -> inference -> arm move.
+        Returns:
+            str: "SUCCESS", "FAILURE", or "CANCELLED"
+        """
         try:
             # Set up execution state
             self.current_goal_handle = goal_handle
@@ -209,11 +244,19 @@ class InferenceNode(Node):
             self.policy.reset()
             self.get_logger().info("Policy reset completed - starting fresh execution")
             
+            # Get inference duration from the goal
+            inference_duration = goal_handle.request.inference_duration
+            if inference_duration <= 0:
+                self.get_logger().warn(
+                    f"Invalid inference duration {inference_duration}s requested, using default 20s."
+                )
+                inference_duration = 20.0 # Default if not specified or invalid
+
             # Step 1: Move arm to start position
             self.get_logger().info("Moving arm to start position...")
             if not self.call_arm_goto_service(self.start_position, 5):
                 self.get_logger().error("Failed to move arm to start position")
-                return False
+                return "FAILURE"
                 
             # Wait for arm movement to complete
             time.sleep(5.0)
@@ -221,7 +264,7 @@ class InferenceNode(Node):
             # Step 2: Run inference for specified duration
             self.inference_start_time = time.time()
             self.get_logger().info(
-                f"Policy inference started for {self.inference_duration} seconds "
+                f"Policy inference started for {inference_duration} seconds "
                 f"at ≈{self.inference_hz} Hz"
             )
 
@@ -230,24 +273,25 @@ class InferenceNode(Node):
                 loop_start = time.time()
 
                 # Check for cancellation
-                if goal_handle.is_cancel_requested:
-                    self.get_logger().info("Policy execution canceled")
+                if self._cancel_requested.is_set():
+                    self.get_logger().info("Policy execution canceled by request")
                     self._stop_robot()
-                    return False
+                    self.call_arm_goto_service(self.end_position, 3) # Attempt cleanup move
+                    return "CANCELLED"
 
                 # One inference step
                 self._run_inference_once()
 
                 # Feedback
                 elapsed_time = loop_start - self.inference_start_time
-                remaining_time = max(0.0, self.inference_duration - elapsed_time)
+                remaining_time = max(0.0, inference_duration - elapsed_time)
                 feedback_msg = ExecutePolicy.Feedback()
                 feedback_msg.elapsed_time = float(elapsed_time)
                 feedback_msg.remaining_time = float(remaining_time)
                 goal_handle.publish_feedback(feedback_msg)
 
                 # Stop after the allotted duration
-                if elapsed_time >= self.inference_duration:
+                if elapsed_time >= inference_duration:
                     break
 
                 # Sleep to maintain the desired loop rate
@@ -258,15 +302,17 @@ class InferenceNode(Node):
             # Step 3: Stop robot and move arm to end position
             self._stop_robot()
             self.get_logger().info("Moving arm to end position...")
-            self.call_arm_goto_service(self.end_position, 5)
+            if not self.call_arm_goto_service(self.end_position, 5):
+                self.get_logger().error("Failed to move arm to end position after inference.")
+                return "FAILURE"
             
             self.get_logger().info("Policy execution completed successfully")
-            return True
+            return "SUCCESS"
             
         except Exception as e:
             self.get_logger().error(f"Error during policy execution: {e}")
             self._stop_robot()
-            return False
+            return "FAILURE"
             
         finally:
             # Clean up state

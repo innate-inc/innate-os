@@ -88,6 +88,7 @@ class MockSetBoolRequest:
     def __init__(self, data=True):
         self.data = data
 
+
 class MockSetBoolResponse:
     def __init__(self, success=True, message=""):
         self.success = success
@@ -280,9 +281,7 @@ def test_pose_image_flow():
     node.ws_bridge.sent_messages = []
 
     # Step 0: Set the brain to active
-    node.handle_set_brain_active(
-        MockSetBoolRequest(data=True), MockSetBoolResponse()
-    )
+    node.handle_set_brain_active(MockSetBoolRequest(data=True), MockSetBoolResponse())
 
     # Step 1: Simulate primitives registration
     reg_msg = MessageOut(
@@ -355,9 +354,7 @@ def test_pose_image_starts_after_registration():
     node.primitives_registered = False
 
     # Set the brain to active
-    node.handle_set_brain_active(
-        MockSetBoolRequest(data=True), MockSetBoolResponse()
-    )
+    node.handle_set_brain_active(MockSetBoolRequest(data=True), MockSetBoolResponse())
 
     # Simulate receiving ready_for_image message
     ready_msg = MessageOut(
@@ -395,9 +392,7 @@ def test_pose_image_starts_after_ready_for_image():
     node.primitives_registered = True
 
     # Set the brain to active
-    node.handle_set_brain_active(
-        MockSetBoolRequest(data=True), MockSetBoolResponse()
-    )
+    node.handle_set_brain_active(MockSetBoolRequest(data=True), MockSetBoolResponse())
 
     # Simulate primitives registration
     reg_msg = MessageOut(

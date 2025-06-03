@@ -16,6 +16,9 @@ import base64  # For encoding
 import numpy as np  # For map data
 import math  # For yaw calculation
 
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+
+
 # Import the action definition – ensure that it is built and available.
 from brain_messages.action import ExecutePrimitive
 
@@ -47,13 +50,22 @@ class PrimitiveExecutionActionServer(Node):
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
 
+        image_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
+        self.image_topic = self.get_parameter("image_topic").value
+
         # Subscribers for robot state
         # TODO: Make topic names configurable if needed (e.g., via parameters)
         self.main_camera_image_sub = self.create_subscription(
             CompressedImage,
-            "/camera/color/image_raw/compressed",
+            self.image_topic,
             self.main_camera_image_callback,
-            10,  # QoS profile depth
+            image_qos
         )
         self.odom_sub = self.create_subscription(
             Odometry, "/odom", self.odom_callback, 10
@@ -65,15 +77,20 @@ class PrimitiveExecutionActionServer(Node):
             1,  # QoS profile with transient local durability might be better for map
         )
 
-        self._primitives = {
-            TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
-            TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
-            TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail(
-                self.get_logger()
-            ),  # Add new primitive
-            TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
-            TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
+        # Mapping from TaskType to primitive class
+        primitive_classes = {
+            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition,
+            TaskType.SEND_EMAIL: SendEmail,
+            TaskType.SEND_PICTURE_VIA_EMAIL: SendPictureViaEmail,
+            TaskType.PICK_UP_TRASH: PickUpTrash,
+            TaskType.DROP_TRASH: DropTrash,
         }
+
+        self._primitives = {}
+        for task_type, primitive_class in primitive_classes.items():
+            primitive_instance = primitive_class(self.get_logger())
+            primitive_instance.node = self  # Inject the node
+            self._primitives[task_type.value] = primitive_instance
 
         self._action_server = ActionServer(
             self,
@@ -153,6 +170,26 @@ class PrimitiveExecutionActionServer(Node):
         self.get_logger().debug(
             f"Starting primitive '{primitive_type}' with inputs: {inputs}"
         )
+
+        # Define a feedback publisher for the primitive
+        def _publish_feedback(update_message: str):
+            try:
+                # Assuming ExecutePrimitive.Feedback is the correct type
+                # and it has a string field.
+                feedback_msg = ExecutePrimitive.Feedback()
+                feedback_msg.feedback = update_message
+
+                goal_handle.publish_feedback(feedback_msg)
+                self.get_logger().debug(
+                    f"Published feedback for '{primitive_type}': {update_message}; feedback_msg: {feedback_msg}"
+                )
+            except Exception as e:
+                self.get_logger().error(
+                    f"Failed to publish feedback for '{primitive_type}': {e}"
+                )
+
+        # Pass the feedback callback to the primitive if it supports it
+        primitive.set_feedback_callback(_publish_feedback)
 
         try:
             # Get required states and inject them into the primitive
@@ -333,7 +370,7 @@ class PrimitiveExecutionActionServer(Node):
         try:
             np_arr = np.frombuffer(msg.data, np.uint8)
             self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            # self.get_logger().debug('Received and decoded new image for primitives.')
+            self.get_logger().debug('Received and decoded new image for primitives.')
         except Exception as e:
             self.get_logger().error(
                 f"Failed to decode compressed image for primitive state: {e}"

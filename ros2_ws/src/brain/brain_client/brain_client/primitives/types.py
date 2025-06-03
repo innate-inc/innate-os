@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from rclpy.node import Node
 
 
 class PrimitiveResult(Enum):
@@ -16,14 +17,17 @@ class RobotStateType(Enum):
     """
     Enum representing the types of robot state a primitive might require.
     """
-
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
     LAST_ODOM = "last_odom"
     LAST_MAP = "last_map"
-    # Add more states as needed, e.g., LAST_DEPTH_IMAGE_B64
 
 
 class Primitive(ABC):
+    def __init__(self, logger):
+        self.logger = logger
+        self.node: Node | None = None
+        self._feedback_callback = None
+
     @property
     @abstractmethod
     def name(self):
@@ -79,3 +83,35 @@ class Primitive(ABC):
         Subclasses may override this method if guidelines are available.
         """
         return None
+
+    def set_feedback_callback(self, callback):
+        """Sets the feedback callback function."""
+        self._feedback_callback = callback
+        if self.logger:  # Check if logger is available
+            self.logger.debug(f"Feedback callback set for primitive {self.name}.")
+        else:
+            # Consider a simple print or no log if logger isn't guaranteed
+            print(
+                f"DEBUG: Feedback callback set for primitive {self.name} (logger not available)."
+            )
+
+    def _send_feedback(self, message: str):
+        """Sends feedback if the callback is set."""
+        if self._feedback_callback:
+            try:
+                self._feedback_callback(message)
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(
+                        f"Error sending feedback for primitive {self.name}: {e}"
+                    )
+                else:
+                    print(
+                        f"ERROR: Error sending feedback for primitive {self.name}: {e} (logger not available)."
+                    )
+        # else:
+        # Optionally log if feedback is not sent because callback is not set
+        # if self.logger:
+        #     self.logger.debug(f"Feedback callback not set for {self.name}. Message not sent: {message}")
+        # else:
+        #     print(f"DEBUG: Feedback callback not set for {self.name}. Message not sent: {message} (logger not available).")
