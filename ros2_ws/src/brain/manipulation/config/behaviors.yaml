@@ -32,8 +32,8 @@ behavior_manager:
           - [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
           - [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
       
-      - name: "wave"
-        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/behaviors/wave.yaml"
+      - name: "Wave"
+        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Wave/episode_0.h5"
         type: "replay"
         duration: null
         start_pose: null
