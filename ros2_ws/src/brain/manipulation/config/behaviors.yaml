@@ -12,12 +12,12 @@ behavior_manager:
   pick_socks:
     file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_20250530_104614/act_policy_epoch_90000.pth"
     type: "learned"
-    duration: 45.0
+    duration: 30.0
     start_pose: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
-    end_pose: [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+    end_pose: []
   
   drop_socks:
-    file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocks_20250530_104614/act_policy_epoch_90000.pth"
+    file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocks_1_2_20250603_060007/act_policy_epoch_70000.pth"
     type: "learned"
     duration: 45.0
     start_pose: []
