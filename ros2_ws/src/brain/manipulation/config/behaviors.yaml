@@ -1,0 +1,40 @@
+# ROS2 Humble Parameter file for manipulation behaviors
+behavior_manager:
+  ros__parameters:
+    behaviors:
+      - name: "pick_paper"
+        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/PaperCorner_Filtered_20250526_213031/act_policy_epoch_90000.pth"
+        type: "learned"
+        duration: 45.0
+        start_pose: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
+        end_pose: [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+      
+      - name: "pick_socks"
+        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_20250530_104614/act_policy_epoch_90000.pth"
+        type: "learned"
+        duration: 45.0
+        start_pose: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
+        end_pose: [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+      
+      - name: "drop_socks"
+        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocks_20250530_104614/act_policy_epoch_90000.pth"
+        type: "learned"
+        duration: 45.0
+        start_pose: null
+        end_pose: null
+      
+      - name: "drop_paper"
+        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/behaviors/drop_paper.yaml"
+        type: "poses"
+        steps: 3.0
+        poses:
+          - [0.143, -0.434, 0.147, 0.788, 0.060, 0.0]
+          - [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
+          - [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+      
+      - name: "wave"
+        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/behaviors/wave.yaml"
+        type: "replay"
+        duration: null
+        start_pose: null
+        end_pose: [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
