@@ -280,6 +280,7 @@ class BehaviorServer(Node):
         try:
             # Load the policy for this behavior
             checkpoint_path = behavior_config.get('file_path')
+            checkpoint_path = os.path.expanduser(checkpoint_path)
             if not checkpoint_path or not os.path.exists(checkpoint_path):
                 self.get_logger().error(f"Checkpoint not found: {checkpoint_path}")
                 return "FAILURE"
@@ -398,6 +399,7 @@ class BehaviorServer(Node):
         self.get_logger().info(f"Executing replay behavior: {behavior_name}")
         
         file_path = behavior_config.get('file_path')
+        file_path = os.path.expanduser(file_path)
         end_pose = behavior_config.get('end_pose')
         
         if not file_path or not os.path.exists(file_path):
@@ -506,6 +508,9 @@ class BehaviorServer(Node):
             # Clean up previous policy
             if self.current_policy:
                 del self.current_policy
+            
+            # Expand user path
+            checkpoint_path = os.path.expanduser(checkpoint_path)
             
             # Load normalization stats
             checkpoint_dir = os.path.dirname(checkpoint_path)
