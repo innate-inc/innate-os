@@ -15,6 +15,9 @@ import math
 import inspect
 import types
 import typing
+from collections import deque
+import tempfile
+import os
 
 # TF2 imports
 # import tf2_ros # Reverted by user, then identified as unused by linter
@@ -108,6 +111,14 @@ class BrainClientNode(Node):
         # Parameter for logging complete vision agent output
         self.declare_parameter("log_everything", False)  # Default to False
 
+        # --- New: Video buffering parameters ---
+        self.declare_parameter("video_buffer_duration_seconds", 2.0) # Duration of video to send
+        self.declare_parameter("video_fps", 10.0) # FPS for the created video clip
+        self.declare_parameter("image_buffer_max_size", 60) # Max images to store (e.g., 2s @ 30fps for a 30fps camera)
+
+        # --- New: Flag to switch between image and video feed ---
+        self.declare_parameter("send_video_feed", False) # Default to sending single image
+
         # --- New: Brain active state flag ---
         self.is_brain_active = False  # Brain starts active
 
@@ -187,6 +198,17 @@ class BrainClientNode(Node):
         self.log_everything = (
             self.get_parameter("log_everything").get_parameter_value().bool_value
         )
+
+        # --- Get video buffering parameters ---
+        self.video_buffer_duration_seconds = self.get_parameter("video_buffer_duration_seconds").get_parameter_value().double_value
+        self.video_fps = self.get_parameter("video_fps").get_parameter_value().double_value
+        self.image_buffer_max_size = self.get_parameter("image_buffer_max_size").get_parameter_value().integer_value
+        
+        # --- Get video feed flag ---
+        self.send_video_feed_enabled = self.get_parameter("send_video_feed").get_parameter_value().bool_value
+
+        # image_buffer stores (timestamp_sec, image_numpy_array)
+        self.image_buffer = deque(maxlen=self.image_buffer_max_size)
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
@@ -399,9 +421,16 @@ class BrainClientNode(Node):
         try:
             # self.get_logger().info(f"\033[1;92m[BrainClient] Received image_callback\033[0m")
             np_arr = np.frombuffer(msg.data, np.uint8)
-            self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            # self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            decoded_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if decoded_image is not None:
+                self.last_image = decoded_image # Keep updating for other uses (e.g. pose_image_callback)
+                current_time_sec = self.get_clock().now().nanoseconds / 1e9
+                self.image_buffer.append((current_time_sec, decoded_image))
+            else:
+                self.get_logger().warn("Failed to decode image in image_callback, decoded_image is None.")
         except Exception as e:
-            self.get_logger().error(f"Failed to decode compressed image: {e}")
+            self.get_logger().error(f"Failed to decode compressed image or add to buffer: {e}")
 
     def arm_camera_image_callback(self, msg: CompressedImage):
         try:
@@ -775,7 +804,7 @@ class BrainClientNode(Node):
                     )
                     return
 
-                # Compress the RGB image as JPEG (70% quality)
+                # Compress the RGB image as JPEG (70% quality) - User's addition
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
                 success, encoded_img = cv2.imencode(
                     ".jpg", self.last_image, encode_params
@@ -784,10 +813,85 @@ class BrainClientNode(Node):
                     self.get_logger().error("Failed to encode RGB image")
                     self.ready_for_image = False
                     return
-
                 rgb_b64 = base64.b64encode(encoded_img.tobytes()).decode("utf-8")
-                payload = {"image_b64": rgb_b64}
 
+                # --- BEGIN IMAGE/VIDEO PROCESSING AND SENDING WITH TIMING ---
+                processing_start_time = time.perf_counter()
+                
+                payload = {"image_b64": rgb_b64} # Start with the always-encoded image
+                log_message_label = "Image"
+
+                if self.send_video_feed_enabled:
+                    log_message_label = "Video"
+                    # Grab images from the buffer that are within the desired time window
+                    current_time_sec = self.get_clock().now().nanoseconds / 1e9
+                    recent_frames_data = [
+                        img for ts, img in list(self.image_buffer) 
+                        if current_time_sec - ts <= self.video_buffer_duration_seconds
+                    ]
+
+                    if not recent_frames_data:
+                        self.get_logger().warn(
+                            "\033[93m[BrainClient] Video feed enabled, but no recent images in buffer. Sending only single image.\033[0m"
+                        )
+                        # Fallback to sending just the single image if buffer is empty for video
+                    else:
+                        video_b64 = None
+                        temp_video_path = ""
+                        try:
+                            first_image = recent_frames_data[0]
+                            height, width, _ = first_image.shape
+
+                            if height == 0 or width == 0:
+                                self.get_logger().error(f"Invalid image dimensions for video: {width}x{height}")
+                                # Don't return, will send single image instead
+                            else:
+                                with tempfile.NamedTemporaryFile(suffix='.avi', delete=False) as tmpfile_obj:
+                                    temp_video_path = tmpfile_obj.name
+                                
+                                if not temp_video_path:
+                                    self.get_logger().error("Failed to create temporary file path for video.")
+                                    # Don't return, will send single image instead
+                                else:
+                                    fourcc = cv2.VideoWriter_fourcc(*'MJPG') # Motion JPEG
+                                    video_writer = cv2.VideoWriter(temp_video_path, fourcc, float(self.video_fps), (width, height))
+
+                                    if not video_writer.isOpened():
+                                        self.get_logger().error(f"Failed to open VideoWriter for path: {temp_video_path} with res {width}x{height}, FPS {self.video_fps}")
+                                        if os.path.exists(temp_video_path): os.remove(temp_video_path)
+                                        
+                                        # Don't return, will send single image instead
+                                    else:
+                                        for frame_img in recent_frames_data:
+                                            if frame_img is not None and frame_img.shape[0] == height and frame_img.shape[1] == width:
+                                                video_writer.write(frame_img)
+                                            elif frame_img is None:
+                                                self.get_logger().warn("Skipping None frame in video creation.")
+                                            else:
+                                                self.get_logger().warn(f"Skipping frame with mismatched dimensions: {frame_img.shape} vs {height}x{width}")
+                                        
+                                        video_writer.release()
+
+                                        if os.path.exists(temp_video_path) and os.path.getsize(temp_video_path) > 0:
+                                            with open(temp_video_path, 'rb') as f:
+                                                video_bytes = f.read()
+                                            video_b64 = base64.b64encode(video_bytes).decode('utf-8')
+                                        else:
+                                            self.get_logger().error(f"Temporary video file is empty or does not exist after writing: {temp_video_path}")
+                                            if os.path.exists(temp_video_path): os.remove(temp_video_path) # Clean up
+                        except Exception as e:
+                            self.get_logger().error(f"Error during video creation: {e}, Traceback: {traceback.format_exc()}")
+                        finally:
+                            if temp_video_path and os.path.exists(temp_video_path):
+                                os.remove(temp_video_path)
+                        
+                        if video_b64:
+                            payload["video_b64"] = video_b64
+                            payload["video_format"] = "avi_mjpeg"
+                        else:
+                            self.get_logger().warn("Video creation failed or resulted in no data. Sending only single image.")
+                
+                # --- Add other payload components (FOV, depth, map, robot_coords, arm_camera) ---
                 # Include the horizontal and vertical FOV of the camera
                 payload["horizontal_fov"] = self.horizontal_fov
                 payload["vertical_fov"] = self.vertical_fov
@@ -904,6 +1008,12 @@ class BrainClientNode(Node):
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
                 self.ws_bridge.send_message(image_msg)
+
+                processing_end_time = time.perf_counter()
+                self.get_logger().info(
+                    f"{log_message_label} processing and sending took {processing_end_time - processing_start_time:.4f} seconds."
+                )
+                # --- END IMAGE/VIDEO PROCESSING AND SENDING WITH TIMING ---
 
                 # Reset flags so we do not resend the same images
                 self.ready_for_image = False
