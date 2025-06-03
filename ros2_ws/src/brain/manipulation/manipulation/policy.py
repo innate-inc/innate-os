@@ -8,7 +8,7 @@ from std_msgs.msg import Float64MultiArray  # For arm commands
 from std_srvs.srv import Trigger  # Simple service
 from maurice_msgs.srv import GotoJS  # Add this import for arm service
 from brain_messages.action import ExecutePolicy  # Add this import for action
-from rclpy.action import ActionServer
+from rclpy.action import ActionServer, CancelResponse
 from cv_bridge import CvBridge
 import numpy as np
 import torch
@@ -174,20 +174,24 @@ class InferenceNode(Node):
         
         self.get_logger().info("Policy loaded and ready. Call '/policy/execute' action to start inference.")
 
-    def cancel_policy_callback(self, goal_handle):
-        """Action callback to cancel policy execution."""
-        if not self.inference_running:
-            result = ExecutePolicy.Result()
-            result.success = False
-            self.get_logger().warn("Policy execution requested but already running")
-            goal_handle.abort()
-            return result
-        
-        # Cancel the policy execution
-        self.get_logger().info("Cancelling policy execution")
-        self._stop_robot()
+    def cancel_policy_callback(self, goal_handle_to_cancel):
+        """Handle action cancel requests."""
+        self.get_logger().info(f"Received cancel request...")
+
+        # Check if this is the currently active goal
+        if not self.inference_running or not self.current_goal_handle:
+            self.get_logger().warn(
+                f"Rejecting cancel request. "
+                f"Policy not running. "
+            )
+            return CancelResponse.REJECT
+
+        # If it is the active goal, accept the cancellation.
+        # The execution loop (_execute_complete_policy) will see _cancel_requested
+        # and handle the cleanup and state transition.
+        self.get_logger().info(f"Accepting cancel request.")
         self._cancel_requested.set()
-        return ExecutePolicy.Result(success=True)
+        return CancelResponse.ACCEPT
         
     def execute_policy_callback(self, goal_handle):
         """Action callback to execute complete policy workflow."""
@@ -202,23 +206,35 @@ class InferenceNode(Node):
         self._cancel_requested.clear()
         
         # Execute the complete policy workflow
-        success = self._execute_complete_policy(goal_handle)
+        outcome = self._execute_complete_policy(goal_handle)
         
         # Set the goal state and return result
         result = ExecutePolicy.Result()
-        result.success = success
         
-        if success:
+        if outcome == "SUCCESS":
+            result.success = True
             goal_handle.succeed()
             self.get_logger().info("Policy execution succeeded")
-        else:
+        elif outcome == "CANCELLED":
+            result.success = False # Cancelled is not a success of the primary goal
+            goal_handle.canceled()
+            self.get_logger().info("Policy execution was canceled by request")
+        elif outcome == "FAILURE":
+            result.success = False
             goal_handle.abort()
             self.get_logger().error("Policy execution failed")
+        else: # Should not happen with defined string outcomes
+            result.success = False
+            goal_handle.abort()
+            self.get_logger().error(f"Policy execution failed with unexpected outcome: {outcome}")
             
         return result
 
     def _execute_complete_policy(self, goal_handle):
-        """Execute complete policy workflow: arm move -> inference -> arm move."""
+        """Execute complete policy workflow: arm move -> inference -> arm move.
+        Returns:
+            str: "SUCCESS", "FAILURE", or "CANCELLED"
+        """
         try:
             # Set up execution state
             self.current_goal_handle = goal_handle
@@ -240,7 +256,7 @@ class InferenceNode(Node):
             self.get_logger().info("Moving arm to start position...")
             if not self.call_arm_goto_service(self.start_position, 5):
                 self.get_logger().error("Failed to move arm to start position")
-                return False
+                return "FAILURE"
                 
             # Wait for arm movement to complete
             time.sleep(5.0)
@@ -258,10 +274,10 @@ class InferenceNode(Node):
 
                 # Check for cancellation
                 if self._cancel_requested.is_set():
-                    self.get_logger().info("Policy execution canceled")
+                    self.get_logger().info("Policy execution canceled by request")
                     self._stop_robot()
-                    self.call_arm_goto_service(self.end_position, 3)
-                    return False
+                    self.call_arm_goto_service(self.end_position, 3) # Attempt cleanup move
+                    return "CANCELLED"
 
                 # One inference step
                 self._run_inference_once()
@@ -286,15 +302,17 @@ class InferenceNode(Node):
             # Step 3: Stop robot and move arm to end position
             self._stop_robot()
             self.get_logger().info("Moving arm to end position...")
-            self.call_arm_goto_service(self.end_position, 5)
+            if not self.call_arm_goto_service(self.end_position, 5):
+                self.get_logger().error("Failed to move arm to end position after inference.")
+                return "FAILURE"
             
             self.get_logger().info("Policy execution completed successfully")
-            return True
+            return "SUCCESS"
             
         except Exception as e:
             self.get_logger().error(f"Error during policy execution: {e}")
             self._stop_robot()
-            return False
+            return "FAILURE"
             
         finally:
             # Clean up state
