@@ -86,6 +86,16 @@ class BehaviorServer(Node):
         # Load behavior configurations
         self.behaviors_config = self._load_behaviors_config()
         
+        # Print all available behaviors at startup
+        if self.behaviors_config:
+            behavior_names = list(self.behaviors_config.keys())
+            self.get_logger().info(f"Available behaviors at startup: {behavior_names}")
+            for name, config in self.behaviors_config.items():
+                behavior_type = config.get('type', 'unknown')
+                self.get_logger().info(f"  - {name} (type: {behavior_type})")
+        else:
+            self.get_logger().warn("No behaviors loaded!")
+        
         # Current execution state
         self.execution_running = False
         self.current_goal_handle = None
@@ -132,21 +142,42 @@ class BehaviorServer(Node):
     
     def _load_behaviors_config(self):
         """Load behaviors configuration from YAML file."""
-        config_path = os.path.join(
-            os.path.dirname(__file__), 
-            '../config/behaviors.yaml'
-        )
+        # Get config file path from parameter or use default
+        self.declare_parameter('config_file', '')
+        config_file_param = self.get_parameter('config_file').value
+        
+        if config_file_param:
+            config_path = config_file_param
+        else:
+            config_path = os.path.join(
+                os.path.dirname(__file__), 
+                '../config/behaviors.yaml'
+            )
         
         try:
             with open(config_path, 'r') as file:
                 config = yaml.safe_load(file)
                 behaviors = {}
-                for behavior in config['behavior_manager']['ros__parameters']['behaviors']:
-                    behaviors[behavior['name']] = behavior
-                self.get_logger().info(f"Loaded {len(behaviors)} behavior configurations")
+                
+                behavior_names = config['behavior_manager'].get('behavior_names', [])
+                for behavior_name in behavior_names:
+                    behavior_config = config['behavior_manager'][behavior_name].copy()
+                    behavior_config['name'] = behavior_name
+                    
+                    # Convert poses structure if it exists
+                    if 'poses' in behavior_config and isinstance(behavior_config['poses'], dict):
+                        poses = []
+                        for key in sorted(behavior_config['poses'].keys()):
+                            poses.append(behavior_config['poses'][key])
+                        behavior_config['poses'] = poses
+                    
+                    behaviors[behavior_name] = behavior_config
+                
+                self.get_logger().info(f"Loaded {len(behaviors)} behavior configurations from {config_path}")
                 return behaviors
+                
         except Exception as e:
-            self.get_logger().error(f"Failed to load behaviors config: {e}")
+            self.get_logger().error(f"Failed to load behaviors config from {config_path}: {e}")
             return {}
     
     def cancel_behavior_callback(self, goal_handle_to_cancel):
@@ -331,7 +362,7 @@ class BehaviorServer(Node):
         
         # Placeholder implementation
         poses = behavior_config.get('poses', [])
-        steps = behavior_config.get('steps', len(poses))
+        steps = int(behavior_config.get('steps', len(poses)))  # Convert to int here
         
         try:
             for i, pose in enumerate(poses):
@@ -383,13 +414,31 @@ class BehaviorServer(Node):
                 actions = h5file['action'][:]  # Shape: (n_steps, 8)
                 self.get_logger().info(f"Loaded {actions.shape[0]} action steps from {file_path}")
             
+            if actions.shape[0] == 0:
+                self.get_logger().error("No actions found in replay file")
+                return "FAILURE"
+            
+            # Extract first action and arm position
+            first_action = actions[0]  # Shape: (8,)
+            first_arm_position = first_action[0:6].tolist()  # Convert to list for service call
+            
+            self.get_logger().info(f"Moving to initial arm position: {first_arm_position}")
+            
+            # Move to initial arm position
+            if not self.call_arm_goto_service(first_arm_position, 5):
+                self.get_logger().error("Failed to move to initial arm position")
+                return "FAILURE"
+            
+            # Wait for arm movement to complete
+            time.sleep(5.0)
+            
             # Replay parameters
             total_steps = actions.shape[0]
             replay_hz = 25.0  # Match the frequency used in learned behaviors
             step_duration = 1.0 / replay_hz
             total_duration = total_steps * step_duration
             
-            self.get_logger().info(f"Replaying {total_steps} steps at {replay_hz} Hz (total: {total_duration:.1f}s)")
+            self.get_logger().info(f"Starting replay: {total_steps} steps at {replay_hz} Hz (total: {total_duration:.1f}s)")
             
             # Execute replay
             start_time = time.time()
@@ -408,16 +457,16 @@ class BehaviorServer(Node):
                 # Get current action
                 action = actions[step_idx]  # Shape: (8,)
                 
-                # Extract cmd_vel commands (first 2 elements)
-                twist_msg = Twist()
-                twist_msg.linear.x = float(action[0])
-                twist_msg.angular.z = float(action[1])
-                self.cmd_vel_pub.publish(twist_msg)
-                
-                # Extract arm commands (last 6 elements)
+                # Extract arm commands (first 6 elements)
                 arm_msg = Float64MultiArray()
-                arm_msg.data = [float(v) for v in action[2:8]]
+                arm_msg.data = [float(v) for v in action[0:6]]
                 self.arm_state_pub.publish(arm_msg)
+                
+                # Extract cmd_vel commands (last 2 elements)
+                twist_msg = Twist()
+                twist_msg.linear.x = float(action[6])
+                twist_msg.angular.z = float(action[7])
+                self.cmd_vel_pub.publish(twist_msg)
                 
                 # Send feedback
                 elapsed_time = loop_start - start_time

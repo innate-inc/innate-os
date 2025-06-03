@@ -29,6 +29,7 @@ set(msg_files
 set(action_files
   "action/ExecutePrimitive.action"
   "action/ExecutePolicy.action"
+  "action/ExecuteBehavior.action"
 )
 
 if(BUILD_TESTING)
