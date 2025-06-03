@@ -92,7 +92,7 @@ class InferenceNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load normalization stats first
-        checkpoint_path ='/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/PaperCorner_Filtered_20250526_213031/act_policy_epoch_90000.pth'
+        checkpoint_path ='/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocks_1_2_20250603_060007/act_policy_epoch_70000.pth'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pt')
@@ -117,6 +117,9 @@ class InferenceNode(Node):
             self.get_logger().info("Policy loaded successfully.")
         except Exception as e:
             self.get_logger().error(f"Failed to load policy checkpoint: {e}")
+
+        # Warm up the model with dummy forward passes
+        self._warmup_model()
 
         # Set up sensor QoS profile
         image_qos = QoSProfile(
@@ -405,6 +408,37 @@ class InferenceNode(Node):
                 )
             except Exception as e:
                 self.get_logger().error(f"Error during inference: {e}")
+
+    def _warmup_model(self):
+        """Warm up the model with 3 forward passes using dummy data."""
+        self.get_logger().info("Warming up model with dummy forward passes...")
+        
+        try:
+            # Create dummy data matching expected input shapes
+            dummy_batch = {
+                "observation.image_camera_1": torch.randn(1, 3, 480, 640, device=self.device, dtype=torch.float32),
+                "observation.image_camera_2": torch.randn(1, 3, 480, 640, device=self.device, dtype=torch.float32),
+                "observation.state": torch.randn(1, 6, device=self.device, dtype=torch.float32)
+            }
+            
+            # Perform 3 warmup forward passes
+            with torch.no_grad():
+                for i in range(3):
+                    self.get_logger().info(f"Warmup pass {i+1}/3...")
+                    # Reset the policy to clear the action queue before each forward pass
+                    self.policy.reset()
+                    # This will now trigger a forward pass since the queue is empty
+                    _ = self.policy.select_action(dummy_batch)
+                    # Small delay to ensure GPU operations complete
+                    time.sleep(0.1)
+            
+            # Reset one final time to start fresh for actual inference
+            self.policy.reset()
+            self.get_logger().info("Model warmup completed successfully.")
+            
+        except Exception as e:
+            self.get_logger().error(f"Error during model warmup: {e}")
+            # Continue anyway - warmup failure shouldn't prevent operation
 
 def main(args=None):
     rclpy.init(args=args)
