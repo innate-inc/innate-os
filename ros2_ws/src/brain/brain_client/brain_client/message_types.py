@@ -11,7 +11,7 @@ class TaskType(Enum):
     SEND_PICTURE_VIA_EMAIL = "send_picture_via_email"
     PICK_UP_TRASH = "pick_up_trash"
     DROP_TRASH = "drop_trash"
-    
+
 
 class NavigationToPosition(BaseModel):
     x: float
@@ -39,6 +39,7 @@ class MessageInType(str, Enum):
     PRIMITIVE_COMPLETED = "primitive_completed"
     PRIMITIVE_INTERRUPTED = "primitive_interrupted"
     PRIMITIVE_FAILED = "primitive_failed"
+    PRIMITIVE_FEEDBACK = "primitive_feedback"
     REGISTER_PRIMITIVES_AND_DIRECTIVE = "register_primitives_and_directive"
     RESET = "reset"
 
