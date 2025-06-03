@@ -7,7 +7,7 @@ from brain_client.primitives.types import Primitive, PrimitiveResult
 
 
 class Nav2Controller:
-    def __init__(self, logger):
+    def __init__(self, logger, primitive):
         """
         Initialize the Nav2Controller by creating a BasicNavigator instance
         """
@@ -21,6 +21,7 @@ class Nav2Controller:
         # self.cmd_vel_pub = self.navigator.create_publisher(
         #     Twist, '/cmd_vel', 10
         # )
+        self._send_feedback = primitive._send_feedback
 
         self.logger.info("Nav2 position primitive node created")
 
@@ -67,6 +68,8 @@ class Nav2Controller:
         self.logger.debug("Waiting for navigation to complete ...")
 
         was_canceled = False
+        initial_distance_to_goal = -1.0 # Initialize with a value that indicates it's not set
+        feedback_sent_close_to_goal = False # Flag to track if feedback has been sent
 
         # Modified loop to check for cancellation
         while not self.navigator.isTaskComplete():
@@ -80,14 +83,13 @@ class Nav2Controller:
             # Get feedback but don't block for too long
             feedback = self.navigator.getFeedback()
             if feedback:
-                distance_remaining = feedback.distance_remaining
                 current_pose = feedback.current_pose.pose
                 current_position = current_pose.position
                 goal_position = goal_pose.pose.position
                 current_orientation = current_pose.orientation
 
                 # Compute the distance to the goal
-                distance_to_goal = math.sqrt(
+                current_distance_to_goal = math.sqrt(
                     (current_position.x - goal_position.x) ** 2
                     + (current_position.y - goal_position.y) ** 2
                 )
@@ -115,8 +117,16 @@ class Nav2Controller:
                 # Now we compute 2 percentages:
                 # 1. The percentage of the path that has been completed
                 # 2. The percentage of the angle that has been completed
-                path_completion = distance_remaining / distance_to_goal * 100
-                angle_completion = abs(angle_difference) / math.pi * 100
+                if initial_distance_to_goal < 0.0 and current_distance_to_goal > 0 : # Check if not set and current_distance is valid
+                    initial_distance_to_goal = current_distance_to_goal
+
+                if initial_distance_to_goal > 0: # Avoid division by zero if goal is already reached or not set
+                    path_completion = (1.0 - (current_distance_to_goal / initial_distance_to_goal)) * 100
+                else:
+                    path_completion = 100.0 if current_distance_to_goal == 0 else 0.0 # If initial distance is 0, and current is 0, it's 100%
+
+                angle_completion = (1 - abs(angle_difference) / math.pi) * 100
+                average_completion = (path_completion + angle_completion) / 2
 
                 # Compute the
                 self.logger.info(
@@ -135,6 +145,14 @@ class Nav2Controller:
                 # One thing to consider that could be good though is, if we're close enough to the goal,
                 # we can say "I'm close enough to the goal, if I need to navigate again, I should already start doing it now while stopping the current task"
                 # That should really be if we're 95% of the way there, because if what we wanted was a small movement, we don't want to cancel the task.
+
+                if (average_completion > 85 and current_distance_to_goal < 0.5) or current_distance_to_goal < 0.2:
+                    if angle_completion > 90 and not feedback_sent_close_to_goal:
+                        self._send_feedback(
+                            "I'm almost done with this movement, if I think I should navigate again to pursue this task"
+                            ", I should stop the current primitive and start a new navigation movement."
+                        )
+                        feedback_sent_close_to_goal = True # Set flag to true after sending feedback
 
             # Small sleep to prevent CPU hogging
             time.sleep(0.1)  # 100ms check interval
@@ -169,7 +187,7 @@ class Nav2Controller:
 
 class NavigateToPosition(Primitive):
     def __init__(self, logger):
-        self.nav2_controller = Nav2Controller(logger)
+        self.nav2_controller = Nav2Controller(logger, self)
         self.logger = logger
 
     @property
