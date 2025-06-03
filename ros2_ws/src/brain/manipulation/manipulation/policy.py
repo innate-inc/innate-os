@@ -44,7 +44,7 @@ def create_act_config():
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,  # num_queries
-        n_action_steps=15,  # CHANGED: Match training config for efficiency
+        n_action_steps=30,  # CHANGED: Match training config for efficiency
         input_shapes=input_shapes,
         output_shapes=output_shapes,
         
@@ -92,7 +92,7 @@ class InferenceNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load normalization stats first
-        checkpoint_path ='/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocks_1_2_20250603_060007/act_policy_epoch_70000.pth'
+        checkpoint_path ='/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_20250530_104614/act_policy_epoch_90000.pth'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pt')
@@ -140,7 +140,7 @@ class InferenceNode(Node):
         # Inference control variables
         self.inference_running = False
         self.inference_start_time = None
-        self.inference_duration = 20.0  # 20 seconds
+        self.inference_duration = 45.0  # 20 seconds
         self.current_goal_handle = None  # Track current action goal
         
         # Arm positions for start and end
@@ -169,7 +169,7 @@ class InferenceNode(Node):
         
         # Desired inference frequency (Hz). The policy loop now lives
         # directly in the action thread instead of a separate timer.
-        self.inference_hz = 15.0
+        self.inference_hz = 25.0
         
         self.get_logger().info("Policy loaded and ready. Call '/policy/execute' action to start inference.")
 
@@ -204,6 +204,10 @@ class InferenceNode(Node):
             # Set up execution state
             self.current_goal_handle = goal_handle
             self.inference_running = True
+            
+            # Reset policy to clear any queues/buffers from previous runs
+            self.policy.reset()
+            self.get_logger().info("Policy reset completed - starting fresh execution")
             
             # Step 1: Move arm to start position
             self.get_logger().info("Moving arm to start position...")
