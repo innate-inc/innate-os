@@ -59,7 +59,7 @@ class SendPictureViaEmail(Primitive):
         Returns:
             tuple: (result_message, result_status)
         """
-        if recipient is None:
+        if not recipient:  # Checks for None or empty string
             recipient = self.default_recipient
 
         if not self.last_main_camera_image_b64:

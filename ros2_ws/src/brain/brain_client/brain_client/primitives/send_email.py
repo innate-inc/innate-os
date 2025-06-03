@@ -85,7 +85,8 @@ class SendEmail(Primitive):
 
             # Log success message
             self.logger.info(
-                f"\033[92m[BrainClient] Emergency email sent to {recipients_str}" "\033[0m"
+                f"\033[92m[BrainClient] Emergency email sent to {recipients_str}"
+                "\033[0m"
             )
             return f"Email sent to {recipients_str}", PrimitiveResult.SUCCESS
 
