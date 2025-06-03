@@ -70,10 +70,11 @@ checkpoints/
 runs/
 ros2_ws/src/brain/manipulation/ckpts/*
 
-
 # training data
 data/
 
+# recordings folder
+recordings/
 
 #other werid files
 *.mp4

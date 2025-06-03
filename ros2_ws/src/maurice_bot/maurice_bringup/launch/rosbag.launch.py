@@ -9,13 +9,13 @@ def generate_launch_description():
             cmd=[
                 'ros2', 'bag', 'record',
                 '/cmd_vel',
-                '/color/image',
-                '/image_raw',
+                '/color/image/compressed',
+                '/image_raw/compressed',
                 '/maurice_arm/state',
                 '/maurice_arm/commands',
                 '/chat_in',
                 '/chat_out',
-                '-o', f'/home/jetson1/maurice-prod/ros2_ws/recorder_{timestamp}'
+                '-o', f'/home/jetson1/maurice-prod/recordings/recorder_{timestamp}'
             ],
             output='screen'
         ),
