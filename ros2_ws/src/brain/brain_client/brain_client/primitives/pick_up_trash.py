@@ -135,10 +135,12 @@ class PickUpTrash(Primitive):
                 primitive_status = PrimitiveResult.FAILURE
         elif status == GoalStatus.STATUS_ABORTED:
             self.logger.info("Goal aborted")
+            primitive_status = PrimitiveResult.CANCELLED
             action_result_message = "Picking up trash aborted"
         elif status == GoalStatus.STATUS_CANCELED:
             self.logger.info("Goal canceled")
             action_result_message = "Picking up trash canceled"
+            primitive_status = PrimitiveResult.CANCELLED
         else:
             self.logger.info(f"Goal failed with unknown status: {status}")
             action_result_message = (
