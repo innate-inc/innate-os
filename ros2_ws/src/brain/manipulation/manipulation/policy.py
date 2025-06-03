@@ -12,11 +12,11 @@ from rclpy.action import ActionServer
 from cv_bridge import CvBridge
 import numpy as np
 import torch
-import pickle
 import os
 import cv2
 from geometry_msgs.msg import Twist
-import json
+import time
+import threading
 import torch.amp
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.executors import MultiThreadedExecutor
@@ -163,8 +163,10 @@ class InferenceNode(Node):
             self,
             ExecutePolicy,
             '/policy/execute',
-            self.execute_policy_callback
+            execute_callback=self.execute_policy_callback,
+            cancel_callback=self.cancel_policy_callback
         )
+        self._cancel_requested = threading.Event()
         
         # Desired inference frequency (Hz). The policy loop now lives
         # directly in the action thread instead of a separate timer.
@@ -172,6 +174,21 @@ class InferenceNode(Node):
         
         self.get_logger().info("Policy loaded and ready. Call '/policy/execute' action to start inference.")
 
+    def cancel_policy_callback(self, goal_handle):
+        """Action callback to cancel policy execution."""
+        if not self.inference_running:
+            result = ExecutePolicy.Result()
+            result.success = False
+            self.get_logger().warn("Policy execution requested but already running")
+            goal_handle.abort()
+            return result
+        
+        # Cancel the policy execution
+        self.get_logger().info("Cancelling policy execution")
+        self._stop_robot()
+        self._cancel_requested.set()
+        return ExecutePolicy.Result(success=True)
+        
     def execute_policy_callback(self, goal_handle):
         """Action callback to execute complete policy workflow."""
         if self.inference_running:
@@ -180,6 +197,9 @@ class InferenceNode(Node):
             self.get_logger().warn("Policy execution requested but already running")
             goal_handle.abort()
             return result
+        
+        # Reset the cancel flag
+        self._cancel_requested.clear()
         
         # Execute the complete policy workflow
         success = self._execute_complete_policy(goal_handle)
@@ -237,9 +257,10 @@ class InferenceNode(Node):
                 loop_start = time.time()
 
                 # Check for cancellation
-                if goal_handle.is_cancel_requested:
+                if self._cancel_requested.is_set():
                     self.get_logger().info("Policy execution canceled")
                     self._stop_robot()
+                    self.call_arm_goto_service(self.end_position, 3)
                     return False
 
                 # One inference step

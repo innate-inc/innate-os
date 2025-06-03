@@ -153,19 +153,19 @@ class PickUpTrash(Primitive):
         Cancel the pick_up_trash operation.
         This is a best-effort cancellation.
         """
-        if self._goal_handle and self._goal_handle.is_active:
-            self.logger.info(" [91m[BrainClient] Canceling pick_up_trash operation [0m")
+        if self._goal_handle:
+            self.logger.info("\033[91m[BrainClient] Canceling pick_up_trash operation \033[0m")
             cancel_future = self._goal_handle.cancel_goal_async()
             # We could spin for cancel_future here if we need to confirm cancellation
             # For a simple cancel, just sending the request is often enough.
             # rclpy.spin_until_future_complete(self.node, cancel_future, timeout_sec=5.0)
             # self.logger.info(f"Cancel request result: {cancel_future.result()}")
-            return "Cancellation request sent for picking up trash."
+            return "\033[92m[BrainClient] Cancellation request sent for picking up trash. \033[0m"
         else:
             self.logger.info(
-                " [91m[BrainClient] Pick up trash operation cannot be canceled as no goal is active. [0m"
+                "\033[91m[BrainClient] Pick up trash operation cannot be canceled as no goal is active. \033[0m"
             )
-            return "No active pick_up_trash operation to cancel."
+            return "\033[91m[BrainClient] No active pick_up_trash operation to cancel. \033[0m"
 
 
 # Note: Proper rclpy lifecycle management (init/shutdown, node creation/destruction)
