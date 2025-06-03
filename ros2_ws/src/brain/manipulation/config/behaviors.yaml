@@ -24,7 +24,7 @@ behavior_manager:
         end_pose: null
       
       - name: "drop_paper"
-        file_path: "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/behaviors/drop_paper.yaml"
+        file_path: null
         type: "poses"
         steps: 3.0
         poses:
