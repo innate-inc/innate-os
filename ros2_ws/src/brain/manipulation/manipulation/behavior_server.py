@@ -41,7 +41,8 @@ def create_act_config():
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,
-        n_action_steps=30,
+        n_action_steps=1,
+        speed=2.5,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
         
@@ -65,7 +66,7 @@ def create_act_config():
         kl_weight=10.0,
         
         # Temporal ensembling
-        temporal_ensemble_coeff=None,
+        temporal_ensemble_coeff=0.01,
         
         # Optimizer settings
         optimizer_lr=1e-5,
@@ -304,7 +305,7 @@ class BehaviorServer(Node):
             
             # Execute policy inference
             start_time = time.time()
-            inference_hz = 25.0
+            inference_hz = 12.0
             period = 1.0 / inference_hz
             
             self.get_logger().info(f"Starting policy inference for {duration} seconds")
@@ -436,7 +437,7 @@ class BehaviorServer(Node):
             
             # Replay parameters
             total_steps = actions.shape[0]
-            replay_hz = 25.0  # Match the frequency used in learned behaviors
+            replay_hz = 12.0  # Changed from 25.0 to 12.0 to match inference frequency
             step_duration = 1.0 / replay_hz
             total_duration = total_steps * step_duration
             
