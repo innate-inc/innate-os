@@ -90,3 +90,15 @@ ResultAny=yes
 ResultInactive=yes
 ResultActive=yes
 ```
+
+## Caveats
+
+### On Ros2 version
+
+For the action server to run properly you might need to update ros. This version below was shown to work well
+
+```
+dpkg -s ros-humble-ros-core | grep Version
+
+Version: 0.10.0-1jammy.20250430.084858
+```
