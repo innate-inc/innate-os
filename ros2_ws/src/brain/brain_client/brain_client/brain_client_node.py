@@ -991,7 +991,7 @@ class BrainClientNode(Node):
                         arm_rgb_b64 = base64.b64encode(
                             arm_encoded_img.tobytes()
                         ).decode("utf-8")
-                        payload["arm_camera"] = {
+                        payload["additional_camera"] = {
                             "image_b64": arm_rgb_b64,
                             "camera_type": "arm_wrist",
                         }
@@ -1004,8 +1004,7 @@ class BrainClientNode(Node):
                     self.get_logger().warn(
                         "\033[93m[BrainClient] No arm camera image available (send_arm_camera_image is True).\\033[0m"
                     )
-                    # Decide if we should return here or send the message without arm camera.
-                    # For now, let's allow sending without it if other data is present.
+                    return
 
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)

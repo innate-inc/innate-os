@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-from brain_client.primitives.types import Primitive, PrimitiveResult
 import rclpy
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus  # Corrected import
 from brain_messages.action import (
     ExecutePolicy,
 )  # Assuming the action file is in brain_messages/action
+from brain_client.primitives.types import Primitive, PrimitiveResult
 
 class PickUpTrash(Primitive):
     """
@@ -27,8 +27,12 @@ class PickUpTrash(Primitive):
     def guidelines(self):
         return (
             "Use to pick up trash by triggering the execute_policy action. "
-            "To use when you see a piece of trash on the floor. "
-            "Right now you can pick up white pieces of paper."
+            "To use when you see a piece of trash on the floor and it's close enough to pick up (<50cm away). "
+            "If unsure if close enough, try to navigate closer before calling this primitive. "
+            "For the time being, you can only pick up white pieces of paper. "
+            "While you are picking up the trash, you can notice by looking at your wrist camera "
+            "if you have successfully picked up the trash. "
+            "When the primitive is complete, if your wrist camera is not showing the trash, you actually have not picked up the trash."
         )
 
     def feedback_callback(self, feedback_msg):
@@ -123,6 +127,10 @@ class PickUpTrash(Primitive):
 
         action_result_message = ""
         primitive_status = PrimitiveResult.FAILURE
+
+        # First send feedback that the robot should be looking at its wrist camera
+        # to check if the trash is picked up
+        self.send_feedback("I should be looking at my wrist camera to check if I have picked up the trash successfully")
 
         if status == GoalStatus.STATUS_SUCCEEDED:
             final_result = result_response.result
