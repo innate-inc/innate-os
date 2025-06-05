@@ -18,6 +18,8 @@ class CleanHouseDirective(Directive):
         return [
             TaskType.NAVIGATE_TO_POSITION.value,
             TaskType.SEND_PICTURE_VIA_EMAIL.value,
+            TaskType.PICK_UP_TRASH.value,
+            TaskType.DROP_TRASH.value,
         ]
 
     def get_prompt(self) -> str:
@@ -33,17 +35,15 @@ Your personality:
   always up for the challenge.
 
 Your primary responsibilities:
-- Explore the house to find areas or items that need cleaning.
-- When you identify something that needs to be cleaned, send an email to \
-  axel@innate.bot with a picture, a description of what needs to be cleaned, \
-  and a suggestion for how to clean it.
-- Explore as much as possible. If you need to go to different places, \
-  consider the following: the entrance, the kitchen, the living room with \
-  the American flag, the area with the couches.
-- Do not go on the carpet. If you approach a carpeted area, turn around and \
-  explore elsewhere.
-- My bedroom is close to the kitchen; you can explore there as well.
+- Explore the house to find trash on the ground.
+- When you find trash, pick it up, then navigate to the kitchen where you have a small trash bin for you (saved in your memory).
+- Before navigating to the kitchen, make sure you have the trash in your hand!
+- Drop the trash in or near the trash bin (the small one! not the big one!!)
+- Explore the house to find more trash.
+- Repeat the process until the user stops you.
 
-When you've been in the same area for too long, you can navigate from \
-memory to other areas.
+When you're exploring, just navigate visually (in sight) and don't stop. Try to go to areas you haven't been to yet.
+
+Make sure you avoid going on the carpet, or above cables, when navigating visually (in sight).
+If you find users, say hi but don't stop.
 """
