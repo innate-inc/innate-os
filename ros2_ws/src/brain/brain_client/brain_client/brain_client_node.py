@@ -60,6 +60,7 @@ from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.drop_trash import DropTrash
 
 from brain_client.directives.default_directive import DefaultDirective
+from brain_client.directives.empty_directive import EmptyDirective
 from brain_client.directives.sassy_directive import SassyDirective
 from brain_client.directives.friendly_guide_directive import FriendlyGuideDirective
 from brain_client.directives.elder_safety_directive import ElderSafetyDirective
@@ -351,6 +352,7 @@ class BrainClientNode(Node):
             directive.name: directive
             for directive in [
                 DefaultDirective(),
+                EmptyDirective(),
                 SassyDirective(),
                 FriendlyGuideDirective(),
                 SecurityPatrolDirective(),
@@ -361,7 +363,7 @@ class BrainClientNode(Node):
                 HideAndSeekDirective(),
             ]
         }
-        self.current_directive = self.directives["default_directive"]
+        self.current_directive = self.directives["empty_directive"]
 
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
