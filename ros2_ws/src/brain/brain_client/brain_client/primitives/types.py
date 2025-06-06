@@ -83,6 +83,13 @@ class Primitive(ABC):
         Subclasses may override this method if guidelines are available.
         """
         return None
+    
+    def guidelines_when_running(self):
+        """
+        Optionally provide guidelines for this primitive when it is running.
+        Subclasses may override this method if guidelines are available.
+        """
+        return None
 
     def set_feedback_callback(self, callback):
         """Sets the feedback callback function."""

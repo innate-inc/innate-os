@@ -1279,7 +1279,8 @@ class BrainClientNode(Node):
                 primitives.append(
                     {
                         "name": primitive_name,
-                        "guideline": primitive.guidelines(),
+                        "guidelines": primitive.guidelines(),
+                        "guidelines_when_running": primitive.guidelines_when_running(),
                         "inputs": params,
                     }
                 )
@@ -1460,6 +1461,16 @@ class BrainClientNode(Node):
             cancel_future = self._goal_handle.cancel_goal_async()
             # We might want to add a callback to confirm or log, but for deactivation, just sending is key.
             # cancel_future.add_done_callback(self.cancel_response_callback)
+            # Also notify the server that the primitive has been cancelled
+            self.ws_bridge.send_message(
+                MessageIn(
+                    type=MessageInType.PRIMITIVE_INTERRUPTED,
+                    payload={
+                        "primitive_name": self.primitive_running["primitive_name"],
+                        "primitive_id": self.primitive_running["primitive_id"],
+                    },
+                )
+            )
             self._goal_handle = None  # Clear after requesting cancel
 
         self.primitive_running = None

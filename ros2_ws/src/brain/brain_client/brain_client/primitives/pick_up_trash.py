@@ -3,7 +3,7 @@ import rclpy
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus  # Corrected import
 from brain_messages.action import (
-    ExecutePolicy,
+    ExecuteBehavior,
 )  # Assuming the action file is in brain_messages/action
 from brain_client.primitives.types import Primitive, PrimitiveResult
 
@@ -26,13 +26,17 @@ class PickUpTrash(Primitive):
 
     def guidelines(self):
         return (
-            "Use to pick up trash by triggering the execute_policy action. "
-            "To use when you see a piece of trash on the floor and it's close enough to pick up (<50cm away). "
+            "To use when you see a piece of trash on the floor and it's close enough to pick up (under 1m away). "
             "If unsure if close enough, try to navigate closer before calling this primitive. "
-            "For the time being, you can only pick up white pieces of paper. "
-            "While you are picking up the trash, you can notice by looking at your wrist camera "
-            "if you have successfully picked up the trash. "
-            "When the primitive is complete, if your wrist camera is not showing the trash, you actually have not picked up the trash."
+            "For the time being, only use to pick up white pieces of paper, not another piece of trash. "
+        )
+    
+    def guidelines_when_running(self):
+        return (
+            "While you are picking up the trash, watch your main and wrist camera. "
+            "You have successfully picked up the trash if your wrist camera shows the trash and the arm is clearly up. "
+            "If you successfully pick up a trash early, you can stop the primitive and note that you have picked up the trash. "
+            "If the primitive completes, watch your wrist camera to see if you have picked up the trash successfully or not."
         )
 
     def feedback_callback(self, feedback_msg):
@@ -43,7 +47,7 @@ class PickUpTrash(Primitive):
 
     def execute(self):
         """
-        Executes the pick_up_trash policy by calling the ExecutePolicy action server.
+        Executes the pick_up_trash policy by calling the ExecuteBehavior action server.
         This is a blocking call.
 
         Returns:
@@ -57,26 +61,25 @@ class PickUpTrash(Primitive):
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
 
         if not self._action_client: # Initialize client if it doesn't exist
-            self._action_client = ActionClient(self.node, ExecutePolicy, "/policy/execute")
+            self._action_client = ActionClient(self.node, ExecuteBehavior, "/behavior/execute")
             if not self._action_client:
                 self.logger.error(
-                    "PickUpTrash primitive could not create ExecutePolicy action client."
+                    "PickUpTrash primitive could not create ExecuteBehavior action client."
                 )
                 return "Primitive could not create action client", PrimitiveResult.FAILURE
 
         self.logger.info(
-            f" \033[96m[BrainClient] Calling ExecutePolicy for picking up trash (blocking)\033[0m"
+            f" \033[96m[BrainClient] Calling ExecuteBehavior for picking up trash (blocking)\033[0m"
         )
 
         if not self._action_client.wait_for_server(timeout_sec=5.0):
-            self.logger.error("ExecutePolicy action server not available.")
-            return "ExecutePolicy action server not available", PrimitiveResult.FAILURE
+            self.logger.error("ExecuteBehavior action server not available.")
+            return "ExecuteBehavior action server not available", PrimitiveResult.FAILURE
 
-        goal_msg = ExecutePolicy.Goal()
-        # The goal is empty as per ExecutePolicy.action
-        goal_msg.inference_duration = 30.0 # Set inference duration to 30 seconds
+        goal_msg = ExecuteBehavior.Goal()
+        goal_msg.behavior_name = "pick_paper"
 
-        self.logger.info("Sending goal to ExecutePolicy action server...")
+        self.logger.info("Sending goal to ExecuteBehavior action server...")
         goal_future = self._action_client.send_goal_async(
             goal_msg, feedback_callback=self.feedback_callback
         )
@@ -130,7 +133,7 @@ class PickUpTrash(Primitive):
 
         # First send feedback that the robot should be looking at its wrist camera
         # to check if the trash is picked up
-        self.send_feedback("I should be looking at my wrist camera to check if I have picked up the trash successfully")
+        self._send_feedback("I should be looking at my wrist camera to check if I have picked up the trash successfully")
 
         if status == GoalStatus.STATUS_SUCCEEDED:
             final_result = result_response.result
