@@ -11,6 +11,8 @@ class TaskType(Enum):
     SEND_PICTURE_VIA_EMAIL = "send_picture_via_email"
     PICK_UP_TRASH = "pick_up_trash"
     DROP_TRASH = "drop_trash"
+    PICK_UP_SOCK = "pick_up_sock"
+    DROP_SOCKS = "drop_socks"
 
 
 class NavigationToPosition(BaseModel):

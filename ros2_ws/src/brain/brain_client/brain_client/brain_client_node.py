@@ -73,6 +73,7 @@ from brain_client.directives.interior_designer_directive import (
 from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
 from brain_client.directives.clean_house_directive import CleanHouseDirective
 from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
+from brain_client.directives.socks_tidier_directive import SocksTidierDirective
 
 
 class BrainClientNode(Node):
@@ -339,8 +340,8 @@ class BrainClientNode(Node):
             ),
             TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
             TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
-            "pick_up_sock": PickUpSock(self.get_logger()),
-            "drop_socks": DropSocks(self.get_logger()),
+            TaskType.PICK_UP_SOCK.value: PickUpSock(self.get_logger()),
+            TaskType.DROP_SOCKS.value: DropSocks(self.get_logger()),
             # Add other primitives here as they become available
         }
 
@@ -365,6 +366,7 @@ class BrainClientNode(Node):
                 HouseJokerDirective(),
                 CleanHouseDirective(),
                 HideAndSeekDirective(),
+                SocksTidierDirective(),
             ]
         }
         self.current_directive = self.directives["empty_directive"]
