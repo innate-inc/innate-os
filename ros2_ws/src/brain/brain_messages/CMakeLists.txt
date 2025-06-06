@@ -20,6 +20,7 @@ set(srv_files
   "srv/GetTaskMetadata.srv"
   "srv/UpdateTaskMetadata.srv"
   "srv/ResetBrain.srv"
+  "srv/GetAvailableBehaviors.srv"
 )
 
 set(msg_files

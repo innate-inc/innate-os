@@ -7,6 +7,7 @@ from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray
 from maurice_msgs.srv import GotoJS
 from brain_messages.action import ExecuteBehavior  # You'll need to create this action
+from brain_messages.srv import GetAvailableBehaviors
 from rclpy.action import ActionServer, CancelResponse
 from cv_bridge import CvBridge
 import numpy as np
@@ -137,6 +138,13 @@ class BehaviorServer(Node):
             '/behavior/execute',
             execute_callback=self.execute_behavior_callback,
             cancel_callback=self.cancel_behavior_callback
+        )
+        
+        # Service server for getting available behaviors
+        self.get_behaviors_service = self.create_service(
+            GetAvailableBehaviors,
+            '/behavior/get_available',
+            self.get_available_behaviors_callback
         )
         
         self.get_logger().info(f"Behavior server ready. Available behaviors: {list(self.behaviors_config.keys())}")
@@ -637,6 +645,24 @@ class BehaviorServer(Node):
         except Exception as e:
             self.get_logger().error(f"Error calling arm goto service: {e}")
             return False
+
+    def get_available_behaviors_callback(self, request, response):
+        """Service callback to provide available behaviors."""
+        self.get_logger().info("Request for available behaviors received.")
+        
+        behavior_names = []
+        behavior_types = []
+        
+        if self.behaviors_config:
+            for name, config in self.behaviors_config.items():
+                behavior_names.append(name)
+                behavior_types.append(config.get('type', 'unknown'))
+        
+        response.behavior_names = behavior_names
+        response.behavior_types = behavior_types
+        
+        self.get_logger().info(f"Returning {len(behavior_names)} available behaviors.")
+        return response
 
 def main(args=None):
     rclpy.init(args=args)
