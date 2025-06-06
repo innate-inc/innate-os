@@ -30,7 +30,7 @@ class PickUpSock(Primitive):
         return (
             "While you are picking up the sock, watch your main and wrist camera. "
             "You have successfully picked up the sock if your wrist camera shows the sock and the arm is clearly up. "
-            "If you successfully pick up a sock early, you can stop the primitive and note that you have picked up the sock. "
+            "If you successfully pick up a sock early, you can stop the primitive and note that you have picked up the sock. But really ONLY IF YOU SEE THE SOCK IN THE AIR. "
             "If the primitive completes, watch your wrist camera to see if you have picked up the sock successfully or not."
         )
 

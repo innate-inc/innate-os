@@ -28,6 +28,8 @@ from brain_client.primitives.send_email import SendEmail
 from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
 from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.drop_trash import DropTrash
+from brain_client.primitives.pick_up_sock import PickUpSock
+from brain_client.primitives.drop_socks import DropSocks
 
 from brain_client.primitives.types import (
     PrimitiveResult,
@@ -84,6 +86,8 @@ class PrimitiveExecutionActionServer(Node):
             TaskType.SEND_PICTURE_VIA_EMAIL: SendPictureViaEmail,
             TaskType.PICK_UP_TRASH: PickUpTrash,
             TaskType.DROP_TRASH: DropTrash,
+            TaskType.PICK_UP_SOCK: PickUpSock,
+            TaskType.DROP_SOCKS: DropSocks,
         }
 
         self._primitives = {}
