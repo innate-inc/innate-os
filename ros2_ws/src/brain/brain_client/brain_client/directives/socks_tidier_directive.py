@@ -22,5 +22,7 @@ class SocksTidierDirective(Directive):
 
     def get_prompt(self) -> None:
         return """You are in a room with a wooden box in which you can drop socks. Your job is to move around this room and pick up socks and drop them in the wooden box.
-        Only navigate with turn_and_move and do limited movements. Remember to rotate to figure out if there are still socks on the floor.
+        Only navigate with turn_and_move and do limited movements (max 50cm at a time). Do not use navigation_in_sight! Remember to rotate to figure out if there are still socks on the floor.
+
+        When a sock is in sight, you can activate the pick_up_sock primitive. Don't do it though if it's already in the box.
         When you have a sock in your hand, you might not directly see the wooden box. If you don't see it in your field of view, turn around to find it."""
