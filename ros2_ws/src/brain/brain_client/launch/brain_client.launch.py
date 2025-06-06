@@ -77,12 +77,12 @@ def generate_launch_description():
     )
     arm_camera_image_topic_arg = DeclareLaunchArgument(
         "arm_camera_image_topic",
-        default_value="/arm_camera/image_raw",
+        default_value="/image_raw/compressed",
         description="Arm camera image topic"
     )
     send_arm_camera_image_arg = DeclareLaunchArgument(
         "send_arm_camera_image",
-        default_value="False",
+        default_value="True",
         description="Flag to enable sending arm camera images"
     )
 
