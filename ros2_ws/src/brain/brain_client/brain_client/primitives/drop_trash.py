@@ -118,9 +118,9 @@ class DropTrash(Primitive):
         # First arm movement: go to zero position
         # Assuming a 6-joint arm, all set to 0.0
         joint_positions_1 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        time_1 = int(5.0)
+        time_1: float = 5.0
 
-        success, message = self._call_goto_js_service(joint_positions_1, time_1)
+        success, message = self._call_goto_js_service(joint_positions_1, int(time_1))
         if not success:
             return (
                 f"Failed first arm movement to zero position: {message}",
@@ -132,20 +132,20 @@ class DropTrash(Primitive):
         )
         # It's important that this time.sleep happens *after* the service call has completed.
         # The rclpy.spin_until_future_complete ensures the service call itself is blocking.
-        time.sleep(5.0)
+        time.sleep(time_1)
         self._send_feedback("Arm ready to drop object. Dropping now...")  # FEEDBACK 1
 
         # Second arm movement: from zero position, adjust last joint
         joint_positions_2 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Start from zero position
         joint_positions_2[-1] = 0.88  # Target value for the last joint
-        time_2 = int(1.0)
+        time_2: float = 2.0
 
-        time.sleep(1.0)
+        time.sleep(time_2)
         self._send_feedback(
             "Object dropped, arm returning to original position..."
         )  # FEEDBACK 2
 
-        success, message = self._call_goto_js_service(joint_positions_2, time_2)
+        success, message = self._call_goto_js_service(joint_positions_2, int(time_2))
         if not success:
             return (
                 f"Failed second arm movement (adjusting last joint): {message}",
@@ -160,13 +160,15 @@ class DropTrash(Primitive):
             -0.04908738521234052,
             0.8881748761857863,
         ]
-        time_3 = int(2.0)
-        success, message = self._call_goto_js_service(joint_positions_3, time_3)
+        time_3: float = 2.0
+        success, message = self._call_goto_js_service(joint_positions_3, int(time_3))
         if not success:
             return (
                 f"Failed third arm movement (returning to original position): {message}",
                 PrimitiveResult.FAILURE,
             )
+
+        time.sleep(time_3)
 
         self.logger.info(
             "\033[92m[BrainClient] Drop trash sequence completed successfully.\033[0m"

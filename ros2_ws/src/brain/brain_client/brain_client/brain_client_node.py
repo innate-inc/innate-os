@@ -58,6 +58,8 @@ from brain_client.primitives.send_email import SendEmail
 from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
 from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.drop_trash import DropTrash
+from brain_client.primitives.pick_up_sock import PickUpSock
+from brain_client.primitives.drop_socks import DropSocks
 
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.empty_directive import EmptyDirective
@@ -337,6 +339,8 @@ class BrainClientNode(Node):
             ),
             TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
             TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
+            "pick_up_sock": PickUpSock(self.get_logger()),
+            "drop_socks": DropSocks(self.get_logger()),
             # Add other primitives here as they become available
         }
 
