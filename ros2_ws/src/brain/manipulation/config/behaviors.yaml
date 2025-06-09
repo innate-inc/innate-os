@@ -5,13 +5,15 @@ behavior_manager:
   pick_paper:
     file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/PaperCorner_Filtered_20250526_213031/act_policy_epoch_90000.pth"
     type: "learned"
+    action_dim: 8
     duration: 45.0
     start_pose: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
     end_pose: [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0]
   
   pick_socks:
-    file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_20250530_104614/act_policy_epoch_90000.pth"
+    file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_terminated_20250607_005544/act_policy_epoch_90000.pth"
     type: "learned"
+    action_dim: 10
     duration: 30.0
     start_pose: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
     end_pose: []
@@ -19,6 +21,7 @@ behavior_manager:
   drop_socks:
     file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocksV2_1_2_Filtered_20250607_080641/act_policy_epoch_80000.pth"
     type: "learned"
+    action_dim: 8
     duration: 45.0
     start_pose: []
     end_pose: []
