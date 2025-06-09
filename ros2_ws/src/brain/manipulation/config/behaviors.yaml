@@ -17,7 +17,7 @@ behavior_manager:
     end_pose: []
   
   drop_socks:
-    file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocks_1_2_20250603_060007/act_policy_epoch_70000.pth"
+    file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/DropSocksV2_1_2_Filtered_20250607_080641/act_policy_epoch_80000.pth"
     type: "learned"
     duration: 45.0
     start_pose: []
