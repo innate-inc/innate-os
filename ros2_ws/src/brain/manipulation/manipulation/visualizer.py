@@ -48,6 +48,9 @@ class DataViewerNode(Node):
             rclpy.shutdown()
             return
 
+        # Get playback speed from user input
+        self.playback_speed = self.prompt_speed_input()
+
         # Load metadata
         metadata_path = os.path.join(self.task_directory, "metadata.json")
         if not os.path.exists(metadata_path):
@@ -64,6 +67,7 @@ class DataViewerNode(Node):
                 rclpy.shutdown()
                 return
             self.get_logger().info(f"Loaded {len(self.episodes)} episodes from {self.metadata.get('task_name', 'Unknown Task')}")
+            self.get_logger().info(f"Playback speed set to: {self.playback_speed}x")
         except Exception as e:
             self.get_logger().error(f"Failed to load metadata: {e}")
             rclpy.shutdown()
@@ -90,7 +94,7 @@ class DataViewerNode(Node):
             self.get_logger().info(
                 f"Playing episode {episode.get('episode_id')} ({current_episode_index+1}/{len(self.episodes)}): {file_name}"
             )
-            self.play_episode(file_path)
+            self.play_episode(file_path, current_episode_index + 1, len(self.episodes), episode.get('episode_id'))
 
             # Create a dummy window to wait for key input.
             self.get_logger().info("Waiting for key input...")
@@ -128,7 +132,7 @@ class DataViewerNode(Node):
         
         # Add more transforms for other links as needed
         
-    def play_episode(self, file_path):
+    def play_episode(self, file_path, episode_num, total_episodes, episode_id):
         """
         Open an episode HDF5 file and play back each time step at ~30 Hz.
         Overlays the arm positions (qpos) and velocities (qvel) onto the displayed images.
@@ -149,6 +153,15 @@ class DataViewerNode(Node):
         camera_names = list(images_group.keys())
         num_timesteps = actions.shape[0]
         self.get_logger().info(f"Loaded {num_timesteps} timesteps")
+
+        # Calculate adjusted sleep duration and progress interval based on speed
+        base_sleep_duration = 1.0 / self.data_frequency
+        adjusted_sleep_duration = base_sleep_duration / self.playback_speed
+        
+        # To log every second: at normal speed (1.0x) log every 30 frames (30fps = 1 sec)
+        # At 2x speed, log every 60 frames (60 frames at 2x = 1 sec of real time)
+        # At 0.5x speed, log every 15 frames (15 frames at 0.5x = 1 sec of real time)
+        progress_interval = max(1, int(self.data_frequency * self.playback_speed))
 
         # Create window once at the start
         cv2.namedWindow("Episode Playback", cv2.WINDOW_NORMAL)
@@ -198,7 +211,9 @@ class DataViewerNode(Node):
                 cv2.putText(disp_img, f"action: {actions[t]}", (x, y0 + 2*line_height), 
                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
 
-                # Add a visual indicator that window is active
+                # Add speed indicator and window active status
+                cv2.putText(disp_img, f"Speed: {self.playback_speed}x", (10, disp_img.shape[0] - 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                 cv2.putText(disp_img, "Window Active - Press 'q' to quit", (10, disp_img.shape[0] - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                 
@@ -207,11 +222,13 @@ class DataViewerNode(Node):
                 if key == ord('q'):
                     break
 
-                # Add a small delay to maintain the desired frequency
-                time.sleep(1.0/self.data_frequency)
+                # Add adjusted delay to maintain the desired frequency
+                time.sleep(adjusted_sleep_duration)
 
-                if t % 30 == 0:  # Log every 30 frames to avoid too much output
-                    self.get_logger().info(f"Processed frame {t}/{num_timesteps}")
+                # Log progress at adjusted intervals (approximately every second)
+                if t % progress_interval == 0 or t == num_timesteps - 1:
+                    progress = (t + 1) / num_timesteps * 100
+                    self.get_logger().info(f"Episode {episode_num}/{total_episodes} (ID: {episode_id}) - Frame {t+1}/{num_timesteps} ({progress:.1f}%) [Speed: {self.playback_speed}x]")
 
         finally:
             # Clean up
@@ -259,6 +276,42 @@ class DataViewerNode(Node):
         except Exception as e:
             self.get_logger().error(f"Error during GUI directory selection: {e}")
             return None
+
+    def prompt_speed_input(self):
+        """
+        Prompt the user for playback speed via console input.
+        Returns the speed as a float, default is 1.0.
+        """
+        try:
+            print("\n" + "="*50)
+            print("PLAYBACK SPEED CONFIGURATION")
+            print("="*50)
+            print("Enter playback speed multiplier:")
+            print("  1.0 = Normal speed")
+            print("  2.0 = 2x faster")
+            print("  0.5 = Half speed")
+            print("  Default: 1.0")
+            print("-"*50)
+            
+            speed_input = input("Speed (default 1.0): ").strip()
+            
+            if not speed_input:
+                speed = 1.0
+            else:
+                speed = float(speed_input)
+                if speed <= 0:
+                    self.get_logger().warn("Speed must be positive. Using default speed 1.0")
+                    speed = 1.0
+            
+            self.get_logger().info(f"Playback speed set to: {speed}x")
+            return speed
+            
+        except ValueError:
+            self.get_logger().warn("Invalid speed input. Using default speed 1.0")
+            return 1.0
+        except Exception as e:
+            self.get_logger().error(f"Error getting speed input: {e}. Using default speed 1.0")
+            return 1.0
 
     def start_visualization(self):
         """Start the visualization process"""
