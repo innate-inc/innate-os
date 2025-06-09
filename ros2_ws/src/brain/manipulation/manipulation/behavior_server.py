@@ -174,12 +174,53 @@ class BehaviorServer(Node):
                     
                     behaviors[behavior_name] = behavior_config
                 
+                # Validate all file paths exist
+                self._validate_behavior_paths(behaviors)
+                
                 self.get_logger().info(f"Loaded {len(behaviors)} behavior configurations from {config_path}")
                 return behaviors
                 
+        except FileNotFoundError as e:
+            # Re-raise file validation errors
+            self.get_logger().fatal(str(e))
+            raise
         except Exception as e:
             self.get_logger().error(f"Failed to load behaviors config from {config_path}: {e}")
             return {}
+    
+    def _validate_behavior_paths(self, behaviors):
+        """Validate that all required file paths in behaviors exist."""
+        missing_paths = []
+        
+        for behavior_name, behavior_config in behaviors.items():
+            file_path = behavior_config.get('file_path', '')
+            
+            # Skip empty paths (some behaviors like drop_paper might not have files)
+            if not file_path:
+                continue
+            
+            # Expand user path
+            expanded_path = os.path.expanduser(file_path)
+            
+            # Check if file exists
+            if not os.path.exists(expanded_path):
+                missing_paths.append({
+                    'behavior': behavior_name,
+                    'path': file_path,
+                    'expanded_path': expanded_path
+                })
+        
+        # If any paths are missing, log errors and raise exception
+        if missing_paths:
+            self.get_logger().error("Missing behavior files detected:")
+            for missing in missing_paths:
+                self.get_logger().error(f"  Behavior '{missing['behavior']}': {missing['path']} -> {missing['expanded_path']}")
+            
+            # Raise exception instead of calling exit() directly
+            error_msg = f"Missing {len(missing_paths)} required behavior files. Please ensure all files exist before starting the server."
+            raise FileNotFoundError(error_msg)
+        
+        self.get_logger().info("All behavior file paths validated successfully")
     
     def cancel_behavior_callback(self, goal_handle_to_cancel):
         """Handle action cancel requests."""
