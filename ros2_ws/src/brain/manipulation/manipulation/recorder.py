@@ -220,9 +220,12 @@ class RecorderNode(Node):
             # self.state will be set to TASK_ACTIVE by the rest of the method.
             # Episode count for the new task will effectively start fresh.
         self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
+        if self.task_manager.metadata:
+            self.episode_count = self.task_manager.metadata["number_of_episodes"]
+        else:
+            self.episode_count = 0
         self.current_task_name = request.task_name
         self.state = "TASK_ACTIVE"
-        self.episode_count = 0 # Reset episode count for the new task
         self.get_logger().info(f"New task '{request.task_name}' started.")
         # Publish status update for new task
         self.publish_status(status="active", episode_number="", current_task_name=self.current_task_name)
