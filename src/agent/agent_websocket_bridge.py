@@ -19,6 +19,7 @@ from src.agent.types import (
     VelocityCmd,
     DirectiveCmd,
     ResetRobotCmd,
+    BrainActiveCmd,
 )
 from src.shared_queues import ChatMessage, ChatSignal
 
@@ -249,6 +250,15 @@ async def outbound_loop(ws, shared_queues):
                     print("[ROSBridge] Reset without memory state")
 
                 await ws.send(json.dumps(reset_srv))
+
+            elif isinstance(msg, BrainActiveCmd):
+                brain_active_srv = rosbridge_call_service(
+                    "/set_brain_active", "std_srvs/srv/SetBool"
+                )
+                brain_active_srv["args"] = {"data": msg.active}
+                
+                print(f"[ROSBridge] Setting brain active: {msg.active}")
+                await ws.send(json.dumps(brain_active_srv))
 
             elif isinstance(msg, dict) and "clock" in msg:
                 outbound = rosbridge_publish("/clock", msg)
