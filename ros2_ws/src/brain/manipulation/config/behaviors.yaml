@@ -7,7 +7,7 @@ behavior_manager:
     type: "learned"
     duration: 45.0
     start_pose: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
-    end_pose: [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+    end_pose: [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0]
   
   pick_socks:
     file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_20250530_104614/act_policy_epoch_90000.pth"
@@ -30,11 +30,11 @@ behavior_manager:
     poses:
       pose_1: [0.143, -0.434, 0.147, 0.788, 0.060, 0.0]
       pose_2: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
-      pose_3: [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+      pose_3: [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0]
   
   wave:
     file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Wave/episode_0.h5"
     type: "replay"
     duration: 0.0
     start_pose: []
-    end_pose: [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
+    end_pose: [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0]
