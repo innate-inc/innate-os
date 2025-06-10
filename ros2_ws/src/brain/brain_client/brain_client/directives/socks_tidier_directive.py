@@ -25,4 +25,4 @@ class SocksTidierDirective(Directive):
         Only navigate with turn_and_move and do limited movements (max 50cm at a time). Do not use navigation_in_sight! Remember to rotate to figure out if there are still socks on the floor.
 
         When a sock is in sight, you can activate the pick_up_sock primitive. Don't do it though if it's already in the box.
-        When you have a sock in your hand, you might not directly see the wooden box. If you don't see it in your field of view, turn around to find it."""
+        When you have a sock in your hand, you might not directly see the wooden box. If you don't see it in your field of view, turn around to find it or navigate from memory."""

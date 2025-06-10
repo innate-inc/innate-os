@@ -23,7 +23,8 @@ class PickUpSock(Primitive):
 
     def guidelines(self):
         return (
-            "To use when you see a sock on the floor and it's close enough to pick up (under 50cm away). "
+            "To use when you see a sock on the floor and it's close enough to pick up (under like 70cm away). "
+            "It should also be in front of the robot, make sure you are facing the sock. "
         )
     
     def guidelines_when_running(self):
