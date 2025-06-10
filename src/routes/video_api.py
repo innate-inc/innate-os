@@ -5,7 +5,7 @@ import cv2
 from typing import Optional
 from pydantic import BaseModel
 
-from src.agent.types import DirectiveCmd
+from src.agent.types import DirectiveCmd, BrainActiveCmd
 
 router = APIRouter()
 
@@ -15,6 +15,11 @@ class ResetRobotRequest(BaseModel):
     memory_state: Optional[str] = None
     position: Optional[list[float]] = None
     orientation: Optional[list[float]] = None
+
+
+# Create a model for the brain activation request
+class SetBrainActiveRequest(BaseModel):
+    active: bool
 
 
 def mjpeg_generator(shared_queues, camera_name="first_person"):
@@ -141,5 +146,23 @@ async def set_directive(request: Request, directive: dict):
         except Exception:
             return {"status": "queue_full"}
         return {"status": "directive_enqueued"}
+    else:
+        return {"status": "no_shared_queues"}
+
+
+@router.post("/set_brain_active")
+async def set_brain_active(request: Request, brain_request: SetBrainActiveRequest):
+    """
+    Activates or deactivates the brain by sending a command to the agent.
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is not None:
+        try:
+            shared_queues.sim_to_agent.put_nowait(
+                BrainActiveCmd(active=brain_request.active)
+            )
+            return {"status": "brain_command_enqueued"}
+        except Exception:
+            return {"status": "queue_full"}
     else:
         return {"status": "no_shared_queues"}
