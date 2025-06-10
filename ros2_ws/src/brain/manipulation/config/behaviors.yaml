@@ -14,7 +14,7 @@ behavior_manager:
     file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Socks_1_2_3_terminated_20250607_005544/act_policy_epoch_90000.pth"
     type: "learned"
     action_dim: 10
-    duration: 30.0
+    duration: 45.0
     start_pose: [0.143, -0.434, 0.147, 0.788, 0.060, 0.701]
     end_pose: []
   

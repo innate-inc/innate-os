@@ -25,6 +25,8 @@ class PickUpSock(Primitive):
         return (
             "To use when you see a sock on the floor and it's close enough to pick up (under like 70cm away). "
             "It should also be in front of the robot, make sure you are facing the sock. "
+            "If failed because the arm missed the sock, you can suggest to turn a little bit to the left or right to attempt a better pick up after the first time it failed."
+            "Try like 25 degrees to the left or right depending on which way the arm failed."
         )
     
     def guidelines_when_running(self):
