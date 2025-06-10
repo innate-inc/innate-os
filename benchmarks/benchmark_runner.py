@@ -710,6 +710,17 @@ class DirectiveBenchmark:
         if not self._send_directive():
             print("Failed to send directive.")
             return False
+        
+        # Activate the brain
+        print("Activating brain...")
+        try:
+            response = requests.post(
+                f"{self.base_url}/set_brain_active", 
+                json={"active": True}
+            )
+            print("Brain activation command sent")
+        except Exception as e:
+            print(f"Error sending brain activation command: {e}")
 
         # Start data collection
         self.running = True

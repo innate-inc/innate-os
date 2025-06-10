@@ -95,6 +95,14 @@ class ResetRobotCmd:
         self.pose = pose
 
 
+class BrainActiveCmd(NamedTuple):
+    """
+    A command to activate or deactivate the brain.
+    """
+    
+    active: bool
+
+
 class DirectiveCmd(NamedTuple):
     """
     A command to update the robot's directive/behavior.
