@@ -10,7 +10,7 @@ environment:
 name: "navigation_in_sight_to_tv_complex_test"
 description: "Test if the robot can navigate from a different room to the TV using only navigation_in_sight primitive, based on a single initial instruction."
 goal: "Robot should navigate from a different room to the vicinity of the TV by repeatedly calling navigation_in_sight and never using navigation_history, after being told once to go to the other room and navigate to the TV."
-directive: "default_directive" # Simple, direct instruction
+directive: "empty_directive" # Simple, direct instruction
 duration: 300  # seconds, increased duration for a more complex task
 
 # Messages - Single instruction to go to another room and find the TV
