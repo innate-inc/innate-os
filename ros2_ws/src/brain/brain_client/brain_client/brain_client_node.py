@@ -806,11 +806,18 @@ class BrainClientNode(Node):
             )
             try:
                 # Ensure AMCL pose is available before proceeding with image/map data
+                # Otherwise use the odom pose.
                 if not self.last_amcl_pose:
-                    self.get_logger().warn(
-                        "\033[93m[BrainClient] No amcl_pose data available for agent_loop_callback. Skipping image send.\033[0m"
-                    )
-                    return
+                    if self.last_odom:
+                        self.get_logger().warn(
+                            "\033[93m[BrainClient] Using odom pose instead of amcl_pose.\033[0m"
+                        )
+                        self.last_amcl_pose = self.last_odom
+                    else:
+                        self.get_logger().warn(
+                            "\033[93m[BrainClient] No amcl_pose or odom available. Skipping image callback.\033[0m"
+                        )
+                        return
 
                 # Compress the RGB image as JPEG (70% quality) - User's addition
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
