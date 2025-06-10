@@ -102,7 +102,8 @@ class BrainClientNode(Node):
 
         # Set to True if you wish to receive and forward depth images as well
         self.declare_parameter("send_depth", True)
-        # self.declare_parameter("odom_topic", "/odom") # Removed odom_topic
+        self.declare_parameter("odom_topic", "/odom") # Removed odom_topic
+        self.declare_parameter("use_odom_as_amcl_pose", False)
 
         # New parameters for camera FOV
         self.declare_parameter("vertical_fov", 60.0)
@@ -156,15 +157,18 @@ class BrainClientNode(Node):
         self.send_arm_camera_image = (
             self.get_parameter("send_arm_camera_image").get_parameter_value().bool_value
         )
-        # self.odom_topic = (
-        #     self.get_parameter("odom_topic").get_parameter_value().string_value
-        # ) # Removed odom_topic
+        self.odom_topic = (
+            self.get_parameter("odom_topic").get_parameter_value().string_value
+        )
+        self.use_odom_as_amcl_pose = (
+            self.get_parameter("use_odom_as_amcl_pose").get_parameter_value().bool_value
+        )
         self.last_odom = None
         self.last_amcl_pose = None
         self.last_arm_camera = None  # Store the latest arm camera image
-        # self.odom_sub = self.create_subscription(
-        #     Odometry, self.odom_topic, self.odom_callback, 10
-        # ) # Removed odom_sub
+        self.odom_sub = self.create_subscription(
+            Odometry, self.odom_topic, self.odom_callback, 10
+        )
 
         # Create a timer to fetch the transform at 30 Hz
         self.transform_timer = self.create_timer(
@@ -226,7 +230,6 @@ class BrainClientNode(Node):
         self.last_depth_image = None
         self.last_map = None  # Store the latest map data
         self.last_arm_camera = None  # Store the latest arm camera image
-        # self.last_amcl_pose = None # Already initialized above
 
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -546,7 +549,16 @@ class BrainClientNode(Node):
     def amcl_pose_callback(self, msg: PoseWithCovarianceStamped):
         """Store the latest AMCL pose data."""
         self.last_amcl_pose = msg
-        # self.get_logger().debug(f"Received amcl_pose at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
+        self.get_logger().debug(f"Received amcl_pose at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
+
+    def odom_callback(self, msg: Odometry):
+        """Store the latest odometry data."""
+        self.last_odom = msg
+        self.get_logger().debug(f"Received odom at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
+
+        # If we're in the SIM, we can use the odom pose as the amcl pose.
+        if self.use_odom_as_amcl_pose:
+            self.last_amcl_pose = self.last_odom
 
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
@@ -806,18 +818,11 @@ class BrainClientNode(Node):
             )
             try:
                 # Ensure AMCL pose is available before proceeding with image/map data
-                # Otherwise use the odom pose.
                 if not self.last_amcl_pose:
-                    if self.last_odom:
-                        self.get_logger().warn(
-                            "\033[93m[BrainClient] Using odom pose instead of amcl_pose.\033[0m"
-                        )
-                        self.last_amcl_pose = self.last_odom
-                    else:
-                        self.get_logger().warn(
-                            "\033[93m[BrainClient] No amcl_pose or odom available. Skipping image callback.\033[0m"
-                        )
-                        return
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No amcl_pose available. Skipping image callback.\033[0m"
+                    )
+                    return
 
                 # Compress the RGB image as JPEG (70% quality) - User's addition
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
