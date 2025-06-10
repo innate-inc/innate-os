@@ -80,7 +80,11 @@ def generate_launch_description():
         default_value="False",
         description="Flag to enable sending arm camera images"
     )
-
+    use_odom_as_amcl_pose_arg = DeclareLaunchArgument(
+        "use_odom_as_amcl_pose",
+        default_value="True",
+        description="Flag to use odom as amcl pose"
+    )
     # Launch the BrainClientNode
     brain_client_node = Node(
         package="brain_client",
@@ -102,6 +106,7 @@ def generate_launch_description():
                 "pose_image_interval": LaunchConfiguration("pose_image_interval"),
                 "log_everything": LaunchConfiguration("log_everything"),
                 "send_arm_camera_image": LaunchConfiguration("send_arm_camera_image"),
+                "use_odom_as_amcl_pose": LaunchConfiguration("use_odom_as_amcl_pose"),
             }
         ],
         output="screen",
@@ -124,6 +129,7 @@ def generate_launch_description():
             pose_image_interval_arg,
             log_everything_arg,
             send_arm_camera_image_arg,
+            use_odom_as_amcl_pose_arg,
             brain_client_node,
             # Launch the WSClientNode (handles actual WebSocket connection)
             Node(
