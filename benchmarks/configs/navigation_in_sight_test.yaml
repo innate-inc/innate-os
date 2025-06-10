@@ -10,7 +10,7 @@ environment:
 name: "navigation_in_sight_to_tv_test"
 description: "Test if the robot can navigate to the TV using navigation_in_sight primitive multiple times, based on a single initial instruction."
 goal: "Robot should navigate to the vicinity of the TV by repeatedly calling navigation_in_sight and never using navigation_history, after being told once to navigate to the TV."
-directive: "default_directive" # Simple, direct instruction
+directive: "empty_directive" # Simple, direct instruction
 duration: 300  # seconds, allowing time for navigation
 
 # Messages - No specific initial messages needed as the directive is primary
