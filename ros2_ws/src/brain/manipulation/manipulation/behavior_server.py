@@ -347,7 +347,7 @@ class BehaviorServer(Node):
             duration = behavior_config.get('duration', 20.0)
             start_pose = behavior_config.get('start_pose')
             end_pose = behavior_config.get('end_pose')
-            completion_threshold = 0.3  # Threshold for early termination
+            progress_threshold = 0.9  # Threshold for early termination
             
             # Move to start pose if specified
             if start_pose:
@@ -363,7 +363,7 @@ class BehaviorServer(Node):
             period = 1.0 / inference_hz
             early_termination = False
             
-            self.get_logger().info(f"Starting policy inference for {duration} seconds (completion threshold: {completion_threshold})")
+            self.get_logger().info(f"Starting policy inference for {duration} seconds (progress threshold: {progress_threshold})")
             
             while rclpy.ok():
                 loop_start = time.time()
@@ -376,13 +376,13 @@ class BehaviorServer(Node):
                         self.call_arm_goto_service(end_pose, 3)
                     return "CANCELLED"
                 
-                # Run inference and get completion value
-                completion = self._run_inference_once()
+                # Run inference and get progress value
+                progress = self._run_inference_once()
                 
-                # Check for early termination based on completion metric
-                if completion is not None and completion > completion_threshold:
+                # Check for early termination based on progress metric
+                if progress is not None and progress > progress_threshold:
                     early_termination = True
-                    self.get_logger().info(f"Early termination triggered! Completion: {completion:.4f} > {completion_threshold}")
+                    self.get_logger().info(f"Early termination triggered! Progress: {progress:.4f} > {progress_threshold}")
                     break
                 
                 # Send feedback
@@ -412,7 +412,7 @@ class BehaviorServer(Node):
                     return "FAILURE"
             
             if early_termination:
-                self.get_logger().info(f"Learned behavior {behavior_name} completed early due to completion threshold")
+                self.get_logger().info(f"Learned behavior {behavior_name} completed early due to progress threshold")
             else:
                 self.get_logger().info(f"Learned behavior {behavior_name} completed successfully")
             return "SUCCESS"
@@ -686,8 +686,8 @@ class BehaviorServer(Node):
                 arm_msg.data = [float(v) for v in action_np[:6]]  # First 6 elements
                 self.arm_state_pub.publish(arm_msg)
                 
-                # Return completion value for early termination check
-                return completion
+                # Return progress value for early termination check
+                return progress
 
         except Exception as e:
             self.get_logger().error(f"Error during inference: {e}")
