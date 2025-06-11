@@ -60,6 +60,38 @@ class EpisodeData:
         for idx, cam in enumerate(self.camera_names):
             self.images[cam].append(images[idx])
     
+    def add_termination_data(self):
+        """
+        Add termination data to the actions. This method adds two additional dimensions
+        to each action timestep:
+        - First dimension: Linear progression from 0 to 1 across all timesteps
+        - Second dimension: 0 for all timesteps except the last 10, where it's 1
+        """
+        if not self.actions:
+            return  # No actions to modify
+        
+        total_timesteps = len(self.actions)
+        
+        # Convert actions to numpy array
+        actions_array = np.array(self.actions)
+        
+        # Create first dimension: linear progression from 0 to 1
+        linear_values = np.linspace(0, 1, total_timesteps) if total_timesteps > 1 else np.array([0.0])
+        
+        # Create second dimension: 0 for all except last 10 timesteps
+        termination_values = np.zeros(total_timesteps)
+        if total_timesteps >= 10:
+            termination_values[-10:] = 1.0
+        else:
+            termination_values[:] = 1.0  # If less than 10 timesteps, all get 1.0
+        
+        # Stack the additional dimensions and concatenate with actions
+        additional_dims = np.column_stack([linear_values, termination_values])
+        extended_actions = np.concatenate([actions_array, additional_dims], axis=1)
+        
+        # Convert back to list format
+        self.actions = extended_actions.tolist()
+    
     def save_file(self, path):
         """
         Save the buffered episode data into an HDF5 file at the specified path.
@@ -78,6 +110,9 @@ class EpisodeData:
         Args:
             path (str): Full file path (including filename, e.g., 'episode_1.h5').
         """
+        # Automatically add termination data before saving
+        self.add_termination_data()
+        
         with h5py.File(path, 'w') as hf:
             # Create dataset for actions.
             hf.create_dataset('/action', data=np.array(self.actions))
