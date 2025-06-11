@@ -10,6 +10,9 @@
 #include <sys/mman.h>  // For mmap, PROT_READ, PROT_WRITE, MAP_SHARED, MAP_FAILED
 #include <string.h>
 #include <chrono>
+#include <thread>
+#include <sys/select.h>  // Add for select()
+#include <sys/stat.h>    // Add for stat()
 
 using namespace std::chrono_literals;
 
@@ -81,9 +84,33 @@ public:
     }
 
 private:
+    bool device_exists() {
+        struct stat st;
+        return (stat(device_path_.c_str(), &st) == 0);
+    }
+
+    bool device_responsive() {
+        if (fd_ < 0) return false;
+        
+        // Try to query device capabilities - this should fail if device is gone
+        struct v4l2_capability cap;
+        if (ioctl(fd_, VIDIOC_QUERYCAP, &cap) < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Device health check failed: %s", strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
     bool init_camera() {
         RCLCPP_INFO(this->get_logger(), "Opening camera device: %s", device_path_.c_str());
-        fd_ = open(device_path_.c_str(), O_RDWR);
+        
+        // Check if device file exists first
+        if (!device_exists()) {
+            RCLCPP_ERROR(this->get_logger(), "Device file does not exist: %s", device_path_.c_str());
+            return false;
+        }
+
+        fd_ = open(device_path_.c_str(), O_RDWR | O_NONBLOCK);  // Add O_NONBLOCK
         if (fd_ < 0) {
             RCLCPP_ERROR(this->get_logger(), "Failed to open camera device: %s", strerror(errno));
             return false;
@@ -192,40 +219,165 @@ private:
         return true;
     }
 
+    void handle_stream_error() {
+        RCLCPP_ERROR(this->get_logger(), "Stream error occurred (errno=%d: %s), attempting to recover...", errno, strerror(errno));
+        
+        // Check if this looks like a device disconnection
+        if (errno == ENODEV || errno == ENOENT || errno == EPIPE || errno == EIO || errno == EAGAIN) {
+            RCLCPP_ERROR(this->get_logger(), "Device appears to be disconnected, attempting full reconnection...");
+            
+            // Unmap buffers first
+            for (int i = 0; i < 4; i++) {
+                if (buffers_[i].start && buffers_[i].start != MAP_FAILED) {
+                    munmap(buffers_[i].start, buffers_[i].length);
+                    buffers_[i].start = nullptr;
+                    buffers_[i].length = 0;
+                }
+            }
+            
+            // Close current connection
+            if (fd_ >= 0) {
+                close(fd_);
+                fd_ = -1;
+            }
+            
+            // Wait a bit for device to stabilize
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            
+            // Try to reinitialize camera
+            if (init_camera()) {
+                RCLCPP_INFO(this->get_logger(), "Successfully reconnected to camera");
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "Failed to reconnect to camera");
+            }
+            return;
+        }
+        
+        // For other errors, try simple stream restart
+        enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (ioctl(fd_, VIDIOC_STREAMOFF, &type) < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to stop streaming: %s", strerror(errno));
+        }
+        
+        // Restart streaming
+        if (ioctl(fd_, VIDIOC_STREAMON, &type) < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to restart streaming: %s", strerror(errno));
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Successfully restarted streaming");
+        }
+    }
+
     void capture_and_publish() {
+        // Check if camera is still connected before attempting capture
+        if (fd_ < 0) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Camera not connected, attempting reconnection...");
+            
+            // Try to reconnect
+            if (device_exists() && init_camera()) {
+                RCLCPP_INFO(this->get_logger(), "Camera reconnected successfully");
+            }
+            return;
+        }
+
+        // Check if device file still exists
+        if (!device_exists()) {
+            RCLCPP_ERROR(this->get_logger(), "Device file disappeared: %s", device_path_.c_str());
+            handle_stream_error();
+            return;
+        }
+
+        // Use select to check if data is available (with timeout)
+        fd_set fds;
+        struct timeval tv;
+        FD_ZERO(&fds);
+        FD_SET(fd_, &fds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000;  // 100ms timeout
+
+        int ret = select(fd_ + 1, &fds, nullptr, nullptr, &tv);
+        if (ret < 0) {
+            RCLCPP_ERROR(this->get_logger(), "select() failed: %s", strerror(errno));
+            handle_stream_error();
+            return;
+        } else if (ret == 0) {
+            // Timeout - no data available, this might indicate a problem
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "No data available from camera (timeout)");
+            
+            // Check if device is still responsive
+            if (!device_responsive()) {
+                RCLCPP_ERROR(this->get_logger(), "Device no longer responsive");
+                handle_stream_error();
+            }
+            return;
+        }
+
         struct v4l2_buffer buf = {};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
 
         if (ioctl(fd_, VIDIOC_DQBUF, &buf) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to dequeue buffer");
+            RCLCPP_ERROR(this->get_logger(),
+                         "VIDIOC_DQBUF failed (idx=%u, errno=%d): %s", buf.index, errno, strerror(errno));
+            handle_stream_error();
             return;
         }
 
-        // Convert YUYV to BGR
-        cv::Mat yuyv(height_, width_, CV_8UC2, buffers_[buf.index].start);
-        cv::Mat bgr;
-        cv::cvtColor(yuyv, bgr, cv::COLOR_YUV2BGR_YUYV);
+        // Validate buffer index
+        if (buf.index >= 4) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid buffer index: %u", buf.index);
+            return;
+        }
 
-        // Create and publish raw image message
-        auto img_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", bgr).toImageMsg();
-        img_msg->header.stamp = this->now();
-        img_msg->header.frame_id = "camera";
-        image_pub_->publish(*img_msg);
+        // Check if buffer data looks valid
+        if (!buffers_[buf.index].start || buf.bytesused == 0) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid buffer data (idx=%u, bytesused=%u)", buf.index, buf.bytesused);
+            // Still try to requeue the buffer
+            if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to requeue invalid buffer");
+                handle_stream_error();
+            }
+            return;
+        }
 
-        // Create and publish compressed image message
-        sensor_msgs::msg::CompressedImage compressed_msg;
-        compressed_msg.header = img_msg->header;
-        compressed_msg.format = "jpeg";
+        try {
+            // Convert YUYV to BGR
+            cv::Mat yuyv(height_, width_, CV_8UC2, buffers_[buf.index].start);
+            cv::Mat bgr;
+            cv::cvtColor(yuyv, bgr, cv::COLOR_YUV2BGR_YUYV);
 
-        // Compress the image using OpenCV with explicit quality settings
-        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};  // 80% quality
-        cv::imencode(".jpg", bgr, compressed_msg.data, params);
-        compressed_pub_->publish(compressed_msg);
+            // Validate converted image
+            if (bgr.empty() || bgr.cols != width_ || bgr.rows != height_) {
+                RCLCPP_ERROR(this->get_logger(), "Invalid converted image (idx=%u)", buf.index);
+                // Don't return here, still need to requeue buffer
+            } else {
+                // Create and publish raw image message
+                auto img_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", bgr).toImageMsg();
+                img_msg->header.stamp = this->now();
+                img_msg->header.frame_id = "camera";
+                image_pub_->publish(*img_msg);
+
+                // Create and publish compressed image message
+                sensor_msgs::msg::CompressedImage compressed_msg;
+                compressed_msg.header = img_msg->header;
+                compressed_msg.format = "jpeg";
+
+                // Compress the image using OpenCV with explicit quality settings
+                std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};  // 80% quality
+                cv::imencode(".jpg", bgr, compressed_msg.data, params);
+                compressed_pub_->publish(compressed_msg);
+            }
+        } catch (const cv::Exception &e) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "OpenCV exception on buffer %u: %s", buf.index, e.what());
+            handle_stream_error();
+            return;
+        }
 
         // Requeue the buffer
         if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to requeue buffer");
+            RCLCPP_ERROR(this->get_logger(),
+                         "VIDIOC_QBUF failed (idx=%u, errno=%d): %s", buf.index, errno, strerror(errno));
+            handle_stream_error();
         }
     }
 
