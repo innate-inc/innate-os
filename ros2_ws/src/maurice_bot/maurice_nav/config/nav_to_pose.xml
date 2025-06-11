@@ -1,6 +1,6 @@
 <root main_tree_to_execute="MainTree">
     <BehaviorTree ID="MainTree">
-        <RecoveryNode number_of_retries="1" name="NavigateRecovery">
+        <RecoveryNode number_of_retries="2" name="NavigateRecovery">
             <PipelineSequence name="NavigateWithReplanning">
                 <RateController hz="1.0">
                     <RecoveryNode number_of_retries="1" name="ComputePathToPose">
@@ -26,7 +26,8 @@
                         <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
                         <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
                     </Sequence>
-                    <Wait wait_duration="5"/>
+                    <BackUp backup_dist="0.15" backup_speed="0.05"/>
+                    <Wait wait_duration="2"/>
                 </RoundRobin>
             </ReactiveFallback>
         </RecoveryNode>

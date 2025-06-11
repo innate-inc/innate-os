@@ -25,6 +25,7 @@ class PickUpSock(Primitive):
         return (
             "To use when you see a sock on the floor and it's close enough to pick up (under like 70cm away). "
             "It should also be in front of the robot, make sure you are facing the sock by checking your angle to it! "
+            "This is VERY IMPORTANT: The sock should be CENTERED in your main camera, check your angle to it beforehand! "
             "After trying, if it failed because the arm missed the sock, you can suggest to turn a little bit to the left or right to attempt a better pick up after the first time it failed."
             "Try like 25 degrees to the left or right depending on which way the arm failed."
         )
