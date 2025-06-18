@@ -27,7 +27,7 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator
 from act_test.ACT import ACTPolicy, ACTConfig
 
-def create_act_config():
+def create_act_config(action_dim=8):
     """Create ACT configuration matching the training setup."""
     input_shapes = {
         "observation.image_camera_1": [3, 480, 640],  # [C, H, W]
@@ -36,7 +36,7 @@ def create_act_config():
     }
     
     output_shapes = {
-        "action": [8]  # action_dim
+        "action": [action_dim]  # action_dim - now configurable
     }
     
     return ACTConfig(
@@ -102,6 +102,7 @@ class BehaviorServer(Node):
         self.execution_running = False
         self.current_goal_handle = None
         self.current_policy = None
+        self.current_action_dim = 8  # Add this to track current policy's action dimension
         self._cancel_requested = threading.Event()
         
         # Sensor data
@@ -335,14 +336,18 @@ class BehaviorServer(Node):
                 self.get_logger().error(f"Checkpoint not found: {checkpoint_path}")
                 return "FAILURE"
             
+            # Get action dimension from config (default to 8 if not specified)
+            action_dim = behavior_config.get('action_dim', 8)
+            
             # Load policy
-            if not self._load_policy_for_behavior(checkpoint_path):
+            if not self._load_policy_for_behavior(checkpoint_path, action_dim):
                 return "FAILURE"
             
             # Get behavior parameters
             duration = behavior_config.get('duration', 20.0)
             start_pose = behavior_config.get('start_pose')
             end_pose = behavior_config.get('end_pose')
+            progress_threshold = 0.9  # Threshold for early termination
             
             # Move to start pose if specified
             if start_pose:
@@ -356,8 +361,9 @@ class BehaviorServer(Node):
             start_time = time.time()
             inference_hz = 12.0
             period = 1.0 / inference_hz
+            early_termination = False
             
-            self.get_logger().info(f"Starting policy inference for {duration} seconds")
+            self.get_logger().info(f"Starting policy inference for {duration} seconds (progress threshold: {progress_threshold})")
             
             while rclpy.ok():
                 loop_start = time.time()
@@ -370,8 +376,14 @@ class BehaviorServer(Node):
                         self.call_arm_goto_service(end_pose, 3)
                     return "CANCELLED"
                 
-                # Run inference
-                self._run_inference_once()
+                # Run inference and get progress value
+                progress = self._run_inference_once()
+                
+                # Check for early termination based on progress metric
+                if progress is not None and progress > progress_threshold:
+                    early_termination = True
+                    self.get_logger().info(f"Early termination triggered! Progress: {progress:.4f} > {progress_threshold}")
+                    break
                 
                 # Send feedback
                 elapsed_time = loop_start - start_time
@@ -399,7 +411,10 @@ class BehaviorServer(Node):
                     self.get_logger().error("Failed to move to end pose")
                     return "FAILURE"
             
-            self.get_logger().info(f"Learned behavior {behavior_name} completed successfully")
+            if early_termination:
+                self.get_logger().info(f"Learned behavior {behavior_name} completed early due to progress threshold")
+            else:
+                self.get_logger().info(f"Learned behavior {behavior_name} completed successfully")
             return "SUCCESS"
             
         except Exception as e:
@@ -552,7 +567,7 @@ class BehaviorServer(Node):
             self._stop_robot()
             return "FAILURE"
     
-    def _load_policy_for_behavior(self, checkpoint_path):
+    def _load_policy_for_behavior(self, checkpoint_path, action_dim=8):
         """Load ACT policy for a specific behavior."""
         try:
             # Clean up previous policy
@@ -573,8 +588,8 @@ class BehaviorServer(Node):
             except Exception as e:
                 self.get_logger().warn(f"Could not load dataset stats: {e}")
             
-            # Create and load policy
-            policy_config = create_act_config()
+            # Create and load policy with specified action dimension
+            policy_config = create_act_config(action_dim=action_dim)
             self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
             
             state_dict = torch.load(checkpoint_path, map_location=self.device)
@@ -584,7 +599,10 @@ class BehaviorServer(Node):
             # Reset policy to clear any cached states
             self.current_policy.reset()
             
-            self.get_logger().info(f"Policy loaded successfully from {checkpoint_path}")
+            # Store the current action dimension
+            self.current_action_dim = action_dim
+            
+            self.get_logger().info(f"Policy loaded successfully from {checkpoint_path} with action_dim={action_dim}")
             return True
             
         except Exception as e:
@@ -613,7 +631,7 @@ class BehaviorServer(Node):
     def _run_inference_once(self):
         """Run one inference step with current policy."""
         if not self.current_policy or self.latest_image1 is None or self.latest_image2 is None or self.latest_joint_state is None:
-            return
+            return None
 
         try:
             # Image preprocessing
@@ -644,22 +662,36 @@ class BehaviorServer(Node):
                 action = self.current_policy.select_action(batch)
                 action_np = action.cpu().numpy().squeeze(0)
 
-                if action_np.shape[0] < 8:
-                    self.get_logger().error(f"Action has wrong dimensions. Expected 8, got {action_np.shape[0]}")
-                    return
+                # Check action dimensions match expected
+                if action_np.shape[0] < self.current_action_dim:
+                    self.get_logger().error(f"Action has wrong dimensions. Expected {self.current_action_dim}, got {action_np.shape[0]}")
+                    return None
 
-                # Publish commands
+                completion = None
+                progress = None
+                
+                # Extract progress/completion values for 10-dimensional actions
+                if self.current_action_dim >= 10:
+                    progress = float(action_np[8])  # 9th element (index 8) - progress
+                    completion = float(action_np[9])  # 10th element (index 9) - completion
+                    self.get_logger().info(f"Progress: {progress:.4f}, Completion: {completion:.4f}")
+
+                # Publish commands (using first 8 dimensions)
                 twist_msg = Twist()
-                twist_msg.linear.x = float(action_np[-2]) / 2
-                twist_msg.angular.z = float(action_np[-1]) / 2
+                twist_msg.linear.x = float(action_np[6]) / 2  # 7th element
+                twist_msg.angular.z = float(action_np[7]) / 2  # 8th element
                 self.cmd_vel_pub.publish(twist_msg)
 
                 arm_msg = Float64MultiArray()
-                arm_msg.data = [float(v) for v in action_np[:6]]
+                arm_msg.data = [float(v) for v in action_np[:6]]  # First 6 elements
                 self.arm_state_pub.publish(arm_msg)
+                
+                # Return progress value for early termination check
+                return progress
 
         except Exception as e:
             self.get_logger().error(f"Error during inference: {e}")
+            return None
 
     def _stop_robot(self):
         """Stop the robot by sending zero commands."""

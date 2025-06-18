@@ -24,6 +24,7 @@ class DropSocks(Primitive):
     def guidelines(self):
         return (
             "To use when you are holding a sock and want to drop it in the wooden box associated for it. "
+            "The wooden box HAS to be visible in your main camera. Do NOT drop the sock if you don't see the wooden box directly from the main camera!"
         )
 
     def guidelines_when_running(self):

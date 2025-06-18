@@ -1192,9 +1192,9 @@ class BrainClientNode(Node):
                 f"Sent primitive status message: {outgoing_msg.type.name}"
             )
 
-        # --- THEN, check and execute pending task if previous was cancelled ---
+        # --- THEN, check and execute pending task if previous was cancelled OR succeeded in the meantime ---
         if (
-            result.success_type == PrimitiveResult.CANCELLED.value
+            result.success_type in [PrimitiveResult.CANCELLED.value, PrimitiveResult.SUCCESS.value]
             and self._pending_next_task is not None
         ):
             self.get_logger().info(
