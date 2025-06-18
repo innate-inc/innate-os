@@ -23,7 +23,8 @@ public:
         RCLCPP_INFO(this->get_logger(), "OpenCV version: %s", CV_VERSION);
 
         // Parameters
-        this->declare_parameter("device", "/dev/video0");
+        this->declare_parameter("device", "auto");  // Changed default to "auto"
+        this->declare_parameter("camera_name", "Arducam");  // Add camera name parameter
         this->declare_parameter("width", 640);
         this->declare_parameter("height", 480);
         this->declare_parameter("fps", 30);
@@ -31,12 +32,14 @@ public:
 
         // Get parameters
         device_path_ = this->get_parameter("device").as_string();
+        camera_name_ = this->get_parameter("camera_name").as_string();
         width_ = this->get_parameter("width").as_int();
         height_ = this->get_parameter("height").as_int();
         fps_ = this->get_parameter("fps").as_int();
 
         RCLCPP_INFO(this->get_logger(), "Camera parameters:");
         RCLCPP_INFO(this->get_logger(), "  Device: %s", device_path_.c_str());
+        RCLCPP_INFO(this->get_logger(), "  Camera Name: %s", camera_name_.c_str());
         RCLCPP_INFO(this->get_logger(), "  Resolution: %dx%d", width_, height_);
         RCLCPP_INFO(this->get_logger(), "  FPS: %d", fps_);
         RCLCPP_INFO(this->get_logger(), "  Pixel Format: YUYV");
@@ -84,6 +87,66 @@ public:
     }
 
 private:
+    // Add new method to find camera by name/identifier
+    std::string find_camera_device() {
+        RCLCPP_INFO(this->get_logger(), "Searching for Arducam USB camera...");
+        
+        // Check devices from /dev/video0 to /dev/video10
+        for (int i = 0; i <= 10; i++) {
+            std::string device_path = "/dev/video" + std::to_string(i);
+            
+            // Check if device file exists
+            struct stat st;
+            if (stat(device_path.c_str(), &st) != 0) {
+                continue;  // Device doesn't exist, skip
+            }
+            
+            // Try to open the device
+            int test_fd = open(device_path.c_str(), O_RDWR);
+            if (test_fd < 0) {
+                continue;  // Can't open device, skip
+            }
+            
+            // Query device capabilities
+            struct v4l2_capability cap;
+            if (ioctl(test_fd, VIDIOC_QUERYCAP, &cap) < 0) {
+                close(test_fd);
+                continue;  // Can't query capabilities, skip
+            }
+            
+            // Check if this is a video capture device
+            if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
+                close(test_fd);
+                continue;  // Not a video capture device, skip
+            }
+            
+            // Check if this is our Arducam camera
+            std::string card_name = reinterpret_cast<const char*>(cap.card);
+            std::string driver_name = reinterpret_cast<const char*>(cap.driver);
+            
+            RCLCPP_INFO(this->get_logger(), "Found video device %s:", device_path.c_str());
+            RCLCPP_INFO(this->get_logger(), "  Driver: %s", driver_name.c_str());
+            RCLCPP_INFO(this->get_logger(), "  Card: %s", card_name.c_str());
+            
+            // Look for camera name in the card name
+            if (card_name.find(camera_name_) != std::string::npos) {
+                // Additional check: try to set a test format to ensure it's the main video node
+                struct v4l2_format fmt = {};
+                fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+                if (ioctl(test_fd, VIDIOC_G_FMT, &fmt) == 0) {
+                    RCLCPP_INFO(this->get_logger(), "Found Arducam camera at: %s", device_path.c_str());
+                    close(test_fd);
+                    return device_path;
+                }
+            }
+            
+            close(test_fd);
+        }
+        
+        RCLCPP_ERROR(this->get_logger(), "No Arducam USB camera found!");
+        return "";
+    }
+
     bool device_exists() {
         struct stat st;
         return (stat(device_path_.c_str(), &st) == 0);
@@ -102,6 +165,17 @@ private:
     }
 
     bool init_camera() {
+        // If device_path_ is still the default or doesn't exist, try to find the camera
+        if (device_path_ == "/dev/video0" || !device_exists()) {
+            std::string found_device = find_camera_device();
+            if (found_device.empty()) {
+                RCLCPP_ERROR(this->get_logger(), "No suitable camera device found");
+                return false;
+            }
+            device_path_ = found_device;
+            RCLCPP_INFO(this->get_logger(), "Using camera device: %s", device_path_.c_str());
+        }
+        
         RCLCPP_INFO(this->get_logger(), "Opening camera device: %s", device_path_.c_str());
         
         // Check if device file exists first
@@ -387,6 +461,7 @@ private:
 
     int fd_ = -1;
     std::string device_path_;
+    std::string camera_name_;
     int width_;
     int height_;
     int fps_;
