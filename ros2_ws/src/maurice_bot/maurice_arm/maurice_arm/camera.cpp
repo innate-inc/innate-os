@@ -18,7 +18,8 @@ using namespace std::chrono_literals;
 
 class CameraNode : public rclcpp::Node {
 public:
-    CameraNode() : Node("camera_node") {
+    CameraNode() : Node("camera_node"), 
+                   invalid_buffer_index_count_(0) {
         RCLCPP_INFO(this->get_logger(), "Initializing camera node...");
         RCLCPP_INFO(this->get_logger(), "OpenCV version: %s", CV_VERSION);
 
@@ -296,27 +297,32 @@ private:
     void handle_stream_error() {
         RCLCPP_ERROR(this->get_logger(), "Stream error occurred (errno=%d: %s), attempting to recover...", errno, strerror(errno));
         
-        // Check if this looks like a device disconnection
-        if (errno == ENODEV || errno == ENOENT || errno == EPIPE || errno == EIO || errno == EAGAIN) {
-            RCLCPP_ERROR(this->get_logger(), "Device appears to be disconnected, attempting full reconnection...");
-            
-            // Unmap buffers first
-            for (int i = 0; i < 4; i++) {
-                if (buffers_[i].start && buffers_[i].start != MAP_FAILED) {
-                    munmap(buffers_[i].start, buffers_[i].length);
-                    buffers_[i].start = nullptr;
-                    buffers_[i].length = 0;
-                }
+        // Always try to find the camera again since it may have switched device paths
+        RCLCPP_INFO(this->get_logger(), "Searching for camera device (may have switched paths)...");
+        
+        // Unmap buffers first
+        for (int i = 0; i < 4; i++) {
+            if (buffers_[i].start && buffers_[i].start != MAP_FAILED) {
+                munmap(buffers_[i].start, buffers_[i].length);
+                buffers_[i].start = nullptr;
+                buffers_[i].length = 0;
             }
-            
-            // Close current connection
-            if (fd_ >= 0) {
-                close(fd_);
-                fd_ = -1;
-            }
-            
-            // Wait a bit for device to stabilize
-            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        }
+        
+        // Close current connection
+        if (fd_ >= 0) {
+            close(fd_);
+            fd_ = -1;
+        }
+        
+        // Wait a bit for device to stabilize
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        
+        // Search for camera device again (it may have switched paths)
+        std::string found_device = find_camera_device();
+        if (!found_device.empty()) {
+            device_path_ = found_device;
+            RCLCPP_INFO(this->get_logger(), "Found camera at new device path: %s", device_path_.c_str());
             
             // Try to reinitialize camera
             if (init_camera()) {
@@ -324,38 +330,41 @@ private:
             } else {
                 RCLCPP_ERROR(this->get_logger(), "Failed to reconnect to camera");
             }
-            return;
-        }
-        
-        // For other errors, try simple stream restart
-        enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        if (ioctl(fd_, VIDIOC_STREAMOFF, &type) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to stop streaming: %s", strerror(errno));
-        }
-        
-        // Restart streaming
-        if (ioctl(fd_, VIDIOC_STREAMON, &type) < 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to restart streaming: %s", strerror(errno));
         } else {
-            RCLCPP_INFO(this->get_logger(), "Successfully restarted streaming");
+            RCLCPP_ERROR(this->get_logger(), "Could not find camera device");
         }
     }
 
     void capture_and_publish() {
+        static int frame_count = 0;
+        frame_count++;
+        
+        // Log every 100 frames for health monitoring
+        if (frame_count % 100 == 0) {
+            RCLCPP_INFO(this->get_logger(), "Camera health check - Frame %d, Device: %s", 
+                        frame_count, device_path_.c_str());
+        }
+        
         // Check if camera is still connected before attempting capture
         if (fd_ < 0) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Camera not connected, attempting reconnection...");
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Camera not connected, searching for device...");
             
-            // Try to reconnect
-            if (device_exists() && init_camera()) {
-                RCLCPP_INFO(this->get_logger(), "Camera reconnected successfully");
+            // Search for camera device (it may have switched paths)
+            std::string found_device = find_camera_device();
+            if (!found_device.empty()) {
+                device_path_ = found_device;
+                RCLCPP_INFO(this->get_logger(), "Found camera at device path: %s", device_path_.c_str());
+                
+                if (init_camera()) {
+                    RCLCPP_INFO(this->get_logger(), "Camera reconnected successfully");
+                }
             }
             return;
         }
 
-        // Check if device file still exists
+        // Check if current device file still exists
         if (!device_exists()) {
-            RCLCPP_ERROR(this->get_logger(), "Device file disappeared: %s", device_path_.c_str());
+            RCLCPP_ERROR(this->get_logger(), "Current device file disappeared: %s, searching for new device...", device_path_.c_str());
             handle_stream_error();
             return;
         }
@@ -374,12 +383,12 @@ private:
             handle_stream_error();
             return;
         } else if (ret == 0) {
-            // Timeout - no data available, this might indicate a problem
+            // Timeout - no data available, this might indicate device switched
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "No data available from camera (timeout)");
             
             // Check if device is still responsive
             if (!device_responsive()) {
-                RCLCPP_ERROR(this->get_logger(), "Device no longer responsive");
+                RCLCPP_ERROR(this->get_logger(), "Device no longer responsive, may have switched paths");
                 handle_stream_error();
             }
             return;
@@ -396,15 +405,28 @@ private:
             return;
         }
 
-        // Validate buffer index
+        // Validate buffer index with retry logic
         if (buf.index >= 4) {
-            RCLCPP_ERROR(this->get_logger(), "Invalid buffer index: %u", buf.index);
+            invalid_buffer_index_count_++;
+            RCLCPP_ERROR(this->get_logger(), 
+                         "[FRAME %d] Invalid buffer index: %u (count: %d/%d) - Device: %s", 
+                         frame_count, buf.index, invalid_buffer_index_count_, MAX_ERROR_COUNT, device_path_.c_str());
+            
+            if (invalid_buffer_index_count_ >= MAX_ERROR_COUNT) {
+                RCLCPP_ERROR(this->get_logger(), "Too many invalid buffer index errors, attempting recovery");
+                invalid_buffer_index_count_ = 0;  // Reset counter
+                handle_stream_error();
+            }
             return;
+        } else {
+            invalid_buffer_index_count_ = 0;  // Reset counter on success
         }
 
-        // Check if buffer data looks valid
+        // Check if buffer data looks valid (keep original behavior)
         if (!buffers_[buf.index].start || buf.bytesused == 0) {
-            RCLCPP_ERROR(this->get_logger(), "Invalid buffer data (idx=%u, bytesused=%u)", buf.index, buf.bytesused);
+            RCLCPP_ERROR(this->get_logger(), 
+                         "Invalid buffer data - idx:%u, bytesused:%u, buffer_size:%zu, device:%s, frame:%d", 
+                         buf.index, buf.bytesused, buffers_[buf.index].length, device_path_.c_str(), frame_count);
             // Still try to requeue the buffer
             if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
                 RCLCPP_ERROR(this->get_logger(), "Failed to requeue invalid buffer");
@@ -419,12 +441,12 @@ private:
             cv::Mat bgr;
             cv::cvtColor(yuyv, bgr, cv::COLOR_YUV2BGR_YUYV);
 
-            // Validate converted image
+            // Validate converted image (keep original behavior)
             if (bgr.empty() || bgr.cols != width_ || bgr.rows != height_) {
                 RCLCPP_ERROR(this->get_logger(), "Invalid converted image (idx=%u)", buf.index);
                 // Don't return here, still need to requeue buffer
             } else {
-                // Create and publish raw image message
+                // Create and publish messages (only if image is valid)
                 auto img_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", bgr).toImageMsg();
                 img_msg->header.stamp = this->now();
                 img_msg->header.frame_id = "camera";
@@ -435,10 +457,14 @@ private:
                 compressed_msg.header = img_msg->header;
                 compressed_msg.format = "jpeg";
 
-                // Compress the image using OpenCV with explicit quality settings
-                std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};  // 80% quality
-                cv::imencode(".jpg", bgr, compressed_msg.data, params);
+                std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
+                if (!cv::imencode(".jpg", bgr, compressed_msg.data, params)) {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to compress image to JPEG");
+                }
                 compressed_pub_->publish(compressed_msg);
+
+                // Debug level for successful operations
+                RCLCPP_DEBUG(this->get_logger(), "Successfully processed frame %d, buffer idx %u", frame_count, buf.index);
             }
         } catch (const cv::Exception &e) {
             RCLCPP_ERROR(this->get_logger(),
@@ -470,6 +496,11 @@ private:
         void* start;
         size_t length;
     } buffers_[4];
+
+    // Error counter for retry logic (only for buffer index)
+    int invalid_buffer_index_count_ = 0;
+    
+    static const int MAX_ERROR_COUNT = 3;  // Allow 3 consecutive errors before reconnecting
 };
 
 int main(int argc, char** argv) {
