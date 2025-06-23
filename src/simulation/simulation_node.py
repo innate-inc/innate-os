@@ -1080,9 +1080,6 @@ class SimulationNode:
                 )
                 try:
                     self.shared_queues.sim_to_agent.put_nowait(og_msg)
-                    print(
-                        f"Published occupancy grid (changed: {self.occupancy_grid_changed})"
-                    )
                 except queue.Full:
                     pass
 
