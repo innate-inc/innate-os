@@ -40,6 +40,11 @@ class SimulationNode:
         # Store trajectory data for managed entities
         self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
+        # Track dynamic entity positions for occupancy grid generation
+        self.active_entities: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # entity_name -> {position: [x, y, z], hitbox_type: "manual"/"aabb"}
+
         # Add timing variables for real-time simulation
         self.last_render_time = 0
         self.render_interval = 0.5  # Render every 0.5 seconds
@@ -238,7 +243,7 @@ class SimulationNode:
         slice_height_min = 0
         slice_height_max = slice_height_min + 0.20  # 20cm above the floor
         num_slices = 10
-        self.occupancy_grid = None
+        self.base_occupancy_grid = None
         self.grid_bounds = None
 
         for height in np.linspace(slice_height_min, slice_height_max, num_slices):
@@ -248,29 +253,31 @@ class SimulationNode:
                 output_path=f"replica_scene_sliced_{height:.1f}.png",
                 pixel_size=0.05,
             )
-            if self.occupancy_grid is None:
-                self.occupancy_grid = grid_slice
+            if self.base_occupancy_grid is None:
+                self.base_occupancy_grid = grid_slice
                 self.grid_bounds = bounds  # record bounds from the first slice
             else:
-                self.occupancy_grid = np.minimum(
-                    self.occupancy_grid, grid_slice, dtype=np.uint8
+                self.base_occupancy_grid = np.minimum(
+                    self.base_occupancy_grid, grid_slice, dtype=np.uint8
                 )
 
         # Optionally, if needed, flip the grid along the vertical axis so (0,0) is bottom-left
-        # self.occupancy_grid = np.flipud(self.occupancy_grid)
-        cv2.imwrite("occupancy_grid.png", self.occupancy_grid)
+        # self.base_occupancy_grid = np.flipud(self.base_occupancy_grid)
+
+        # Initialize the grid with entities (what gets sent to agent)
+        self.occupancy_grid_with_entities = self.base_occupancy_grid.copy()
 
     def _add_objects_to_occupancy_grid(self):
-        """Add objects to the occupancy grid based on their AABBs"""
-        if not hasattr(self, "occupancy_grid") or self.occupancy_grid is None:
-            print("Warning: Occupancy grid not initialized yet")
+        """Add objects to the base occupancy grid based on their AABBs"""
+        if not hasattr(self, "base_occupancy_grid") or self.base_occupancy_grid is None:
+            print("Warning: Base occupancy grid not initialized yet")
             return
 
         if not hasattr(self, "scene_objects") or not self.scene_objects:
             print("No objects to add to occupancy grid")
             return
 
-        print(f"Adding {len(self.scene_objects)} objects to occupancy grid")
+        print(f"Adding {len(self.scene_objects)} objects to base occupancy grid")
 
         # For each object, get its AABB and project onto the grid
         for obj in self.scene_objects:
@@ -309,11 +316,11 @@ class SimulationNode:
                     f"Adding object {obj['name']} to occupancy grid: ({min_grid_x}, {min_grid_y}) to ({max_grid_x}, {max_grid_y})"
                 )
 
-                # Fill the bounding box with occupied cells (0 = occupied in this grid)
+                # Fill the bounding box with occupied cells (255 = occupied in this grid)
                 for y in range(min_grid_y, max_grid_y + 1):
                     for x in range(min_grid_x, max_grid_x + 1):
                         if 0 <= y < self.map_height and 0 <= x < self.map_width:
-                            self.occupancy_grid[y, x] = 255
+                            self.base_occupancy_grid[y, x] = 255
 
                 print(
                     f"Added object {obj['name']} to occupancy grid: ({min_grid_x}, {min_grid_y}) to ({max_grid_x}, {max_grid_y})"
@@ -322,8 +329,164 @@ class SimulationNode:
             except Exception as e:
                 print(f"Failed to add {obj['name']} to occupancy grid: {e}")
 
-        # Save the updated occupancy grid
-        cv2.imwrite("occupancy_grid_with_objects.png", self.occupancy_grid)
+        # Initialize the grid with entities (what gets sent to agent)
+        self.occupancy_grid_with_entities = self.base_occupancy_grid.copy()
+
+    def _regenerate_occupancy_grid_with_entities(self):
+        """
+        Regenerate the occupancy grid with entities from base grid + all active entities.
+        This replaces the old add/remove approach with a clean regeneration.
+        """
+        # Start with a fresh copy of the base grid (static environment only)
+        self.occupancy_grid_with_entities = self.base_occupancy_grid.copy()
+
+        # Add all currently active entities
+        for entity_name, entity_info in self.active_entities.items():
+            position = entity_info["position"]
+
+            # Add this entity's hitbox to the entities grid
+            self._add_single_entity_to_grid(entity_name, position)
+
+        print(f"Regenerated occupancy grid with {len(self.active_entities)} entities")
+        # Mark grid as changed for immediate republishing
+        self.occupancy_grid_changed = True
+
+        # Save debug grids whenever entities change
+        self._save_occupancy_grid_debug("_with_entities")
+
+    def _add_single_entity_to_grid(self, entity_name: str, position: list):
+        """
+        Add a single entity's hitbox to the CURRENT occupancy grid.
+        This method assumes the grid is already initialized and ready for entity addition.
+        """
+        if entity_name not in self.managed_entities:
+            print(f"Warning: Entity {entity_name} not found in managed entities")
+            return
+
+        entity_obj = self.managed_entities[entity_name]
+
+        try:
+            # Check if manual hitbox is defined for this entity
+            if entity_name in self.manual_entity_hitboxes:
+                # Use manual hitbox definition (centered on entity position)
+                manual_hitbox = self.manual_entity_hitboxes[entity_name]
+                width_m = manual_hitbox["width"]
+                height_m = manual_hitbox["height"]
+
+                # Convert entity position to grid coordinates
+                center_grid_x = int(
+                    (position[0] - self.map_origin_x) / self.map_resolution
+                )
+                center_grid_y = int(
+                    (position[1] - self.map_origin_y) / self.map_resolution
+                )
+
+                # Convert hitbox size from meters to grid cells
+                width_cells = int(width_m / self.map_resolution)
+                height_cells = int(height_m / self.map_resolution)
+
+                # Calculate hitbox bounds (centered on entity position)
+                half_width = width_cells // 2
+                half_height = height_cells // 2
+
+                min_grid_x = center_grid_x - half_width
+                max_grid_x = center_grid_x + half_width
+                min_grid_y = center_grid_y - half_height
+                max_grid_y = center_grid_y + half_height
+
+            else:
+                # Get the actual AABB (Axis-Aligned Bounding Box) of the entity
+                min_point, max_point = entity_obj.get_AABB()
+
+                # Convert to numpy arrays for easier manipulation
+                min_point = np.array(min_point.cpu().numpy())
+                max_point = np.array(max_point.cpu().numpy())
+
+                # Project the 3D bounding box onto the 2D occupancy grid (use only X and Y)
+                # Convert world coordinates to grid coordinates
+                min_grid_x = int(
+                    (min_point[0] - self.map_origin_x) / self.map_resolution
+                )
+                min_grid_y = int(
+                    (min_point[1] - self.map_origin_y) / self.map_resolution
+                )
+                max_grid_x = int(
+                    (max_point[0] - self.map_origin_x) / self.map_resolution
+                )
+                max_grid_y = int(
+                    (max_point[1] - self.map_origin_y) / self.map_resolution
+                )
+
+            # Ensure coordinates are within grid bounds
+            min_grid_x = max(0, min(min_grid_x, self.map_width - 1))
+            min_grid_y = max(0, min(min_grid_y, self.map_height - 1))
+            max_grid_x = max(0, min(max_grid_x, self.map_width - 1))
+            max_grid_y = max(0, min(max_grid_y, self.map_height - 1))
+
+            print(
+                f"Adding entity {entity_name} to occupancy grid: ({min_grid_x}, {min_grid_y}) to ({max_grid_x}, {max_grid_y})"
+            )
+
+            # Fill the bounding box area with occupied cells (0 = occupied, 255 = free)
+            for y in range(min_grid_y, max_grid_y + 1):
+                for x in range(min_grid_x, max_grid_x + 1):
+                    if 0 <= y < self.map_height and 0 <= x < self.map_width:
+                        self.occupancy_grid_with_entities[y, x] = (
+                            255  # Mark as occupied
+                        )
+
+        except Exception as e:
+            print(f"Failed to add entity {entity_name} to grid: {e}")
+
+    def _add_entity_to_active_list(self, entity_name: str, position: list):
+        """
+        Add or update an entity in the active entities list and regenerate the occupancy grid.
+        This replaces the old grid-manipulation approach with a clean regeneration system.
+        """
+        if entity_name not in self.managed_entities:
+            print(f"Warning: Entity {entity_name} not found in managed entities")
+            return
+
+        # Determine hitbox type for logging
+        hitbox_type = "manual" if entity_name in self.manual_entity_hitboxes else "aabb"
+
+        # Store/update entity info
+        self.active_entities[entity_name] = {
+            "position": position.copy(),
+            "hitbox_type": hitbox_type,
+        }
+
+        print(
+            f"Added/updated entity {entity_name} at {position} (hitbox: {hitbox_type})"
+        )
+
+        # Regenerate the entire occupancy grid with all entities
+        self._regenerate_occupancy_grid_with_entities()
+
+    def _clear_all_active_entities(self):
+        """Remove all dynamic entities from the active list and regenerate the occupancy grid"""
+        entity_count = len(self.active_entities)
+        self.active_entities.clear()
+        print(f"Cleared {entity_count} entities from active list")
+
+        if entity_count > 0:
+            # Regenerate the occupancy grid (will be just the base grid now)
+            self._regenerate_occupancy_grid_with_entities()
+
+    def _save_occupancy_grid_debug(self, filename_suffix: str = ""):
+        """Save both base and entities grids for debugging purposes"""
+        if self.base_occupancy_grid is not None:
+            base_filename = f"base_occupancy_grid{filename_suffix}.png"
+            cv2.imwrite(base_filename, self.base_occupancy_grid)
+            print(f"Saved base occupancy grid to {base_filename}")
+
+        if (
+            hasattr(self, "occupancy_grid_with_entities")
+            and self.occupancy_grid_with_entities is not None
+        ):
+            entities_filename = f"occupancy_grid_with_entities{filename_suffix}.png"
+            cv2.imwrite(entities_filename, self.occupancy_grid_with_entities)
+            print(f"Saved entities occupancy grid to {entities_filename}")
 
     def _init_robot(self):
         """Initialize robot and its parameters"""
@@ -374,13 +537,16 @@ class SimulationNode:
         Initialize mapping parameters using the bounds extracted from the STL file.
         Now, (0,0) of the grid (cell [0, 0]) corresponds to (min_x, min_y) in world coordinates.
         """
-        self.map_width = self.occupancy_grid.shape[1]  # columns
-        self.map_height = self.occupancy_grid.shape[0]  # rows
+        self.map_width = self.base_occupancy_grid.shape[1]  # columns
+        self.map_height = self.base_occupancy_grid.shape[0]  # rows
         self.map_resolution = self.grid_bounds["pixel_size"]
         self.map_origin_x = self.grid_bounds["min_x"]
         self.map_origin_y = self.grid_bounds["min_y"]
         self.map_publish_interval = 10
         self.last_map_publish_step = 0
+        self.occupancy_grid_changed = (
+            False  # Flag to track when grid needs republishing
+        )
 
     def init_movement(self):
         """Initialize robot movement"""
@@ -404,8 +570,9 @@ class SimulationNode:
             "via entity placement..."
         )
 
-        # Clear previous trajectory data
+        # Clear previous trajectory data and active entities
         self.entity_trajectories.clear()
+        self._clear_all_active_entities()
 
         if not self.managed_entities:
             print(
@@ -458,6 +625,10 @@ class SimulationNode:
                     try:
                         entity_obj.set_pos(position)
                         entity_obj.set_quat(orientation)  # set_quat uses w,x,y,z
+
+                        # Add entity to active list for fixed entities
+                        self._add_entity_to_active_list(name, position)
+
                     except Exception as e:
                         print(f"[SimulationNode] Error placing entity '{name}': {e}")
 
@@ -481,16 +652,7 @@ class SimulationNode:
                     # Move it out of the way
                     entity_obj.set_pos([0, 0, -1000])
 
-        # Hide entities that were pre-loaded but are NOT in the current config
-        hide_pos = [0, 0, -1000]
-        for name, entity_obj in self.managed_entities.items():
-            if name not in active_entity_names:
-                print(f"[SimulationNode] Hiding unused entity: '{name}'")
-                try:
-                    entity_obj.set_pos(hide_pos)
-                    # entity_obj.set_visibility(False) # If visibility API exists
-                except Exception as e:
-                    print(f"[SimulationNode] Error hiding entity '{name}': {e}")
+        # Note: Debug grids are automatically saved when entities regenerate
 
     def _update_entity_poses(self, sim_time: float):
         """Updates positions of entities based on their trajectories and sim_time."""
@@ -576,24 +738,44 @@ class SimulationNode:
                 #       f"Using start orientation.")
                 interp_quat_wxyz = quat1_wxyz
 
+            # Check if position changed significantly to update occupancy grid
+            position_changed = True
+            if name in self.active_entities:
+                old_pos = self.active_entities[name]["position"]
+                # Check if position changed by more than half a grid cell
+                pos_diff = np.linalg.norm(np.array(interp_pos) - np.array(old_pos))
+                if pos_diff < self.map_resolution * 0.5:
+                    position_changed = False
+
             # Apply interpolated pose (scale is already set)
             entity_obj.set_pos(interp_pos.tolist())
             entity_obj.set_quat(interp_quat_wxyz)
 
+            # Update entity position and regenerate occupancy grid if moved significantly
+            if position_changed:
+                # Update entity position in active list (this will regenerate the grid)
+                self._add_entity_to_active_list(name, interp_pos.tolist())
+
     def _preload_dynamic_entities(self):
         """Pre-loads all known dynamic entities into the scene initially."""
         print("[SimulationNode] Pre-loading dynamic entities...")
-        # Define potential entities here (name, path, default scale)
+
+        # Define potential entities here (name, path, default scale, optional manual hitbox)
         potential_entities = [
             {
                 "name": "walker_1",
                 "asset_path": "data/assets/walking_man/man.obj",
                 "scale": [1.0, 1.0, 1.0],
+                "hitbox": {
+                    "width": 0.6,
+                    "height": 0.6,
+                },  # Optional manual hitbox (meters)
             },
             {
                 "name": "casualty_1",
                 "asset_path": "data/assets/lying_man/Lying_man_0127.obj",
                 "scale": [0.010, 0.010, 0.010],
+                "hitbox": {"width": 0.6, "height": 2.0},
             },
             # {
             #     "name": "banana_peel",
@@ -605,6 +787,12 @@ class SimulationNode:
 
         initial_hide_pos = [0, 0, -1000]  # Position to hide entities initially
         default_quat = [1.0, 0.0, 0.0, 0.0]  # Default orientation (w,x,y,z)
+
+        # Extract manual hitboxes from entity definitions
+        self.manual_entity_hitboxes = {}
+        for entity_data in potential_entities:
+            if "hitbox" in entity_data:
+                self.manual_entity_hitboxes[entity_data["name"]] = entity_data["hitbox"]
 
         for entity_data in potential_entities:
             name = entity_data["name"]
@@ -870,10 +1058,15 @@ class SimulationNode:
             except queue.Full:
                 pass
 
-            # --- (E) Occasionally publish the map
-            if (step_count - self.last_map_publish_step) >= self.map_publish_interval:
-                # Build OccupancyGridMsg
-                # Suppose self.occupancy_grid is shape=(map_height, map_width), int8
+            # --- (E) Publish the map when changed or periodically
+            should_publish_map = (
+                self.occupancy_grid_changed
+                or (step_count - self.last_map_publish_step)
+                >= self.map_publish_interval
+            )
+
+            if should_publish_map:
+                # Build OccupancyGridMsg with current state (including entities)
                 og_msg = OccupancyGridMsg(
                     width=self.map_width,
                     height=self.map_height,
@@ -882,14 +1075,20 @@ class SimulationNode:
                     origin_y=self.map_origin_y,
                     origin_z=0.0,
                     origin_yaw=0.0,
-                    data=self.occupancy_grid,
+                    data=self.occupancy_grid_with_entities,
                     frame_id="map",
                 )
                 try:
                     self.shared_queues.sim_to_agent.put_nowait(og_msg)
+                    print(
+                        f"Published occupancy grid (changed: {self.occupancy_grid_changed})"
+                    )
                 except queue.Full:
                     pass
+
+                # Reset flags
                 self.last_map_publish_step = step_count
+                self.occupancy_grid_changed = False
 
             # --- (F) Step the physics
             try:
