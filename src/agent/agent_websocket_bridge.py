@@ -256,7 +256,7 @@ async def outbound_loop(ws, shared_queues):
                     "/set_brain_active", "std_srvs/srv/SetBool"
                 )
                 brain_active_srv["args"] = {"data": msg.active}
-                
+
                 print(f"[ROSBridge] Setting brain active: {msg.active}")
                 await ws.send(json.dumps(brain_active_srv))
 
