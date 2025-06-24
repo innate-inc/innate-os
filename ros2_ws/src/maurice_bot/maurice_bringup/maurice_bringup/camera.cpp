@@ -212,8 +212,14 @@ private:
             video_queue_.reset();
             device_.reset();
             
-            // Wait a bit before reinitializing
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            // Wait longer for device to recover after crash
+            RCLCPP_INFO(this->get_logger(), "Waiting for device to recover...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            
+            // Try to wait for device to become available with timeout
+            if (!wait_for_device_availability(10000)) { // 10 second timeout
+                throw std::runtime_error("Device did not become available after crash recovery period");
+            }
             
             // Reinitialize device
             initialize_device();
@@ -230,6 +236,44 @@ private:
             RCLCPP_ERROR(this->get_logger(), "Failed to restart device: %s", e.what());
             throw;
         }
+    }
+
+    bool wait_for_device_availability(int timeout_ms) {
+        int elapsed_ms = 0;
+        const int check_interval_ms = 500;
+        
+        while (elapsed_ms < timeout_ms) {
+            try {
+                auto availableDevices = dai::Device::getAllAvailableDevices();
+                
+                if (!availableDevices.empty()) {
+                    // If we have a specific MXID, check if it's available
+                    if (!mxId_str_.empty()) {
+                        for (const auto& device : availableDevices) {
+                            if (device.getMxId() == mxId_str_) {
+                                RCLCPP_INFO(this->get_logger(), "Target device %s is now available", mxId_str_.c_str());
+                                return true;
+                            }
+                        }
+                        RCLCPP_INFO(this->get_logger(), "Waiting for specific device %s... (%d/%d ms)", 
+                            mxId_str_.c_str(), elapsed_ms, timeout_ms);
+                    } else {
+                        RCLCPP_INFO(this->get_logger(), "Device is now available");
+                        return true;
+                    }
+                } else {
+                    RCLCPP_INFO(this->get_logger(), "No devices available yet... (%d/%d ms)", elapsed_ms, timeout_ms);
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_WARN(this->get_logger(), "Error checking device availability: %s", e.what());
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(check_interval_ms));
+            elapsed_ms += check_interval_ms;
+        }
+        
+        RCLCPP_ERROR(this->get_logger(), "Timeout waiting for device to become available");
+        return false;
     }
 
     void setup_video_publisher() {
@@ -323,6 +367,8 @@ private:
                         
                         if (retry_count_ >= max_retries_) {
                             RCLCPP_FATAL(this->get_logger(), "Maximum restart attempts reached. Node will continue but may not function properly.");
+                        } else {
+                            RCLCPP_WARN(this->get_logger(), "Will retry restart in next communication error");
                         }
                     }
                 } else {
