@@ -10,6 +10,7 @@ import os  # Add os import for path joining
 from typing import Dict, Any  # Add typing imports
 
 from src.simulation.stl_slicing import slice_stl
+from src.simulation.special_object_treatments import SpecialObjectHandler
 from src.agent.types import (
     RobotStateMsg,
     OccupancyGridMsg,
@@ -282,8 +283,24 @@ class SimulationNode:
         # For each object, get its AABB and project onto the grid
         for obj in self.scene_objects:
             entity = obj["entity"]
+            object_name = obj["name"]
+            object_position = obj["position"]
+            object_rotation = obj["rotation"]
 
             try:
+                # Check if this object has a special treatment
+                special_applied = self.special_object_handler.apply_special_treatment(
+                    object_name,
+                    object_position.tolist(),
+                    object_rotation,
+                    self.base_occupancy_grid,
+                )
+
+                if special_applied:
+                    print(f"Applied special treatment for object {object_name}")
+                    continue  # Skip the default AABB handling
+
+                # Default AABB handling for objects without special treatment
                 # Get the AABB (Axis-Aligned Bounding Box) of the mesh
                 min_point, max_point = entity.get_AABB()
 
@@ -328,6 +345,8 @@ class SimulationNode:
 
             except Exception as e:
                 print(f"Failed to add {obj['name']} to occupancy grid: {e}")
+
+        self._save_occupancy_grid_debug("_with_static_objects")
 
         # Initialize the grid with entities (what gets sent to agent)
         self.occupancy_grid_with_entities = self.base_occupancy_grid.copy()
@@ -546,6 +565,15 @@ class SimulationNode:
         self.last_map_publish_step = 0
         self.occupancy_grid_changed = (
             False  # Flag to track when grid needs republishing
+        )
+
+        # Initialize special object handler
+        self.special_object_handler = SpecialObjectHandler(
+            map_resolution=self.map_resolution,
+            map_origin_x=self.map_origin_x,
+            map_origin_y=self.map_origin_y,
+            map_width=self.map_width,
+            map_height=self.map_height,
         )
 
     def init_movement(self):
