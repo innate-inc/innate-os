@@ -464,6 +464,8 @@ def evaluate_stop_criterion(
     metrics: Dict,
     save_metrics_callback: callable,
     use_frames: bool = True,
+    expectations: Dict = None,
+    check_status: Dict = None,
 ) -> bool:
     """
     Evaluate if the benchmark should stop early based on the stop criterion.
@@ -476,6 +478,8 @@ def evaluate_stop_criterion(
         metrics: Benchmark metrics
         save_metrics_callback: Function to save metrics
         use_frames: Whether to use frames in evaluation (5 most recent if True)
+        expectations: Benchmark expectations configuration (contains check definitions)
+        check_status: Current status of checks (which have passed/failed)
 
     Returns:
         True if benchmark should stop, False otherwise
@@ -490,9 +494,52 @@ def evaluate_stop_criterion(
         if not frames:
             return False
 
+    # Build context about checks for the VLM
+    check_context = ""
+    if expectations and expectations.get("checks"):
+        check_context += "\n\nCHECK STATUS:\n"
+
+        for check in expectations["checks"]:
+            check_id = check.get("id", "unknown")
+            check_type = check.get("type", "unknown")
+            description = check.get("description", "No description")
+
+            # Check if this check has passed
+            status = (
+                "PASSED"
+                if check_status and check_status.get(check_id, False)
+                else "NOT PASSED"
+            )
+
+            check_context += f"- Check '{check_id}' ({check_type}): {status}\n"
+            check_context += f"  Description: {description}\n"
+
+            # Add completion time if available and check passed
+            if status == "PASSED" and metrics.get("checks", {}).get(check_id, {}).get(
+                "completion_time"
+            ):
+                completion_time = metrics["checks"][check_id]["completion_time"]
+                check_context += f"  Completed at: {completion_time:.2f} seconds\n"
+
+        # Add summary
+        total_checks = len(expectations["checks"])
+        passed_checks = sum(
+            1
+            for check in expectations["checks"]
+            if check_status and check_status.get(check.get("id"), False)
+        )
+        check_context += (
+            f"\nSUMMARY: {passed_checks}/{total_checks} checks have passed.\n"
+        )
+
+    # Enhanced stop criterion with check context
+    enhanced_criterion = stop_criterion
+    if check_context:
+        enhanced_criterion = f"{stop_criterion}\n{check_context}\nConsider the above check status when determining if the benchmark should stop early."
+
     # Evaluate the stop criterion using VLM
     result = evaluate_with_vlm(
-        stop_criterion,
+        enhanced_criterion,
         frames,
         chat_log=chat_log,
         metrics=metrics,
