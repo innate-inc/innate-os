@@ -29,7 +29,7 @@ sleep 2  # Give nav system time to start up
 # Create a new pane for the brain client
 tmux split-window -t maurice:0.0 -h
 # Let's add a debug message to see which pane we're currently in
-tmux send-keys -t maurice:0.1 "ros2 launch brain_client brain_client.launch.py" C-m
+tmux send-keys -t maurice:0.1 "ros2 launch brain_client brain_client.sim.launch.py" C-m
 echo "Started brain client..."
 
 # Select the first pane
