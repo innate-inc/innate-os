@@ -95,14 +95,12 @@ class BrainClientNode(Node):
         self.declare_parameter("map_topic", "/map")
 
         # New parameters for arm camera
-        self.declare_parameter(
-            "arm_camera_image_topic", "/image_raw/compressed"
-        )
+        self.declare_parameter("arm_camera_image_topic", "/image_raw/compressed")
         self.declare_parameter("send_arm_camera_image", True)
 
         # Set to True if you wish to receive and forward depth images as well
         self.declare_parameter("send_depth", True)
-        self.declare_parameter("odom_topic", "/odom") # Removed odom_topic
+        self.declare_parameter("odom_topic", "/odom")  # Removed odom_topic
         self.declare_parameter("use_odom_as_amcl_pose", False)
 
         # New parameters for camera FOV
@@ -117,12 +115,18 @@ class BrainClientNode(Node):
         self.declare_parameter("log_everything", False)  # Default to False
 
         # --- New: Video buffering parameters ---
-        self.declare_parameter("video_buffer_duration_seconds", 2.0) # Duration of video to send
-        self.declare_parameter("video_fps", 10.0) # FPS for the created video clip
-        self.declare_parameter("image_buffer_max_size", 60) # Max images to store (e.g., 2s @ 30fps for a 30fps camera)
+        self.declare_parameter(
+            "video_buffer_duration_seconds", 2.0
+        )  # Duration of video to send
+        self.declare_parameter("video_fps", 10.0)  # FPS for the created video clip
+        self.declare_parameter(
+            "image_buffer_max_size", 60
+        )  # Max images to store (e.g., 2s @ 30fps for a 30fps camera)
 
         # --- New: Flag to switch between image and video feed ---
-        self.declare_parameter("send_video_feed", False) # Default to sending single image
+        self.declare_parameter(
+            "send_video_feed", False
+        )  # Default to sending single image
 
         # --- New: Brain active state flag ---
         self.is_brain_active = False  # Brain starts active
@@ -208,12 +212,24 @@ class BrainClientNode(Node):
         )
 
         # --- Get video buffering parameters ---
-        self.video_buffer_duration_seconds = self.get_parameter("video_buffer_duration_seconds").get_parameter_value().double_value
-        self.video_fps = self.get_parameter("video_fps").get_parameter_value().double_value
-        self.image_buffer_max_size = self.get_parameter("image_buffer_max_size").get_parameter_value().integer_value
-        
+        self.video_buffer_duration_seconds = (
+            self.get_parameter("video_buffer_duration_seconds")
+            .get_parameter_value()
+            .double_value
+        )
+        self.video_fps = (
+            self.get_parameter("video_fps").get_parameter_value().double_value
+        )
+        self.image_buffer_max_size = (
+            self.get_parameter("image_buffer_max_size")
+            .get_parameter_value()
+            .integer_value
+        )
+
         # --- Get video feed flag ---
-        self.send_video_feed_enabled = self.get_parameter("send_video_feed").get_parameter_value().bool_value
+        self.send_video_feed_enabled = (
+            self.get_parameter("send_video_feed").get_parameter_value().bool_value
+        )
 
         # image_buffer stores (timestamp_sec, image_numpy_array)
         self.image_buffer = deque(maxlen=self.image_buffer_max_size)
@@ -435,13 +451,17 @@ class BrainClientNode(Node):
             # self.last_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             decoded_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if decoded_image is not None:
-                self.last_image = decoded_image # Keep updating for other uses (e.g. pose_image_callback)
+                self.last_image = decoded_image  # Keep updating for other uses (e.g. pose_image_callback)
                 current_time_sec = self.get_clock().now().nanoseconds / 1e9
                 self.image_buffer.append((current_time_sec, decoded_image))
             else:
-                self.get_logger().warn("Failed to decode image in image_callback, decoded_image is None.")
+                self.get_logger().warn(
+                    "Failed to decode image in image_callback, decoded_image is None."
+                )
         except Exception as e:
-            self.get_logger().error(f"Failed to decode compressed image or add to buffer: {e}")
+            self.get_logger().error(
+                f"Failed to decode compressed image or add to buffer: {e}"
+            )
 
     def arm_camera_image_callback(self, msg: CompressedImage):
         try:
@@ -449,7 +469,9 @@ class BrainClientNode(Node):
             self.last_arm_camera = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             # self.get_logger().info(f"\033[1;92m[BrainClient] Received arm_camera_image_callback\033[0m")
         except Exception as e:
-            self.get_logger().error(f"Failed to decode compressed arm camera image: {e}")
+            self.get_logger().error(
+                f"Failed to decode compressed arm camera image: {e}"
+            )
 
     def depth_image_callback(self, msg):
         try:
@@ -549,12 +571,16 @@ class BrainClientNode(Node):
     def amcl_pose_callback(self, msg: PoseWithCovarianceStamped):
         """Store the latest AMCL pose data."""
         self.last_amcl_pose = msg
-        self.get_logger().debug(f"Received amcl_pose at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
+        self.get_logger().debug(
+            f"Received amcl_pose at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}"
+        )
 
     def odom_callback(self, msg: Odometry):
         """Store the latest odometry data."""
         self.last_odom = msg
-        self.get_logger().debug(f"Received odom at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
+        self.get_logger().debug(
+            f"Received odom at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}"
+        )
 
         # If we're in the SIM, we can use the odom pose as the amcl pose.
         if self.use_odom_as_amcl_pose:
@@ -837,8 +863,8 @@ class BrainClientNode(Node):
 
                 # --- BEGIN IMAGE/VIDEO PROCESSING AND SENDING WITH TIMING ---
                 processing_start_time = time.perf_counter()
-                
-                payload = {"image_b64": rgb_b64} # Start with the always-encoded image
+
+                payload = {"image_b64": rgb_b64}  # Start with the always-encoded image
                 log_message_label = "Image"
 
                 if self.send_video_feed_enabled:
@@ -846,7 +872,8 @@ class BrainClientNode(Node):
                     # Grab images from the buffer that are within the desired time window
                     current_time_sec = self.get_clock().now().nanoseconds / 1e9
                     recent_frames_data = [
-                        img for ts, img in list(self.image_buffer) 
+                        img
+                        for ts, img in list(self.image_buffer)
                         if current_time_sec - ts <= self.video_buffer_duration_seconds
                     ]
 
@@ -863,54 +890,90 @@ class BrainClientNode(Node):
                             height, width, _ = first_image.shape
 
                             if height == 0 or width == 0:
-                                self.get_logger().error(f"Invalid image dimensions for video: {width}x{height}")
+                                self.get_logger().error(
+                                    f"Invalid image dimensions for video: {width}x{height}"
+                                )
                                 # Don't return, will send single image instead
                             else:
-                                with tempfile.NamedTemporaryFile(suffix='.avi', delete=False) as tmpfile_obj:
+                                with tempfile.NamedTemporaryFile(
+                                    suffix=".avi", delete=False
+                                ) as tmpfile_obj:
                                     temp_video_path = tmpfile_obj.name
-                                
+
                                 if not temp_video_path:
-                                    self.get_logger().error("Failed to create temporary file path for video.")
+                                    self.get_logger().error(
+                                        "Failed to create temporary file path for video."
+                                    )
                                     # Don't return, will send single image instead
                                 else:
-                                    fourcc = cv2.VideoWriter_fourcc(*'MJPG') # Motion JPEG
-                                    video_writer = cv2.VideoWriter(temp_video_path, fourcc, float(self.video_fps), (width, height))
+                                    fourcc = cv2.VideoWriter_fourcc(
+                                        *"MJPG"
+                                    )  # Motion JPEG
+                                    video_writer = cv2.VideoWriter(
+                                        temp_video_path,
+                                        fourcc,
+                                        float(self.video_fps),
+                                        (width, height),
+                                    )
 
                                     if not video_writer.isOpened():
-                                        self.get_logger().error(f"Failed to open VideoWriter for path: {temp_video_path} with res {width}x{height}, FPS {self.video_fps}")
-                                        if os.path.exists(temp_video_path): os.remove(temp_video_path)
-                                        
+                                        self.get_logger().error(
+                                            f"Failed to open VideoWriter for path: {temp_video_path} with res {width}x{height}, FPS {self.video_fps}"
+                                        )
+                                        if os.path.exists(temp_video_path):
+                                            os.remove(temp_video_path)
+
                                         # Don't return, will send single image instead
                                     else:
                                         for frame_img in recent_frames_data:
-                                            if frame_img is not None and frame_img.shape[0] == height and frame_img.shape[1] == width:
+                                            if (
+                                                frame_img is not None
+                                                and frame_img.shape[0] == height
+                                                and frame_img.shape[1] == width
+                                            ):
                                                 video_writer.write(frame_img)
                                             elif frame_img is None:
-                                                self.get_logger().warn("Skipping None frame in video creation.")
+                                                self.get_logger().warn(
+                                                    "Skipping None frame in video creation."
+                                                )
                                             else:
-                                                self.get_logger().warn(f"Skipping frame with mismatched dimensions: {frame_img.shape} vs {height}x{width}")
-                                        
+                                                self.get_logger().warn(
+                                                    f"Skipping frame with mismatched dimensions: {frame_img.shape} vs {height}x{width}"
+                                                )
+
                                         video_writer.release()
 
-                                        if os.path.exists(temp_video_path) and os.path.getsize(temp_video_path) > 0:
-                                            with open(temp_video_path, 'rb') as f:
+                                        if (
+                                            os.path.exists(temp_video_path)
+                                            and os.path.getsize(temp_video_path) > 0
+                                        ):
+                                            with open(temp_video_path, "rb") as f:
                                                 video_bytes = f.read()
-                                            video_b64 = base64.b64encode(video_bytes).decode('utf-8')
+                                            video_b64 = base64.b64encode(
+                                                video_bytes
+                                            ).decode("utf-8")
                                         else:
-                                            self.get_logger().error(f"Temporary video file is empty or does not exist after writing: {temp_video_path}")
-                                            if os.path.exists(temp_video_path): os.remove(temp_video_path) # Clean up
+                                            self.get_logger().error(
+                                                f"Temporary video file is empty or does not exist after writing: {temp_video_path}"
+                                            )
+                                            if os.path.exists(temp_video_path):
+                                                os.remove(temp_video_path)  # Clean up
                         except Exception as e:
-                            self.get_logger().error(f"Error during video creation: {e}, Traceback: {traceback.format_exc()}")
+                            self.get_logger().error(
+                                f"Error during video creation: {e}, Traceback: {traceback.format_exc()}"
+                            )
                         finally:
                             if temp_video_path and os.path.exists(temp_video_path):
                                 os.remove(temp_video_path)
-                        
+
                         if video_b64:
                             payload["video_b64"] = video_b64
                             payload["video_format"] = "avi_mjpeg"
                         else:
-                            self.get_logger().warn("Video creation failed or resulted in no data. Sending only single image.")
-                
+                            self.get_logger().warn(
+                                "Video creation failed or resulted in no data. Sending only single image."
+                            )
+
                 # --- Add other payload components (FOV, depth, map, robot_coords, arm_camera) ---
                 # Include the horizontal and vertical FOV of the camera
                 payload["horizontal_fov"] = self.horizontal_fov
@@ -1036,13 +1099,13 @@ class BrainClientNode(Node):
 
                 # Reset flags so we do not resend the same images
                 self.ready_for_image = False
-                self.last_depth_image = None # Depth is reset after sending.
-                self.last_arm_camera = None # Arm camera is reset after sending.
+                self.last_depth_image = None  # Depth is reset after sending.
+                self.last_arm_camera = None  # Arm camera is reset after sending.
             except Exception as e:
                 self.get_logger().error(f"Error in agent_loop_callback: {e}")
                 # It's important to re-raise the exception if we are not handling it here,
                 # otherwise, the error might be silently ignored and lead to difficult debugging.
-                raise # Re-raise the caught exception
+                raise  # Re-raise the caught exception
 
     def send_primitive_goal(self, task_type, inputs):
         goal_msg = ExecutePrimitive.Goal()
@@ -1194,7 +1257,8 @@ class BrainClientNode(Node):
 
         # --- THEN, check and execute pending task if previous was cancelled OR succeeded in the meantime ---
         if (
-            result.success_type in [PrimitiveResult.CANCELLED.value, PrimitiveResult.SUCCESS.value]
+            result.success_type
+            in [PrimitiveResult.CANCELLED.value, PrimitiveResult.SUCCESS.value]
             and self._pending_next_task is not None
         ):
             self.get_logger().info(
