@@ -91,7 +91,7 @@ public:
         this->declare_parameter<bool>("use_video", true);
         // Device specific parameters
         this->declare_parameter<std::string>("mxId", "");
-        this->declare_parameter<bool>("usb2Mode", false);
+        this->declare_parameter<bool>("usb2Mode", true);
 
         // Get parameters
         tf_prefix_ = this->get_parameter("tf_prefix").as_string();
