@@ -308,7 +308,7 @@ private:
 
     void publish_frame() {
         try {
-            auto frame = video_queue_->get<dai::ImgFrame>();
+            auto frame = video_queue_->tryGet<dai::ImgFrame>();
             if (frame) {
                 auto imgData = frame->getData();
                 if (!imgData.empty()) {
