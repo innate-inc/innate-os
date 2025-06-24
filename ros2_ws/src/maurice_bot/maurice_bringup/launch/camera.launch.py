@@ -61,7 +61,7 @@ def generate_launch_description():
 
     # --- Device and Model Arguments (for URDF and Camera Driver) ---
     declare_mxId = DeclareLaunchArgument('mxId', default_value='', description='MXID of the OAK device. Empty for first available.')
-    declare_usb2Mode = DeclareLaunchArgument('usb2Mode', default_value='False', description='Enable USB2 mode for the OAK device.')
+    declare_usb2Mode = DeclareLaunchArgument('usb2Mode', default_value='Trueus', description='Enable USB2 mode for the OAK device.')
     declare_camera_model = DeclareLaunchArgument('camera_model', default_value='OAK-D', description='The model of the OAK camera (e.g., OAK-D, OAK-D-LITE). Used for URDF.')
     declare_tf_prefix = DeclareLaunchArgument('tf_prefix', default_value='oak', description='Namespace for TF frames (e.g., oak/rgb_camera_optical_frame).')
 

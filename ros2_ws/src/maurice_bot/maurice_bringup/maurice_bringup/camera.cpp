@@ -79,7 +79,10 @@ std::tuple<dai::Pipeline, ImageDimensions> create_rgb_pipeline(
 class CameraDriverNode : public rclcpp::Node {
 public:
     CameraDriverNode() : Node("camera_driver"),
-                         cinfo_manager_(this) {
+                         cinfo_manager_(this),
+                         retry_count_(0),
+                         max_retries_(5),
+                         retry_delay_ms_(1000) {
         // Declare parameters
         this->declare_parameter<std::string>("tf_prefix", "oak");
         this->declare_parameter<std::string>("camera_model", "OAK-D");
@@ -88,44 +91,82 @@ public:
         this->declare_parameter<bool>("use_video", true);
         // Device specific parameters
         this->declare_parameter<std::string>("mxId", "");
-        this->declare_parameter<bool>("usb2Mode", false);
+        this->declare_parameter<bool>("usb2Mode", true);
 
         // Get parameters
         tf_prefix_ = this->get_parameter("tf_prefix").as_string();
         camera_model_ = this->get_parameter("camera_model").as_string();
-        std::string color_resolution_str = this->get_parameter("color_resolution").as_string();
-        double fps_val = this->get_parameter("fps").as_double();
+        color_resolution_str_ = this->get_parameter("color_resolution").as_string();
+        fps_val_ = this->get_parameter("fps").as_double();
         use_video_ = this->get_parameter("use_video").as_bool();
         
-        std::string mxId_str = this->get_parameter("mxId").as_string();
-        bool usb2Mode_val = this->get_parameter("usb2Mode").as_bool();
+        mxId_str_ = this->get_parameter("mxId").as_string();
+        usb2Mode_val_ = this->get_parameter("usb2Mode").as_bool();
 
         RCLCPP_INFO(this->get_logger(), "Initializing Camera Driver Node with parameters:");
         RCLCPP_INFO(this->get_logger(), "  TF Prefix: %s", tf_prefix_.c_str());
         RCLCPP_INFO(this->get_logger(), "  Camera Model: %s", camera_model_.c_str());
-        RCLCPP_INFO(this->get_logger(), "  Color Resolution: %s", color_resolution_str.c_str());
-        RCLCPP_INFO(this->get_logger(), "  FPS: %.2f", fps_val);
+        RCLCPP_INFO(this->get_logger(), "  Color Resolution: %s", color_resolution_str_.c_str());
+        RCLCPP_INFO(this->get_logger(), "  FPS: %.2f", fps_val_);
         RCLCPP_INFO(this->get_logger(), "  Use Video: %s", use_video_ ? "true" : "false");
 
         // Now that tf_prefix_ is available, initialize rgb_converter_
         rgb_converter_ = std::make_unique<dai::rosBridge::ImageConverter>(tf_prefix_ + "_rgb_camera_optical_frame", false);
 
+        // Initialize device with retry logic
+        initialize_device_with_retry();
+
+        RCLCPP_INFO(this->get_logger(), "Camera driver node core initialized. Publisher setup deferred.");
+    }
+
+    void initialize_publishers() {
+        if (use_video_) {
+            setup_video_publisher();
+        }
+        RCLCPP_INFO(this->get_logger(), "Camera publishers initialized successfully.");
+    }
+
+private:
+    void initialize_device_with_retry() {
+        for (int attempt = 0; attempt < max_retries_; ++attempt) {
+            try {
+                initialize_device();
+                retry_count_ = 0; // Reset retry count on success
+                return;
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), 
+                    "Device initialization attempt %d/%d failed: %s", 
+                    attempt + 1, max_retries_, e.what());
+                
+                if (attempt < max_retries_ - 1) {
+                    RCLCPP_WARN(this->get_logger(), 
+                        "Retrying device initialization in %d ms...", retry_delay_ms_);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms_));
+                    retry_delay_ms_ = std::min(retry_delay_ms_ * 2, 10000); // Exponential backoff, max 10s
+                }
+            }
+        }
+        
+        RCLCPP_FATAL(this->get_logger(), "Failed to initialize device after %d attempts", max_retries_);
+        throw std::runtime_error("Failed to initialize device after maximum retry attempts");
+    }
+
+    void initialize_device() {
         ImageDimensions video_dims;
-        std::tie(pipeline_, video_dims) = create_rgb_pipeline(
-            color_resolution_str, fps_val);
+        std::tie(pipeline_, video_dims) = create_rgb_pipeline(color_resolution_str_, fps_val_);
 
         // Initialize device
         dai::DeviceInfo deviceInfo; // Default constructor for first available device
         bool deviceFound = false;
-        if (!mxId_str.empty()) {
-            RCLCPP_INFO(this->get_logger(), "Attempting to find device with MXID: %s", mxId_str.c_str());
+        if (!mxId_str_.empty()) {
+            RCLCPP_INFO(this->get_logger(), "Attempting to find device with MXID: %s", mxId_str_.c_str());
             try {
-                dai::DeviceInfo di(mxId_str); // Try to find by MXID
+                dai::DeviceInfo di(mxId_str_); // Try to find by MXID
                 deviceInfo = di;
                 deviceFound = true;
-                 RCLCPP_INFO(this->get_logger(), "Device %s found.", mxId_str.c_str());
+                 RCLCPP_INFO(this->get_logger(), "Device %s found.", mxId_str_.c_str());
             } catch (const std::exception& e) {
-                 RCLCPP_WARN(this->get_logger(), "Device with MXID %s not found or error: %s. Will try first available.", mxId_str.c_str(), e.what());
+                 RCLCPP_WARN(this->get_logger(), "Device with MXID %s not found or error: %s. Will try first available.", mxId_str_.c_str(), e.what());
             }
         }
         
@@ -139,9 +180,7 @@ public:
             deviceInfo = availableDevices[0];
         }
 
-        device_ = std::make_unique<dai::Device>(pipeline_, deviceInfo, usb2Mode_val);
-
-        // IR emitter setup removed as it's for Pro models
+        device_ = std::make_unique<dai::Device>(pipeline_, deviceInfo, usb2Mode_val_);
 
         // Get output queues
         if (use_video_) {
@@ -157,19 +196,86 @@ public:
         rgb_cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(
             rgb_converter_->calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_A, video_dims.width, video_dims.height)
         );
-
-        // Publishers are initialized after construction via initialize_publishers()
-        RCLCPP_INFO(this->get_logger(), "Camera driver node core initialized. Publisher setup deferred.");
     }
 
-    void initialize_publishers() {
-        if (use_video_) {
-            setup_video_publisher();
+    void restart_device() {
+        RCLCPP_WARN(this->get_logger(), "Attempting to restart device due to communication error...");
+        
+        try {
+            // Stop the publishing timer
+            if (publish_timer_) {
+                publish_timer_->cancel();
+                publish_timer_.reset();
+            }
+            
+            // Reset device and queues
+            video_queue_.reset();
+            device_.reset();
+            
+            // Wait longer for device to recover after crash
+            RCLCPP_INFO(this->get_logger(), "Waiting for device to recover...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+            
+            // Try to wait for device to become available with timeout
+            if (!wait_for_device_availability(10000)) { // 10 second timeout
+                throw std::runtime_error("Device did not become available after crash recovery period");
+            }
+            
+            // Reinitialize device
+            initialize_device();
+            
+            // Restart publishing if we were using video
+            if (use_video_) {
+                setup_video_publisher();
+            }
+            
+            retry_count_ = 0; // Reset retry count on successful restart
+            RCLCPP_INFO(this->get_logger(), "Device successfully restarted");
+            
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to restart device: %s", e.what());
+            throw;
         }
-        RCLCPP_INFO(this->get_logger(), "Camera publishers initialized successfully.");
     }
 
-private:
+    bool wait_for_device_availability(int timeout_ms) {
+        int elapsed_ms = 0;
+        const int check_interval_ms = 500;
+        
+        while (elapsed_ms < timeout_ms) {
+            try {
+                auto availableDevices = dai::Device::getAllAvailableDevices();
+                
+                if (!availableDevices.empty()) {
+                    // If we have a specific MXID, check if it's available
+                    if (!mxId_str_.empty()) {
+                        for (const auto& device : availableDevices) {
+                            if (device.getMxId() == mxId_str_) {
+                                RCLCPP_INFO(this->get_logger(), "Target device %s is now available", mxId_str_.c_str());
+                                return true;
+                            }
+                        }
+                        RCLCPP_INFO(this->get_logger(), "Waiting for specific device %s... (%d/%d ms)", 
+                            mxId_str_.c_str(), elapsed_ms, timeout_ms);
+                    } else {
+                        RCLCPP_INFO(this->get_logger(), "Device is now available");
+                        return true;
+                    }
+                } else {
+                    RCLCPP_INFO(this->get_logger(), "No devices available yet... (%d/%d ms)", elapsed_ms, timeout_ms);
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_WARN(this->get_logger(), "Error checking device availability: %s", e.what());
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(check_interval_ms));
+            elapsed_ms += check_interval_ms;
+        }
+        
+        RCLCPP_ERROR(this->get_logger(), "Timeout waiting for device to become available");
+        return false;
+    }
+
     void setup_video_publisher() {
         if (!video_queue_) {
             RCLCPP_ERROR(this->get_logger(), "Video queue is not initialized. Cannot setup video publisher.");
@@ -201,9 +307,9 @@ private:
     }
 
     void publish_frame() {
-        auto frame = video_queue_->get<dai::ImgFrame>();
-        if (frame) {
-            try {
+        try {
+            auto frame = video_queue_->tryGet<dai::ImgFrame>();
+            if (frame) {
                 auto imgData = frame->getData();
                 if (!imgData.empty()) {
                     // Convert to OpenCV Mat
@@ -239,9 +345,40 @@ private:
                             frame_count, rosImage.data.size(), compressed_msg.data.size());
                     }
                 }
-            } catch (const std::exception& e) {
-                RCLCPP_ERROR(this->get_logger(), "Failed to publish frame: %s", e.what());
             }
+        } catch (const std::runtime_error& e) {
+            std::string error_msg = e.what();
+            
+            // Check if this is a communication error
+            if (error_msg.find("Communication exception") != std::string::npos || 
+                error_msg.find("X_LINK_ERROR") != std::string::npos ||
+                error_msg.find("Couldn't read data from stream") != std::string::npos) {
+                
+                RCLCPP_ERROR(this->get_logger(), "Device communication error detected: %s", e.what());
+                
+                if (retry_count_ < max_retries_) {
+                    retry_count_++;
+                    RCLCPP_WARN(this->get_logger(), "Attempting device restart (attempt %d/%d)", retry_count_, max_retries_);
+                    
+                    try {
+                        restart_device();
+                    } catch (const std::exception& restart_e) {
+                        RCLCPP_ERROR(this->get_logger(), "Device restart failed: %s", restart_e.what());
+                        
+                        if (retry_count_ >= max_retries_) {
+                            RCLCPP_FATAL(this->get_logger(), "Maximum restart attempts reached. Node will continue but may not function properly.");
+                        } else {
+                            RCLCPP_WARN(this->get_logger(), "Will retry restart in next communication error");
+                        }
+                    }
+                } else {
+                    RCLCPP_FATAL(this->get_logger(), "Maximum restart attempts reached. Node will continue but may not function properly.");
+                }
+            } else {
+                RCLCPP_ERROR(this->get_logger(), "Non-communication error in publish_frame: %s", e.what());
+            }
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Unexpected error in publish_frame: %s", e.what());
         }
     }
 
@@ -253,6 +390,12 @@ private:
     std::string camera_model_;
     bool use_video_;
 
+    // Store parameters for device restart
+    std::string color_resolution_str_;
+    double fps_val_;
+    std::string mxId_str_;
+    bool usb2Mode_val_;
+
     dai::Pipeline pipeline_;
     std::unique_ptr<dai::Device> device_;
     std::shared_ptr<dai::DataOutputQueue> video_queue_;
@@ -262,6 +405,11 @@ private:
 
     camera_info_manager::CameraInfoManager cinfo_manager_;
     std::shared_ptr<sensor_msgs::msg::CameraInfo> rgb_cam_info_;
+
+    // Retry logic variables
+    int retry_count_;
+    int max_retries_;
+    int retry_delay_ms_;
 };
 
 int main(int argc, char** argv) {
