@@ -62,6 +62,8 @@ class NavigationController:
             f"[NavController] Received navigation path with {len(path.waypoints)} waypoints"
         )
 
+        print(f"[NavController] Path: {path}")
+
         # Log start and end positions
         start_wp = path.waypoints[0]
         end_wp = path.waypoints[-1]
@@ -90,7 +92,7 @@ class NavigationController:
         self.nav_thread.start()
 
         # Publish initial status
-        self._publish_status()
+        # self._publish_status()
 
     def cancel_navigation(self):
         """Cancel current navigation."""
@@ -191,7 +193,6 @@ class NavigationController:
                 print("[NavController] All waypoints reached - path completed!")
                 self.current_status = "SUCCEEDED"
                 self.is_navigating = False
-                self._publish_status()
                 break
 
             # Check if we've reached the current waypoint
@@ -209,7 +210,6 @@ class NavigationController:
                     )
                     self.current_status = "SUCCEEDED"
                     self.is_navigating = False
-                    self._publish_status()
                     break
                 else:
                     # Reached intermediate waypoint, move to next one
