@@ -41,9 +41,11 @@ class SharedQueues:
         self.chat_to_bridge = queue.Queue(maxsize=5000)
         self.chat_from_bridge = queue.Queue(maxsize=5000)
 
-        # Store the latest robot position for direct access
+        # Store the latest robot position and orientation for direct access
         # Format: [x, y, z]
         self.latest_robot_position: List[float] = [0.0, 0.0, 0.0]
+        # Format: [ox, oy, oz, ow] (quaternion)
+        self.latest_robot_orientation: List[float] = [0.0, 0.0, 0.0, 1.0]
         self.robot_position_timestamp: float = 0.0
         self.robot_position_lock = threading.Lock()  # For thread-safe updates
 
@@ -60,7 +62,38 @@ class SharedQueues:
             self.latest_robot_position = [x, y, z]
             self.robot_position_timestamp = timestamp
 
+    def update_robot_pose(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        ox: float,
+        oy: float,
+        oz: float,
+        ow: float,
+        timestamp: float = None,
+    ):
+        """Thread-safe method to update the robot's position and orientation"""
+        if timestamp is None:
+            import time
+
+            timestamp = time.time()
+
+        with self.robot_position_lock:
+            self.latest_robot_position = [x, y, z]
+            self.latest_robot_orientation = [ox, oy, oz, ow]
+            self.robot_position_timestamp = timestamp
+
     def get_robot_position(self) -> Tuple[List[float], float]:
         """Thread-safe method to get the robot's position and timestamp"""
         with self.robot_position_lock:
             return self.latest_robot_position.copy(), self.robot_position_timestamp
+
+    def get_robot_pose(self) -> Tuple[List[float], List[float], float]:
+        """Thread-safe method to get the robot's position, orientation and timestamp"""
+        with self.robot_position_lock:
+            return (
+                self.latest_robot_position.copy(),
+                self.latest_robot_orientation.copy(),
+                self.robot_position_timestamp,
+            )
