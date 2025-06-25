@@ -17,11 +17,18 @@ from src.agent.types import (
     OccupancyGridMsg,
     RobotStateMsg,
     VelocityCmd,
+    PositionCmd,
     DirectiveCmd,
     ResetRobotCmd,
     BrainActiveCmd,
+    NavigationPathMsg,
+    NavigationWaypoint,
+    NavigationCancelMsg,
+    NavigationStatusMsg,
+    NavigationFeedbackMsg,
 )
 from src.shared_queues import ChatMessage, ChatSignal
+from src.agent.navigation_controller import NavigationController
 
 
 def np_encoder(obj):
@@ -108,6 +115,52 @@ async def inbound_loop(ws, shared_queues):
                     # Forward to sim
                     shared_queues.chat_from_bridge.put_nowait(chat_msg)
 
+            # 3) /sim_navigation/global_plan
+            elif topic == "/sim_navigation/global_plan":
+                frame_id = msg_data.get("header", {}).get("frame_id", "map")
+                poses = msg_data.get("poses", [])
+
+                if not poses:
+                    print("[ROSBridge] Received empty navigation path")
+                    continue
+
+                # Convert poses to waypoints
+                waypoints = []
+                for pose_stamped in poses:
+                    pose = pose_stamped.get("pose", {})
+                    position = pose.get("position", {})
+                    orientation = pose.get("orientation", {})
+
+                    x = float(position.get("x", 0.0))
+                    y = float(position.get("y", 0.0))
+
+                    # Convert quaternion to yaw
+                    qz = float(orientation.get("z", 0.0))
+                    qw = float(orientation.get("w", 1.0))
+                    yaw = 2 * math.atan2(qz, qw)
+
+                    waypoint = NavigationWaypoint(x=x, y=y, yaw=yaw)
+                    waypoints.append(waypoint)
+
+                nav_path = NavigationPathMsg(frame_id=frame_id, waypoints=waypoints)
+
+                print(
+                    f"[ROSBridge] Received navigation path with {len(waypoints)} waypoints"
+                )
+
+                # Forward to navigation controller
+                if hasattr(shared_queues, "nav_controller"):
+                    shared_queues.nav_controller.set_navigation_path(nav_path)
+
+            # 4) /sim_navigation/cancel
+            elif topic == "/sim_navigation/cancel":
+                cancel_data = msg_data.get("data", False)
+                if cancel_data:
+                    nav_cancel = NavigationCancelMsg(cancel=True)
+                    # Forward to navigation controller
+                    if hasattr(shared_queues, "nav_controller"):
+                        shared_queues.nav_controller.cancel_navigation()
+
         # Process service responses (responses to service calls that we initiated)
         elif op_type == "service_response":
             service_name = inbound_data.get("service", "")
@@ -176,6 +229,14 @@ async def outbound_loop(ws, shared_queues):
     adv_logging_config = rosbridge_advertise("/logging_config", "std_msgs/msg/Bool")
     adv_clock = rosbridge_advertise("/clock", "rosgraph_msgs/Clock")
 
+    # Navigation topics
+    adv_nav_status = rosbridge_advertise(
+        "/sim_navigation/status", "std_msgs/msg/String"
+    )
+    adv_nav_feedback = rosbridge_advertise(
+        "/sim_navigation/feedback", "geometry_msgs/msg/Point"
+    )
+
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
     await ws.send(json.dumps(adv_cinfo))
@@ -185,16 +246,29 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_set_directive))
     await ws.send(json.dumps(adv_logging_config))
     await ws.send(json.dumps(adv_clock))
+    await ws.send(json.dumps(adv_nav_status))
+    await ws.send(json.dumps(adv_nav_feedback))
     print(
-        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, and /logging_config"
+        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, and navigation topics"
     )
 
-    # Also subscribe to /cmd_vel, /chat_out
+    # Also subscribe to /cmd_vel, /chat_out, and navigation topics
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
     sub_chat_out = rosbridge_subscribe("/chat_out", "std_msgs/msg/String")
+    sub_nav_path = rosbridge_subscribe(
+        "/sim_navigation/global_plan", "nav_msgs/msg/Path"
+    )
+    sub_nav_cancel = rosbridge_subscribe("/sim_navigation/cancel", "std_msgs/msg/Bool")
     await ws.send(json.dumps(sub_cmd_vel))
     await ws.send(json.dumps(sub_chat_out))
-    print("[ROSBridge] Subscribed to /cmd_vel and /chat_out")
+    await ws.send(json.dumps(sub_nav_path))
+    await ws.send(json.dumps(sub_nav_cancel))
+    print("[ROSBridge] Subscribed to /cmd_vel, /chat_out, and navigation topics")
+
+    # Initialize navigation controller
+    nav_controller = NavigationController(shared_queues)
+    shared_queues.nav_controller = nav_controller  # Store reference for inbound_loop
+    print("[ROSBridge] Navigation controller initialized")
 
     # Send the logging configuration immediately after connection
     if hasattr(shared_queues, "log_everything"):
@@ -262,6 +336,20 @@ async def outbound_loop(ws, shared_queues):
 
             elif isinstance(msg, dict) and "clock" in msg:
                 outbound = rosbridge_publish("/clock", msg)
+                await ws.send(json.dumps(outbound))
+
+            elif isinstance(msg, NavigationStatusMsg):
+                status_msg = {"data": msg.status}
+                outbound = rosbridge_publish("/sim_navigation/status", status_msg)
+                await ws.send(json.dumps(outbound))
+
+            elif isinstance(msg, NavigationFeedbackMsg):
+                feedback_msg = {
+                    "x": msg.distance_to_goal,
+                    "y": msg.unused_y,
+                    "z": msg.unused_z,
+                }
+                outbound = rosbridge_publish("/sim_navigation/feedback", feedback_msg)
                 await ws.send(json.dumps(outbound))
 
         except queue.Empty:
