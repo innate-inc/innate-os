@@ -24,6 +24,7 @@ from brain_messages.action import ExecutePrimitive
 
 # Import available primitive(s) and any needed types.
 from brain_client.primitives.navigate_to_position import NavigateToPosition
+from brain_client.primitives.navigate_to_position_sim import NavigateToPositionSim
 from brain_client.primitives.send_email import SendEmail
 from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
 from brain_client.primitives.pick_up_trash import PickUpTrash
@@ -61,13 +62,16 @@ class PrimitiveExecutionActionServer(Node):
         self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
         self.image_topic = self.get_parameter("image_topic").value
 
+        self.declare_parameter("simulator_mode", False)
+        self.simulator_mode = self.get_parameter("simulator_mode").value
+
         # Subscribers for robot state
         # TODO: Make topic names configurable if needed (e.g., via parameters)
         self.main_camera_image_sub = self.create_subscription(
             CompressedImage,
             self.image_topic,
             self.main_camera_image_callback,
-            image_qos
+            image_qos,
         )
         self.odom_sub = self.create_subscription(
             Odometry, "/odom", self.odom_callback, 10
@@ -80,8 +84,16 @@ class PrimitiveExecutionActionServer(Node):
         )
 
         # Mapping from TaskType to primitive class
+        # Choose navigation primitive based on parameter
+        navigation_primitive = (
+            NavigateToPositionSim if self.simulator_mode else NavigateToPosition
+        )
+        self.get_logger().info(
+            f"Using {'simulator' if self.simulator_mode else 'Nav2'} navigation primitive"
+        )
+
         primitive_classes = {
-            TaskType.NAVIGATE_TO_POSITION: NavigateToPosition,
+            TaskType.NAVIGATE_TO_POSITION: navigation_primitive,
             TaskType.SEND_EMAIL: SendEmail,
             TaskType.SEND_PICTURE_VIA_EMAIL: SendPictureViaEmail,
             TaskType.PICK_UP_TRASH: PickUpTrash,
@@ -374,7 +386,7 @@ class PrimitiveExecutionActionServer(Node):
         try:
             np_arr = np.frombuffer(msg.data, np.uint8)
             self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            self.get_logger().debug('Received and decoded new image for primitives.')
+            self.get_logger().debug("Received and decoded new image for primitives.")
         except Exception as e:
             self.get_logger().error(
                 f"Failed to decode compressed image for primitive state: {e}"
