@@ -124,23 +124,59 @@ async def inbound_loop(ws, shared_queues):
                     print("[ROSBridge] Received empty navigation path")
                     continue
 
-                # Convert poses to waypoints
+                # Convert poses to waypoints and recalculate yaw for forward movement
                 waypoints = []
+                positions = []
+
+                # First pass: extract positions
                 for pose_stamped in poses:
                     pose = pose_stamped.get("pose", {})
                     position = pose.get("position", {})
-                    orientation = pose.get("orientation", {})
-
                     x = float(position.get("x", 0.0))
                     y = float(position.get("y", 0.0))
+                    positions.append((x, y))
 
-                    # Convert quaternion to yaw
-                    qz = float(orientation.get("z", 0.0))
-                    qw = float(orientation.get("w", 1.0))
-                    yaw = 2 * math.atan2(qz, qw)
+                # Get original final orientation from Nav2 (this is the target orientation)
+                final_pose = poses[-1].get("pose", {})
+                final_orientation = final_pose.get("orientation", {})
+                final_qz = float(final_orientation.get("z", 0.0))
+                final_qw = float(final_orientation.get("w", 1.0))
+                target_final_yaw = 2 * math.atan2(final_qz, final_qw)
+
+                print(
+                    f"[ROSBridge] Target final orientation: {math.degrees(target_final_yaw):.1f}°"
+                )
+
+                # Second pass: calculate yaw based on direction of movement
+                for i, (x, y) in enumerate(positions):
+                    if i < len(positions) - 1:
+                        # For all waypoints except the last: face towards next waypoint
+                        next_x, next_y = positions[i + 1]
+                        dx = next_x - x
+                        dy = next_y - y
+                        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+                            # Handle case where consecutive waypoints are very close
+                            if i > 0:
+                                # Use previous segment direction
+                                prev_x, prev_y = positions[i - 1]
+                                dx = x - prev_x
+                                dy = y - prev_y
+                            else:
+                                dx, dy = 1.0, 0.0  # Default to facing east
+                        yaw = math.atan2(dy, dx)  # Direction to next waypoint
+                    else:
+                        # For the final waypoint: use the original Nav2 target orientation
+                        yaw = target_final_yaw
 
                     waypoint = NavigationWaypoint(x=x, y=y, yaw=yaw)
                     waypoints.append(waypoint)
+
+                    waypoint_type = (
+                        "FINAL" if i == len(positions) - 1 else "intermediate"
+                    )
+                    print(
+                        f"Waypoint {i} ({waypoint_type}): pos=({x:.2f}, {y:.2f}), yaw={math.degrees(yaw):.1f}°"
+                    )
 
                 nav_path = NavigationPathMsg(frame_id=frame_id, waypoints=waypoints)
 
