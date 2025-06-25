@@ -15,6 +15,7 @@ from src.agent.types import (
     RobotStateMsg,
     OccupancyGridMsg,
     VelocityCmd,
+    PositionCmd,
     ResetRobotCmd,
     SetEnvironmentCmd,
 )
@@ -53,6 +54,20 @@ class SimulationNode:
         # Store commanded velocities for odometry
         self.commanded_lin_vel = np.zeros(3)  # [vx, vy, vz]
         self.commanded_ang_vel = np.zeros(3)  # [wx, wy, wz]
+
+        # Navigation control parameters
+        self.max_linear_velocity = 0.5  # m/s
+        self.max_angular_velocity = 1.0  # rad/s
+        self.position_tolerance = (
+            0.02  # m - how close to target before considering reached
+        )
+        self.angle_tolerance = (
+            0.02  # rad - how close to target angle before considering reached
+        )
+
+        # Current navigation target (None if no active target)
+        self.nav_target_pos = None
+        self.nav_target_yaw = None
 
         self.render_camera_vfov = 40
         self.render_camera_hfov = degrees(
@@ -591,6 +606,89 @@ class SimulationNode:
         ) / self.wheel_radius
         return left_vel, right_vel
 
+    def _update_navigation_movement(self, dt):
+        """Smoothly move robot towards navigation target with velocity limits."""
+        # Get current robot state
+        current_pos = self.robot.get_pos().cpu().numpy()
+        current_quat = self.robot.get_quat().cpu().numpy()  # [w, x, y, z]
+
+        # Convert current quaternion to yaw angle
+        current_yaw = 2 * np.arctan2(
+            current_quat[3], current_quat[0]
+        )  # z, w components
+
+        # Calculate position error
+        pos_error = self.nav_target_pos - current_pos
+        distance_to_target = np.linalg.norm(pos_error[:2])  # Only X,Y distance
+
+        # Calculate angle error (normalize to [-pi, pi])
+        angle_error = self.nav_target_yaw - current_yaw
+        while angle_error > np.pi:
+            angle_error -= 2 * np.pi
+        while angle_error < -np.pi:
+            angle_error += 2 * np.pi
+
+        # Check if we've reached the target
+        position_reached = distance_to_target < self.position_tolerance
+        angle_reached = abs(angle_error) < self.angle_tolerance
+
+        if position_reached and angle_reached:
+            # Target reached, clear navigation target
+            self.nav_target_pos = None
+            self.nav_target_yaw = None
+            self.commanded_lin_vel = np.zeros(3)
+            self.commanded_ang_vel = np.zeros(3)
+            return
+
+        # Calculate desired velocities
+        if distance_to_target > self.position_tolerance:
+            # Calculate direction to target (in world frame)
+            direction = pos_error[:2] / distance_to_target
+
+            # Apply velocity limit
+            desired_speed = min(self.max_linear_velocity, distance_to_target / dt)
+
+            # Calculate velocity in world frame
+            linear_velocity = direction * desired_speed
+
+            # Move robot position
+            new_pos = current_pos + np.array(
+                [linear_velocity[0] * dt, linear_velocity[1] * dt, 0]
+            )
+            self.robot.set_pos(new_pos)
+
+            # Store commanded velocities for odometry
+            self.commanded_lin_vel = np.array(
+                [linear_velocity[0], linear_velocity[1], 0]
+            )
+        else:
+            self.commanded_lin_vel = np.zeros(3)
+
+        # Handle rotation
+        if abs(angle_error) > self.angle_tolerance:
+            # Apply angular velocity limit
+            desired_angular_vel = np.sign(angle_error) * min(
+                self.max_angular_velocity, abs(angle_error) / dt
+            )
+
+            # Update orientation
+            new_yaw = current_yaw + desired_angular_vel * dt
+
+            # Convert yaw to quaternion [w, x, y, z]
+            new_quat = [
+                np.cos(new_yaw / 2.0),  # w
+                0.0,  # x
+                0.0,  # y
+                np.sin(new_yaw / 2.0),  # z
+            ]
+
+            self.robot.set_quat(new_quat)
+
+            # Store commanded angular velocity for odometry
+            self.commanded_ang_vel = np.array([0, 0, desired_angular_vel])
+        else:
+            self.commanded_ang_vel = np.zeros(3)
+
     def _apply_environment_config(self, config: Dict[str, Any]):
         """Activates and positions managed entities based on config, hides others."""
         print(
@@ -879,6 +977,7 @@ class SimulationNode:
             try:
                 # Process all messages in queue and keep track of latest commands
                 latest_velocity_cmd = None
+                latest_position_cmd = None
                 latest_reset_cmd = None
                 latest_set_env_cmd = None  # Variable to hold the latest env command
 
@@ -887,6 +986,8 @@ class SimulationNode:
                         cmd = self.shared_queues.agent_to_sim.get_nowait()
                         if isinstance(cmd, VelocityCmd):
                             latest_velocity_cmd = cmd
+                        elif isinstance(cmd, PositionCmd):
+                            latest_position_cmd = cmd
                         elif isinstance(cmd, ResetRobotCmd):
                             latest_reset_cmd = cmd
                         elif isinstance(
@@ -927,6 +1028,18 @@ class SimulationNode:
                     # Reset commanded velocities
                     self.commanded_lin_vel = np.zeros(3)
                     self.commanded_ang_vel = np.zeros(3)
+                elif latest_position_cmd is not None:
+                    # Set navigation target for smooth movement
+                    self.nav_target_pos = np.array(
+                        [
+                            latest_position_cmd.target_x,
+                            latest_position_cmd.target_y,
+                            latest_position_cmd.target_z,
+                        ]
+                    )
+                    self.nav_target_yaw = latest_position_cmd.target_yaw
+
+                    # print(f"New nav target: pos=({self.nav_target_pos[0]:.3f}, {self.nav_target_pos[1]:.3f}), yaw={self.nav_target_yaw:.3f}")
                 elif latest_velocity_cmd is not None:
                     linear_vel = latest_velocity_cmd.linear_x
                     angular_vel = latest_velocity_cmd.angular_z
@@ -978,10 +1091,14 @@ class SimulationNode:
             except Exception as e:
                 print(f"Error processing commands: {e}")
 
-            # --- (B) Update moving entities ---
+            # --- (B) Handle smooth navigation movement ---
+            if self.nav_target_pos is not None and self.nav_target_yaw is not None:
+                self._update_navigation_movement(dt)
+
+            # --- (C) Update moving entities ---
             self._update_entity_poses(sim_time)
 
-            # --- (C) Gather robot pose, velocity (after applying commands)
+            # --- (D) Gather robot pose, velocity (after applying commands)
             pos = self.robot.get_pos().cpu().numpy()
             quat = self.robot.get_quat().cpu().numpy()
 
@@ -989,7 +1106,7 @@ class SimulationNode:
             lin_vel = self.commanded_lin_vel
             ang_vel = self.commanded_ang_vel
 
-            # --- (D) Render cameras based on time interval
+            # --- (E) Render cameras based on time interval
             sim_time += dt
 
             # --- Publish Clock Message
@@ -1045,7 +1162,7 @@ class SimulationNode:
                 rgb_to_send = None
                 depth_to_send = None
 
-            # --- (D) Build and publish RobotStateMsg with latest state
+            # --- (F) Build and publish RobotStateMsg with latest state
             state_msg = RobotStateMsg(
                 # camera data
                 rgb_frame=rgb_to_send if "rgb_to_send" in locals() else None,
@@ -1077,8 +1194,10 @@ class SimulationNode:
                 wz=ang_vel[2],
             )
 
-            # Update shared robot position directly (more reliable than waiting for websocket bridge)
-            self.shared_queues.update_robot_position(pos[0], pos[1], pos[2], sim_time)
+            # Update shared robot position and orientation directly (more reliable than waiting for websocket bridge)
+            self.shared_queues.update_robot_pose(
+                pos[0], pos[1], pos[2], quat[1], quat[2], quat[3], quat[0], sim_time
+            )
 
             # Publish the unified RobotStateMsg to the bridge
             try:
@@ -1086,7 +1205,7 @@ class SimulationNode:
             except queue.Full:
                 pass
 
-            # --- (E) Publish the map when changed or periodically
+            # --- (G) Publish the map when changed or periodically
             should_publish_map = (
                 self.occupancy_grid_changed
                 or (step_count - self.last_map_publish_step)
@@ -1115,12 +1234,12 @@ class SimulationNode:
                 self.last_map_publish_step = step_count
                 self.occupancy_grid_changed = False
 
-            # --- (F) Step the physics
+            # --- (H) Step the physics
             try:
                 self.scene.step()
                 step_count += 1
 
-                # --- (G) Sleep to maintain real-time simulation
+                # --- (I) Sleep to maintain real-time simulation
                 current_time = time.time()
                 elapsed = current_time - last_step_time
                 sleep_time = dt - elapsed

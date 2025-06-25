@@ -1,6 +1,6 @@
 # intypes.py
 
-from typing import NamedTuple, Dict, Any
+from typing import NamedTuple, Dict, Any, List
 import numpy as np
 import time
 
@@ -72,6 +72,15 @@ class VelocityCmd(NamedTuple):
     angular_z: float
 
 
+class PositionCmd(NamedTuple):
+    """Agent -> Simulation: a direct position command for navigation."""
+
+    target_x: float
+    target_y: float
+    target_z: float = 0.0
+    target_yaw: float = 0.0  # Optional orientation
+
+
 class ResetRobotCmd:
     """
     A command telling the simulator to reset the robot's pose.
@@ -99,7 +108,7 @@ class BrainActiveCmd(NamedTuple):
     """
     A command to activate or deactivate the brain.
     """
-    
+
     active: bool
 
 
@@ -116,3 +125,51 @@ class SetEnvironmentCmd(NamedTuple):
 
     config: Dict[str, Any]
     timestamp: float = time.time()
+
+
+# Navigation-related message types
+class NavigationWaypoint(NamedTuple):
+    """A single waypoint in a navigation path."""
+
+    x: float
+    y: float
+    yaw: float
+
+
+class NavigationPathMsg(NamedTuple):
+    """
+    Navigation path from brain client.
+    Represents a nav_msgs/Path message.
+    """
+
+    frame_id: str
+    waypoints: List[NavigationWaypoint]  # Complete path from Nav2
+
+
+class NavigationCancelMsg(NamedTuple):
+    """
+    Navigation cancellation request from brain client.
+    Represents a Bool message.
+    """
+
+    cancel: bool
+
+
+class NavigationStatusMsg(NamedTuple):
+    """
+    Navigation status to be published to brain client.
+    Represents a String message.
+    """
+
+    status: str  # "IDLE", "ACTIVE", "SUCCEEDED", "FAILED", "CANCELED"
+
+
+class NavigationFeedbackMsg(NamedTuple):
+    """
+    Navigation feedback to be published to brain client.
+    Represents a Point message.
+    """
+
+    distance_to_goal: float  # x field
+    unused_y: float = 0.0  # y field
+    unused_z: float = 0.0  # z field
