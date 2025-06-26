@@ -37,7 +37,7 @@ http://localhost:8080/vnc.html
 Inside the container, first run the discovery service:
 
 ```bash
-discovery
+discovery-and-launch-sim
 ```
 
 VERIFY THAT THE IP ADDRESS IS CORRECT IN SETUP_DDS.ZSH

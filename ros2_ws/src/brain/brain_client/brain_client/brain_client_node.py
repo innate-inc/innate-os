@@ -131,6 +131,14 @@ class BrainClientNode(Node):
         # --- New: Brain active state flag ---
         self.is_brain_active = False  # Brain starts active
 
+        # --- New: Simulator mode parameter ---
+        self.declare_parameter("simulator_mode", False)
+        self.simulator_mode = self.get_parameter("simulator_mode").value
+
+        self.get_logger().info(
+            f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode"
+        )
+
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
@@ -1299,6 +1307,13 @@ class BrainClientNode(Node):
             self.get_logger().info(
                 f"Successfully registered {primitive_count} primitives and directive: {directive_registered}"
             )
+
+            # Auto-activate brain in simulator mode
+            if self.simulator_mode and not self.is_brain_active:
+                self.get_logger().info(
+                    "\033[1;92m[BrainClient] Auto-activating brain in simulator mode\033[0m"
+                )
+                self.is_brain_active = True
 
             # Start the pose image timer if we've already received a ready_for_image message
             if self.ready_for_image and not self.pose_image_started:
