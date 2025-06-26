@@ -6,9 +6,9 @@ from std_msgs.msg import Int32
 from std_srvs.srv import SetBool  # Import service message type
 from maurice_head.servo_controller import ServoController
 
-class ServoNode(Node):
+class HeadServoNode(Node):
     def __init__(self):
-        super().__init__('servo_node')
+        super().__init__('head_servo_node')
         self.declare_parameter('servo_id', 5)
         self.servo_id = self.get_parameter('servo_id').value
         self.servo_controller = ServoController(port="/dev/ttyACM0")
@@ -16,7 +16,7 @@ class ServoNode(Node):
         # Subscription for position control
         self.subscription = self.create_subscription(
             Int32,
-            'servo_position',
+            'head/set_position',
             self.position_callback,
             10
         )
@@ -24,7 +24,7 @@ class ServoNode(Node):
         # Service for enabling/disabling servo
         self.srv = self.create_service(
             SetBool,
-            'enable_servo',
+            'head/enable_servo',
             self.enable_servo_callback
         )
 
@@ -56,7 +56,7 @@ class ServoNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ServoNode()
+    node = HeadServoNode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

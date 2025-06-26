@@ -6,7 +6,7 @@ def generate_launch_description():
         Node(
             package='maurice_head',  # Replace with your package name
             executable='servo_node.py',
-            name='servo_node',
+            name='head_servo_node',
             output='screen'
         )
     ])

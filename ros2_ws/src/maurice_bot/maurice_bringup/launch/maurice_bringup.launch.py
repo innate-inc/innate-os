@@ -7,6 +7,7 @@ import os
 def generate_launch_description():
     # Get the package share directory
     pkg_dir = get_package_share_directory('maurice_bringup')
+    head_pkg_dir = get_package_share_directory('maurice_head')
     
     # Include the bringup_core launch file
     bringup_core_launch = IncludeLaunchDescription(
@@ -26,9 +27,15 @@ def generate_launch_description():
             os.path.join(pkg_dir, 'launch', 'camera.launch.py')
         )
     )
+    head_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(head_pkg_dir, 'launch', 'head.launch.py')
+        )
+    )
     
     return LaunchDescription([
         bringup_core_launch,
         lidar_launch,
         camera_launch,
+        head_launch
     ])
