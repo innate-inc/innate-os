@@ -4,7 +4,6 @@ project(maurice_nav)
 # Find the ament_cmake package and any dependencies you need
 find_package(ament_cmake REQUIRED)
 find_package(rclpy REQUIRED)  # for Python nodes
-# If you have any C++ nodes, you can also find rclcpp here
 
 # Optionally, build any C++ executables here if needed
 # For example:
@@ -33,6 +32,7 @@ install(
 # Install Python scripts/programs
 install(PROGRAMS
   maurice_nav/__init__.py
+  maurice_nav/mode_manager.py
   # Add more scripts as needed
   DESTINATION lib/${PROJECT_NAME}
 )
