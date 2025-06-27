@@ -9,7 +9,7 @@ import json
 
 DEFAULT_ANGLE = 0  # Logical angle (will be offset to 220 on servo)
 SERVO_OFFSET = 220  # Offset to apply to logical angles
-MIN_ANGLE = -30
+MIN_ANGLE = -40
 MAX_ANGLE = 70
 
 class HeadServoNode(Node):

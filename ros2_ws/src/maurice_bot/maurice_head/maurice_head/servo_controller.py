@@ -93,8 +93,8 @@ class ServoController:
         try:
             self.open_connection()
             self.ser.write(message)
-            response = self.read_fixed_response()
-            print(f"Position Response: {response}")
+            # response = self.read_fixed_response()
+            # print(f"Position Response: {response}")
         finally:
             self.close_connection()
 
