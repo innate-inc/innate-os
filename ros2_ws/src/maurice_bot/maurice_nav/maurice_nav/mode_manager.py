@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from nav2_msgs.srv import LoadMap
-from brain_messages.srv import ChangeMap
+from brain_messages.srv import ChangeMap, ChangeNavigationMode
 import subprocess
 import signal
 import os
@@ -17,12 +17,11 @@ class ModeManager(Node):
     def __init__(self):
         super().__init__('mode_manager')
         
-        # Subscriber to switch modes
-        self.mode_subscriber = self.create_subscription(
-            String,
+        # Service to switch modes
+        self.mode_service = self.create_service(
+            ChangeNavigationMode,
             '/nav/change_mode',
-            self.change_mode_callback,
-            10
+            self.change_mode_callback
         )
         
         # Service to change maps in navigation mode
@@ -64,7 +63,7 @@ class ModeManager(Node):
         self.available_maps = self.discover_maps()
         
         self.get_logger().info('Mode Manager started with map management capabilities.')
-        self.get_logger().info('- Publish to /nav/change_mode topic to switch modes ("navigation" or "mapping")')
+        self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
         self.get_logger().info('- Call /nav/change_navigation_map service to change map for navigation mode')
         self.get_logger().info(f'- Current mode: {self.current_mode}')
         self.get_logger().info(f'- Available maps: {self.available_maps}')
@@ -125,10 +124,11 @@ class ModeManager(Node):
         
         if self.current_mode in ["navigation", "mapping"]:
             self.get_logger().info(f"Auto-starting in {self.current_mode} mode...")
-            # Simulate a mode change message
-            msg = String()
-            msg.data = self.current_mode
-            self.change_mode_callback(msg)
+            # Simulate a service request
+            request = ChangeNavigationMode.Request()
+            request.mode = self.current_mode
+            response = ChangeNavigationMode.Response()
+            self.change_mode_callback(request, response)
 
     def publish_status(self):
         """Publish current mode, available maps, and current map"""
@@ -251,24 +251,28 @@ class ModeManager(Node):
             finally:
                 self.current_process = None
 
-    def change_mode_callback(self, msg):
+    def change_mode_callback(self, request, response):
         """
-        Topic callback to switch between modes
-        msg.data = "navigation": Switch to navigation mode
-        msg.data = "mapping": Switch to mapping mode
+        Service callback to switch between modes
+        request.mode = "navigation": Switch to navigation mode
+        request.mode = "mapping": Switch to mapping mode
         """
         try:
-            target_mode = msg.data.strip().lower()
+            target_mode = request.mode.strip().lower()
             
             # Validate mode
             if target_mode not in ["navigation", "mapping"]:
-                self.get_logger().error(f"Invalid mode '{target_mode}'. Use 'navigation' or 'mapping'")
-                return
+                response.success = False
+                response.message = f"Invalid mode '{target_mode}'. Use 'navigation' or 'mapping'"
+                self.get_logger().error(response.message)
+                return response
             
             # Don't restart if already in the requested mode
             if self.current_mode == target_mode and self.current_process and self.current_process.poll() is None:
-                self.get_logger().info(f"Already in {target_mode} mode")
-                return
+                response.success = True
+                response.message = f"Already in {target_mode} mode"
+                self.get_logger().info(response.message)
+                return response
 
             # Kill current process if running
             if self.current_process:
@@ -319,19 +323,26 @@ class ModeManager(Node):
             
             # Check if process is still running
             if self.current_process.poll() is None:
-                success_msg = f"Successfully switched to {target_mode} mode"
+                response.success = True
+                response.message = f"Successfully switched to {target_mode} mode"
                 if target_mode == "navigation":
-                    success_msg += f" with map '{self.current_map}'"
-                self.get_logger().info(success_msg)
+                    response.message += f" with map '{self.current_map}'"
+                self.get_logger().info(response.message)
             else:
-                self.get_logger().error(f"Failed to start {target_mode} mode - process exited")
+                response.success = False
+                response.message = f"Failed to start {target_mode} mode - process exited"
+                self.get_logger().error(response.message)
                 self.current_mode = "none"
                 self.current_process = None
 
         except Exception as e:
-            self.get_logger().error(f"Error switching modes: {str(e)}")
+            response.success = False
+            response.message = f"Error switching modes: {str(e)}"
+            self.get_logger().error(response.message)
             self.current_mode = "none"
             self.current_process = None
+
+        return response
 
     def __del__(self):
         """Cleanup when node is destroyed"""
