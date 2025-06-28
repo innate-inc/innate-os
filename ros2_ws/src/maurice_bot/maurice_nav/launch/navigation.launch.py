@@ -23,7 +23,7 @@ def generate_launch_description():
     smoother_params_file = os.path.join(share_dir, 'config', 'velocity_smoother.yaml')
 
     # Use the map file located at ~/maurice-prod/maps/map.yaml
-    default_map_path = os.path.expanduser('~/maurice-prod/maps/bedroom.yaml')
+    default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
     
     # Declare launch arguments so that these paths can be overridden if needed
     map_arg = DeclareLaunchArgument(
