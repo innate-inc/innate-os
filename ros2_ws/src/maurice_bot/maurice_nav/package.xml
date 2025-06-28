@@ -12,8 +12,8 @@
   <!-- Execution dependencies -->
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
-  <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>nav2_simple_commander</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>brain_messages</exec_depend>
 
   <!-- Lint and testing dependencies -->

@@ -23,6 +23,7 @@ set(srv_files
   "srv/GetAvailableBehaviors.srv"
   "srv/ChangeMap.srv"
   "srv/ChangeNavigationMode.srv"
+  "srv/SaveMap.srv"
 )
 
 set(msg_files
