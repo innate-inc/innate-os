@@ -3,8 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from nav2_msgs.srv import LoadMap
-from brain_messages.srv import ChangeMap, ChangeNavigationMode
+from brain_messages.srv import ChangeMap, ChangeNavigationMode, SaveMap
 import subprocess
 import signal
 import os
@@ -31,6 +30,13 @@ class ModeManager(Node):
             self.change_map_callback
         )
         
+        # Service to save current map in mapping mode
+        self.save_map_service = self.create_service(
+            SaveMap,
+            '/nav/save_map',
+            self.save_map_callback
+        )
+        
         # Publisher to announce current mode
         self.mode_publisher = self.create_publisher(String, '/nav/current_mode', 10)
         
@@ -42,7 +48,6 @@ class ModeManager(Node):
         
         # Track current processes
         self.current_process = None
-        self.current_map = "home.yaml"  # Default map
         
         # Maps directory
         self.maps_dir = os.path.expanduser('~/maurice-prod/maps')
@@ -50,22 +55,30 @@ class ModeManager(Node):
         # Mode persistence file
         self.mode_file = os.path.expanduser('~/maurice-prod/.last_mode')
         
-        # Load last mode or default to navigation
-        self.current_mode = self.load_last_mode()
+        # Map persistence file  
+        self.map_file = os.path.expanduser('~/maurice-prod/.last_map')
         
         # BasicNavigator for map operations
         self.navigator = None
         
+        # Discover available maps first (needed for loading last map)
+        self.available_maps = self.discover_maps()
+        
+        # Load last mode or default to navigation
+        self.current_mode = self.load_last_mode()
+        
+        # Load last map or default to home.yaml (must be after discovering maps)
+        self.current_map = self.load_last_map()
+        
         # Timer to publish current mode and maps
         self.timer = self.create_timer(1.0, self.publish_status)
         
-        # Discover available maps
-        self.available_maps = self.discover_maps()
-        
         self.get_logger().info('Mode Manager started with map management capabilities.')
         self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
-        self.get_logger().info('- Call /nav/change_navigation_map service to change map for navigation mode')
-        self.get_logger().info(f'- Current mode: {self.current_mode}')
+        self.get_logger().info('- Call /nav/change_navigation_map service to change map (restarts navigation if running)')
+        self.get_logger().info('- Call /nav/save_map service to save current map with new name (mapping mode only, set overwrite=true to replace existing maps)')
+        self.get_logger().info(f'- Current mode: {self.current_mode} (loaded from persistence)')
+        self.get_logger().info(f'- Current map: {self.current_map} (loaded from persistence)')
         self.get_logger().info(f'- Available maps: {self.available_maps}')
         
         # Auto-start in the saved mode after a short delay
@@ -107,6 +120,37 @@ class ModeManager(Node):
             self.get_logger().error(f"Error loading last mode: {e}, defaulting to navigation")
             return "navigation"
 
+    def load_last_map(self):
+        """Load the last used map from file, default to home.yaml"""
+        try:
+            if os.path.exists(self.map_file):
+                with open(self.map_file, 'r') as f:
+                    saved_map = f.read().strip()
+                    # Validate that the saved map exists
+                    if saved_map and saved_map in self.available_maps:
+                        self.get_logger().info(f"Loaded last map: {saved_map}")
+                        return saved_map
+                    else:
+                        self.get_logger().warning(f"Saved map '{saved_map}' not found, defaulting to home.yaml")
+            
+            # Default to home.yaml
+            default_map = "home.yaml"
+            if default_map in self.available_maps:
+                self.get_logger().info(f"No saved map found, defaulting to {default_map}")
+                return default_map
+            elif self.available_maps:
+                # If home.yaml doesn't exist, use the first available map
+                first_map = self.available_maps[0]
+                self.get_logger().info(f"Default map '{default_map}' not found, using first available: {first_map}")
+                return first_map
+            else:
+                # No maps available, fallback to home.yaml anyway
+                self.get_logger().warning("No maps available, using home.yaml as fallback")
+                return "home.yaml"
+        except Exception as e:
+            self.get_logger().error(f"Error loading last map: {e}, defaulting to home.yaml")
+            return "home.yaml"
+
     def save_last_mode(self, mode):
         """Save the current mode to file for persistence"""
         try:
@@ -117,6 +161,17 @@ class ModeManager(Node):
             self.get_logger().debug(f"Saved mode: {mode}")
         except Exception as e:
             self.get_logger().error(f"Error saving mode: {e}")
+
+    def save_last_map(self, map_name):
+        """Save the current map to file for persistence"""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.map_file), exist_ok=True)
+            with open(self.map_file, 'w') as f:
+                f.write(map_name)
+            self.get_logger().debug(f"Saved map: {map_name}")
+        except Exception as e:
+            self.get_logger().error(f"Error saving map: {e}")
 
     def auto_start_mode(self):
         """Auto-start the mode manager in the last saved mode"""
@@ -162,20 +217,52 @@ class ModeManager(Node):
                 self.get_logger().error(response.message)
                 return response
             
-            # If we're in navigation mode, we need to reload the map
-            if self.current_mode == "navigation":
-                if self.load_map_in_navigation(requested_map):
-                    self.current_map = requested_map
+            # Update the current map
+            old_map = self.current_map
+            self.current_map = requested_map
+            
+            # Save the new map choice for persistence
+            self.save_last_map(requested_map)
+            
+            # If we're in navigation mode, restart navigation with the new map
+            if self.current_mode == "navigation" and self.current_process and self.current_process.poll() is None:
+                self.get_logger().info(f"Restarting navigation with new map: {requested_map}")
+                
+                # Kill current navigation process
+                self.kill_current_process()
+                time.sleep(2)  # Give some time for cleanup
+                
+                # Start navigation with the new map
+                map_path = os.path.join(self.maps_dir, self.current_map)
+                launch_cmd = [
+                    'ros2', 'launch', 'maurice_nav', 'navigation.launch.py',
+                    f'map:={map_path}'
+                ]
+                
+                self.get_logger().info(f"Launching navigation with map: {self.current_map}")
+                
+                # Start the new process
+                self.current_process = subprocess.Popen(
+                    launch_cmd,
+                    preexec_fn=os.setsid,  # Create new process group for easier cleanup
+                )
+                
+                # Give it a moment to start
+                time.sleep(3)
+                
+                # Check if process is still running
+                if self.current_process.poll() is None:
                     response.success = True
-                    response.message = f"Successfully changed map to '{requested_map}' in navigation mode"
+                    response.message = f"Successfully changed map to '{requested_map}' and restarted navigation"
                     self.get_logger().info(response.message)
                 else:
                     response.success = False
-                    response.message = f"Failed to load map '{requested_map}' in navigation mode"
+                    response.message = f"Failed to restart navigation with map '{requested_map}'"
                     self.get_logger().error(response.message)
+                    self.current_mode = "none"
+                    self.current_process = None
             else:
                 # If not in navigation mode, just update the map for next time navigation starts
-                self.current_map = requested_map
                 response.success = True
                 response.message = f"Map set to '{requested_map}' for next navigation session"
                 self.get_logger().info(response.message)
@@ -187,70 +274,109 @@ class ModeManager(Node):
             
         return response
 
-    def load_map_in_navigation(self, map_filename):
+    def save_map_callback(self, request, response):
         """
-        Load a new map in the currently running navigation mode using Nav2's LoadMap service
+        Service callback to save the current map with a new name
+        Only works when in mapping mode
+        request.map_name should contain the new map name (e.g., "my_new_map")
+        request.overwrite: if true, allows overwriting existing maps
         """
         try:
-            # Create a client to the map server's load_map service
-            load_map_client = self.create_client(LoadMap, '/map_server/load_map')
+            map_name = request.map_name.strip()
             
-            if not load_map_client.wait_for_service(timeout_sec=5.0):
-                self.get_logger().error("LoadMap service not available")
-                return False
+            # Validate we're in mapping mode
+            if self.current_mode != "mapping":
+                response.success = False
+                response.message = f"Cannot save map - not in mapping mode. Current mode: {self.current_mode}"
+                self.get_logger().error(response.message)
+                return response
             
-            # Prepare the request
-            request = LoadMap.Request()
-            request.map_url = os.path.join(self.maps_dir, map_filename)
+            # Validate map name
+            if not map_name or not map_name.replace('_', '').replace('-', '').isalnum():
+                response.success = False
+                response.message = f"Invalid map name '{map_name}'. Use alphanumeric characters, underscores, and hyphens only."
+                self.get_logger().error(response.message)
+                return response
             
-            self.get_logger().info(f"Loading map from: {request.map_url}")
-            
-            # Call the service with a longer timeout
-            future = load_map_client.call_async(request)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-            
-            # Check if the future completed (even if it timed out, the map might still load)
-            if future.done():
-                result = future.result()
-                if result is not None:
-                    # Check the result code if it exists
-                    if hasattr(result, 'result') and result.result == LoadMap.Response.RESULT_SUCCESS:
-                        self.get_logger().info(f"LoadMap service returned success for: {map_filename}")
-                    elif hasattr(result, 'result'):
-                        self.get_logger().warning(f"LoadMap service returned: {result.result}, but will proceed anyway")
-                    else:
-                        self.get_logger().warning("LoadMap service completed but no result field, proceeding anyway")
+            # Check if map already exists
+            map_yaml_name = f"{map_name}.yaml"
+            is_overwriting = map_yaml_name in self.available_maps
+            if is_overwriting:
+                if not request.overwrite:
+                    response.success = False
+                    response.message = f"Map '{map_yaml_name}' already exists. Set overwrite=true to replace it, or choose a different name."
+                    self.get_logger().error(response.message)
+                    return response
                 else:
-                    self.get_logger().warning("LoadMap service returned None, but proceeding anyway")
-            else:
-                self.get_logger().warning("LoadMap service call timed out, but map might still be loading")
+                    self.get_logger().info(f"Overwriting existing map: {map_yaml_name}")
+                    # Remove old files before saving new ones
+                    try:
+                        old_yaml = os.path.join(self.maps_dir, map_yaml_name)
+                        old_pgm = os.path.join(self.maps_dir, f"{map_name}.pgm")
+                        if os.path.exists(old_yaml):
+                            os.remove(old_yaml)
+                        if os.path.exists(old_pgm):
+                            os.remove(old_pgm)
+                        self.get_logger().info(f"Removed old map files for: {map_name}")
+                    except Exception as e:
+                        self.get_logger().warning(f"Could not remove old map files: {e}")
             
-            # Initialize BasicNavigator if not already done
-            if self.navigator is None:
-                self.navigator = BasicNavigator()
+            # Ensure maps directory exists
+            os.makedirs(self.maps_dir, exist_ok=True)
             
-            # Clear costmaps to ensure the new map is properly loaded
-            try:
-                self.navigator.clearAllCostmaps()
-                self.get_logger().info("Cleared costmaps after map load")
-            except Exception as e:
-                self.get_logger().warning(f"Could not clear costmaps: {e}")
+            # Create full path for the map (without extension)
+            map_path = os.path.join(self.maps_dir, map_name)
             
-            # Assume success since the service often works even when it reports issues
-            self.get_logger().info(f"Map loading process completed for: {map_filename}")
-            return True
+            self.get_logger().info(f"Saving current map as: {map_name}")
+            
+            # Use nav2_map_server map_saver_cli to save the map
+            save_cmd = [
+                'ros2', 'run', 'nav2_map_server', 'map_saver_cli',
+                '-f', map_path,
+                '--ros-args', '-p', 'save_map_timeout:=5000.0'
+            ]
+            
+            # Run the map saver command
+            result = subprocess.run(
+                save_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30  # 30 second timeout
+            )
+            
+            if result.returncode == 0:
+                # Check if the files were actually created
+                yaml_file = f"{map_path}.yaml"
+                pgm_file = f"{map_path}.pgm"
                 
+                if os.path.exists(yaml_file) and os.path.exists(pgm_file):
+                    response.success = True
+                    action_word = "overwritten" if is_overwriting else "saved"
+                    response.message = f"Successfully {action_word} map as '{map_name}.yaml'"
+                    self.get_logger().info(response.message)
+                    
+                    # Refresh available maps list
+                    self.available_maps = self.discover_maps()
+                    self.get_logger().info(f"Updated available maps: {self.available_maps}")
+                else:
+                    response.success = False
+                    response.message = f"Map saver completed but files not found at {map_path}"
+                    self.get_logger().error(response.message)
+            else:
+                response.success = False
+                response.message = f"Map saver failed with return code {result.returncode}: {result.stderr}"
+                self.get_logger().error(response.message)
+                
+        except subprocess.TimeoutExpired:
+            response.success = False
+            response.message = "Map saving timed out after 30 seconds"
+            self.get_logger().error(response.message)
         except Exception as e:
-            self.get_logger().error(f"Exception during map loading: {e}")
-            # Even with exceptions, the map might have loaded, so let's still try to clear costmaps
-            try:
-                if self.navigator is None:
-                    self.navigator = BasicNavigator()
-                self.navigator.clearAllCostmaps()
-                time.sleep(1)
-            except:
-                pass
-            return True  # Return True since the map often loads despite exceptions
+            response.success = False
+            response.message = f"Error saving map: {str(e)}"
+            self.get_logger().error(response.message)
+            
+        return response
 
     def kill_current_process(self):
         """Safely kill the current launch process"""
