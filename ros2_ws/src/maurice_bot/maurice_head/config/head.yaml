@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    # Serial port configuration
+    port: "/dev/ttyUSB0"
+    
+    # Motor ID
+    motor_id: 1
