@@ -3,12 +3,18 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetLaunchConfiguration
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetLaunchConfiguration, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch_ros.actions import Node
 
 def generate_launch_description():
     maurice_sim_directory = get_package_share_directory('maurice_sim')
+
+    # Set LD_LIBRARY_PATH environment variable
+    set_env_var = SetEnvironmentVariable(
+        'LD_LIBRARY_PATH', 
+        '/usr/local/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+    )
 
     # Launch arguments
     world_arg = DeclareLaunchArgument(
@@ -67,6 +73,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        set_env_var,
         world_arg,
         stamped_arg,
         world_file_configuration_func,
