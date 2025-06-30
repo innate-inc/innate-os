@@ -1,40 +1,67 @@
 # worlds/maurice.world
 
 # Defines a simple floorplan with no obstacles.
-floorplan my_floor
+define floorplan model
 (
-  bitmap "~/maurice-prod/maps/bedroom.pgm" 0.05 # each pixel = 5cm
+  # most commonly used properties
+  gui_nose 0
+  gui_grid 0
+  gui_move 0
+  gui_outline 0
+  gripper_return 0
+  fiducial_return 0
+  laser_return 1
 )
 
-# Defines the Maurice robot model.
-robot
+floorplan
 (
-  name "maurice"        # Used for namespacing in ROS topics
+  name "my_floor"
+  bitmap "/home/vignesh/maurice-prod/maps/bedroom.pgm"
+  size [10.0 10.0 0.5]
+  pose [0 0 0 0]
+)
+
+# Define laser scanner model
+define laser ranger
+(
+  sensor
+  (
+    range [0.15 12.0]
+    fov 360.0
+    samples 360
+  )
+  # generic model properties
+  color "black"
+  size [0.05 0.05 0.1]
+)
+
+# Define robot model
+define maurice_robot position
+(
+  # Robot physical properties
+  size [0.45 0.20 0.2]
+  
   # More precise footprint matching costmap.yaml
-  boundary [
-    [0.25, 0.10]   # front-right
-    [0.25, -0.10]  # front-left  
-    [-0.20, -0.10] # back-left
-    [-0.20, 0.10]  # back-right
-  ]
-  size [0.0 0.0 0.2]    # length and width now defined by boundary, keep height
+  polygons 1
+  polygon[0].points 4
+  polygon[0].point[0] [0.25 0.10]   # front-right
+  polygon[0].point[1] [0.25 -0.10]  # front-left  
+  polygon[0].point[2] [-0.20 -0.10] # back-left
+  polygon[0].point[3] [-0.20 0.10]  # back-right
+  
   color "blue"
+  
+  # Differential drive
+  drive "diff"
+  
+  # Add laser scanner to robot with correct offset from lidar.launch.py
+  laser(pose [-0.0764 0 0.17165 0])
+)
 
-  # Differential drive kinematics
-  diff_drive
-  (
-    wheel_sep     0.189   # meters between wheels
-    wheel_radius  0.069  # meters
-    cmd_vel_topic "/cmd_vel"
-    odom_topic    "/odom"
-  )
-
-  # Laser scanner
-  laser
-  (
-    samples    360
-    fov        360.0   # degrees
-    range      [0.15 12.0] # min/max meters
-    topic      "/scan"
-  )
+# Create the robot instance
+maurice_robot
+(
+  name "maurice"
+  pose [2 3 0 0]
+  color "blue"
 )
