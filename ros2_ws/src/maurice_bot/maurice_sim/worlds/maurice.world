@@ -1,0 +1,40 @@
+# worlds/maurice.world
+
+# Defines a simple floorplan with no obstacles.
+floorplan my_floor
+(
+  bitmap "~/maurice-prod/maps/bedroom.pgm" 0.05 # each pixel = 5cm
+)
+
+# Defines the Maurice robot model.
+robot
+(
+  name "maurice"        # Used for namespacing in ROS topics
+  # More precise footprint matching costmap.yaml
+  boundary [
+    [0.25, 0.10]   # front-right
+    [0.25, -0.10]  # front-left  
+    [-0.20, -0.10] # back-left
+    [-0.20, 0.10]  # back-right
+  ]
+  size [0.0 0.0 0.2]    # length and width now defined by boundary, keep height
+  color "blue"
+
+  # Differential drive kinematics
+  diff_drive
+  (
+    wheel_sep     0.189   # meters between wheels
+    wheel_radius  0.069  # meters
+    cmd_vel_topic "/cmd_vel"
+    odom_topic    "/odom"
+  )
+
+  # Laser scanner
+  laser
+  (
+    samples    360
+    fov        360.0   # degrees
+    range      [0.15 12.0] # min/max meters
+    topic      "/scan"
+  )
+)
