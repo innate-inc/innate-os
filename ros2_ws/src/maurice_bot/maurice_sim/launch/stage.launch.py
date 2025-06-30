@@ -46,12 +46,12 @@ def generate_launch_description():
         ]
     )
 
-    # Static transform publisher from base_footprint to base_link
+    # Static transform publisher from base_link to base_footprint
     static_tf_base = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='base_footprint_to_base_link',
-        arguments=['0', '0', '0', '0', '0', '0', 'base_footprint', 'base_link']
+        name='base_link_to_base_footprint',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
     )
 
     # Static transform publisher from base_link to base_laser (lidar)
