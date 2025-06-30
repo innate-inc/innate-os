@@ -1,0 +1,67 @@
+# worlds/maurice.world
+
+# Defines a simple floorplan with no obstacles.
+define floorplan model
+(
+  # most commonly used properties
+  gui_nose 0
+  gui_grid 0
+  gui_move 0
+  gui_outline 0
+  gripper_return 0
+  fiducial_return 0
+  laser_return 1
+)
+
+floorplan
+(
+  name "my_floor"
+  bitmap "/home/vignesh/maurice-prod/maps/home.pgm"
+  size [17.3 16.5 0.5]
+  pose [0 0 0 0]
+)
+
+# Define laser scanner model
+define laser ranger
+(
+  sensor
+  (
+    range [0.15 12.0]
+    fov 360.0
+    samples 360
+  )
+  # generic model properties
+  color "black"
+  size [0.05 0.05 0.1]
+)
+
+# Define robot model
+define maurice_robot position
+(
+  # Robot physical properties
+  size [0.45 0.20 0.2]
+  
+  # More precise footprint matching costmap.yaml
+  polygons 1
+  polygon[0].points 4
+  polygon[0].point[0] [0.25 0.10]   # front-right
+  polygon[0].point[1] [0.25 -0.10]  # front-left  
+  polygon[0].point[2] [-0.20 -0.10] # back-left
+  polygon[0].point[3] [-0.20 0.10]  # back-right
+  
+  color "blue"
+  
+  # Differential drive
+  drive "diff"
+  
+  # Add laser scanner to robot with correct offset from lidar.launch.py
+  laser(pose [-0.0764 0 0.17165 0])
+)
+
+# Create the robot instance
+maurice_robot
+(
+  name "maurice"
+  pose [0.5 -3.5 0 0]
+  color "blue"
+)

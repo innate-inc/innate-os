@@ -39,6 +39,12 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+# Install worlds files
+install(
+  DIRECTORY worlds
+  DESTINATION share/${PROJECT_NAME}
+)
+
 # Install mjcf files
 install(
   DIRECTORY mjcf

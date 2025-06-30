@@ -86,21 +86,10 @@ class JoystickController(Node):
         self.slow_mode_button = self.joystick_control['slow_mode_button']
         self.slow_mode_factor = self.joystick_control['slow_mode_factor']
         
-        # Add light control state
-        self.light_mode = 0  # 0: solid all, 1: blink all, 2: blink ring
+        # Add publishing control state
+        self.publishing_enabled = True
         self.button_4_previous = False
-        self.light_mode_button = self.joystick_control['light_mode_button']
-        self.blink_interval_ms = self.joystick_control['light_control']['blink_interval_ms']
-        
-        # Create light command service client
-        self.light_client = self.create_client(LightCommand, '/light_command')
-        # while not self.light_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().info('Light command service not available, waiting...')
-        
-        # Add debug mode
-        self.debug = debug
-        if self.debug:
-            self._setup_debug_plotting()
+        self.publish_toggle_button = self.joystick_control['light_mode_button']  # Reuse the same button parameter
         
         # Add debug mode
         self.debug = debug
@@ -117,36 +106,6 @@ class JoystickController(Node):
         else:
             self.get_logger().warn('No joystick found!')
     
-    
-    
-    def send_light_command(self):
-    # Generate random RGB values
-        r = random.randint(0, 255)
-        g = random.randint(0, 255)
-        b = random.randint(0, 255)
-        
-        request = LightCommand.Request()
-        request.r = r
-        request.g = g
-        request.b = b
-        
-        # Map current light mode to the service request
-        if self.light_mode == 0:
-            request.mode = LightCommand.Request.OFF
-            request.interval = 0
-        elif self.light_mode == 1:
-            request.mode = LightCommand.Request.SOLID
-            request.interval = 0
-        elif self.light_mode == 2:
-            request.mode = LightCommand.Request.BLINK
-            request.interval = self.blink_interval_ms
-        elif self.light_mode == 3:
-            request.mode = LightCommand.Request.RING
-            request.interval = self.blink_interval_ms
-        
-        self.light_client.call_async(request)
-        self.get_logger().info(f'Sent light command: mode={self.light_mode}, RGB=({r},{g},{b})')
-    
     def timer_callback(self):
         if self.joystick is None:
             return
@@ -160,12 +119,12 @@ class JoystickController(Node):
             self.get_logger().info('Slow mode: {}'.format(self.slow_mode))
         self.button_slow_previous = button_slow
         
-        # Check button 4 state for light mode
-        button_light = self.joystick.get_button(self.light_mode_button)
-        if button_light and not self.button_light_previous:
-            self.light_mode = (self.light_mode + 1) % 4
-            self.send_light_command()
-        self.button_light_previous = button_light
+        # Check button 4 state for publishing toggle
+        button_4 = self.joystick.get_button(self.publish_toggle_button)
+        if button_4 and not self.button_4_previous:
+            self.publishing_enabled = not self.publishing_enabled
+            self.get_logger().info(f'Publishing {"enabled" if self.publishing_enabled else "disabled"}')
+        self.button_4_previous = button_4
         
         # Read joystick values
         forward = -self.joystick.get_axis(self.joystick_control['speed_axis'])
@@ -193,11 +152,12 @@ class JoystickController(Node):
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
         
-        # Create and publish Twist message
-        msg = Twist()
-        msg.linear.x = linear_speed
-        msg.angular.z = angular_speed
-        self.twist_pub.publish(msg)
+        # Create and publish Twist message only if publishing is enabled
+        if self.publishing_enabled:
+            msg = Twist()
+            msg.linear.x = linear_speed
+            msg.angular.z = angular_speed
+            self.twist_pub.publish(msg)
 
     def _load_parameters(self):
         """Declare and load all parameters from the config file."""
@@ -279,6 +239,35 @@ class JoystickController(Node):
         
         plt.tight_layout()
         plt.show()
+
+    def send_light_command(self):
+        """Send light command - kept for future use"""
+        # Generate random RGB values
+        r = random.randint(0, 255)
+        g = random.randint(0, 255)
+        b = random.randint(0, 255)
+        
+        request = LightCommand.Request()
+        request.r = r
+        request.g = g
+        request.b = b
+        
+        # Map current light mode to the service request
+        if self.light_mode == 0:
+            request.mode = LightCommand.Request.OFF
+            request.interval = 0
+        elif self.light_mode == 1:
+            request.mode = LightCommand.Request.SOLID
+            request.interval = 0
+        elif self.light_mode == 2:
+            request.mode = LightCommand.Request.BLINK
+            request.interval = self.blink_interval_ms
+        elif self.light_mode == 3:
+            request.mode = LightCommand.Request.RING
+            request.interval = self.blink_interval_ms
+        
+        self.light_client.call_async(request)
+        self.get_logger().info(f'Sent light command: mode={self.light_mode}, RGB=({r},{g},{b})')
 
 def main(args=None):
     rclpy.init(args=args)
