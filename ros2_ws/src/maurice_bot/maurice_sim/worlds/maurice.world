@@ -16,8 +16,8 @@ define floorplan model
 floorplan
 (
   name "my_floor"
-  bitmap "/home/vignesh/maurice-prod/maps/home2.pgm"
-  size [10.0 10.0 0.5]
+  bitmap "/home/vignesh/maurice-prod/maps/home.pgm"
+  size [17.3 16.5 0.5]
   pose [0 0 0 0]
 )
 
@@ -62,6 +62,6 @@ define maurice_robot position
 maurice_robot
 (
   name "maurice"
-  pose [2 3 0 0]
+  pose [0.5 -3.5 0 0]
   color "blue"
 )
