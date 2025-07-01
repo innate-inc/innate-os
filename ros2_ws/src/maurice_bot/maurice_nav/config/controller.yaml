@@ -1,10 +1,10 @@
 controller_server:
   ros__parameters:
-    use_sim_time: false
-    controller_frequency: 5.0
-    min_x_velocity_threshold: 0.02
-    min_y_velocity_threshold: 0.0         # Differential drive: no lateral motion
-    min_theta_velocity_threshold: 0.05
+    use_sim_time: True
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5         # Differential drive: no lateral motion
+    min_theta_velocity_threshold: 0.001
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -20,9 +20,21 @@ controller_server:
 
     # DWB controller parameters for the "FollowPath" plugin
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+
+      # rotation-shim parameters
+      angular_dist_threshold: 1.57
+      forward_sampling_distance: 0.2
+      angular_disengage_threshold: 0.785
+      rotate_to_heading_angular_vel: 0.6
+      max_angular_accel: 0.5
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: True
+
+      # Primary controller (DWB) parameters
       debug_trajectory_details: True
-      min_vel_x: -0.0                   # Allow reverse up to -0.2 m/s
+      min_vel_x:  0.0                # Allow reverse up to -0.2 m/s
       min_vel_y: 0.0
       max_vel_x: 0.5                     # Maximum forward speed 0.4 m/s
       max_vel_y: 0.0
