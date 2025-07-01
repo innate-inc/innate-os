@@ -34,7 +34,7 @@ controller_server:
 
       # Primary controller (DWB) parameters
       debug_trajectory_details: True
-      min_vel_x:  0.0                # Allow reverse up to -0.2 m/s
+      min_vel_x:  -0.2               # Allow reverse up to -0.2 m/s
       min_vel_y: 0.0
       max_vel_x: 0.5                     # Maximum forward speed 0.4 m/s
       max_vel_y: 0.0
