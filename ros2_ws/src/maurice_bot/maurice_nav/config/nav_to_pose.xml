@@ -15,6 +15,7 @@
                     <FollowPath path="{path}" controller_id="FollowPath"/>
                     <ReactiveFallback name="FollowPathRecoveryFallback">
                         <GoalUpdated/>
+                        <BackUp backup_dist="0.15" backup_speed="0.05"/>
                         <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
                     </ReactiveFallback>
                 </RecoveryNode>

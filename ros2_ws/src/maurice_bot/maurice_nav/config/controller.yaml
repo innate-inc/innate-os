@@ -20,17 +20,17 @@ controller_server:
 
     # DWB controller parameters for the "FollowPath" plugin
     FollowPath:
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "dwb_core::DWBLocalPlanner"
+      plugin: "dwb_core::DWBLocalPlanner"
+      # primary_controller: "dwb_core::DWBLocalPlanner"  # Commented out since we're using DWB directly
 
-      # rotation-shim parameters
-      angular_dist_threshold: 1.57
-      forward_sampling_distance: 0.2
-      angular_disengage_threshold: 0.785
-      rotate_to_heading_angular_vel: 0.6
-      max_angular_accel: 0.5
-      simulate_ahead_time: 1.0
-      rotate_to_goal_heading: True
+      # rotation-shim parameters (commented out temporarily)
+      # angular_dist_threshold: 1.57
+      # forward_sampling_distance: 0.2
+      # angular_disengage_threshold: 0.3
+      # rotate_to_heading_angular_vel: 0.6
+      # max_angular_accel: 0.5
+      # simulate_ahead_time: 1.0
+      # rotate_to_goal_heading: True
 
       # Primary controller (DWB) parameters
       debug_trajectory_details: True

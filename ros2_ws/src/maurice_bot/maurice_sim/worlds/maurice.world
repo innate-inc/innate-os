@@ -16,8 +16,8 @@ define floorplan model
 floorplan
 (
   name "my_floor"
-  bitmap "/home/vignesh/maurice-prod/maps/bedroom_b.pgm"
-  size [4.75 5.15 0.5]
+  bitmap "/home/vignesh/maurice-prod/maps/home_b.pgm"
+  size [17.4 16.6 0.5]
   pose [0 0 0 0]
 )
 
