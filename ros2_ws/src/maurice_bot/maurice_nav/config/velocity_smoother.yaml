@@ -8,7 +8,7 @@ velocity_smoother:
 
     # Limits using flat list structure [x, y, theta]
     max_velocity: [0.5, 0.0, 0.8]   # Based on controller max_vel_x, max_vel_y, max_vel_theta
-    min_velocity: [0.0, 0.0, -0.8]  # Based on controller min_vel_x, min_vel_y, symmetric min_vel_theta
+    min_velocity: [-0.2, 0.0, -0.8]  # Based on controller min_vel_x, min_vel_y, symmetric min_vel_theta
     
     max_accel: [0.3, 0.0, 0.5]      # Based on controller acc_lim_x, acc_lim_y, acc_lim_theta
     # NOTE: This format often uses negative values for max_decel, representing deceleration limits.

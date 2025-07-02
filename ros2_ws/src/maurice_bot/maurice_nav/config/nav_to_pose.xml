@@ -15,7 +15,7 @@
                     <FollowPath path="{path}" controller_id="FollowPath"/>
                     <ReactiveFallback name="FollowPathRecoveryFallback">
                         <GoalUpdated/>
-                        <BackUp backup_dist="0.15" backup_speed="0.05"/>
+                        <BackUp backup_dist="0.1" backup_speed="0.2"/>
                         <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
                     </ReactiveFallback>
                 </RecoveryNode>
@@ -27,7 +27,7 @@
                         <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
                         <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
                     </Sequence>
-                    <BackUp backup_dist="0.15" backup_speed="0.05"/>
+                    <BackUp backup_dist="0.1" backup_speed="0.2"/>
                     <Wait wait_duration="2"/>
                 </RoundRobin>
             </ReactiveFallback>
