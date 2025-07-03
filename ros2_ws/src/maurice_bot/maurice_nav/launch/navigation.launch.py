@@ -121,7 +121,12 @@ def generate_launch_description():
         executable='behavior_server',
         name='behavior_server',
         output='screen',
-        parameters=[behavior_params_file]
+        parameters=[behavior_params_file],
+        arguments=['--ros-args', '--log-level', 'warn'],
+        remappings=[
+            # send behavior_server's cmd_vel into the smoother's input
+            ('cmd_vel', 'cmd_vel_raw'),
+        ]
     )
 
     return LaunchDescription([
