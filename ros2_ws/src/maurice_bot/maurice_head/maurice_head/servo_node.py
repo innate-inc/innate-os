@@ -59,13 +59,6 @@ class HeadServoNode(Node):
             self.enable_servo_callback
         )
         
-        # Service for getting current position
-        self.position_srv = self.create_service(
-            SetBool,  # We'll use SetBool for simplicity, but we could create a custom service
-            'head/get_current_position',
-            self.get_position_callback
-        )
-        
         # Publish initial position
         self.publish_position_status()
         self.get_logger().info(f"Published initial logical position: {self.current_position}")
@@ -124,20 +117,6 @@ class HeadServoNode(Node):
         except Exception as e:
             response.success = False
             response.message = f"Failed to set servo state: {str(e)}"
-        return response
-
-    def get_position_callback(self, request, response):
-        """Service callback to get the current servo position."""
-        try:
-            response.success = True
-            response.message = f"Current logical position: {self.current_position} (range: {MIN_ANGLE} to {MAX_ANGLE})"
-            self.get_logger().info(f"Current logical position requested: {self.current_position}")
-            
-            # Also publish current position when requested
-            self.publish_position_status()
-        except Exception as e:
-            response.success = False
-            response.message = f"Failed to get current position: {str(e)}"
         return response
 
 def main(args=None):
