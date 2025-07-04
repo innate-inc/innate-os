@@ -18,7 +18,7 @@ class MauriceArmNode(Node):
 
         # Get parameters from the new YAML structure
         # Note: parameters are loaded under the node's namespace (e.g. "maurice_arm")
-        self.declare_parameter('device_name', '/dev/ttyACM0')
+        self.declare_parameter('device_name', '/dev/ttyACM1')
         self.declare_parameter('baud_rate', 1000000)
         self.declare_parameter('control_frequency', 100)
         # Declare 'joints' as a string parameter with empty JSON object as default

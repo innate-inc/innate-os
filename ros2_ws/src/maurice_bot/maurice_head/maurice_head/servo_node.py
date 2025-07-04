@@ -29,7 +29,8 @@ class HeadServoNode(Node):
         self.declare_parameter('baud_rate', 57600)
         self.declare_parameter('pwm_limit', 885)
         self.declare_parameter('current_limit', 500)
-        self.declare_parameter('position_offset', -502)  # Encoder offset for calibration
+        self.declare_parameter('position_offset', -445)  # Encoder offset for calibration
+        self.declare_parameter('control_frequency', 50)  # Hz - how often to publish position
         
         # Get parameters
         self.servo_id = self.get_parameter('servo_id').value
@@ -38,6 +39,7 @@ class HeadServoNode(Node):
         pwm_limit = self.get_parameter('pwm_limit').value
         current_limit = self.get_parameter('current_limit').value
         self.position_offset = self.get_parameter('position_offset').value
+        control_frequency = self.get_parameter('control_frequency').value
 
         # Initialize Dynamixel interface
         self.dynamixel = Dynamixel.Config(
@@ -81,9 +83,30 @@ class HeadServoNode(Node):
             self.enable_servo_callback
         )
         
+        # Create timer for frequent position publishing
+        self.timer = self.create_timer(1.0 / control_frequency, self.timer_callback)
+        
+        # Store the latest command for processing in timer callback
+        self.latest_command = None
+        
         # Publish initial position
         self.publish_position_status()
         self.get_logger().info(f"Published initial logical position: {self.current_position}")
+        self.get_logger().info(f"Control frequency: {control_frequency} Hz")
+
+    def timer_callback(self):
+        """Publish current servo position at control frequency and process any pending commands."""
+        try:
+            # Always publish current position
+            self.publish_position_status()
+            
+            # If a new command was received, execute it
+            if self.latest_command is not None:
+                self._move_to_logical_angle(self.latest_command)
+                self.latest_command = None
+                
+        except Exception as e:
+            self.get_logger().error(f"Error in timer callback: {str(e)}")
 
     def _configure_servo(self, pwm_limit, current_limit):
         """Configure the servo with proper limits and operating mode"""
@@ -196,14 +219,11 @@ class HeadServoNode(Node):
             return
         
         try:
-            # Move to the requested position
-            self._move_to_logical_angle(logical_position)
-            
-            # Publish updated position
-            self.publish_position_status()
+            # Store the command for processing in the timer callback
+            self.latest_command = logical_position
             
         except Exception as e:
-            self.get_logger().error(f"Failed to set position: {str(e)}")
+            self.get_logger().error(f"Failed to store position command: {str(e)}")
 
     def enable_servo_callback(self, request, response):
         """Service callback to enable or disable the servo."""
