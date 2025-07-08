@@ -1,6 +1,6 @@
 arm:
   ros__parameters:
-    device_name: "/dev/ttyACM0"
+    device_name: "/dev/ttyACM1"
     baud_rate: 1000000
     control_frequency: 100
     joints: |
