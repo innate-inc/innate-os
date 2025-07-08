@@ -268,31 +268,31 @@ class BehaviorServer(Node):
         
         # Execute the behavior
         behavior_config = self.behaviors_config[behavior_name]
-        outcome = self._execute_behavior(goal_handle, behavior_name, behavior_config)
+        outcome, reason = self._execute_behavior(goal_handle, behavior_name, behavior_config)
         
         # Set result based on outcome
         result = ExecuteBehavior.Result()
         
         if outcome == "SUCCESS":
             result.success = True
-            result.message = f"Behavior {behavior_name} completed successfully"
+            result.message = f"Behavior {behavior_name} completed successfully. {reason}"
             goal_handle.succeed()
-            self.get_logger().info(f"Behavior {behavior_name} succeeded")
+            self.get_logger().info(f"Behavior {behavior_name} succeeded: {reason}")
         elif outcome == "CANCELLED":
             result.success = False
-            result.message = f"Behavior {behavior_name} was cancelled"
+            result.message = f"Behavior {behavior_name} was cancelled. {reason}"
             goal_handle.canceled()
-            self.get_logger().info(f"Behavior {behavior_name} was canceled")
+            self.get_logger().info(f"Behavior {behavior_name} was canceled: {reason}")
         elif outcome == "FAILURE":
             result.success = False
-            result.message = f"Behavior {behavior_name} failed"
+            result.message = f"Behavior {behavior_name} failed. {reason}"
             goal_handle.abort()
-            self.get_logger().error(f"Behavior {behavior_name} failed")
+            self.get_logger().error(f"Behavior {behavior_name} failed: {reason}")
         else:
             result.success = False
-            result.message = f"Behavior {behavior_name} failed with unexpected outcome"
+            result.message = f"Behavior {behavior_name} failed with unexpected outcome: {outcome}. {reason}"
             goal_handle.abort()
-            self.get_logger().error(f"Behavior {behavior_name} failed with unexpected outcome: {outcome}")
+            self.get_logger().error(f"Behavior {behavior_name} failed with unexpected outcome: {outcome}. {reason}")
         
         return result
     
@@ -313,11 +313,11 @@ class BehaviorServer(Node):
                 return self._execute_replay_behavior(goal_handle, behavior_name, behavior_config)
             else:
                 self.get_logger().error(f"Unknown behavior type: {behavior_type}")
-                return "FAILURE"
+                return "FAILURE", f"Unknown behavior type: {behavior_type}"
                 
         except Exception as e:
             self.get_logger().error(f"Error executing behavior {behavior_name}: {e}")
-            return "FAILURE"
+            return "FAILURE", f"Exception during execution: {str(e)}"
         finally:
             # Clean up
             self.execution_running = False
@@ -334,14 +334,19 @@ class BehaviorServer(Node):
             checkpoint_path = os.path.expanduser(checkpoint_path)
             if not checkpoint_path or not os.path.exists(checkpoint_path):
                 self.get_logger().error(f"Checkpoint not found: {checkpoint_path}")
-                return "FAILURE"
+                return "FAILURE", f"Checkpoint file not found: {checkpoint_path}"
             
             # Get action dimension from config (default to 8 if not specified)
             action_dim = behavior_config.get('action_dim', 8)
             
             # Load policy
             if not self._load_policy_for_behavior(checkpoint_path, action_dim):
-                return "FAILURE"
+                return "FAILURE", f"Failed to load policy from {checkpoint_path}"
+            
+            # Check sensor availability before starting
+            if not self._check_sensor_availability():
+                self.get_logger().error("Required sensors not available. Cannot execute learned behavior.")
+                return "FAILURE", "Required sensors not available (cameras or joint state)"
             
             # Get behavior parameters
             duration = behavior_config.get('duration', 20.0)
@@ -354,7 +359,7 @@ class BehaviorServer(Node):
                 self.get_logger().info(f"Moving to start pose: {start_pose}")
                 if not self.call_arm_goto_service(start_pose, 5):
                     self.get_logger().error("Failed to move to start pose")
-                    return "FAILURE"
+                    return "FAILURE", "Failed to move arm to start pose"
                 time.sleep(5.0)
             
             # Execute policy inference
@@ -374,13 +379,23 @@ class BehaviorServer(Node):
                     self._stop_robot()
                     if end_pose:
                         self.call_arm_goto_service(end_pose, 3)
-                    return "CANCELLED"
+                    return "CANCELLED", "User requested cancellation"
                 
                 # Run inference and get progress value
                 progress = self._run_inference_once()
                 
+                # Check if inference failed due to missing sensor data
+                if progress is None:
+                    # Check if it's due to missing sensors
+                    if not self._check_sensor_availability():
+                        self.get_logger().error("Required sensors became unavailable during execution")
+                        self._stop_robot()
+                        return "FAILURE", "Required sensors became unavailable during execution"
+                    # If sensors are available but inference still failed, continue
+                    continue
+                
                 # Check for early termination based on progress metric
-                if progress is not None and progress > progress_threshold:
+                if progress > progress_threshold:
                     early_termination = True
                     self.get_logger().info(f"Early termination triggered! Progress: {progress:.4f} > {progress_threshold}")
                     break
@@ -409,18 +424,19 @@ class BehaviorServer(Node):
                 self.get_logger().info(f"Moving to end pose: {end_pose}")
                 if not self.call_arm_goto_service(end_pose, 5):
                     self.get_logger().error("Failed to move to end pose")
-                    return "FAILURE"
+                    return "FAILURE", "Failed to move arm to end pose"
             
             if early_termination:
                 self.get_logger().info(f"Learned behavior {behavior_name} completed early due to progress threshold")
+                return "SUCCESS", "Completed early due to progress threshold being reached"
             else:
                 self.get_logger().info(f"Learned behavior {behavior_name} completed successfully")
-            return "SUCCESS"
+                return "SUCCESS", "Completed full duration successfully"
             
         except Exception as e:
             self.get_logger().error(f"Error in learned behavior execution: {e}")
             self._stop_robot()
-            return "FAILURE"
+            return "FAILURE", f"Exception during execution: {str(e)}"
     
     def _execute_poses_behavior(self, goal_handle, behavior_name, behavior_config):
         """Execute a poses-based behavior (placeholder)."""
@@ -434,7 +450,7 @@ class BehaviorServer(Node):
             for i, pose in enumerate(poses):
                 # Check for cancellation
                 if self._cancel_requested.is_set():
-                    return "CANCELLED"
+                    return "CANCELLED", "User requested cancellation"
                 
                 self.get_logger().info(f"Moving to pose {i+1}/{len(poses)}: {pose}")
                 
@@ -448,16 +464,16 @@ class BehaviorServer(Node):
                 # Execute pose movement
                 if not self.call_arm_goto_service(pose, steps):
                     self.get_logger().error(f"Failed to reach pose {i+1}")
-                    return "FAILURE"
+                    return "FAILURE", f"Failed to reach pose {i+1}/{len(poses)}"
                 
                 time.sleep(steps)
             
             self.get_logger().info(f"Poses behavior {behavior_name} completed successfully")
-            return "SUCCESS"
+            return "SUCCESS", f"All {len(poses)} poses executed successfully"
             
         except Exception as e:
             self.get_logger().error(f"Error in poses behavior execution: {e}")
-            return "FAILURE"
+            return "FAILURE", f"Exception during poses execution: {str(e)}"
     
     def _execute_replay_behavior(self, goal_handle, behavior_name, behavior_config):
         """Execute a replay-based behavior from H5 file."""
@@ -469,21 +485,21 @@ class BehaviorServer(Node):
         
         if not file_path or not os.path.exists(file_path):
             self.get_logger().error(f"Replay file not found: {file_path}")
-            return "FAILURE"
+            return "FAILURE", f"Replay file not found: {file_path}"
         
         try:
             # Load H5 file and extract actions
             with h5py.File(file_path, 'r') as h5file:
                 if 'action' not in h5file:
                     self.get_logger().error("No 'action' dataset found in H5 file")
-                    return "FAILURE"
+                    return "FAILURE", "No 'action' dataset found in H5 file"
                 
                 actions = h5file['action'][:]  # Shape: (n_steps, 8)
                 self.get_logger().info(f"Loaded {actions.shape[0]} action steps from {file_path}")
             
             if actions.shape[0] == 0:
                 self.get_logger().error("No actions found in replay file")
-                return "FAILURE"
+                return "FAILURE", "No actions found in replay file"
             
             # Extract first action and arm position
             first_action = actions[0]  # Shape: (8,)
@@ -494,7 +510,7 @@ class BehaviorServer(Node):
             # Move to initial arm position
             if not self.call_arm_goto_service(first_arm_position, 5):
                 self.get_logger().error("Failed to move to initial arm position")
-                return "FAILURE"
+                return "FAILURE", "Failed to move to initial arm position"
             
             # Wait for arm movement to complete
             time.sleep(5.0)
@@ -519,7 +535,7 @@ class BehaviorServer(Node):
                     self._stop_robot()
                     if end_pose:
                         self.call_arm_goto_service(end_pose, 3)
-                    return "CANCELLED"
+                    return "CANCELLED", "User requested cancellation"
                 
                 # Get current action
                 action = actions[step_idx]  # Shape: (8,)
@@ -557,15 +573,15 @@ class BehaviorServer(Node):
                 self.get_logger().info(f"Moving to end pose: {end_pose}")
                 if not self.call_arm_goto_service(end_pose, 5):
                     self.get_logger().error("Failed to move to end pose")
-                    return "FAILURE"
+                    return "FAILURE", "Failed to move to end pose"
             
             self.get_logger().info(f"Replay behavior {behavior_name} completed successfully")
-            return "SUCCESS"
+            return "SUCCESS", f"Replay completed successfully with {total_steps} steps"
             
         except Exception as e:
             self.get_logger().error(f"Error in replay behavior execution: {e}")
             self._stop_robot()
-            return "FAILURE"
+            return "FAILURE", f"Exception during replay execution: {str(e)}"
     
     def _load_policy_for_behavior(self, checkpoint_path, action_dim=8):
         """Load ACT policy for a specific behavior."""
@@ -699,6 +715,45 @@ class BehaviorServer(Node):
         twist_msg.linear.x = 0.0
         twist_msg.angular.z = 0.0
         self.cmd_vel_pub.publish(twist_msg)
+    
+    def _check_sensor_availability(self):
+        """Check if all required sensors are providing data."""
+        current_time = self.get_clock().now()
+        timeout_threshold = 2.0  # seconds
+        
+        # Check if we have received any data at all
+        if self.latest_image1 is None:
+            self.get_logger().warn("Camera 1 (/color/image) has never received data")
+            return False
+        
+        if self.latest_image2 is None:
+            self.get_logger().warn("Camera 2 (/image_raw) has never received data")
+            return False
+        
+        if self.latest_joint_state is None:
+            self.get_logger().warn("Joint state (/maurice_arm/state) has never received data")
+            return False
+        
+        # Check if data is recent (within timeout threshold)
+        if self.latest_image1_timestamp is not None:
+            time_diff = (current_time - self.latest_image1_timestamp).nanoseconds / 1e9
+            if time_diff > timeout_threshold:
+                self.get_logger().warn(f"Camera 1 data is stale ({time_diff:.2f}s old)")
+                return False
+        
+        if self.latest_image2_timestamp is not None:
+            time_diff = (current_time - self.latest_image2_timestamp).nanoseconds / 1e9
+            if time_diff > timeout_threshold:
+                self.get_logger().warn(f"Camera 2 data is stale ({time_diff:.2f}s old)")
+                return False
+        
+        if self.latest_joint_timestamp is not None:
+            time_diff = (current_time - self.latest_joint_timestamp).nanoseconds / 1e9
+            if time_diff > timeout_threshold:
+                self.get_logger().warn(f"Joint state data is stale ({time_diff:.2f}s old)")
+                return False
+        
+        return True
 
     def call_arm_goto_service(self, position, time_duration=5):
         """Call the arm goto service with specified position."""
