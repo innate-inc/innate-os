@@ -170,15 +170,14 @@ def main():
 
     # 5) Launch simulation run() in its own thread (macOS) or directly
     # (other platforms)
-    if platform.system() == "Darwin":
-        gs.tools.run_in_another_thread(fn=sim_node.run, args=())
-    else:
-        sim_node.run()
+    sim_node.run()
 
     # 6) If visualization is requested, drive the viewer in the main thread
     if args.vis:
         try:
-            sim_node.scene.viewer.start()
+            # Keep the simulation running and responsive
+            while not SHARED_QUEUES.exit_event.is_set():
+                time.sleep(0.1)
         except KeyboardInterrupt:
             pass
         print("[Main] Viewer closed or keyboard interrupt. Shutting down...")
