@@ -22,14 +22,18 @@ class HeadServoNode(Node):
         super().__init__("head_servo_node")
 
         # Declare parameters
-        self.declare_parameter('servo_id', 1)
-        self.declare_parameter('device_name', '/dev/ttyACM0')
-        self.declare_parameter('baud_rate', 57600)
-        self.declare_parameter('pwm_limit', 885)
-        self.declare_parameter('current_limit', 500)
-        self.declare_parameter('position_offset', -445)  # Encoder offset for calibration
-        self.declare_parameter('control_frequency', 50)  # Hz - how often to publish position
-        
+        self.declare_parameter("servo_id", 7)
+        self.declare_parameter("device_name", "/dev/ttyACM1")
+        self.declare_parameter("baud_rate", 1000000)
+        self.declare_parameter("pwm_limit", 885)
+        self.declare_parameter("current_limit", 500)
+        self.declare_parameter(
+            "position_offset", -445
+        )  # Encoder offset for calibration
+        self.declare_parameter(
+            "control_frequency", 50
+        )  # Hz - how often to publish position
+
         # Get parameters
         self.servo_id = self.get_parameter('servo_id').value
         device_name = self.get_parameter('device_name').value
