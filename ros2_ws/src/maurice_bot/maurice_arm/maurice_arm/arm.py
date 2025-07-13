@@ -2,6 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter, SyncParameterClient
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 import math
@@ -18,18 +19,26 @@ class MauriceArmNode(Node):
 
         # Get parameters from the new YAML structure
         # Note: parameters are loaded under the node's namespace (e.g. "maurice_arm")
-        self.declare_parameter('device_name', '/dev/ttyACM1')
         self.declare_parameter('baud_rate', 1000000)
         self.declare_parameter('control_frequency', 100)
         # Declare 'joints' as a string parameter with empty JSON object as default
         self.declare_parameter('joints', '{}')
 
-        device_name = self.get_parameter('device_name').value
         baud_rate = self.get_parameter('baud_rate').value
         control_frequency = self.get_parameter('control_frequency').value
         # Get the joints parameter as a string and parse it as JSON
         joints_str = self.get_parameter('joints').value
         joints_param = json.loads(joints_str)
+
+        # Wait for servo_manager to be ready and get device name
+        self.get_logger().info("Waiting for servo_manager to be ready...")
+        device_name = self.wait_for_servo_manager()
+        
+        if not device_name:
+            self.get_logger().error("Failed to get device name from servo_manager")
+            return
+
+        self.get_logger().info(f"Using arm device: {device_name}")
 
         # Create a list to hold servo IDs (extracted from joint parameters)
         servo_ids = []
@@ -122,6 +131,46 @@ class MauriceArmNode(Node):
         self.joint_state_msg.name = [f'joint_{i}' for i in range(1, len(servo_ids)+1)]
         
         self.latest_command = None
+
+    def wait_for_servo_manager(self):
+        """Wait for servo_manager to be ready and return the arm device name."""
+        # Create a client to get parameters from servo_manager
+        param_client = SyncParameterClient(self, '/servo_manager')
+        
+        # Wait for the parameter service to be available
+        timeout_sec = 30.0
+        if not param_client.wait_for_service(timeout_sec=timeout_sec):
+            self.get_logger().error(f"servo_manager parameter service not available after {timeout_sec} seconds")
+            return None
+        
+        # Poll for the ready parameter
+        max_attempts = 60  # 60 seconds with 1 second intervals
+        for attempt in range(max_attempts):
+            try:
+                # Get the ready parameter
+                ready_param = param_client.get_parameters(['ready'])
+                if ready_param and len(ready_param) > 0:
+                    if ready_param[0].value:
+                        # servo_manager is ready, get the arm device
+                        arm_device_param = param_client.get_parameters(['arm_device'])
+                        if arm_device_param and len(arm_device_param) > 0:
+                            return arm_device_param[0].value
+                        else:
+                            self.get_logger().error("Could not get arm_device parameter")
+                            return None
+                    else:
+                        self.get_logger().info(f"servo_manager not ready yet, attempt {attempt + 1}/{max_attempts}")
+                else:
+                    self.get_logger().info(f"ready parameter not available yet, attempt {attempt + 1}/{max_attempts}")
+                    
+            except Exception as e:
+                self.get_logger().warn(f"Error checking servo_manager parameters: {e}")
+            
+            # Wait 1 second before next attempt
+            time.sleep(1.0)
+        
+        self.get_logger().error("Timeout waiting for servo_manager to be ready")
+        return None
 
     def timer_callback(self):
         """Publish current joint states and send latest command if available."""

@@ -2,6 +2,8 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
@@ -12,7 +14,15 @@ def generate_launch_description():
         'arm_config.yaml'
     ])
 
-    # Create the node
+    # Create the servo manager node first
+    servo_manager_node = Node(
+        package='maurice_arm',
+        executable='servo_manager.py',
+        name='servo_manager',
+        output='screen'
+    )
+
+    # Create the arm node that will wait for servo manager
     maurice_arm_node = Node(
         package='maurice_arm',
         executable='arm.py',
@@ -38,6 +48,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        servo_manager_node,
         maurice_arm_node,
         camera_node,
         arm_utils_node
