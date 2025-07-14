@@ -702,11 +702,13 @@ class BrainClientNode(Node):
                 "x": pos.x,
                 "y": pos.y,
                 "theta": theta,
-                "horizontal_fov": self.horizontal_fov,
-                "vertical_fov": self.vertical_fov,
-                "pitch_deg": self.current_head_pitch,
-                "x_cam": self.x_cam,
-                "height_cam": self.height_cam,
+                "camera_info": {
+                    "horizontal_fov": self.horizontal_fov,
+                    "vertical_fov": self.vertical_fov,
+                    "pitch_deg": self.current_head_pitch,
+                    "x_cam": self.x_cam,
+                    "height_cam": self.height_cam,
+                },
             }
 
             # Add covariance if available (i.e., from amcl_pose)
@@ -1022,11 +1024,13 @@ class BrainClientNode(Node):
 
                 # --- Add other payload components (FOV, depth, map, robot_coords, arm_camera) ---
                 # Include the horizontal and vertical FOV of the camera
-                payload["horizontal_fov"] = self.horizontal_fov
-                payload["vertical_fov"] = self.vertical_fov
-                payload["pitch_deg"] = self.current_head_pitch
-                payload["x_cam"] = self.x_cam
-                payload["height_cam"] = self.height_cam
+                payload["camera_info"] = {
+                    "horizontal_fov": self.horizontal_fov,
+                    "vertical_fov": self.vertical_fov,
+                    "pitch_deg": self.current_head_pitch,
+                    "x_cam": self.x_cam,
+                    "height_cam": self.height_cam,
+                }
 
                 # Optionally include depth data if enabled and available.
                 if self.send_depth and self.last_depth_image is None:
@@ -1657,6 +1661,7 @@ class BrainClientNode(Node):
 
         self._unregister_primitives()
         self.register_primitives_and_directive()
+        self.ready_for_image = True
 
         self.get_logger().info(
             "\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m"
