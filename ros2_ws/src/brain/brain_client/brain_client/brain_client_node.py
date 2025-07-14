@@ -108,6 +108,10 @@ class BrainClientNode(Node):
         self.declare_parameter("horizontal_resolution", 640)
         self.declare_parameter("vertical_resolution", 480)
 
+        # New parameters for camera position
+        self.declare_parameter("x_cam")  # Camera x position relative to robot base
+        self.declare_parameter("height_cam")  # Camera height above ground
+
         # New parameter for pose image interval
         self.declare_parameter("pose_image_interval", 0.5)  # 0.5 seconds default
 
@@ -209,6 +213,15 @@ class BrainClientNode(Node):
             )
         )
 
+        # Get camera position parameters
+        self.x_cam = self.get_parameter("x_cam").get_parameter_value().double_value
+        self.height_cam = (
+            self.get_parameter("height_cam").get_parameter_value().double_value
+        )
+
+        # Initialize head position storage
+        self.current_head_pitch = 0.0  # Default to horizontal (0 degrees)
+
         # Get pose image interval parameter
         self.pose_image_interval = (
             self.get_parameter("pose_image_interval").get_parameter_value().double_value
@@ -300,6 +313,14 @@ class BrainClientNode(Node):
             self.amcl_pose_topic,
             self.amcl_pose_callback,
             amcl_pose_qos,
+        )
+
+        # Subscribe to head position topic
+        self.head_position_sub = self.create_subscription(
+            String,
+            "head/current_position",
+            self.head_position_callback,
+            10,
         )
 
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -594,6 +615,18 @@ class BrainClientNode(Node):
         if self.use_odom_as_amcl_pose:
             self.last_amcl_pose = self.last_odom
 
+    def head_position_callback(self, msg: String):
+        """Store the latest head position data."""
+        try:
+            position_data = json.loads(msg.data)
+            self.current_head_pitch = position_data.get("current_position", 0.0)
+            self.get_logger().debug(
+                f"Received head pitch: {self.current_head_pitch} degrees"
+            )
+        except (json.JSONDecodeError, KeyError) as e:
+            self.get_logger().error(f"Failed to parse head position data: {e}")
+            self.current_head_pitch = 0.0  # Default to horizontal
+
     def _handle_ready_for_image(self, msg):
         self.get_logger().info("Received READY_FOR_IMAGE; setting flag.")
         self.ready_for_image = True
@@ -669,6 +702,11 @@ class BrainClientNode(Node):
                 "x": pos.x,
                 "y": pos.y,
                 "theta": theta,
+                "horizontal_fov": self.horizontal_fov,
+                "vertical_fov": self.vertical_fov,
+                "pitch_deg": self.current_head_pitch,
+                "x_cam": self.x_cam,
+                "height_cam": self.height_cam,
             }
 
             # Add covariance if available (i.e., from amcl_pose)
@@ -986,6 +1024,9 @@ class BrainClientNode(Node):
                 # Include the horizontal and vertical FOV of the camera
                 payload["horizontal_fov"] = self.horizontal_fov
                 payload["vertical_fov"] = self.vertical_fov
+                payload["pitch_deg"] = self.current_head_pitch
+                payload["x_cam"] = self.x_cam
+                payload["height_cam"] = self.height_cam
 
                 # Optionally include depth data if enabled and available.
                 if self.send_depth and self.last_depth_image is None:

@@ -45,15 +45,23 @@ def generate_launch_description():
         description="Flag to enable sending depth images",
     )
     vertical_fov_arg = DeclareLaunchArgument(
-        "vertical_fov", default_value="0.0", description="Vertical field of view"
+        "vertical_fov", default_value="80.0", description="Vertical field of view"
     )
     horizontal_resolution_arg = DeclareLaunchArgument(
         "horizontal_resolution",
-        default_value="120",
+        default_value="640",
         description="Horizontal resolution",
     )
     vertical_resolution_arg = DeclareLaunchArgument(
-        "vertical_resolution", default_value="80", description="Vertical resolution"
+        "vertical_resolution", default_value="480", description="Vertical resolution"
+    )
+    x_cam_arg = DeclareLaunchArgument(
+        "x_cam",
+        default_value="0.0",
+        description="Camera x position relative to robot base",
+    )
+    height_cam_arg = DeclareLaunchArgument(
+        "height_cam", default_value="0.2", description="Camera height above ground"
     )
     pose_image_interval_arg = DeclareLaunchArgument(
         "pose_image_interval",
@@ -103,6 +111,8 @@ def generate_launch_description():
                 "send_arm_camera_image": LaunchConfiguration("send_arm_camera_image"),
                 "use_odom_as_amcl_pose": LaunchConfiguration("use_odom_as_amcl_pose"),
                 "simulator_mode": LaunchConfiguration("simulator_mode"),
+                "x_cam": LaunchConfiguration("x_cam"),
+                "height_cam": LaunchConfiguration("height_cam"),
             }
         ],
         output="screen",
@@ -127,6 +137,8 @@ def generate_launch_description():
             send_arm_camera_image_arg,
             use_odom_as_amcl_pose_arg,
             simulator_mode_arg,
+            x_cam_arg,
+            height_cam_arg,
             brain_client_node,
             # Launch the WSClientNode (handles actual WebSocket connection)
             Node(

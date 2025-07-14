@@ -35,10 +35,11 @@ class MockNode:
 
     def create_timer(self, period, callback):
         timer = MagicMock()
+        timer.is_canceled.return_value = False
         self.timers[callback] = timer
         return timer
 
-    def declare_parameter(self, name, default_value):
+    def declare_parameter(self, name, default_value=None):
         self.parameters[name] = default_value
 
     def get_parameter(self, name):
@@ -124,6 +125,9 @@ class MockPrimitive:
     def guidelines(self):
         return self._guidelines
 
+    def guidelines_when_running(self):
+        return f"Guidelines when running {self._name}"
+
     def execute(self, *args, **kwargs):
         return f"Executed {self._name}", True
 
@@ -180,6 +184,12 @@ sys.modules["nav2_simple_commander.robot_navigator"] = MagicMock()
 sys.modules["nav2_simple_commander.robot_navigator"].BasicNavigator = MagicMock()
 sys.modules["nav2_simple_commander.robot_navigator"].TaskResult = MagicMock()
 
+# Mock maurice_msgs module
+sys.modules["maurice_msgs"] = MagicMock()
+sys.modules["maurice_msgs.srv"] = MagicMock()
+sys.modules["maurice_msgs.srv"].GotoJS = MagicMock()
+sys.modules["maurice_msgs.srv"].GotoJS.Request = MagicMock()
+sys.modules["maurice_msgs.srv"].GotoJS.Response = MagicMock()
 
 # Mock the primitives
 mock_navigate = MockPrimitive("navigate_to_position", "Navigate to a position")
