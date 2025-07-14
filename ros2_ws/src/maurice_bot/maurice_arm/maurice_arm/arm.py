@@ -2,7 +2,8 @@
 
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter, SyncParameterClient
+from rclpy.parameter import Parameter
+from rcl_interfaces.srv import GetParameters
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 import math
@@ -135,7 +136,7 @@ class MauriceArmNode(Node):
     def wait_for_servo_manager(self):
         """Wait for servo_manager to be ready and return the arm device name."""
         # Create a client to get parameters from servo_manager
-        param_client = SyncParameterClient(self, '/servo_manager')
+        param_client = self.create_client(GetParameters, '/servo_manager/get_parameters')
         
         # Wait for the parameter service to be available
         timeout_sec = 30.0
@@ -147,17 +148,31 @@ class MauriceArmNode(Node):
         max_attempts = 60  # 60 seconds with 1 second intervals
         for attempt in range(max_attempts):
             try:
-                # Get the ready parameter
-                ready_param = param_client.get_parameters(['ready'])
-                if ready_param and len(ready_param) > 0:
-                    if ready_param[0].value:
+                # Create request for the ready parameter
+                request = GetParameters.Request()
+                request.names = ['ready']
+                
+                # Call the service
+                future = param_client.call_async(request)
+                rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
+                
+                if future.result() is not None:
+                    response = future.result()
+                    if len(response.values) > 0 and response.values[0].bool_value:
                         # servo_manager is ready, get the arm device
-                        arm_device_param = param_client.get_parameters(['arm_device'])
-                        if arm_device_param and len(arm_device_param) > 0:
-                            return arm_device_param[0].value
-                        else:
-                            self.get_logger().error("Could not get arm_device parameter")
-                            return None
+                        request = GetParameters.Request()
+                        request.names = ['arm_device']
+                        
+                        future = param_client.call_async(request)
+                        rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
+                        
+                        if future.result() is not None:
+                            response = future.result()
+                            if len(response.values) > 0:
+                                return response.values[0].string_value
+                        
+                        self.get_logger().error("Could not get arm_device parameter")
+                        return None
                     else:
                         self.get_logger().info(f"servo_manager not ready yet, attempt {attempt + 1}/{max_attempts}")
                 else:
