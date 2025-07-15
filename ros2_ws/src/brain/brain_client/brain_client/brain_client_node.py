@@ -24,6 +24,7 @@ import os
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
+from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 
 # from tf2_geometry_msgs import do_transform_pose # Reverted by user, then identified as unused by linter
 # from geometry_msgs.msg import PoseStamped # Reverted by user, then identified as unused by linter
@@ -672,7 +673,8 @@ class BrainClientNode(Node):
                 )
 
             except Exception as err:
-                self.get_logger().error(f"Error in pose_image_callback: {err}")
+                # self.get_logger().error(f"Error in pose_image_callback: {err}")
+                self.get_logger().info("Trnsform not ready")
                 return
 
             # if self.last_amcl_pose:
