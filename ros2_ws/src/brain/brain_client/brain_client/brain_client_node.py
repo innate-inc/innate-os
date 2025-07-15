@@ -663,21 +663,33 @@ class BrainClientNode(Node):
 
             # Use self.last_amcl_pose if available, otherwise fallback to self.last_odom (or skip)
             current_pose_source = None
-            if self.last_amcl_pose:
-                current_pose_source = self.last_amcl_pose.pose
-                # self.get_logger().debug("Using amcl_pose for pose_image_callback")
-            elif (
-                self.last_odom
-            ):  # Fallback, though ideally amcl_pose is what we want for covariance
-                current_pose_source = self.last_odom.pose
-                self.get_logger().warn(
-                    "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    target_frame='map',
+                    source_frame='base_link',
+                    time=self.get_clock().now().to_msg(),
+                    timeout=rclpy.time.Duration(seconds=1.0),
                 )
-            else:
-                self.get_logger().warn(
-                    "Skipping pose_image: No amcl_pose or odom available."
-                )
+
+            except Exception as err:
+                self.get_logger().error(f"Error in pose_image_callback: {err}")
                 return
+
+            # if self.last_amcl_pose:
+            #     current_pose_source = self.last_amcl_pose.pose
+            #     # self.get_logger().debug("Using amcl_pose for pose_image_callback")
+            # elif (
+            #     self.last_odom
+            # ):  # Fallback, though ideally amcl_pose is what we want for covariance
+            #     current_pose_source = self.last_odom.pose
+            #     self.get_logger().warn(
+            #         "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
+            #     )
+            # else:
+            #     self.get_logger().warn(
+            #         "Skipping pose_image: No amcl_pose or odom available."
+            #     )
+            #     return
 
             # Compress the image as JPEG
             encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
@@ -686,9 +698,12 @@ class BrainClientNode(Node):
                 self.get_logger().error("Failed to encode image for pose_image")
                 return
 
-            # Extract position and orientation data
-            pos = current_pose_source.pose.position  # Use selected source
-            ori = current_pose_source.pose.orientation  # Use selected source
+            # # Extract position and orientation data
+            # pos = current_pose_source.pose.position  # Use selected source
+            # ori = current_pose_source.pose.orientation  # Use selected source
+
+            pos = transform.transform.translation
+            ori = transform.transform.rotation
 
             # Compute yaw from quaternion
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
