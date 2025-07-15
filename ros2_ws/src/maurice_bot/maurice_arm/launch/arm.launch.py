@@ -12,7 +12,7 @@ def generate_launch_description():
         'arm_config.yaml'
     ])
 
-    # Create the node
+    # Create the arm node that will wait for servo manager
     maurice_arm_node = Node(
         package='maurice_arm',
         executable='arm.py',

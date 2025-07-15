@@ -39,7 +39,7 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(
   PROGRAMS
-    maurice_head/servo_node.py
+    maurice_head/head.py
     maurice_head/test.py
   DESTINATION lib/${PROJECT_NAME}
 )
