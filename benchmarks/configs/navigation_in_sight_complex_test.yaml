@@ -16,8 +16,8 @@ duration: 500  # seconds, increased duration for a more complex task
 # Messages - Single instruction to go to another room and find the TV
 messages:
   - trigger_type: "time"
-    time: 10  # seconds after start
-    text: "Go in the corridor then go in the living room and find the TV, and then go to it. Only use navigation_in_sight, never use navigate_through_memory."
+    time: 2  # seconds after start
+    text: "Go in the corridor then go in the living room and go directly under the TV. "
 
 # Expectations section
 expectations:
@@ -34,8 +34,12 @@ expectations:
       # No verification_prompt needed here as validate_primitive_check doesn't use it
       # This check confirms navigation_in_sight was called at least once.
 
-  use_frames: false # As per previous structure, can be adjusted if VLM for success_criterion needs it
+  use_frames: false # Not needed for deterministic success evaluation
 
-  success_criterion: "Success is if the robot, starting from a different room, reached the designated area near the TV. The navigation must have been achieved by making multiple calls to the navigation_in_sight primitive, and the navigate_through_memory primitive must not have been used at all during the test.."
+  # Use deterministic success evaluation based on location checks
+  success_type: "deterministic"
+  success_criterion:
+    required_checks:
+      - "reached_tv_area"
 
-  early_stop_criterion: "If the robot has reached the target area near the TV, the test can conclude." 
+  early_stop_criterion: "deterministic"  # Will stop early when success conditions are met 
