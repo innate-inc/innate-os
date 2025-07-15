@@ -32,10 +32,16 @@ def generate_launch_description():
             os.path.join(head_pkg_dir, 'launch', 'head.launch.py')
         )
     )
+    servo_manager_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_dir, 'launch', 'servo_manager.launch.py')
+        )
+    )
     
     return LaunchDescription([
         bringup_core_launch,
         lidar_launch,
         camera_launch,
-        head_launch
+        head_launch,
+        servo_manager_launch
     ])
