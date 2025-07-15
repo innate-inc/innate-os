@@ -372,6 +372,7 @@ class BehaviorServer(Node):
             
             while rclpy.ok():
                 loop_start = time.time()
+                elapsed_time = loop_start - start_time
                 
                 # Check for cancellation
                 if self._cancel_requested.is_set():
@@ -380,6 +381,11 @@ class BehaviorServer(Node):
                     if end_pose:
                         self.call_arm_goto_service(end_pose, 3)
                     return "CANCELLED", "User requested cancellation"
+                
+                # Check if duration completed (moved earlier to prevent infinite loop)
+                if elapsed_time >= duration:
+                    self.get_logger().info(f"Behavior timeout reached after {elapsed_time:.2f} seconds")
+                    break
                 
                 # Run inference and get progress value
                 progress = self._run_inference_once()
@@ -392,26 +398,21 @@ class BehaviorServer(Node):
                         self._stop_robot()
                         return "FAILURE", "Required sensors became unavailable during execution"
                     # If sensors are available but inference still failed, continue
-                    continue
-                
-                # Check for early termination based on progress metric
-                if progress > progress_threshold:
-                    early_termination = True
-                    self.get_logger().info(f"Early termination triggered! Progress: {progress:.4f} > {progress_threshold}")
-                    break
+                    # but still check timeout and send feedback
+                else:
+                    # Check for early termination based on progress metric
+                    if progress > progress_threshold:
+                        early_termination = True
+                        self.get_logger().info(f"Early termination triggered! Progress: {progress:.4f} > {progress_threshold}")
+                        break
                 
                 # Send feedback
-                elapsed_time = loop_start - start_time
                 remaining_time = max(0.0, duration - elapsed_time)
                 feedback_msg = ExecuteBehavior.Feedback()
                 feedback_msg.elapsed_time = float(elapsed_time)
                 feedback_msg.remaining_time = float(remaining_time)
                 feedback_msg.status = f"Executing {behavior_name}"
                 goal_handle.publish_feedback(feedback_msg)
-                
-                # Check if duration completed
-                if elapsed_time >= duration:
-                    break
                 
                 # Maintain loop rate
                 sleep_time = period - (time.time() - loop_start)
@@ -629,20 +630,20 @@ class BehaviorServer(Node):
     def image1_callback(self, msg: Image):
         try:
             self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            self.latest_image1_timestamp = msg.header.stamp
+            self.latest_image1_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
         except Exception as e:
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
         try:
             self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-            self.latest_image2_timestamp = msg.header.stamp
+            self.latest_image2_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
         except Exception as e:
             self.get_logger().error(f"Error converting image2: {e}")
 
     def joint_state_callback(self, msg: JointState):
         self.latest_joint_state = msg
-        self.latest_joint_timestamp = msg.header.stamp
+        self.latest_joint_timestamp = rclpy.time.Time.from_msg(msg.header.stamp)
 
     def _run_inference_once(self):
         """Run one inference step with current policy."""
