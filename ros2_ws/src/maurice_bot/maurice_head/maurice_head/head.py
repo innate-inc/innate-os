@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from rcl_interfaces.srv import GetParameters
-from std_msgs.msg import Int32, String
+from std_msgs.msg import Int32, String, Empty
 from std_srvs.srv import SetBool  # Import service message type
 
 
@@ -33,6 +33,9 @@ class HeadServoNode(Node):
         self.declare_parameter(
             "control_frequency", 50
         )  # Hz - how often to publish position
+        self.declare_parameter(
+            "ai_position", -20
+        )  # AI position angle for recording and policy execution
 
         # Get parameters
         self.servo_id = self.get_parameter('servo_id').value
@@ -41,6 +44,7 @@ class HeadServoNode(Node):
         current_limit = self.get_parameter('current_limit').value
         self.position_offset = self.get_parameter('position_offset').value
         control_frequency = self.get_parameter('control_frequency').value
+        self.ai_position = self.get_parameter('ai_position').value
 
         # Wait for servo_manager to be ready and get device name
         self.get_logger().info("Waiting for servo_manager to be ready...")
@@ -76,6 +80,11 @@ class HeadServoNode(Node):
         # Subscription for position control
         self.subscription = self.create_subscription(
             Int32, "head/set_position", self.position_callback, 10
+        )
+
+        # Subscription for AI position control
+        self.ai_position_subscription = self.create_subscription(
+            Empty, "head/set_ai_position", self.ai_position_callback, 10
         )
 
         # Publisher for current position (JSON format)
@@ -297,6 +306,24 @@ class HeadServoNode(Node):
             
         except Exception as e:
             self.get_logger().error(f"Failed to store position command: {str(e)}")
+
+    def ai_position_callback(self, msg):
+        """Callback for setting the AI position."""
+        self.get_logger().info(f"Received AI position command, moving to: {self.ai_position} degrees")
+        
+        # Validate AI position range
+        if self.ai_position < MIN_ANGLE or self.ai_position > MAX_ANGLE:
+            self.get_logger().error(
+                f"AI position {self.ai_position} out of range [{MIN_ANGLE}, {MAX_ANGLE}]"
+            )
+            return
+
+        try:
+            # Store the AI position command for processing in the timer callback
+            self.latest_command = self.ai_position
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to store AI position command: {str(e)}")
 
     def enable_servo_callback(self, request, response):
         """Service callback to enable or disable the servo."""

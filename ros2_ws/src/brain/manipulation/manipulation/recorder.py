@@ -8,7 +8,7 @@ from manipulation.DataUtils import EpisodeData, TaskManager
 
 # Import message types for sensor data
 from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Empty
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge  # For image conversion
 import cv2
@@ -33,6 +33,7 @@ class RecorderNode(Node):
         self.declare_parameter('leader_command_topic', '/leader/command')
         self.declare_parameter('velocity_topic', '/cmd_vel')
         self.declare_parameter('image_size', [640, 480])
+        self.declare_parameter('head_ai_position_topic', '/head/set_ai_position')
         
         # Get parameter values
         data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
@@ -42,6 +43,7 @@ class RecorderNode(Node):
         self.leader_command_topic = self.get_parameter('leader_command_topic').value
         self.velocity_topic = self.get_parameter('velocity_topic').value
         self.image_size = self.get_parameter('image_size').value
+        self.head_ai_position_topic = self.get_parameter('head_ai_position_topic').value
         # Initialize TaskManager and internal state
         self.task_manager = TaskManager(data_directory)
         self.current_episode = None  # Holds an EpisodeData instance when an episode is active
@@ -98,6 +100,9 @@ class RecorderNode(Node):
         self.get_logger().info(f"Subscribing to arm state topic: {self.arm_state_topic}")
         self.get_logger().info(f"Subscribing to leader command topic: {self.leader_command_topic}")
         self.get_logger().info(f"Subscribing to velocity topic: {self.velocity_topic}")
+        
+        # Create publishers
+        self.head_ai_position_pub = self.create_publisher(Empty, self.head_ai_position_topic, 10)
         
         # Create service servers with updated names prefixed with "recorder/"
         self.new_task_srv = self.create_service(ManipulationTask, 'recorder/new_task', self.handle_new_task)
@@ -208,6 +213,16 @@ class RecorderNode(Node):
         except ValueError as e:
             self.get_logger().error(f"Error adding timestep: {e}")
 
+    def _set_head_ai_position(self):
+        """Set the head to AI position for recording."""
+        try:
+            empty_msg = Empty()
+            self.head_ai_position_pub.publish(empty_msg)
+            self.get_logger().info("AI position command sent to head for recording setup")
+            time.sleep(3.0)  # Wait for head to move to AI position
+        except Exception as e:
+            self.get_logger().error(f"Error setting AI position: {e}")
+
     # Service handlers.
     def handle_new_task(self, request, response):
         if self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
@@ -245,6 +260,10 @@ class RecorderNode(Node):
             response.success = False
             response.message = f"An episode is already {self.state.lower()}. Please save or cancel the current episode first."
             return response
+        
+        # Set head to AI position for optimal camera angle during recording
+        self.get_logger().info("Setting head to AI position for recording setup")
+        self._set_head_ai_position()
         
         self.current_episode = EpisodeData()
         self.episode_start_time = time.time()

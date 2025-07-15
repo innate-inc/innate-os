@@ -4,7 +4,7 @@ import threading
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Empty
 from maurice_msgs.srv import GotoJS
 from brain_messages.action import ExecuteBehavior  # You'll need to create this action
 from brain_messages.srv import GetAvailableBehaviors
@@ -128,6 +128,7 @@ class BehaviorServer(Node):
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+        self.head_ai_position_pub = self.create_publisher(Empty, '/head/set_ai_position', 10)
         
         # Service client
         self.arm_goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
@@ -347,6 +348,10 @@ class BehaviorServer(Node):
             if not self._check_sensor_availability():
                 self.get_logger().error("Required sensors not available. Cannot execute learned behavior.")
                 return "FAILURE", "Required sensors not available (cameras or joint state)"
+            
+            # Set head to AI position for optimal camera angle
+            self.get_logger().info("Setting head to AI position for optimal camera angle")
+            self._set_head_ai_position()
             
             # Get behavior parameters
             duration = behavior_config.get('duration', 20.0)
@@ -716,6 +721,16 @@ class BehaviorServer(Node):
         twist_msg.linear.x = 0.0
         twist_msg.angular.z = 0.0
         self.cmd_vel_pub.publish(twist_msg)
+    
+    def _set_head_ai_position(self):
+        """Set the head to AI position for recording/policy execution."""
+        try:
+            empty_msg = Empty()
+            self.head_ai_position_pub.publish(empty_msg)
+            self.get_logger().info("AI position command sent to head")
+            time.sleep(3.0)  # Wait for head to move to AI position
+        except Exception as e:
+            self.get_logger().error(f"Error setting AI position: {e}")
     
     def _check_sensor_availability(self):
         """Check if all required sensors are providing data."""
