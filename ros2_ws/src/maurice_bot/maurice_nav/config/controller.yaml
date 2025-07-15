@@ -1,10 +1,10 @@
 controller_server:
   ros__parameters:
     use_sim_time: false
-    controller_frequency: 5.0
-    min_x_velocity_threshold: 0.02
-    min_y_velocity_threshold: 0.0         # Differential drive: no lateral motion
-    min_theta_velocity_threshold: 0.05
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5         # Differential drive: no lateral motion
+    min_theta_velocity_threshold: 0.001
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -18,45 +18,124 @@ controller_server:
       yaw_goal_tolerance: 0.1
       stateful: True
 
-    # DWB controller parameters for the "FollowPath" plugin
+    # MPPI controller parameters for the "FollowPath" plugin
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: True
-      min_vel_x: -0.0                   # Allow reverse up to -0.2 m/s
-      min_vel_y: 0.0
-      max_vel_x: 0.5                     # Maximum forward speed 0.4 m/s
-      max_vel_y: 0.0
-      max_vel_theta: 0.8                 # Maximum angular speed 0.1 rad/s
-      min_speed_xy: 0.0
-      max_speed_xy: 0.5
-      min_speed_theta: 0.0
-      acc_lim_x: 0.3                     # Linear acceleration limit 0.4 m/s²
-      acc_lim_y: 0.0
-      acc_lim_theta: 0.5                # Angular acceleration limit 1.0 rad/s²
-      decel_lim_x: -0.3                  # Linear deceleration limit -0.4 m/s²
-      decel_lim_y: 0.0
-      decel_lim_theta: -0.5             # Angular deceleration limit -1.0 rad/s²
-      vx_samples: 40
-      vy_samples: 0
-      vtheta_samples: 100
-      sim_time: 2.5
-      linear_granularity: 0.05
-      angular_granularity: 0.05
-      transform_tolerance: 0.2
-      xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.25
-      short_circuit_trajectory_evaluation: True
-      limit_vel_cmd_in_traj: False
-      stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.5
-      ObstacleFootprint.scale: 0.5
-      PathAlign.scale: 64.0
-      GoalAlign.scale: 5.0
-      PathAlign.forward_point_distance: 0.2
-      GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 128.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
+      plugin: "nav2_mppi_controller::MPPIController"
+      
+      # Motion model and basic parameters
+      motion_model: "DiffDrive"
+      time_steps: 50                    # 50 steps * 0.05s = 2.5s prediction horizon (matches old sim_time)
+      model_dt: 0.05                    # 1/controller_frequency = 1/20 = 0.05s
+      batch_size: 1000                  # Number of trajectory samples
+      iteration_count: 1
+      
+      # Velocity limits (from existing DWB config)
+      vx_min: -0.2                      # matches min_vel_x
+      vx_max: 0.5                       # matches max_vel_x
+      vy_max: 0.0                       # differential drive - no lateral motion
+      wz_max: 0.8                       # matches max_vel_theta
+      
+      # Acceleration limits (from existing DWB config)
+      ax_min: -0.3                      # matches decel_lim_x
+      ax_max: 0.3                       # matches acc_lim_x
+      ay_min: 0.0                       # differential drive - no lateral acceleration
+      ay_max: 0.0                       # differential drive - no lateral acceleration
+      az_max: 0.5                       # matches acc_lim_theta (absolute value of decel_lim_theta)
+      
+      # Sampling standard deviations
+      vx_std: 0.2                       # Forward velocity sampling std
+      vy_std: 0.0                       # No lateral sampling for diff drive
+      wz_std: 0.4                       # Angular velocity sampling std
+      
+      # Path handling
+      transform_tolerance: 0.2          # matches existing transform_tolerance
+      prune_distance: 1.5               # Distance ahead to prune path
+      max_robot_pose_search_dist: 10.0  # Max distance to search for nearest path point
+      
+      # Algorithm parameters
+      temperature: 0.3                  # Trajectory selection temperature
+      gamma: 0.015                      # Smoothness vs energy trade-off
+      visualize: true                   # Set to true for debugging (slows performance)
+      regenerate_noises: false
+      
+      # Goal tolerances
+      xy_goal_tolerance: 0.25           # matches existing xy_goal_tolerance
+      
+      # Critics (objective functions)
+      critics: [
+        "ConstraintCritic", 
+        "CostCritic", 
+        "GoalCritic", 
+        "GoalAngleCritic", 
+        "PathAlignCritic", 
+        "PathFollowCritic", 
+        "PathAngleCritic", 
+        "PreferForwardCritic"
+      ]
+      
+      # Constraint critic - ensures trajectories stay within kinematic limits
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      
+      # Cost critic - uses costmap for obstacle avoidance
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.8
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 0.5
+        trajectory_point_step: 2
+      
+      # Goal critic - drives robot toward goal position
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.2       # Start considering when within this distance of goal
+      
+      # Goal angle critic - aligns robot with goal orientation
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      
+      # Path alignment critic - keeps robot aligned with path
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      
+      # Path following critic - drives progress along path
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 6
+        threshold_to_consider: 1.2
+      
+      # Path angle critic - handles sharp turns
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.2
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0                          # Forward preference mode
+      
+      # Prefer forward critic - encourages forward motion over reversing
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
