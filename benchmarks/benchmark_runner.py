@@ -589,36 +589,110 @@ class DirectiveBenchmark:
     def _should_stop_early(self):
         """
         Check if the benchmark should stop early based on the stop criterion.
-        Uses a VLM to evaluate the stop criterion against the current state.
+        Can use either deterministic checks or VLM evaluation based on success_type.
         """
-        return evaluate_stop_criterion(
-            self.early_stop_criterion,
-            self.first_person_dir,
-            self.chase_dir,
-            self.chat_log,
-            self.metrics,
-            self._save_metrics,
-            self.use_frames,
-            self.expectations,
-            self.check_status,
-        )
+        if not self.early_stop_criterion:
+            return False
+            
+        # Check if we should use deterministic early stopping
+        success_type = self.expectations.get("success_type", "vlm")
+        
+        if success_type == "deterministic":
+            # For deterministic success, stop early if success conditions are met
+            success_result = self._evaluate_deterministic_success()
+            if success_result.get("success", False):
+                print(f"Early stop triggered by deterministic success: {success_result.get('reason', '')}")
+                
+                # Save the early stop decision to metrics
+                self.metrics["early_stop"] = {
+                    "triggered": True,
+                    "time": time.time() - self.metrics["start_timestamp"],
+                    "reason": f"Deterministic success achieved: {success_result.get('reason', '')}",
+                }
+                self._save_metrics()
+                return True
+            return False
+        else:
+            # Default to VLM evaluation
+            return evaluate_stop_criterion(
+                self.early_stop_criterion,
+                self.first_person_dir,
+                self.chase_dir,
+                self.chat_log,
+                self.metrics,
+                self._save_metrics,
+                self.use_frames,
+                self.expectations,
+                self.check_status,
+            )
 
     def _evaluate_final_success(self):
         """
         Evaluate whether the benchmark was successful based on the success criterion.
-        Uses a VLM to evaluate the success criterion against the collected data.
+        Can use either deterministic checks or VLM evaluation based on success_type.
         """
         if not self.expectations.get("success_criterion"):
             return {"success": False, "reason": "No success criterion defined"}
 
-        return evaluate_final_success(
-            self.expectations["success_criterion"],
-            self.first_person_dir,
-            self.chase_dir,
-            self.chat_log,
-            self.metrics,
-            self.use_frames,
-        )
+        # Check if we should use deterministic success evaluation
+        success_type = self.expectations.get("success_type", "vlm")
+        
+        if success_type == "deterministic":
+            return self._evaluate_deterministic_success()
+        else:
+            # Default to VLM evaluation
+                         return evaluate_final_success(
+                 self.expectations["success_criterion"],
+                 self.first_person_dir,
+                 self.chase_dir,
+                 self.chat_log,
+                 self.metrics,
+                 self.use_frames,
+             )
+
+    def _evaluate_deterministic_success(self):
+        """
+        Evaluate success based on deterministic criteria (e.g., location checks).
+        This checks if all required conditions in the success_criterion are met.
+        """
+        success_criterion = self.expectations.get("success_criterion", {})
+        
+        # If success_criterion is a string (legacy format), return error
+        if isinstance(success_criterion, str):
+            return {
+                "success": False, 
+                "reason": "Deterministic success requires structured success_criterion, not string"
+            }
+        
+        # success_criterion should be a dict with required_checks
+        required_checks = success_criterion.get("required_checks", [])
+        
+        if not required_checks:
+            return {
+                "success": False,
+                "reason": "No required_checks specified in success_criterion for deterministic evaluation"
+            }
+        
+        # Check if all required checks have passed
+        failed_checks = []
+        passed_checks = []
+        
+        for check_id in required_checks:
+            if self.check_status.get(check_id, False):
+                passed_checks.append(check_id)
+            else:
+                failed_checks.append(check_id)
+        
+        if failed_checks:
+            return {
+                "success": False,
+                "reason": f"Required checks failed: {failed_checks}. Passed checks: {passed_checks}"
+            }
+        else:
+            return {
+                "success": True,
+                "reason": f"All required checks passed: {passed_checks}"
+            }
 
     def run(self):
         """Run the benchmark test."""

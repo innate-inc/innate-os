@@ -157,11 +157,15 @@ def evaluate_with_vlm(
         eval_text = (
             f"Based on the provided frames and chat log, evaluate the "
             f"following {prompt_type} criterion:\n\n{criterion}\n\n"
+            f"IMPORTANT: Only indicate that the criterion has been met if you are "
+            f"completely certain and have clear evidence. When in doubt, err on the "
+            f"side of caution and indicate the criterion has NOT been met. Be "
+            f"conservative in your evaluation.\n\n"
             f"{time_info}{chat_log_text}"
         )
         user_message_content.append(
             {
-                "type": "input_text",
+                "type": "text",
                 "text": eval_text,
             }
         )
@@ -172,8 +176,10 @@ def evaluate_with_vlm(
             if encoded_image:
                 user_message_content.append(
                     {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{encoded_image}",
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{encoded_image}",
+                        },
                     }
                 )
 
@@ -181,12 +187,12 @@ def evaluate_with_vlm(
         messages.append({"role": "user", "content": user_message_content})
 
         # Call the OpenAI API with the properly formatted messages
-        response = client.responses.create(
+        response = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
-            input=messages,
-            text={
-                "format": {
-                    "type": "json_schema",
+            messages=messages,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
                     "name": "criterion_evaluation",
                     "schema": schema,
                     "strict": True,
@@ -195,7 +201,7 @@ def evaluate_with_vlm(
         )
 
         # Parse the structured output
-        result = response.output_text
+        result = response.choices[0].message.content
 
         # If response is a string (JSON), parse it
         if isinstance(result, str):

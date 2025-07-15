@@ -34,6 +34,8 @@ This directory contains a framework for benchmarking agent performance across va
 
 ```bash
 python benchmarks/benchmark_runner.py --config benchmarks/configs/path/to/config.yaml --trial 1
+source venv/bin/activate
+python benchmarks/benchmark_runner.py --config benchmarks/configs/navigation_in_sight_complex_test.yaml --trial 1
 ```
 
 ### Running Multiple Benchmarks
