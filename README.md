@@ -66,6 +66,12 @@ python main_web.py [OPTIONS]
 *   `--auth0-audience <your-audience>`: Your Auth0 API identifier/audience (required if `--need-oauth true`).
 *   `--log-everything`: Enable verbose logging for all agent model inputs/outputs.
 
+**Preferred starting options for dev on the agent**
+
+```bash
+python main_web.py --local --vis --log-everything --need-oauth false
+```
+
 ### 2. Start the Frontend Development Server
 
 In a *separate* terminal, from the `frontend` directory:
