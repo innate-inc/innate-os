@@ -405,9 +405,9 @@ class ModeManager(Node):
             target_mode = request.mode.strip().lower()
             
             # Validate mode
-            if target_mode not in ["navigation", "mapping"]:
+            if target_mode not in ["navigation", "mapping", "mapfree"]:
                 response.success = False
-                response.message = f"Invalid mode '{target_mode}'. Use 'navigation' or 'mapping'"
+                response.message = f"Invalid mode '{target_mode}'. Use 'navigation' or 'mapping' or 'mapfree'"
                 self.get_logger().error(response.message)
                 return response
             
@@ -425,7 +425,7 @@ class ModeManager(Node):
                 time.sleep(2)  # Give some time for cleanup
 
             # Determine which mode to launch
-            if target_mode == "mapping":
+            if target_mode == "mapping" or target_mode == "mapfree":
                 launch_cmd = [
                     'ros2', 'launch', 'maurice_nav', 'mapping.launch.py'
                 ]
