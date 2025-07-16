@@ -104,6 +104,7 @@ class BrainClientNode(Node):
         self.declare_parameter("send_depth", True)
         self.declare_parameter("odom_topic", "/odom")  # Removed odom_topic
         self.declare_parameter("use_odom_as_amcl_pose", False)
+        self.declare_parameter("current_nav_mode_topic", "/nav/current_mode")
 
         # New parameters for camera FOV
         self.declare_parameter("vertical_fov", 60.0)
@@ -190,7 +191,9 @@ class BrainClientNode(Node):
             Odometry, self.odom_topic, self.odom_callback, 10
         )
         self.current_nav_mode_topic = (
-            self.get_parameter("/nav/current_mode").get_parameter_value().string_value
+            self.get_parameter("current_nav_mode_topic")
+            .get_parameter_value()
+            .string_value
         )
         self.current_nav_mode_sub = self.create_subscription(
             String, self.current_nav_mode_topic, self.nav_mode_callback, 10

@@ -88,6 +88,11 @@ def generate_launch_description():
         default_value="True",
         description="Flag to enable simulator mode (uses sim navigation and auto-activates brain)",
     )
+    current_nav_mode_topic_arg = DeclareLaunchArgument(
+        "current_nav_mode_topic",
+        default_value="/nav/current_mode",
+        description="Topic for current navigation mode (mapfree, mapping, navigation)",
+    )
     # Launch the BrainClientNode
     brain_client_node = Node(
         package="brain_client",
@@ -113,6 +118,7 @@ def generate_launch_description():
                 "simulator_mode": LaunchConfiguration("simulator_mode"),
                 "x_cam": LaunchConfiguration("x_cam"),
                 "height_cam": LaunchConfiguration("height_cam"),
+                "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
             }
         ],
         output="screen",
@@ -139,6 +145,7 @@ def generate_launch_description():
             simulator_mode_arg,
             x_cam_arg,
             height_cam_arg,
+            current_nav_mode_topic_arg,
             brain_client_node,
             # Launch the WSClientNode (handles actual WebSocket connection)
             Node(
