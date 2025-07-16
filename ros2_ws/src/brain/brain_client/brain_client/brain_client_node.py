@@ -25,6 +25,8 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
+# from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
+
 # from tf2_geometry_msgs import do_transform_pose # Reverted by user, then identified as unused by linter
 # from geometry_msgs.msg import PoseStamped # Reverted by user, then identified as unused by linter
 
@@ -181,10 +183,19 @@ class BrainClientNode(Node):
         )
         self.last_odom = None
         self.last_amcl_pose = None
+        self.cur_nav_mode = None
+
         self.last_arm_camera = None  # Store the latest arm camera image
         self.odom_sub = self.create_subscription(
             Odometry, self.odom_topic, self.odom_callback, 10
         )
+        self.current_nav_mode_topic = (
+            self.get_parameter("/nav/current_mode").get_parameter_value().string_value
+        )
+        self.current_nav_mode_sub = self.create_subscription(
+            String, self.current_nav_mode_topic, self.nav_mode_callback, 10
+        )
+        # self.map_agnostic_odom_pub = self.create_publisher(Odometry, '/map_agnost_odom', 10)
 
         # Create a timer to fetch the transform at 30 Hz
         self.transform_timer = self.create_timer(
@@ -615,6 +626,17 @@ class BrainClientNode(Node):
         if self.use_odom_as_amcl_pose:
             self.last_amcl_pose = self.last_odom
 
+    def nav_mode_callback(self, msg: String):
+        """Store the Current navigation mode. mapfree, mapping, navigation"""
+        self.cur_nav_mode = msg.data
+        self.get_logger().debug(f"Current Navigation Mode is {self.cur_nav_mode}")
+        # if msg.data == 'mapfree':
+        #     if self.last_odom is None:
+        #         self.get_logger().warn("No odometry received yet. Cannot publish map-agnostic odometry.")
+        #         return
+        #     self.last_odom.pose.covariance = [1e4] * 36
+        # self.map_agnostic_odom_pub.publish(self.last_odom)
+
     def head_position_callback(self, msg: String):
         """Store the latest head position data."""
         try:
@@ -660,22 +682,42 @@ class BrainClientNode(Node):
                     "Skipping pose_image: No image or odom/amcl_pose."
                 )
                 return
+            if self.cur_nav_mode is None or self.cur_nav_mode == "mapping":
+                self.get_logger().warn(
+                    f"Skipping pose_image_callback as navigation mode is {self.cur_nav_mode}"
+                )
 
             # Use self.last_amcl_pose if available, otherwise fallback to self.last_odom (or skip)
             current_pose_source = None
-            if self.last_amcl_pose:
+            # try:
+            #     transform = self.tf_buffer.lookup_transform(
+            #         target_frame='map',
+            #         source_frame='base_link',
+            #         time=rclpy.time.Time(),
+            #         timeout=rclpy.time.Duration(seconds=1.0),
+            #     )
+
+            # except Exception as err:
+            #     # self.get_logger().error(f"Error in pose_image_callback: {err}")
+            #     self.get_logger().info(f"Transform not ready {err}")
+            #     return
+
+            if self.cur_nav_mode == "navigation" and self.last_amcl_pose:
                 current_pose_source = self.last_amcl_pose.pose
                 # self.get_logger().debug("Using amcl_pose for pose_image_callback")
             elif (
                 self.last_odom
             ):  # Fallback, though ideally amcl_pose is what we want for covariance
+                if self.cur_nav_mode == "mapfree":
+                    self.last_odom.pose.covariance = [1e4] * 36
                 current_pose_source = self.last_odom.pose
+
                 self.get_logger().warn(
                     "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
                 )
             else:
                 self.get_logger().warn(
-                    "Skipping pose_image: No amcl_pose or odom available."
+                    f"Skipping pose_image: No amcl_pose or odom available at navigation mode {self.cur_nav_mode}"
                 )
                 return
 
@@ -686,14 +728,19 @@ class BrainClientNode(Node):
                 self.get_logger().error("Failed to encode image for pose_image")
                 return
 
-            # Extract position and orientation data
+            # # Extract position and orientation data
             pos = current_pose_source.pose.position  # Use selected source
             ori = current_pose_source.pose.orientation  # Use selected source
+
+            # pos = transform.transform.translation
+            # ori = transform.transform.rotation
 
             # Compute yaw from quaternion
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
             cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
             theta = math.atan2(siny_cosp, cosy_cosp)
+            self.pos_data_xyt = (pos.x, pos.y, theta)
+            # self.get_logger().info(f"Are you working? {pos.x}  {pos.y} and theta {theta}")
 
             # Create and send the pose_image message
             # No user_token is needed as the server will use the connection_id

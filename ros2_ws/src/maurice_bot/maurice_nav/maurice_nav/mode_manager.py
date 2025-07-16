@@ -12,6 +12,12 @@ import glob
 import json
 from nav2_simple_commander.robot_navigator import BasicNavigator
 
+# TF2 imports for transform lookup
+import tf2_ros
+from geometry_msgs.msg import Pose
+from geometry_msgs.msg import TransformStamped
+from nav_msgs.msg import Odometry
+
 class ModeManager(Node):
     def __init__(self):
         super().__init__('mode_manager')
@@ -72,6 +78,18 @@ class ModeManager(Node):
         
         # Timer to publish current mode and maps
         self.timer = self.create_timer(1.0, self.publish_status)
+
+        # --- TF2: Mapping pose publisher ---
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.mapping_pose_pub = self.create_publisher(Odometry, '/mapping_pose', 10)
+        # Subscribe to odometry topic (for mapping_pose publishing)
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            '/odom',
+            self.odom_callback,
+            20  # queue size
+        )
         
         self.get_logger().info('Mode Manager started with map management capabilities.')
         self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
@@ -83,6 +101,36 @@ class ModeManager(Node):
         
         # Auto-start in the saved mode after a short delay
         self.startup_timer = self.create_timer(3.0, self.auto_start_mode)
+
+    def odom_callback(self, msg):
+        # Only publish mapping_pose in mapping mode
+        if getattr(self, 'current_mode', None) != 'mapping':
+            return
+        try:
+            tf_time = rclpy.time.Time()
+            tf: TransformStamped = self.tf_buffer.lookup_transform('map', 'base_link', tf_time)
+            odom_msg = Odometry()
+            odom_msg.header.stamp = msg.header.stamp
+            odom_msg.header.frame_id = 'map'
+            odom_msg.child_frame_id = 'base_link'
+            odom_msg.pose.pose.position.x = tf.transform.translation.x
+            odom_msg.pose.pose.position.y = tf.transform.translation.y
+            odom_msg.pose.pose.position.z = tf.transform.translation.z
+            odom_msg.pose.pose.orientation = tf.transform.rotation
+            # Set covariance to zeros (or small value if desired)
+            odom_msg.pose.covariance = [0.0] * 36
+            # Set twist to zero
+            odom_msg.twist.twist.linear.x = 0.0
+            odom_msg.twist.twist.linear.y = 0.0
+            odom_msg.twist.twist.linear.z = 0.0
+            odom_msg.twist.twist.angular.x = 0.0
+            odom_msg.twist.twist.angular.y = 0.0
+            odom_msg.twist.twist.angular.z = 0.0
+            odom_msg.twist.covariance = [0.0] * 36
+            self.mapping_pose_pub.publish(odom_msg)
+        except Exception as e:
+            self.get_logger().warn(f"[mapping_pose] TF lookup failed in odom_callback: {e}")
+
 
     def discover_maps(self):
         """Discover available map files in the maps directory"""
@@ -109,10 +157,9 @@ class ModeManager(Node):
             if os.path.exists(self.mode_file):
                 with open(self.mode_file, 'r') as f:
                     saved_mode = f.read().strip()
-                    if saved_mode in ["navigation", "mapping"]:
+                    if saved_mode in ["navigation", "mapping", "mapfree"]:
                         self.get_logger().info(f"Loaded last mode: {saved_mode}")
                         return saved_mode
-            
             # Default to navigation mode
             self.get_logger().info("No saved mode found, defaulting to navigation")
             return "navigation"
@@ -184,6 +231,8 @@ class ModeManager(Node):
             request.mode = self.current_mode
             response = ChangeNavigationMode.Response()
             self.change_mode_callback(request, response)
+        elif self.current_mode == "mapfree":
+            self.get_logger().info("Auto-starting in mapfree mode (no launch)")
 
     def publish_status(self):
         """Publish current mode, available maps, and current map"""
@@ -405,16 +454,30 @@ class ModeManager(Node):
             target_mode = request.mode.strip().lower()
             
             # Validate mode
-            if target_mode not in ["navigation", "mapping"]:
+            if target_mode not in ["navigation", "mapping", "mapfree"]:
                 response.success = False
-                response.message = f"Invalid mode '{target_mode}'. Use 'navigation' or 'mapping'"
+                response.message = f"Invalid mode '{target_mode}'. Use 'navigation', 'mapping', or 'mapfree'"
                 self.get_logger().error(response.message)
                 return response
             
             # Don't restart if already in the requested mode
-            if self.current_mode == target_mode and self.current_process and self.current_process.poll() is None:
+            if self.current_mode == target_mode and (
+                (self.current_process and self.current_process.poll() is None) or target_mode == "mapfree"):
                 response.success = True
                 response.message = f"Already in {target_mode} mode"
+                self.get_logger().info(response.message)
+                return response
+
+            # For mapfree, just set the mode, do not launch or kill any processes
+            if target_mode == "mapfree":
+                if self.current_process:
+                    self.get_logger().info(f"Stopping current mode: {self.current_mode}")
+                    self.kill_current_process()
+                    time.sleep(2)
+                self.current_mode = "mapfree"
+                self.save_last_mode("mapfree")
+                response.success = True
+                response.message = "Switched to mapfree mode (no launch)"
                 self.get_logger().info(response.message)
                 return response
 
