@@ -24,6 +24,7 @@ import os
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
+
 # from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 
 # from tf2_geometry_msgs import do_transform_pose # Reverted by user, then identified as unused by linter
@@ -75,6 +76,7 @@ from brain_client.directives.security_patrol_directive import SecurityPatrolDire
 from brain_client.directives.clean_house_directive import CleanHouseDirective
 from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
 from brain_client.directives.socks_tidier_directive import SocksTidierDirective
+
 
 class BrainClientNode(Node):
     def __init__(self):
@@ -181,15 +183,17 @@ class BrainClientNode(Node):
         )
         self.last_odom = None
         self.last_amcl_pose = None
-        self.cur_mode = None
+        self.cur_nav_mode = None
 
         self.last_arm_camera = None  # Store the latest arm camera image
         self.odom_sub = self.create_subscription(
             Odometry, self.odom_topic, self.odom_callback, 10
         )
-        self.current_mode_topic = self.get_parameter("/nav/current_mode").get_parameter_value().string_value
-        self.current_mode_sub = self.create_subscription(
-            String, self.current_mode_topic, self.mode_callback, 10
+        self.current_nav_mode_topic = (
+            self.get_parameter("/nav/current_mode").get_parameter_value().string_value
+        )
+        self.current_nav_mode_sub = self.create_subscription(
+            String, self.current_nav_mode_topic, self.nav_mode_callback, 10
         )
         # self.map_agnostic_odom_pub = self.create_publisher(Odometry, '/map_agnost_odom', 10)
 
@@ -622,20 +626,16 @@ class BrainClientNode(Node):
         if self.use_odom_as_amcl_pose:
             self.last_amcl_pose = self.last_odom
 
-    def mode_callback(self, msg: String):
-        """Store the Current mode. mapfree, mapping, navigation"""
-        self.cur_mode = msg.data
-        self.get_logger().debug(
-            f"Current Mode is {self.cur_mode}"
-        )
+    def nav_mode_callback(self, msg: String):
+        """Store the Current navigation mode. mapfree, mapping, navigation"""
+        self.cur_nav_mode = msg.data
+        self.get_logger().debug(f"Current Navigation Mode is {self.cur_nav_mode}")
         # if msg.data == 'mapfree':
         #     if self.last_odom is None:
         #         self.get_logger().warn("No odometry received yet. Cannot publish map-agnostic odometry.")
         #         return
         #     self.last_odom.pose.covariance = [1e4] * 36
         # self.map_agnostic_odom_pub.publish(self.last_odom)
-
-
 
     def head_position_callback(self, msg: String):
         """Store the latest head position data."""
@@ -682,9 +682,9 @@ class BrainClientNode(Node):
                     "Skipping pose_image: No image or odom/amcl_pose."
                 )
                 return
-            if self.cur_mode is None or self.cur_mode == "mapping":
+            if self.cur_nav_mode is None or self.cur_nav_mode == "mapping":
                 self.get_logger().warn(
-                    f"Skipping pose_image_callback as mode is {self.cur_mode}"
+                    f"Skipping pose_image_callback as navigation mode is {self.cur_nav_mode}"
                 )
 
             # Use self.last_amcl_pose if available, otherwise fallback to self.last_odom (or skip)
@@ -702,22 +702,22 @@ class BrainClientNode(Node):
             #     self.get_logger().info(f"Transform not ready {err}")
             #     return
 
-            if self.cur_mode == "navigation" and self.last_amcl_pose:
+            if self.cur_nav_mode == "navigation" and self.last_amcl_pose:
                 current_pose_source = self.last_amcl_pose.pose
                 # self.get_logger().debug("Using amcl_pose for pose_image_callback")
             elif (
                 self.last_odom
             ):  # Fallback, though ideally amcl_pose is what we want for covariance
-                if self.cur_mode == "mapfree":
+                if self.cur_nav_mode == "mapfree":
                     self.last_odom.pose.covariance = [1e4] * 36
                 current_pose_source = self.last_odom.pose
-                    
+
                 self.get_logger().warn(
                     "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
                 )
             else:
                 self.get_logger().warn(
-                    f"Skipping pose_image: No amcl_pose or odom available at mode {self.cur_mode}"
+                    f"Skipping pose_image: No amcl_pose or odom available at navigation mode {self.cur_nav_mode}"
                 )
                 return
 
@@ -1155,7 +1155,9 @@ class BrainClientNode(Node):
                     "frame_id": self.last_amcl_pose.header.frame_id,  # Use amcl_pose frame_id
                     "cov_x": amcl_pose_data.covariance[0],  # Variance of x
                     "cov_y": amcl_pose_data.covariance[7],  # Variance of y
-                    "cov_yaw": amcl_pose_data.covariance[35],  # Variance of yaw (renamed from cov_angle_z)
+                    "cov_yaw": amcl_pose_data.covariance[
+                        35
+                    ],  # Variance of yaw (renamed from cov_angle_z)
                 }
                 payload["robot_coords"] = robot_coords_payload
 
