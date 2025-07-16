@@ -17,7 +17,7 @@ duration: 500  # seconds, increased duration for a more complex task
 messages:
   - trigger_type: "time"
     time: 2  # seconds after start
-    text: "Go in the corridor then go in the living room and go directly under the TV. "
+    text: "Go in the corridor then go in the living room and go directly under the TV. ONLY STOP WHEN YOU ARE RIGHT UNDER THE TV"
 
 # Expectations section
 expectations:
