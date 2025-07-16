@@ -81,6 +81,17 @@ def generate_launch_description():
     declare_jpeg_quality = DeclareLaunchArgument(
         'jpeg_quality', default_value='90',
         description='JPEG compression quality (0-100).')
+    
+    # --- Debug Arguments ---
+    declare_debug_save_images = DeclareLaunchArgument(
+        'debug_save_images', default_value='True',
+        description='Enable saving debug images to disk.')
+    declare_debug_output_dir = DeclareLaunchArgument(
+        'debug_output_dir', default_value='~/Pictures/camera_debug',
+        description='Directory to save debug images.')
+    declare_debug_save_interval = DeclareLaunchArgument(
+        'debug_save_interval', default_value='30',
+        description='Save every Nth frame as debug image.')
 
     # -------------------------------------------------------
     # URDF Launch (Publishes Robot Description and Robot State Publisher)
@@ -142,6 +153,9 @@ def generate_launch_description():
             'jpeg_quality': LaunchConfiguration('jpeg_quality'),
             'mxId': mxId_lc,
             'usb2Mode': usb2Mode_lc,
+            'debug_save_images': LaunchConfiguration('debug_save_images'),
+            'debug_output_dir': LaunchConfiguration('debug_output_dir'),
+            'debug_save_interval': LaunchConfiguration('debug_save_interval'),
         }]
     )
 
@@ -169,6 +183,9 @@ def generate_launch_description():
     ld.add_action(declare_use_video)
     ld.add_action(declare_compression_format)
     ld.add_action(declare_jpeg_quality)
+    ld.add_action(declare_debug_save_images)
+    ld.add_action(declare_debug_output_dir)
+    ld.add_action(declare_debug_save_interval)
 
     # Add nodes and other launch actions
     ld.add_action(urdf_launch)
