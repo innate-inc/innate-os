@@ -685,10 +685,14 @@ class BrainClientNode(Node):
                     "Skipping pose_image: No image or odom/amcl_pose."
                 )
                 return
-            if self.cur_nav_mode is None or self.cur_nav_mode == "mapping":
+            # In simulator mode, allow pose_image_callback even if nav_mode is None
+            if (
+                self.cur_nav_mode is None or self.cur_nav_mode == "mapping"
+            ) and not self.simulator_mode:
                 self.get_logger().warn(
                     f"Skipping pose_image_callback as navigation mode is {self.cur_nav_mode}"
                 )
+                return
 
             # Use self.last_amcl_pose if available, otherwise fallback to self.last_odom (or skip)
             current_pose_source = None
@@ -715,9 +719,11 @@ class BrainClientNode(Node):
                     self.last_odom.pose.covariance = [1e4] * 36
                 current_pose_source = self.last_odom.pose
 
-                self.get_logger().warn(
-                    "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
-                )
+                # Only show warning in real robot mode, not in simulator where odom is expected
+                if not self.simulator_mode:
+                    self.get_logger().warn(
+                        "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
+                    )
             else:
                 self.get_logger().warn(
                     f"Skipping pose_image: No amcl_pose or odom available at navigation mode {self.cur_nav_mode}"
