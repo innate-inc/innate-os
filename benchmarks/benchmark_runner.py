@@ -586,6 +586,54 @@ class DirectiveBenchmark:
 
         return updated_status
 
+    def _periodic_check_validation(self):
+        """Periodically validate checks during the benchmark run to enable real-time early stopping."""
+        if not self.expectations.get("checks"):
+            return
+            
+        # Only validate location and primitive checks during the run
+        # VLM checks are too expensive to run periodically
+        for check in self.expectations["checks"]:
+            check_id = check.get("id")
+            check_type = check.get("type")
+            
+            if not check_id or not check_type:
+                continue
+                
+            # Skip checks that have already passed
+            if self.check_status.get(check_id, False):
+                continue
+                
+            # Only validate location and primitive checks periodically
+            if check_type == "location":
+                # Validate location check with current position history
+                from src.check_validation import validate_location_check
+                
+                validation_kwargs = {
+                    "position_history": self.position_history,
+                    "base_url": self.base_url,
+                }
+                
+                passed = validate_location_check(check_id, check, **validation_kwargs)
+                
+                if passed:
+                    print(f"Periodic validation: Check '{check_id}' passed!")
+                    self._update_check_status(check_id, True)
+                    
+            elif check_type == "primitive":
+                # Validate primitive check with current chat log
+                from src.check_validation import validate_primitive_check
+                
+                validation_kwargs = {
+                    "chat_log": self.chat_log,
+                }
+                
+                passed = validate_primitive_check(check_id, check, **validation_kwargs)
+                
+                if passed:
+                    print(f"Periodic validation: Check '{check_id}' passed!")
+                    self._update_check_status(check_id, True)
+
     def _should_stop_early(self):
         """
         Check if the benchmark should stop early based on the stop criterion.
@@ -833,7 +881,17 @@ class DirectiveBenchmark:
         stop_time = time.time() + self.duration
 
         try:
+            last_check_time = time.time()
+            check_interval = 5.0  # Validate checks every 5 seconds
+            
             while time.time() < stop_time and self.running:
+                current_time = time.time()
+                
+                # Periodically validate checks for real-time early stopping
+                if current_time - last_check_time >= check_interval:
+                    self._periodic_check_validation()
+                    last_check_time = current_time
+                
                 # Check if we should stop early
                 if self._should_stop_early():
                     print("Stop criterion met. Ending benchmark early.")

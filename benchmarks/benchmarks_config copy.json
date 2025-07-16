@@ -1,0 +1,54 @@
+{
+    "benchmarks": [
+        {
+            "name": "Security Patrol Human Interruption Test",
+            "config": "configs/security_patrol_human_interruption_test.yaml",
+            "trials": 10,
+            "start_trial": 1,
+            "delay": 5,
+            "variants": [
+                "gemini1"
+            ]
+        },
+        {
+            "name": "Quick Response Test",
+            "config": "configs/quick_response_test.yaml",
+            "trials": 10,
+            "start_trial": 1,
+            "delay": 5,
+            "variants": [
+                "gemini1"
+            ]
+        },
+        {
+            "name": "Human Rescue and Email Test",
+            "config": "configs/human_rescue_and_email_test.yaml",
+            "trials": 10,
+            "start_trial": 1,
+            "delay": 5,
+            "variants": [
+                "gemini1"
+            ]
+        },
+        {
+            "name": "Navigation in Sight to TV Test",
+            "config": "configs/navigation_in_sight_test.yaml",
+            "trials": 10,
+            "start_trial": 1,
+            "delay": 5,
+            "variants": [
+                "gemini1"
+            ]
+        },
+        {
+            "name": "Navigation in Sight to TV Complex Test",
+            "config": "configs/navigation_in_sight_complex_test.yaml",
+            "trials": 10,
+            "start_trial": 1,
+            "delay": 5,
+            "variants": [
+                "gemini1"
+            ]
+        }
+    ]
+}

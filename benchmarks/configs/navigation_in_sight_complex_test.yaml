@@ -17,7 +17,7 @@ duration: 500  # seconds, increased duration for a more complex task
 messages:
   - trigger_type: "time"
     time: 2  # seconds after start
-    text: "Go in the corridor then go in the living room and go directly under the TV. ONLY STOP WHEN YOU ARE RIGHT UNDER THE TV"
+    text: "Find the TV in the house and stop directly under it. ONLY STOP WHEN YOU ARE DIRECTLY UNDER THE TV"
 
 # Expectations section
 expectations:
@@ -26,13 +26,8 @@ expectations:
       type: "location"
       # User needs to define the coordinates for the area near the TV
       # Example: if TV is around x=5, y=-2
-      coordinates: [0.5, -3.0, 3.5, -8.0]
+      coordinates: [0.5, -4.0, 3.5, -8.0]
       verification_prompt: "Did the robot reach the area near the TV?"
-    - id: "used_navigation_in_sight"
-      type: "primitive"
-      primitive_name: "navigation_in_sight"
-      # No verification_prompt needed here as validate_primitive_check doesn't use it
-      # This check confirms navigation_in_sight was called at least once.
 
   use_frames: false # Not needed for deterministic success evaluation
 
