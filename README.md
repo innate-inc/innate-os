@@ -28,6 +28,11 @@ And then drop into the container:
 docker compose -f docker-compose.dev.yml exec maurice zsh -l
 ```
 
+See the nodes running with tmux
+```
+tmux a
+```
+
 You can use novnc to connect to rviz2. After launching rviz2 inside the container, you can connect to the instance in your browser:
 
 ```bash
