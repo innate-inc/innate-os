@@ -3,7 +3,7 @@
         {
             "name": "Navigation in Sight to TV Complex Test",
             "config": "configs/navigation_in_sight_complex_test.yaml",
-            "trials": 5,
+            "trials": 10,
             "start_trial": 1,
             "delay": 2,
             "variants": [
