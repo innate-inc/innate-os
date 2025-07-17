@@ -10,3 +10,4 @@
     leader_command_topic: "/maurice_arm/commands"  # Single leader command topic
     velocity_topic: "/cmd_vel"             # Topic for velocity data
     image_size: [640, 480]
+    head_ai_position_topic: "/head/set_ai_position"     # Topic to set head to AI position for recording
