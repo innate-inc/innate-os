@@ -1,0 +1,9 @@
+# Request
+string task_name          # Name of the task to trigger training for
+string task_directory     # Optional: specific task directory path (if empty, will use task_name)
+string training_params    # Optional: JSON string with training parameters (epochs, batch_size, etc.)
+---
+# Response
+bool success              # True if training was successfully triggered
+string message            # Status message or error details
+string dataset_info       # JSON string with information about available data (episodes, timesteps, etc.) 

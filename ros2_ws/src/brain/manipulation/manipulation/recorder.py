@@ -24,6 +24,7 @@ from brain_messages.srv import (
     GetTaskMetadataList,
     UpdateTaskMetadata,
     GetTaskMetadata,
+    TriggerTraining,
 )  # Placeholder for actual import
 
 
@@ -152,6 +153,9 @@ class RecorderNode(Node):
         self.get_task_metadata_srv = self.create_service(
             GetTaskMetadata, "recorder/get_task_metadata", self.handle_get_task_metadata
         )
+        self.trigger_training_srv = self.create_service(
+            TriggerTraining, "recorder/trigger_training", self.handle_trigger_training
+        )
 
         # Log the services it is hosting
         self.get_logger().info("Hosting services:")
@@ -164,6 +168,7 @@ class RecorderNode(Node):
         self.get_logger().info("  recorder/get_task_metadata_list")
         self.get_logger().info("  recorder/update_task_metadata")
         self.get_logger().info("  recorder/get_task_metadata")
+        self.get_logger().info("  recorder/trigger_training")
 
         # Create a publisher for recorder status
         self.status_pub = self.create_publisher(RecorderStatus, "recorder/status", 10)
@@ -626,6 +631,102 @@ class RecorderNode(Node):
             response.success = False
             response.message = f"Error retrieving task metadata: {str(e)}"
             response.json_metadata = "{}"
+        return response
+
+    def handle_trigger_training(self, request, response):
+        self.get_logger().info(
+            f"Received request to trigger training for task: {request.task_name}"
+        )
+        try:
+            # Determine the task directory to use
+            task_directory = request.task_directory
+            if not task_directory:
+                # If no directory provided, try to find it using task_name
+                if not hasattr(self.task_manager, "get_task_directory_by_name"):
+                    # Fallback: construct directory path from task name
+                    data_directory = os.path.expanduser(
+                        self.get_parameter("data_directory").value
+                    )
+                    task_directory = os.path.join(data_directory, request.task_name)
+                else:
+                    task_directory = self.task_manager.get_task_directory_by_name(
+                        request.task_name
+                    )
+
+            # Check if task directory exists
+            if not os.path.exists(task_directory):
+                self.get_logger().error(f"Task directory not found: {task_directory}")
+                response.success = False
+                response.message = f"Task directory not found: {task_directory}"
+                response.dataset_info = "{}"
+                return response
+
+            # Analyze available data for the task
+            dataset_info = {}
+            try:
+                # Count episodes and get basic statistics
+                episodes = []
+                if os.path.exists(task_directory):
+                    for item in os.listdir(task_directory):
+                        episode_path = os.path.join(task_directory, item)
+                        if os.path.isdir(episode_path) and item.startswith("episode_"):
+                            episodes.append(item)
+
+                dataset_info["task_name"] = request.task_name
+                dataset_info["task_directory"] = task_directory
+                dataset_info["total_episodes"] = len(episodes)
+                dataset_info["episodes"] = sorted(episodes)
+
+                # Get task metadata if available
+                metadata_path = os.path.join(task_directory, "metadata.json")
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, "r") as f:
+                        metadata = json.load(f)
+                        dataset_info["metadata"] = metadata
+                        dataset_info["data_frequency"] = metadata.get(
+                            "data_frequency", "unknown"
+                        )
+                        dataset_info["mobile_task"] = metadata.get(
+                            "mobile_task", "unknown"
+                        )
+
+                # Parse training parameters if provided
+                training_params = {}
+                if request.training_params:
+                    try:
+                        training_params = json.loads(request.training_params)
+                        dataset_info["training_params"] = training_params
+                    except json.JSONDecodeError:
+                        self.get_logger().warn(
+                            "Invalid JSON in training_params, ignoring"
+                        )
+
+                self.get_logger().info(f"Found {len(episodes)} episodes for training")
+                self.get_logger().info("Simulating training initialization...")
+
+                # Wait for 5 seconds as requested
+                time.sleep(5.0)
+
+                response.success = True
+                response.message = f"Training triggered successfully for task '{request.task_name}' with {len(episodes)} episodes"
+                response.dataset_info = json.dumps(dataset_info, indent=2)
+
+                self.get_logger().info(
+                    f"Training simulation completed for task: {request.task_name}"
+                )
+
+            except Exception as e:
+                self.get_logger().error(f"Error analyzing dataset: {str(e)}")
+                response.success = False
+                response.message = f"Error analyzing dataset: {str(e)}"
+                response.dataset_info = json.dumps(dataset_info, indent=2)
+
+        except Exception as e:
+            self.get_logger().error(f"Exception while triggering training: {str(e)}")
+            response.success = False
+            response.message = f"Error triggering training: {str(e)}"
+            response.dataset_info = "{}"
+
         return response
 
     def publish_status(
