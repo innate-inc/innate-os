@@ -34,7 +34,6 @@ To run a benchmark with a configuration file:
 
 ```bash
 python benchmarks/benchmark_runner.py --config benchmarks/configs/your_config.yaml --trial 1
-
 ```
 
 ## Results

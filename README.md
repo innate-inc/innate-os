@@ -193,7 +193,7 @@ The backend exposes several API endpoints for controlling the simulation and int
 *   **`GET /video_feed`**: MJPEG stream of the robot's first-person camera.
 *   **`GET /video_feed_chase`**: MJPEG stream of the chase camera.
 *   **`GET /video_feeds_ready`**: Checks if the simulation and video feeds are initialized. Returns `{"ready": true/false, "message": "..."}`.
-*   **`GET /get_robot_position`**: Returns th0.5e robot's current position and timestamp. `{"position": [x,y,z], "timestamp": float}`.
+*   **`GET /get_robot_position`**: Returns the robot's current position and timestamp. `{"position": [x,y,z], "timestamp": float}`.
 *   **`POST /set_directive`**: Sends a natural language directive to the agent. Request body: `{"text": "Your directive here"}`.
 
 ### Chat (`/chat_api`)
