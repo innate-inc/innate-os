@@ -16,26 +16,24 @@ duration: 500  # seconds, increased duration for a more complex task
 # Messages - Single instruction to go to another room and find the TV
 messages:
   - trigger_type: "time"
-    time: 10  # seconds after start
-    text: "Go in the corridor then go in the living room and find the TV, and then go to it. Only use navigation_in_sight, never use navigate_through_memory."
+    time: 2  # seconds after start
+    text: "Find the TV in the house and stop directly under it. ONLY STOP WHEN YOU ARE DIRECTLY UNDER THE TV, less than 1 meter away from the TV."
 
 # Expectations section
 expectations:
   checks:
     - id: "reached_tv_area"
       type: "location"
+      description: "Check if robot reached the area near the TV"
       # User needs to define the coordinates for the area near the TV
       # Example: if TV is around x=5, y=-2
       coordinates: [0.5, -3.0, 3.5, -8.0]
       verification_prompt: "Did the robot reach the area near the TV?"
-    - id: "used_navigation_in_sight"
-      type: "primitive"
-      primitive_name: "navigation_in_sight"
-      # No verification_prompt needed here as validate_primitive_check doesn't use it
-      # This check confirms navigation_in_sight was called at least once.
 
-  use_frames: false # As per previous structure, can be adjusted if VLM for success_criterion needs it
+  use_frames: true
 
-  success_criterion: "Success is if the robot, starting from a different room, reached the designated area near the TV. The navigation must have been achieved by making multiple calls to the navigation_in_sight primitive, and the navigate_through_memory primitive must not have been used at all during the test.."
+  # Success criterion - what the robot needs to achieve to succeed
+  success_criterion: "Did the robot successfully navigate to the TV and stop around it? The robot should be positioned close to the TV coordinates. It is not necessary to stop directly under the TV as long as it is close to it."
 
-  early_stop_criterion: "If the robot has reached the target area near the TV, the test can conclude." 
+  # Early stop criterion - conditions that should end the benchmark early
+  early_stop_criterion: "Should this benchmark be stopped early? Stop if the robot appears to be stuck in the same location for more than 60 seconds, is moving in circles without making progress, or if it's clear the robot cannot complete the navigation task." 

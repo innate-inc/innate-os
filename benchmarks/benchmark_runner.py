@@ -182,6 +182,18 @@ class DirectiveBenchmark:
             # Add time_since_start to the message
             message["time_since_start"] = round(time_since_start, 2)
 
+        # Add current robot coordinates to the message
+        try:
+            response = requests.get(f"{self.base_url}/get_robot_position")
+            position_data = response.json()
+            if "position" in position_data and len(position_data["position"]) >= 2:
+                x, y = position_data["position"][0], position_data["position"][1]
+                message["coordinates"] = f"({x:.2f}, {y:.2f})"
+            else:
+                message["coordinates"] = "unknown"
+        except Exception as e:
+            message["coordinates"] = "unknown"
+
         # Append to the chat log in memory
         self.chat_log.append(message)
         self.metrics["chat_messages"] += 1
@@ -586,39 +598,278 @@ class DirectiveBenchmark:
 
         return updated_status
 
-    def _should_stop_early(self):
+    def _periodic_check_validation(self):
         """
-        Check if the benchmark should stop early based on the stop criterion.
-        Uses a VLM to evaluate the stop criterion against the current state.
+        Periodically validate checks during the benchmark run using the new 2-stage system:
+        1. First run all deterministic checks (location, primitive, etc.)
+        2. Then run VLM evaluation with both success and early stop criteria
+        
+        Returns:
+            str: VLM action result ("continue", "success", or "stop")
         """
-        return evaluate_stop_criterion(
-            self.early_stop_criterion,
-            self.first_person_dir,
-            self.chase_dir,
-            self.chat_log,
-            self.metrics,
-            self._save_metrics,
-            self.use_frames,
-            self.expectations,
-            self.check_status,
-        )
+        if not self.expectations.get("checks"):
+            return "continue"
+            
+        # Stage 1: Run all deterministic checks
+        deterministic_check_status = {}
+        
+        for check in self.expectations["checks"]:
+            check_id = check.get("id")
+            check_type = check.get("type")
+            
+            if not check_id or not check_type:
+                continue
+                
+            # Initialize check status
+            deterministic_check_status[check_id] = self.check_status.get(check_id, False)
+                
+            # Skip checks that have already passed
+            if self.check_status.get(check_id, False):
+                continue
+                
+            # Validate deterministic checks
+            if check_type == "location":
+                # Validate location check with current position history
+                from src.check_validation import validate_location_check
+                
+                validation_kwargs = {
+                    "position_history": self.position_history,
+                    "base_url": self.base_url,
+                }
+                
+                passed = validate_location_check(check_id, check, **validation_kwargs)
+                
+                if passed:
+                    print(f"Periodic validation: Deterministic check '{check_id}' passed!")
+                    self._update_check_status(check_id, True)
+                    deterministic_check_status[check_id] = True
+                    
+            elif check_type == "primitive":
+                # Validate primitive check with current chat log
+                from src.check_validation import validate_primitive_check
+                
+                validation_kwargs = {
+                    "chat_log": self.chat_log,
+                }
+                
+                passed = validate_primitive_check(check_id, check, **validation_kwargs)
+                
+                if passed:
+                    print(f"Periodic validation: Deterministic check '{check_id}' passed!")
+                    self._update_check_status(check_id, True)
+                    deterministic_check_status[check_id] = True
+        
+        # Stage 2: Run VLM evaluation with both success and early stop criteria
+        success_criterion = self.expectations.get("success_criterion", "")
+        early_stop_criterion = self.expectations.get("early_stop_criterion", "")
+        
+        if success_criterion or early_stop_criterion:
+            # Get frames for VLM evaluation
+            from src.vlm_utils import get_representative_frames, evaluate_periodic_with_vlm
+            
+            frames = get_representative_frames(self.first_person_dir, self.chase_dir)
+            
+            if frames:
+                try:
+                    # Use the new 3-state VLM evaluation
+                    result = evaluate_periodic_with_vlm(
+                        success_criterion=success_criterion,
+                        early_stop_criterion=early_stop_criterion,
+                        frame_paths=frames,
+                        chat_log_with_coordinates=self.chat_log,
+                        deterministic_check_status=deterministic_check_status,
+                        metrics=self.metrics,
+                    )
+                    
+                    action = result.get("action", "continue")
+                    reason = result.get("reason", "No reason provided")
+                    
+                    print(f"VLM periodic evaluation: {action} - {reason}")
+                    
+                    # Save the evaluation result to metrics
+                    if "periodic_evaluations" not in self.metrics:
+                        self.metrics["periodic_evaluations"] = []
+                    
+                    self.metrics["periodic_evaluations"].append({
+                        "timestamp": time.time() - self.metrics["start_timestamp"],
+                        "action": action,
+                        "reason": reason,
+                        "deterministic_checks": deterministic_check_status.copy(),
+                    })
+                    
+                    self._save_metrics()
+                    
+                    return action
+                    
+                except Exception as e:
+                    print(f"Error in periodic VLM evaluation: {e}")
+                    return "continue"
+        
+        return "continue"
+
+    def _should_stop_early(self, vlm_action=None):
+        """
+        Check if the benchmark should stop early based on the VLM evaluation result.
+        The new system always uses both deterministic checks and VLM evaluation.
+        
+        Args:
+            vlm_action (str): The action result from VLM evaluation ("continue", "success", or "stop")
+        
+        Returns:
+            tuple: (should_stop, is_success) - whether to stop and whether it's due to success
+        """
+        if not vlm_action:
+            return False, False
+            
+        if vlm_action == "stop":
+            print("Early stop triggered by VLM evaluation")
+            
+            # Save the early stop decision to metrics
+            self.metrics["early_stop"] = {
+                "triggered": True,
+                "time": time.time() - self.metrics["start_timestamp"],
+                "reason": "VLM evaluation indicated early stop criterion was met",
+            }
+            self._save_metrics()
+            return True, False
+            
+        elif vlm_action == "success":
+            print("Early stop triggered by VLM evaluation - SUCCESS achieved")
+            
+            # Save the success decision to metrics
+            self.metrics["early_stop"] = {
+                "triggered": True,
+                "time": time.time() - self.metrics["start_timestamp"],
+                "reason": "VLM evaluation indicated success criterion was met",
+            }
+            self._save_metrics()
+            return True, True
+            
+        # vlm_action == "continue"
+        return False, False
 
     def _evaluate_final_success(self):
         """
         Evaluate whether the benchmark was successful based on the success criterion.
-        Uses a VLM to evaluate the success criterion against the collected data.
+        The new system always uses both deterministic checks and VLM evaluation.
         """
         if not self.expectations.get("success_criterion"):
             return {"success": False, "reason": "No success criterion defined"}
 
-        return evaluate_final_success(
-            self.expectations["success_criterion"],
-            self.first_person_dir,
-            self.chase_dir,
-            self.chat_log,
-            self.metrics,
-            self.use_frames,
-        )
+        # Check if the benchmark was already marked as successful during early stopping
+        if self.metrics.get("early_success", {}).get("achieved", False):
+            return {
+                "success": True,
+                "reason": "Benchmark completed successfully during execution (early success)",
+                "early_success": True,
+            }
+
+        # Run final deterministic checks
+        deterministic_check_status = {}
+        for check in self.expectations.get("checks", []):
+            check_id = check.get("id")
+            if check_id:
+                deterministic_check_status[check_id] = self.check_status.get(check_id, False)
+
+        # Run final VLM evaluation
+        success_criterion = self.expectations.get("success_criterion", "")
+        early_stop_criterion = self.expectations.get("early_stop_criterion", "")
+        
+        if success_criterion:
+            try:
+                from src.vlm_utils import get_representative_frames, evaluate_periodic_with_vlm
+                
+                # Get frames for final evaluation
+                frames = get_representative_frames(self.first_person_dir, self.chase_dir)
+                
+                if frames:
+                    result = evaluate_periodic_with_vlm(
+                        success_criterion=success_criterion,
+                        early_stop_criterion=early_stop_criterion,
+                        frame_paths=frames,
+                        chat_log_with_coordinates=self.chat_log,
+                        deterministic_check_status=deterministic_check_status,
+                        metrics=self.metrics,
+                    )
+                    
+                    action = result.get("action", "continue")
+                    reason = result.get("reason", "No reason provided")
+                    
+                    if action == "success":
+                        return {
+                            "success": True,
+                            "reason": f"Final VLM evaluation: {reason}",
+                            "deterministic_checks": deterministic_check_status,
+                        }
+                    else:
+                        return {
+                            "success": False,
+                            "reason": f"Final VLM evaluation: {reason}",
+                            "deterministic_checks": deterministic_check_status,
+                        }
+                else:
+                    return {
+                        "success": False,
+                        "reason": "No frames available for final evaluation",
+                        "deterministic_checks": deterministic_check_status,
+                    }
+                    
+            except Exception as e:
+                return {
+                    "success": False,
+                    "reason": f"Error in final VLM evaluation: {e}",
+                    "deterministic_checks": deterministic_check_status,
+                }
+        else:
+            return {
+                "success": False,
+                "reason": "No success criterion defined for VLM evaluation",
+                "deterministic_checks": deterministic_check_status,
+            }
+
+    def _evaluate_deterministic_success(self):
+        """
+        Evaluate success based on deterministic criteria (e.g., location checks).
+        This checks if all required conditions in the success_criterion are met.
+        """
+        success_criterion = self.expectations.get("success_criterion", {})
+        
+        # If success_criterion is a string (legacy format), return error
+        if isinstance(success_criterion, str):
+            return {
+                "success": False, 
+                "reason": "Deterministic success requires structured success_criterion, not string"
+            }
+        
+        # success_criterion should be a dict with required_checks
+        required_checks = success_criterion.get("required_checks", [])
+        
+        if not required_checks:
+            return {
+                "success": False,
+                "reason": "No required_checks specified in success_criterion for deterministic evaluation"
+            }
+        
+        # Check if all required checks have passed
+        failed_checks = []
+        passed_checks = []
+        
+        for check_id in required_checks:
+            if self.check_status.get(check_id, False):
+                passed_checks.append(check_id)
+            else:
+                failed_checks.append(check_id)
+        
+        if failed_checks:
+            return {
+                "success": False,
+                "reason": f"Required checks failed: {failed_checks}. Passed checks: {passed_checks}"
+            }
+        else:
+            return {
+                "success": True,
+                "reason": f"All required checks passed: {passed_checks}"
+            }
 
     def run(self):
         """Run the benchmark test."""
@@ -759,11 +1010,32 @@ class DirectiveBenchmark:
         stop_time = time.time() + self.duration
 
         try:
+            last_check_time = time.time()
+            check_interval = 10.0  # Validate checks every 10 seconds
+            
             while time.time() < stop_time and self.running:
-                # Check if we should stop early
-                if self._should_stop_early():
-                    print("Stop criterion met. Ending benchmark early.")
-                    break
+                current_time = time.time()
+                
+                # Periodically validate checks for real-time early stopping
+                if current_time - last_check_time >= check_interval:
+                    vlm_action = self._periodic_check_validation()
+                    last_check_time = current_time
+                    
+                    # Check if we should stop early based on VLM action
+                    should_stop, is_success = self._should_stop_early(vlm_action)
+                    if should_stop:
+                        if is_success:
+                            print("Benchmark completed successfully. Ending early.")
+                            # Update metrics to reflect early success
+                            self.metrics["early_success"] = {
+                                "achieved": True,
+                                "time": time.time() - self.metrics["start_timestamp"],
+                                "reason": "VLM evaluation indicated success criterion was met",
+                            }
+                        else:
+                            print("Stop criterion met. Ending benchmark early.")
+                        break
+                
                 time.sleep(1.0)  # Check conditions every second
         except KeyboardInterrupt:
             print("Benchmark interrupted by user.")
