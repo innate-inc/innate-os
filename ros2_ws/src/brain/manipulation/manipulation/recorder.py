@@ -12,56 +12,66 @@ from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge  # For image conversion
 import cv2
+
 # Import RecorderStatus message
 from brain_messages.msg import RecorderStatus
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-import json # Added for JSON manipulation
+import json  # Added for JSON manipulation
 
 # Assuming you will create this service in brain_messages/srv:
-from brain_messages.srv import GetTaskMetadataList, UpdateTaskMetadata, GetTaskMetadata # Placeholder for actual import
+from brain_messages.srv import (
+    GetTaskMetadataList,
+    UpdateTaskMetadata,
+    GetTaskMetadata,
+)  # Placeholder for actual import
+
 
 class RecorderNode(Node):
     def __init__(self):
-        super().__init__('recorder_node')
-        
+        super().__init__("recorder_node")
+
         # Load parameters (can be set via a YAML file or launch file)
-        self.declare_parameter('data_directory', '/path/to/data')
-        self.declare_parameter('data_frequency', 10)
-        self.declare_parameter('image_topics', ['/camera/image_raw', '/camera/image_processed'])
-        self.declare_parameter('arm_state_topic', '/arm/state')
-        self.declare_parameter('leader_command_topic', '/leader/command')
-        self.declare_parameter('velocity_topic', '/cmd_vel')
-        self.declare_parameter('image_size', [640, 480])
-        
+        self.declare_parameter("data_directory", "/path/to/data")
+        self.declare_parameter("data_frequency", 10)
+        self.declare_parameter(
+            "image_topics", ["/camera/image_raw", "/camera/image_processed"]
+        )
+        self.declare_parameter("arm_state_topic", "/arm/state")
+        self.declare_parameter("leader_command_topic", "/leader/command")
+        self.declare_parameter("velocity_topic", "/cmd_vel")
+        self.declare_parameter("image_size", [640, 480])
+
         # Get parameter values
-        data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
-        self.data_frequency = self.get_parameter('data_frequency').value
-        self.image_topics = self.get_parameter('image_topics').value
-        self.arm_state_topic = self.get_parameter('arm_state_topic').value
-        self.leader_command_topic = self.get_parameter('leader_command_topic').value
-        self.velocity_topic = self.get_parameter('velocity_topic').value
-        self.image_size = self.get_parameter('image_size').value
+        data_directory = os.path.expanduser(self.get_parameter("data_directory").value)
+        self.data_frequency = self.get_parameter("data_frequency").value
+        self.image_topics = self.get_parameter("image_topics").value
+        self.arm_state_topic = self.get_parameter("arm_state_topic").value
+        self.leader_command_topic = self.get_parameter("leader_command_topic").value
+        self.velocity_topic = self.get_parameter("velocity_topic").value
+        self.image_size = self.get_parameter("image_size").value
         # Initialize TaskManager and internal state
         self.task_manager = TaskManager(data_directory)
-        self.current_episode = None  # Holds an EpisodeData instance when an episode is active
-        self.state = "IDLE"          # Possible states: "IDLE", "TASK_ACTIVE", "EPISODE_ACTIVE", "EPISODE_STOPPED"
+        self.current_episode = (
+            None  # Holds an EpisodeData instance when an episode is active
+        )
+        self.state = "IDLE"  # Possible states: "IDLE", "TASK_ACTIVE", "EPISODE_ACTIVE", "EPISODE_STOPPED"
         self.episode_start_time = None
-        
+
         # Internal variables to track current task and episode number
         self.current_task_name = ""
         self.episode_count = 0
-        
+
         # Initialize CvBridge for image conversion
         self.bridge = CvBridge()
-        
+
         # Latest sensor data variables
         # Use a dictionary to store the latest image for each topic.
         self.latest_images = {topic: None for topic in self.image_topics}
         self.latest_arm_state = None
         self.latest_leader_command = None
         self.latest_cmd_vel = None
-        
+
         # Tracking message reception for each topic.
         # Initialize booleans for image topics and the other topics.
         self.topics_received = {}
@@ -73,43 +83,76 @@ class RecorderNode(Node):
 
         # Overall flag: True when every topic has received at least one message.
         self.all_topics_received = False
-        
+
         # Create subscribers for sensor topics.
         # Subscribe to each image topic with QoS profile
         image_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=10,
         )
 
         for topic in self.image_topics:
             self.create_subscription(
-                Image, 
-                topic, 
-                lambda msg, t=topic: self.image_callback(msg, t), 
-                image_qos
+                Image,
+                topic,
+                lambda msg, t=topic: self.image_callback(msg, t),
+                image_qos,
             )
-        self.create_subscription(JointState, self.arm_state_topic, self.arm_state_callback, 10)
-        self.create_subscription(Float64MultiArray, self.leader_command_topic, self.leader_command_callback, 10)
+        self.create_subscription(
+            JointState, self.arm_state_topic, self.arm_state_callback, 10
+        )
+        self.create_subscription(
+            Float64MultiArray,
+            self.leader_command_topic,
+            self.leader_command_callback,
+            10,
+        )
         self.create_subscription(Twist, self.velocity_topic, self.cmd_vel_callback, 10)
-        
+
         # Log the topics it is subscribing to
         self.get_logger().info(f"Subscribing to image topics: {self.image_topics}")
-        self.get_logger().info(f"Subscribing to arm state topic: {self.arm_state_topic}")
-        self.get_logger().info(f"Subscribing to leader command topic: {self.leader_command_topic}")
+        self.get_logger().info(
+            f"Subscribing to arm state topic: {self.arm_state_topic}"
+        )
+        self.get_logger().info(
+            f"Subscribing to leader command topic: {self.leader_command_topic}"
+        )
         self.get_logger().info(f"Subscribing to velocity topic: {self.velocity_topic}")
-        
+
         # Create service servers with updated names prefixed with "recorder/"
-        self.new_task_srv = self.create_service(ManipulationTask, 'recorder/new_task', self.handle_new_task)
-        self.new_episode_srv = self.create_service(Trigger, 'recorder/new_episode', self.handle_new_episode)
-        self.save_episode_srv = self.create_service(Trigger, 'recorder/save_episode', self.handle_save_episode)
-        self.cancel_episode_srv = self.create_service(Trigger, 'recorder/cancel_episode', self.handle_cancel_episode)
-        self.stop_episode_srv = self.create_service(Trigger, 'recorder/stop_episode', self.handle_stop_episode)
-        self.end_task_srv = self.create_service(Trigger, 'recorder/end_task', self.handle_end_task)
-        self.get_task_metadata_list_srv = self.create_service(GetTaskMetadataList, 'recorder/get_task_metadata_list', self.handle_get_task_metadata_list)
-        self.update_task_metadata_srv = self.create_service(UpdateTaskMetadata, 'recorder/update_task_metadata', self.handle_update_task_metadata)
-        self.get_task_metadata_srv = self.create_service(GetTaskMetadata, 'recorder/get_task_metadata', self.handle_get_task_metadata)
-        
+        self.new_task_srv = self.create_service(
+            ManipulationTask, "recorder/new_task", self.handle_new_task
+        )
+        self.new_episode_srv = self.create_service(
+            Trigger, "recorder/new_episode", self.handle_new_episode
+        )
+        self.save_episode_srv = self.create_service(
+            Trigger, "recorder/save_episode", self.handle_save_episode
+        )
+        self.cancel_episode_srv = self.create_service(
+            Trigger, "recorder/cancel_episode", self.handle_cancel_episode
+        )
+        self.stop_episode_srv = self.create_service(
+            Trigger, "recorder/stop_episode", self.handle_stop_episode
+        )
+        self.end_task_srv = self.create_service(
+            Trigger, "recorder/end_task", self.handle_end_task
+        )
+        self.get_task_metadata_list_srv = self.create_service(
+            GetTaskMetadataList,
+            "recorder/get_task_metadata_list",
+            self.handle_get_task_metadata_list,
+        )
+        self.update_task_metadata_srv = self.create_service(
+            UpdateTaskMetadata,
+            "recorder/update_task_metadata",
+            self.handle_update_task_metadata,
+        )
+        self.get_task_metadata_srv = self.create_service(
+            GetTaskMetadata, "recorder/get_task_metadata", self.handle_get_task_metadata
+        )
+
         # Log the services it is hosting
         self.get_logger().info("Hosting services:")
         self.get_logger().info("  recorder/new_task")
@@ -121,15 +164,15 @@ class RecorderNode(Node):
         self.get_logger().info("  recorder/get_task_metadata_list")
         self.get_logger().info("  recorder/update_task_metadata")
         self.get_logger().info("  recorder/get_task_metadata")
-        
+
         # Create a publisher for recorder status
-        self.status_pub = self.create_publisher(RecorderStatus, 'recorder/status', 10)
-        
+        self.status_pub = self.create_publisher(RecorderStatus, "recorder/status", 10)
+
         # Create a timer that will attempt to add sensor data as a new timestep at the specified frequency.
         self.timer = self.create_timer(1.0 / self.data_frequency, self.timer_callback)
-        
+
         self.get_logger().info("Recorder Node initialized in IDLE state.")
-    
+
     def check_all_topics_received(self):
         """Check if every subscribed topic has received at least one message."""
         if not self.all_topics_received and all(self.topics_received.values()):
@@ -143,26 +186,32 @@ class RecorderNode(Node):
             self.topics_received[topic] = True
             self.get_logger().info(f"First message received on image topic: {topic}")
             self.check_all_topics_received()
-    
+
     def arm_state_callback(self, msg):
         self.latest_arm_state = msg
         if not self.topics_received[self.arm_state_topic]:
             self.topics_received[self.arm_state_topic] = True
-            self.get_logger().info(f"First message received on arm state topic: {self.arm_state_topic}")
+            self.get_logger().info(
+                f"First message received on arm state topic: {self.arm_state_topic}"
+            )
             self.check_all_topics_received()
 
     def leader_command_callback(self, msg):
         self.latest_leader_command = msg
         if not self.topics_received[self.leader_command_topic]:
             self.topics_received[self.leader_command_topic] = True
-            self.get_logger().info(f"First message received on leader command topic: {self.leader_command_topic}")
+            self.get_logger().info(
+                f"First message received on leader command topic: {self.leader_command_topic}"
+            )
             self.check_all_topics_received()
 
     def cmd_vel_callback(self, msg):
         self.latest_cmd_vel = msg
         if not self.topics_received[self.velocity_topic]:
             self.topics_received[self.velocity_topic] = True
-            self.get_logger().info(f"First message received on velocity topic: {self.velocity_topic}")
+            self.get_logger().info(
+                f"First message received on velocity topic: {self.velocity_topic}"
+            )
             self.check_all_topics_received()
 
     # Timer callback to record sensor data as a timestep.
@@ -170,38 +219,52 @@ class RecorderNode(Node):
         # Only record data if an episode is active.
         if self.state != "EPISODE_ACTIVE" or self.current_episode is None:
             return
-        
+
         # Ensure all sensor data are available.
         for topic in self.image_topics:
             if self.latest_images[topic] is None:
-                self.get_logger().warn(f"Incomplete sensor data; missing image from topic {topic}. Skipping timestep.")
+                self.get_logger().warn(
+                    f"Incomplete sensor data; missing image from topic {topic}. Skipping timestep."
+                )
                 return
-        
-        if self.latest_arm_state is None or self.latest_leader_command is None or self.latest_cmd_vel is None:
+
+        if (
+            self.latest_arm_state is None
+            or self.latest_leader_command is None
+            or self.latest_cmd_vel is None
+        ):
             self.get_logger().warn("Incomplete sensor data; skipping timestep.")
             return
-        
+
         # Build action data starting with leader command
-        action_data = list(self.latest_leader_command.data)  # leader_command is a list of floats
+        action_data = list(
+            self.latest_leader_command.data
+        )  # leader_command is a list of floats
         # Add only forward speed and yaw rate from cmd_vel
         twist = self.latest_cmd_vel
         action_data.extend([twist.linear.x, twist.angular.z])
-        
+
         # Get joint positions and velocities from the arm state message.
         qpos = list(self.latest_arm_state.position)
         qvel = list(self.latest_arm_state.velocity)
-        
+
         # Convert each ROS image message to a NumPy array using cv_bridge.
         images_converted = []
         for topic in self.image_topics:
             try:
-                cv_image = self.bridge.imgmsg_to_cv2(self.latest_images[topic], desired_encoding='passthrough')
-                cv_image = cv2.resize(cv_image, (self.image_size[0], self.image_size[1]))
+                cv_image = self.bridge.imgmsg_to_cv2(
+                    self.latest_images[topic], desired_encoding="passthrough"
+                )
+                cv_image = cv2.resize(
+                    cv_image, (self.image_size[0], self.image_size[1])
+                )
                 images_converted.append(cv_image)
             except Exception as e:
-                self.get_logger().error(f"Error converting image from topic {topic}: {e}")
+                self.get_logger().error(
+                    f"Error converting image from topic {topic}: {e}"
+                )
                 return
-        
+
         try:
             self.current_episode.add_timestep(action_data, qpos, qvel, images_converted)
             self.get_logger().debug("Added timestep to current episode.")
@@ -211,15 +274,26 @@ class RecorderNode(Node):
     # Service handlers.
     def handle_new_task(self, request, response):
         if self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
-            self.get_logger().warn(f"New task requested during an {self.state.lower()} episode; canceling current episode.")
+            self.get_logger().warn(
+                f"New task requested during an {self.state.lower()} episode; canceling current episode."
+            )
             # Publish status update for cancelled episode
-            self.publish_status(status="cancelled", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            self.publish_status(
+                status="cancelled",
+                episode_number=str(self.episode_count),
+                current_task_name=self.current_task_name,
+            )
             if self.current_episode:
                 self.current_episode.clear()
             self.current_episode = None
             # self.state will be set to TASK_ACTIVE by the rest of the method.
             # Episode count for the new task will effectively start fresh.
-        self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
+        self.task_manager.start_new_task(
+            request.task_name,
+            request.task_description,
+            request.mobile_task,
+            self.data_frequency,
+        )
         if self.task_manager.metadata:
             self.episode_count = self.task_manager.metadata["number_of_episodes"]
         else:
@@ -228,43 +302,72 @@ class RecorderNode(Node):
         self.state = "TASK_ACTIVE"
         self.get_logger().info(f"New task '{request.task_name}' started.")
         # Publish status update for new task
-        self.publish_status(status="active", episode_number="", current_task_name=self.current_task_name)
+        self.publish_status(
+            status="active", episode_number="", current_task_name=self.current_task_name
+        )
         response.success = True
         return response
 
     def handle_new_episode(self, request, response):
         if self.state == "IDLE":
-            self.get_logger().error("Cannot start a new episode unless a task is active.")
-            self.publish_status(status="failed - no active task", episode_number="", current_task_name="")
+            self.get_logger().error(
+                "Cannot start a new episode unless a task is active."
+            )
+            self.publish_status(
+                status="failed - no active task",
+                episode_number="",
+                current_task_name="",
+            )
             response.success = False
             response.message = "No active task. Please start a task first."
             return response
         elif self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
-            self.get_logger().error(f"Cannot start a new episode while an episode is {self.state.lower()}.")
-            self.publish_status(status=f"failed - episode {self.state.lower()}", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            self.get_logger().error(
+                f"Cannot start a new episode while an episode is {self.state.lower()}."
+            )
+            self.publish_status(
+                status=f"failed - episode {self.state.lower()}",
+                episode_number=str(self.episode_count),
+                current_task_name=self.current_task_name,
+            )
             response.success = False
             response.message = f"An episode is already {self.state.lower()}. Please save or cancel the current episode first."
             return response
-        
+
         self.current_episode = EpisodeData()
         self.episode_start_time = time.time()
         self.state = "EPISODE_ACTIVE"
         self.episode_count += 1
         episode_str = str(self.episode_count)
         self.get_logger().info("Episode started; now recording data.")
-        self.publish_status(status="active", episode_number=episode_str, current_task_name=self.current_task_name)
+        self.publish_status(
+            status="active",
+            episode_number=episode_str,
+            current_task_name=self.current_task_name,
+        )
         response.success = True
         response.message = "Episode started."
         return response
 
     def handle_save_episode(self, request, response):
-        if self.state not in ["EPISODE_ACTIVE", "EPISODE_STOPPED"] or self.current_episode is None:
+        if (
+            self.state not in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]
+            or self.current_episode is None
+        ):
             self.get_logger().error("No active or stopped episode to save.")
             # Publish appropriate status based on current state
             if self.state == "TASK_ACTIVE":
-                self.publish_status(status="failed - no active/stopped episode to save", episode_number="", current_task_name=self.current_task_name)
+                self.publish_status(
+                    status="failed - no active/stopped episode to save",
+                    episode_number="",
+                    current_task_name=self.current_task_name,
+                )
             else:  # IDLE state
-                self.publish_status(status="failed - no active task", episode_number="", current_task_name="")
+                self.publish_status(
+                    status="failed - no active task",
+                    episode_number="",
+                    current_task_name="",
+                )
             response.success = False
             response.message = "No active or stopped episode to save."
             return response
@@ -272,7 +375,11 @@ class RecorderNode(Node):
         # Check if episode has any timesteps
         if self.current_episode.get_episode_length() == 0:
             self.get_logger().error("Cannot save empty episode with no timesteps.")
-            self.publish_status(status="failed - empty episode", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            self.publish_status(
+                status="failed - empty episode",
+                episode_number=str(self.episode_count),
+                current_task_name=self.current_task_name,
+            )
             response.success = False
             response.message = "Cannot save empty episode."
             return response
@@ -280,13 +387,17 @@ class RecorderNode(Node):
         end_time = time.time()
         self.task_manager.add_episode(
             self.current_episode,
-            time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(self.episode_start_time)),
-            time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_time))
+            time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(self.episode_start_time)),
+            time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(end_time)),
         )
         self.get_logger().info("Episode saved successfully.")
         # Publish status update for saved episode
         episode_str = str(self.episode_count)
-        self.publish_status(status="saved", episode_number=episode_str, current_task_name=self.current_task_name)
+        self.publish_status(
+            status="saved",
+            episode_number=episode_str,
+            current_task_name=self.current_task_name,
+        )
         self.current_episode = None
         self.state = "TASK_ACTIVE"
         response.success = True
@@ -294,13 +405,24 @@ class RecorderNode(Node):
         return response
 
     def handle_cancel_episode(self, request, response):
-        if self.state not in ["EPISODE_ACTIVE", "EPISODE_STOPPED"] or self.current_episode is None:
+        if (
+            self.state not in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]
+            or self.current_episode is None
+        ):
             self.get_logger().error("No active or stopped episode to cancel.")
             # Publish appropriate status based on current state
             if self.state == "TASK_ACTIVE":
-                self.publish_status(status="failed - no active/stopped episode to cancel", episode_number="", current_task_name=self.current_task_name)
+                self.publish_status(
+                    status="failed - no active/stopped episode to cancel",
+                    episode_number="",
+                    current_task_name=self.current_task_name,
+                )
             else:  # IDLE state
-                self.publish_status(status="failed - no active task", episode_number="", current_task_name="")
+                self.publish_status(
+                    status="failed - no active task",
+                    episode_number="",
+                    current_task_name="",
+                )
             response.success = False
             response.message = "No active or stopped episode to cancel."
             return response
@@ -312,7 +434,11 @@ class RecorderNode(Node):
         self.get_logger().info("Episode canceled; buffered data discarded.")
         # Publish status update for cancelled episode
         episode_str = str(self.episode_count)
-        self.publish_status(status="cancelled", episode_number=episode_str, current_task_name=self.current_task_name)
+        self.publish_status(
+            status="cancelled",
+            episode_number=episode_str,
+            current_task_name=self.current_task_name,
+        )
         self.current_episode = None
         self.state = "TASK_ACTIVE"
         response.success = True
@@ -322,33 +448,59 @@ class RecorderNode(Node):
     def handle_stop_episode(self, request, response):
         if self.state == "EPISODE_ACTIVE":
             self.state = "EPISODE_STOPPED"
-            self.get_logger().info("Episode recording stopped. Waiting for save or cancel command.")
-            self.publish_status(status="stopped", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            self.get_logger().info(
+                "Episode recording stopped. Waiting for save or cancel command."
+            )
+            self.publish_status(
+                status="stopped",
+                episode_number=str(self.episode_count),
+                current_task_name=self.current_task_name,
+            )
             response.success = True
             response.message = "Episode recording stopped. Awaiting save or cancel."
         elif self.state == "EPISODE_STOPPED":
-            self.get_logger().warn("Stop episode requested, but episode is already stopped.")
-            self.publish_status(status="failed - episode already stopped", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
+            self.get_logger().warn(
+                "Stop episode requested, but episode is already stopped."
+            )
+            self.publish_status(
+                status="failed - episode already stopped",
+                episode_number=str(self.episode_count),
+                current_task_name=self.current_task_name,
+            )
             response.success = False
             response.message = "Episode is already stopped."
         elif self.state == "TASK_ACTIVE":
             self.get_logger().error("Stop episode requested, but no episode is active.")
-            self.publish_status(status="failed - no active episode", episode_number="", current_task_name=self.current_task_name) # Assuming episode_count is not relevant if no episode active
+            self.publish_status(
+                status="failed - no active episode",
+                episode_number="",
+                current_task_name=self.current_task_name,
+            )  # Assuming episode_count is not relevant if no episode active
             response.success = False
             response.message = "No active episode to stop."
         else:  # IDLE
             self.get_logger().error("Stop episode requested, but no task is active.")
-            self.publish_status(status="failed - no active task", episode_number="", current_task_name="")
+            self.publish_status(
+                status="failed - no active task",
+                episode_number="",
+                current_task_name="",
+            )
             response.success = False
             response.message = "No active task or episode to stop."
         return response
 
     def handle_end_task(self, request, response):
         if self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
-            self.get_logger().warn(f"Ending task during an {self.state.lower()} episode; canceling current episode first.")
+            self.get_logger().warn(
+                f"Ending task during an {self.state.lower()} episode; canceling current episode first."
+            )
             # Publish status update for cancelled episode
             episode_str = str(self.episode_count)
-            self.publish_status(status="cancelled", episode_number=episode_str, current_task_name=self.current_task_name)
+            self.publish_status(
+                status="cancelled",
+                episode_number=episode_str,
+                current_task_name=self.current_task_name,
+            )
             if self.current_episode:
                 self.current_episode.clear()
             self.current_episode = None
@@ -370,99 +522,132 @@ class RecorderNode(Node):
             # This method is hypothetical and needs to be implemented in your TaskManager class
             # It should scan the data_directory and return a list of dictionaries
             # conforming to the structure expected for the JSON output.
-            if not hasattr(self.task_manager, 'get_all_tasks_summary'):
-                self.get_logger().error("TaskManager does not have 'get_all_tasks_summary' method.")
+            if not hasattr(self.task_manager, "get_all_tasks_summary"):
+                self.get_logger().error(
+                    "TaskManager does not have 'get_all_tasks_summary' method."
+                )
                 response.success = False
-                response.message = "Internal server error: TaskManager cannot provide task summaries."
+                response.message = (
+                    "Internal server error: TaskManager cannot provide task summaries."
+                )
                 response.json_metadata = "{}"
                 return response
 
             all_tasks_summary = self.task_manager.get_all_tasks_summary()
-            
+
             if not all_tasks_summary:
                 self.get_logger().info("No tasks found by TaskManager.")
-                response.success = True # Success, but no data
+                response.success = True  # Success, but no data
                 response.message = "No tasks recorded yet."
-                response.json_metadata = "[]" # Empty JSON array
+                response.json_metadata = "[]"  # Empty JSON array
                 return response
 
             response.json_metadata = json.dumps(all_tasks_summary, indent=2)
             response.success = True
             response.message = "Successfully retrieved task metadata list."
             self.get_logger().info("Successfully prepared task metadata list.")
-            
+
         except Exception as e:
             self.get_logger().error(f"Failed to get task metadata list: {str(e)}")
             response.success = False
             response.message = f"Error retrieving task metadata: {str(e)}"
-            response.json_metadata = "{}" # Empty JSON object on error
+            response.json_metadata = "{}"  # Empty JSON object on error
         return response
 
     def handle_update_task_metadata(self, request, response):
-        self.get_logger().info(f"Received request to update metadata for task directory: {request.task_directory}")
+        self.get_logger().info(
+            f"Received request to update metadata for task directory: {request.task_directory}"
+        )
         try:
-            if not hasattr(self.task_manager, 'update_task_metadata_by_directory'):
-                self.get_logger().error("TaskManager does not have 'update_task_metadata_by_directory' method.")
+            if not hasattr(self.task_manager, "update_task_metadata_by_directory"):
+                self.get_logger().error(
+                    "TaskManager does not have 'update_task_metadata_by_directory' method."
+                )
                 response.success = False
                 response.message = "Internal server error: TaskManager cannot update task metadata by directory."
                 return response
 
-            success, message = self.task_manager.update_task_metadata_by_directory(request.task_directory, request.json_metadata_update)
+            success, message = self.task_manager.update_task_metadata_by_directory(
+                request.task_directory, request.json_metadata_update
+            )
             response.success = success
             response.message = message
             if success:
-                self.get_logger().info(f"Successfully updated metadata for task directory: {request.task_directory}")
+                self.get_logger().info(
+                    f"Successfully updated metadata for task directory: {request.task_directory}"
+                )
             else:
-                self.get_logger().error(f"Failed to update metadata for task directory {request.task_directory}: {message}")
-            
+                self.get_logger().error(
+                    f"Failed to update metadata for task directory {request.task_directory}: {message}"
+                )
+
         except Exception as e:
-            self.get_logger().error(f"Exception while updating task metadata for directory {request.task_directory}: {str(e)}")
+            self.get_logger().error(
+                f"Exception while updating task metadata for directory {request.task_directory}: {str(e)}"
+            )
             response.success = False
             response.message = f"Error updating task metadata: {str(e)}"
         return response
 
     def handle_get_task_metadata(self, request, response):
-        self.get_logger().info(f"Received request to get metadata for task directory: {request.task_directory}")
+        self.get_logger().info(
+            f"Received request to get metadata for task directory: {request.task_directory}"
+        )
         try:
-            if not hasattr(self.task_manager, 'get_task_metadata_by_directory'):
-                self.get_logger().error("TaskManager does not have 'get_task_metadata_by_directory' method.")
+            if not hasattr(self.task_manager, "get_task_metadata_by_directory"):
+                self.get_logger().error(
+                    "TaskManager does not have 'get_task_metadata_by_directory' method."
+                )
                 response.success = False
                 response.message = "Internal server error: TaskManager cannot provide task metadata by directory."
                 response.json_metadata = "{}"
                 return response
 
-            success, message, metadata_json = self.task_manager.get_task_metadata_by_directory(request.task_directory)
+            success, message, metadata_json = (
+                self.task_manager.get_task_metadata_by_directory(request.task_directory)
+            )
             response.success = success
             response.message = message
             response.json_metadata = metadata_json
 
             if success:
-                self.get_logger().info(f"Successfully retrieved metadata for task directory: {request.task_directory}")
+                self.get_logger().info(
+                    f"Successfully retrieved metadata for task directory: {request.task_directory}"
+                )
             else:
-                self.get_logger().error(f"Failed to retrieve metadata for task directory {request.task_directory}: {message}")
-            
+                self.get_logger().error(
+                    f"Failed to retrieve metadata for task directory {request.task_directory}: {message}"
+                )
+
         except Exception as e:
-            self.get_logger().error(f"Exception while retrieving task metadata for directory {request.task_directory}: {str(e)}")
+            self.get_logger().error(
+                f"Exception while retrieving task metadata for directory {request.task_directory}: {str(e)}"
+            )
             response.success = False
             response.message = f"Error retrieving task metadata: {str(e)}"
             response.json_metadata = "{}"
         return response
 
-    def publish_status(self, status: str, episode_number: str = "", current_task_name: str = ""):
+    def publish_status(
+        self, status: str, episode_number: str = "", current_task_name: str = ""
+    ):
         msg = RecorderStatus()
-        msg.current_task_name = current_task_name if current_task_name else self.current_task_name
+        msg.current_task_name = (
+            current_task_name if current_task_name else self.current_task_name
+        )
         msg.episode_number = episode_number
         msg.status = status
         self.status_pub.publish(msg)
 
+
 def main(args=None):
     rclpy.init(args=args)
     node = RecorderNode()
-    
+
     # Create a MultiThreadedExecutor
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(node)
-    
+
     try:
         executor.spin()
     except KeyboardInterrupt:
@@ -471,5 +656,6 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
