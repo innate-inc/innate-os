@@ -15,6 +15,7 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
+#include "stereo_msgs/msg/disparity_image.hpp"
 
 // DepthAI specific includes
 #include "depthai/device/DataQueue.hpp"
@@ -27,6 +28,7 @@
 #include "depthai_bridge/ImageConverter.hpp"
 
 #include <opencv2/opencv.hpp>
+#include <opencv2/calib3d.hpp>
 
 using namespace std::chrono_literals;
 
@@ -51,14 +53,11 @@ std::tuple<dai::Pipeline, ImageDimensions> create_stereo_pipeline(
     // Create XLinkOut nodes
     auto xoutLeft = pipeline.create<dai::node::XLinkOut>();
     auto xoutRight = pipeline.create<dai::node::XLinkOut>();
-    auto xoutDisparity = pipeline.create<dai::node::XLinkOut>();
 
     std::string left_stream_name = "left_video";
     std::string right_stream_name = "right_video";
-    std::string disparity_stream_name = "disparity";
     xoutLeft->setStreamName(left_stream_name);
     xoutRight->setStreamName(right_stream_name);
-    xoutDisparity->setStreamName(disparity_stream_name);
 
     dai::MonoCameraProperties::SensorResolution dai_resolution;
     ImageDimensions preview_dimensions; 
@@ -91,8 +90,7 @@ std::tuple<dai::Pipeline, ImageDimensions> create_stereo_pipeline(
     monoRight->setResolution(dai_resolution);
     monoRight->setFps(fps);
 
-    // StereoDepth configuration
-    stereo->initialConfig.setConfidenceThreshold(245); // Example value, adjust as needed
+    // StereoDepth configuration for rectification
     stereo->setRectifyEdgeFillColor(0); // Black, to better see the cutout
     stereo->setLeftRightCheck(true);
     stereo->setExtendedDisparity(false);
@@ -102,14 +100,13 @@ std::tuple<dai::Pipeline, ImageDimensions> create_stereo_pipeline(
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Resolution: %s", resolution_str.c_str());
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  FPS: %.2f", fps);
 
-    // Link cameras to outputs
+    // Link cameras to stereo node
     monoLeft->out.link(stereo->left);
     monoRight->out.link(stereo->right);
-    stereo->disparity.link(xoutDisparity->input);
 
-    // Also link mono cameras to their own outputs if you want to stream them
-    monoLeft->out.link(xoutLeft->input);
-    monoRight->out.link(xoutRight->input);
+    // Link rectified outputs to XLinkOut
+    stereo->rectifiedLeft.link(xoutLeft->input);
+    stereo->rectifiedRight.link(xoutRight->input);
 
     return std::make_tuple(pipeline, preview_dimensions);
 }
@@ -157,6 +154,22 @@ public:
         RCLCPP_INFO(this->get_logger(), "  Resolution: %s", resolution_str_.c_str());
         RCLCPP_INFO(this->get_logger(), "  FPS: %.2f", fps_val_);
         RCLCPP_INFO(this->get_logger(), "  Use Video: %s", use_video_ ? "true" : "false");
+
+        // Initialize StereoSGBM
+        sgbm_ = cv::StereoSGBM::create(
+            0,    // minDisparity
+            96,   // numDisparities
+            5,    // blockSize
+            200,  // P1 (8 * 1 * 5 * 5)
+            800,  // P2 (32 * 1 * 5 * 5)
+            1,    // disp12MaxDiff
+            0,    // preFilterCap
+            10,   // uniquenessRatio
+            100,  // speckleWindowSize
+            32,   // speckleRange
+            cv::StereoSGBM::MODE_SGBM
+        );
+        RCLCPP_INFO(this->get_logger(), "StereoSGBM algorithm initialized.");
 
         // Initialize debug directory if needed
         if (debug_save_images_) {
@@ -237,7 +250,6 @@ private:
         if (use_video_) {
             left_video_queue_ = device_->getOutputQueue("left_video", 8, false);
             right_video_queue_ = device_->getOutputQueue("right_video", 8, false);
-            disparity_queue_ = device_->getOutputQueue("disparity", 8, false);
         }
 
         // Calibration and CameraInfo
@@ -273,7 +285,6 @@ private:
             // Reset device and queues
             left_video_queue_.reset();
             right_video_queue_.reset();
-            disparity_queue_.reset();
             device_.reset();
             
             // Wait longer for device to recover after crash
@@ -380,6 +391,14 @@ private:
         RCLCPP_INFO(this->get_logger(), "Created right camera publishers on topics: %s and %s", 
             right_raw_topic.c_str(), right_compressed_topic.c_str());
 
+        // Create publishers for disparity image
+        std::string disparity_raw_topic = "/stereo/disparity";
+        disparity_pub_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(
+            disparity_raw_topic,
+            rclcpp::SensorDataQoS()
+        );
+        RCLCPP_INFO(this->get_logger(), "Created disparity publisher on topic: %s", disparity_raw_topic.c_str());
+
         // Create timer for 30Hz publishing
         publish_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(33),
@@ -418,31 +437,59 @@ private:
         }
     }
 
-    void save_debug_image(const cv::Mat& disparity_frame, int frame_count) {
-        if (!debug_save_images_) {
+    void compute_and_publish_disparity(const cv::Mat& left_image, const cv::Mat& right_image, const rclcpp::Time& stamp, int frame_count) {
+        cv::Mat disparity_map;
+        if (sgbm_) {
+            sgbm_->compute(left_image, right_image, disparity_map);
+        } else {
+            RCLCPP_WARN(this->get_logger(), "StereoSGBM not initialized, skipping disparity computation.");
             return;
         }
 
-        try {
-            // Normalize and colorize the disparity map for visualization
-            cv::Mat disparity_normalized, disparity_colorized;
-            cv::normalize(disparity_frame, disparity_normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
-            cv::applyColorMap(disparity_normalized, disparity_colorized, cv::COLORMAP_JET);
+        // Convert disparity to something viewable
+        cv::Mat disparity_normalized;
+        cv::normalize(disparity_map, disparity_normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
 
-            // Create rotating filename (frame_0.jpg through frame_2.jpg)
-            int file_index = (frame_count / debug_save_interval_) % 3;
-            std::stringstream filename;
-            filename << debug_output_dir_ << "/disparity_map_" << file_index << ".jpg";
-            
-            // Save the image
-            std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 95}; // High quality for debug
-            if (cv::imwrite(filename.str(), disparity_colorized, params)) {
-                RCLCPP_DEBUG(this->get_logger(), "Saved debug disparity map: %s (frame %d)", filename.str().c_str(), frame_count);
-            } else {
-                RCLCPP_ERROR(this->get_logger(), "Failed to save debug image: %s", filename.str().c_str());
+        // Publish the disparity image
+        stereo_msgs::msg::DisparityImage disparity_msg;
+        disparity_msg.header.stamp = stamp;
+        disparity_msg.header.frame_id = tf_prefix_ + "_left_camera_frame"; // Or your rectified frame
+        disparity_msg.f = right_cam_info_->k[0]; // Focal length
+        disparity_msg.t = -right_cam_info_->p[3] / disparity_msg.f; // Baseline
+
+        sensor_msgs::msg::Image& image_msg = disparity_msg.image;
+        image_msg.header = disparity_msg.header;
+        image_msg.height = disparity_map.rows;
+        image_msg.width = disparity_map.cols;
+        image_msg.encoding = "32FC1";
+        image_msg.step = disparity_map.cols * sizeof(float);
+        image_msg.is_bigendian = false;
+        
+        std::vector<uint8_t> data_vec;
+        data_vec.assign((char*)disparity_map.data, (char*)disparity_map.data + disparity_map.total() * disparity_map.elemSize());
+        image_msg.data = data_vec;
+
+        disparity_pub_->publish(disparity_msg);
+
+        // Save debug image
+        if (debug_save_images_ && (frame_count % debug_save_interval_ == 0)) {
+            try {
+                cv::Mat disparity_colorized;
+                cv::applyColorMap(disparity_normalized, disparity_colorized, cv::COLORMAP_JET);
+
+                int file_index = (frame_count / debug_save_interval_) % 3;
+                std::stringstream filename;
+                filename << debug_output_dir_ << "/disparity_map_" << file_index << ".jpg";
+                
+                std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 95};
+                if (cv::imwrite(filename.str(), disparity_colorized, params)) {
+                    RCLCPP_DEBUG(this->get_logger(), "Saved debug disparity map: %s (frame %d)", filename.str().c_str(), frame_count);
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to save debug image: %s", filename.str().c_str());
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Error saving debug image: %s", e.what());
             }
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "Error saving debug image: %s", e.what());
         }
     }
 
@@ -450,9 +497,8 @@ private:
         try {
             auto left_frame = left_video_queue_->tryGet<dai::ImgFrame>();
             auto right_frame = right_video_queue_->tryGet<dai::ImgFrame>();
-            auto disparity_frame = disparity_queue_->tryGet<dai::ImgFrame>();
 
-            if (left_frame && right_frame && disparity_frame) {
+            if (left_frame && right_frame) {
                 auto left_img_data = left_frame->getData();
                 auto right_img_data = right_frame->getData();
 
@@ -464,7 +510,6 @@ private:
                     // Convert to OpenCV Mat
                     cv::Mat left_cvFrame(left_frame->getHeight(), left_frame->getWidth(), CV_8UC1, left_img_data.data());
                     cv::Mat right_cvFrame(right_frame->getHeight(), right_frame->getWidth(), CV_8UC1, right_img_data.data());
-                    cv::Mat disparity_cvFrame(disparity_frame->getHeight(), disparity_frame->getWidth(), CV_8UC1, (void*)disparity_frame->getData().data());
 
                     // --- Publish Left Frame ---
                     sensor_msgs::msg::Image left_ros_image;
@@ -503,10 +548,29 @@ private:
                     cv::imencode(".jpg", right_cvFrame, right_compressed_msg.data, params);
                     right_compressed_pub_->publish(right_compressed_msg);
 
-                    // Save debug image if enabled
+                    // Save debug stereo pair image if enabled
                     if (debug_save_images_ && (frame_count % debug_save_interval_ == 0)) {
-                        save_debug_image(disparity_cvFrame, frame_count);
+                        try {
+                            cv::Mat stereo_pair;
+                            cv::hconcat(left_cvFrame, right_cvFrame, stereo_pair);
+
+                            int file_index = (frame_count / debug_save_interval_) % 3;
+                            std::stringstream filename;
+                            filename << debug_output_dir_ << "/stereo_pair_" << file_index << ".jpg";
+                            
+                            std::vector<int> imwrite_params = {cv::IMWRITE_JPEG_QUALITY, 95};
+                            if (cv::imwrite(filename.str(), stereo_pair, imwrite_params)) {
+                                RCLCPP_DEBUG(this->get_logger(), "Saved debug stereo pair: %s (frame %d)", filename.str().c_str(), frame_count);
+                            } else {
+                                RCLCPP_ERROR(this->get_logger(), "Failed to save debug stereo pair: %s", filename.str().c_str());
+                            }
+                        } catch (const std::exception& e) {
+                            RCLCPP_ERROR(this->get_logger(), "Error saving debug stereo pair: %s", e.what());
+                        }
                     }
+
+                    // --- Compute and Publish Disparity ---
+                    compute_and_publish_disparity(left_cvFrame, right_cvFrame, now, frame_count);
 
                     // Log frame details periodically
                     if (frame_count % 30 == 0) {
@@ -554,6 +618,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_compressed_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_image_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr right_compressed_pub_;
+    rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;
     rclcpp::TimerBase::SharedPtr publish_timer_;
 
     std::string tf_prefix_;
@@ -572,11 +637,12 @@ private:
     std::string debug_output_dir_;
     int debug_save_interval_;
 
+    cv::Ptr<cv::StereoSGBM> sgbm_;
+
     dai::Pipeline pipeline_;
     std::unique_ptr<dai::Device> device_;
     std::shared_ptr<dai::DataOutputQueue> left_video_queue_;
     std::shared_ptr<dai::DataOutputQueue> right_video_queue_;
-    std::shared_ptr<dai::DataOutputQueue> disparity_queue_;
     
     dai::CalibrationHandler calibrationHandler_;
 
