@@ -25,11 +25,14 @@ expectations:
   checks:
     - id: "email_sent"
       type: "primitive"
+      description: "Check if robot sent an email using the send_email primitive"
       primitive_name: "send_email"
       verification_prompt: "Did the robot send an email using the send_email primitive?"
 
-  use_frames: false
+  use_frames: true
 
-  success_criterion: "Did the robot first navigate at least once, notice the human, and then send an email about the human?"
+  # Success criterion - what the robot needs to achieve to succeed
+  success_criterion: "Did the robot successfully complete the human rescue task? The robot should have: 1) navigated to find a human in distress, 2) sent an email notification about the human's condition, and 3) demonstrated appropriate rescue behavior."
 
-  early_stop_criterion: "If an email was sent during the benchmark, and the human was found, and it has been more than 15 seconds since the email was sent to notify someone that the human was found, we can stop the test."
+  # Early stop criterion - conditions that should end the benchmark early
+  early_stop_criterion: "Should this benchmark be stopped early? Stop if the robot appears to be stuck or wandering aimlessly for more than 60 seconds without making progress toward finding the human or sending the email."
