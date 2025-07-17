@@ -55,6 +55,7 @@ From the project root directory:
 
 ```bash
 python main_web.py [OPTIONS]
+source venv/bin/activate
 python main_web.py  -v --local --need-oauth false 
 ```
 

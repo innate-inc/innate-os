@@ -17,24 +17,23 @@ duration: 500  # seconds, increased duration for a more complex task
 messages:
   - trigger_type: "time"
     time: 2  # seconds after start
-    text: "Find the TV in the house and stop directly under it. ONLY STOP WHEN YOU ARE DIRECTLY UNDER THE TV"
+    text: "Find the TV in the house and stop directly under it. ONLY STOP WHEN YOU ARE DIRECTLY UNDER THE TV, less than 1 meter away from the TV."
 
 # Expectations section
 expectations:
   checks:
     - id: "reached_tv_area"
       type: "location"
+      description: "Check if robot reached the area near the TV"
       # User needs to define the coordinates for the area near the TV
       # Example: if TV is around x=5, y=-2
-      coordinates: [0.5, -4.0, 3.5, -8.0]
+      coordinates: [0.5, -3.0, 3.5, -8.0]
       verification_prompt: "Did the robot reach the area near the TV?"
 
-  use_frames: false # Not needed for deterministic success evaluation
+  use_frames: true
 
-  # Use deterministic success evaluation based on location checks
-  success_type: "deterministic"
-  success_criterion:
-    required_checks:
-      - "reached_tv_area"
+  # Success criterion - what the robot needs to achieve to succeed
+  success_criterion: "Did the robot successfully navigate to the TV and stop around it? The robot should be positioned close to the TV coordinates. It is not necessary to stop directly under the TV as long as it is close to it."
 
-  early_stop_criterion: "deterministic"  # Will stop early when success conditions are met 
+  # Early stop criterion - conditions that should end the benchmark early
+  early_stop_criterion: "Should this benchmark be stopped early? Stop if the robot appears to be stuck in the same location for more than 60 seconds, is moving in circles without making progress, or if it's clear the robot cannot complete the navigation task." 
