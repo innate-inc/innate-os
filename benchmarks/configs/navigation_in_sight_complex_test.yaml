@@ -36,4 +36,4 @@ expectations:
   success_criterion: "Did the robot successfully navigate to the TV and stop around it? The robot should be positioned close to the TV coordinates. It is not necessary to stop directly under the TV as long as it is close to it."
 
   # Early stop criterion - conditions that should end the benchmark early
-  early_stop_criterion: "Should this benchmark be stopped early? Stop if the robot appears to be stuck in the same location for more than 60 seconds, is moving in circles without making progress, or if it's clear the robot cannot complete the navigation task." 
+  early_stop_criterion: "Should this benchmark be stopped early? Stop if the robot appears to be stuck in the same location for more than 120 seconds, is moving in circles without making progress for more than 120 seconds, or if it's clear the robot cannot complete the navigation task. DO NOT STOP TOO EARLY, ONLY IF YOU ARE REALLY SURE." 

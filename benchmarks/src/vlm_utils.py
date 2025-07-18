@@ -46,7 +46,7 @@ def get_representative_frames(first_person_dir, chase_dir):
     if not first_person_frames and not chase_frames:
         return []
     # Select frames at regular intervals
-    interval = 5
+    interval = 30
 
     # Combine frames from both cameras, alternating
     selected_frames = []
@@ -93,7 +93,7 @@ def evaluate_periodic_with_vlm(
     try:
         # Configure Gemini
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-pro')
 
         # Format the chat log with coordinates
         chat_log_text = ""
@@ -120,7 +120,7 @@ def evaluate_periodic_with_vlm(
             time_info = "Benchmark running time: unknown\n\n"
 
         # Build the prompt
-        prompt = f"""You are an AI evaluator for robot benchmarks. You will analyze robot behavior and determine if a benchmark should continue, succeed, or stop.
+        prompt = f"""You are an AI evaluator for robot benchmarks. You will analyze robot behavior and determine if a benchmark should continue, succeed, or stop every 30 seconds.
 
 You will receive:
 1. A SUCCESS CRITERION - what the robot needs to achieve to succeed
