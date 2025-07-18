@@ -1,0 +1,23 @@
+# Numerical & scientific
+numpy
+h5py
+pyyaml
+
+# Computer vision
+opencv-python
+
+# Deep learning
+torch
+
+# Plotting / visualization
+matplotlib
+pygame
+
+# Robotics & devices
+dynamixel-sdk
+pyserial
+pynput
+mujoco
+
+# Networking / Bluetooth
+bluezero
