@@ -25,17 +25,35 @@ def analyze_metrics_file(metrics_file_path):
             except ValueError as e:
                 print(f"Error parsing timestamps in {metrics_file_path}: {e}")
 
+        # Extract stopping reason
+        stop_reason = "N/A"
+        if metrics_data.get("early_success", {}).get("achieved"):
+            stop_reason = metrics_data.get("early_success", {}).get(
+                "reason", "Early success criterion met."
+            )
+        elif metrics_data.get("early_stop", {}).get("triggered"):
+            stop_reason = metrics_data.get("early_stop", {}).get(
+                "reason", "Early stop criterion met."
+            )
+        elif "success" in metrics_data and "reason" in metrics_data["success"]:
+            stop_reason = metrics_data["success"]["reason"]
+        else:
+            stop_reason = "Benchmark timed out or ended without a specific reason."
+
         # The task name could be inferred from the path relative to the run_dir
         # e.g., {config_name}/trial_{trial_num}
         # Path(metrics_file_path).parent.parent.name could be the config_name
         task_name = Path(metrics_file_path).parent.parent.name
+        trial_name = Path(metrics_file_path).parent.name
 
         return {
             "task_name": task_name,
+            "trial_name": trial_name,
             "trial_path": str(Path(metrics_file_path).parent),
             "success": success,
             "duration_seconds": duration_seconds,
             "metrics_data": metrics_data,
+            "stop_reason": stop_reason,
         }
     except Exception as e:
         print(f"Error processing metrics file {metrics_file_path}: {e}")
@@ -48,7 +66,7 @@ def generate_report(run_directory_path):
     """
     run_dir = Path(run_directory_path)
     if not run_dir.is_dir():
-        return "Error: Provided run directory does not exist or is not a directory."
+        return "<h1>Error: Provided run directory does not exist or is not a directory.</h1>"
 
     all_results = []
     for metrics_file in run_dir.rglob("**/metrics.json"):
@@ -57,7 +75,7 @@ def generate_report(run_directory_path):
             all_results.append(analysis_result)
 
     if not all_results:
-        return "No metrics.json files found in the specified directory."
+        return "<h1>No metrics.json files found in the specified directory.</h1>"
 
     # Aggregate results by task name
     tasks_summary = {}
@@ -86,68 +104,93 @@ def generate_report(run_directory_path):
                 tasks_summary[task_name]["durations"].append(result["duration_seconds"])
                 total_duration_all_successful_runs += result["duration_seconds"]
 
-    report_lines = [
-        "Benchmark Run Analysis Report",
-        "=" * 30,
-        f"Run Directory: {run_dir.resolve()}",
-        "",
-    ]
+    overall_success_rate = (
+        (total_successful_runs / total_runs * 100) if total_runs > 0 else 0
+    )
+    overall_avg_duration = (
+        (total_duration_all_successful_runs / total_successful_runs)
+        if total_successful_runs > 0
+        else 0
+    )
 
-    report_lines.append("Per-Task Summary:")
-    report_lines.append("-" * 30)
+    # HTML report generation
+    html = f"""
+<html>
+<head>
+<style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; line-height: 1.6; }}
+    h1, h2, h3 {{ color: #1d2d50; }}
+    .container {{ max-width: 800px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
+    th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+    th {{ background-color: #f2f2f2; font-weight: bold; }}
+    tr:nth-child(even) {{ background-color: #f9f9f9; }}
+    .summary-box {{ background-color: #eaf2f8; border-left: 5px solid #3498db; padding: 15px; margin-bottom: 20px; }}
+    .task-box {{ margin-bottom: 20px; }}
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>Benchmark Run Analysis Report</h1>
+    <div class="summary-box">
+        <h3>Overall Run Summary</h3>
+        <p><strong>Run Directory:</strong> {run_dir.resolve()}</p>
+        <p><strong>Total Benchmarks (trials):</strong> {total_runs}</p>
+        <p><strong>Successful Benchmarks (trials):</strong> {total_successful_runs} ({{overall_success_rate:.2f}}%)</p>
+        <p><strong>Avg Duration (all successful trials):</strong> {{overall_avg_duration:.2f}}s</p>
+    </div>
+    <h2>Per-Task Summary</h2>
+    """
 
-    for task_name, data in tasks_summary.items():
-        report_lines.append(f"Task: {task_name}")
+    for task_name, data in sorted(tasks_summary.items()):
         success_rate = (
             (data["successful_trials"] / data["total_trials"] * 100)
             if data["total_trials"] > 0
             else 0
         )
-        trials_summary = (
-            f"  Trials: {data['successful_trials']}/{data['total_trials']} "
-            f"successful ({success_rate:.2f}%)"
-        )
-        report_lines.append(trials_summary)
-
         avg_duration = (
             (data["total_duration_seconds"] / len(data["durations"]))
             if data["durations"]
-            else None
+            else 0
         )
-        if avg_duration is not None:
-            report_lines.append(f"  Avg Duration (ok): {avg_duration:.2f}s")
-        else:
-            report_lines.append(
-                "  Avg Duration (ok): N/A (no successful runs w/ duration)"
-            )
-        report_lines.append("")
+        html += f"""
+        <div class="task-box">
+            <h3>Task: {task_name}</h3>
+            <p><strong>Trials:</strong> {data['successful_trials']}/{data['total_trials']} successful ({{success_rate:.2f}}%)</p>
+            <p><strong>Avg Duration (successful trials):</strong> {{avg_duration:.2f}}s</p>
+        </div>
+        """
 
-    report_lines.append("Overall Run Summary:")
-    report_lines.append("-" * 30)
-    overall_success_rate = (
-        (total_successful_runs / total_runs * 100) if total_runs > 0 else 0
-    )
-    report_lines.append(f"Total Benchmarks (trials): {total_runs}")
-    overall_summary_text = (
-        f"Successful Benchmarks (trials): {total_successful_runs} "
-        f"({overall_success_rate:.2f}%)"
-    )
-    report_lines.append(overall_summary_text)
+    html += """
+    <h2>Stop Reasons per Trial</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Task</th>
+                <th>Trial</th>
+                <th>Stop Reason</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
 
-    overall_avg_duration = (
-        (total_duration_all_successful_runs / total_successful_runs)
-        if total_successful_runs > 0
-        else None
-    )
-    if overall_avg_duration is not None:
-        report_lines.append(
-            f"Avg Duration (all successful trials): {overall_avg_duration:.2f}s"
-        )
-    else:
-        report_lines.append("Avg Duration (all successful trials): N/A")
+    for result in sorted(all_results, key=lambda x: (x["task_name"], x["trial_name"])):
+        html += f"""
+            <tr>
+                <td>{result['task_name']}</td>
+                <td>{result['trial_name']}</td>
+                <td>{result['stop_reason']}</td>
+            </tr>
+        """
 
-    report_lines.append("=" * 30)
-    return "\n".join(report_lines)
+    html += """
+        </tbody>
+    </table>
+</div>
+</body>
+</html>
+    """
+    return html
 
 
 def main():

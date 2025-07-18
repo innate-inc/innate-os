@@ -9,6 +9,7 @@ import json
 import requests
 import smtplib
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from datetime import datetime
 from pathlib import Path
@@ -27,10 +28,13 @@ def send_email_summary(
     smtp_password,
 ):
     """Sends an email with the benchmark summary."""
-    msg = MIMEText(body)
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = from_email
     msg["To"] = to_email
+
+    # Attach the body as HTML
+    msg.attach(MIMEText(body, "html"))
 
     try:
         with smtplib.SMTP(smtp_server, smtp_port) as server:
@@ -194,7 +198,7 @@ def run_multiple_trials(
 
 
 def run_benchmarks_from_config(
-    config_file, base_url="http://localhost:8000", interval=1.0
+    config_file, base_url="http://localhost:8000", interval=1.0, run_name=None
 ):
     """
     Run multiple benchmarks as defined in a benchmarks configuration file
@@ -224,7 +228,16 @@ def run_benchmarks_from_config(
 
     # Create a timestamped base directory for all benchmarks in this run
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    main_output_directory = Path("benchmarks/runs") / timestamp_str
+    dir_name_parts = [timestamp_str]
+    if run_name:
+        # Sanitize the run name to be file-system safe
+        sanitized_name = "".join(
+            c if c.isalnum() or c in ["-", "_"] else "_" for c in run_name
+        )
+        dir_name_parts.append(sanitized_name)
+
+    dir_name = "_".join(dir_name_parts)
+    main_output_directory = Path("benchmarks/runs") / dir_name
     main_output_directory.mkdir(parents=True, exist_ok=True)
     print(f"Saving all benchmark data for this run to: {main_output_directory}")
     main_output_directory_str = str(main_output_directory)  # Store as string for return
@@ -423,6 +436,12 @@ def main():
         help="Path to benchmarks configuration file"
         " (default: benchmarks_config.json)",
     )
+    all_parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="A name for this benchmark run, used in the output directory name",
+    )
 
     # Common arguments for both commands
     for subparser in [run_parser, all_parser]:
@@ -519,6 +538,7 @@ def main():
                 config_file=args.config,
                 base_url=args.url,
                 interval=args.interval,
+                run_name=args.name,
             )
         )
         # Stop simulator if requested
@@ -556,14 +576,8 @@ def main():
                     "Could not determine run output directory for analysis."
                 )
 
-            email_body = "Benchmark run completed.\n\nRaw Summary:\n"
-            email_body += "\n".join(results_summary)
-            email_body += "\n\n" + "=" * 40
-            email_body += "\n\nDetailed Analysis Report:\n"
-            email_body += "=" * 40
-            email_body += "\n"
-            email_body += analysis_report
-
+            email_body = analysis_report
+            
             # Fallback to .env for email config
             to_email = args.to_email or os.getenv("TO_EMAIL")
             from_email = args.from_email or os.getenv("FROM_EMAIL")
