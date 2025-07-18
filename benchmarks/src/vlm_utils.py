@@ -93,7 +93,7 @@ def evaluate_periodic_with_vlm(
     try:
         # Configure Gemini
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         # Format the chat log with coordinates
         chat_log_text = ""
@@ -136,7 +136,7 @@ Your task is to return one of three actions (NOTHING ELSE):
 
 IMPORTANT GUIDELINES:
 1. Only return "success" if BOTH the deterministic checks are validated AND the success criterion is completely satisfied
-2. Return "stop" if the early stop criterion is met (robot is stuck, task is impossible, etc.)
+2. Return "stop" if the early stop criterion is met (robot is stuck, task is impossible, etc.). BUT ONlY RETURN STOP EARLY IN A LAST CASE SCENARIO, DO NOT STOP TOO EARLY, LET THE ROBOT RUN FOR AS LONG AS POSSIBLE
 3. Return "continue" in all other cases - when the task is still in progress
 4. Be conservative - err on the side of "continue" rather than premature success/stop decisions
 5. Pay attention to robot coordinates and movement patterns to detect if the robot is stuck or making progress

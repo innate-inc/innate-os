@@ -69,6 +69,7 @@ def validate_location_check(check_id: str, check_data: Dict, **kwargs) -> bool:
         # Fallback to current position if no history
         base_url = kwargs.get("base_url", "http://localhost:8000")
         current_position = get_robot_position(base_url)
+        print(f"Current position: {current_position}")
         if current_position:
             position_history = [current_position]
         else:
