@@ -43,7 +43,8 @@ struct ImageDimensions {
 std::tuple<dai::Pipeline, ImageDimensions, ImageDimensions> create_combined_pipeline(
     std::string color_resolution_str,
     std::string stereo_resolution_str,
-    float fps) {
+    float fps,
+    bool enable_stereo) {
 
     dai::Pipeline pipeline;
     
@@ -52,19 +53,25 @@ std::tuple<dai::Pipeline, ImageDimensions, ImageDimensions> create_combined_pipe
     auto xlinkOutRgb = pipeline.create<dai::node::XLinkOut>();
     xlinkOutRgb->setStreamName("rgb_video");
     
-    // Create mono cameras for stereo
-    auto monoLeft = pipeline.create<dai::node::MonoCamera>();
-    auto monoRight = pipeline.create<dai::node::MonoCamera>();
-    auto stereo = pipeline.create<dai::node::StereoDepth>();
+    // Create mono cameras for stereo (only if enabled)
+    std::shared_ptr<dai::node::MonoCamera> monoLeft, monoRight;
+    std::shared_ptr<dai::node::StereoDepth> stereo;
+    std::shared_ptr<dai::node::XLinkOut> xoutLeft, xoutRight;
+    
+    if (enable_stereo) {
+        monoLeft = pipeline.create<dai::node::MonoCamera>();
+        monoRight = pipeline.create<dai::node::MonoCamera>();
+        stereo = pipeline.create<dai::node::StereoDepth>();
 
-    // Create XLinkOut nodes for stereo
-    auto xoutLeft = pipeline.create<dai::node::XLinkOut>();
-    auto xoutRight = pipeline.create<dai::node::XLinkOut>();
+        // Create XLinkOut nodes for stereo
+        xoutLeft = pipeline.create<dai::node::XLinkOut>();
+        xoutRight = pipeline.create<dai::node::XLinkOut>();
 
-    std::string left_stream_name = "left_video";
-    std::string right_stream_name = "right_video";
-    xoutLeft->setStreamName(left_stream_name);
-    xoutRight->setStreamName(right_stream_name);
+        std::string left_stream_name = "left_video";
+        std::string right_stream_name = "right_video";
+        xoutLeft->setStreamName(left_stream_name);
+        xoutRight->setStreamName(right_stream_name);
+    }
 
     // Configure color camera
     dai::ColorCameraProperties::SensorResolution dai_color_resolution;
@@ -96,55 +103,60 @@ std::tuple<dai::Pipeline, ImageDimensions, ImageDimensions> create_combined_pipe
 
     colorCam->preview.link(xlinkOutRgb->input);
 
-    // Configure stereo cameras
-    dai::MonoCameraProperties::SensorResolution dai_stereo_resolution;
-    ImageDimensions stereo_preview_dimensions; 
-
-    if (stereo_resolution_str == "800p") {
-        dai_stereo_resolution = dai::MonoCameraProperties::SensorResolution::THE_800_P;
-        stereo_preview_dimensions = {1280, 800};
-        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting mono resolution to 800P (1280x800)");
-    } else if (stereo_resolution_str == "720p") {
-        dai_stereo_resolution = dai::MonoCameraProperties::SensorResolution::THE_720_P;
-        stereo_preview_dimensions = {1280, 720};
-        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting mono resolution to 720P (1280x720)");
-    } else if (stereo_resolution_str == "400p") {
-        dai_stereo_resolution = dai::MonoCameraProperties::SensorResolution::THE_400_P;
-        stereo_preview_dimensions = {640, 400};
-        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting mono resolution to 400P (640x400)");
-    }
-    else {
-        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Invalid stereo resolution parameter: %s. Supported: 800p, 720p, 400p.", stereo_resolution_str.c_str());
-        throw std::runtime_error("Invalid mono camera resolution provided to pipeline creation.");
-    }
+    // Configure stereo cameras (only if enabled)
+    ImageDimensions stereo_preview_dimensions = {640, 400}; // Default dimensions 
     
-    // Configure left camera
-    monoLeft->setBoardSocket(dai::CameraBoardSocket::CAM_B);
-    monoLeft->setResolution(dai_stereo_resolution);
-    monoLeft->setFps(fps);
+    if (enable_stereo) {
+        dai::MonoCameraProperties::SensorResolution dai_stereo_resolution;
 
-    // Configure right camera
-    monoRight->setBoardSocket(dai::CameraBoardSocket::CAM_C);
-    monoRight->setResolution(dai_stereo_resolution);
-    monoRight->setFps(fps);
+        if (stereo_resolution_str == "800p") {
+            dai_stereo_resolution = dai::MonoCameraProperties::SensorResolution::THE_800_P;
+            stereo_preview_dimensions = {1280, 800};
+            RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting mono resolution to 800P (1280x800)");
+        } else if (stereo_resolution_str == "720p") {
+            dai_stereo_resolution = dai::MonoCameraProperties::SensorResolution::THE_720_P;
+            stereo_preview_dimensions = {1280, 720};
+            RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting mono resolution to 720P (1280x720)");
+        } else if (stereo_resolution_str == "400p") {
+            dai_stereo_resolution = dai::MonoCameraProperties::SensorResolution::THE_400_P;
+            stereo_preview_dimensions = {640, 400};
+            RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting mono resolution to 400P (640x400)");
+        }
+        else {
+            RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Invalid stereo resolution parameter: %s. Supported: 800p, 720p, 400p.", stereo_resolution_str.c_str());
+            throw std::runtime_error("Invalid mono camera resolution provided to pipeline creation.");
+        }
+        
+        // Configure left camera
+        monoLeft->setBoardSocket(dai::CameraBoardSocket::CAM_B);
+        monoLeft->setResolution(dai_stereo_resolution);
+        monoLeft->setFps(fps);
 
-    // StereoDepth configuration for rectification
-    stereo->setRectifyEdgeFillColor(0); // Black, to better see the cutout
-    stereo->setLeftRightCheck(true);
-    stereo->setExtendedDisparity(false);
-    stereo->setSubpixel(false);
+        // Configure right camera
+        monoRight->setBoardSocket(dai::CameraBoardSocket::CAM_C);
+        monoRight->setResolution(dai_stereo_resolution);
+        monoRight->setFps(fps);
 
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Stereo cameras configured with:");
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Resolution: %s", stereo_resolution_str.c_str());
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  FPS: %.2f", fps);
+        // StereoDepth configuration for rectification
+        stereo->setRectifyEdgeFillColor(0); // Black, to better see the cutout
+        stereo->setLeftRightCheck(true);
+        stereo->setExtendedDisparity(false);
+        stereo->setSubpixel(false);
 
-    // Link cameras to stereo node
-    monoLeft->out.link(stereo->left);
-    monoRight->out.link(stereo->right);
+        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Stereo cameras configured with:");
+        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Resolution: %s", stereo_resolution_str.c_str());
+        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  FPS: %.2f", fps);
 
-    // Link rectified outputs to XLinkOut
-    stereo->rectifiedLeft.link(xoutLeft->input);
-    stereo->rectifiedRight.link(xoutRight->input);
+        // Link cameras to stereo node
+        monoLeft->out.link(stereo->left);
+        monoRight->out.link(stereo->right);
+
+        // Link rectified outputs to XLinkOut
+        stereo->rectifiedLeft.link(xoutLeft->input);
+        stereo->rectifiedRight.link(xoutRight->input);
+    } else {
+        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Stereo cameras disabled - skipping stereo pipeline creation");
+    }
 
     return std::make_tuple(pipeline, color_preview_dimensions, stereo_preview_dimensions);
 }
@@ -171,11 +183,21 @@ public:
         this->declare_parameter<int>("sgbm_block_size", 3);
         // Device specific parameters
         this->declare_parameter<std::string>("mxId", "");
-        this->declare_parameter<bool>("usb2Mode", true);
+        this->declare_parameter<bool>("usb2Mode", false);
         // Debug parameters
         this->declare_parameter<bool>("debug_save_images", true);
         this->declare_parameter<std::string>("debug_output_dir", "~/Pictures/camera_debug");
         this->declare_parameter<int>("debug_save_interval", 30); // Save every N frames
+
+        // Disparity parameters
+        this->declare_parameter<bool>("enable_disparity", true);
+
+        // Performance parameters
+        this->declare_parameter<int>("jpeg_quality", 80);
+        this->declare_parameter<bool>("publish_stereo_compressed", true);
+        this->declare_parameter<double>("rgb_fps", 30.0);
+        this->declare_parameter<double>("stereo_fps", 15.0);
+        this->declare_parameter<bool>("enable_stereo", false);
 
         // Get parameters
         tf_prefix_ = this->get_parameter("tf_prefix").as_string();
@@ -198,11 +220,28 @@ public:
         debug_output_dir_ = this->get_parameter("debug_output_dir").as_string();
         debug_save_interval_ = this->get_parameter("debug_save_interval").as_int();
 
+        // Disparity parameters
+        enable_disparity_ = this->get_parameter("enable_disparity").as_bool();
+        RCLCPP_INFO(this->get_logger(), "DEBUG: enable_disparity parameter read as: %s", enable_disparity_ ? "true" : "false");
+
+        // Performance parameters
+        jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
+        publish_stereo_compressed_ = this->get_parameter("publish_stereo_compressed").as_bool();
+        rgb_fps_ = this->get_parameter("rgb_fps").as_double();
+        stereo_fps_ = this->get_parameter("stereo_fps").as_double();
+        enable_stereo_ = this->get_parameter("enable_stereo").as_bool();
+
         RCLCPP_INFO(this->get_logger(), "Initializing Camera Driver Node with parameters:");
         RCLCPP_INFO(this->get_logger(), "  Color Resolution: %s", color_resolution_str_.c_str());
         RCLCPP_INFO(this->get_logger(), "  Stereo Resolution: %s", resolution_str_.c_str());
         RCLCPP_INFO(this->get_logger(), "  FPS: %.2f", fps_val_);
         RCLCPP_INFO(this->get_logger(), "  Use Video: %s", use_video_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "  Enable Disparity: %s", enable_disparity_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "  JPEG Quality: %d", jpeg_quality_);
+        RCLCPP_INFO(this->get_logger(), "  Publish Stereo Compressed: %s", publish_stereo_compressed_ ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "  RGB FPS: %.2f", rgb_fps_);
+        RCLCPP_INFO(this->get_logger(), "  Stereo FPS: %.2f", stereo_fps_);
+        RCLCPP_INFO(this->get_logger(), "  Enable Stereo: %s", enable_stereo_ ? "true" : "false");
 
         // Initialize RGB converter
         rgb_converter_ = std::make_unique<dai::rosBridge::ImageConverter>(tf_prefix_ + "_rgb_camera_optical_frame", false);
@@ -212,20 +251,24 @@ public:
         int p2 = 32 * 1 * sgbm_block_size * sgbm_block_size;
 
         // Initialize StereoSGBM
-        sgbm_ = cv::StereoSGBM::create(
-            0,    // minDisparity
-            sgbm_num_disparities,   // numDisparities
-            sgbm_block_size,    // blockSize
-            p1,  // P1
-            p2,  // P2
-            1,    // disp12MaxDiff
-            0,    // preFilterCap
-            10,   // uniquenessRatio
-            100,  // speckleWindowSize
-            32,   // speckleRange
-            cv::StereoSGBM::MODE_SGBM
-        );
-        RCLCPP_INFO(this->get_logger(), "StereoSGBM algorithm initialized.");
+        if (enable_disparity_) {
+            sgbm_ = cv::StereoSGBM::create(
+                0,    // minDisparity
+                sgbm_num_disparities,   // numDisparities
+                sgbm_block_size,    // blockSize
+                p1,  // P1
+                p2,  // P2
+                1,    // disp12MaxDiff
+                0,    // preFilterCap
+                10,   // uniquenessRatio
+                100,  // speckleWindowSize
+                32,   // speckleRange
+                cv::StereoSGBM::MODE_SGBM
+            );
+            RCLCPP_INFO(this->get_logger(), "StereoSGBM algorithm initialized.");
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Disparity computation disabled - skipping StereoSGBM initialization.");
+        }
 
         // Initialize debug directory if needed
         if (debug_save_images_) {
@@ -273,7 +316,7 @@ private:
     void initialize_device() {
         ImageDimensions color_dims, stereo_dims;
         
-        std::tie(pipeline_, color_dims, stereo_dims) = create_combined_pipeline(color_resolution_str_, resolution_str_, fps_val_);
+        std::tie(pipeline_, color_dims, stereo_dims) = create_combined_pipeline(color_resolution_str_, resolution_str_, fps_val_, enable_stereo_);
 
         // Initialize device
         dai::DeviceInfo deviceInfo; // Default constructor for first available device
@@ -305,8 +348,11 @@ private:
         // Get output queues
         if (use_video_) {
             rgb_video_queue_ = device_->getOutputQueue("rgb_video", 8, false);
-            left_video_queue_ = device_->getOutputQueue("left_video", 8, false);
-            right_video_queue_ = device_->getOutputQueue("right_video", 8, false);
+            
+            if (enable_stereo_) {
+                left_video_queue_ = device_->getOutputQueue("left_video", 8, false);
+                right_video_queue_ = device_->getOutputQueue("right_video", 8, false);
+            }
         }
 
         // Calibration and CameraInfo
@@ -319,21 +365,24 @@ private:
             rgb_converter_->calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_A, color_dims.width, color_dims.height)
         );
         
-        // Left camera
-        std::string left_camera_name = tf_prefix_ + "_left";
-        cinfo_manager_left_.setCameraName(left_camera_name + "_camera");
-        dai::rosBridge::ImageConverter left_converter(tf_prefix_ + "_left_camera_frame", false);
-        left_cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(
-            left_converter.calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_B, stereo_dims.width, stereo_dims.height)
-        );
+        // Stereo camera calibration (only if enabled)
+        if (enable_stereo_) {
+            // Left camera
+            std::string left_camera_name = tf_prefix_ + "_left";
+            cinfo_manager_left_.setCameraName(left_camera_name + "_camera");
+            dai::rosBridge::ImageConverter left_converter(tf_prefix_ + "_left_camera_frame", false);
+            left_cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(
+                left_converter.calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_B, stereo_dims.width, stereo_dims.height)
+            );
 
-        // Right camera
-        std::string right_camera_name = tf_prefix_ + "_right";
-        cinfo_manager_right_.setCameraName(right_camera_name + "_camera");
-        dai::rosBridge::ImageConverter right_converter(tf_prefix_ + "_right_camera_frame", false);
-        right_cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(
-            right_converter.calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_C, stereo_dims.width, stereo_dims.height)
-        );
+            // Right camera
+            std::string right_camera_name = tf_prefix_ + "_right";
+            cinfo_manager_right_.setCameraName(right_camera_name + "_camera");
+            dai::rosBridge::ImageConverter right_converter(tf_prefix_ + "_right_camera_frame", false);
+            right_cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(
+                right_converter.calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_C, stereo_dims.width, stereo_dims.height)
+            );
+        }
     }
 
     void restart_device() {
@@ -439,55 +488,64 @@ private:
         RCLCPP_INFO(this->get_logger(), "Created RGB camera publishers on topics: %s and %s", 
             rgb_raw_topic.c_str(), rgb_compressed_topic.c_str());
 
-        // Create publishers for left camera with sensor QoS profile
-        std::string left_raw_topic = "/mono/left/image_raw";
-        std::string left_compressed_topic = "/mono/left/image/compressed";
-        
-        left_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-            left_raw_topic,
-            rclcpp::SensorDataQoS()
-        );
-        
-        left_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-            left_compressed_topic,
-            rclcpp::SensorDataQoS()
-        );
+        // Create publishers for stereo cameras (only if enabled)
+        if (enable_stereo_) {
+            // Create publishers for left camera with sensor QoS profile
+            std::string left_raw_topic = "/mono/left/image_raw";
+            std::string left_compressed_topic = "/mono/left/image/compressed";
+            
+            left_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+                left_raw_topic,
+                rclcpp::SensorDataQoS()
+            );
+            
+            left_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+                left_compressed_topic,
+                rclcpp::SensorDataQoS()
+            );
 
-        RCLCPP_INFO(this->get_logger(), "Created left camera publishers on topics: %s and %s", 
-            left_raw_topic.c_str(), left_compressed_topic.c_str());
+            RCLCPP_INFO(this->get_logger(), "Created left camera publishers on topics: %s and %s", 
+                left_raw_topic.c_str(), left_compressed_topic.c_str());
 
-        // Create publishers for right camera with sensor QoS profile
-        std::string right_raw_topic = "/mono/right/image_raw";
-        std::string right_compressed_topic = "/mono/right/image/compressed";
-        
-        right_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-            right_raw_topic,
-            rclcpp::SensorDataQoS()
-        );
-        
-        right_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-            right_compressed_topic,
-            rclcpp::SensorDataQoS()
-        );
+            // Create publishers for right camera with sensor QoS profile
+            std::string right_raw_topic = "/mono/right/image_raw";
+            std::string right_compressed_topic = "/mono/right/image/compressed";
+            
+            right_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+                right_raw_topic,
+                rclcpp::SensorDataQoS()
+            );
+            
+            right_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+                right_compressed_topic,
+                rclcpp::SensorDataQoS()
+            );
 
-        RCLCPP_INFO(this->get_logger(), "Created right camera publishers on topics: %s and %s", 
-            right_raw_topic.c_str(), right_compressed_topic.c_str());
+            RCLCPP_INFO(this->get_logger(), "Created right camera publishers on topics: %s and %s", 
+                right_raw_topic.c_str(), right_compressed_topic.c_str());
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Stereo publishers disabled - skipping stereo publisher creation");
+        }
 
-        // Create publishers for disparity image
-        std::string disparity_raw_topic = "/stereo/disparity";
-        disparity_pub_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(
-            disparity_raw_topic,
-            rclcpp::SensorDataQoS()
-        );
-        RCLCPP_INFO(this->get_logger(), "Created disparity publisher on topic: %s", disparity_raw_topic.c_str());
+        // Create publishers for disparity image (only if disparity computation is enabled)
+        if (enable_disparity_) {
+            std::string disparity_raw_topic = "/stereo/disparity";
+            disparity_pub_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(
+                disparity_raw_topic,
+                rclcpp::SensorDataQoS()
+            );
+            RCLCPP_INFO(this->get_logger(), "Created disparity publisher on topic: %s", disparity_raw_topic.c_str());
 
-        // Create publisher for disparity visualization (for rqt_image_view)
-        std::string disparity_viz_topic = "/stereo/disparity/image";
-        disparity_viz_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-            disparity_viz_topic,
-            rclcpp::SensorDataQoS()
-        );
-        RCLCPP_INFO(this->get_logger(), "Created disparity visualization publisher on topic: %s", disparity_viz_topic.c_str());
+            // Create publisher for disparity visualization (for rqt_image_view)
+            std::string disparity_viz_topic = "/stereo/disparity/image";
+            disparity_viz_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+                disparity_viz_topic,
+                rclcpp::SensorDataQoS()
+            );
+            RCLCPP_INFO(this->get_logger(), "Created disparity visualization publisher on topic: %s", disparity_viz_topic.c_str());
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Disparity computation disabled - skipping disparity publishers");
+        }
 
         // Create timer for 30Hz publishing
         publish_timer_ = this->create_wall_timer(
@@ -602,8 +660,13 @@ private:
         try {
             // Get all frames
             auto rgb_frame = rgb_video_queue_->tryGet<dai::ImgFrame>();
-            auto left_frame = left_video_queue_->tryGet<dai::ImgFrame>();
-            auto right_frame = right_video_queue_->tryGet<dai::ImgFrame>();
+            
+            // Only fetch stereo frames if stereo is enabled
+            std::shared_ptr<dai::ImgFrame> left_frame, right_frame;
+            if (enable_stereo_) {
+                left_frame = left_video_queue_->tryGet<dai::ImgFrame>();
+                right_frame = right_video_queue_->tryGet<dai::ImgFrame>();
+            }
 
             auto now = this->now();
             static int frame_count = 0;
@@ -632,14 +695,14 @@ private:
                     sensor_msgs::msg::CompressedImage rgb_compressed_msg;
                     rgb_compressed_msg.header = rgb_ros_image.header;
                     rgb_compressed_msg.format = "jpeg";
-                    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
+                    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
                     cv::imencode(".jpg", rgb_cvFrame, rgb_compressed_msg.data, params);
                     rgb_compressed_pub_->publish(rgb_compressed_msg);
                 }
             }
 
-            // Publish stereo frames if available
-            if (left_frame && right_frame) {
+            // Publish stereo frames if available and enabled
+            if (enable_stereo_ && left_frame && right_frame) {
                 auto left_img_data = left_frame->getData();
                 auto right_img_data = right_frame->getData();
 
@@ -660,12 +723,14 @@ private:
                     left_ros_image.data = std::vector<uint8_t>(left_img_data.begin(), left_img_data.end());
                     left_image_pub_->publish(left_ros_image);
 
-                    sensor_msgs::msg::CompressedImage left_compressed_msg;
-                    left_compressed_msg.header = left_ros_image.header;
-                    left_compressed_msg.format = "jpeg";
-                    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
-                    cv::imencode(".jpg", left_cvFrame, left_compressed_msg.data, params);
-                    left_compressed_pub_->publish(left_compressed_msg);
+                    if (publish_stereo_compressed_) {
+                        sensor_msgs::msg::CompressedImage left_compressed_msg;
+                        left_compressed_msg.header = left_ros_image.header;
+                        left_compressed_msg.format = "jpeg";
+                        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
+                        cv::imencode(".jpg", left_cvFrame, left_compressed_msg.data, params);
+                        left_compressed_pub_->publish(left_compressed_msg);
+                    }
                     
                     // --- Publish Right Frame ---
                     sensor_msgs::msg::Image right_ros_image;
@@ -679,11 +744,14 @@ private:
                     right_ros_image.data = std::vector<uint8_t>(right_img_data.begin(), right_img_data.end());
                     right_image_pub_->publish(right_ros_image);
 
-                    sensor_msgs::msg::CompressedImage right_compressed_msg;
-                    right_compressed_msg.header = right_ros_image.header;
-                    right_compressed_msg.format = "jpeg";
-                    cv::imencode(".jpg", right_cvFrame, right_compressed_msg.data, params);
-                    right_compressed_pub_->publish(right_compressed_msg);
+                    if (publish_stereo_compressed_) {
+                        sensor_msgs::msg::CompressedImage right_compressed_msg;
+                        right_compressed_msg.header = right_ros_image.header;
+                        right_compressed_msg.format = "jpeg";
+                        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
+                        cv::imencode(".jpg", right_cvFrame, right_compressed_msg.data, params);
+                        right_compressed_pub_->publish(right_compressed_msg);
+                    }
 
                     // Save debug stereo pair image if enabled
                     if (debug_save_images_ && (frame_count % debug_save_interval_ == 0)) {
@@ -708,7 +776,7 @@ private:
 
                     // --- Compute and Publish Disparity ---
                     // Only compute disparity every 5 frames to improve performance
-                    if (frame_count % 5 == 0) {
+                    if (frame_count % 5 == 0 && enable_disparity_) {
                         compute_and_publish_disparity(left_cvFrame, right_cvFrame, now, frame_count);
                     }
                 }
@@ -785,6 +853,16 @@ private:
     bool debug_save_images_;
     std::string debug_output_dir_;
     int debug_save_interval_;
+
+    // Disparity parameters
+    bool enable_disparity_;
+
+    // Performance parameters
+    int jpeg_quality_;
+    bool publish_stereo_compressed_;
+    double rgb_fps_;
+    double stereo_fps_;
+    bool enable_stereo_;
 
     cv::Ptr<cv::StereoSGBM> sgbm_;
 

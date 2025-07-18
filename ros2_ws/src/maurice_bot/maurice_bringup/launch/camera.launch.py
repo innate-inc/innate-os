@@ -61,7 +61,7 @@ def generate_launch_description():
 
     # --- Device and Model Arguments (for URDF and Camera Driver) ---
     declare_mxId = DeclareLaunchArgument('mxId', default_value='', description='MXID of the OAK device. Empty for first available.')
-    declare_usb2Mode = DeclareLaunchArgument('usb2Mode', default_value='True', description='Enable USB2 mode for the OAK device.')
+    declare_usb2Mode = DeclareLaunchArgument('usb2Mode', default_value='False', description='Enable USB2 mode for the OAK device.')
     declare_camera_model = DeclareLaunchArgument('camera_model', default_value='OAK-D', description='The model of the OAK camera (e.g., OAK-D, OAK-D-LITE). Used for URDF.')
     declare_tf_prefix = DeclareLaunchArgument('tf_prefix', default_value='oak', description='Namespace for TF frames (e.g., oak/rgb_camera_optical_frame).')
 
@@ -84,7 +84,7 @@ def generate_launch_description():
     
     # --- Debug Arguments ---
     declare_debug_save_images = DeclareLaunchArgument(
-        'debug_save_images', default_value='True',
+        'debug_save_images', default_value='False',
         description='Enable saving debug images to disk.')
     declare_debug_output_dir = DeclareLaunchArgument(
         'debug_output_dir', default_value='~/Pictures/camera_debug',
@@ -92,6 +92,11 @@ def generate_launch_description():
     declare_debug_save_interval = DeclareLaunchArgument(
         'debug_save_interval', default_value='30',
         description='Save every Nth frame as debug image.')
+
+    # --- Disparity Arguments ---
+    declare_enable_disparity = DeclareLaunchArgument(
+        'enable_disparity', default_value='False',
+        description='Enable disparity map calculation and publishing.')
 
     # -------------------------------------------------------
     # URDF Launch (Publishes Robot Description and Robot State Publisher)
@@ -156,6 +161,7 @@ def generate_launch_description():
             'debug_save_images': LaunchConfiguration('debug_save_images'),
             'debug_output_dir': LaunchConfiguration('debug_output_dir'),
             'debug_save_interval': LaunchConfiguration('debug_save_interval'),
+            'enable_disparity': LaunchConfiguration('enable_disparity'),
         }]
     )
 
@@ -186,6 +192,7 @@ def generate_launch_description():
     ld.add_action(declare_debug_save_images)
     ld.add_action(declare_debug_output_dir)
     ld.add_action(declare_debug_save_interval)
+    ld.add_action(declare_enable_disparity)
 
     # Add nodes and other launch actions
     ld.add_action(urdf_launch)
