@@ -49,6 +49,8 @@ python benchmarks/run_benchmarks.py --category 01_long_term_consistency --trials
 
 # Run all available configs
 python benchmarks/run_benchmarks.py --all --trials 10
+
+python run_benchmarks.py --all --send-email --stop-simulator
 ```
 
 ## Configuration Format
