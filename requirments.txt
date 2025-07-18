@@ -21,3 +21,7 @@ mujoco
 
 # Networking / Bluetooth
 bluezero
+
+# Additional packages from Dockerfile
+websockets
+pydantic

@@ -61,7 +61,16 @@ sudo apt-get install -y \
   ros-humble-depthai-examples \
   ros-humble-stage \
   ros-humble-rosbridge-server \
-  ros-humble-rosbridge-suite
+  ros-humble-rosbridge-suite \
+  # Additional packages from Dockerfile
+  ros-humble-fastrtps \
+  ros-humble-launch-xml \
+  ros-humble-navigation2 \
+  ros-humble-demo-nodes-cpp \
+  ros-humble-nav2-bringup \
+  ros-humble-depthai-ros \
+  ros-humble-rqt-plot \
+  ros-humble-rviz2
 
 #----------------------------------------
 # 4. Install Python packages
