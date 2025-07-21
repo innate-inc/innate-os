@@ -6,6 +6,9 @@ from rclpy.serialization import deserialize_message
 import argparse
 import os
 from datetime import datetime
+import cv2
+import numpy as np
+from cv_bridge import CvBridge
 
 def nanoseconds_to_datetime(nanoseconds):
     """Convert ROS nanosecond timestamp to readable datetime."""
@@ -101,11 +104,117 @@ def extract_chat_dialogue(bag_path, output_file):
     print(f"Dialogue extracted to: {output_file}")
     print(f"Total chat messages: {len(chat_messages)}")
 
+def extract_video(bag_path, output_file, fps=10):
+    """
+    Extract images from /color/image/compressed topic and create an MP4 video.
+    
+    Args:
+        bag_path (str): Path to the ROS bag directory
+        output_file (str): Path to output MP4 file
+        fps (int): Frames per second for the output video
+    """
+    
+    # Configure reader
+    storage_opts = rosbag2_py.StorageOptions(uri=bag_path, storage_id='sqlite3')
+    converter_opts = rosbag2_py.ConverterOptions(
+        input_serialization_format='cdr',
+        output_serialization_format='cdr'
+    )
+    
+    reader = rosbag2_py.SequentialReader()
+    reader.open(storage_opts, converter_opts)
+    
+    # Get topic ↔ type map
+    topics_and_types = {t.name: t.type for t in reader.get_all_topics_and_types()}
+    
+    # Find compressed image topics
+    image_topics = {topic: msg_type for topic, msg_type in topics_and_types.items() 
+                   if 'color/image/compressed' in topic}
+    
+    if not image_topics:
+        print("No color/image/compressed topics found in the bag file.")
+        print("Available topics:", list(topics_and_types.keys()))
+        return
+    
+    print(f"Found compressed image topics: {list(image_topics.keys())}")
+    
+    bridge = CvBridge()
+    video_writer = None
+    frame_count = 0
+    
+    # Read through the bag
+    while reader.has_next():
+        topic, serialized_data, timestamp = reader.read_next()
+        
+        # Only process compressed image topics
+        if topic in image_topics:
+            msg_type = image_topics[topic]
+            msg_cls = get_message(msg_type)
+            msg = deserialize_message(serialized_data, msg_cls)
+            
+            try:
+                # Convert compressed image message to OpenCV format
+                # For CompressedImage messages, we need to decode the data field
+                np_arr = np.frombuffer(msg.data, np.uint8)
+                cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                
+                if cv_image is None:
+                    print(f"Failed to decode compressed image at frame {frame_count}")
+                    continue
+                
+                # Initialize video writer with first frame dimensions
+                if video_writer is None:
+                    height, width = cv_image.shape[:2]
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    video_writer = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
+                    print(f"Initialized video writer: {width}x{height} at {fps} FPS")
+                
+                # Write frame to video
+                video_writer.write(cv_image)
+                frame_count += 1
+                
+                if frame_count % 100 == 0:
+                    print(f"Processed {frame_count} frames...")
+                    
+            except Exception as e:
+                print(f"Error processing compressed image frame {frame_count}: {e}")
+                continue
+    
+    # Clean up
+    if video_writer is not None:
+        video_writer.release()
+        print(f"Video saved to: {output_file}")
+        print(f"Total frames processed: {frame_count}")
+    else:
+        print("No valid compressed image frames found to create video.")
+
+def extract_both(bag_path, chat_output, video_output, fps=10):
+    """
+    Extract both chat dialogue and video from the bag.
+    
+    Args:
+        bag_path (str): Path to the ROS bag directory
+        chat_output (str): Path to output text file
+        video_output (str): Path to output MP4 file
+        fps (int): Frames per second for the output video
+    """
+    print("Extracting chat dialogue...")
+    extract_chat_dialogue(bag_path, chat_output)
+    
+    print("\nExtracting video...")
+    extract_video(bag_path, video_output, fps)
+
 def main():
-    parser = argparse.ArgumentParser(description='Extract chat dialogue from ROS bag')
+    parser = argparse.ArgumentParser(description='Extract chat dialogue and/or video from ROS bag')
     parser.add_argument('bag_path', help='Path to the ROS bag directory')
     parser.add_argument('-o', '--output', default='chat_dialogue.txt', 
                        help='Output text file (default: chat_dialogue.txt)')
+    parser.add_argument('-v', '--video', 
+                       help='Output MP4 video file (if specified, will extract video)')
+    parser.add_argument('--fps', type=int, default=10,
+                       help='Frames per second for video output (default: 10)')
+    parser.add_argument('--both', action='store_true',
+                       help='Extract both chat and video (auto-generates video filename)')
     
     args = parser.parse_args()
     
@@ -113,7 +222,16 @@ def main():
         print(f"Error: Bag path '{args.bag_path}' does not exist.")
         return
     
-    extract_chat_dialogue(args.bag_path, args.output)
+    if args.both:
+        # Auto-generate video filename based on chat output
+        video_output = args.output.replace('.txt', '.mp4')
+        if video_output == args.output:  # If no .txt extension, just add .mp4
+            video_output = args.output + '.mp4'
+        extract_both(args.bag_path, args.output, video_output, args.fps)
+    elif args.video:
+        extract_video(args.bag_path, args.video, args.fps)
+    else:
+        extract_chat_dialogue(args.bag_path, args.output)
 
 if __name__ == '__main__':
     main()
