@@ -6,6 +6,7 @@ from rclpy.parameter import Parameter
 from rcl_interfaces.srv import GetParameters
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import Trigger
 import math
 import time
 import json
@@ -114,6 +115,9 @@ class MauriceArmNode(Node):
             dynamixel._enable_torque(servo_id)
             time.sleep(0.5)
 
+        # Store servo_ids as instance variable for service callbacks
+        self.servo_ids = servo_ids
+
         # Initialize robot interface with the collected servo IDs.
         self.robot = Robot(dynamixel=dynamixel, servo_ids=servo_ids)
 
@@ -125,6 +129,19 @@ class MauriceArmNode(Node):
             self.command_callback,
             10
         )
+        
+        # Create torque control services
+        self.torque_on_service = self.create_service(
+            Trigger,
+            '/maurice_arm/torque_on',
+            self.torque_on_callback
+        )
+        self.torque_off_service = self.create_service(
+            Trigger,
+            '/maurice_arm/torque_off',
+            self.torque_off_callback
+        )
+        
         self.timer = self.create_timer(1.0 / control_frequency, self.timer_callback)
         
         # Initialize joint state message (assuming number of joints equals len(servo_ids))
@@ -186,6 +203,44 @@ class MauriceArmNode(Node):
         
         self.get_logger().error("Timeout waiting for servo_manager to be ready")
         return None
+
+    def torque_on_callback(self, request, response):
+        """Service callback to enable torque for all servos."""
+        try:
+            self.get_logger().info("Enabling torque for all servos...")
+            for servo_id in self.servo_ids:
+                self.robot.dynamixel._enable_torque(servo_id)
+                time.sleep(0.1)  # Small delay between servos
+            
+            response.success = True
+            response.message = f"Successfully enabled torque for {len(self.servo_ids)} servos"
+            self.get_logger().info("Torque enabled for all servos")
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to enable torque: {str(e)}"
+            self.get_logger().error(f"Error enabling torque: {str(e)}")
+        
+        return response
+
+    def torque_off_callback(self, request, response):
+        """Service callback to disable torque for all servos."""
+        try:
+            self.get_logger().info("Disabling torque for all servos...")
+            for servo_id in self.servo_ids:
+                self.robot.dynamixel._disable_torque(servo_id)
+                time.sleep(0.1)  # Small delay between servos
+            
+            response.success = True
+            response.message = f"Successfully disabled torque for {len(self.servo_ids)} servos"
+            self.get_logger().info("Torque disabled for all servos")
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to disable torque: {str(e)}"
+            self.get_logger().error(f"Error disabling torque: {str(e)}")
+        
+        return response
 
     def timer_callback(self):
         """Publish current joint states and send latest command if available."""
