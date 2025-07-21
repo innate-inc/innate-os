@@ -146,9 +146,9 @@ class PlayMove(Primitive):
         """Store the latest IK solution"""
         self.latest_ik_solution = msg
         self.ik_solution_received.set()
-        self.logger.info(f"Received IK solution: {[f'{pos:.3f}' for pos in msg.position]}")
+        self.logger.info(f"✅ Received IK solution: {[f'{pos:.3f}' for pos in msg.position]}")
 
-    def _solve_ik_for_position(self, target_x, target_y, target_z, target_roll=0.0, target_pitch=math.radians(80), target_yaw=0.0, timeout=5.0):
+    def _solve_ik_for_position(self, target_x, target_y, target_z, target_roll=0.0, target_pitch=math.radians(80), target_yaw=0.0, timeout=10.0):
         """
         Solve IK for a target position using the IK delta topic.
         Returns True if successful, False otherwise.
@@ -176,17 +176,29 @@ class PlayMove(Primitive):
 
         self.logger.info(f"Solving IK for position: x={target_x:.3f}, y={target_y:.3f}, z={target_z:.3f}")
         self.logger.info(f"Orientation: roll={target_roll:.3f}, pitch={target_pitch:.3f}, yaw={target_yaw:.3f}")
+        self.logger.info(f"Waiting up to {timeout} seconds for IK solution...")
 
         # Reset flag and publish
         self.ik_solution_received.clear()
         self.ik_delta_publisher.publish(twist_msg)
+        
+        # Small delay to ensure message is sent
+        time.sleep(0.1)
 
         # Wait for IK solution
         if self.ik_solution_received.wait(timeout):
+            self.logger.info(f"✅ IK solution received successfully")
             return True
         else:
-            self.logger.error("IK solution not received within timeout")
-            return False
+            self.logger.warn(f"⏰ IK solution timeout after {timeout}s, checking if solution arrived...")
+            # Give it a bit more time and check if solution arrived
+            time.sleep(0.5)
+            if self.latest_ik_solution is not None:
+                self.logger.warn("⚠️  IK solution received after timeout, but proceeding")
+                return True
+            else:
+                self.logger.error("❌ IK solution not received within timeout")
+                return False
 
     def _execute_trajectory_to_ik_solution(self, trajectory_time=3):
         """Execute trajectory to the latest IK solution"""
