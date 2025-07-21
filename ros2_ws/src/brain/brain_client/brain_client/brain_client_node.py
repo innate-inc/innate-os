@@ -77,6 +77,7 @@ from brain_client.directives.security_patrol_directive import SecurityPatrolDire
 from brain_client.directives.clean_house_directive import CleanHouseDirective
 from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
 from brain_client.directives.socks_tidier_directive import SocksTidierDirective
+from brain_client.directives.chess_directive import ChessDirective
 
 
 class BrainClientNode(Node):
@@ -431,6 +432,7 @@ class BrainClientNode(Node):
                 CleanHouseDirective(),
                 HideAndSeekDirective(),
                 SocksTidierDirective(),
+                ChessDirective(),
             ]
         }
         self.current_directive = self.directives["empty_directive"]

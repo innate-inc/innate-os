@@ -21,7 +21,6 @@ class DefaultDirective(Directive):
             TaskType.SEND_PICTURE_VIA_EMAIL.value,
             TaskType.PICK_UP_TRASH.value,
             TaskType.DROP_TRASH.value,
-            TaskType.PLAY_MOVE.value,
         ]
 
     def get_prompt(self) -> None:
