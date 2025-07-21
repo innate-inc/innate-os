@@ -9,6 +9,8 @@ from datetime import datetime
 import cv2
 import numpy as np
 from cv_bridge import CvBridge
+import tkinter as tk
+from tkinter import filedialog
 
 def nanoseconds_to_datetime(nanoseconds):
     """Convert ROS nanosecond timestamp to readable datetime."""
@@ -104,7 +106,7 @@ def extract_chat_dialogue(bag_path, output_file):
     print(f"Dialogue extracted to: {output_file}")
     print(f"Total chat messages: {len(chat_messages)}")
 
-def extract_video(bag_path, output_file, fps=10):
+def extract_video(bag_path, output_file, fps=30):
     """
     Extract images from /color/image/compressed topic and create an MP4 video.
     
@@ -188,7 +190,7 @@ def extract_video(bag_path, output_file, fps=10):
     else:
         print("No valid compressed image frames found to create video.")
 
-def extract_both(bag_path, chat_output, video_output, fps=10):
+def extract_both(bag_path, chat_output, video_output, fps=30):
     """
     Extract both chat dialogue and video from the bag.
     
@@ -204,23 +206,87 @@ def extract_both(bag_path, chat_output, video_output, fps=10):
     print("\nExtracting video...")
     extract_video(bag_path, video_output, fps)
 
+def select_and_process_bag():
+    """
+    Open a directory dialog to select a ROS bag directory and process it.
+    """
+    # Create a root window and hide it
+    root = tk.Tk()
+    root.withdraw()
+    
+    print("Opening directory dialog...")
+    
+    # Open directory dialog
+    bag_path = filedialog.askdirectory(
+        title="Select ROS bag directory",
+        initialdir=os.getcwd()
+    )
+    
+    # Destroy the root window
+    root.destroy()
+    
+    if bag_path:
+        print(f"\n📁 Selected bag directory: {bag_path}")
+        print(f"🔍 Processing ROS bag...\n")
+        
+        # Generate output filenames in the same directory
+        bag_name = os.path.basename(bag_path)
+        chat_output = os.path.join(bag_path, f"{bag_name}_chat_dialogue.txt")
+        video_output = os.path.join(bag_path, f"{bag_name}_video.mp4")
+        
+        # Process both chat and video
+        extract_both(bag_path, chat_output, video_output, fps=30)
+        
+        print("\n" + "=" * 60)
+        print("✅ ROS bag processing completed!")
+        print(f"📝 Chat dialogue saved to: {chat_output}")
+        print(f"🎬 Video saved to: {video_output}")
+        
+        return True
+    else:
+        print("No directory selected. Exiting...")
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description='Extract chat dialogue and/or video from ROS bag')
-    parser.add_argument('bag_path', help='Path to the ROS bag directory')
+    parser.add_argument('--manual', action='store_true',
+                       help='Use manual mode with command line arguments instead of dialog')
+    parser.add_argument('bag_path', nargs='?', help='Path to the ROS bag directory (manual mode only)')
     parser.add_argument('-o', '--output', default='chat_dialogue.txt', 
-                       help='Output text file (default: chat_dialogue.txt)')
+                       help='Output text file (manual mode only, default: chat_dialogue.txt)')
     parser.add_argument('-v', '--video', 
-                       help='Output MP4 video file (if specified, will extract video)')
-    parser.add_argument('--fps', type=int, default=10,
-                       help='Frames per second for video output (default: 10)')
+                       help='Output MP4 video file (manual mode only)')
+    parser.add_argument('--fps', type=int, default=30,
+                       help='Frames per second for video output (default: 30)')
     parser.add_argument('--both', action='store_true',
-                       help='Extract both chat and video (auto-generates video filename)')
+                       help='Extract both chat and video (manual mode only)')
     
     args = parser.parse_args()
     
+    # Default behavior: use dialog to select bag and process both
+    if not args.manual:
+        print("🔍 ROS BAG PROCESSOR")
+        print("This tool extracts chat dialogue and video from ROS bags.")
+        print("You'll be prompted to select a ROS bag directory.\n")
+        
+        try:
+            select_and_process_bag()
+        except KeyboardInterrupt:
+            print("\n\nOperation cancelled by user.")
+        except Exception as e:
+            print(f"\nUnexpected error: {e}")
+            return 1
+        
+        return 0
+    
+    # Manual mode (original behavior)
+    if not args.bag_path:
+        print("Error: bag_path is required when using --manual mode.")
+        return 1
+        
     if not os.path.exists(args.bag_path):
         print(f"Error: Bag path '{args.bag_path}' does not exist.")
-        return
+        return 1
     
     if args.both:
         # Auto-generate video filename based on chat output
@@ -232,6 +298,8 @@ def main():
         extract_video(args.bag_path, args.video, args.fps)
     else:
         extract_chat_dialogue(args.bag_path, args.output)
+    
+    return 0
 
 if __name__ == '__main__':
     main()
