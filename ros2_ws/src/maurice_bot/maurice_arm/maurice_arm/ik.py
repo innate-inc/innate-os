@@ -5,7 +5,7 @@ KDL-based IK node loading URDF directly from maurice_sim and using the package-l
 import os
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from urdf_parser_py.urdf import URDF
@@ -83,10 +83,60 @@ class KDLIKNode(Node):
 
         # 6) publisher and subscription
         self.joint_pub = self.create_publisher(JointState, 'ik_solution', 10)
-        self.command_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+        self.fk_pub = self.create_publisher(PoseStamped, 'fk_pose', 10)
+        # self.command_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
         self.create_subscription(Twist, 'ik_delta', self.on_delta, 10)
+        self.create_subscription(JointState, 'maurice_arm/state', self.on_joint_states, 10)
+        
+        # Timer for FK publishing at 10Hz
+        self.create_timer(0.1, self.publish_fk)  # 0.1 seconds = 10Hz
+        
+        # Store latest joint states
+        self.latest_joint_states = None
 
         self.get_logger().info(f"KDL IK node ready (eps={eps}, maxiter={maxiter})")
+
+    def on_joint_states(self, msg: JointState):
+        """Store the latest joint states"""
+        self.latest_joint_states = msg
+
+    def publish_fk(self):
+        """Timer callback to publish FK result at 10Hz"""
+        if self.latest_joint_states is None:
+            return
+            
+        # Create joint array from received joint states
+        q = kdl.JntArray(self.chain.getNrOfJoints())
+        
+        # Map joint states to our joint names
+        for i, joint_name in enumerate(self.joint_names):
+            if joint_name in self.latest_joint_states.name:
+                joint_idx = self.latest_joint_states.name.index(joint_name)
+                q[i] = self.latest_joint_states.position[joint_idx]
+        
+        # Compute FK
+        fk_frame = kdl.Frame()
+        fk_result = self.fksolver.JntToCart(q, fk_frame)
+        
+        if fk_result >= 0:
+            # Create PoseStamped message
+            pose_msg = PoseStamped()
+            pose_msg.header.stamp = self.get_clock().now().to_msg()
+            pose_msg.header.frame_id = 'base_link'
+            
+            # Position (x, y, z)
+            pose_msg.pose.position.x = fk_frame.p.x()
+            pose_msg.pose.position.y = fk_frame.p.y()
+            pose_msg.pose.position.z = fk_frame.p.z()
+            
+            # Orientation (quaternion)
+            quat = fk_frame.M.GetQuaternion()
+            pose_msg.pose.orientation.x = quat[0]
+            pose_msg.pose.orientation.y = quat[1]
+            pose_msg.pose.orientation.z = quat[2]
+            pose_msg.pose.orientation.w = quat[3]
+            
+            self.fk_pub.publish(pose_msg)
 
     def on_delta(self, delta: Twist):
         if self.initial_frame is None:
@@ -125,7 +175,7 @@ class KDLIKNode(Node):
         if ik_result >= 0:
             # Successful convergence (ik_result == SolverI.NoError, which is 0)
              self.get_logger().info(f'KDL IK solved successfully (took {solve_time_ms:.2f} ms)')
-        elif ik_result == -100: # KDL::ChainIkSolverPos_LMA::E_GRADIENT_JOINTS_TOO_SMALL
+        elif ik_result == -100: # KDL::ChainIkSolver Pos_LMA::E_GRADIENT_JOINTS_TOO_SMALL
             # Gradient too small (local minimum / flat region) - accept result
             self.get_logger().warn(
                 f'KDL IK gradient too small (solver returned {ik_result}), using approximate result. '
@@ -151,14 +201,14 @@ class KDLIKNode(Node):
         js.position = [q_out[i] for i in range(q_out.rows())]
         self.joint_pub.publish(js)
 
-        # Publish command for the arm
-        cmd_msg = Float64MultiArray()
-        # Get the 5 joint values from IK solution
-        ik_positions = [q_out[i] for i in range(q_out.rows())]
-        # Append 0.0 for the 6th joint (joint6)
-        ik_positions.append(0.0)
-        cmd_msg.data = ik_positions
-        self.command_pub.publish(cmd_msg)
+        # Publish command for the arm - COMMENTED OUT
+        # cmd_msg = Float64MultiArray()
+        # # Get the 5 joint values from IK solution
+        # ik_positions = [q_out[i] for i in range(q_out.rows())]
+        # # Append 0.0 for the 6th joint (joint6)
+        # ik_positions.append(0.0)
+        # cmd_msg.data = ik_positions
+        # self.command_pub.publish(cmd_msg)
 
         # seed next solve with the result
         self.current_q = q_out
