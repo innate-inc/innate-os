@@ -139,27 +139,23 @@ class KDLIKNode(Node):
             self.fk_pub.publish(pose_msg)
 
     def on_delta(self, delta: Twist):
-        if self.initial_frame is None:
-             self.get_logger().error("Cannot process delta, initial frame calculation failed.")
-             return
-
-        # Start from a copy of the initial frame
-        target_frame = copy.deepcopy(self.initial_frame)
-
-        # apply delta position relative to initial frame
-        target_frame.p.x(target_frame.p.x() + delta.linear.x)
-        target_frame.p.y(target_frame.p.y() + delta.linear.y)
-        target_frame.p.z(target_frame.p.z() + delta.linear.z)
-
-        # apply delta orientation relative to initial frame
-        delta_rot = kdl.Rotation.RPY(delta.angular.x, delta.angular.y, delta.angular.z)
-        target_frame.M = target_frame.M * delta_rot # Combine rotations
+        """Handle absolute target pose (sent via Twist message for compatibility)"""
+        # Create target frame from absolute pose values
+        target_frame = kdl.Frame()
+        
+        # Set position directly (absolute with respect to base)
+        target_frame.p.x(delta.linear.x)
+        target_frame.p.y(delta.linear.y)
+        target_frame.p.z(delta.linear.z)
+        
+        # Set orientation from RPY values
+        target_frame.M = kdl.Rotation.RPY(delta.angular.x, delta.angular.y, delta.angular.z)
 
         # Log the target frame before IK
         target_pos = target_frame.p
         target_rot = target_frame.M.GetRPY()
         self.get_logger().info(
-            f"IK Target - Pos (x,y,z): ({target_pos.x():.4f}, {target_pos.y():.4f}, {target_pos.z():.4f}), "
+            f"IK Target (absolute w.r.t. base) - Pos (x,y,z): ({target_pos.x():.4f}, {target_pos.y():.4f}, {target_pos.z():.4f}), "
             f"RPY: ({target_rot[0]:.4f}, {target_rot[1]:.4f}, {target_rot[2]:.4f})"
         )
 
