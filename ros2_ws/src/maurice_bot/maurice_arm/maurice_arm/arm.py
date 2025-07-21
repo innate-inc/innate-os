@@ -146,7 +146,7 @@ class MauriceArmNode(Node):
         
         # Initialize joint state message (assuming number of joints equals len(servo_ids))
         self.joint_state_msg = JointState()
-        self.joint_state_msg.name = [f'joint_{i}' for i in range(1, len(servo_ids)+1)]
+        self.joint_state_msg.name = [f'joint{i}' for i in range(1, len(servo_ids)+1)]
         
         self.latest_command = None
 
