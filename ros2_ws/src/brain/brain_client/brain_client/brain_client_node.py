@@ -62,6 +62,7 @@ from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.drop_trash import DropTrash
 from brain_client.primitives.pick_up_sock import PickUpSock
 from brain_client.primitives.drop_socks import DropSocks
+from brain_client.primitives.play_move import PlayMove
 
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.empty_directive import EmptyDirective
@@ -404,6 +405,7 @@ class BrainClientNode(Node):
             TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
             TaskType.PICK_UP_SOCK.value: PickUpSock(self.get_logger()),
             TaskType.DROP_SOCKS.value: DropSocks(self.get_logger()),
+            TaskType.PLAY_MOVE.value: PlayMove(self.get_logger()),
             # Add other primitives here as they become available
         }
 

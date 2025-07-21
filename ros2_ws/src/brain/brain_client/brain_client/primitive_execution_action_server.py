@@ -31,6 +31,7 @@ from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.drop_trash import DropTrash
 from brain_client.primitives.pick_up_sock import PickUpSock
 from brain_client.primitives.drop_socks import DropSocks
+from brain_client.primitives.play_move import PlayMove
 
 from brain_client.primitives.types import (
     PrimitiveResult,
@@ -100,6 +101,7 @@ class PrimitiveExecutionActionServer(Node):
             TaskType.DROP_TRASH: DropTrash,
             TaskType.PICK_UP_SOCK: PickUpSock,
             TaskType.DROP_SOCKS: DropSocks,
+            TaskType.PLAY_MOVE: PlayMove,
         }
 
         self._primitives = {}

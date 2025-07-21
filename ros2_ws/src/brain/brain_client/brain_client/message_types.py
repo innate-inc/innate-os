@@ -13,6 +13,7 @@ class TaskType(Enum):
     DROP_TRASH = "drop_trash"
     PICK_UP_SOCK = "pick_up_sock"
     DROP_SOCKS = "drop_socks"
+    PLAY_MOVE = "play_move"
 
 
 class NavigationToPosition(BaseModel):
