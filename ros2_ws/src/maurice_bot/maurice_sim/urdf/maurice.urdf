@@ -231,6 +231,28 @@
     </collision>
   </link>
 
+  <!-- End-effector link -->
+  <joint name="ee_joint" type="fixed">
+    <parent link="link5"/>
+    <child  link="ee_link"/>
+    <origin xyz="0.065 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="ee_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+    <!-- Optional: Add a small visual marker to see the end-effector in simulation -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="bright_orange"/>
+    </visual>
+  </link>
+
   <!-- joint6 → link6 -->
   <joint name="joint6" type="revolute">
     <parent link="link5"/>

@@ -41,7 +41,7 @@ class KDLIKNode(Node):
             self.get_logger().fatal('Failed to build KDL tree from URDF')
             raise RuntimeError('URDF→KDL parse error')
         base_link = 'base_link'
-        tip_link  = 'link5'
+        tip_link  = 'ee_link'  # Changed from 'link5' to 'ee_link'
         self.chain = tree.getChain(base_link, tip_link)
 
         # 4) FK and IK solver setup
@@ -73,7 +73,7 @@ class KDLIKNode(Node):
         if fk_result >= 0:
             pos = self.initial_frame.p
             rot = self.initial_frame.M.GetRPY()
-            self.get_logger().info(f"Initial FK pose (link5 relative to base_link):")
+            self.get_logger().info(f"Initial FK pose (ee_link relative to base_link):")  # Updated message
             self.get_logger().info(f"  Position (x,y,z): ({pos.x():.4f}, {pos.y():.4f}, {pos.z():.4f})")
             self.get_logger().info(f"  Orientation (r,p,y): ({rot[0]:.4f}, {rot[1]:.4f}, {rot[2]:.4f})")
         else:
