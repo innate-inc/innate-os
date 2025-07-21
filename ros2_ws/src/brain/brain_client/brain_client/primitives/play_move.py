@@ -3,9 +3,13 @@ import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PoseStamped
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
+from maurice_msgs.srv import GotoJS
 from brain_client.primitives.types import Primitive, PrimitiveResult
 import threading
 import re
+import math
 
 
 class PlayMove(Primitive):
@@ -82,15 +86,16 @@ class PlayMove(Primitive):
         'h8': {'x': 0.44643, 'y': -0.20070, 'z': 0.04330},
     }
 
-    # Rest position (example - adjust based on your robot's home position)
-    REST_POSITION = {'x': 0.3, 'y': 0.0, 'z': 0.2}
+    # Rest position joint angles (from your service call)
+    REST_JOINT_POSITIONS = [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.91425255]
 
     def __init__(self, logger):
         super().__init__(logger)
         self.ik_delta_publisher = None
-        self.fk_pose_subscriber = None
-        self.current_pose = None
-        self.pose_received = threading.Event()
+        self.ik_solution_subscriber = None
+        self.goto_js_client = None
+        self.latest_ik_solution = None
+        self.ik_solution_received = threading.Event()
 
     @property
     def name(self):
@@ -127,76 +132,146 @@ class PlayMove(Primitive):
         
         return None, None
 
-    def _wait_for_current_pose(self, timeout=5.0):
-        """Wait for the current FK pose to be received."""
-        if not self.fk_pose_subscriber:
-            self.fk_pose_subscriber = self.node.create_subscription(
-                PoseStamped,
-                'fk_pose',
-                self._fk_pose_callback,
+    def _wait_for_services(self):
+        """Wait for required services to be available"""
+        if not self.goto_js_client:
+            self.goto_js_client = self.node.create_client(GotoJS, 'maurice_arm/goto_js')
+        
+        if not self.goto_js_client.wait_for_service(timeout_sec=10.0):
+            self.logger.error("goto_js service not available")
+            return False
+        return True
+
+    def _ik_solution_callback(self, msg: JointState):
+        """Store the latest IK solution"""
+        self.latest_ik_solution = msg
+        self.ik_solution_received.set()
+        self.logger.info(f"Received IK solution: {[f'{pos:.3f}' for pos in msg.position]}")
+
+    def _solve_ik_for_position(self, target_x, target_y, target_z, target_roll=0.0, target_pitch=math.radians(80), target_yaw=0.0, timeout=5.0):
+        """
+        Solve IK for a target position using the IK delta topic.
+        Returns True if successful, False otherwise.
+        """
+        # Initialize publishers and subscribers if needed
+        if not self.ik_delta_publisher:
+            self.ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
+        
+        if not self.ik_solution_subscriber:
+            self.ik_solution_subscriber = self.node.create_subscription(
+                JointState,
+                'ik_solution',
+                self._ik_solution_callback,
                 10
             )
-        
-        self.pose_received.clear()
-        if self.pose_received.wait(timeout):
+
+        # Create and publish Twist message with absolute pose values
+        twist_msg = Twist()
+        twist_msg.linear.x = target_x
+        twist_msg.linear.y = target_y
+        twist_msg.linear.z = target_z
+        twist_msg.angular.x = target_roll
+        twist_msg.angular.y = target_pitch
+        twist_msg.angular.z = target_yaw
+
+        self.logger.info(f"Solving IK for position: x={target_x:.3f}, y={target_y:.3f}, z={target_z:.3f}")
+        self.logger.info(f"Orientation: roll={target_roll:.3f}, pitch={target_pitch:.3f}, yaw={target_yaw:.3f}")
+
+        # Reset flag and publish
+        self.ik_solution_received.clear()
+        self.ik_delta_publisher.publish(twist_msg)
+
+        # Wait for IK solution
+        if self.ik_solution_received.wait(timeout):
             return True
         else:
-            self.logger.error("Timeout waiting for current pose")
+            self.logger.error("IK solution not received within timeout")
             return False
 
-    def _fk_pose_callback(self, msg: PoseStamped):
-        """Callback for FK pose updates."""
-        self.current_pose = {
-            'x': msg.pose.position.x,
-            'y': msg.pose.position.y,
-            'z': msg.pose.position.z
-        }
-        self.pose_received.set()
+    def _execute_trajectory_to_ik_solution(self, trajectory_time=3):
+        """Execute trajectory to the latest IK solution"""
+        if not self.latest_ik_solution:
+            self.logger.error("No IK solution available")
+            return False
+
+        # Create service request
+        request = GotoJS.Request()
+        request.data = Float64MultiArray()
+
+        # IK returns 5 positions, append 0.0 for the 6th joint
+        ik_positions = list(self.latest_ik_solution.position)
+        if len(ik_positions) == 5:
+            ik_positions.append(0.0)  # Add 6th joint position as 0.0
+
+        request.data.data = ik_positions
+        request.time = trajectory_time
+
+        self.logger.info(f"Executing trajectory to joint positions: {[f'{pos:.3f}' for pos in request.data.data]}")
+
+        # Call service
+        future = self.goto_js_client.call_async(request)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
+
+        if future.result() is not None:
+            response = future.result()
+            if response.success:
+                self.logger.info("Trajectory execution started successfully")
+                # Wait for trajectory to complete
+                time.sleep(trajectory_time + 0.5)
+                return True
+            else:
+                self.logger.error("Trajectory execution failed")
+                return False
+        else:
+            self.logger.error("Service call failed or timed out")
+            return False
+
+    def _go_to_rest_position(self):
+        """Move arm to rest position using direct joint angles"""
+        request = GotoJS.Request()
+        request.data = Float64MultiArray()
+        request.data.data = self.REST_JOINT_POSITIONS
+        request.time = 5
+
+        self.logger.info("Moving to rest position")
+        
+        # Call service
+        future = self.goto_js_client.call_async(request)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
+
+        if future.result() is not None:
+            response = future.result()
+            if response.success:
+                self.logger.info("Rest position trajectory started successfully")
+                time.sleep(5.5)  # Wait for trajectory to complete
+                return True
+            else:
+                self.logger.error("Rest position trajectory failed")
+                return False
+        else:
+            self.logger.error("Rest position service call failed or timed out")
+            return False
 
     def _move_to_position(self, target_position, description=""):
         """
         Move the arm to a target position using inverse kinematics.
         target_position should be a dict with 'x', 'y', 'z' keys.
         """
-        if not self.current_pose:
-            self.logger.error("Current pose not available")
+        target_x = target_position['x']
+        target_y = target_position['y']
+        target_z = target_position['z']
+
+        self.logger.info(f"{description} - Moving to position: x={target_x:.4f}, y={target_y:.4f}, z={target_z:.4f}")
+
+        # Solve IK for the target position
+        if not self._solve_ik_for_position(target_x, target_y, target_z):
             return False
 
-        # Calculate delta from current position to target
-        delta_x = target_position['x'] - self.current_pose['x']
-        delta_y = target_position['y'] - self.current_pose['y']
-        delta_z = target_position['z'] - self.current_pose['z']
-
-        # Create Twist message for IK delta
-        twist_msg = Twist()
-        twist_msg.linear.x = delta_x
-        twist_msg.linear.y = delta_y
-        twist_msg.linear.z = delta_z
-        twist_msg.angular.x = 0.0
-        twist_msg.angular.y = 0.0
-        twist_msg.angular.z = 0.0
-
-        self.logger.info(f"{description} - Moving to position: x={target_position['x']:.4f}, y={target_position['y']:.4f}, z={target_position['z']:.4f}")
-        self.logger.info(f"Delta: dx={delta_x:.4f}, dy={delta_y:.4f}, dz={delta_z:.4f}")
-
-        # Publish the IK delta command
-        if not self.ik_delta_publisher:
-            self.ik_delta_publisher = self.node.create_publisher(
-                Twist,
-                'ik_delta',
-                10
-            )
-
-        self.ik_delta_publisher.publish(twist_msg)
-
-        # Wait a moment for the IK to process and update current pose
-        time.sleep(1.0)
-        
-        # Get updated pose
-        if self._wait_for_current_pose():
-            return True
-        else:
+        # Execute trajectory to the IK solution
+        if not self._execute_trajectory_to_ik_solution():
             return False
+
+        return True
 
     def execute(self, move_string=""):
         """
@@ -219,73 +294,59 @@ class PlayMove(Primitive):
 
         self.logger.info(f"\033[96m[BrainClient] Initiating chess move: {from_square} to {to_square}\033[0m")
 
-        # Get current pose first
-        if not self._wait_for_current_pose():
-            return "Failed to get current arm pose", PrimitiveResult.FAILURE
+        # Wait for services to be available
+        if not self._wait_for_services():
+            return "Required services not available", PrimitiveResult.FAILURE
 
         try:
             # Step 1: Move above the 'from' square at z=0.15
             from_coords = self.CHESS_COORDINATES[from_square].copy()
-            from_coords['z'] = 0.15
+            from_coords['z'] = from_coords['z'] + 0.12  # Add 0.12m above the square
             
             self._send_feedback(f"Moving above {from_square} square...")
             if not self._move_to_position(from_coords, f"Step 1: Above {from_square}"):
                 return f"Failed to move above {from_square} square", PrimitiveResult.FAILURE
 
-            time.sleep(1.0)
-
             # Step 2: Lower to z=0.05 to pick up the piece
-            from_coords['z'] = 0.05
+            from_coords['z'] = from_coords['z'] - 0.10  # Lower by 0.10m (from 0.12 above to 0.02 above)
             
             self._send_feedback(f"Lowering to pick up piece from {from_square}...")
             if not self._move_to_position(from_coords, f"Step 2: Pick up from {from_square}"):
                 return f"Failed to lower to {from_square} square", PrimitiveResult.FAILURE
 
-            time.sleep(1.0)
-
-            # Step 3: Raise back to z=0.15
-            from_coords['z'] = 0.15
+            # Step 3: Raise back up
+            from_coords['z'] = from_coords['z'] + 0.10  # Raise back up
             
             self._send_feedback("Lifting piece...")
             if not self._move_to_position(from_coords, f"Step 3: Lift from {from_square}"):
                 return f"Failed to lift from {from_square} square", PrimitiveResult.FAILURE
 
-            time.sleep(1.0)
-
             # Step 4: Move above the 'to' square at z=0.15
             to_coords = self.CHESS_COORDINATES[to_square].copy()
-            to_coords['z'] = 0.15
+            to_coords['z'] = to_coords['z'] + 0.12  # Add 0.12m above the square
             
             self._send_feedback(f"Moving to {to_square} square...")
             if not self._move_to_position(to_coords, f"Step 4: Above {to_square}"):
                 return f"Failed to move above {to_square} square", PrimitiveResult.FAILURE
 
-            time.sleep(1.0)
-
-            # Step 5: Lower to z=0.05 to place the piece
-            to_coords['z'] = 0.05
+            # Step 5: Lower to place the piece
+            to_coords['z'] = to_coords['z'] - 0.10  # Lower by 0.10m
             
             self._send_feedback(f"Placing piece on {to_square}...")
             if not self._move_to_position(to_coords, f"Step 5: Place on {to_square}"):
                 return f"Failed to lower to {to_square} square", PrimitiveResult.FAILURE
 
-            time.sleep(1.0)
-
-            # Step 6: Raise back to z=0.15
-            to_coords['z'] = 0.15
+            # Step 6: Raise back up
+            to_coords['z'] = to_coords['z'] + 0.10  # Raise back up
             
             self._send_feedback("Releasing piece...")
             if not self._move_to_position(to_coords, f"Step 6: Release at {to_square}"):
                 return f"Failed to lift from {to_square} square", PrimitiveResult.FAILURE
 
-            time.sleep(1.0)
-
             # Step 7: Return to rest position
             self._send_feedback("Returning to rest position...")
-            if not self._move_to_position(self.REST_POSITION, "Step 7: Return to rest"):
+            if not self._go_to_rest_position():
                 return "Failed to return to rest position", PrimitiveResult.FAILURE
-
-            time.sleep(1.0)
 
             self.logger.info(f"\033[92m[BrainClient] Chess move {from_square} to {to_square} completed successfully.\033[0m")
             return f"Chess move {from_square} to {to_square} completed successfully.", PrimitiveResult.SUCCESS
