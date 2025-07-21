@@ -46,6 +46,7 @@ ament_python_install_package(${PROJECT_NAME}
 install(PROGRAMS
   maurice_bringup/bringup.py
   maurice_bringup/servo_manager.py
+  maurice_bringup/rosbag.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
