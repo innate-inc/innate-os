@@ -142,16 +142,17 @@ class PlayMove(Primitive):
         self.logger.info(f"Sending IK request for position: x={x:.5f}, y={y:.5f}, z={z:.5f}")
         self.ik_delta_publisher.publish(twist_msg)
 
-    def execute(self, move_str=""):
+    def execute(self, **kwargs):
         """
         Execute a chess move by converting chess coordinates to joint positions.
         
         Args:
-            move_str: Chess move in format "a2 to a4" or "a2 a4"
+            **kwargs: Should contain 'move_str' with chess move in format "a2 to a4" or "a2 a4"
             
         Returns:
             tuple: (result_message, result_status)
         """
+        move_str = kwargs.get('move_str', '')
         if not self.node:
             self.logger.error("PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
@@ -172,6 +173,8 @@ class PlayMove(Primitive):
                 self.ik_solution_subscriber = self.node.create_subscription(
                     JointState, 'ik_solution', self._ik_solution_callback, 10
                 )
+                # Give the subscriber a moment to be ready
+                time.sleep(0.1)
 
             # Clear previous results
             self.ik_result_received.clear()
@@ -184,8 +187,9 @@ class PlayMove(Primitive):
                 to_coords['z']
             )
 
-            # Wait for IK solution
-            if not self.ik_result_received.wait(timeout=10.0):
+            # Wait for IK solution (increased timeout since IK can take a few seconds)
+            self.logger.info(f"Waiting for IK solution for move {move_str}...")
+            if not self.ik_result_received.wait(timeout=15.0):
                 return f"IK solution timeout for move {move_str}", PrimitiveResult.FAILURE
 
             if self.latest_ik_solution is None:
