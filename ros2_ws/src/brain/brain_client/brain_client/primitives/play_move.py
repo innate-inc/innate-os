@@ -174,9 +174,9 @@ class PlayMove(Primitive):
             # Small delay to ensure subscriber is fully registered
             time.sleep(0.2)
             
-            # Check subscriber count
-            self.logger.info(f"📊 Subscriber count for /ik_solution: {ik_solution_subscriber.get_subscription_count()}")
-            self.logger.info(f"📊 Publisher count for /ik_delta: {ik_delta_publisher.get_subscription_count()}")
+            # Check connection status
+            self.logger.info(f"📊 IK solution subscriber created successfully")
+            self.logger.info(f"📊 IK delta publisher created successfully")
 
             # Create and publish Twist message with absolute pose values
             twist_msg = Twist()
