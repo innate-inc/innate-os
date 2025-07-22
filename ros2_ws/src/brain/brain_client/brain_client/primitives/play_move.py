@@ -196,9 +196,7 @@ class PlayMove(Primitive):
                 self.logger.info(f"✅ IK solution received successfully after {time.time() - start_time:.2f}s")
                 # Store solution for use in trajectory execution
                 self.latest_ik_solution = latest_ik_solution
-                # Clean up subscriber
-                self.node.destroy_subscription(ik_solution_subscriber)
-                self.node.destroy_publisher(ik_delta_publisher)
+                # Note: We don't destroy the publisher/subscriber - let them be garbage collected
                 return True
             
             # Small sleep to prevent busy waiting
@@ -212,15 +210,11 @@ class PlayMove(Primitive):
             self.logger.warn("⚠️  IK solution received after timeout, but proceeding")
             # Store solution for use in trajectory execution
             self.latest_ik_solution = latest_ik_solution
-            # Clean up subscriber
-            self.node.destroy_subscription(ik_solution_subscriber)
-            self.node.destroy_publisher(ik_delta_publisher)
+            # Note: We don't destroy the publisher/subscriber - let them be garbage collected
             return True
         else:
             self.logger.error("❌ IK solution not received within timeout")
-            # Clean up subscriber even on failure
-            self.node.destroy_subscription(ik_solution_subscriber)
-            self.node.destroy_publisher(ik_delta_publisher)
+            # Note: We don't destroy the publisher/subscriber - let them be garbage collected
             return False
 
     def _execute_trajectory_to_ik_solution(self, goto_js_client, trajectory_time=3):
