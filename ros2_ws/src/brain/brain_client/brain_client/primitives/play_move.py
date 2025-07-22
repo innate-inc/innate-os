@@ -188,12 +188,19 @@ class PlayMove(Primitive):
             # Small delay to ensure message is sent
             time.sleep(0.1)
 
-            # Wait for IK solution using threading event (no node spinning conflicts)
+            # Wait for IK solution with careful node spinning to avoid conflicts
             start_time = time.time()
             while (time.time() - start_time) < timeout:
-                # Use threading event wait instead of spinning the node
-                # This prevents conflicts with the action server's main spin loop
-                if ik_solution_received.wait(timeout=0.1):
+                # We need to spin to process callbacks, but do it carefully
+                # Use a very short timeout to avoid blocking the action server
+                try:
+                    rclpy.spin_once(self.node, timeout_sec=0.01)
+                except Exception as e:
+                    # If spinning fails (e.g., due to executor conflicts), just continue
+                    self.logger.debug(f"Spin exception (continuing): {e}")
+                
+                # Check if we received the solution
+                if ik_solution_received.is_set():
                     self.logger.info(f"✅ IK solution received successfully after {time.time() - start_time:.2f}s")
                     # Store solution for use in trajectory execution
                     self.latest_ik_solution = latest_ik_solution
@@ -205,8 +212,13 @@ class PlayMove(Primitive):
             # Final check after timeout
             self.logger.warn(f"⏰ IK solution timeout after {timeout}s, doing final check...")
             
-            # Give one more chance with a longer wait
-            if ik_solution_received.wait(timeout=0.5):
+            # Give one more chance with a longer spin
+            try:
+                rclpy.spin_once(self.node, timeout_sec=0.5)
+            except Exception as e:
+                self.logger.debug(f"Final spin exception: {e}")
+            
+            if ik_solution_received.is_set():
                 self.logger.warn("⚠️  IK solution received after timeout, but proceeding")
                 # Store solution for use in trajectory execution
                 self.latest_ik_solution = latest_ik_solution
