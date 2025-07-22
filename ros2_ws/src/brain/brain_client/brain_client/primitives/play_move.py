@@ -317,6 +317,9 @@ class PlayMove(Primitive):
         """
         self.logger.info(f"🎯 PlayMove.execute() called with move_string='{move_string}'")
         
+        # Reset any persistent state from previous executions
+        self.latest_ik_solution = None
+        
         if not self.node:
             self.logger.error("❌ PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
