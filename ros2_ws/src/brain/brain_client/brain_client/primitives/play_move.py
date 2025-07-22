@@ -155,6 +155,7 @@ class PlayMove(Primitive):
             
             def ik_solution_callback(msg: JointState):
                 nonlocal latest_ik_solution, ik_solution_received
+                self.logger.info(f"🔔 IK solution callback triggered! Message: {msg}")
                 if msg and len(msg.position) > 0:  # Validate the message
                     latest_ik_solution = msg
                     ik_solution_received.set()
@@ -168,6 +169,14 @@ class PlayMove(Primitive):
                 ik_solution_callback,
                 10
             )
+            self.logger.info(f"📡 Created IK solution subscriber: {ik_solution_subscriber}")
+            
+            # Small delay to ensure subscriber is fully registered
+            time.sleep(0.2)
+            
+            # Check subscriber count
+            self.logger.info(f"📊 Subscriber count for /ik_solution: {ik_solution_subscriber.get_subscription_count()}")
+            self.logger.info(f"📊 Publisher count for /ik_delta: {ik_delta_publisher.get_subscription_count()}")
 
             # Create and publish Twist message with absolute pose values
             twist_msg = Twist()
@@ -183,6 +192,7 @@ class PlayMove(Primitive):
             self.logger.info(f"Waiting up to {timeout} seconds for IK solution...")
 
             # Publish the IK request
+            self.logger.info(f"📤 Publishing IK request: {twist_msg}")
             ik_delta_publisher.publish(twist_msg)
             
             # Small delay to ensure message is sent
