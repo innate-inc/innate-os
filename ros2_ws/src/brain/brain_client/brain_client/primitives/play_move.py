@@ -132,16 +132,6 @@ class PlayMove(Primitive):
         
         return None, None
 
-    def _reset_state(self):
-        """Reset primitive state for fresh execution"""
-        self.latest_ik_solution = None
-        self.ik_solution_received.clear()
-        
-        # Don't recreate publishers/subscribers - just reset state
-        # The node and publishers/subscribers should persist between executions
-        
-        self.logger.info("🔄 Primitive state reset for new execution")
-
     def _wait_for_services(self):
         """Wait for required services to be available"""
         if not self.goto_js_client:
@@ -319,16 +309,12 @@ class PlayMove(Primitive):
         if not move_string:
             return "No move specified", PrimitiveResult.FAILURE
 
-        # Reset primitive state for fresh execution
-        self._reset_state()
-
         # Parse the move
         from_square, to_square = self._parse_move(move_string)
         if not from_square or not to_square:
             return f"Invalid move format: '{move_string}'. Use format like 'e2 to e4'", PrimitiveResult.FAILURE
 
         self.logger.info(f"\033[96m[BrainClient] Initiating chess move: {from_square} to {to_square}\033[0m")
-        self.logger.info(f"📋 Primitive state - IK solution: {self.latest_ik_solution is not None}, Event set: {self.ik_solution_received.is_set()}")
 
         # Wait for services to be available
         if not self._wait_for_services():
