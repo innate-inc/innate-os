@@ -16,78 +16,86 @@ class PlayMove(Primitive):
     # Rest position joint angles
     REST_JOINT_POSITIONS = [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.91425255]
     
+    # Rest position coordinates (actual end-effector position at rest)
+    REST_POSITION = {'x': 0.08507, 'y': 0.09278, 'z': 0.0527}
+    
     # Movement parameters
-    PICK_HEIGHT = 0.05  # Height for picking up pieces
+    PICK_HEIGHT = 0.08  # Height for picking up pieces
     SAFE_HEIGHT = 0.15  # Safe travel height
     DEFAULT_ORIENTATION = [0.0, math.radians(90), 0.0]  # Roll, Pitch, Yaw in radians
+    
+    # Gripper control
+    GRIPPER_OPEN = 0.6   # Joint 6 position for open gripper
+    GRIPPER_CLOSED = 0.0 # Joint 6 position for closed gripper
 
     # Chess coordinates mapping
     CHESS_COORDINATES = {
-        'a1': {'x': 0.15000, 'y': 0.09800, 'z': 0.02900},
-        'a2': {'x': 0.19263, 'y': 0.09790, 'z': 0.03090},
-        'a3': {'x': 0.23527, 'y': 0.09780, 'z': 0.03280},
-        'a4': {'x': 0.27790, 'y': 0.09770, 'z': 0.03470},
-        'a5': {'x': 0.32053, 'y': 0.09760, 'z': 0.03660},
-        'a6': {'x': 0.36317, 'y': 0.09750, 'z': 0.03850},
-        'a7': {'x': 0.40580, 'y': 0.09740, 'z': 0.04040},
-        'a8': {'x': 0.44843, 'y': 0.09730, 'z': 0.04230},
-        'b1': {'x': 0.14971, 'y': 0.05543, 'z': 0.02914},
-        'b2': {'x': 0.19235, 'y': 0.05533, 'z': 0.03104},
-        'b3': {'x': 0.23498, 'y': 0.05523, 'z': 0.03294},
-        'b4': {'x': 0.27761, 'y': 0.05513, 'z': 0.03484},
-        'b5': {'x': 0.32025, 'y': 0.05503, 'z': 0.03674},
-        'b6': {'x': 0.36288, 'y': 0.05493, 'z': 0.03864},
-        'b7': {'x': 0.40551, 'y': 0.05483, 'z': 0.04054},
-        'b8': {'x': 0.44815, 'y': 0.05473, 'z': 0.04244},
-        'c1': {'x': 0.14943, 'y': 0.01286, 'z': 0.02929},
-        'c2': {'x': 0.19206, 'y': 0.01276, 'z': 0.03119},
-        'c3': {'x': 0.23470, 'y': 0.01266, 'z': 0.03309},
-        'c4': {'x': 0.27733, 'y': 0.01256, 'z': 0.03499},
-        'c5': {'x': 0.31996, 'y': 0.01246, 'z': 0.03689},
-        'c6': {'x': 0.36260, 'y': 0.01236, 'z': 0.03879},
-        'c7': {'x': 0.40523, 'y': 0.01226, 'z': 0.04069},
-        'c8': {'x': 0.44786, 'y': 0.01216, 'z': 0.04259},
-        'd1': {'x': 0.14914, 'y': -0.02971, 'z': 0.02943},
-        'd2': {'x': 0.19178, 'y': -0.02981, 'z': 0.03133},
-        'd3': {'x': 0.23441, 'y': -0.02991, 'z': 0.03323},
-        'd4': {'x': 0.27704, 'y': -0.03001, 'z': 0.03513},
-        'd5': {'x': 0.31968, 'y': -0.03011, 'z': 0.03703},
-        'd6': {'x': 0.36231, 'y': -0.03021, 'z': 0.03893},
-        'd7': {'x': 0.40494, 'y': -0.03031, 'z': 0.04083},
-        'd8': {'x': 0.44758, 'y': -0.03041, 'z': 0.04273},
-        'e1': {'x': 0.14886, 'y': -0.07229, 'z': 0.02957},
-        'e2': {'x': 0.19149, 'y': -0.07239, 'z': 0.03147},
-        'e3': {'x': 0.23412, 'y': -0.07249, 'z': 0.03337},
-        'e4': {'x': 0.27676, 'y': -0.07259, 'z': 0.03527},
-        'e5': {'x': 0.31939, 'y': -0.07269, 'z': 0.03717},
-        'e6': {'x': 0.36202, 'y': -0.07279, 'z': 0.03907},
-        'e7': {'x': 0.40466, 'y': -0.07289, 'z': 0.04097},
-        'e8': {'x': 0.44729, 'y': -0.07299, 'z': 0.04287},
-        'f1': {'x': 0.14857, 'y': -0.11486, 'z': 0.02971},
-        'f2': {'x': 0.19120, 'y': -0.11496, 'z': 0.03161},
-        'f3': {'x': 0.23384, 'y': -0.11506, 'z': 0.03351},
-        'f4': {'x': 0.27647, 'y': -0.11516, 'z': 0.03541},
-        'f5': {'x': 0.31910, 'y': -0.11526, 'z': 0.03731},
-        'f6': {'x': 0.36174, 'y': -0.11536, 'z': 0.03921},
-        'f7': {'x': 0.40437, 'y': -0.11546, 'z': 0.04111},
-        'f8': {'x': 0.44700, 'y': -0.11556, 'z': 0.04301},
-        'g1': {'x': 0.14829, 'y': -0.15743, 'z': 0.02986},
-        'g2': {'x': 0.19092, 'y': -0.15753, 'z': 0.03176},
-        'g3': {'x': 0.23355, 'y': -0.15763, 'z': 0.03366},
-        'g4': {'x': 0.27619, 'y': -0.15773, 'z': 0.03556},
-        'g5': {'x': 0.31882, 'y': -0.15783, 'z': 0.03746},
-        'g6': {'x': 0.36145, 'y': -0.15793, 'z': 0.03936},
-        'g7': {'x': 0.40409, 'y': -0.15803, 'z': 0.04126},
-        'g8': {'x': 0.44672, 'y': -0.15813, 'z': 0.04316},
-        'h1': {'x': 0.14800, 'y': -0.20000, 'z': 0.03000},
-        'h2': {'x': 0.19063, 'y': -0.20010, 'z': 0.03190},
-        'h3': {'x': 0.23327, 'y': -0.20020, 'z': 0.03380},
-        'h4': {'x': 0.27590, 'y': -0.20030, 'z': 0.03570},
-        'h5': {'x': 0.31853, 'y': -0.20040, 'z': 0.03760},
-        'h6': {'x': 0.36117, 'y': -0.20050, 'z': 0.03950},
-        'h7': {'x': 0.40380, 'y': -0.20060, 'z': 0.04140},
-        'h8': {'x': 0.44643, 'y': -0.20070, 'z': 0.04330},
-    }
+    'a1': {'x': 0.15340, 'y': 0.10068, 'z': 0.04155},
+    'a2': {'x': 0.19776, 'y': 0.09847, 'z': 0.04659},
+    'a3': {'x': 0.24212, 'y': 0.09626, 'z': 0.05163},
+    'a4': {'x': 0.28648, 'y': 0.09404, 'z': 0.05668},
+    'a5': {'x': 0.33084, 'y': 0.09183, 'z': 0.06172},
+    'a6': {'x': 0.37520, 'y': 0.08962, 'z': 0.06676},
+    'a7': {'x': 0.41956, 'y': 0.08741, 'z': 0.07180},
+    'a8': {'x': 0.46392, 'y': 0.08520, 'z': 0.07684},
+    'b1': {'x': 0.15125, 'y': 0.05550, 'z': 0.04120},
+    'b2': {'x': 0.19561, 'y': 0.05329, 'z': 0.04624},
+    'b3': {'x': 0.23997, 'y': 0.05107, 'z': 0.05128},
+    'b4': {'x': 0.28433, 'y': 0.04886, 'z': 0.05632},
+    'b5': {'x': 0.32869, 'y': 0.04665, 'z': 0.06136},
+    'b6': {'x': 0.37305, 'y': 0.04444, 'z': 0.06641},
+    'b7': {'x': 0.41741, 'y': 0.04223, 'z': 0.07145},
+    'b8': {'x': 0.46177, 'y': 0.04002, 'z': 0.07649},
+    'c1': {'x': 0.14911, 'y': 0.01031, 'z': 0.04085},
+    'c2': {'x': 0.19347, 'y': 0.00810, 'z': 0.04589},
+    'c3': {'x': 0.23783, 'y': 0.00589, 'z': 0.05093},
+    'c4': {'x': 0.28219, 'y': 0.00368, 'z': 0.05597},
+    'c5': {'x': 0.32655, 'y': 0.00147, 'z': 0.06101},
+    'c6': {'x': 0.37091, 'y': -0.00074, 'z': 0.06605},
+    'c7': {'x': 0.41527, 'y': -0.00296, 'z': 0.07110},
+    'c8': {'x': 0.45963, 'y': -0.00517, 'z': 0.07614},
+    'd1': {'x': 0.14696, 'y': -0.03487, 'z': 0.04049},
+    'd2': {'x': 0.19132, 'y': -0.03708, 'z': 0.04554},
+    'd3': {'x': 0.23568, 'y': -0.03929, 'z': 0.05058},
+    'd4': {'x': 0.28004, 'y': -0.04150, 'z': 0.05562},
+    'd5': {'x': 0.32440, 'y': -0.04372, 'z': 0.06066},
+    'd6': {'x': 0.36876, 'y': -0.04593, 'z': 0.06570},
+    'd7': {'x': 0.41312, 'y': -0.04814, 'z': 0.07074},
+    'd8': {'x': 0.45748, 'y': -0.05035, 'z': 0.07579},
+    'e1': {'x': 0.14481, 'y': -0.08005, 'z': 0.04014},
+    'e2': {'x': 0.18917, 'y': -0.08226, 'z': 0.04518},
+    'e3': {'x': 0.23353, 'y': -0.08447, 'z': 0.05022},
+    'e4': {'x': 0.27789, 'y': -0.08669, 'z': 0.05527},
+    'e5': {'x': 0.32225, 'y': -0.08890, 'z': 0.06031},
+    'e6': {'x': 0.36661, 'y': -0.09111, 'z': 0.06535},
+    'e7': {'x': 0.41097, 'y': -0.09332, 'z': 0.07039},
+    'e8': {'x': 0.45533, 'y': -0.09553, 'z': 0.07543},
+    'f1': {'x': 0.14266, 'y': -0.12523, 'z': 0.03979},
+    'f2': {'x': 0.18702, 'y': -0.12745, 'z': 0.04483},
+    'f3': {'x': 0.23138, 'y': -0.12966, 'z': 0.04987},
+    'f4': {'x': 0.27574, 'y': -0.13187, 'z': 0.05491},
+    'f5': {'x': 0.32010, 'y': -0.13408, 'z': 0.05996},
+    'f6': {'x': 0.36446, 'y': -0.13629, 'z': 0.06500},
+    'f7': {'x': 0.40882, 'y': -0.13850, 'z': 0.07004},
+    'f8': {'x': 0.45318, 'y': -0.14072, 'z': 0.07508},
+    'g1': {'x': 0.14052, 'y': -0.17042, 'z': 0.03944},
+    'g2': {'x': 0.18488, 'y': -0.17263, 'z': 0.04448},
+    'g3': {'x': 0.22924, 'y': -0.17484, 'z': 0.04952},
+    'g4': {'x': 0.27360, 'y': -0.17705, 'z': 0.05456},
+    'g5': {'x': 0.31796, 'y': -0.17926, 'z': 0.05960},
+    'g6': {'x': 0.36232, 'y': -0.18148, 'z': 0.06465},
+    'g7': {'x': 0.40668, 'y': -0.18369, 'z': 0.06969},
+    'g8': {'x': 0.45104, 'y': -0.18590, 'z': 0.07473},
+    'h1': {'x': 0.13837, 'y': -0.21560, 'z': 0.03909},
+    'h2': {'x': 0.18273, 'y': -0.21781, 'z': 0.04413},
+    'h3': {'x': 0.22709, 'y': -0.22002, 'z': 0.04917},
+    'h4': {'x': 0.27145, 'y': -0.22224, 'z': 0.05421},
+    'h5': {'x': 0.31581, 'y': -0.22445, 'z': 0.05925},
+    'h6': {'x': 0.36017, 'y': -0.22666, 'z': 0.06429},
+    'h7': {'x': 0.40453, 'y': -0.22887, 'z': 0.06934},
+    'h8': {'x': 0.44889, 'y': -0.23108, 'z': 0.07438}
+}
+
 
     def __init__(self, logger):
         super().__init__(logger)
@@ -201,8 +209,8 @@ class PlayMove(Primitive):
             
         return solution
 
-    def _execute_trajectory(self, joint_positions, trajectory_time=3):
-        """Execute a trajectory to the given joint positions."""
+    def _execute_trajectory(self, joint_positions, trajectory_time=3, gripper_state=None):
+        """Execute a trajectory to the given joint positions with optional gripper control."""
         if not self.goto_js_client:
             self.goto_js_client = self.node.create_client(GotoJS, 'maurice_arm/goto_js')
             
@@ -210,16 +218,28 @@ class PlayMove(Primitive):
             self.logger.error("GotoJS service not available")
             return False
 
-        # Ensure we have 6 joint positions (add 0.0 for 6th joint if needed)
+        # Ensure we have 6 joint positions
         if len(joint_positions) == 5:
             joint_positions = list(joint_positions) + [0.0]
+        else:
+            joint_positions = list(joint_positions)
+            
+        # Set gripper state if specified
+        if gripper_state is not None:
+            joint_positions[5] = gripper_state  # Set the 6th joint (gripper)
             
         request = GotoJS.Request()
         request.data = Float64MultiArray()
         request.data.data = joint_positions
         request.time = trajectory_time
 
-        self.logger.info(f"Executing trajectory: {[f'{pos:.3f}' for pos in joint_positions]}")
+        gripper_desc = ""
+        if gripper_state == self.GRIPPER_OPEN:
+            gripper_desc = " (gripper OPEN)"
+        elif gripper_state == self.GRIPPER_CLOSED:
+            gripper_desc = " (gripper CLOSED)"
+
+        self.logger.info(f"Executing trajectory: {[f'{pos:.3f}' for pos in joint_positions]}{gripper_desc}")
         
         # Call service synchronously
         future = self.goto_js_client.call_async(request)
@@ -247,8 +267,8 @@ class PlayMove(Primitive):
         self._send_feedback("🏠 Moving to rest position")
         return self._execute_trajectory(self.REST_JOINT_POSITIONS, trajectory_time=3)
 
-    def _move_to_position_with_ik(self, x, y, z, description=""):
-        """Move to a position using IK and trajectory execution."""
+    def _move_to_position_with_ik(self, x, y, z, description="", gripper_state=None):
+        """Move to a position using IK and trajectory execution with optional gripper control."""
         if description:
             self._send_feedback(f"🎯 {description}")
             
@@ -256,7 +276,7 @@ class PlayMove(Primitive):
         if solution is None:
             return False
             
-        return self._execute_trajectory(solution.position, trajectory_time=2)
+        return self._execute_trajectory(solution.position, trajectory_time=2, gripper_state=gripper_state)
 
     def execute(self, **kwargs):
         """
@@ -298,10 +318,9 @@ class PlayMove(Primitive):
                 
             # STEP 2: Move up from rest to safe height
             self._send_feedback("2️⃣ Moving up from rest to safe height")
-            # Use rest position as reference, but move to safe height
-            rest_coords = self._get_coordinates('d4')  # Use center of board as reference
-            if not self._move_to_position_with_ik(rest_coords['x'], rest_coords['y'], self.SAFE_HEIGHT, 
-                                                  "Moving to safe height above center"):
+            # Use actual rest position coordinates, but move to safe height
+            if not self._move_to_position_with_ik(self.REST_POSITION['x'], self.REST_POSITION['y'], self.SAFE_HEIGHT, 
+                                                  "Moving to safe height above rest position"):
                 return f"Failed to move to safe height", PrimitiveResult.FAILURE
                 
             # STEP 3: Move to 'from' coordinates at safe height
@@ -310,41 +329,67 @@ class PlayMove(Primitive):
                                                   f"Moving above {from_square}"):
                 return f"Failed to move above {from_square}", PrimitiveResult.FAILURE
                 
+            # STEP 3.5: Open gripper before going down
+            self._send_feedback(f"🤏 Opening gripper above {from_square}")
+            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
+                                                  f"Opening gripper above {from_square}", 
+                                                  gripper_state=self.GRIPPER_OPEN):
+                return f"Failed to open gripper above {from_square}", PrimitiveResult.FAILURE
+                
             # STEP 4: Move down to pick up piece
             self._send_feedback(f"4️⃣ Moving down to pick up piece at {from_square}")
             if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.PICK_HEIGHT,
-                                                  f"Picking up piece at {from_square}"):
-                return f"Failed to pick up piece at {from_square}", PrimitiveResult.FAILURE
+                                                  f"Moving down to {from_square}", 
+                                                  gripper_state=self.GRIPPER_OPEN):
+                return f"Failed to move down to {from_square}", PrimitiveResult.FAILURE
+                
+            # STEP 4.5: Close gripper to grab piece
+            self._send_feedback(f"✊ Closing gripper to grab piece at {from_square}")
+            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.PICK_HEIGHT,
+                                                  f"Grabbing piece at {from_square}", 
+                                                  gripper_state=self.GRIPPER_CLOSED):
+                return f"Failed to grab piece at {from_square}", PrimitiveResult.FAILURE
                 
             # STEP 5: Move up with piece
             self._send_feedback(f"5️⃣ Moving up with piece from {from_square}")
             if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Lifting piece from {from_square}"):
+                                                  f"Lifting piece from {from_square}", 
+                                                  gripper_state=self.GRIPPER_CLOSED):
                 return f"Failed to lift piece from {from_square}", PrimitiveResult.FAILURE
                 
             # STEP 6: Move to 'to' coordinates at safe height
             self._send_feedback(f"6️⃣ Moving to {to_square} at safe height")
             if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Moving above {to_square}"):
+                                                  f"Moving above {to_square}", 
+                                                  gripper_state=self.GRIPPER_CLOSED):
                 return f"Failed to move above {to_square}", PrimitiveResult.FAILURE
                 
             # STEP 7: Move down to place piece
             self._send_feedback(f"7️⃣ Moving down to place piece at {to_square}")
             if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.PICK_HEIGHT,
-                                                  f"Placing piece at {to_square}"):
-                return f"Failed to place piece at {to_square}", PrimitiveResult.FAILURE
+                                                  f"Moving down to {to_square}", 
+                                                  gripper_state=self.GRIPPER_CLOSED):
+                return f"Failed to move down to {to_square}", PrimitiveResult.FAILURE
+                
+            # STEP 7.5: Open gripper to release piece
+            self._send_feedback(f"🤏 Opening gripper to release piece at {to_square}")
+            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.PICK_HEIGHT,
+                                                  f"Releasing piece at {to_square}", 
+                                                  gripper_state=self.GRIPPER_OPEN):
+                return f"Failed to release piece at {to_square}", PrimitiveResult.FAILURE
                 
             # STEP 8: Move up after placing
             self._send_feedback(f"8️⃣ Moving up after placing piece at {to_square}")
             if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Lifting from {to_square}"):
+                                                  f"Lifting from {to_square}", 
+                                                  gripper_state=self.GRIPPER_OPEN):
                 return f"Failed to lift from {to_square}", PrimitiveResult.FAILURE
                 
-            # STEP 9: Move back to center at safe height
-            self._send_feedback("9️⃣ Moving back to center at safe height")
-            if not self._move_to_position_with_ik(rest_coords['x'], rest_coords['y'], self.SAFE_HEIGHT,
-                                                  "Moving to center at safe height"):
-                return f"Failed to move to center", PrimitiveResult.FAILURE
+            # STEP 9: Move back to rest position at safe height
+            self._send_feedback("9️⃣ Moving back to rest position at safe height")
+            if not self._move_to_position_with_ik(self.REST_POSITION['x'], self.REST_POSITION['y'], self.SAFE_HEIGHT,
+                                                  "Moving to rest position at safe height"):
+                return f"Failed to move to rest position at safe height", PrimitiveResult.FAILURE
                 
             # STEP 10: Final move to rest position
             self._send_feedback("🔟 Moving to final rest position")
