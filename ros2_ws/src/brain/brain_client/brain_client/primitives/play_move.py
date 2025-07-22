@@ -143,76 +143,85 @@ class PlayMove(Primitive):
         Solve IK for a target position using the IK delta topic.
         Returns True if successful, False otherwise.
         """
-        # Create fresh instances for this call
-        ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
-        
-        # Local state for this IK solve
-        latest_ik_solution = None
-        ik_solution_received = threading.Event()
-        
-        def ik_solution_callback(msg: JointState):
-            nonlocal latest_ik_solution, ik_solution_received
-            if msg and len(msg.position) > 0:  # Validate the message
-                latest_ik_solution = msg
-                ik_solution_received.set()
-                self.logger.info(f"✅ Received IK solution: {[f'{pos:.3f}' for pos in msg.position]}")
-            else:
-                self.logger.warn("Received invalid IK solution message")
-        
-        ik_solution_subscriber = self.node.create_subscription(
-            JointState,
-            'ik_solution',
-            ik_solution_callback,
-            10
-        )
-
-        # Create and publish Twist message with absolute pose values
-        twist_msg = Twist()
-        twist_msg.linear.x = target_x
-        twist_msg.linear.y = target_y
-        twist_msg.linear.z = target_z
-        twist_msg.angular.x = target_roll
-        twist_msg.angular.y = target_pitch
-        twist_msg.angular.z = target_yaw
-
-        self.logger.info(f"Solving IK for position: x={target_x:.3f}, y={target_y:.3f}, z={target_z:.3f}")
-        self.logger.info(f"Orientation: roll={target_roll:.3f}, pitch={target_pitch:.3f}, yaw={target_yaw:.3f}")
-        self.logger.info(f"Waiting up to {timeout} seconds for IK solution...")
-
-        # Publish the IK request
-        ik_delta_publisher.publish(twist_msg)
-        
-        # Small delay to ensure message is sent
-        time.sleep(0.1)
-
-        # Wait for IK solution with active spinning
-        start_time = time.time()
-        while (time.time() - start_time) < timeout:
-            # Actively spin the node to process callbacks
-            rclpy.spin_once(self.node, timeout_sec=0.1)
+        ik_delta_publisher = None
+        ik_solution_subscriber = None
+        try:
+            # Create fresh instances for this call
+            ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
             
-            # Check if we received the solution
+            # Local state for this IK solve
+            latest_ik_solution = None
+            ik_solution_received = threading.Event()
+            
+            def ik_solution_callback(msg: JointState):
+                nonlocal latest_ik_solution, ik_solution_received
+                if msg and len(msg.position) > 0:  # Validate the message
+                    latest_ik_solution = msg
+                    ik_solution_received.set()
+                    self.logger.info(f"✅ Received IK solution: {[f'{pos:.3f}' for pos in msg.position]}")
+                else:
+                    self.logger.warn("Received invalid IK solution message")
+            
+            ik_solution_subscriber = self.node.create_subscription(
+                JointState,
+                'ik_solution',
+                ik_solution_callback,
+                10
+            )
+
+            # Create and publish Twist message with absolute pose values
+            twist_msg = Twist()
+            twist_msg.linear.x = target_x
+            twist_msg.linear.y = target_y
+            twist_msg.linear.z = target_z
+            twist_msg.angular.x = target_roll
+            twist_msg.angular.y = target_pitch
+            twist_msg.angular.z = target_yaw
+
+            self.logger.info(f"Solving IK for position: x={target_x:.3f}, y={target_y:.3f}, z={target_z:.3f}")
+            self.logger.info(f"Orientation: roll={target_roll:.3f}, pitch={target_pitch:.3f}, yaw={target_yaw:.3f}")
+            self.logger.info(f"Waiting up to {timeout} seconds for IK solution...")
+
+            # Publish the IK request
+            ik_delta_publisher.publish(twist_msg)
+            
+            # Small delay to ensure message is sent
+            time.sleep(0.1)
+
+            # Wait for IK solution with active spinning
+            start_time = time.time()
+            while (time.time() - start_time) < timeout:
+                # Actively spin the node to process callbacks
+                rclpy.spin_once(self.node, timeout_sec=0.1)
+                
+                # Check if we received the solution
+                if ik_solution_received.is_set():
+                    self.logger.info(f"✅ IK solution received successfully after {time.time() - start_time:.2f}s")
+                    # Store solution for use in trajectory execution
+                    self.latest_ik_solution = latest_ik_solution
+                    return True
+                
+                # Small sleep to prevent busy waiting
+                time.sleep(0.05)
+            
+            # Final check after timeout
+            self.logger.warn(f"⏰ IK solution timeout after {timeout}s, doing final check...")
+            rclpy.spin_once(self.node, timeout_sec=0.5)  # One more spin with longer timeout
+            
             if ik_solution_received.is_set():
-                self.logger.info(f"✅ IK solution received successfully after {time.time() - start_time:.2f}s")
+                self.logger.warn("⚠️  IK solution received after timeout, but proceeding")
                 # Store solution for use in trajectory execution
                 self.latest_ik_solution = latest_ik_solution
                 return True
-            
-            # Small sleep to prevent busy waiting
-            time.sleep(0.05)
-        
-        # Final check after timeout
-        self.logger.warn(f"⏰ IK solution timeout after {timeout}s, doing final check...")
-        rclpy.spin_once(self.node, timeout_sec=0.5)  # One more spin with longer timeout
-        
-        if ik_solution_received.is_set():
-            self.logger.warn("⚠️  IK solution received after timeout, but proceeding")
-            # Store solution for use in trajectory execution
-            self.latest_ik_solution = latest_ik_solution
-            return True
-        else:
-            self.logger.error("❌ IK solution not received within timeout")
-            return False
+            else:
+                self.logger.error("❌ IK solution not received within timeout")
+                return False
+        finally:
+            # Guaranteed cleanup
+            if ik_delta_publisher:
+                self.node.destroy_publisher(ik_delta_publisher)
+            if ik_solution_subscriber:
+                self.node.destroy_subscription(ik_solution_subscriber)
 
     def _execute_trajectory_to_ik_solution(self, goto_js_client, trajectory_time=3):
         """Execute trajectory to the latest IK solution"""
