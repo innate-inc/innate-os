@@ -187,24 +187,16 @@ class PlayMove(Primitive):
         # Small delay to ensure message is sent
         time.sleep(0.1)
 
-        # Wait for IK solution using a less aggressive approach
-        # Use simple event wait with occasional spinning
+        # Wait for IK solution using simple event wait (no manual spinning)
         start_time = time.time()
         
-        while (time.time() - start_time) < timeout:
-            # Check if solution received
-            if self.ik_solution_received.wait(timeout=0.5):  # Wait up to 0.5s
-                self.logger.info(f"✅ IK solution received successfully after {time.time() - start_time:.2f}s")
-                return True
-            
-            # Spin once to process any pending callbacks
-            try:
-                rclpy.spin_once(self.node, timeout_sec=0.01)
-            except Exception as e:
-                self.logger.debug(f"Spin exception (normal): {e}")
-        
-        self.logger.error(f"❌ IK solution not received within {timeout}s timeout")
-        return False
+        if self.ik_solution_received.wait(timeout=timeout):
+            elapsed_time = time.time() - start_time
+            self.logger.info(f"✅ IK solution received successfully after {elapsed_time:.2f}s")
+            return True
+        else:
+            self.logger.error(f"❌ IK solution not received within {timeout}s timeout")
+            return False
 
     def _execute_trajectory_to_ik_solution(self, trajectory_time=3):
         """Execute trajectory to the latest IK solution"""
