@@ -137,14 +137,8 @@ class PlayMove(Primitive):
         self.latest_ik_solution = None
         self.ik_solution_received.clear()
         
-        # Clean up existing publishers/subscribers to ensure fresh state
-        if self.ik_delta_publisher:
-            self.node.destroy_publisher(self.ik_delta_publisher)
-            self.ik_delta_publisher = None
-            
-        if self.ik_solution_subscriber:
-            self.node.destroy_subscription(self.ik_solution_subscriber)
-            self.ik_solution_subscriber = None
+        # Don't recreate publishers/subscribers - just reset state
+        # The node and publishers/subscribers should persist between executions
         
         self.logger.info("🔄 Primitive state reset for new execution")
 
