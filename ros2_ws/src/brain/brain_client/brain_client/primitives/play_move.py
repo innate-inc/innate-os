@@ -153,8 +153,17 @@ class PlayMove(Primitive):
         Solve IK for a target position using the IK delta topic.
         Returns True if successful, False otherwise.
         """
-        # Initialize publishers and subscribers ONCE in execute method, not here
-        # This should be moved to execute() method to avoid creating multiple instances
+        # Initialize publishers and subscribers if needed
+        if not self.ik_delta_publisher:
+            self.ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
+        
+        if not self.ik_solution_subscriber:
+            self.ik_solution_subscriber = self.node.create_subscription(
+                JointState,
+                'ik_solution',
+                self._ik_solution_callback,
+                10
+            )
 
         # Create and publish Twist message with absolute pose values
         twist_msg = Twist()
@@ -176,30 +185,24 @@ class PlayMove(Primitive):
         # Small delay to ensure message is sent
         time.sleep(0.1)
 
-        # Wait for IK solution with active spinning
+        # Wait for IK solution using a less aggressive approach
+        # Use simple event wait with occasional spinning
         start_time = time.time()
+        
         while (time.time() - start_time) < timeout:
-            # Actively spin the node to process callbacks
-            rclpy.spin_once(self.node, timeout_sec=0.1)
-            
-            # Check if we received the solution
-            if self.ik_solution_received.is_set():
+            # Check if solution received
+            if self.ik_solution_received.wait(timeout=0.5):  # Wait up to 0.5s
                 self.logger.info(f"✅ IK solution received successfully after {time.time() - start_time:.2f}s")
                 return True
             
-            # Small sleep to prevent busy waiting
-            time.sleep(0.05)
+            # Spin once to process any pending callbacks
+            try:
+                rclpy.spin_once(self.node, timeout_sec=0.01)
+            except Exception as e:
+                self.logger.debug(f"Spin exception (normal): {e}")
         
-        # Final check after timeout
-        self.logger.warn(f"⏰ IK solution timeout after {timeout}s, doing final check...")
-        rclpy.spin_once(self.node, timeout_sec=0.5)  # One more spin with longer timeout
-        
-        if self.ik_solution_received.is_set():
-            self.logger.warn("⚠️  IK solution received after timeout, but proceeding")
-            return True
-        else:
-            self.logger.error("❌ IK solution not received within timeout")
-            return False
+        self.logger.error(f"❌ IK solution not received within {timeout}s timeout")
+        return False
 
     def _execute_trajectory_to_ik_solution(self, trajectory_time=3):
         """Execute trajectory to the latest IK solution"""
@@ -300,18 +303,6 @@ class PlayMove(Primitive):
         if not self.node:
             self.logger.error("PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
-
-        # Initialize publishers and subscribers ONCE per execution to avoid race conditions
-        if not self.ik_delta_publisher:
-            self.ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
-        
-        if not self.ik_solution_subscriber:
-            self.ik_solution_subscriber = self.node.create_subscription(
-                JointState,
-                'ik_solution',
-                self._ik_solution_callback,
-                10
-            )
 
         if not move_string:
             return "No move specified", PrimitiveResult.FAILURE
