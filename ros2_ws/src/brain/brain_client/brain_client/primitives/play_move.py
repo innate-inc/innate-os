@@ -188,14 +188,12 @@ class PlayMove(Primitive):
             # Small delay to ensure message is sent
             time.sleep(0.1)
 
-            # Wait for IK solution with active spinning
+            # Wait for IK solution using threading event (no node spinning conflicts)
             start_time = time.time()
             while (time.time() - start_time) < timeout:
-                # Actively spin the node to process callbacks
-                rclpy.spin_once(self.node, timeout_sec=0.1)
-                
-                # Check if we received the solution
-                if ik_solution_received.is_set():
+                # Use threading event wait instead of spinning the node
+                # This prevents conflicts with the action server's main spin loop
+                if ik_solution_received.wait(timeout=0.1):
                     self.logger.info(f"✅ IK solution received successfully after {time.time() - start_time:.2f}s")
                     # Store solution for use in trajectory execution
                     self.latest_ik_solution = latest_ik_solution
@@ -206,9 +204,9 @@ class PlayMove(Primitive):
             
             # Final check after timeout
             self.logger.warn(f"⏰ IK solution timeout after {timeout}s, doing final check...")
-            rclpy.spin_once(self.node, timeout_sec=0.5)  # One more spin with longer timeout
             
-            if ik_solution_received.is_set():
+            # Give one more chance with a longer wait
+            if ik_solution_received.wait(timeout=0.5):
                 self.logger.warn("⚠️  IK solution received after timeout, but proceeding")
                 # Store solution for use in trajectory execution
                 self.latest_ik_solution = latest_ik_solution
@@ -336,6 +334,7 @@ class PlayMove(Primitive):
         self.logger.info(f"\033[96m[BrainClient] Initiating chess move: {from_square} to {to_square}\033[0m")
 
         # Wait for services to be available and get client
+        goto_js_client = None
         services_available, goto_js_client = self._wait_for_services()
         if not services_available:
             return "Required services not available", PrimitiveResult.FAILURE
@@ -396,6 +395,10 @@ class PlayMove(Primitive):
         except Exception as e:
             self.logger.error(f"Error during chess move execution: {e}")
             return f"Error during chess move execution: {e}", PrimitiveResult.FAILURE
+        finally:
+            # Clean up service client to prevent resource leaks
+            if goto_js_client:
+                self.node.destroy_client(goto_js_client)
 
     def cancel(self):
         """
