@@ -96,6 +96,9 @@ class PlayMove(Primitive):
         self.goto_js_client = None
         self.latest_ik_solution = None
         self.ik_solution_received = threading.Event()
+        
+        # Flag to track if we've initialized ROS publishers/subscribers
+        self._ros_initialized = False
 
     @property
     def name(self):
@@ -153,17 +156,16 @@ class PlayMove(Primitive):
         Solve IK for a target position using the IK delta topic.
         Returns True if successful, False otherwise.
         """
-        # Initialize publishers and subscribers if needed
-        if not self.ik_delta_publisher:
+        # Initialize publishers and subscribers only once
+        if not self._ros_initialized:
             self.ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
-        
-        if not self.ik_solution_subscriber:
             self.ik_solution_subscriber = self.node.create_subscription(
                 JointState,
                 'ik_solution',
                 self._ik_solution_callback,
                 10
             )
+            self._ros_initialized = True
 
         # Create and publish Twist message with absolute pose values
         twist_msg = Twist()
