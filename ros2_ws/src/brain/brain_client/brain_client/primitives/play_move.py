@@ -302,6 +302,10 @@ class PlayMove(Primitive):
         Args:
             move_string: Chess move in notation like 'e2 to e4'
         """
+        # RESET STATE at the beginning of each execution
+        self.latest_ik_solution = None
+        self.ik_solution_received.clear()  # Clear the threading event
+        
         if not self.node:
             self.logger.error("PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
