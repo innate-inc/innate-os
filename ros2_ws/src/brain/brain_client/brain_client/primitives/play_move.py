@@ -2,17 +2,26 @@
 import rclpy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
 from brain_client.primitives.types import Primitive, PrimitiveResult, RobotStateType
 from maurice_msgs.srv import GotoJS
+from std_msgs.msg import Float64MultiArray
 import time
+import math
 
 class PlayMove(Primitive):
     """
-    Primitive for playing a chess move by calculating and executing a sequence of arm movements.
+    Primitive for playing a chess move by executing a complete pick-and-place sequence.
     """
 
-    # Chess coordinates mapping (x, y, z_base)
+    # Rest position joint angles
+    REST_JOINT_POSITIONS = [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.91425255]
+    
+    # Movement parameters
+    PICK_HEIGHT = 0.05  # Height for picking up pieces
+    SAFE_HEIGHT = 0.15  # Safe travel height
+    DEFAULT_ORIENTATION = [0.0, math.radians(90), 0.0]  # Roll, Pitch, Yaw in radians
+
+    # Chess coordinates mapping
     CHESS_COORDINATES = {
         'a1': {'x': 0.15000, 'y': 0.09800, 'z': 0.02900},
         'a2': {'x': 0.19263, 'y': 0.09790, 'z': 0.03090},
@@ -80,16 +89,10 @@ class PlayMove(Primitive):
         'h8': {'x': 0.44643, 'y': -0.20070, 'z': 0.04330},
     }
 
-    # Rest position joint angles for the start and end of the move
-    REST_JOINT_POSITIONS = [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.91425255]
-
-    # Z-heights for movement
-    HOVER_HEIGHT = 0.15  # The height for traveling between squares
-    PICK_HEIGHT = 0.05   # The height for picking up or dropping a piece
-
     def __init__(self, logger):
         super().__init__(logger)
         self.ik_delta_publisher = None
+        self.goto_js_client = None  # Service client for trajectory execution
         self.last_ik_solution = None  # Store IK solution from robot state
         self.last_ik_timestamp = None  # Track when we last received an IK solution
 
@@ -184,9 +187,80 @@ class PlayMove(Primitive):
         
         return None
 
+    def _solve_ik_for_position(self, x, y, z, roll=0.0, pitch=None, yaw=0.0):
+        """Solve IK for a specific position and orientation."""
+        if pitch is None:
+            pitch = self.DEFAULT_ORIENTATION[1]  # Use default 80-degree pitch
+            
+        self._send_ik_request(x, y, z, roll, pitch, yaw)
+        solution = self._wait_for_ik_solution(timeout=10.0)
+        
+        if solution is None:
+            self.logger.error(f"IK solution failed for position: x={x:.3f}, y={y:.3f}, z={z:.3f}")
+            return None
+            
+        return solution
+
+    def _execute_trajectory(self, joint_positions, trajectory_time=3):
+        """Execute a trajectory to the given joint positions."""
+        if not self.goto_js_client:
+            self.goto_js_client = self.node.create_client(GotoJS, 'maurice_arm/goto_js')
+            
+        if not self.goto_js_client.wait_for_service(timeout_sec=5.0):
+            self.logger.error("GotoJS service not available")
+            return False
+
+        # Ensure we have 6 joint positions (add 0.0 for 6th joint if needed)
+        if len(joint_positions) == 5:
+            joint_positions = list(joint_positions) + [0.0]
+            
+        request = GotoJS.Request()
+        request.data = Float64MultiArray()
+        request.data.data = joint_positions
+        request.time = trajectory_time
+
+        self.logger.info(f"Executing trajectory: {[f'{pos:.3f}' for pos in joint_positions]}")
+        
+        # Call service synchronously
+        future = self.goto_js_client.call_async(request)
+        
+        # Wait for service response
+        start_time = time.time()
+        while not future.done() and (time.time() - start_time) < 10.0:
+            time.sleep(0.1)
+            
+        if future.done():
+            response = future.result()
+            if response and response.success:
+                self.logger.info(f"Trajectory started successfully, waiting {trajectory_time}s for completion")
+                time.sleep(trajectory_time + 0.5)  # Wait for trajectory to complete
+                return True
+            else:
+                self.logger.error("Trajectory execution failed")
+                return False
+        else:
+            self.logger.error("Service call timed out")
+            return False
+
+    def _move_to_rest(self):
+        """Move to the rest position."""
+        self._send_feedback("🏠 Moving to rest position")
+        return self._execute_trajectory(self.REST_JOINT_POSITIONS, trajectory_time=3)
+
+    def _move_to_position_with_ik(self, x, y, z, description=""):
+        """Move to a position using IK and trajectory execution."""
+        if description:
+            self._send_feedback(f"🎯 {description}")
+            
+        solution = self._solve_ik_for_position(x, y, z)
+        if solution is None:
+            return False
+            
+        return self._execute_trajectory(solution.position, trajectory_time=2)
+
     def execute(self, **kwargs):
         """
-        Execute a chess move by converting chess coordinates to joint positions using IK.
+        Execute a complete chess move sequence: rest → from → to → rest.
         
         Args:
             **kwargs: Should contain 'move_str' with chess move in format "a2 to a4" or "a2 a4"
@@ -211,63 +285,74 @@ class PlayMove(Primitive):
             self._send_feedback(f"✅ Parsed chess move: {from_square} → {to_square}")
 
             # Get coordinates for both squares
-            self._send_feedback(f"📍 Getting coordinates for source square '{from_square}'")
+            self._send_feedback(f"📍 Getting coordinates for squares '{from_square}' and '{to_square}'")
             from_coords = self._get_coordinates(from_square)
-            
-            self._send_feedback(f"📍 Getting coordinates for destination square '{to_square}'")
             to_coords = self._get_coordinates(to_square)
             
-            # Send IK request for source coordinates first
-            self.logger.info(f"📤 Sending IK request for FROM coordinates: x={from_coords['x']:.5f}, y={from_coords['y']:.5f}, z={from_coords['z']:.5f}")
-            self._send_feedback(f"📤 Sending IK request for FROM position: x={from_coords['x']:.3f}, y={from_coords['y']:.3f}, z={from_coords['z']:.3f}")
-            self._send_ik_request(
-                from_coords['x'], 
-                from_coords['y'], 
-                from_coords['z']
-            )
-
-            # Wait for IK solution for FROM square
-            self.logger.info(f"⏳ Waiting for IK solution for FROM square {from_square}...")
-            self._send_feedback(f"⏳ Waiting for IK solution for FROM square {from_square}...")
-            from_ik_solution = self._wait_for_ik_solution(timeout=10.0)
+            self._send_feedback(f"📋 Executing chess move sequence: {from_square} → {to_square}")
             
-            if from_ik_solution is None:
-                self._send_feedback(f"⏰ IK solution timeout for FROM square {from_square} - position may not be reachable")
-                return f"IK solution timeout for FROM square {from_square}", PrimitiveResult.FAILURE
-
-            # Format joint positions for FROM square
-            from_joint_positions = [round(pos, 4) for pos in from_ik_solution.position]
-            self.logger.info(f"✅ FROM square IK solution: {from_joint_positions}")
-            self._send_feedback(f"✅ FROM square IK solution received")
+            # STEP 1: Move to rest position
+            self._send_feedback("1️⃣ Moving to rest position")
+            if not self._move_to_rest():
+                return f"Failed to move to rest position", PrimitiveResult.FAILURE
+                
+            # STEP 2: Move up from rest to safe height
+            self._send_feedback("2️⃣ Moving up from rest to safe height")
+            # Use rest position as reference, but move to safe height
+            rest_coords = self._get_coordinates('d4')  # Use center of board as reference
+            if not self._move_to_position_with_ik(rest_coords['x'], rest_coords['y'], self.SAFE_HEIGHT, 
+                                                  "Moving to safe height above center"):
+                return f"Failed to move to safe height", PrimitiveResult.FAILURE
+                
+            # STEP 3: Move to 'from' coordinates at safe height
+            self._send_feedback(f"3️⃣ Moving to {from_square} at safe height")
+            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
+                                                  f"Moving above {from_square}"):
+                return f"Failed to move above {from_square}", PrimitiveResult.FAILURE
+                
+            # STEP 4: Move down to pick up piece
+            self._send_feedback(f"4️⃣ Moving down to pick up piece at {from_square}")
+            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.PICK_HEIGHT,
+                                                  f"Picking up piece at {from_square}"):
+                return f"Failed to pick up piece at {from_square}", PrimitiveResult.FAILURE
+                
+            # STEP 5: Move up with piece
+            self._send_feedback(f"5️⃣ Moving up with piece from {from_square}")
+            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
+                                                  f"Lifting piece from {from_square}"):
+                return f"Failed to lift piece from {from_square}", PrimitiveResult.FAILURE
+                
+            # STEP 6: Move to 'to' coordinates at safe height
+            self._send_feedback(f"6️⃣ Moving to {to_square} at safe height")
+            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
+                                                  f"Moving above {to_square}"):
+                return f"Failed to move above {to_square}", PrimitiveResult.FAILURE
+                
+            # STEP 7: Move down to place piece
+            self._send_feedback(f"7️⃣ Moving down to place piece at {to_square}")
+            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.PICK_HEIGHT,
+                                                  f"Placing piece at {to_square}"):
+                return f"Failed to place piece at {to_square}", PrimitiveResult.FAILURE
+                
+            # STEP 8: Move up after placing
+            self._send_feedback(f"8️⃣ Moving up after placing piece at {to_square}")
+            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
+                                                  f"Lifting from {to_square}"):
+                return f"Failed to lift from {to_square}", PrimitiveResult.FAILURE
+                
+            # STEP 9: Move back to center at safe height
+            self._send_feedback("9️⃣ Moving back to center at safe height")
+            if not self._move_to_position_with_ik(rest_coords['x'], rest_coords['y'], self.SAFE_HEIGHT,
+                                                  "Moving to center at safe height"):
+                return f"Failed to move to center", PrimitiveResult.FAILURE
+                
+            # STEP 10: Final move to rest position
+            self._send_feedback("🔟 Moving to final rest position")
+            if not self._move_to_rest():
+                return f"Failed to move to final rest position", PrimitiveResult.FAILURE
             
-            # Send IK request for destination coordinates
-            self.logger.info(f"📤 Sending IK request for TO coordinates: x={to_coords['x']:.5f}, y={to_coords['y']:.5f}, z={to_coords['z']:.5f}")
-            self._send_feedback(f"📤 Sending IK request for TO position: x={to_coords['x']:.3f}, y={to_coords['y']:.3f}, z={to_coords['z']:.3f}")
-            self._send_ik_request(
-                to_coords['x'], 
-                to_coords['y'], 
-                to_coords['z']
-            )
-
-            # Wait for IK solution for TO square
-            self.logger.info(f"⏳ Waiting for IK solution for TO square {to_square}...")
-            self._send_feedback(f"⏳ Waiting for IK solution for TO square {to_square}...")
-            to_ik_solution = self._wait_for_ik_solution(timeout=10.0)
-            
-            if to_ik_solution is None:
-                self._send_feedback(f"⏰ IK solution timeout for TO square {to_square} - position may not be reachable")
-                return f"IK solution timeout for TO square {to_square}", PrimitiveResult.FAILURE
-
-            # Format joint positions for TO square
-            to_joint_positions = [round(pos, 4) for pos in to_ik_solution.position]
-            self.logger.info(f"✅ TO square IK solution: {to_joint_positions}")
-            
-            self._send_feedback("✅ Both IK solutions received - chess move calculation completed successfully")
-            
-            result_msg = (f"Chess move {move_str} calculated successfully. "
-                         f"FROM joint positions ({from_square}): {from_joint_positions}, "
-                         f"TO joint positions ({to_square}): {to_joint_positions}")
-            
+            result_msg = f"✅ Chess move {move_str} completed successfully! Executed full pick-and-place sequence."
+            self._send_feedback(result_msg)
             self.logger.info(result_msg)
             return result_msg, PrimitiveResult.SUCCESS
 
