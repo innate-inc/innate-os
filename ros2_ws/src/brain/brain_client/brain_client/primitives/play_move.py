@@ -315,11 +315,14 @@ class PlayMove(Primitive):
         Args:
             move_string: Chess move in notation like 'e2 to e4'
         """
+        self.logger.info(f"🎯 PlayMove.execute() called with move_string='{move_string}'")
+        
         if not self.node:
-            self.logger.error("PlayMove primitive is not functional due to missing ROS node.")
+            self.logger.error("❌ PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
 
         if not move_string:
+            self.logger.error("❌ No move specified")
             return "No move specified", PrimitiveResult.FAILURE
 
         # Parse the move

@@ -118,11 +118,12 @@ class PrimitiveExecutionActionServer(Node):
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
         )
-        self.get_logger().debug("Primitive Execution Action Server has started.")
+        self.get_logger().info("🎯 Primitive Execution Action Server has started!")
+        self.get_logger().info(f"📋 Available primitives: {list(self._primitives.keys())}")
 
     def goal_callback(self, goal_request):
-        self.get_logger().debug(
-            f"Received goal for primitive: '{goal_request.primitive_type}'"
+        self.get_logger().info(
+            f"🎯 GOAL RECEIVED for primitive: '{goal_request.primitive_type}'"
         )
         return GoalResponse.ACCEPT
 
@@ -158,8 +159,8 @@ class PrimitiveExecutionActionServer(Node):
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
-        self.get_logger().debug(
-            f"Executing primitive: '{goal_handle.request.primitive_type}'"
+        self.get_logger().info(
+            f"🎬 STARTING execution of primitive: '{goal_handle.request.primitive_type}'"
         )
         # Decode the inputs (assumed to be JSON)
         try:
@@ -185,8 +186,8 @@ class PrimitiveExecutionActionServer(Node):
             )
 
         primitive = self._primitives[primitive_type]
-        self.get_logger().debug(
-            f"Starting primitive '{primitive_type}' with inputs: {inputs}"
+        self.get_logger().info(
+            f"🚀 About to execute primitive '{primitive_type}' with inputs: {inputs}"
         )
 
         # Define a feedback publisher for the primitive
@@ -332,7 +333,9 @@ class PrimitiveExecutionActionServer(Node):
                 primitive.update_robot_state(**robot_state_to_inject)
 
             # Execute the primitive with its direct inputs
+            self.get_logger().info(f"⚡ CALLING primitive.execute() for '{primitive_type}' with inputs: {inputs}")
             result_message, result_status = primitive.execute(**inputs)
+            self.get_logger().info(f"✅ primitive.execute() COMPLETED for '{primitive_type}' with result: {result_status.value}, message: {result_message}")
 
             # Handle the result based on the PrimitiveResult enum
             if result_status == PrimitiveResult.SUCCESS:
