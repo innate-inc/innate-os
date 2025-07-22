@@ -153,17 +153,8 @@ class PlayMove(Primitive):
         Solve IK for a target position using the IK delta topic.
         Returns True if successful, False otherwise.
         """
-        # Initialize publishers and subscribers if needed
-        if not self.ik_delta_publisher:
-            self.ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
-        
-        if not self.ik_solution_subscriber:
-            self.ik_solution_subscriber = self.node.create_subscription(
-                JointState,
-                'ik_solution',
-                self._ik_solution_callback,
-                10
-            )
+        # Initialize publishers and subscribers ONCE in execute method, not here
+        # This should be moved to execute() method to avoid creating multiple instances
 
         # Create and publish Twist message with absolute pose values
         twist_msg = Twist()
@@ -309,6 +300,18 @@ class PlayMove(Primitive):
         if not self.node:
             self.logger.error("PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
+
+        # Initialize publishers and subscribers ONCE per execution to avoid race conditions
+        if not self.ik_delta_publisher:
+            self.ik_delta_publisher = self.node.create_publisher(Twist, 'ik_delta', 10)
+        
+        if not self.ik_solution_subscriber:
+            self.ik_solution_subscriber = self.node.create_subscription(
+                JointState,
+                'ik_solution',
+                self._ik_solution_callback,
+                10
+            )
 
         if not move_string:
             return "No move specified", PrimitiveResult.FAILURE
