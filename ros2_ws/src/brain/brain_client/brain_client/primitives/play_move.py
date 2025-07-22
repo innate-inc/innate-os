@@ -2,16 +2,17 @@
 import rclpy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState
-from brain_client.primitives.types import Primitive, PrimitiveResult
-import threading
+from std_msgs.msg import Float64MultiArray
+from brain_client.primitives.types import Primitive, PrimitiveResult, RobotStateType
+from maurice_msgs.srv import GotoJS
 import time
 
 class PlayMove(Primitive):
     """
-    Primitive for playing a chess move by converting chess coordinates to joint positions using IK.
+    Primitive for playing a chess move by calculating and executing a sequence of arm movements.
     """
 
-    # Chess coordinates mapping
+    # Chess coordinates mapping (x, y, z_base)
     CHESS_COORDINATES = {
         'a1': {'x': 0.15000, 'y': 0.09800, 'z': 0.02900},
         'a2': {'x': 0.19263, 'y': 0.09790, 'z': 0.03090},
@@ -79,12 +80,18 @@ class PlayMove(Primitive):
         'h8': {'x': 0.44643, 'y': -0.20070, 'z': 0.04330},
     }
 
+    # Rest position joint angles for the start and end of the move
+    REST_JOINT_POSITIONS = [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.91425255]
+
+    # Z-heights for movement
+    HOVER_HEIGHT = 0.15  # The height for traveling between squares
+    PICK_HEIGHT = 0.05   # The height for picking up or dropping a piece
+
     def __init__(self, logger):
         super().__init__(logger)
         self.ik_delta_publisher = None
-        self.ik_solution_subscriber = None
-        self.latest_ik_solution = None
-        self.ik_result_received = threading.Event()
+        self.last_ik_solution = None  # Store IK solution from robot state
+        self.last_ik_timestamp = None  # Track when we last received an IK solution
 
     @property
     def name(self):
@@ -97,11 +104,18 @@ class PlayMove(Primitive):
             "to move the arm to the specified chess square coordinates."
         )
 
-    def _ik_solution_callback(self, msg: JointState):
-        """Callback for receiving IK solutions."""
-        self.latest_ik_solution = msg
-        self.ik_result_received.set()
-        self.logger.info(f"Received IK solution: {msg.position}")
+    def get_required_robot_states(self):
+        """Request IK solution from the action server."""
+        return [RobotStateType.LAST_IK_SOLUTION]
+
+    def update_robot_state(self, **kwargs):
+        """Update the primitive with the latest IK solution."""
+        if RobotStateType.LAST_IK_SOLUTION.value in kwargs:
+            self.last_ik_solution = kwargs[RobotStateType.LAST_IK_SOLUTION.value]
+            # Store the timestamp to detect new solutions
+            if self.last_ik_solution and 'header' in self.last_ik_solution:
+                stamp = self.last_ik_solution['header']['stamp']
+                self.last_ik_timestamp = stamp['sec'] + stamp['nanosec'] / 1e9
 
     def _parse_chess_move(self, move_str):
         """Parse chess move string like 'a2 to a4' into from and to squares."""
@@ -142,9 +156,37 @@ class PlayMove(Primitive):
         self.logger.info(f"Sending IK request for position: x={x:.5f}, y={y:.5f}, z={z:.5f}")
         self.ik_delta_publisher.publish(twist_msg)
 
+    def _wait_for_ik_solution(self, timeout=10.0):
+        """Wait for IK solution using the centralized subscription from action server."""
+        start_time = time.time()
+        # Remember the timestamp of the current solution so we wait for a NEW one
+        initial_timestamp = self.last_ik_timestamp
+        
+        while (time.time() - start_time) < timeout:
+            # Check if we have received a NEW IK solution (different timestamp)
+            if (self.last_ik_solution is not None and 
+                self.last_ik_timestamp is not None and
+                self.last_ik_timestamp != initial_timestamp):
+                
+                # Convert the dict back to a more usable format
+                solution = type('IKSolution', (), {})()
+                solution.position = self.last_ik_solution['position']
+                solution.velocity = self.last_ik_solution['velocity'] 
+                solution.effort = self.last_ik_solution['effort']
+                
+                self.logger.info(f"✅ Using NEW IK solution: {solution.position}")
+                
+                # Don't clear the solution anymore - just update our reference timestamp
+                return solution
+            
+            # Small delay to avoid busy waiting
+            time.sleep(0.1)
+        
+        return None
+
     def execute(self, **kwargs):
         """
-        Execute a chess move by converting chess coordinates to joint positions.
+        Execute a chess move by converting chess coordinates to joint positions using IK.
         
         Args:
             **kwargs: Should contain 'move_str' with chess move in format "a2 to a4" or "a2 a4"
@@ -158,63 +200,89 @@ class PlayMove(Primitive):
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
 
         if not move_str:
+            self._send_feedback("❌ No chess move provided")
             return "No chess move provided", PrimitiveResult.FAILURE
 
         try:
             # Parse the chess move
+            self._send_feedback(f"🔍 Parsing chess move: '{move_str}'")
             from_square, to_square = self._parse_chess_move(move_str)
             self.logger.info(f"Parsed chess move: {from_square} to {to_square}")
+            self._send_feedback(f"✅ Parsed chess move: {from_square} → {to_square}")
 
-            # Get coordinates for the destination square
+            # Get coordinates for both squares
+            self._send_feedback(f"📍 Getting coordinates for source square '{from_square}'")
+            from_coords = self._get_coordinates(from_square)
+            
+            self._send_feedback(f"📍 Getting coordinates for destination square '{to_square}'")
             to_coords = self._get_coordinates(to_square)
             
-            # Set up IK solution subscriber
-            if not self.ik_solution_subscriber:
-                self.ik_solution_subscriber = self.node.create_subscription(
-                    JointState, 'ik_solution', self._ik_solution_callback, 10
-                )
-                # Give the subscriber a moment to be ready
-                time.sleep(0.1)
+            # Send IK request for source coordinates first
+            self.logger.info(f"📤 Sending IK request for FROM coordinates: x={from_coords['x']:.5f}, y={from_coords['y']:.5f}, z={from_coords['z']:.5f}")
+            self._send_feedback(f"📤 Sending IK request for FROM position: x={from_coords['x']:.3f}, y={from_coords['y']:.3f}, z={from_coords['z']:.3f}")
+            self._send_ik_request(
+                from_coords['x'], 
+                from_coords['y'], 
+                from_coords['z']
+            )
 
-            # Clear previous results
-            self.ik_result_received.clear()
-            self.latest_ik_solution = None
+            # Wait for IK solution for FROM square
+            self.logger.info(f"⏳ Waiting for IK solution for FROM square {from_square}...")
+            self._send_feedback(f"⏳ Waiting for IK solution for FROM square {from_square}...")
+            from_ik_solution = self._wait_for_ik_solution(timeout=10.0)
+            
+            if from_ik_solution is None:
+                self._send_feedback(f"⏰ IK solution timeout for FROM square {from_square} - position may not be reachable")
+                return f"IK solution timeout for FROM square {from_square}", PrimitiveResult.FAILURE
 
+            # Format joint positions for FROM square
+            from_joint_positions = [round(pos, 4) for pos in from_ik_solution.position]
+            self.logger.info(f"✅ FROM square IK solution: {from_joint_positions}")
+            self._send_feedback(f"✅ FROM square IK solution received")
+            
             # Send IK request for destination coordinates
+            self.logger.info(f"📤 Sending IK request for TO coordinates: x={to_coords['x']:.5f}, y={to_coords['y']:.5f}, z={to_coords['z']:.5f}")
+            self._send_feedback(f"📤 Sending IK request for TO position: x={to_coords['x']:.3f}, y={to_coords['y']:.3f}, z={to_coords['z']:.3f}")
             self._send_ik_request(
                 to_coords['x'], 
                 to_coords['y'], 
                 to_coords['z']
             )
 
-            # Wait for IK solution (increased timeout since IK can take a few seconds)
-            self.logger.info(f"Waiting for IK solution for move {move_str}...")
-            if not self.ik_result_received.wait(timeout=15.0):
-                return f"IK solution timeout for move {move_str}", PrimitiveResult.FAILURE
+            # Wait for IK solution for TO square
+            self.logger.info(f"⏳ Waiting for IK solution for TO square {to_square}...")
+            self._send_feedback(f"⏳ Waiting for IK solution for TO square {to_square}...")
+            to_ik_solution = self._wait_for_ik_solution(timeout=10.0)
+            
+            if to_ik_solution is None:
+                self._send_feedback(f"⏰ IK solution timeout for TO square {to_square} - position may not be reachable")
+                return f"IK solution timeout for TO square {to_square}", PrimitiveResult.FAILURE
 
-            if self.latest_ik_solution is None:
-                return f"No IK solution received for move {move_str}", PrimitiveResult.FAILURE
-
-            # Format joint positions for output
-            joint_positions = [round(pos, 4) for pos in self.latest_ik_solution.position]
+            # Format joint positions for TO square
+            to_joint_positions = [round(pos, 4) for pos in to_ik_solution.position]
+            self.logger.info(f"✅ TO square IK solution: {to_joint_positions}")
+            
+            self._send_feedback("✅ Both IK solutions received - chess move calculation completed successfully")
             
             result_msg = (f"Chess move {move_str} calculated successfully. "
-                         f"Joint positions: {joint_positions}")
+                         f"FROM joint positions ({from_square}): {from_joint_positions}, "
+                         f"TO joint positions ({to_square}): {to_joint_positions}")
             
             self.logger.info(result_msg)
             return result_msg, PrimitiveResult.SUCCESS
 
         except ValueError as e:
             error_msg = f"Invalid chess move '{move_str}': {e}"
+            self._send_feedback(f"❌ {error_msg}")
             self.logger.error(error_msg)
             return error_msg, PrimitiveResult.FAILURE
         except Exception as e:
             error_msg = f"Failed to execute chess move '{move_str}': {e}"
+            self._send_feedback(f"❌ {error_msg}")
             self.logger.error(error_msg)
             return error_msg, PrimitiveResult.FAILURE
 
     def cancel(self):
         """Cancel the chess move operation."""
         self.logger.info("Canceling chess move operation")
-        self.ik_result_received.set()  # Unblock any waiting operations
         return "Chess move operation canceled" 

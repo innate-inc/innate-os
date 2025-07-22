@@ -17,6 +17,7 @@ import numpy as np  # For map data
 import math  # For yaw calculation
 
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+from rclpy.executors import MultiThreadedExecutor
 
 
 # Import the action definition – ensure that it is built and available.
@@ -41,7 +42,7 @@ from brain_client.primitives.types import (
 from brain_client.message_types import TaskType
 
 # Import ROS message types for subscriptions
-from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
+from sensor_msgs.msg import CompressedImage, JointState  # Added JointState
 from nav_msgs.msg import Odometry, OccupancyGrid
 
 
@@ -53,6 +54,7 @@ class PrimitiveExecutionActionServer(Node):
         self.last_main_camera_image = None  # Stores cv2 image object
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
+        self.last_ik_solution = None  # Stores JointState message from IK solver
 
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -82,6 +84,12 @@ class PrimitiveExecutionActionServer(Node):
             "/map",
             self.map_callback,
             1,  # QoS profile with transient local durability might be better for map
+        )
+        self.ik_solution_sub = self.create_subscription(
+            JointState,
+            "ik_solution",
+            self.ik_solution_callback,
+            10,
         )
 
         # Mapping from TaskType to primitive class
@@ -329,6 +337,28 @@ class PrimitiveExecutionActionServer(Node):
                         f"none available."
                     )
 
+            if RobotStateType.LAST_IK_SOLUTION in primitive.get_required_robot_states():
+                self.get_logger().debug(f"Updating primitive {primitive.name} with new IK solution.")
+                if self.last_ik_solution is not None:
+                    robot_state_to_inject[RobotStateType.LAST_IK_SOLUTION.value] = {
+                        "header": {
+                            "stamp": {
+                                "sec": self.last_ik_solution.header.stamp.sec,
+                                "nanosec": self.last_ik_solution.header.stamp.nanosec,
+                            },
+                            "frame_id": self.last_ik_solution.header.frame_id,
+                        },
+                        "name": self.last_ik_solution.name,
+                        "position": list(self.last_ik_solution.position),
+                        "velocity": list(self.last_ik_solution.velocity),
+                        "effort": list(self.last_ik_solution.effort),
+                    }
+                else:
+                    self.get_logger().warn(
+                        f"Primitive {primitive_type} requires LAST_IK_SOLUTION but "
+                        f"none available."
+                    )
+
             if robot_state_to_inject:  # Only call if there is state to update
                 primitive.update_robot_state(**robot_state_to_inject)
 
@@ -405,13 +435,62 @@ class PrimitiveExecutionActionServer(Node):
         self.last_map = msg
         # self.get_logger().debug('Received new map for primitives.')
 
+    def ik_solution_callback(self, msg: JointState):
+        """
+        Handles incoming IK solutions and updates any running primitives
+        that require this state.
+        """
+        self.last_ik_solution = msg
+        self.get_logger().debug(f'Received IK solution: {msg.position}')
+
+        # Find the currently active primitive. In this system, we assume one at a time.
+        # A more complex system might need to iterate through a list of active goals.
+        active_primitive = None
+        for primitive in self._primitives.values():
+            # This is a simplification; a real system might need a more robust
+            # way to check if a primitive is "active".
+            # For now, we assume any primitive that requires IK might be waiting for it.
+            if RobotStateType.LAST_IK_SOLUTION in primitive.get_required_robot_states():
+                active_primitive = primitive
+                break
+
+        if active_primitive:
+            self.get_logger().debug(f"Updating primitive '{active_primitive.name}' with new IK solution.")
+            ik_solution_dict = {
+                "header": {
+                    "stamp": {
+                        "sec": msg.header.stamp.sec,
+                        "nanosec": msg.header.stamp.nanosec,
+                    },
+                    "frame_id": msg.header.frame_id,
+                },
+                "name": msg.name,
+                "position": list(msg.position),
+                "velocity": list(msg.velocity),
+                "effort": list(msg.effort),
+            }
+            # Directly update the primitive's state.
+            active_primitive.update_robot_state(**{RobotStateType.LAST_IK_SOLUTION.value: ik_solution_dict})
+
 
 def main(args=None):
     rclpy.init(args=args)
     action_server = PrimitiveExecutionActionServer()
-    rclpy.spin(action_server)
-    action_server.destroy()
-    rclpy.shutdown()
+
+    # A MultiThreadedExecutor is required to allow the action's execute_callback
+    # to block while still allowing other callbacks (like ik_solution_callback)
+    # to be processed concurrently.
+    executor = MultiThreadedExecutor()
+    executor.add_node(action_server)
+
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # It's good practice to explicitly destroy the node and shut down rclpy
+        action_server.destroy()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

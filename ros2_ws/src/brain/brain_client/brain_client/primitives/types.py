@@ -20,6 +20,7 @@ class RobotStateType(Enum):
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
     LAST_ODOM = "last_odom"
     LAST_MAP = "last_map"
+    LAST_IK_SOLUTION = "last_ik_solution"
 
 
 class Primitive(ABC):
