@@ -93,8 +93,8 @@ controller_server:
       # Goal critic - drives robot toward goal position
       GoalCritic:
         enabled: true
-        cost_power: 1
-        cost_weight: 5.0
+        cost_power: 2
+        cost_weight: 15.0
         threshold_to_consider: 1.2       # Start considering when within this distance of goal
       
       # Goal angle critic - aligns robot with goal orientation
