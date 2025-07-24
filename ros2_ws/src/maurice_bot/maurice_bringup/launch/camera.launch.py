@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
 import os
-import math
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import OpaqueFunction, DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 import launch_ros.actions
-
-def euler_to_quat(roll, pitch, yaw):
-    """
-    Convert Euler angles (in radians) to a quaternion.
-    Returns (qx, qy, qz, qw)
-    """
-    qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
-    qy = math.cos(roll/2) * math.sin(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.cos(pitch/2) * math.sin(yaw/2)
-    qz = math.cos(roll/2) * math.cos(pitch/2) * math.sin(yaw/2) - math.sin(roll/2) * math.sin(pitch/2) * math.cos(yaw/2)
-    qw = math.cos(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
-    return (qx, qy, qz, qw)
 
 def generate_launch_description():
     # Package paths
@@ -41,9 +29,9 @@ def generate_launch_description():
     # --- TF Frame Arguments ---
     declare_head_camera_link = DeclareLaunchArgument(
         'head_camera_link', default_value='head_camera_link',
-        description='Head camera frame published by head transform node ')
+        description='Head camera frame published by head transform node')
 
-    # --- Device and Model Arguments (for URDF and Camera Driver) ---
+    # --- Camera Driver Parameters (only what it actually uses) ---
     declare_mxId = DeclareLaunchArgument(
         'mxId', default_value='', 
         description='MXID of the OAK device. Empty for first available.')
@@ -52,30 +40,22 @@ def generate_launch_description():
         description='Enable USB2 mode for the OAK device.')
     declare_camera_model = DeclareLaunchArgument(
         'camera_model', default_value='OAK-D', 
-        description='The model of the OAK camera (e.g., OAK-D, OAK-D-LITE). Used for URDF.')
+        description='The model of the OAK camera for URDF.')
     declare_tf_prefix = DeclareLaunchArgument(
         'tf_prefix', default_value='oak', 
-        description='Namespace for TF frames (e.g., oak/rgb_camera_optical_frame).')
-
-    # --- Custom Camera Driver Specific Arguments ---
+        description='Namespace for TF frames.')
     declare_color_resolution = DeclareLaunchArgument(
         'color_resolution', default_value='800p',
-        description='RGB camera resolution for the driver. Supported: 800p, 720p.')
+        description='RGB camera resolution. Supported: 800p, 720p.')
     declare_fps = DeclareLaunchArgument(
         'fps', default_value='30.0',
         description='RGB camera FPS.')
     declare_use_video = DeclareLaunchArgument(
         'use_video', default_value='True',
         description='Enable main video stream.')
-    declare_compression_format = DeclareLaunchArgument(
-        'compression_format', default_value='jpeg',
-        description='Compression format for the video stream (jpeg or png).')
-    declare_jpeg_quality = DeclareLaunchArgument(
-        'jpeg_quality', default_value='90',
-        description='JPEG compression quality (0-100).')
 
     # -------------------------------------------------------
-    # URDF Launch (Publishes Robot Description and Robot State Publisher)
+    # URDF Launch
     # -------------------------------------------------------
     urdf_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -84,8 +64,8 @@ def generate_launch_description():
         launch_arguments={
             'tf_prefix': tf_prefix_lc,
             'camera_model': camera_model_lc,
-            'base_frame': head_camera_link_lc, # URDF base frame is directly the head_camera_link
-            'parent_frame': head_camera_link_lc, # Parent is also head_camera_link (no offset)
+            'base_frame': head_camera_link_lc,
+            'parent_frame': head_camera_link_lc,
             'cam_pos_x': '0.0', 'cam_pos_y': '0.0', 'cam_pos_z': '0.0',
             'cam_roll': '0.0', 'cam_pitch': '0.0', 'cam_yaw': '0.0'
         }.items()
@@ -105,15 +85,13 @@ def generate_launch_description():
             'color_resolution': LaunchConfiguration('color_resolution'),
             'fps': LaunchConfiguration('fps'),
             'use_video': LaunchConfiguration('use_video'),
-            'compression_format': LaunchConfiguration('compression_format'),
-            'jpeg_quality': LaunchConfiguration('jpeg_quality'),
             'mxId': mxId_lc,
             'usb2Mode': usb2Mode_lc,
         }]
     )
 
     # -------------------------------------------------------
-    # Assemble the Launch Description
+    # Assemble Launch Description
     # -------------------------------------------------------
     ld = LaunchDescription()
 
@@ -126,8 +104,6 @@ def generate_launch_description():
     ld.add_action(declare_color_resolution)
     ld.add_action(declare_fps)
     ld.add_action(declare_use_video)
-    ld.add_action(declare_compression_format)
-    ld.add_action(declare_jpeg_quality)
 
     # Add nodes and other launch actions
     ld.add_action(urdf_launch)
