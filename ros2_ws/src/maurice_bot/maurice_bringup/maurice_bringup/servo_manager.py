@@ -91,34 +91,43 @@ class ServoManager(Node):
                 self.verify_servo_configuration(dev, found, len(found))
                 self.get_logger().warn(f"Unexpected servo count on {dev}")
         
-        # Set parameters if both devices found
-        if arm_device and head_device:
-            self.get_logger().info("Setting ROS parameters...")
-            
-            # Set parameters
-            self.declare_parameter('ready', False)
+        # Set parameters for any devices found
+        self.get_logger().info("Setting ROS parameters...")
+        
+        # Determine if we're ready (both devices found)
+        ready = arm_device is not None and head_device is not None
+        
+        # Always declare and set ready parameter
+        self.declare_parameter('ready', False)
+        params_to_set = [
+            rclpy.parameter.Parameter('ready', rclpy.Parameter.Type.BOOL, ready)
+        ]
+        
+        # Only declare and set device parameters if devices are found
+        if arm_device:
             self.declare_parameter('arm_device', '')
-            self.declare_parameter('head_device', '')
-            
-            self.set_parameters([
-                rclpy.parameter.Parameter('ready', rclpy.Parameter.Type.BOOL, True),
-                rclpy.parameter.Parameter('arm_device', rclpy.Parameter.Type.STRING, arm_device),
-                rclpy.parameter.Parameter('head_device', rclpy.Parameter.Type.STRING, head_device)
-            ])
-            
-            self.get_logger().info(f"Parameters set - ready: True, arm_device: {arm_device}, head_device: {head_device}")
+            params_to_set.append(
+                rclpy.parameter.Parameter('arm_device', rclpy.Parameter.Type.STRING, arm_device)
+            )
+            self.get_logger().info(f"Arm device parameter set: {arm_device}")
         else:
-            self.get_logger().error("Could not identify both arm and head devices!")
-            if not arm_device:
-                self.get_logger().error("Arm device (6 servos) not found")
-            if not head_device:
-                self.get_logger().error("Head device (1 servo) not found")
-            
-            # Set ready to false
-            self.declare_parameter('ready', False)
-            self.set_parameters([
-                rclpy.parameter.Parameter('ready', rclpy.Parameter.Type.BOOL, False)
-            ])
+            self.get_logger().warn("Arm device (6 servos) not found")
+        
+        if head_device:
+            self.declare_parameter('head_device', '')
+            params_to_set.append(
+                rclpy.parameter.Parameter('head_device', rclpy.Parameter.Type.STRING, head_device)
+            )
+            self.get_logger().info(f"Head device parameter set: {head_device}")
+        else:
+            self.get_logger().warn("Head device (1 servo) not found")
+        
+        self.set_parameters(params_to_set)
+        
+        if ready:
+            self.get_logger().info(f"All devices found - ready: True")
+        else:
+            self.get_logger().warn("Not all devices found - ready: False")
 
 def main(args=None):
     rclpy.init(args=args)
