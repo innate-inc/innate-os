@@ -31,39 +31,31 @@ def generate_launch_description():
     camera_model_lc = LaunchConfiguration('camera_model')
     tf_prefix_lc    = LaunchConfiguration('tf_prefix')
     
-    # Frame related LaunchConfigurations for TF and URDF
-    base_link_lc   = LaunchConfiguration('base_link')
-    camera_link_lc = LaunchConfiguration('camera_link')
-    oak_d_base_lc  = LaunchConfiguration('oak_d_base')
+    # Frame related LaunchConfigurations for URDF
+    head_camera_link_lc = LaunchConfiguration('head_camera_link')
 
     # -------------------------------------------------------
     # Declare Launch Arguments
     # -------------------------------------------------------
 
     # --- TF Frame Arguments ---
-    declare_base_link = DeclareLaunchArgument(
-        'base_link', default_value='base_link',
-        description='Robot base frame for the static transform.')
-    declare_camera_link = DeclareLaunchArgument(
-        'camera_link', default_value='camera_link',
-        description='Intermediate frame: child of static transform, parent of URDF oak_d_base.')
-    declare_oak_d_base = DeclareLaunchArgument(
-        'oak_d_base', default_value='oak_d_base',
-        description='Base frame of the camera, as defined in URDF (child of camera_link).')
-
-    # --- Static Transform Publisher Arguments (base_link to camera_link pose) ---
-    declare_measured_cam_pos_x = DeclareLaunchArgument('measured_cam_pos_x', default_value='0.01039', description='Measured camera X offset from base_link.')
-    declare_measured_cam_pos_y = DeclareLaunchArgument('measured_cam_pos_y', default_value='0.00708', description='Measured camera Y offset from base_link.')
-    declare_measured_cam_pos_z = DeclareLaunchArgument('measured_cam_pos_z', default_value='0.1976', description='Measured camera Z offset from base_link.')
-    declare_measured_cam_roll  = DeclareLaunchArgument('measured_cam_roll', default_value='0.0', description='Measured camera roll offset from base_link (radians).')
-    declare_measured_cam_pitch = DeclareLaunchArgument('measured_cam_pitch', default_value='0.17453', description='Measured camera pitch offset from base_link (radians).') # Default 10 deg
-    declare_measured_cam_yaw   = DeclareLaunchArgument('measured_cam_yaw', default_value='0.0', description='Measured camera yaw offset from base_link (radians).')
+    declare_head_camera_link = DeclareLaunchArgument(
+        'head_camera_link', default_value='head_camera_link',
+        description='Head camera frame published by head transform node ')
 
     # --- Device and Model Arguments (for URDF and Camera Driver) ---
-    declare_mxId = DeclareLaunchArgument('mxId', default_value='', description='MXID of the OAK device. Empty for first available.')
-    declare_usb2Mode = DeclareLaunchArgument('usb2Mode', default_value='True', description='Enable USB2 mode for the OAK device.')
-    declare_camera_model = DeclareLaunchArgument('camera_model', default_value='OAK-D', description='The model of the OAK camera (e.g., OAK-D, OAK-D-LITE). Used for URDF.')
-    declare_tf_prefix = DeclareLaunchArgument('tf_prefix', default_value='oak', description='Namespace for TF frames (e.g., oak/rgb_camera_optical_frame).')
+    declare_mxId = DeclareLaunchArgument(
+        'mxId', default_value='', 
+        description='MXID of the OAK device. Empty for first available.')
+    declare_usb2Mode = DeclareLaunchArgument(
+        'usb2Mode', default_value='True', 
+        description='Enable USB2 mode for the OAK device.')
+    declare_camera_model = DeclareLaunchArgument(
+        'camera_model', default_value='OAK-D', 
+        description='The model of the OAK camera (e.g., OAK-D, OAK-D-LITE). Used for URDF.')
+    declare_tf_prefix = DeclareLaunchArgument(
+        'tf_prefix', default_value='oak', 
+        description='Namespace for TF frames (e.g., oak/rgb_camera_optical_frame).')
 
     # --- Custom Camera Driver Specific Arguments ---
     declare_color_resolution = DeclareLaunchArgument(
@@ -92,40 +84,15 @@ def generate_launch_description():
         launch_arguments={
             'tf_prefix': tf_prefix_lc,
             'camera_model': camera_model_lc,
-            'base_frame': oak_d_base_lc, # URDF's own base frame, child of camera_link
-            'parent_frame': camera_link_lc, # Connects URDF to the rest of the TF tree
+            'base_frame': head_camera_link_lc, # URDF base frame is directly the head_camera_link
+            'parent_frame': head_camera_link_lc, # Parent is also head_camera_link (no offset)
             'cam_pos_x': '0.0', 'cam_pos_y': '0.0', 'cam_pos_z': '0.0',
             'cam_roll': '0.0', 'cam_pitch': '0.0', 'cam_yaw': '0.0'
         }.items()
     )
 
     # -------------------------------------------------------
-    # Static Transform Publisher (base_link -> camera_link)
-    # -------------------------------------------------------
-    def launch_static_tf_func(context, *args, **kwargs):
-        x = float(LaunchConfiguration('measured_cam_pos_x').perform(context))
-        y = float(LaunchConfiguration('measured_cam_pos_y').perform(context))
-        z = float(LaunchConfiguration('measured_cam_pos_z').perform(context))
-        roll = float(LaunchConfiguration('measured_cam_roll').perform(context))
-        pitch = float(LaunchConfiguration('measured_cam_pitch').perform(context))
-        yaw = float(LaunchConfiguration('measured_cam_yaw').perform(context))
-        qx, qy, qz, qw = euler_to_quat(roll, pitch, yaw)
-        
-        return [launch_ros.actions.Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='static_tf_base_to_camera',
-            output='screen',
-            arguments=[
-                str(x), str(y), str(z),
-                str(qx), str(qy), str(qz), str(qw),
-                base_link_lc.perform(context), camera_link_lc.perform(context)
-            ]
-        )]
-    static_tf_action = OpaqueFunction(function=launch_static_tf_func)
-
-    # -------------------------------------------------------
-    # Custom Camera Driver Node
+    # Camera Driver Node
     # -------------------------------------------------------
     camera_driver_node = launch_ros.actions.Node(
         package='maurice_bringup',
@@ -151,15 +118,7 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     # Add declared arguments to the LaunchDescription
-    ld.add_action(declare_base_link)
-    ld.add_action(declare_camera_link)
-    ld.add_action(declare_oak_d_base)
-    ld.add_action(declare_measured_cam_pos_x)
-    ld.add_action(declare_measured_cam_pos_y)
-    ld.add_action(declare_measured_cam_pos_z)
-    ld.add_action(declare_measured_cam_roll)
-    ld.add_action(declare_measured_cam_pitch)
-    ld.add_action(declare_measured_cam_yaw)
+    ld.add_action(declare_head_camera_link)
     ld.add_action(declare_mxId)
     ld.add_action(declare_usb2Mode)
     ld.add_action(declare_camera_model)
@@ -172,7 +131,6 @@ def generate_launch_description():
 
     # Add nodes and other launch actions
     ld.add_action(urdf_launch)
-    ld.add_action(static_tf_action)
     ld.add_action(camera_driver_node)
 
     return ld
