@@ -5,8 +5,7 @@ from rclpy.node import Node
 from rcl_interfaces.srv import GetParameters
 from std_msgs.msg import Int32, String, Empty
 from std_srvs.srv import SetBool  # Import service message type
-from geometry_msgs.msg import TransformStamped
-from tf2_ros import TransformBroadcaster
+
 
 # Import Dynamixel classes from maurice_arm package
 from maurice_arm.dynamixel import Dynamixel, OperatingMode
@@ -382,120 +381,12 @@ class HeadServoNode(Node):
         return response
 
 
-class HeadTransformPublisher(Node):
-    def __init__(self):
-        super().__init__("head_transform_publisher")
-        
-        # Head servo physical parameters (in meters)
-        self.servo_joint_position = {
-            'x': -0.04327,  # -43.27mm
-            'y': 0.0,
-            'z': 0.25783   # 257.83mm
-        }
-        self.camera_distance = 0.04634  # 46.34mm from servo joint to camera
-        self.horizontal_angle = 30.0  # Logical angle where head points straight forward
-        
-        # Initialize transform broadcaster
-        self.tf_broadcaster = TransformBroadcaster(self)
-        
-        # Subscribe to head position updates
-        self.head_position_subscription = self.create_subscription(
-            String,
-            "head/current_position",
-            self.head_position_callback,
-            10
-        )
-        
-        # Timer for publishing transforms at 10Hz
-        self.timer = self.create_timer(0.1, self.publish_transform)  # 10Hz = 0.1s
-        
-        # Current head angle (initialized to default)
-        self.current_head_angle = DEFAULT_ANGLE
-        
-        self.get_logger().info("Head Transform Publisher initialized")
-        self.get_logger().info(f"Servo joint position: {self.servo_joint_position}")
-        self.get_logger().info(f"Camera distance from joint: {self.camera_distance}m")
-        self.get_logger().info(f"Horizontal reference angle: {self.horizontal_angle}°")
-
-    def head_position_callback(self, msg):
-        """Callback to update current head angle from head servo node."""
-        try:
-            position_data = json.loads(msg.data)
-            self.current_head_angle = position_data.get('current_position', DEFAULT_ANGLE)
-        except (json.JSONDecodeError, KeyError) as e:
-            self.get_logger().warn(f"Failed to parse head position data: {e}")
-
-    def publish_transform(self):
-        """Publish the dynamic transform from base_link to head_camera_link."""
-        try:
-            # Calculate the camera position based on head angle
-            # The head rotates around the servo joint, with the camera at a fixed distance
-            
-            # Convert logical angle to rotation (head horizontal at 30° logical)
-            # When logical angle = 30°, the head points straight forward (pitch = 0)
-            # So the actual pitch rotation is: (30° - current_angle)
-            pitch_rotation_deg = self.horizontal_angle - self.current_head_angle
-            pitch_rotation_rad = math.radians(pitch_rotation_deg)
-            
-            # Calculate camera position relative to base_link
-            # Camera is offset from servo joint by camera_distance in the direction the head is pointing
-            camera_x = self.servo_joint_position['x'] + self.camera_distance * math.cos(pitch_rotation_rad)
-            camera_y = self.servo_joint_position['y']  # No Y movement for head tilt
-            camera_z = self.servo_joint_position['z'] + self.camera_distance * math.sin(pitch_rotation_rad)
-            
-            # Create transform message
-            transform = TransformStamped()
-            transform.header.stamp = self.get_clock().now().to_msg()
-            transform.header.frame_id = "base_link"
-            transform.child_frame_id = "head_camera_link"
-            
-            # Set translation
-            transform.transform.translation.x = camera_x
-            transform.transform.translation.y = camera_y
-            transform.transform.translation.z = camera_z
-            
-            # Set rotation (pitch rotation around Y axis)
-            # Convert pitch angle to quaternion
-            qx = 0.0
-            qy = math.sin(-pitch_rotation_rad / 2.0)  # Negative because ROS uses right-hand rule
-            qz = 0.0
-            qw = math.cos(-pitch_rotation_rad / 2.0)
-            
-            transform.transform.rotation.x = qx
-            transform.transform.rotation.y = qy
-            transform.transform.rotation.z = qz
-            transform.transform.rotation.w = qw
-            
-            # Publish the transform
-            self.tf_broadcaster.sendTransform(transform)
-            
-        except Exception as e:
-            self.get_logger().error(f"Failed to publish head transform: {e}")
-
-
 def main(args=None):
     rclpy.init(args=args)
-    
-    # Create both nodes
-    head_servo_node = HeadServoNode()
-    head_transform_node = HeadTransformPublisher()
-    
-    # Use MultiThreadedExecutor to run both nodes concurrently
-    from rclpy.executors import MultiThreadedExecutor
-    executor = MultiThreadedExecutor()
-    executor.add_node(head_servo_node)
-    executor.add_node(head_transform_node)
-    
-    try:
-        executor.spin()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        # Cleanup
-        head_servo_node.destroy_node()
-        head_transform_node.destroy_node()
-        executor.shutdown()
-        rclpy.shutdown()
+    node = HeadServoNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 
 if __name__ == "__main__":
