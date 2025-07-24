@@ -28,15 +28,22 @@ class GetChessMove(Primitive):
         self.chessboard_height = 25  # mm height of board
         
         # Stockfish configuration
-        self.stockfish_elo = 1000
+        self.stockfish_elo = 1500
         self.stockfish_engine = None
         
         # Camera image state
         self.last_main_camera_image_b64 = None
         
+        # Load chess piece classification model
+        self.chess_model = self._load_chess_model()
+        
         self.logger.info("GetChessMove primitive initialized")
         self.logger.info(f"Initial board FEN: {self.board_fen}")
         self.logger.info(f"Stockfish ELO: {self.stockfish_elo}")
+        if self.chess_model is not None:
+            self.logger.info("✅ Chess piece classification model loaded successfully")
+        else:
+            self.logger.warning("⚠️  Chess piece classification model failed to load")
 
     @property
     def name(self):
@@ -54,7 +61,60 @@ class GetChessMove(Primitive):
         if self.last_main_camera_image_b64:
             self.logger.debug("[GetChessMove] Received camera image for analysis")
         else:
-            self.logger.warning("[GetChessMove] No camera image received")
+            self.logger.warning("[GetChessMove] No camera image received"        )
+
+    def _load_chess_model(self):
+        """Load the chess piece classification model."""
+        try:
+            import torch
+            import torch.nn as nn
+            import torch.nn.functional as F
+            
+            # Import the ChessCNN class from update_board_state
+            from brain_client.utils.chess.update_board_state import ChessCNN, device
+            
+            # Common model file paths to try
+            model_paths = [
+                "chess_square_classifier.pth",
+                "ros2_ws/chess_square_classifier.pth", 
+                "brain_client/chess_square_classifier.pth",
+                "/home/jetson1/maurice-prod/ros2_ws/src/brain/brain_client/brain_client/utils/chess/chess_square_classifier.pth",
+                "chess_model.pth",
+                os.path.join(os.path.expanduser("~"), "chess_square_classifier.pth"),
+                os.path.join(os.path.expanduser("~"), "maurice-prod", "chess_square_classifier.pth")
+            ]
+            
+            model = None
+            model_path_found = None
+            
+            for model_path in model_paths:
+                if os.path.exists(model_path):
+                    model_path_found = model_path
+                    break
+            
+            if model_path_found is None:
+                self.logger.error("❌ Chess model file not found in any of the expected locations:")
+                self.logger.error(f"🗂️  Current working directory: {os.getcwd()}")
+                for path in model_paths:
+                    abs_path = os.path.abspath(path)
+                    self.logger.error(f"   - {path} -> {abs_path}")
+                self.logger.error("💡 Please place your trained model file in one of these locations")
+                return None
+            
+            # Load the model
+            model = ChessCNN(num_classes=3)
+            model.load_state_dict(torch.load(model_path_found, map_location=device))
+            model.to(device)
+            model.eval()
+            
+            self.logger.info(f"✅ Loaded chess model from: {model_path_found}")
+            self.logger.info(f"📱 Using device: {device}")
+            
+            return model
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error loading chess model: {e}")
+            return None
 
     def guidelines(self):
         return (
@@ -150,13 +210,21 @@ class GetChessMove(Primitive):
         try:
             self.logger.info(f"🔄 Updating board state from image")
             self.logger.info(f"Current FEN: {self.board_fen}")
+            self.logger.info(f"🔍 Debug images will be saved to /tmp/chess_debug/")
             
-            # Use the update_board_state function with stored corners
+            # Check if model is loaded
+            if self.chess_model is None:
+                self.logger.error("❌ Chess model not loaded - tile classification will fail")
+            
+            # Use the update_board_state function with stored corners and loaded model
+            # Enable debug image saving for troubleshooting
             new_fen, detected_move = get_new_fen(
                 image_path, 
                 self.board_fen, 
+                self.chess_model,
                 confidence_threshold=0.99, 
-                corners=self.board_corners
+                corners=self.board_corners,
+                save_debug_images=True  # Enable debug images
             )
             
             board_updated = (new_fen != self.board_fen)
@@ -284,7 +352,11 @@ class GetChessMove(Primitive):
             self.logger.info("✅ GetChessMove completed successfully")
             self.logger.info(f"📤 Result: {result}")
             
-            return result, PrimitiveResult.SUCCESS
+            # Convert result to JSON string for ROS2 action compatibility
+            import json
+            result_message = json.dumps(result)
+            
+            return result_message, PrimitiveResult.SUCCESS
 
         except Exception as e:
             error_msg = f"Unexpected error during chess move calculation: {e}"
