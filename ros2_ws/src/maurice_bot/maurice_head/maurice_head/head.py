@@ -6,6 +6,9 @@ from rcl_interfaces.srv import GetParameters
 from std_msgs.msg import Int32, String, Empty
 from std_srvs.srv import SetBool  # Import service message type
 
+# Add tf2_ros imports for dynamic transform publishing
+import tf2_ros
+from geometry_msgs.msg import TransformStamped
 
 # Import Dynamixel classes from maurice_arm package
 from maurice_arm.dynamixel import Dynamixel, OperatingMode
@@ -17,6 +20,122 @@ DEFAULT_ANGLE = 0  # Logical angle
 # Remove hardcoded limits - will be parameters now
 # MIN_ANGLE = -40
 # MAX_ANGLE = 70
+
+
+class HeadTransformNode(Node):
+    """Node that publishes dynamic transform for head camera based on servo position"""
+    
+    def __init__(self):
+        super().__init__("head_transform_node")
+        
+        # Declare parameters for head geometry
+        self.declare_parameter("servo_joint_x", -0.04327)  # -43.27mm in meters
+        self.declare_parameter("servo_joint_z", 0.25783)   # 257.83mm in meters
+        self.declare_parameter("camera_distance", 0.04634)  # 46.34mm in meters
+        self.declare_parameter("horizontal_angle", -30.0)   # Angle where head points straight forward
+        self.declare_parameter("transform_frequency", 10.0)  # 10Hz
+        self.declare_parameter("parent_frame", "base_link")
+        self.declare_parameter("child_frame", "head_camera_link")
+        
+        # Get parameters
+        self.servo_joint_x = self.get_parameter("servo_joint_x").value
+        self.servo_joint_z = self.get_parameter("servo_joint_z").value
+        self.camera_distance = self.get_parameter("camera_distance").value
+        self.horizontal_angle = self.get_parameter("horizontal_angle").value
+        self.transform_frequency = self.get_parameter("transform_frequency").value
+        self.parent_frame = self.get_parameter("parent_frame").value
+        self.child_frame = self.get_parameter("child_frame").value
+        
+        # Initialize transform broadcaster
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        
+        # Subscribe to head position updates
+        self.position_subscription = self.create_subscription(
+            String,
+            "head/current_position",
+            self.position_callback,
+            10
+        )
+        
+        # Current head angle (initialized to horizontal position)
+        self.current_head_angle = self.horizontal_angle
+        
+        # Create timer for transform publishing
+        self.timer = self.create_timer(
+            1.0 / self.transform_frequency, 
+            self.publish_transform
+        )
+        
+        self.get_logger().info(f"Head transform node initialized")
+        self.get_logger().info(f"Servo joint position: x={self.servo_joint_x:.4f}m, z={self.servo_joint_z:.4f}m")
+        self.get_logger().info(f"Camera distance: {self.camera_distance:.4f}m")
+        self.get_logger().info(f"Horizontal angle: {self.horizontal_angle}°")
+        self.get_logger().info(f"Publishing transform at {self.transform_frequency}Hz")
+    
+    def position_callback(self, msg):
+        """Callback to receive current head position from head servo node"""
+        try:
+            position_data = json.loads(msg.data)
+            self.current_head_angle = position_data.get("current_position", self.horizontal_angle)
+        except (json.JSONDecodeError, KeyError) as e:
+            self.get_logger().warn(f"Failed to parse head position: {e}")
+    
+    def calculate_camera_transform(self, head_angle_deg):
+        """Calculate camera position and orientation based on head servo angle"""
+        # Convert angle to radians
+        head_angle_rad = math.radians(head_angle_deg)
+        
+        # Calculate camera position relative to servo joint
+        # The camera is mounted at a distance from the servo joint
+        # When head_angle is horizontal_angle (-30°), camera points straight forward
+        camera_x_offset = self.camera_distance * math.cos(head_angle_rad)
+        camera_z_offset = self.camera_distance * math.sin(head_angle_rad)
+        
+        # Calculate final camera position relative to base_link
+        camera_x = self.servo_joint_x + camera_x_offset
+        camera_y = 0.0  # Assuming no Y offset
+        camera_z = self.servo_joint_z + camera_z_offset
+        
+        # Calculate camera orientation (rotation around Y axis)
+        # The camera rotates with the head servo
+        camera_pitch = -head_angle_rad
+        
+        # Convert to quaternion (rotation around Y axis)
+        qx = 0.0
+        qy = math.sin(camera_pitch / 2.0)
+        qz = 0.0
+        qw = math.cos(camera_pitch / 2.0)
+        
+        return camera_x, camera_y, camera_z, qx, qy, qz, qw
+    
+    def publish_transform(self):
+        """Publish the dynamic transform for the head camera"""
+        try:
+            # Calculate camera transform
+            x, y, z, qx, qy, qz, qw = self.calculate_camera_transform(self.current_head_angle)
+            
+            # Create transform message
+            transform = TransformStamped()
+            transform.header.stamp = self.get_clock().now().to_msg()
+            transform.header.frame_id = self.parent_frame
+            transform.child_frame_id = self.child_frame
+            
+            # Set translation
+            transform.transform.translation.x = x
+            transform.transform.translation.y = y
+            transform.transform.translation.z = z
+            
+            # Set rotation
+            transform.transform.rotation.x = qx
+            transform.transform.rotation.y = qy
+            transform.transform.rotation.z = qz
+            transform.transform.rotation.w = qw
+            
+            # Broadcast transform
+            self.tf_broadcaster.sendTransform(transform)
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish transform: {e}")
 
 
 class HeadServoNode(Node):
@@ -42,8 +161,8 @@ class HeadServoNode(Node):
         self.declare_parameter("kp", 400.0)  # PID proportional gain
         self.declare_parameter("ki", 1011.0)   # PID integral gain  
         self.declare_parameter("kd", 0.0)   # PID derivative gain
-        self.declare_parameter("min_position_limit", -30.0)  # Minimum angle limit
-        self.declare_parameter("max_position_limit", 15.0)   # Maximum angle limit
+        self.declare_parameter("min_position_limit", -25.0)  # Minimum angle limit
+        self.declare_parameter("max_position_limit", 30.0)   # Maximum angle limit
 
         # Get parameters
         self.servo_id = self.get_parameter('servo_id').value
@@ -78,7 +197,7 @@ class HeadServoNode(Node):
 
         self.get_logger().info(f"Connected to Dynamixel at {device_name}")
 
-        self.get_logger().info(f"Using servo ID: {self.servo_id}")
+        self.get_logger().info(f"Using servo ID: {self. servo_id}")
         self.get_logger().info(
             f"Position offset: {self.position_offset} encoder counts"
         )
@@ -383,10 +502,26 @@ class HeadServoNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = HeadServoNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    
+    # Create both nodes
+    head_servo_node = HeadServoNode()
+    head_transform_node = HeadTransformNode()
+    
+    # Use MultiThreadedExecutor to run both nodes
+    from rclpy.executors import MultiThreadedExecutor
+    executor = MultiThreadedExecutor()
+    executor.add_node(head_servo_node)
+    executor.add_node(head_transform_node)
+    
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Clean up nodes
+        head_servo_node.destroy_node()
+        head_transform_node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
