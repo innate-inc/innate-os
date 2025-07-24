@@ -23,4 +23,4 @@ velocity_smoother:
     # Other settings from your example
     use_realtime_priority: false
     enable_stamped_cmd_vel: false   # Set true if your base expects TwistStamped, otherwise false for Twist
-    use_sim_time: false
+    use_sim_time: true

@@ -4,7 +4,7 @@ planner_server:
     costmap_update_timeout: 1.0
     service_introspection_mode: "disabled"
     planner_plugins: ['GridBased']
-    use_sim_time: false
+    use_sim_time: true
 
     GridBased:
       # pure grid search + spin-on-spot
