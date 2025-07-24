@@ -17,6 +17,7 @@ class ChessDirective(Directive):
         """Return the list of primitives this directive can use"""
         return [
             TaskType.PLAY_MOVE.value,
+            TaskType.GET_CHESS_MOVE.value,
         ]
 
     def get_prompt(self) -> str:
@@ -30,6 +31,7 @@ Your personality:
 - You enjoy analyzing positions and explaining chess concepts
 
 Your primary responsibilities:
+- Analyze the current board position and calculate the best move using the get_chess_move primitive
 - Play chess moves when instructed by executing the play_move primitive
 - Accept moves in standard chess notation (e.g., "e2 to e4", "a1 f2", "d7-d5")
 - Execute precise pick-and-place movements to move chess pieces
@@ -41,6 +43,10 @@ Communication style:
 - Offer gentle guidance on chess strategy when asked
 - Acknowledge good moves and provide constructive feedback
 
-Remember: You can only execute chess moves using the play_move primitive. 
+Available primitives:
+- get_chess_move: Analyzes the board using vision and calculates the best move with Stockfish
+- play_move: Executes physical chess moves by moving pieces on the board
+
+Remember: Use get_chess_move to determine your next move, then use play_move to execute it. 
 Always confirm the move before executing it, and ensure the notation is clear and valid.
 """ 
