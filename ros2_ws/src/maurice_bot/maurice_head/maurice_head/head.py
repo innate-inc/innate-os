@@ -29,7 +29,7 @@ class HeadServoNode(Node):
         self.declare_parameter("pwm_limit", 885)
         self.declare_parameter("current_limit", 500)
         self.declare_parameter(
-            "position_offset", -341
+            "position_offset", 341
         )  # Encoder offset for calibration
         self.declare_parameter(
             "control_frequency", 50
@@ -41,9 +41,9 @@ class HeadServoNode(Node):
         # Add new parameters
         self.declare_parameter("kp", 400.0)  # PID proportional gain
         self.declare_parameter("ki", 1011.0)   # PID integral gain  
-        self.declare_parameter("kd", 539.0)   # PID derivative gain
-        self.declare_parameter("min_position_limit", -20.0)  # Minimum angle limit
-        self.declare_parameter("max_position_limit", 30.0)   # Maximum angle limit
+        self.declare_parameter("kd", 0.0)   # PID derivative gain
+        self.declare_parameter("min_position_limit", -30.0)  # Minimum angle limit
+        self.declare_parameter("max_position_limit", 15.0)   # Maximum angle limit
 
         # Get parameters
         self.servo_id = self.get_parameter('servo_id').value
@@ -91,7 +91,7 @@ class HeadServoNode(Node):
         # Track current position (in logical angles)
         self.current_position = DEFAULT_ANGLE
 
-        # Move to default position
+        # Move to default position on startup
         self._move_to_logical_angle(DEFAULT_ANGLE)
 
         # Subscription for position control
@@ -193,7 +193,33 @@ class HeadServoNode(Node):
             self.dynamixel._disable_torque(self.servo_id)
             time.sleep(0.5)
 
-            # Set operating mode to position control FIRST (before other configurations)
+            # Convert angle limits to encoder values relative to actual servo center
+            # Note: Since we reverse direction, min_position_limit maps to max servo position and vice versa
+            # Using: encoder_value = int((angle_rad / (2*pi)) * 4096 + 2048) - NO OFFSET for limits
+            min_servo_rad = math.radians(-self.max_position_limit)  # Logical MAX becomes servo MIN
+            max_servo_rad = math.radians(-self.min_position_limit)  # Logical MIN becomes servo MAX
+            min_encoder = int(
+                (min_servo_rad / (2 * math.pi)) * 4096 + 2048
+            )
+            max_encoder = int(
+                (max_servo_rad / (2 * math.pi)) * 4096 + 2048
+            )
+
+            # Try setting position limits BEFORE setting operating mode
+            self.get_logger().info(
+                f"Setting position limits: {min_encoder} (min) to {max_encoder} (max)"
+            )
+            try:
+                self.dynamixel.set_min_position_limit(self.servo_id, min_encoder)
+                time.sleep(0.1)
+                self.dynamixel.set_max_position_limit(self.servo_id, max_encoder)
+                time.sleep(0.1)
+                self.get_logger().info("Successfully set position limits")
+            except Exception as e:
+                self.get_logger().warn(f"Failed to set position limits: {str(e)}")
+                self.get_logger().info("Continuing without hardware position limits")
+
+            # Set operating mode to position control AFTER trying position limits
             self.get_logger().info("Setting operating mode to POSITION")
             self.dynamixel.set_operating_mode(self.servo_id, OperatingMode.POSITION)
             time.sleep(0.5)
@@ -219,26 +245,6 @@ class HeadServoNode(Node):
             self.dynamixel.set_home_offset(self.servo_id, self.position_offset)
             time.sleep(0.1)
 
-            # Convert angle limits to encoder values relative to actual servo center
-            # Note: Since we reverse direction, min_position_limit maps to max servo position and vice versa
-            # Using: encoder_value = int((angle_rad / (2*pi)) * 4096 + 2048 + offset)
-            min_servo_rad = math.radians(-self.max_position_limit)  # Logical MAX becomes servo MIN
-            max_servo_rad = math.radians(-self.min_position_limit)  # Logical MIN becomes servo MAX
-            min_encoder = int(
-                (min_servo_rad / (2 * math.pi)) * 4096 + 2048 + self.position_offset
-            )
-            max_encoder = int(
-                (max_servo_rad / (2 * math.pi)) * 4096 + 2048 + self.position_offset
-            )
-
-            self.get_logger().info(
-                f"Setting position limits: {min_encoder} (min) to {max_encoder} (max)"
-            )
-            self.dynamixel.set_min_position_limit(self.servo_id, min_encoder)
-            time.sleep(0.1)
-            self.dynamixel.set_max_position_limit(self.servo_id, max_encoder)
-            time.sleep(0.1)
-
             # Set PWM limit
             self.get_logger().info(f"Setting PWM limit: {pwm_limit}")
             self.dynamixel.set_pwm_limit(self.servo_id, pwm_limit)
@@ -259,21 +265,19 @@ class HeadServoNode(Node):
             raise
 
     def _logical_angle_to_encoder(self, logical_angle):
-        """Convert logical angle to encoder value with offset and direction reversal"""
+        """Convert logical angle to encoder value with direction reversal only"""
         # Reverse the angle direction (positive becomes negative, negative becomes positive)
         reversed_angle = -logical_angle
         # Convert logical angle to radians
         angle_rad = math.radians(reversed_angle)
-        # Convert to encoder value and apply offset
-        encoder_value = int(
-            (angle_rad / (2 * math.pi)) * 4096 + 2048 + self.position_offset
-        )
+        # Convert to encoder value - NO manual offset since servo handles it via homing offset
+        encoder_value = int((angle_rad / (2 * math.pi)) * 4096 + 2048)
         return encoder_value
 
     def _encoder_to_logical_angle(self, encoder_value):
-        """Convert encoder value to logical angle with offset and direction reversal"""
-        # Convert encoder value to radians, removing offset
-        angle_rad = (encoder_value - 2048 - self.position_offset) * (2 * math.pi) / 4096
+        """Convert encoder value to logical angle with direction reversal only"""
+        # Convert encoder value to radians - NO manual offset since servo handles it via homing offset
+        angle_rad = (encoder_value - 2048) * (2 * math.pi) / 4096
         # Convert to degrees
         servo_angle = math.degrees(angle_rad)
         # Reverse the direction to get logical angle (since we reversed it when sending)
