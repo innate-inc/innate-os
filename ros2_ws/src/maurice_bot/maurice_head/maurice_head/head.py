@@ -14,8 +14,9 @@ import math
 import time
 
 DEFAULT_ANGLE = 0  # Logical angle
-MIN_ANGLE = -40
-MAX_ANGLE = 70
+# Remove hardcoded limits - will be parameters now
+# MIN_ANGLE = -40
+# MAX_ANGLE = 70
 
 
 class HeadServoNode(Node):
@@ -28,7 +29,7 @@ class HeadServoNode(Node):
         self.declare_parameter("pwm_limit", 885)
         self.declare_parameter("current_limit", 500)
         self.declare_parameter(
-            "position_offset", -445
+            "position_offset", -341
         )  # Encoder offset for calibration
         self.declare_parameter(
             "control_frequency", 50
@@ -36,6 +37,13 @@ class HeadServoNode(Node):
         self.declare_parameter(
             "ai_position", -20
         )  # AI position angle for recording and policy execution
+        
+        # Add new parameters
+        self.declare_parameter("kp", 400.0)  # PID proportional gain
+        self.declare_parameter("ki", 1011.0)   # PID integral gain  
+        self.declare_parameter("kd", 539.0)   # PID derivative gain
+        self.declare_parameter("min_position_limit", -20.0)  # Minimum angle limit
+        self.declare_parameter("max_position_limit", 30.0)   # Maximum angle limit
 
         # Get parameters
         self.servo_id = self.get_parameter('servo_id').value
@@ -45,6 +53,13 @@ class HeadServoNode(Node):
         self.position_offset = self.get_parameter('position_offset').value
         control_frequency = self.get_parameter('control_frequency').value
         self.ai_position = self.get_parameter('ai_position').value
+        
+        # Get new parameters
+        self.kp = self.get_parameter('kp').value
+        self.ki = self.get_parameter('ki').value  
+        self.kd = self.get_parameter('kd').value
+        self.min_position_limit = self.get_parameter('min_position_limit').value
+        self.max_position_limit = self.get_parameter('max_position_limit').value
 
         # Wait for servo_manager to be ready and get device name
         self.get_logger().info("Waiting for servo_manager to be ready...")
@@ -67,6 +82,8 @@ class HeadServoNode(Node):
         self.get_logger().info(
             f"Position offset: {self.position_offset} encoder counts"
         )
+        self.get_logger().info(f"PID gains - kp: {self.kp}, ki: {self.ki}, kd: {self.kd}")
+        self.get_logger().info(f"Position limits: {self.min_position_limit}° to {self.max_position_limit}°")
 
         # Configure servo
         self._configure_servo(pwm_limit, current_limit)
@@ -109,7 +126,7 @@ class HeadServoNode(Node):
         self.get_logger().info(f"Control frequency: {control_frequency} Hz")
 
     def wait_for_servo_manager(self):
-        """Wait for servo_manager to be ready and return the head device name."""
+        """Wait for servo_manager to provide head device name."""
         # Create a client to get parameters from servo_manager
         param_client = self.create_client(GetParameters, '/servo_manager/get_parameters')
         
@@ -119,13 +136,13 @@ class HeadServoNode(Node):
             self.get_logger().error(f"servo_manager parameter service not available after {timeout_sec} seconds")
             return None
         
-        # Poll for the ready parameter
+        # Poll for the head_device parameter
         max_attempts = 60  # 60 seconds with 1 second intervals
         for attempt in range(max_attempts):
             try:
-                # Create request for the ready parameter
+                # Create request for the head_device parameter
                 request = GetParameters.Request()
-                request.names = ['ready']
+                request.names = ['head_device']
                 
                 # Call the service
                 future = param_client.call_async(request)
@@ -133,25 +150,17 @@ class HeadServoNode(Node):
                 
                 if future.result() is not None:
                     response = future.result()
-                    if len(response.values) > 0 and response.values[0].bool_value:
-                        # servo_manager is ready, get the head device
-                        request = GetParameters.Request()
-                        request.names = ['head_device']
-                        
-                        future = param_client.call_async(request)
-                        rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-                        
-                        if future.result() is not None:
-                            response = future.result()
-                            if len(response.values) > 0:
-                                return response.values[0].string_value
-                        
-                        self.get_logger().error("Could not get head_device parameter")
-                        return None
+                    if len(response.values) > 0:
+                        head_device = response.values[0].string_value
+                        if head_device and head_device.strip():  # Check if not empty or just whitespace
+                            self.get_logger().info(f"Found head device: {head_device}")
+                            return head_device
+                        else:
+                            self.get_logger().info(f"Head device parameter exists but is empty, attempt {attempt + 1}/{max_attempts}")
                     else:
-                        self.get_logger().info(f"servo_manager not ready yet, attempt {attempt + 1}/{max_attempts}")
+                        self.get_logger().info(f"head_device parameter not available yet, attempt {attempt + 1}/{max_attempts}")
                 else:
-                    self.get_logger().info(f"ready parameter not available yet, attempt {attempt + 1}/{max_attempts}")
+                    self.get_logger().info(f"Failed to get parameters, attempt {attempt + 1}/{max_attempts}")
                     
             except Exception as e:
                 self.get_logger().warn(f"Error checking servo_manager parameters: {e}")
@@ -159,7 +168,7 @@ class HeadServoNode(Node):
             # Wait 1 second before next attempt
             time.sleep(1.0)
         
-        self.get_logger().error("Timeout waiting for servo_manager to be ready")
+        self.get_logger().error("Timeout waiting for head_device parameter")
         return None
 
     def timer_callback(self):
@@ -184,11 +193,37 @@ class HeadServoNode(Node):
             self.dynamixel._disable_torque(self.servo_id)
             time.sleep(0.5)
 
+            # Set operating mode to position control FIRST (before other configurations)
+            self.get_logger().info("Setting operating mode to POSITION")
+            self.dynamixel.set_operating_mode(self.servo_id, OperatingMode.POSITION)
+            time.sleep(0.5)
+
+            # Set PID gains AFTER setting operating mode
+            self.get_logger().info(f"Setting PID gains - kp: {self.kp}, ki: {self.ki}, kd: {self.kd}")
+            try:
+                self.dynamixel.set_P(self.servo_id, int(self.kp))
+                self.get_logger().info(f"Successfully set P gain to {int(self.kp)}")
+                time.sleep(0.1)
+                self.dynamixel.set_I(self.servo_id, int(self.ki))
+                self.get_logger().info(f"Successfully set I gain to {int(self.ki)}")
+                time.sleep(0.1)
+                self.dynamixel.set_D(self.servo_id, int(self.kd))
+                self.get_logger().info(f"Successfully set D gain to {int(self.kd)}")
+                time.sleep(0.1)
+            except Exception as e:
+                self.get_logger().error(f"Failed to set PID gains: {str(e)}")
+                raise
+
+            # Set homing offset
+            self.get_logger().info(f"Setting homing offset: {self.position_offset}")
+            self.dynamixel.set_home_offset(self.servo_id, self.position_offset)
+            time.sleep(0.1)
+
             # Convert angle limits to encoder values relative to actual servo center
-            # Note: Since we reverse direction, MIN_ANGLE maps to max servo position and vice versa
+            # Note: Since we reverse direction, min_position_limit maps to max servo position and vice versa
             # Using: encoder_value = int((angle_rad / (2*pi)) * 4096 + 2048 + offset)
-            min_servo_rad = math.radians(-MAX_ANGLE)  # Logical MAX becomes servo MIN
-            max_servo_rad = math.radians(-MIN_ANGLE)  # Logical MIN becomes servo MAX
+            min_servo_rad = math.radians(-self.max_position_limit)  # Logical MAX becomes servo MIN
+            max_servo_rad = math.radians(-self.min_position_limit)  # Logical MIN becomes servo MAX
             min_encoder = int(
                 (min_servo_rad / (2 * math.pi)) * 4096 + 2048 + self.position_offset
             )
@@ -200,23 +235,19 @@ class HeadServoNode(Node):
                 f"Setting position limits: {min_encoder} (min) to {max_encoder} (max)"
             )
             self.dynamixel.set_min_position_limit(self.servo_id, min_encoder)
+            time.sleep(0.1)
             self.dynamixel.set_max_position_limit(self.servo_id, max_encoder)
-            time.sleep(0.5)
+            time.sleep(0.1)
 
             # Set PWM limit
             self.get_logger().info(f"Setting PWM limit: {pwm_limit}")
             self.dynamixel.set_pwm_limit(self.servo_id, pwm_limit)
-            time.sleep(0.5)
+            time.sleep(0.1)
 
             # Set current limit
             self.get_logger().info(f"Setting current limit: {current_limit}")
             self.dynamixel.set_current_limit(self.servo_id, current_limit)
-            time.sleep(0.5)
-
-            # Set operating mode to position control
-            self.get_logger().info("Setting operating mode to POSITION")
-            self.dynamixel.set_operating_mode(self.servo_id, OperatingMode.POSITION)
-            time.sleep(0.5)
+            time.sleep(0.1)
 
             # Enable torque
             self.get_logger().info(f"Enabling torque for servo {self.servo_id}")
@@ -280,8 +311,8 @@ class HeadServoNode(Node):
 
         position_data = {
             "current_position": actual_position,
-            "min_angle": MIN_ANGLE,
-            "max_angle": MAX_ANGLE,
+            "min_angle": self.min_position_limit,
+            "max_angle": self.max_position_limit,
             "default_angle": DEFAULT_ANGLE,
         }
 
@@ -294,9 +325,9 @@ class HeadServoNode(Node):
         self.get_logger().info(f"Received position command: {logical_position}")
 
         # Validate position range
-        if logical_position < MIN_ANGLE or logical_position > MAX_ANGLE:
+        if logical_position < self.min_position_limit or logical_position > self.max_position_limit:
             self.get_logger().error(
-                f"Position {logical_position} out of range [{MIN_ANGLE}, {MAX_ANGLE}]"
+                f"Position {logical_position} out of range [{self.min_position_limit}, {self.max_position_limit}]"
             )
             return
 
@@ -312,9 +343,9 @@ class HeadServoNode(Node):
         self.get_logger().info(f"Received AI position command, moving to: {self.ai_position} degrees")
         
         # Validate AI position range
-        if self.ai_position < MIN_ANGLE or self.ai_position > MAX_ANGLE:
+        if self.ai_position < self.min_position_limit or self.ai_position > self.max_position_limit:
             self.get_logger().error(
-                f"AI position {self.ai_position} out of range [{MIN_ANGLE}, {MAX_ANGLE}]"
+                f"AI position {self.ai_position} out of range [{self.min_position_limit}, {self.max_position_limit}]"
             )
             return
 

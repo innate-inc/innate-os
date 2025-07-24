@@ -36,9 +36,10 @@ class Dynamixel:
     OPERATING_MODE_ADDR = 11
     POSITION_I = 82
     POSITION_P = 84
+    POSITION_D = 80  # Position D Gain address
     ADDR_ID = 7
-    ADDR_MAX_POSITION_LIMIT = 48  # 4 bytes, Max Position Limit
-    ADDR_MIN_POSITION_LIMIT = 52  # 4 bytes, Min Position Limit
+    ADDR_MIN_POSITION_LIMIT = 52  # 4 bytes, Min Position Limit (was 48)
+    ADDR_MAX_POSITION_LIMIT = 48  # 4 bytes, Max Position Limit (was 52)
     ADDR_CURRENT_LIMIT = 38       # 2 bytes, Current Limit
 
     @dataclass
@@ -201,13 +202,14 @@ class Dynamixel:
                 f"dxl_comm_result for motor {motor_id}: {self.packetHandler.getTxRxResult(dxl_comm_result)}"
             )
         elif dxl_error != 0:
-            print(f"dxl error {dxl_error}")
+            error_msg = self.packetHandler.getRxPacketError(dxl_error)
+            print(f"dxl error {dxl_error}: {error_msg}")
             raise ConnectionError(
-                f"dynamixel error for motor {motor_id}: {self.packetHandler.getTxRxResult(dxl_error)}"
+                f"dynamixel error for motor {motor_id}: {error_msg} (error code: {dxl_error})"
             )
 
     def set_operating_mode(self, motor_id: int, operating_mode: OperatingMode):
-        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
+        dxl_comm_result, dxl_error = self.packetHandler.write1ByteTxRx(
             self.portHandler, motor_id, self.OPERATING_MODE_ADDR, operating_mode.value
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
@@ -244,6 +246,12 @@ class Dynamixel:
     def set_I(self, motor_id: int, I: int):
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
             self.portHandler, motor_id, self.POSITION_I, I
+        )
+        self._process_response(dxl_comm_result, dxl_error, motor_id)
+
+    def set_D(self, motor_id: int, D: int):
+        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
+            self.portHandler, motor_id, self.POSITION_D, D
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
