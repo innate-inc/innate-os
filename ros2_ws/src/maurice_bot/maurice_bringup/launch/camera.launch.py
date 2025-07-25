@@ -11,7 +11,6 @@ import launch_ros.actions
 def generate_launch_description():
     # Package paths
     depthai_descriptions_path = get_package_share_directory('depthai_descriptions') # For URDF
-    urdf_launch_dir = os.path.join(depthai_descriptions_path, 'launch')
 
     # Common LaunchConfigurations
     mxId_lc         = LaunchConfiguration('mxId')
@@ -55,23 +54,6 @@ def generate_launch_description():
         description='Enable main video stream.')
 
     # -------------------------------------------------------
-    # URDF Launch
-    # -------------------------------------------------------
-    urdf_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(urdf_launch_dir, 'urdf_launch.py')
-        ),
-        launch_arguments={
-            'tf_prefix': tf_prefix_lc,
-            'camera_model': camera_model_lc,
-            'base_frame': head_camera_link_lc,
-            'parent_frame': head_camera_link_lc,
-            'cam_pos_x': '0.0', 'cam_pos_y': '0.0', 'cam_pos_z': '0.0',
-            'cam_roll': '0.0', 'cam_pitch': '0.0', 'cam_yaw': '0.0'
-        }.items()
-    )
-
-    # -------------------------------------------------------
     # Camera Driver Node
     # -------------------------------------------------------
     camera_driver_node = launch_ros.actions.Node(
@@ -106,7 +88,6 @@ def generate_launch_description():
     ld.add_action(declare_use_video)
 
     # Add nodes and other launch actions
-    ld.add_action(urdf_launch)
     ld.add_action(camera_driver_node)
 
     return ld
