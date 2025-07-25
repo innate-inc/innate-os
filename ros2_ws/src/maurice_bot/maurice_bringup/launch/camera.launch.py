@@ -67,8 +67,8 @@ def generate_launch_description():
 
     # --- Custom Camera Driver Specific Arguments ---
     declare_color_resolution = DeclareLaunchArgument(
-        'color_resolution', default_value='800p',
-        description='RGB camera resolution for the driver. Supported: 800p, 720p.')
+        'color_resolution', default_value='1080p',
+        description='RGB camera resolution for the driver. Supported: 800p, 720p, 1080p.')
     declare_fps = DeclareLaunchArgument(
         'fps', default_value='30.0',
         description='RGB camera FPS.')

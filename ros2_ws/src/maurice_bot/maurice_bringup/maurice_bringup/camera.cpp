@@ -46,16 +46,22 @@ std::tuple<dai::Pipeline, ImageDimensions> create_rgb_pipeline(
     xlinkOutVideo->setStreamName("rgb_video");
 
     dai::ColorCameraProperties::SensorResolution dai_color_resolution;
-    ImageDimensions preview_dimensions = {640, 480};  // Preview/output resolution
+    ImageDimensions preview_dimensions = {1920, 1080};  // Preview/output resolution for 1080p
 
     if (color_resolution_str == "800p") {
         dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_800_P;
+        preview_dimensions = {640, 480};  // Keep original dimensions for 800p
         RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 800P (1280x800)");
     } else if (color_resolution_str == "720p") {
         dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_720_P;
+        preview_dimensions = {640, 480};  // Keep original dimensions for 720p
         RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 720P (1280x720)");
+    } else if (color_resolution_str == "1080p") {
+        dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_1080_P;
+        preview_dimensions = {1920, 1080};  // Full 1080p resolution
+        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 1080P (1920x1080)");
     } else {
-        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Invalid color_resolution parameter: %s. Supported: 800p, 720p.", color_resolution_str.c_str());
+        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Invalid color_resolution parameter: %s. Supported: 800p, 720p, 1080p.", color_resolution_str.c_str());
         throw std::runtime_error("Invalid color camera resolution provided to pipeline creation.");
     }
 
@@ -88,7 +94,7 @@ public:
         // Declare parameters
         this->declare_parameter<std::string>("tf_prefix", "oak");
         this->declare_parameter<std::string>("camera_model", "OAK-D");
-        this->declare_parameter<std::string>("color_resolution", "800p");
+        this->declare_parameter<std::string>("color_resolution", "1080p");
         this->declare_parameter<double>("fps", 30.0);
         this->declare_parameter<bool>("use_video", true);
         // Device specific parameters

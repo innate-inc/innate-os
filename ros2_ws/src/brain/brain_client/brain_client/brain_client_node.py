@@ -111,8 +111,8 @@ class BrainClientNode(Node):
 
         # New parameters for camera FOV
         self.declare_parameter("vertical_fov", 60.0)
-        self.declare_parameter("horizontal_resolution", 640)
-        self.declare_parameter("vertical_resolution", 480)
+        self.declare_parameter("horizontal_resolution", 1920)
+        self.declare_parameter("vertical_resolution", 1080)
 
         # New parameters for camera position
         self.declare_parameter("x_cam")  # Camera x position relative to robot base
