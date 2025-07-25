@@ -119,9 +119,10 @@ class GetChessMove(Primitive):
     def guidelines(self):
         return (
             "Use this to get the next best chess move. The primitive will automatically "
-            "capture the current board state using the camera, update the internal board "
-            "representation, and calculate the best move using Stockfish at ELO 1000. "
-            "No arguments needed - it maintains persistent board state."
+            "capture the current board state using the camera (with fisheye rectification "
+            "for better accuracy), update the internal board representation, and calculate "
+            "the best move using Stockfish at ELO 1500. No arguments needed - it maintains "
+            "persistent board state."
         )
 
     def _initialize_stockfish(self):

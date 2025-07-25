@@ -82,6 +82,17 @@ def generate_launch_description():
         'jpeg_quality', default_value='90',
         description='JPEG compression quality (0-100).')
 
+    # --- Fisheye Rectification Arguments ---
+    declare_enable_rectification = DeclareLaunchArgument(
+        'enable_rectification', default_value='True',
+        description='Enable fisheye rectification for the RGB camera.')
+    declare_rectified_fps = DeclareLaunchArgument(
+        'rectified_fps', default_value='10.0',
+        description='Target FPS for rectified images (lower than raw FPS for performance).')
+    declare_fov_scale = DeclareLaunchArgument(
+        'fov_scale', default_value='1.1',
+        description='FOV scale factor for rectification (1.0 = no scaling, >1.0 = more FOV).')
+
     # -------------------------------------------------------
     # URDF Launch (Publishes Robot Description and Robot State Publisher)
     # -------------------------------------------------------
@@ -142,6 +153,10 @@ def generate_launch_description():
             'jpeg_quality': LaunchConfiguration('jpeg_quality'),
             'mxId': mxId_lc,
             'usb2Mode': usb2Mode_lc,
+            # Fisheye rectification parameters
+            'enable_rectification': LaunchConfiguration('enable_rectification'),
+            'rectified_fps': LaunchConfiguration('rectified_fps'),
+            'fov_scale': LaunchConfiguration('fov_scale'),
         }]
     )
 
@@ -169,6 +184,9 @@ def generate_launch_description():
     ld.add_action(declare_use_video)
     ld.add_action(declare_compression_format)
     ld.add_action(declare_jpeg_quality)
+    ld.add_action(declare_enable_rectification)
+    ld.add_action(declare_rectified_fps)
+    ld.add_action(declare_fov_scale)
 
     # Add nodes and other launch actions
     ld.add_action(urdf_launch)

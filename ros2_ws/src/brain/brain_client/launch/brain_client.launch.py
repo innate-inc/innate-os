@@ -22,8 +22,8 @@ def generate_launch_description():
     )
     image_topic_arg = DeclareLaunchArgument(
         "image_topic",
-        default_value="/color/image/compressed",
-        description="Image topic",
+        default_value="/color/image_rectified",
+        description="Image topic (using raw rectified fisheye image for best quality)",
     )
     cmd_vel_topic_arg = DeclareLaunchArgument(
         "cmd_vel_topic", default_value="/cmd_vel", description="Command velocity topic"

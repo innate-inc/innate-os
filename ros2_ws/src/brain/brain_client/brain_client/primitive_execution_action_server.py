@@ -43,8 +43,9 @@ from brain_client.primitives.types import (
 from brain_client.message_types import TaskType
 
 # Import ROS message types for subscriptions
-from sensor_msgs.msg import CompressedImage, JointState  # Added JointState
+from sensor_msgs.msg import CompressedImage, Image, JointState  # Added JointState
 from nav_msgs.msg import Odometry, OccupancyGrid
+from cv_bridge import CvBridge
 
 
 class PrimitiveExecutionActionServer(Node):
@@ -56,6 +57,9 @@ class PrimitiveExecutionActionServer(Node):
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
         self.last_ik_solution = None  # Stores JointState message from IK solver
+        
+        # Initialize CvBridge for raw image conversion
+        self.cv_bridge = CvBridge()
 
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -71,12 +75,23 @@ class PrimitiveExecutionActionServer(Node):
 
         # Subscribers for robot state
         # TODO: Make topic names configurable if needed (e.g., via parameters)
-        self.main_camera_image_sub = self.create_subscription(
-            CompressedImage,
-            self.image_topic,
-            self.main_camera_image_callback,
-            image_qos,
-        )
+        # Determine if we should subscribe to compressed or raw images based on topic name
+        if "compressed" in self.image_topic:
+            self.main_camera_image_sub = self.create_subscription(
+                CompressedImage,
+                self.image_topic,
+                self.main_camera_image_compressed_callback,
+                image_qos,
+            )
+            self.get_logger().info(f"Subscribing to compressed image topic: {self.image_topic}")
+        else:
+            self.main_camera_image_sub = self.create_subscription(
+                Image,
+                self.image_topic,
+                self.main_camera_image_raw_callback,
+                image_qos,
+            )
+            self.get_logger().info(f"Subscribing to raw image topic: {self.image_topic}")
         self.odom_sub = self.create_subscription(
             Odometry, "/odom", self.odom_callback, 10
         )
@@ -419,14 +434,23 @@ class PrimitiveExecutionActionServer(Node):
         super().destroy_node()
 
     # Callbacks for state subscriptions
-    def main_camera_image_callback(self, msg: CompressedImage):
+    def main_camera_image_compressed_callback(self, msg: CompressedImage):
         try:
             np_arr = np.frombuffer(msg.data, np.uint8)
             self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            self.get_logger().debug("Received and decoded new image for primitives.")
+            self.get_logger().debug("Received and decoded compressed image for primitives.")
         except Exception as e:
             self.get_logger().error(
                 f"Failed to decode compressed image for primitive state: {e}"
+            )
+
+    def main_camera_image_raw_callback(self, msg: Image):
+        try:
+            self.last_main_camera_image = self.cv_bridge.imgmsg_to_cv2(msg, "bgr8")
+            self.get_logger().debug("Received and converted raw image for primitives.")
+        except Exception as e:
+            self.get_logger().error(
+                f"Failed to convert raw image for primitive state: {e}"
             )
 
     def odom_callback(self, msg: Odometry):
