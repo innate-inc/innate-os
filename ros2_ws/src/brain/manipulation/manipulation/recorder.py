@@ -234,6 +234,11 @@ class RecorderNode(Node):
             self.current_episode = None
             # self.state will be set to TASK_ACTIVE by the rest of the method.
             # Episode count for the new task will effectively start fresh.
+        
+        # Set head to AI position for optimal camera angle during recording
+        self.get_logger().info("Setting head to AI position for new task setup")
+        self._set_head_ai_position()
+        
         self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
         if self.task_manager.metadata:
             self.episode_count = self.task_manager.metadata["number_of_episodes"]
@@ -260,10 +265,6 @@ class RecorderNode(Node):
             response.success = False
             response.message = f"An episode is already {self.state.lower()}. Please save or cancel the current episode first."
             return response
-        
-        # Set head to AI position for optimal camera angle during recording
-        self.get_logger().info("Setting head to AI position for recording setup")
-        self._set_head_ai_position()
         
         self.current_episode = EpisodeData()
         self.episode_start_time = time.time()
