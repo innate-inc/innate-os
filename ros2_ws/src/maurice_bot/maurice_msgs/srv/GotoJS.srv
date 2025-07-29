@@ -1,4 +1,5 @@
 std_msgs/Float64MultiArray data
-int32 time
+float32 time
 ---
 bool success
+string message
