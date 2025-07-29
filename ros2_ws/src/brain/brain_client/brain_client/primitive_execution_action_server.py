@@ -34,6 +34,7 @@ from brain_client.primitives.pick_up_sock import PickUpSock
 from brain_client.primitives.drop_socks import DropSocks
 from brain_client.primitives.play_move import PlayMove
 from brain_client.primitives.get_chess_move import GetChessMove
+from brain_client.primitives.calibrate_chess import CalibrateChess
 
 from brain_client.primitives.types import (
     PrimitiveResult,
@@ -127,6 +128,7 @@ class PrimitiveExecutionActionServer(Node):
             TaskType.DROP_SOCKS: DropSocks,
             TaskType.PLAY_MOVE: PlayMove,
             TaskType.GET_CHESS_MOVE: GetChessMove,
+            TaskType.CALIBRATE_CHESS: CalibrateChess,
         }
 
         self._primitives = {}

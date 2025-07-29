@@ -15,6 +15,7 @@ class TaskType(Enum):
     DROP_SOCKS = "drop_socks"
     PLAY_MOVE = "play_move"
     GET_CHESS_MOVE = "get_chess_move"
+    CALIBRATE_CHESS = "calibrate_chess"
 
 
 class NavigationToPosition(BaseModel):

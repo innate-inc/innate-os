@@ -7,10 +7,15 @@ from maurice_msgs.srv import GotoJS
 from std_msgs.msg import Float64MultiArray
 import time
 import math
+import cv2
+import tempfile
+import os
+from brain_client.utils.camera_utils import initialize_camera
 
 class PlayMove(Primitive):
     """
     Primitive for playing a chess move by executing a complete pick-and-place sequence.
+    This primitive now captures an image AFTER the move is completed.
     """
 
     # Rest position joint angles
@@ -104,6 +109,14 @@ class PlayMove(Primitive):
         self.goto_js_client = None  # Service client for trajectory execution
         self.last_ik_solution = None  # Store IK solution from robot state
         self.last_ik_timestamp = None  # Track when we last received an IK solution
+        
+        # Camera configuration for image capture
+        self.camera_index = None  # Will be determined automatically
+        self.camera = None
+        self.preferred_backend = cv2.CAP_V4L2  # Use V4L2 backend for better compatibility
+        
+        # Store path to the "after" image for get_chess_move to use
+        self.after_move_image_path = None
 
     @property
     def name(self):
@@ -113,7 +126,8 @@ class PlayMove(Primitive):
         return (
             "Use this to play a chess move. Provide the move in format 'from_square to_square' "
             "like 'a2 to a4' or 'e1 to e3'. This will calculate the joint positions needed "
-            "to move the arm to the specified chess square coordinates."
+            "to move the arm to the specified chess square coordinates. After the move, it "
+            "will capture an image of the board for vision analysis."
         )
 
     def get_required_robot_states(self):
@@ -128,6 +142,62 @@ class PlayMove(Primitive):
             if self.last_ik_solution and 'header' in self.last_ik_solution:
                 stamp = self.last_ik_solution['header']['stamp']
                 self.last_ik_timestamp = stamp['sec'] + stamp['nanosec'] / 1e9
+
+    def _initialize_camera(self):
+        """Initialize the camera for capturing images."""
+        if self.camera is not None and self.camera.isOpened():
+            return True  # Already initialized
+            
+        self.camera, self.camera_index = initialize_camera(self.logger, self.camera_index, self.preferred_backend)
+        return self.camera is not None
+
+    def _capture_after_image(self):
+        """Capture an image after the move is completed and store the path."""
+        if not self._initialize_camera():
+            return None
+        
+        try:
+            # Capture frame
+            ret, frame = self.camera.read()
+            
+            # Immediately release camera after capture to prevent blocking
+            self.camera.release()
+            cv2.destroyAllWindows()
+            self.camera = None
+            self.logger.debug("Camera released immediately after capture")
+            
+            if not ret or frame is None:
+                self.logger.error("❌ Failed to capture after-move frame from camera")
+                return None
+            
+            # Create temporary file
+            temp_fd, temp_path = tempfile.mkstemp(suffix='.jpg', prefix='chess_after_move_')
+            
+            # Save the captured frame
+            success = cv2.imwrite(temp_path, frame)
+            os.close(temp_fd)  # Close the file descriptor
+            
+            if not success:
+                self.logger.error("❌ Failed to save after-move image")
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                return None
+            
+            self.logger.info(f"📸 Captured after-move image and saved to: {temp_path}")
+            self.after_move_image_path = temp_path  # Store for get_chess_move to use
+            return temp_path
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error capturing after-move image: {e}")
+            # Make sure camera is released even on error
+            if self.camera is not None:
+                try:
+                    self.camera.release()
+                    cv2.destroyAllWindows()
+                    self.camera = None
+                except:
+                    pass
+            return None
 
     def _parse_chess_move(self, move_str):
         """Parse chess move string like 'a2 to a4' into from and to squares."""
@@ -312,90 +382,98 @@ class PlayMove(Primitive):
             
             self._send_feedback(f"📋 Executing chess move sequence: {from_square} → {to_square}")
             
-            # STEP 1: Move to rest position
-            self._send_feedback("1️⃣ Moving to rest position")
-            if not self._move_to_rest():
-                return f"Failed to move to rest position", PrimitiveResult.FAILURE
+            # # STEP 1: Move to rest position
+            # self._send_feedback("1️⃣ Moving to rest position")
+            # if not self._move_to_rest():
+            #     return f"Failed to move to rest position", PrimitiveResult.FAILURE
                 
-            # STEP 2: Move up from rest to safe height
-            self._send_feedback("2️⃣ Moving up from rest to safe height")
-            # Use actual rest position coordinates, but move to safe height
-            if not self._move_to_position_with_ik(self.REST_POSITION['x'], self.REST_POSITION['y'], self.SAFE_HEIGHT, 
-                                                  "Moving to safe height above rest position"):
-                return f"Failed to move to safe height", PrimitiveResult.FAILURE
+            # # STEP 2: Move up from rest to safe height
+            # self._send_feedback("2️⃣ Moving up from rest to safe height")
+            # # Use actual rest position coordinates, but move to safe height
+            # if not self._move_to_position_with_ik(self.REST_POSITION['x'], self.REST_POSITION['y'], self.SAFE_HEIGHT, 
+            #                                       "Moving to safe height above rest position"):
+            #     return f"Failed to move to safe height", PrimitiveResult.FAILURE
                 
-            # STEP 3: Move to 'from' coordinates at safe height
-            self._send_feedback(f"3️⃣ Moving to {from_square} at safe height")
-            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Moving above {from_square}"):
-                return f"Failed to move above {from_square}", PrimitiveResult.FAILURE
+            # # STEP 3: Move to 'from' coordinates at safe height
+            # self._send_feedback(f"3️⃣ Moving to {from_square} at safe height")
+            # if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
+            #                                       f"Moving above {from_square}"):
+            #     return f"Failed to move above {from_square}", PrimitiveResult.FAILURE
                 
-            # STEP 3.5: Open gripper before going down
-            self._send_feedback(f"🤏 Opening gripper above {from_square}")
-            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Opening gripper above {from_square}", 
-                                                  gripper_state=self.GRIPPER_OPEN):
-                return f"Failed to open gripper above {from_square}", PrimitiveResult.FAILURE
+            # # STEP 3.5: Open gripper before going down
+            # self._send_feedback(f"🤏 Opening gripper above {from_square}")
+            # if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
+            #                                       f"Opening gripper above {from_square}", 
+            #                                       gripper_state=self.GRIPPER_OPEN):
+            #     return f"Failed to open gripper above {from_square}", PrimitiveResult.FAILURE
                 
-            # STEP 4: Move down to pick up piece
-            self._send_feedback(f"4️⃣ Moving down to pick up piece at {from_square}")
-            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.PICK_HEIGHT,
-                                                  f"Moving down to {from_square}", 
-                                                  gripper_state=self.GRIPPER_OPEN):
-                return f"Failed to move down to {from_square}", PrimitiveResult.FAILURE
+            # # STEP 4: Move down to pick up piece
+            # self._send_feedback(f"4️⃣ Moving down to pick up piece at {from_square}")
+            # if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.PICK_HEIGHT,
+            #                                       f"Moving down to {from_square}", 
+            #                                       gripper_state=self.GRIPPER_OPEN):
+            #     return f"Failed to move down to {from_square}", PrimitiveResult.FAILURE
                 
-            # STEP 4.5: Close gripper to grab piece
-            self._send_feedback(f"✊ Closing gripper to grab piece at {from_square}")
-            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.PICK_HEIGHT,
-                                                  f"Grabbing piece at {from_square}", 
-                                                  gripper_state=self.GRIPPER_CLOSED):
-                return f"Failed to grab piece at {from_square}", PrimitiveResult.FAILURE
+            # # STEP 4.5: Close gripper to grab piece
+            # self._send_feedback(f"✊ Closing gripper to grab piece at {from_square}")
+            # if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.PICK_HEIGHT,
+            #                                       f"Grabbing piece at {from_square}", 
+            #                                       gripper_state=self.GRIPPER_CLOSED):
+            #     return f"Failed to grab piece at {from_square}", PrimitiveResult.FAILURE
                 
-            # STEP 5: Move up with piece
-            self._send_feedback(f"5️⃣ Moving up with piece from {from_square}")
-            if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Lifting piece from {from_square}", 
-                                                  gripper_state=self.GRIPPER_CLOSED):
-                return f"Failed to lift piece from {from_square}", PrimitiveResult.FAILURE
+            # # STEP 5: Move up with piece
+            # self._send_feedback(f"5️⃣ Moving up with piece from {from_square}")
+            # if not self._move_to_position_with_ik(from_coords['x'], from_coords['y'], self.SAFE_HEIGHT,
+            #                                       f"Lifting piece from {from_square}", 
+            #                                       gripper_state=self.GRIPPER_CLOSED):
+            #     return f"Failed to lift piece from {from_square}", PrimitiveResult.FAILURE
                 
-            # STEP 6: Move to 'to' coordinates at safe height
-            self._send_feedback(f"6️⃣ Moving to {to_square} at safe height")
-            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Moving above {to_square}", 
-                                                  gripper_state=self.GRIPPER_CLOSED):
-                return f"Failed to move above {to_square}", PrimitiveResult.FAILURE
+            # # STEP 6: Move to 'to' coordinates at safe height
+            # self._send_feedback(f"6️⃣ Moving to {to_square} at safe height")
+            # if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
+            #                                       f"Moving above {to_square}", 
+            #                                       gripper_state=self.GRIPPER_CLOSED):
+            #     return f"Failed to move above {to_square}", PrimitiveResult.FAILURE
                 
-            # STEP 7: Move down to place piece
-            self._send_feedback(f"7️⃣ Moving down to place piece at {to_square}")
-            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.PICK_HEIGHT,
-                                                  f"Moving down to {to_square}", 
-                                                  gripper_state=self.GRIPPER_CLOSED):
-                return f"Failed to move down to {to_square}", PrimitiveResult.FAILURE
+            # # STEP 7: Move down to place piece
+            # self.logger.info(f"7️⃣ Moving down to place piece at {to_square}")
+            # if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.PICK_HEIGHT,
+            #                                       f"Moving down to {to_square}", 
+            #                                       gripper_state=self.GRIPPER_CLOSED):
+            #     return f"Failed to move down to {to_square}", PrimitiveResult.FAILURE
                 
-            # STEP 7.5: Open gripper to release piece
-            self._send_feedback(f"🤏 Opening gripper to release piece at {to_square}")
-            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.PICK_HEIGHT,
-                                                  f"Releasing piece at {to_square}", 
-                                                  gripper_state=self.GRIPPER_OPEN):
-                return f"Failed to release piece at {to_square}", PrimitiveResult.FAILURE
+            # # STEP 7.5: Open gripper to release piece
+            # self._send_feedback(f"🤏 Opening gripper to release piece at {to_square}")
+            # if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.PICK_HEIGHT,
+            #                                       f"Releasing piece at {to_square}", 
+            #                                       gripper_state=self.GRIPPER_OPEN):
+            #     return f"Failed to release piece at {to_square}", PrimitiveResult.FAILURE
                 
-            # STEP 8: Move up after placing
-            self._send_feedback(f"8️⃣ Moving up after placing piece at {to_square}")
-            if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
-                                                  f"Lifting from {to_square}", 
-                                                  gripper_state=self.GRIPPER_OPEN):
-                return f"Failed to lift from {to_square}", PrimitiveResult.FAILURE
+            # # STEP 8: Move up after placing
+            # self._send_feedback(f"8️⃣ Moving up after placing piece at {to_square}")
+            # if not self._move_to_position_with_ik(to_coords['x'], to_coords['y'], self.SAFE_HEIGHT,
+            #                                       f"Lifting from {to_square}", 
+            #                                       gripper_state=self.GRIPPER_OPEN):
+            #     return f"Failed to lift from {to_square}", PrimitiveResult.FAILURE
                 
-            # STEP 9: Move back to rest position at safe height
-            self._send_feedback("9️⃣ Moving back to rest position at safe height")
-            if not self._move_to_position_with_ik(self.REST_POSITION['x'], self.REST_POSITION['y'], self.SAFE_HEIGHT,
-                                                  "Moving to rest position at safe height"):
-                return f"Failed to move to rest position at safe height", PrimitiveResult.FAILURE
+            # # STEP 9: Move back to rest position at safe height
+            # self._send_feedback("9️⃣ Moving back to rest position at safe height")
+            # if not self._move_to_position_with_ik(self.REST_POSITION['x'], self.REST_POSITION['y'], self.SAFE_HEIGHT,
+            #                                       "Moving to rest position at safe height"):
+            #     return f"Failed to move to rest position at safe height", PrimitiveResult.FAILURE
                 
-            # STEP 10: Final move to rest position
-            self._send_feedback("🔟 Moving to final rest position")
-            if not self._move_to_rest():
-                return f"Failed to move to final rest position", PrimitiveResult.FAILURE
+            # # STEP 10: Final move to rest position
+            # self._send_feedback("🔟 Moving to final rest position")
+            # if not self._move_to_rest():
+            #     return f"Failed to move to final rest position", PrimitiveResult.FAILURE
+            
+            # FINAL STEP: Capture image AFTER the move is complete
+            self._send_feedback("📸 Capturing image after move")
+            after_image_path = self._capture_after_image()
+            if not after_image_path:
+                self.logger.error("❌ Failed to capture after-move image")
+                # Don't fail the whole primitive, but log a severe warning
+                self._send_feedback("⚠️ WARNING: Failed to capture image after move.")
             
             result_msg = f"✅ Chess move {move_str} completed successfully! Executed full pick-and-place sequence."
             self._send_feedback(result_msg)
@@ -413,7 +491,39 @@ class PlayMove(Primitive):
             self.logger.error(error_msg)
             return error_msg, PrimitiveResult.FAILURE
 
+        finally:
+            # Clean up camera if it's open
+            if self.camera is not None:
+                try:
+                    self.camera.release()
+                    cv2.destroyAllWindows()
+                    self.camera = None
+                    self.logger.debug("Camera released in execute() finally block")
+                except Exception as e:
+                    self.logger.warning(f"Error releasing camera in finally block: {e}")
+
     def cancel(self):
         """Cancel the chess move operation."""
         self.logger.info("Canceling chess move operation")
-        return "Chess move operation canceled" 
+        
+        # Release camera if it's open
+        if self.camera is not None:
+            try:
+                self.camera.release()
+                cv2.destroyAllWindows()
+                self.camera = None
+                self.logger.info("📹 Camera released")
+            except Exception as e:
+                self.logger.warning(f"Error releasing camera: {e}")
+        
+        return "Chess move operation canceled"
+
+    def __del__(self):
+        """Clean up camera on destruction."""
+        if self.camera is not None:
+            try:
+                self.camera.release()
+                cv2.destroyAllWindows()
+                self.logger.info("Camera released in destructor")
+            except Exception as e:
+                self.logger.warning(f"Error releasing camera in destructor: {e}") 

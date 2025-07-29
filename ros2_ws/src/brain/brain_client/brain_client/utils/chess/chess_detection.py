@@ -24,8 +24,20 @@ def detectChessboardCorners(filename):
     print(f"Error: Could not load image from {filename}")
     return None, False
     
-  # img = scaleImageIfNeeded(img, 600, 480)
-  img = scaleImageIfNeeded(img, 1024, 768)
+  # Get original image dimensions
+  orig_height, orig_width = img.shape[:2]
+  
+  # Scale image for processing while preserving aspect ratio
+  max_dimension = 1024
+  img = scaleImageIfNeeded(img, max_dimension, max_dimension)
+  
+  # Get scaled image dimensions
+  scaled_height, scaled_width = img.shape[:2]
+  
+  # Calculate scaling factors
+  width_scale = orig_width / scaled_width
+  height_scale = orig_height / scaled_height
+
   img_orig = img.copy()
   img_orig2 = img.copy()
 
@@ -108,6 +120,10 @@ def detectChessboardCorners(filename):
   print("Ransac corner detection took %.4f seconds." % (time() - a))
 
   if real_corners is not None:
+    # Scale corners back to original image dimensions
+    real_corners[:, 0] *= width_scale
+    real_corners[:, 1] *= height_scale
+    
     return real_corners.astype(np.float32), True
   else:
     print("Failed to detect chessboard corners")
