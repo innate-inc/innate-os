@@ -5,8 +5,11 @@ import tempfile
 import os
 import time
 import json
+import shutil
+import traceback
 from brain_client.primitives.types import Primitive, PrimitiveResult, RobotStateType
 from brain_client.utils.camera_utils import initialize_camera
+from brain_client.utils.chess.chess_detection import detectChessboardCorners
 
 
 class CalibrateChess(Primitive):
@@ -32,6 +35,8 @@ class CalibrateChess(Primitive):
         
         # Path to the FEN file that holds the game's state
         self.fen_file_path = "/tmp/chess_game_fen.txt"
+        self.move_history_path = "/tmp/chess_move_history.txt"
+        self.fen_history_path = "/tmp/chess_fen_history.txt"
         
         self.logger.info("CalibrateChess primitive initialized")
 
@@ -102,13 +107,9 @@ class CalibrateChess(Primitive):
             self.logger.info("🔍 Detecting chessboard corners for calibration")
             
             # Save a debug copy of the image for inspection
-            import shutil
             debug_image_path = f"/tmp/chess_calibration_view_{int(time.time())}.jpg"
             shutil.copy2(image_path, debug_image_path)
             self.logger.info(f"🔍 Debug: Saved calibration view to {debug_image_path}")
-            
-            # Import the detection functions
-            from brain_client.utils.chess.chess_detection import detectChessboardCorners
             
             # Detect the corners
             corners, success = detectChessboardCorners(image_path)
@@ -146,7 +147,6 @@ class CalibrateChess(Primitive):
                 
         except Exception as e:
             self.logger.error(f"Error during corner detection: {e}")
-            import traceback
             traceback.print_exc()
             return False
 
@@ -188,7 +188,6 @@ class CalibrateChess(Primitive):
                 return error_msg, PrimitiveResult.FAILURE
 
             # Step 3: CRITICAL - Set this image as the definitive initial board state
-            import shutil
             definitive_state_path = "/tmp/last_known_board_state.jpg"
             shutil.copy2(calibration_image_path, definitive_state_path)
             self.logger.info(f"✅ Set initial board state at: {definitive_state_path}")
@@ -205,8 +204,17 @@ class CalibrateChess(Primitive):
                 with open(self.fen_file_path, 'w') as f:
                     f.write(initial_fen)
                 self.logger.info(f"✅ Reset chess game state. FEN file created at {self.fen_file_path}")
+
+                # Reset history files
+                with open(self.move_history_path, 'w') as f:
+                    f.write("")
+                with open(self.fen_history_path, 'w') as f:
+                    # Start FEN history with the initial state
+                    f.write(initial_fen + '\n')
+                self.logger.info("✅ Cleared move and FEN history files.")
+
             except Exception as e:
-                error_msg = f"Failed to create FEN file: {e}"
+                error_msg = f"Failed to create FEN or history files: {e}"
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 

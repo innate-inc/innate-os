@@ -8,6 +8,7 @@ import time
 import chess
 import chess.engine
 import json
+import re
 import requests
 from brain_client.primitives.types import Primitive, PrimitiveResult, RobotStateType
 from brain_client.utils.chess.update_board_state import create_annotated_board_images
@@ -37,6 +38,33 @@ def _save_fen_to_file(fen, logger):
         logger.info(f"Saved new FEN to {fen_file_path}")
     except Exception as e:
         logger.error(f"Error saving FEN to file: {e}")
+
+def _load_history_files(logger):
+    """Load move and FEN history from their respective files."""
+    move_history_path = "/tmp/chess_move_history.txt"
+    fen_history_path = "/tmp/chess_fen_history.txt"
+    try:
+        with open(move_history_path, 'r') as f:
+            move_history = f.read().strip()
+        with open(fen_history_path, 'r') as f:
+            fen_history = f.read().strip()
+        return move_history, fen_history
+    except Exception as e:
+        logger.error(f"Error loading history files: {e}")
+        return "", ""
+
+def _append_to_history(move_str, new_fen, logger):
+    """Append move and FEN to their respective history files."""
+    move_history_path = "/tmp/chess_move_history.txt"
+    fen_history_path = "/tmp/chess_fen_history.txt"
+    try:
+        with open(move_history_path, 'a') as f:
+            f.write(move_str + '\n')
+        with open(fen_history_path, 'a') as f:
+            f.write(new_fen + '\n')
+        logger.info(f"Appended '{move_str}' and new FEN to history files.")
+    except Exception as e:
+        logger.error(f"Error appending to history files: {e}")
 
 class GetChessMove(Primitive):
     """
@@ -154,7 +182,7 @@ class GetChessMove(Primitive):
             self.logger.error(f"Error encoding image to base64: {e}")
             return None
 
-    def _call_gemini_api(self, before_image_b64, after_image_b64):
+    def _call_gemini_api(self, before_image_b64, after_image_b64, board_fen, move_history, fen_history):
         """Call Gemini 2.5 Pro API to analyze chess move."""
         if not self.gemini_api_key:
             self.logger.error("❌ Gemini API key not set")
@@ -163,24 +191,33 @@ class GetChessMove(Primitive):
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={self.gemini_api_key}"
             
+            # Determine whose turn it is
+            turn = "White" if chess.Board(board_fen).turn == chess.WHITE else "Black"
+            prompt = (
+                f"You are an expert chess analyst. You are observing a game. It is currently {turn}'s turn to move. "
+                f"The opponent has just made a move, and your task is to identify it by comparing the 'before' and 'after' images. "
+                "The images show a 10x10 grid with the chessboard in the center 8x8 area. Focus only on the labeled squares (a1-h8).\n\n"
+                "Here is the history of the game so far:\n"
+                f"Move History:\n{move_history}\n\n"
+                f"FEN History:\n{fen_history}\n\n"
+                f"The current FEN string before the move is: {board_fen}\n\n"
+                "Analyze the two images provided. Based on the visual change and the game context, identify the single move that was made. "
+                "Every move is legal. If you see a discrepancy, you have made a wrong observation. "
+                "Your answer must be ONLY the move in 'e2 to e4' format."
+            )
+
             payload = {
                 "contents": [{
                     "parts": [
-                        {
-                            "text": "You are an expert chess analyst. You are going to be given annotated images of a chess game, one before and one after a move. After analyzing both images, you must just answer the move (eg e2 to e4). Think deeply each time. Every move is legal, and there are no discrepancy. If you think there is a discrepancy, it is that you made a wrong observation. Look carefully at the annotations on each square to identify which pieces moved. The images show a 10x10 grid with the chessboard occupying the center 8x8 area. Only focus on the labeled squares (a1-h8)."
-                        },
-                        {
-                            "text": "Before move:"
-                        },
+                        {"text": prompt},
+                        {"text": "Before move:"},
                         {
                             "inline_data": {
                                 "mime_type": "image/jpeg",
                                 "data": before_image_b64
                             }
                         },
-                        {
-                            "text": "After move:"
-                        },
+                        {"text": "After move:"},
                         {
                             "inline_data": {
                                 "mime_type": "image/jpeg",
@@ -218,9 +255,6 @@ class GetChessMove(Primitive):
         try:
             # Clean up the response
             response = gemini_response.lower().strip()
-            
-            # Look for patterns like "e2 to e4", "e2-e4", "e2e4"
-            import re
             
             # Pattern for "square to square" format
             pattern1 = r'([a-h][1-8])\s*(?:to|->|-)\s*([a-h][1-8])'
@@ -414,6 +448,9 @@ class GetChessMove(Primitive):
         if board_fen is None:
             return "Failed to load board state from file", PrimitiveResult.FAILURE
         self.logger.info(f"Loaded board FEN: {board_fen}")
+
+        # Load history
+        move_history, fen_history = _load_history_files(self.logger)
         
         # Check if the system is calibrated
         if not CalibrateChess.is_calibrated():
@@ -482,7 +519,7 @@ class GetChessMove(Primitive):
 
             # Step 5: Call Gemini API to detect the move
             self.logger.info("🤖 Calling Gemini API to analyze move")
-            gemini_response = self._call_gemini_api(before_b64, after_b64)
+            gemini_response = self._call_gemini_api(before_b64, after_b64, board_fen, move_history, fen_history)
             
             if not gemini_response:
                 error_msg = "Failed to get response from Gemini API"
@@ -506,8 +543,9 @@ class GetChessMove(Primitive):
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 
-            # Save the new FEN back to the file
+            # Save the new FEN back to the file and update history
             _save_fen_to_file(new_board_fen, self.logger)
+            _append_to_history(detected_move_str, new_board_fen, self.logger)
 
             # Step 8: Get best move from Stockfish
             best_move, evaluation = self._get_best_move(new_board_fen)
@@ -525,7 +563,8 @@ class GetChessMove(Primitive):
                 "move": best_move,
                 "evaluation": evaluation,
                 "board_updated": True,
-                "detected_move": detected_move_str
+                "detected_move": detected_move_str,
+                "fen": new_board_fen
             }
             
             self.logger.info("✅ GetChessMove completed successfully")
@@ -595,4 +634,4 @@ class GetChessMove(Primitive):
                 cv2.destroyAllWindows()  # Clean up any OpenCV windows
                 self.logger.info("Camera released in destructor")
             except Exception as e:
-                self.logger.warning(f"Error releasing camera in destructor: {e}") 
+                self.logger.warning(f"Error releasing camera in destructor: {e}")
