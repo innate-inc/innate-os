@@ -30,8 +30,8 @@ class CalibrateChess(Primitive):
         # Path for the initial board setup image, used by get_chess_move
         self.initial_board_image_path = "/tmp/initial_board_setup.jpg"
         
-        # Path to signal a board reset to get_chess_move
-        self.reset_signal_path = "/tmp/reset_chess_game.signal"
+        # Path to the FEN file that holds the game's state
+        self.fen_file_path = "/tmp/chess_game_fen.txt"
         
         self.logger.info("CalibrateChess primitive initialized")
 
@@ -187,19 +187,31 @@ class CalibrateChess(Primitive):
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 
-            # Step 3: Verify calibration was saved
+            # Step 3: CRITICAL - Set this image as the definitive initial board state
+            import shutil
+            definitive_state_path = "/tmp/last_known_board_state.jpg"
+            shutil.copy2(calibration_image_path, definitive_state_path)
+            self.logger.info(f"✅ Set initial board state at: {definitive_state_path}")
+
+            # Step 4: Verify calibration was saved
             if not os.path.exists(self.corners_file_path):
                 error_msg = "Calibration file was not created"
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
             
-            # Step 4: Signal to get_chess_move that the game should be reset
-            with open(self.reset_signal_path, 'w') as f:
-                f.write(str(time.time()))
-            self.logger.info(f"🚩 Created reset signal at {self.reset_signal_path}")
+            # Step 5: Create/reset the FEN file to the starting position
+            try:
+                initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+                with open(self.fen_file_path, 'w') as f:
+                    f.write(initial_fen)
+                self.logger.info(f"✅ Reset chess game state. FEN file created at {self.fen_file_path}")
+            except Exception as e:
+                error_msg = f"Failed to create FEN file: {e}"
+                self.logger.error(f"❌ {error_msg}")
+                return error_msg, PrimitiveResult.FAILURE
 
             # Success!
-            result_msg = f"✅ Chess recalibration complete! New baseline image and corners saved."
+            result_msg = f"✅ Chess recalibration complete! New baseline image, corners, and FEN state saved."
             self._send_feedback(result_msg)
             self.logger.info(result_msg)
             

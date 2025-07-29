@@ -14,19 +14,39 @@ from brain_client.utils.chess.update_board_state import create_annotated_board_i
 from brain_client.primitives.calibrate_chess import CalibrateChess
 from brain_client.utils.camera_utils import initialize_camera
 
+def _load_fen_from_file(logger):
+    """Load FEN from the shared file."""
+    fen_file_path = "/tmp/chess_game_fen.txt"
+    try:
+        if os.path.exists(fen_file_path):
+            with open(fen_file_path, 'r') as f:
+                return f.read().strip()
+        else:
+            logger.warning(f"FEN file not found at {fen_file_path}. Using default.")
+            return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    except Exception as e:
+        logger.error(f"Error loading FEN from file: {e}")
+        return None
+
+def _save_fen_to_file(fen, logger):
+    """Save FEN to the shared file."""
+    fen_file_path = "/tmp/chess_game_fen.txt"
+    try:
+        with open(fen_file_path, 'w') as f:
+            f.write(fen)
+        logger.info(f"Saved new FEN to {fen_file_path}")
+    except Exception as e:
+        logger.error(f"Error saving FEN to file: {e}")
+
 class GetChessMove(Primitive):
     """
     Primitive for getting the next chess move using vision and Stockfish engine.
-    Maintains persistent board state and uses calibrated chessboard corners.
+    Reads board state from a shared FEN file and updates it after detecting opponent's move.
     Uses Gemini 2.5 Pro for move detection.
     """
 
     def __init__(self, logger):
         super().__init__(logger)
-        
-        # Persistent state variables
-        self.board_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"  # Starting position
-        self.board_corners = None  # Will be loaded from calibration
         
         # Stockfish configuration
         self.stockfish_elo = 1500
@@ -42,16 +62,10 @@ class GetChessMove(Primitive):
         if not self.gemini_api_key:
             self.logger.warning("⚠️  GEMINI_API_KEY environment variable not set")
         
-        # Path to signal a board reset from calibrate_chess
-        self.reset_signal_path = "/tmp/reset_chess_game.signal"
-        
-        # Store path to the "before" image, which is the last "after" image
-        self.last_after_image_path = None
-        self._initialize_board_state()
+        # Path to the definitive "before" image, managed by other primitives
+        self.last_known_board_state_path = "/tmp/last_known_board_state.jpg"
         
         self.logger.info("GetChessMove primitive initialized")
-        self.logger.info(f"Initial board FEN: {self.board_fen}")
-        self.logger.info(f"Stockfish ELO: {self.stockfish_elo}")
         if self.gemini_api_key:
             self.logger.info("✅ Gemini API key loaded")
         else:
@@ -59,53 +73,9 @@ class GetChessMove(Primitive):
 
     def _initialize_board_state(self):
         """
-        Initialize or reset the board state.
-        If a reset signal is found, it resets the FEN to the starting position.
-        It also ensures an initial board image exists.
+        No-op, board state is now loaded from file in execute()
         """
-        # Check for reset signal from calibration
-        if os.path.exists(self.reset_signal_path):
-            self.logger.info("🚩 Reset signal found. Resetting chess game state.")
-            self.board_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-            
-            # Clean up the signal file so it doesn't trigger again
-            try:
-                os.unlink(self.reset_signal_path)
-            except Exception as e:
-                self.logger.warning(f"Could not remove reset signal file: {e}")
-
-        try:
-            # Check for an initial board state image
-            initial_image_path = "/tmp/initial_board_setup.jpg"
-            if not os.path.exists(initial_image_path):
-                self.logger.info("📸 No initial board image found. Capturing one now...")
-                
-                # Use the utility to get a camera
-                self.camera, self.camera_index = initialize_camera(self.logger, self.camera_index, self.preferred_backend)
-                
-                if self.camera:
-                    # Capture frame
-                    ret, frame = self.camera.read()
-                    
-                    if ret and frame is not None:
-                        cv2.imwrite(initial_image_path, frame)
-                        self.logger.info(f"✅ Saved initial board image to: {initial_image_path}")
-                        self.last_after_image_path = initial_image_path
-                    else:
-                        self.logger.error("❌ Failed to capture initial board image")
-                    
-                    # Release camera
-                    self.camera.release()
-                    cv2.destroyAllWindows()
-                    self.camera = None
-                else:
-                    self.logger.error("❌ Failed to initialize camera for initial setup")
-            else:
-                self.logger.info(f"📷 Using existing initial board image: {initial_image_path}")
-                self.last_after_image_path = initial_image_path
-        
-        except Exception as e:
-            self.logger.error(f"❌ Error initializing board state: {e}")
+        pass
 
     @property
     def name(self):
@@ -191,7 +161,7 @@ class GetChessMove(Primitive):
             return None
         
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={self.gemini_api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={self.gemini_api_key}"
             
             payload = {
                 "contents": [{
@@ -222,12 +192,11 @@ class GetChessMove(Primitive):
                 "generationConfig": {
                     "temperature": 0.1,
                     "topK": 1,
-                    "topP": 1,
-                    "maxOutputTokens": 50
+                    "topP": 1
                 }
             }
             
-            response = requests.post(url, json=payload, timeout=30)
+            response = requests.post(url, json=payload, timeout=300)
             response.raise_for_status()
             
             result = response.json()
@@ -278,9 +247,12 @@ class GetChessMove(Primitive):
             self.logger.error(f"❌ Error parsing Gemini response: {e}")
             return None
 
-    def _update_fen_with_move(self, move_str):
+    def _update_fen_with_move(self, board_fen, move_str):
         """Update the FEN string by applying the detected move."""
         try:
+            # Create board from current FEN
+            board = chess.Board(board_fen)
+            
             # Parse the move string
             parts = move_str.strip().lower().split()
             if len(parts) == 3 and parts[1] == 'to':
@@ -291,9 +263,6 @@ class GetChessMove(Primitive):
                 to_square = parts[1]
             else:
                 raise ValueError(f"Invalid move format: {move_str}")
-            
-            # Create board from current FEN
-            board = chess.Board(self.board_fen)
             
             # Convert algebraic notation to chess.Move
             from_sq = chess.parse_square(from_square)
@@ -324,19 +293,18 @@ class GetChessMove(Primitive):
             board.push(move)
             
             # Update our FEN
-            old_fen = self.board_fen
-            self.board_fen = board.fen()
+            new_fen = board.fen()
             
             self.logger.info(f"📋 Board state updated!")
-            self.logger.info(f"Old FEN: {old_fen}")
-            self.logger.info(f"New FEN: {self.board_fen}")
+            self.logger.info(f"Old FEN: {board_fen}")
+            self.logger.info(f"New FEN: {new_fen}")
             self.logger.info(f"Applied move: {move}")
             
-            return True
+            return new_fen
             
         except Exception as e:
             self.logger.error(f"❌ Error updating FEN with move {move_str}: {e}")
-            return False
+            return None
 
     def guidelines(self):
         return (
@@ -381,7 +349,7 @@ class GetChessMove(Primitive):
                 return False
         return True
 
-    def _get_best_move(self):
+    def _get_best_move(self, board_fen):
         """Get the best move from Stockfish."""
         try:
             # Initialize Stockfish if needed (only when we actually need to calculate a move)
@@ -392,7 +360,7 @@ class GetChessMove(Primitive):
             self.logger.info("🤖 Calculating best move with Stockfish")
             
             # Create chess board from current FEN
-            board = chess.Board(self.board_fen)
+            board = chess.Board(board_fen)
             self.logger.info(f"Board to analyze:\n{board}")
             
             # Check if it's our turn (assuming we're white for now)
@@ -441,8 +409,11 @@ class GetChessMove(Primitive):
         """
         self.logger.info("🚀 Starting GetChessMove execution with Gemini-based move detection")
         
-        # Check for and apply reset signal if a game is in progress
-        self._initialize_board_state()
+        # Load the current board state from the shared file
+        board_fen = _load_fen_from_file(self.logger)
+        if board_fen is None:
+            return "Failed to load board state from file", PrimitiveResult.FAILURE
+        self.logger.info(f"Loaded board FEN: {board_fen}")
         
         # Check if the system is calibrated
         if not CalibrateChess.is_calibrated():
@@ -458,14 +429,14 @@ class GetChessMove(Primitive):
             return error_msg, PrimitiveResult.FAILURE
         
         after_image_path = None
-        before_image_path = self.last_after_image_path
         temp_before_annotated = None
         temp_after_annotated = None
         
         try:
-            # Step 1: Get the "before" image (which is the last "after" image)
-            if not before_image_path or not os.path.exists(before_image_path):
-                error_msg = "No previous board state image available to compare against."
+            # Step 1: Get the "before" image from the definitive state file
+            before_image_path = self.last_known_board_state_path
+            if not os.path.exists(before_image_path):
+                error_msg = f"Definitive board state image not found at '{before_image_path}'. Please run 'calibrate_chess' first."
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 
@@ -528,29 +499,32 @@ class GetChessMove(Primitive):
 
             # Step 7: Update FEN with the detected move
             self.logger.info(f"🔄 Updating board state with move: {detected_move_str}")
-            board_updated = self._update_fen_with_move(detected_move_str)
+            new_board_fen = self._update_fen_with_move(board_fen, detected_move_str)
             
-            if not board_updated:
+            if not new_board_fen:
                 error_msg = f"Failed to update board state with move: {detected_move_str}"
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 
+            # Save the new FEN back to the file
+            _save_fen_to_file(new_board_fen, self.logger)
+
             # Step 8: Get best move from Stockfish
-            best_move, evaluation = self._get_best_move()
+            best_move, evaluation = self._get_best_move(new_board_fen)
             
             if best_move is None:
                 error_msg = "Failed to calculate best move"
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 
-            # Step 9: Update the 'before' image for the next turn
-            self.last_after_image_path = after_image_path
+            # NOTE: This primitive no longer updates the definitive board state image.
+            # That is the responsibility of the `play_move` primitive.
             
             # Prepare result
             result = {
                 "move": best_move,
                 "evaluation": evaluation,
-                "board_updated": board_updated,
+                "board_updated": True,
                 "detected_move": detected_move_str
             }
             
@@ -578,8 +552,10 @@ class GetChessMove(Primitive):
                 except Exception as e:
                     self.logger.warning(f"Error releasing camera in finally block: {e}")
             
-            # Clean up temporary files (don't delete the new after_image_path)
-            temp_files = [temp_before_annotated, temp_after_annotated]
+            # Clean up temporary files.
+            # The after_image_path from the capture is temporary and should be cleaned up.
+            # The definitive state file is NEVER touched by this primitive.
+            temp_files = [temp_before_annotated, temp_after_annotated, after_image_path]
             for temp_file in temp_files:
                 try:
                     if temp_file and os.path.exists(temp_file):

@@ -32,7 +32,7 @@ def order_points(pts):
     
     return rect
 
-def get_board_tiles_with_annotation(image_path, logger, corners=None, save_debug_images=False, debug_prefix=""):
+def get_board_tiles_with_annotation(image_path, logger, corners=None, save_debug_images=False, debug_prefix=''):
     """
     Processes an image of a chessboard and returns a warped 10x10 image with annotations.
     The chessboard occupies the center 8x8 area with 1 tile padding on each side.
@@ -148,9 +148,8 @@ def get_board_tiles_with_annotation(image_path, logger, corners=None, save_debug
         if save_debug_images:
             debug_dir = "/tmp/chess_debug"
             os.makedirs(debug_dir, exist_ok=True)
-            
-            prefix = f"{debug_prefix}_" if debug_prefix else ""
             timestamp = int(time())
+            prefix = f"{debug_prefix}_" if debug_prefix else ""
             
             # Save the original warped image
             debug_warped_path = os.path.join(debug_dir, f"{prefix}warped_board_padded_{timestamp}.png")
