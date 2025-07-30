@@ -112,8 +112,8 @@ class BrainClientNode(Node):
 
         # New parameters for camera FOV
         self.declare_parameter("vertical_fov", 60.0)
-        self.declare_parameter("horizontal_resolution", 1280)
-        self.declare_parameter("vertical_resolution", 800)
+        self.declare_parameter("horizontal_resolution", 640)
+        self.declare_parameter("vertical_resolution", 480)
 
         # New parameters for camera position
         self.declare_parameter("x_cam")  # Camera x position relative to robot base
@@ -689,12 +689,9 @@ class BrainClientNode(Node):
 
             # Skip if no valid image or odometry data is available
             if self.last_image is None or self.last_odom is None:
-                debug_msg = "Skipping pose_image because:"
-                if self.last_image is None:
-                    debug_msg += " self.last_image is None."
-                if self.last_odom is None:
-                    debug_msg += " self.last_odom is None."
-                self.get_logger().warn(debug_msg)
+                self.get_logger().warn(
+                    "Skipping pose_image: No image or odom/amcl_pose."
+                )
                 return
             # In simulator mode, allow pose_image_callback even if nav_mode is None
             if (

@@ -76,23 +76,12 @@ class PrimitiveExecutionActionServer(Node):
 
         # Subscribers for robot state
         # TODO: Make topic names configurable if needed (e.g., via parameters)
-        # Determine if we should subscribe to compressed or raw images based on topic name
-        if "compressed" in self.image_topic:
-            self.main_camera_image_sub = self.create_subscription(
-                CompressedImage,
-                self.image_topic,
-                self.main_camera_image_compressed_callback,
-                image_qos,
-            )
-            self.get_logger().info(f"Subscribing to compressed image topic: {self.image_topic}")
-        else:
-            self.main_camera_image_sub = self.create_subscription(
-                Image,
-                self.image_topic,
-                self.main_camera_image_raw_callback,
-                image_qos,
-            )
-            self.get_logger().info(f"Subscribing to raw image topic: {self.image_topic}")
+        self.main_camera_image_sub = self.create_subscription(
+            CompressedImage,
+            self.image_topic,
+            self.main_camera_image_callback,
+            image_qos,
+        )
         self.odom_sub = self.create_subscription(
             Odometry, "/odom", self.odom_callback, 10
         )
@@ -143,12 +132,11 @@ class PrimitiveExecutionActionServer(Node):
             goal_callback=self.goal_callback,
             cancel_callback=self.cancel_callback,
         )
-        self.get_logger().info("🎯 Primitive Execution Action Server has started!")
-        self.get_logger().info(f"📋 Available primitives: {list(self._primitive_classes.keys())}")
+        self.get_logger().debug("Primitive Execution Action Server has started.")
 
     def goal_callback(self, goal_request):
-        self.get_logger().info(
-            f"🎯 GOAL RECEIVED for primitive: '{goal_request.primitive_type}'"
+        self.get_logger().debug(
+            f"Received goal for primitive: '{goal_request.primitive_type}'"
         )
         return GoalResponse.ACCEPT
 
@@ -184,8 +172,8 @@ class PrimitiveExecutionActionServer(Node):
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
-        self.get_logger().info(
-            f"🎬 STARTING execution of primitive: '{goal_handle.request.primitive_type}'"
+        self.get_logger().debug(
+            f"Executing primitive: '{goal_handle.request.primitive_type}'"
         )
         # Decode the inputs (assumed to be JSON)
         try:
@@ -200,7 +188,7 @@ class PrimitiveExecutionActionServer(Node):
             )
 
         primitive_type = goal_handle.request.primitive_type
-        if primitive_type not in self._primitive_classes:
+        if primitive_type not in self._primitives:
             self.get_logger().error(f"Primitive '{primitive_type}' not available")
             goal_handle.abort()
             return ExecutePrimitive.Result(
@@ -460,23 +448,14 @@ class PrimitiveExecutionActionServer(Node):
         super().destroy_node()
 
     # Callbacks for state subscriptions
-    def main_camera_image_compressed_callback(self, msg: CompressedImage):
+    def main_camera_image_callback(self, msg: CompressedImage):
         try:
             np_arr = np.frombuffer(msg.data, np.uint8)
             self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            self.get_logger().debug("Received and decoded compressed image for primitives.")
+            self.get_logger().debug("Received and decoded new image for primitives.")
         except Exception as e:
             self.get_logger().error(
                 f"Failed to decode compressed image for primitive state: {e}"
-            )
-
-    def main_camera_image_raw_callback(self, msg: Image):
-        try:
-            self.last_main_camera_image = self.cv_bridge.imgmsg_to_cv2(msg, "bgr8")
-            self.get_logger().debug("Received and converted raw image for primitives.")
-        except Exception as e:
-            self.get_logger().error(
-                f"Failed to convert raw image for primitive state: {e}"
             )
 
     def odom_callback(self, msg: Odometry):
