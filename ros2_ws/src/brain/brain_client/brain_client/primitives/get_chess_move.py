@@ -73,7 +73,7 @@ class GetChessMove(Primitive):
     Uses Gemini 2.5 Pro for move detection.
     """
 
-    def __init__(self, logger):
+    def __init__(self, logger, feedback_callback=None):
         super().__init__(logger)
         
         # Stockfish configuration
@@ -93,6 +93,9 @@ class GetChessMove(Primitive):
         # Path to the definitive "before" image, managed by other primitives
         self.last_known_board_state_path = "/tmp/last_known_board_state.jpg"
         
+        # Callback for sending feedback
+        self.feedback_callback = feedback_callback
+
         self.logger.info("GetChessMove primitive initialized")
         if self.gemini_api_key:
             self.logger.info("✅ Gemini API key loaded")
@@ -348,6 +351,13 @@ class GetChessMove(Primitive):
             "the internal board representation, and calculate the best move using Stockfish."
         )
 
+    def send_feedback(self, message):
+        """Send feedback to the main node if a callback is registered."""
+        if self.feedback_callback:
+            self.feedback_callback(message)
+        else:
+            self.logger.warning("Feedback callback not registered. Cannot send feedback.")
+
     def _initialize_stockfish(self):
         """Initialize Stockfish engine if not already done."""
         if self.stockfish_engine is None:
@@ -554,6 +564,11 @@ class GetChessMove(Primitive):
                 error_msg = "Failed to calculate best move"
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
+
+            # a recommended move for you.
+            self.send_feedback(
+                f"I've detected the opponent's move as {detected_move_str}. My recommended counter-move is {best_move}."
+            )
 
             # NOTE: This primitive no longer updates the definitive board state image.
             # That is the responsibility of the `play_move` primitive.

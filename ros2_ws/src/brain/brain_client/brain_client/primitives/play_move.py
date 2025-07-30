@@ -286,6 +286,15 @@ class PlayMove(Primitive):
             tuple: (result_message, result_status)
         """
         move_str = kwargs.get('move_str', '')
+        if not move_str and 'kwargs' in kwargs and isinstance(kwargs['kwargs'], str):
+            self.logger.info(f"Received unexpected kwargs format: {kwargs}")
+            kw_str = kwargs['kwargs']
+            # Try to parse "move_str='e2 to e4'"
+            if kw_str.startswith("move_str="):
+                move_str_val = kw_str.split('=', 1)[1]
+                move_str = move_str_val.strip("'\"") # remove quotes
+                self.logger.info(f"Parsed move_str from unexpected format: '{move_str}'")
+        
         if not self.node:
             self.logger.error("PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE

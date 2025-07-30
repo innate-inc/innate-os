@@ -118,24 +118,22 @@ class PrimitiveExecutionActionServer(Node):
             f"Using {'simulator' if self.simulator_mode else 'Nav2'} navigation primitive"
         )
 
-        primitive_classes = {
-            TaskType.NAVIGATE_TO_POSITION: navigation_primitive,
-            TaskType.SEND_EMAIL: SendEmail,
-            TaskType.SEND_PICTURE_VIA_EMAIL: SendPictureViaEmail,
-            TaskType.PICK_UP_TRASH: PickUpTrash,
-            TaskType.DROP_TRASH: DropTrash,
-            TaskType.PICK_UP_SOCK: PickUpSock,
-            TaskType.DROP_SOCKS: DropSocks,
-            TaskType.PLAY_MOVE: PlayMove,
-            TaskType.GET_CHESS_MOVE: GetChessMove,
-            TaskType.CALIBRATE_CHESS: CalibrateChess,
+        self._primitive_classes = {
+            TaskType.NAVIGATE_TO_POSITION.value: navigation_primitive,
+            TaskType.SEND_EMAIL.value: SendEmail,
+            TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail,
+            TaskType.PICK_UP_TRASH.value: PickUpTrash,
+            TaskType.DROP_TRASH.value: DropTrash,
+            TaskType.PICK_UP_SOCK.value: PickUpSock,
+            TaskType.DROP_SOCKS.value: DropSocks,
+            TaskType.PLAY_MOVE.value: PlayMove,
+            TaskType.GET_CHESS_MOVE.value: GetChessMove,
+            TaskType.CALIBRATE_CHESS.value: CalibrateChess,
         }
 
         self._primitives = {}
-        for task_type, primitive_class in primitive_classes.items():
-            primitive_instance = primitive_class(self.get_logger())
-            primitive_instance.node = self  # Inject the node
-            self._primitives[task_type.value] = primitive_instance
+        # Primitives are now instantiated in the execute_callback, where the
+        # goal_handle is available for feedback.
 
         self._action_server = ActionServer(
             self,
@@ -146,7 +144,7 @@ class PrimitiveExecutionActionServer(Node):
             cancel_callback=self.cancel_callback,
         )
         self.get_logger().info("🎯 Primitive Execution Action Server has started!")
-        self.get_logger().info(f"📋 Available primitives: {list(self._primitives.keys())}")
+        self.get_logger().info(f"📋 Available primitives: {list(self._primitive_classes.keys())}")
 
     def goal_callback(self, goal_request):
         self.get_logger().info(
@@ -202,7 +200,7 @@ class PrimitiveExecutionActionServer(Node):
             )
 
         primitive_type = goal_handle.request.primitive_type
-        if primitive_type not in self._primitives:
+        if primitive_type not in self._primitive_classes:
             self.get_logger().error(f"Primitive '{primitive_type}' not available")
             goal_handle.abort()
             return ExecutePrimitive.Result(
@@ -212,30 +210,56 @@ class PrimitiveExecutionActionServer(Node):
                 success_type=PrimitiveResult.FAILURE.value,
             )
 
-        primitive = self._primitives[primitive_type]
-        self.get_logger().info(
-            f"🚀 About to execute primitive '{primitive_type}' with inputs: {inputs}"
-        )
-
         # Define a feedback publisher for the primitive
         def _publish_feedback(update_message: str):
             try:
-                # Assuming ExecutePrimitive.Feedback is the correct type
-                # and it has a string field.
                 feedback_msg = ExecutePrimitive.Feedback()
                 feedback_msg.feedback = update_message
-
                 goal_handle.publish_feedback(feedback_msg)
                 self.get_logger().debug(
-                    f"Published feedback for '{primitive_type}': {update_message}; feedback_msg: {feedback_msg}"
+                    f"Published feedback for '{primitive_type}': {update_message}"
                 )
             except Exception as e:
                 self.get_logger().error(
                     f"Failed to publish feedback for '{primitive_type}': {e}"
                 )
 
-        # Pass the feedback callback to the primitive if it supports it
-        primitive.set_feedback_callback(_publish_feedback)
+        # Instantiate the primitive, passing the feedback callback
+        try:
+            primitive_class = self._primitive_classes[primitive_type]
+
+            # Check if the primitive's __init__ accepts feedback_callback
+            import inspect
+            sig = inspect.signature(primitive_class.__init__)
+            if 'feedback_callback' in sig.parameters:
+                primitive = primitive_class(
+                    self.get_logger(), feedback_callback=_publish_feedback
+                )
+            else:
+                primitive = primitive_class(self.get_logger())
+
+            primitive.node = self  # Inject the node
+            self.get_logger().info(
+                f"🚀 About to execute primitive '{primitive_type}' with inputs: {inputs}"
+            )
+        except KeyError:
+            self.get_logger().error(f"Primitive class for '{primitive_type}' not found.")
+            goal_handle.abort()
+            return ExecutePrimitive.Result(
+                success=False,
+                message=f"Primitive class for '{primitive_type}' not found.",
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.FAILURE.value,
+            )
+        except Exception as e:
+            self.get_logger().error(f"Error instantiating primitive '{primitive_type}': {e}")
+            goal_handle.abort()
+            return ExecutePrimitive.Result(
+                success=False,
+                message=f"Error instantiating primitive: {e}",
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.FAILURE.value,
+            )
 
         try:
             # Get required states and inject them into the primitive

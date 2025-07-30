@@ -23,8 +23,6 @@
 #include "depthai_bridge/ImageConverter.hpp"
 
 #include <opencv2/opencv.hpp>
-// Add fisheye calibration support
-#include <opencv2/calib3d.hpp>
 
 using namespace std::chrono_literals;
 
@@ -46,22 +44,16 @@ std::tuple<dai::Pipeline, ImageDimensions> create_rgb_pipeline(
     xlinkOutVideo->setStreamName("rgb_video");
 
     dai::ColorCameraProperties::SensorResolution dai_color_resolution;
-    ImageDimensions preview_dimensions = {1920, 1080};  // Preview/output resolution for 1080p
+    ImageDimensions preview_dimensions = {640, 480};  // Preview/output resolution
 
     if (color_resolution_str == "800p") {
         dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_800_P;
-        preview_dimensions = {640, 480};  // Keep original dimensions for 800p
         RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 800P (1280x800)");
     } else if (color_resolution_str == "720p") {
         dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_720_P;
-        preview_dimensions = {640, 480};  // Keep original dimensions for 720p
         RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 720P (1280x720)");
-    } else if (color_resolution_str == "1080p") {
-        dai_color_resolution = dai::ColorCameraProperties::SensorResolution::THE_1080_P;
-        preview_dimensions = {1920, 1080};  // Full 1080p resolution
-        RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Setting color resolution to 1080P (1920x1080)");
     } else {
-        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Invalid color_resolution parameter: %s. Supported: 800p, 720p, 1080p.", color_resolution_str.c_str());
+        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Invalid color_resolution parameter: %s. Supported: 800p, 720p.", color_resolution_str.c_str());
         throw std::runtime_error("Invalid color camera resolution provided to pipeline creation.");
     }
 
@@ -94,17 +86,12 @@ public:
         // Declare parameters
         this->declare_parameter<std::string>("tf_prefix", "oak");
         this->declare_parameter<std::string>("camera_model", "OAK-D");
-        this->declare_parameter<std::string>("color_resolution", "1080p");
+        this->declare_parameter<std::string>("color_resolution", "800p");
         this->declare_parameter<double>("fps", 30.0);
         this->declare_parameter<bool>("use_video", true);
         // Device specific parameters
         this->declare_parameter<std::string>("mxId", "");
         this->declare_parameter<bool>("usb2Mode", true);
-        
-        // Fisheye rectification parameters
-        this->declare_parameter<bool>("enable_rectification", true);
-        this->declare_parameter<double>("rectified_fps", 10.0);
-        this->declare_parameter<double>("fov_scale", 1.1);
 
         // Get parameters
         tf_prefix_ = this->get_parameter("tf_prefix").as_string();
@@ -115,11 +102,6 @@ public:
         
         mxId_str_ = this->get_parameter("mxId").as_string();
         usb2Mode_val_ = this->get_parameter("usb2Mode").as_bool();
-        
-        // Fisheye rectification parameters
-        enable_rectification_ = this->get_parameter("enable_rectification").as_bool();
-        rectified_fps_ = this->get_parameter("rectified_fps").as_double();
-        fov_scale_ = this->get_parameter("fov_scale").as_double();
 
         RCLCPP_INFO(this->get_logger(), "Initializing Camera Driver Node with parameters:");
         RCLCPP_INFO(this->get_logger(), "  TF Prefix: %s", tf_prefix_.c_str());
@@ -127,9 +109,6 @@ public:
         RCLCPP_INFO(this->get_logger(), "  Color Resolution: %s", color_resolution_str_.c_str());
         RCLCPP_INFO(this->get_logger(), "  FPS: %.2f", fps_val_);
         RCLCPP_INFO(this->get_logger(), "  Use Video: %s", use_video_ ? "true" : "false");
-        RCLCPP_INFO(this->get_logger(), "  Enable Rectification: %s", enable_rectification_ ? "true" : "false");
-        RCLCPP_INFO(this->get_logger(), "  Rectified FPS: %.2f", rectified_fps_);
-        RCLCPP_INFO(this->get_logger(), "  FOV Scale: %.2f", fov_scale_);
 
         // Now that tf_prefix_ is available, initialize rgb_converter_
         rgb_converter_ = std::make_unique<dai::rosBridge::ImageConverter>(tf_prefix_ + "_rgb_camera_optical_frame", false);
@@ -217,69 +196,6 @@ private:
         rgb_cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(
             rgb_converter_->calibrationToCameraInfo(calibrationHandler_, dai::CameraBoardSocket::CAM_A, video_dims.width, video_dims.height)
         );
-        
-        // Initialize fisheye rectification if enabled
-        if (enable_rectification_) {
-            initialize_fisheye_rectification(video_dims);
-        }
-    }
-    
-    void initialize_fisheye_rectification(const ImageDimensions& dims) {
-        try {
-            RCLCPP_INFO(this->get_logger(), "Initializing fisheye rectification for %dx%d", dims.width, dims.height);
-            
-            // Get camera intrinsics and distortion coefficients from DepthAI calibration
-            // Use the depthai-ros bridge to get camera info, then extract the matrices
-            auto camera_info = rgb_converter_->calibrationToCameraInfo(
-                calibrationHandler_, dai::CameraBoardSocket::CAM_A, dims.width, dims.height);
-            
-            // Extract intrinsics from ROS CameraInfo K matrix [fx, 0, cx, 0, fy, cy, 0, 0, 1]
-            if (camera_info.k.size() >= 9) {
-                fisheye_camera_matrix_ = (cv::Mat_<double>(3, 3) << 
-                    camera_info.k[0], camera_info.k[1], camera_info.k[2],
-                    camera_info.k[3], camera_info.k[4], camera_info.k[5],
-                    camera_info.k[6], camera_info.k[7], camera_info.k[8]);
-            } else {
-                throw std::runtime_error("Invalid intrinsics data from camera info");
-            }
-            
-            // Extract distortion coefficients from ROS CameraInfo D vector
-            if (camera_info.d.size() >= 4) {
-                fisheye_dist_coeffs_ = (cv::Mat_<double>(4, 1) << 
-                    camera_info.d[0], camera_info.d[1], 
-                    camera_info.d[2], camera_info.d[3]);
-            } else {
-                throw std::runtime_error("Invalid distortion coefficients from camera info");
-            }
-            
-            image_size_ = cv::Size(dims.width, dims.height);
-            
-            // Create new camera matrix for rectification with FOV scaling
-            cv::Mat new_camera_matrix;
-            cv::fisheye::estimateNewCameraMatrixForUndistortRectify(
-                fisheye_camera_matrix_, fisheye_dist_coeffs_, image_size_, 
-                cv::Matx33d::eye(), new_camera_matrix, fov_scale_);
-            rectified_camera_matrix_ = new_camera_matrix;
-            
-            // Create fisheye undistortion maps
-            cv::fisheye::initUndistortRectifyMap(
-                fisheye_camera_matrix_, fisheye_dist_coeffs_, cv::Matx33d::eye(),
-                rectified_camera_matrix_, image_size_, CV_32FC1, 
-                fisheye_map1_, fisheye_map2_);
-            
-            RCLCPP_INFO(this->get_logger(), "Fisheye rectification initialized successfully");
-            RCLCPP_INFO(this->get_logger(), "Original camera matrix:");
-            RCLCPP_INFO(this->get_logger(), "  fx=%.2f, fy=%.2f, cx=%.2f, cy=%.2f", 
-                fisheye_camera_matrix_.at<double>(0,0), fisheye_camera_matrix_.at<double>(1,1),
-                fisheye_camera_matrix_.at<double>(0,2), fisheye_camera_matrix_.at<double>(1,2));
-            RCLCPP_INFO(this->get_logger(), "Distortion coefficients: [%.4f, %.4f, %.4f, %.4f]",
-                fisheye_dist_coeffs_.at<double>(0), fisheye_dist_coeffs_.at<double>(1),
-                fisheye_dist_coeffs_.at<double>(2), fisheye_dist_coeffs_.at<double>(3));
-            
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to initialize fisheye rectification: %s", e.what());
-            enable_rectification_ = false;
-        }
     }
 
     void restart_device() {
@@ -380,39 +296,14 @@ private:
             rclcpp::SensorDataQoS()
         );
 
-        // Create publishers for rectified images if rectification is enabled
-        if (enable_rectification_) {
-            std::string rectified_topic = "/color/image_rectified";
-            std::string rectified_compressed_topic = "/color/image_rectified/compressed";
-            
-            rectified_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-                rectified_topic,
-                rclcpp::SensorDataQoS()
-            );
-            
-            rectified_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-                rectified_compressed_topic,
-                rclcpp::SensorDataQoS()
-            );
-
-            RCLCPP_INFO(this->get_logger(), "Created rectified image publishers on topics: %s and %s", 
-                rectified_topic.c_str(), rectified_compressed_topic.c_str());
-        }
-
-        RCLCPP_INFO(this->get_logger(), "Created raw image publishers on topics: %s and %s", 
+        RCLCPP_INFO(this->get_logger(), "Created publishers on topics: %s and %s", 
             raw_topic.c_str(), compressed_topic.c_str());
 
-        // Create timer for publishing
-        // Use different frequencies for raw vs rectified images
-        int publish_interval_ms = enable_rectification_ ? 
-            static_cast<int>(1000.0 / rectified_fps_) : 33; // 33ms = ~30Hz for raw
-            
+        // Create timer for 30Hz publishing
         publish_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(publish_interval_ms),
+            std::chrono::milliseconds(33),
             std::bind(&CameraDriverNode::publish_frame, this)
         );
-        
-        RCLCPP_INFO(this->get_logger(), "Publishing timer set to %d ms interval", publish_interval_ms);
     }
 
     void publish_frame() {
@@ -424,7 +315,7 @@ private:
                     // Convert to OpenCV Mat
                     cv::Mat cvFrame(frame->getHeight(), frame->getWidth(), CV_8UC3, imgData.data());
                     
-                    // Create and publish raw image message (always publish this)
+                    // Create and publish raw image message
                     sensor_msgs::msg::Image rosImage;
                     rosImage.header.stamp = this->now();
                     rosImage.header.frame_id = tf_prefix_ + "_rgb_camera_optical_frame";
@@ -436,7 +327,7 @@ private:
                     rosImage.data = std::vector<uint8_t>(imgData.begin(), imgData.end());
                     image_pub_->publish(rosImage);
 
-                    // Create and publish compressed raw image message
+                    // Create and publish compressed image message
                     sensor_msgs::msg::CompressedImage compressed_msg;
                     compressed_msg.header = rosImage.header;
                     compressed_msg.format = "jpeg";
@@ -447,40 +338,11 @@ private:
                     
                     compressed_pub_->publish(compressed_msg);
 
-                    // Apply fisheye rectification and publish rectified images if enabled
-                    if (enable_rectification_ && !fisheye_map1_.empty() && !fisheye_map2_.empty()) {
-                        cv::Mat rectified_frame;
-                        cv::remap(cvFrame, rectified_frame, fisheye_map1_, fisheye_map2_, cv::INTER_LINEAR);
-                        
-                        // Create and publish rectified raw image message
-                        sensor_msgs::msg::Image rectified_ros_image;
-                        rectified_ros_image.header.stamp = this->now();
-                        rectified_ros_image.header.frame_id = tf_prefix_ + "_rgb_camera_optical_frame_rectified";
-                        rectified_ros_image.height = rectified_frame.rows;
-                        rectified_ros_image.width = rectified_frame.cols;
-                        rectified_ros_image.encoding = "bgr8";
-                        rectified_ros_image.is_bigendian = false;
-                        rectified_ros_image.step = rectified_frame.cols * 3;
-                        rectified_ros_image.data = std::vector<uint8_t>(
-                            rectified_frame.data, 
-                            rectified_frame.data + rectified_frame.total() * rectified_frame.elemSize()
-                        );
-                        rectified_image_pub_->publish(rectified_ros_image);
-
-                        // Create and publish compressed rectified image message
-                        sensor_msgs::msg::CompressedImage rectified_compressed_msg;
-                        rectified_compressed_msg.header = rectified_ros_image.header;
-                        rectified_compressed_msg.format = "jpeg";
-                        cv::imencode(".jpg", rectified_frame, rectified_compressed_msg.data, params);
-                        rectified_compressed_pub_->publish(rectified_compressed_msg);
-                    }
-
                     // Log frame details periodically
                     static int frame_count = 0;
                     if (++frame_count % 30 == 0) {
-                        std::string rectified_status = enable_rectification_ ? "with rectification" : "without rectification";
-                        RCLCPP_INFO(this->get_logger(), "Published frame %d - %s (Raw size: %zu bytes, Compressed size: %zu bytes)",
-                            frame_count, rectified_status.c_str(), rosImage.data.size(), compressed_msg.data.size());
+                        RCLCPP_INFO(this->get_logger(), "Published frame %d - Raw size: %zu bytes, Compressed size: %zu bytes",
+                            frame_count, rosImage.data.size(), compressed_msg.data.size());
                     }
                 }
             }
@@ -522,11 +384,6 @@ private:
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
-    
-    // Rectified image publishers
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rectified_image_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr rectified_compressed_pub_;
-    
     rclcpp::TimerBase::SharedPtr publish_timer_;
 
     std::string tf_prefix_;
@@ -538,11 +395,6 @@ private:
     double fps_val_;
     std::string mxId_str_;
     bool usb2Mode_val_;
-    
-    // Fisheye rectification parameters
-    bool enable_rectification_;
-    double rectified_fps_;
-    double fov_scale_;
 
     dai::Pipeline pipeline_;
     std::unique_ptr<dai::Device> device_;
@@ -553,13 +405,6 @@ private:
 
     camera_info_manager::CameraInfoManager cinfo_manager_;
     std::shared_ptr<sensor_msgs::msg::CameraInfo> rgb_cam_info_;
-
-    // Fisheye rectification variables
-    cv::Mat fisheye_camera_matrix_;
-    cv::Mat fisheye_dist_coeffs_;
-    cv::Mat rectified_camera_matrix_;
-    cv::Mat fisheye_map1_, fisheye_map2_;
-    cv::Size image_size_;
 
     // Retry logic variables
     int retry_count_;

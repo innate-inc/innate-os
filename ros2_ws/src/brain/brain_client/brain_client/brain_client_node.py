@@ -64,6 +64,7 @@ from brain_client.primitives.pick_up_sock import PickUpSock
 from brain_client.primitives.drop_socks import DropSocks
 from brain_client.primitives.play_move import PlayMove
 from brain_client.primitives.get_chess_move import GetChessMove
+from brain_client.primitives.calibrate_chess import CalibrateChess
 
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.empty_directive import EmptyDirective
@@ -88,7 +89,7 @@ class BrainClientNode(Node):
         # Parameters
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
-        self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
+        self.declare_parameter("image_topic", "/color/image/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
 
         # New parameters for optional depth processing:
@@ -409,6 +410,7 @@ class BrainClientNode(Node):
             TaskType.DROP_SOCKS.value: DropSocks(self.get_logger()),
             TaskType.PLAY_MOVE.value: PlayMove(self.get_logger()),
             TaskType.GET_CHESS_MOVE.value: GetChessMove(self.get_logger()),
+            TaskType.CALIBRATE_CHESS.value: CalibrateChess(self.get_logger()),
             # Add other primitives here as they become available
         }
 
@@ -687,9 +689,12 @@ class BrainClientNode(Node):
 
             # Skip if no valid image or odometry data is available
             if self.last_image is None or self.last_odom is None:
-                self.get_logger().warn(
-                    "Skipping pose_image: No image or odom/amcl_pose."
-                )
+                debug_msg = "Skipping pose_image because:"
+                if self.last_image is None:
+                    debug_msg += " self.last_image is None."
+                if self.last_odom is None:
+                    debug_msg += " self.last_odom is None."
+                self.get_logger().warn(debug_msg)
                 return
             # In simulator mode, allow pose_image_callback even if nav_mode is None
             if (
@@ -1333,11 +1338,24 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Primitive result details: {result}")
         outgoing_msg = None
         if result.success and result.success_type == PrimitiveResult.SUCCESS.value:
+            # Try to parse the result message as JSON
+            result_payload = {}
+            if result.message:
+                try:
+                    result_payload = json.loads(result.message)
+                except json.JSONDecodeError:
+                    self.get_logger().warn(
+                        f"Primitive result message is not valid JSON, sending as raw string: {result.message}"
+                    )
+                    # If not JSON, send it as a raw string under a 'message' key
+                    result_payload = {"message": result.message}
+
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_COMPLETED,
                 payload={
                     "primitive_name": primitive_name,
                     "primitive_id": primitive_id,
+                    "result": result_payload,  # Include the parsed result from the primitive
                 },
             )
         elif result.success_type == PrimitiveResult.CANCELLED.value:
