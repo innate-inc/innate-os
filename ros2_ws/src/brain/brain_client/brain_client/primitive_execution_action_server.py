@@ -188,7 +188,7 @@ class PrimitiveExecutionActionServer(Node):
             )
 
         primitive_type = goal_handle.request.primitive_type
-        if primitive_type not in self._primitives:
+        if primitive_type not in self._primitive_classes:
             self.get_logger().error(f"Primitive '{primitive_type}' not available")
             goal_handle.abort()
             return ExecutePrimitive.Result(
@@ -249,6 +249,9 @@ class PrimitiveExecutionActionServer(Node):
                 success_type=PrimitiveResult.FAILURE.value,
             )
 
+        # The core execution logic is wrapped in a try/finally block to ensure
+        # that the primitive is removed from the active dictionary after completion.
+        self._primitives[primitive_type] = primitive
         try:
             # Get required states and inject them into the primitive
             required_states = primitive.get_required_robot_states()
@@ -442,6 +445,11 @@ class PrimitiveExecutionActionServer(Node):
                 primitive_type=primitive_type,
                 success_type=PrimitiveResult.FAILURE.value,
             )
+        finally:
+            # Ensure the primitive is removed from the active list when execution finishes
+            if primitive_type in self._primitives:
+                del self._primitives[primitive_type]
+                self.get_logger().debug(f"Removed '{primitive_type}' from active primitives.")
 
     def destroy(self):
         self._action_server.destroy()

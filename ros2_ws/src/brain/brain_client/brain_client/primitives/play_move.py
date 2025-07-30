@@ -254,7 +254,7 @@ class PlayMove(Primitive):
             response = future.result()
             if response and response.success:
                 self.logger.info(f"Trajectory started successfully, waiting {trajectory_time + 1.5}s for completion")
-                time.sleep(trajectory_time + 1.5)  # Wait for trajectory to complete + buffer
+                time.sleep(trajectory_time + 0.5)  # Wait for trajectory to complete + buffer
                 return True
             else:
                 self.logger.error(f"Trajectory execution failed: {response.message if response else 'No response'}")
@@ -263,7 +263,7 @@ class PlayMove(Primitive):
             self.logger.error("Service call timed out")
             return False
 
-    def _move_to_square(self, square, pose_type, gripper_state=None, trajectory_time=3):
+    def _move_to_square(self, square, pose_type, gripper_state=None, trajectory_time=1.5):
         """Move the arm to a specific chess square's high or low pose."""
         position_name = f"{square}_{pose_type}"
         if not self.chess_positions or position_name not in self.chess_positions:
@@ -356,7 +356,7 @@ class PlayMove(Primitive):
             # STEP 4: Close gripper
             self._send_feedback(f"4️⃣ Closing gripper to grab piece at {from_square}")
             if not self._execute_trajectory(self.chess_positions[f"{from_square}_low"]['joint_positions'], 
-                                            trajectory_time=1.5, gripper_state=self.GRIPPER_CLOSED):
+                                            trajectory_time=0.5, gripper_state=self.GRIPPER_CLOSED):
                 return f"Failed to close gripper at {from_square}", PrimitiveResult.FAILURE
 
             # STEP 5: Move back to 'from' high position
@@ -377,7 +377,7 @@ class PlayMove(Primitive):
             # STEP 8: Open gripper
             self._send_feedback(f"8️⃣ Opening gripper to release piece at {to_square}")
             if not self._execute_trajectory(self.chess_positions[f"{to_square}_low"]['joint_positions'], 
-                                            trajectory_time=1.5, gripper_state=self.GRIPPER_OPEN):
+                                            trajectory_time=0.5, gripper_state=self.GRIPPER_OPEN):
                 return f"Failed to open gripper at {to_square}", PrimitiveResult.FAILURE
 
             # STEP 9: Move back to 'to' high position
@@ -392,7 +392,7 @@ class PlayMove(Primitive):
             
             # STEP 11: Final move to rest position
             self._send_feedback("🏠 Moving to final rest position")
-            if not self._execute_trajectory(self.FINAL_REST_JOINT_POSITIONS, trajectory_time=4):
+            if not self._execute_trajectory(self.FINAL_REST_JOINT_POSITIONS, trajectory_time=2):
                  return f"Failed to move to final rest position", PrimitiveResult.FAILURE
 
             # FINAL STEP: Capture image AFTER the move is complete
