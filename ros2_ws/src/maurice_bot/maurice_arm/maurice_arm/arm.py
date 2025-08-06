@@ -209,9 +209,19 @@ class MauriceArmNode(Node):
             # Convert positions from encoder counts to radians:
             # Assuming 0 encoder count corresponds to -2048 and full revolution is 4096 counts:
             positions_rad = [((pos - 2048) * (2 * math.pi) / 4096) for pos in positions]
+            
+            # Flip directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
+            for i in [1, 2, 3, 5]:
+                if i < len(positions_rad):
+                    positions_rad[i] = -positions_rad[i]
 
             # Convert velocities to radians per second (if needed)
             velocities_rad = [float(vel) * 2 * math.pi / 4096 for vel in velocities]
+            
+            # Flip velocity directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
+            for i in [1, 2, 3, 5]:
+                if i < len(velocities_rad):
+                    velocities_rad[i] = -velocities_rad[i]
 
             self.joint_state_msg.header.stamp = self.get_clock().now().to_msg()
             self.joint_state_msg.position = positions_rad
@@ -232,8 +242,17 @@ class MauriceArmNode(Node):
         try:
             # In this example, we assume the command array has one value per joint.
             # Here you might check against limits (converted to radians) if desired.
+            
+            # Create a copy of the command data to modify
+            command_data = list(msg.data)
+            
+            # Flip directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
+            for i in [1, 2, 3, 5]:
+                if i < len(command_data):
+                    command_data[i] = -command_data[i]
+            
             # Then convert the command from radians to encoder counts:
-            command_encoder = [int((pos / (2 * math.pi)) * 4096 + 2048) for pos in msg.data]
+            command_encoder = [int((pos / (2 * math.pi)) * 4096 + 2048) for pos in command_data]
             self.latest_command = command_encoder
         except Exception as e:
             self.get_logger().error(f"Error in command callback: {str(e)}")
