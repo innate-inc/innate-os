@@ -134,7 +134,7 @@ class MauriceArmNode(Node):
         self.latest_command = None
 
     def wait_for_servo_manager(self):
-        """Wait for servo_manager to be ready and return the arm device name."""
+        """Wait for servo_manager to provide arm_device parameter."""
         # Create a client to get parameters from servo_manager
         param_client = self.create_client(GetParameters, '/servo_manager/get_parameters')
         
@@ -144,13 +144,13 @@ class MauriceArmNode(Node):
             self.get_logger().error(f"servo_manager parameter service not available after {timeout_sec} seconds")
             return None
         
-        # Poll for the ready parameter
+        # Poll for the arm_device parameter
         max_attempts = 60  # 60 seconds with 1 second intervals
         for attempt in range(max_attempts):
             try:
-                # Create request for the ready parameter
+                # Create request for the arm_device parameter
                 request = GetParameters.Request()
-                request.names = ['ready']
+                request.names = ['arm_device']
                 
                 # Call the service
                 future = param_client.call_async(request)
@@ -158,25 +158,16 @@ class MauriceArmNode(Node):
                 
                 if future.result() is not None:
                     response = future.result()
-                    if len(response.values) > 0 and response.values[0].bool_value:
-                        # servo_manager is ready, get the arm device
-                        request = GetParameters.Request()
-                        request.names = ['arm_device']
-                        
-                        future = param_client.call_async(request)
-                        rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-                        
-                        if future.result() is not None:
-                            response = future.result()
-                            if len(response.values) > 0:
-                                return response.values[0].string_value
-                        
-                        self.get_logger().error("Could not get arm_device parameter")
-                        return None
+                    if len(response.values) > 0:
+                        arm_device = response.values[0].string_value
+                        if arm_device and arm_device.strip():  # Check if not empty and not just whitespace
+                            return arm_device
+                        else:
+                            self.get_logger().info(f"arm_device parameter is empty, attempt {attempt + 1}/{max_attempts}")
                     else:
-                        self.get_logger().info(f"servo_manager not ready yet, attempt {attempt + 1}/{max_attempts}")
+                        self.get_logger().info(f"arm_device parameter not available yet, attempt {attempt + 1}/{max_attempts}")
                 else:
-                    self.get_logger().info(f"ready parameter not available yet, attempt {attempt + 1}/{max_attempts}")
+                    self.get_logger().info(f"Could not get arm_device parameter, attempt {attempt + 1}/{max_attempts}")
                     
             except Exception as e:
                 self.get_logger().warn(f"Error checking servo_manager parameters: {e}")
@@ -184,7 +175,7 @@ class MauriceArmNode(Node):
             # Wait 1 second before next attempt
             time.sleep(1.0)
         
-        self.get_logger().error("Timeout waiting for servo_manager to be ready")
+        self.get_logger().error("Timeout waiting for servo_manager to provide arm_device")
         return None
 
     def timer_callback(self):

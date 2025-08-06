@@ -8,8 +8,8 @@ arm:
           "joint_1": {
               "servo_id": 1,
               "position_limits": {
-                  "min": -1.57,
-                  "max": 1.57
+                  "min": -1.5708,
+                  "max": 1.5708
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -17,8 +17,8 @@ arm:
           "joint_2": {
               "servo_id": 2,
               "position_limits": {
-                  "min": -0.61,
-                  "max": 1.2
+                  "min": -1.5708,
+                  "max": 0.6981
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -26,8 +26,8 @@ arm:
           "joint_3": {
               "servo_id": 3,
               "position_limits": {
-                  "min": -1.57,
-                  "max": 1.57
+                  "min": -1.5708,
+                  "max": 1.7453
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -35,8 +35,8 @@ arm:
           "joint_4": {
               "servo_id": 4,
               "position_limits": {
-                  "min": -1.74,
-                  "max": 1.74
+                  "min": -1.9199,
+                  "max": 1.7453
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -44,8 +44,8 @@ arm:
           "joint_5": {
               "servo_id": 5,
               "position_limits": {
-                  "min": -1.57,
-                  "max": 1.57
+                  "min": -1.5708,
+                  "max": 1.5708
               },
               "pwm_limits": 885,
               "control_mode": 2
@@ -53,8 +53,8 @@ arm:
           "joint_6": {
               "servo_id": 6,
               "position_limits": {
-                  "min": -0.0872,
-                  "max": 1.0821
+                  "min": -0.8727,
+                  "max": 0.3491
               },
               "pwm_limits": 885,
               "current_limit": 100,
