@@ -109,6 +109,28 @@ class MauriceArmNode(Node):
             dynamixel.set_operating_mode(servo_id, op_mode)
             time.sleep(0.5)
 
+            # Set PID gains AFTER setting operating mode (like in head file)
+            if "pid_gains" in joint:
+                pid_gains = joint["pid_gains"]
+                kp = pid_gains.get("kp", 400)  # Default P gain is 400
+                ki = pid_gains.get("ki", 0)    # Default I gain is 0
+                kd = pid_gains.get("kd", 0)    # Default D gain is 0
+                
+                self.get_logger().info(f"Setting {joint_name} PID gains - kp: {kp}, ki: {ki}, kd: {kd}")
+                try:
+                    dynamixel.set_P(servo_id, int(kp))
+                    self.get_logger().info(f"Successfully set P gain to {int(kp)} for {joint_name}")
+                    time.sleep(0.1)
+                    dynamixel.set_I(servo_id, int(ki))
+                    self.get_logger().info(f"Successfully set I gain to {int(ki)} for {joint_name}")
+                    time.sleep(0.1)
+                    dynamixel.set_D(servo_id, int(kd))
+                    self.get_logger().info(f"Successfully set D gain to {int(kd)} for {joint_name}")
+                    time.sleep(0.1)
+                except Exception as e:
+                    self.get_logger().error(f"Failed to set PID gains for {joint_name}: {str(e)}")
+                    raise
+
             # Finally, enable torque for this servo.
             self.get_logger().info(f"Enabling torque for {joint_name} (Servo ID {servo_id})")
             dynamixel._enable_torque(servo_id)

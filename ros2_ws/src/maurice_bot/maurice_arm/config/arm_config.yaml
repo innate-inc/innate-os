@@ -12,7 +12,12 @@ arm:
                   "max": 1.5708
               },
               "pwm_limits": 885,
-              "control_mode": 2
+              "control_mode": 2,
+              "pid_gains": {
+                  "kp": 300,
+                  "ki": 10,
+                  "kd": 1000
+              }
           },
           "joint_2": {
               "servo_id": 2,
@@ -21,7 +26,12 @@ arm:
                   "max": 0.6981
               },
               "pwm_limits": 885,
-              "control_mode": 2
+              "control_mode": 2,
+              "pid_gains": {
+                  "kp": 300,
+                  "ki": 200,
+                  "kd": 100
+              }
           },
           "joint_3": {
               "servo_id": 3,
@@ -30,7 +40,12 @@ arm:
                   "max": 1.7453
               },
               "pwm_limits": 885,
-              "control_mode": 2
+              "control_mode": 2,
+              "pid_gains": {
+                  "kp": 640,
+                  "ki": 100,
+                  "kd": 3600
+              }
           },
           "joint_4": {
               "servo_id": 4,
@@ -39,7 +54,12 @@ arm:
                   "max": 1.7453
               },
               "pwm_limits": 885,
-              "control_mode": 2
+              "control_mode": 2,
+              "pid_gains": {
+                  "kp": 400,
+                  "ki": 400,
+                  "kd": 1000
+              }
           },
           "joint_5": {
               "servo_id": 5,
@@ -48,7 +68,12 @@ arm:
                   "max": 1.5708
               },
               "pwm_limits": 885,
-              "control_mode": 2
+              "control_mode": 2,
+              "pid_gains": {
+                  "kp": 400,
+                  "ki": 0,
+                  "kd": 0
+              }
           },
           "joint_6": {
               "servo_id": 6,
@@ -58,6 +83,11 @@ arm:
               },
               "pwm_limits": 885,
               "current_limit": 100,
-              "control_mode": 4
+              "control_mode": 4,
+              "pid_gains": {
+                  "kp": 400,
+                  "ki": 0,
+                  "kd": 0
+              }
           }
       }
