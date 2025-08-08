@@ -54,35 +54,41 @@
             <camera name="camera_base" pos="0.0197 0 0.19663" 
                     quat="0.5416752 0.4545195 -0.4545195 -0.5416752" mode="fixed" fovy="80"/>
             
-            <body name="link1" pos="0.0845 -0.0597 0.0583">
+            <body name="link1" pos="0.086 -0.05285 0.04025">
               <inertial pos="0 0 0" mass="0.065" diaginertia="0.0001 0.0001 0.0001"/>
               <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="5"/>
               <geom name="link1_geom" type="mesh" mesh="link1_mesh" material="bright_orange"/>
               
-              <body name="link2" pos="0 0 0.01825">
+              <body name="link2" pos="0 0 0.04225">
                 <inertial pos="0 0 0" mass="0.080" diaginertia="0.0001 0.0001 0.0001"/>
                 <joint name="joint2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                 <geom name="link2_geom" type="mesh" mesh="link2_mesh" material="matt_black"/>
                 
-                <body name="link3" pos="0.034 0 0.11825">
+                <body name="link3" pos="0.02825 0 0.12125">
                   <inertial pos="0 0 0" mass="0.055" diaginertia="0.0001 0.0001 0.0001"/>
                   <joint name="joint3" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                   <geom name="link3_geom" type="mesh" mesh="link3_mesh" material="bright_orange"/>
                   
-                  <body name="link4" pos="0.13609 0 0.00025">
+                  <body name="link4" pos="0.1375 0 -0.0045">
                     <inertial pos="0 0 0" mass="0.022" diaginertia="0.00005 0.00005 0.00005"/>
                     <joint name="joint4" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                     <geom name="link4_geom" type="mesh" mesh="link4_mesh" material="matt_black"/>
                     
-                    <body name="link5" pos="0.045 0.002 0">
+                    <body name="link5" pos="0.019 0 0">
                       <inertial pos="0 0 0" mass="0.050" diaginertia="0.00005 0.00005 0.00005"/>
                       <joint name="joint5" type="hinge" axis="1 0 0" limited="true" range="-3.14 3.14" damping="5"/>
                       <geom name="link5_geom" type="mesh" mesh="link5_mesh" material="bright_orange"/>
                       
-                      <body name="link6" pos="0.014 -0.0075 0">
+                      <body name="link6" pos="0.044 0.0091 0">
                         <inertial pos="0 0 0" mass="0.012" diaginertia="0.00002 0.00002 0.00002"/>
-                        <joint name="joint6" type="hinge" axis="0 0 -1" limited="true" range="-3.14 3.14" damping="5"/>
+                        <joint name="joint6" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="5"/>
                         <geom name="link6_geom" type="mesh" mesh="link6_mesh" material="matt_black"/>
+                      </body>
+                      
+                      <!-- Add End Effector -->
+                      <body name="ee_link" pos="0.09285 0 0">
+                        <inertial pos="0 0 0" mass="0.001" diaginertia="0.00001 0.00001 0.00001"/>
+                        <geom name="ee_geom" type="sphere" size="0.005" material="bright_orange"/>
                       </body>
                       
                       <body name="arm_camera_link" pos="0.00454 0 0.05448">

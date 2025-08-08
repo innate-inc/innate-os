@@ -135,7 +135,10 @@ class Bringup(Node):
             '/battery_state',
             10  # QoS profile depth
         )
-        
+
+        # Every minute, enqueue a UART health request (will update battery_voltage)
+        self.status_timer = self.create_timer(60.0, self.uart_manager.request_health)
+
         if self.debug:
             self.get_logger().debug('Finished setting up ROS2 services and topics')
 
