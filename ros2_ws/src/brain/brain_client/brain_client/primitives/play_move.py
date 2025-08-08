@@ -57,11 +57,13 @@ class PlayMove(Primitive):
     """
 
     # Rest position joint angles
-    FINAL_REST_JOINT_POSITIONS = [-1.5477, 1.2241, -1.5309, 1.0814, -0.0874, -0.113]
+    FINAL_REST_JOINT_POSITIONS = [1.55, -1.3, 1.6, 0.27, -0.029, -0.023]
+    SAFE_REST_JOINT_POSITIONS = [1.57, 0.0, 0.0, 0.0, 0.0,0.0]
     
     # Gripper control
-    GRIPPER_OPEN = 0.5
-    GRIPPER_CLOSED = 0.0
+    GRIPPER_OPEN = 0.4
+    GRIPPER_CLOSED = -0.1
+
 
     def __init__(self, logger):
         super().__init__(logger)
@@ -408,9 +410,10 @@ class PlayMove(Primitive):
             self._send_feedback(f"📋 Executing chess move sequence: {from_square} → {to_square}")
             
             # STEP 1: Move to a safe starting position (d2_high)
-            self._send_feedback("1️⃣ Moving to safe start position (d2_high)")
-            if not self._move_to_square('d2', 'high', gripper_state=self.GRIPPER_OPEN):
-                 return f"Failed to move to safe start position", PrimitiveResult.FAILURE
+            self._send_feedback("1️⃣ Moving to safe start position")
+            if not self._execute_trajectory(self.SAFE_REST_JOINT_POSITIONS, trajectory_time=1):
+                 return f"Failed to move to final rest position", PrimitiveResult.FAILURE
+                 
 
             # STEP 2: Move to 'from' high position, gripper open
             self._send_feedback(f"2️⃣ Moving above {from_square} (gripper open)")
@@ -452,10 +455,10 @@ class PlayMove(Primitive):
             if not self._move_to_square(to_square, 'high', gripper_state=self.GRIPPER_OPEN):
                 return f"Failed to move up from {to_square}", PrimitiveResult.FAILURE
                 
-            # STEP 10: Move back to safe position (d2_high)
-            self._send_feedback("🔟 Moving back to safe position (d2_high)")
-            if not self._move_to_square('d2', 'high', gripper_state=self.GRIPPER_OPEN):
-                return f"Failed to move back to safe position", PrimitiveResult.FAILURE
+            # STEP 10: Move back to safe position
+            self._send_feedback("🔟 Moving back to safe position")
+            if not self._execute_trajectory(self.SAFE_REST_JOINT_POSITIONS, trajectory_time=1):
+                 return f"Failed to move to final rest position", PrimitiveResult.FAILURE
             
             # STEP 11: Final move to rest position
             self._send_feedback("🏠 Moving to final rest position")

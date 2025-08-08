@@ -39,6 +39,9 @@ class CalibrateChess(Primitive):
         # Path for the generated cartesian poses
         self.cartesian_poses_path = "/tmp/chess_cartesian_poses.json"
         
+        # Path for the chessboard corner data
+        self.corners_file_path = "/tmp/chess_board_corners.npy"
+        
         self.logger.info("CalibrateChess primitive initialized")
 
     @property
@@ -72,7 +75,7 @@ class CalibrateChess(Primitive):
                 'h4': np.array(anchor_data['anchors']['h4_low']['position'])
             }
             z_offset = anchor_data.get('z_offset', 0.05)
-            default_rpy = anchor_data.get('default_orientation_rpy', [3.14, 0.0, 0.0])
+            default_rpy = anchor_data.get('default_orientation_rpy', [0, 1.57, 0.0])
 
             # 2. Interpolate to find all low poses
             a1 = measured_poses['a1']
@@ -259,18 +262,25 @@ class CalibrateChess(Primitive):
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 
-            # Step 3: CRITICAL - Set this image as the definitive initial board state
+            # Step 3: Detect and save corners from the new image
+            self._send_feedback("🔍 Detecting chessboard corners")
+            if not self._detect_and_save_corners(calibration_image_path):
+                error_msg = "Failed to detect chessboard corners"
+                self.logger.error(f"❌ {error_msg}")
+                return error_msg, PrimitiveResult.FAILURE
+
+            # Step 4: CRITICAL - Set this image as the definitive initial board state
             definitive_state_path = "/tmp/last_known_board_state.jpg"
             shutil.copy2(calibration_image_path, definitive_state_path)
             self.logger.info(f"✅ Set initial board state at: {definitive_state_path}")
 
-            # Step 4: Verify interpolated poses file was saved
+            # Step 5: Verify interpolated poses file was saved
             if not os.path.exists(self.cartesian_poses_path):
                 error_msg = "Interpolated poses file was not created"
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
             
-            # Step 5: Create/reset the FEN file to the starting position
+            # Step 6: Create/reset the FEN file to the starting position
             try:
                 initial_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
                 with open(self.fen_file_path, 'w') as f:
@@ -291,7 +301,7 @@ class CalibrateChess(Primitive):
                 return error_msg, PrimitiveResult.FAILURE
 
             # Success!
-            result_msg = f"✅ Chess recalibration complete! Interpolated poses, new baseline image, and FEN state saved."
+            result_msg = f"✅ Chess recalibration complete! Interpolated poses, new baseline image, corners, and FEN state saved."
             self._send_feedback(result_msg)
             self.logger.info(result_msg)
             
@@ -299,6 +309,7 @@ class CalibrateChess(Primitive):
             result = {
                 "calibrated": True,
                 "cartesian_poses_file": self.cartesian_poses_path,
+                "corners_file": self.corners_file_path,
                 "initial_image": self.initial_board_image_path,
                 "timestamp": time.time()
             }
@@ -389,10 +400,11 @@ class CalibrateChess(Primitive):
     def is_calibrated():
         """
         Static method to check if the chess system has been calibrated.
-        Now checks for the interpolated poses file instead of corners.
+        Now checks for both the interpolated poses file and the corner file.
         
         Returns:
             bool: True if calibrated, False otherwise
         """
         poses_file_path = "/tmp/chess_cartesian_poses.json"
-        return os.path.exists(poses_file_path) 
+        corners_file_path = "/tmp/chess_board_corners.npy"
+        return os.path.exists(poses_file_path) and os.path.exists(corners_file_path) 

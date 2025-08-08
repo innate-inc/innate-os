@@ -5,7 +5,7 @@
     "frame_id": "base_link"
   },
   "z_offset": 0.05,
-  "default_orientation_rpy": [3.14159, 0.0, 0.0],
+  "default_orientation_rpy": [0.0, 1.57, 0.0],
   "anchors": {
     "a1_low": {
       "position": [0.164, 0.0545, 0.0288]
