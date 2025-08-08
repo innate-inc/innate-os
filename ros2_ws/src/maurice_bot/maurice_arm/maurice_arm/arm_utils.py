@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
-from maurice_msgs.srv import GotoJS  # Service now includes an int32 time in the request
+from maurice_msgs.srv import GotoJS  # Service now includes a float32 time in the request
 
 class ArmCommanderNode(Node):
     def __init__(self):
@@ -71,12 +71,12 @@ class ArmCommanderNode(Node):
         Service callback for 'maurice_arm/goto_js'.
         Expects:
           - request.data: a Float64MultiArray containing the target joint positions.
-          - request.time: an int32 representing the total trajectory time in seconds.
+          - request.time: a float32 representing the total trajectory time in seconds.
         Computes a cubic trajectory from the current state to the target and starts publishing it.
         """
         # Extract the target joint positions and trajectory time from the service request.
         target = request.data.data
-        total_time = float(request.time)
+        total_time = request.time # No longer need to cast to float
 
         # Validate trajectory time
         if total_time <= 0:

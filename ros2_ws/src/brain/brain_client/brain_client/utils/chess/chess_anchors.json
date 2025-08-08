@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "description": "Anchor Cartesian poses for the four corners of the playable chess area (a1, h1, a4, h4). Used for interpolating all other square positions.",
+    "units": "meters, radians",
+    "frame_id": "base_link"
+  },
+  "z_offset": 0.05,
+  "default_orientation_rpy": [3.14159, 0.0, 0.0],
+  "anchors": {
+    "a1_low": {
+      "position": [0.164, 0.0545, 0.0288]
+    },
+    "h1_low": {
+      "position": [0.165, -0.1688, 0.0315]
+    },
+    "a4_low": {
+      "position": [0.264, 0.057, 0.038]
+    },
+    "h4_low": {
+      "position": [0.26, -0.167, 0.038]
+    }
+  }
+} 

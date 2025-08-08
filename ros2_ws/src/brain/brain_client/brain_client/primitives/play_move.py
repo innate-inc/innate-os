@@ -3,13 +3,14 @@ import rclpy
 from brain_client.primitives.types import Primitive, PrimitiveResult, RobotStateType
 from maurice_msgs.srv import GotoJS
 from std_msgs.msg import Float64MultiArray
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import JointState
 import time
 import cv2
 import os
-from brain_client.utils.camera_utils import initialize_camera
 import chess
 import json
-import pkg_resources
+from brain_client.utils.camera_utils import initialize_camera
 
 def _load_fen_from_file(logger):
     """Load FEN from the shared file."""
@@ -51,7 +52,7 @@ def _append_to_history(move_str, new_fen, logger):
 class PlayMove(Primitive):
     """
     Primitive for playing a chess move by executing a complete pick-and-place sequence
-    using pre-recorded joint positions.
+    using dynamically calculated Cartesian poses and inverse kinematics.
     This primitive now captures an image AFTER the move is completed.
     """
 
@@ -65,24 +66,31 @@ class PlayMove(Primitive):
     def __init__(self, logger):
         super().__init__(logger)
         self.goto_js_client = None  # Service client for trajectory execution
-        self.chess_positions = self._load_chess_positions()
+        self.ik_delta_pub = None    # Publisher for IK requests
+        self.ik_solution_sub = None # Subscriber for IK solutions
+        
+        self.cartesian_poses = self._load_cartesian_poses()
+        self.ik_solution = None # Stores the latest IK solution
         
         # Camera configuration for image capture
         self.camera_index = None  # Will be determined automatically
         self.camera = None
         self.preferred_backend = cv2.CAP_V4L2  # Use V4L2 backend for better compatibility
 
-    def _load_chess_positions(self):
-        """Load chess positions from the JSON file."""
+    def _load_cartesian_poses(self):
+        """Load interpolated chess poses from the JSON file."""
+        poses_path = "/tmp/chess_cartesian_poses.json"
         try:
-            # Correctly locate the file within the package
-            file_path = pkg_resources.resource_filename('brain_client', 'utils/chess/chess_positions.json')
-            with open(file_path, 'r') as f:
+            if not os.path.exists(poses_path):
+                self.logger.error(f"Cartesian poses file not found at {poses_path}. Run calibrate_chess first.")
+                return None
+
+            with open(poses_path, 'r') as f:
                 data = json.load(f)
-            self.logger.info(f"Successfully loaded {len(data['positions'])} chess positions.")
-            return data['positions']
+            self.logger.info(f"Successfully loaded {len(data['poses'])} Cartesian poses.")
+            return data['poses']
         except Exception as e:
-            self.logger.error(f"Failed to load chess_positions.json: {e}")
+            self.logger.error(f"Failed to load {poses_path}: {e}")
             return None
 
     @property
@@ -92,8 +100,8 @@ class PlayMove(Primitive):
     def guidelines(self):
         return (
             "Use this to play a chess move. Provide the move in format 'from_square to_square' "
-            "like 'a2 to a4' or 'e1 to e3'. This will use pre-recorded joint positions "
-            "to move the arm. After the move, it will capture an image of the board for vision analysis."
+            "like 'a2 to a4'. This primitive uses inverse kinematics to calculate joint positions "
+            "based on interpolated Cartesian poses. After the move, it will capture an image of the board."
         )
 
     def get_required_robot_states(self):
@@ -103,6 +111,32 @@ class PlayMove(Primitive):
     def update_robot_state(self, **kwargs):
         """This primitive does not use external state updates."""
         pass
+
+    def _initialize_ros_comms(self):
+        """Initialize ROS2 publishers and subscribers."""
+        if not self.node:
+            self.logger.error("ROS node not available.")
+            return False
+            
+        if self.ik_delta_pub is None:
+            self.ik_delta_pub = self.node.create_publisher(Twist, 'ik_delta', 10)
+            self.logger.info("Created publisher for /ik_delta")
+
+        if self.ik_solution_sub is None:
+            self.ik_solution_sub = self.node.create_subscription(
+                JointState, 
+                'ik_solution', 
+                self._ik_solution_callback, 
+                10
+            )
+            self.logger.info("Created subscription for /ik_solution")
+        
+        return True
+
+    def _ik_solution_callback(self, msg: JointState):
+        """Callback to store the latest IK solution."""
+        self.logger.info(f"Received IK solution: {msg.position}")
+        self.ik_solution = msg
 
     def _initialize_camera(self):
         """Initialize the camera for capturing images."""
@@ -219,10 +253,14 @@ class PlayMove(Primitive):
             self.logger.error("GotoJS service not available")
             return False
 
-        # Ensure we have 6 joint positions
         joint_positions = list(joint_positions)
-        if len(joint_positions) < 6:
-            self.logger.error(f"Not enough joint positions provided: {joint_positions}")
+        # If IK provides 5 joints, add a placeholder for the gripper.
+        if len(joint_positions) == 5:
+            joint_positions.append(0.0)  # Placeholder for gripper
+
+        # Ensure we have exactly 6 joint positions
+        if len(joint_positions) != 6:
+            self.logger.error(f"Incorrect number of joint positions provided. Expected 6, got {len(joint_positions)}: {joint_positions}")
             return False
             
         # Set gripper state if specified
@@ -264,16 +302,44 @@ class PlayMove(Primitive):
             return False
 
     def _move_to_square(self, square, pose_type, gripper_state=None, trajectory_time=1.5):
-        """Move the arm to a specific chess square's high or low pose."""
+        """
+        Move the arm to a specific chess square's pose using IK.
+        """
         position_name = f"{square}_{pose_type}"
-        if not self.chess_positions or position_name not in self.chess_positions:
-            self.logger.error(f"Position '{position_name}' not found in loaded positions.")
+        if not self.cartesian_poses or position_name not in self.cartesian_poses:
+            self.logger.error(f"Position '{position_name}' not found in loaded poses.")
             return False
-            
-        joint_positions = self.chess_positions[position_name]['joint_positions']
+
+        # 1. Get the target Cartesian pose
+        target_pose = self.cartesian_poses[position_name]
+        pos = target_pose['position']
+        rpy = target_pose['orientation_rpy']
+
+        # 2. Publish target pose to IK node
+        self.ik_solution = None # Reset previous solution
+        ik_request = Twist()
+        ik_request.linear.x = pos[0]
+        ik_request.linear.y = pos[1]
+        ik_request.linear.z = pos[2]
+        ik_request.angular.x = rpy[0]
+        ik_request.angular.y = rpy[1]
+        ik_request.angular.z = rpy[2]
         
-        self._send_feedback(f"Moving to {square} ({pose_type})")
-        return self._execute_trajectory(joint_positions, trajectory_time, gripper_state)
+        self.ik_delta_pub.publish(ik_request)
+        self._send_feedback(f"Requesting IK for {square} ({pose_type}) at {pos}")
+        
+        # 3. Wait for the IK solution
+        wait_start_time = time.time()
+        while self.ik_solution is None and (time.time() - wait_start_time) < 5.0:
+            time.sleep(0.1)
+        
+        if self.ik_solution is None:
+            self.logger.error(f"IK solution not received for {position_name} within timeout.")
+            return False
+
+        # 4. Execute trajectory with the received joint state
+        self._send_feedback(f"Moving to {square} ({pose_type}) with IK solution")
+        return self._execute_trajectory(self.ik_solution.position, trajectory_time, gripper_state)
 
     def execute(self, **kwargs):
         """
@@ -299,8 +365,11 @@ class PlayMove(Primitive):
             self.logger.error("PlayMove primitive is not functional due to missing ROS node.")
             return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
 
-        if not self.chess_positions:
-            return "Chess positions not loaded, cannot execute move.", PrimitiveResult.FAILURE
+        if not self._initialize_ros_comms():
+            return "Failed to initialize ROS communications", PrimitiveResult.FAILURE
+
+        if not self.cartesian_poses:
+            return "Cartesian poses not loaded, run calibrate_chess first.", PrimitiveResult.FAILURE
 
         if not move_str:
             self._send_feedback("❌ No chess move provided")
@@ -330,7 +399,7 @@ class PlayMove(Primitive):
             self._send_feedback(f"✅ Parsed chess move: {from_square} → {to_square}")
 
             # Validate squares
-            if f"{from_square}_high" not in self.chess_positions or f"{to_square}_high" not in self.chess_positions:
+            if f"{from_square}_high" not in self.cartesian_poses or f"{to_square}_high" not in self.cartesian_poses:
                 err_msg = f"Move squares '{from_square}' or '{to_square}' not in recorded positions."
                 self.logger.error(err_msg)
                 return err_msg, PrimitiveResult.FAILURE
@@ -350,13 +419,12 @@ class PlayMove(Primitive):
 
             # STEP 3: Move to 'from' low position to pick
             self._send_feedback(f"3️⃣ Moving down to {from_square} to pick piece")
-            if not self._move_to_square(from_square, 'low', gripper_state=self.GRIPPER_OPEN):
+            if not self._move_to_square(from_square, 'low', gripper_state=self.GRIPPER_OPEN, trajectory_time=1.0):
                 return f"Failed to move down to {from_square}", PrimitiveResult.FAILURE
 
             # STEP 4: Close gripper
             self._send_feedback(f"4️⃣ Closing gripper to grab piece at {from_square}")
-            if not self._execute_trajectory(self.chess_positions[f"{from_square}_low"]['joint_positions'], 
-                                            trajectory_time=0.5, gripper_state=self.GRIPPER_CLOSED):
+            if not self._move_to_square(from_square, 'low', gripper_state=self.GRIPPER_CLOSED, trajectory_time=0.5):
                 return f"Failed to close gripper at {from_square}", PrimitiveResult.FAILURE
 
             # STEP 5: Move back to 'from' high position
@@ -371,13 +439,12 @@ class PlayMove(Primitive):
 
             # STEP 7: Move to 'to' low position to place
             self._send_feedback(f"7️⃣ Moving down to {to_square} to place piece")
-            if not self._move_to_square(to_square, 'low', gripper_state=self.GRIPPER_CLOSED):
+            if not self._move_to_square(to_square, 'low', gripper_state=self.GRIPPER_CLOSED, trajectory_time=1.0):
                 return f"Failed to move down to {to_square}", PrimitiveResult.FAILURE
 
             # STEP 8: Open gripper
             self._send_feedback(f"8️⃣ Opening gripper to release piece at {to_square}")
-            if not self._execute_trajectory(self.chess_positions[f"{to_square}_low"]['joint_positions'], 
-                                            trajectory_time=0.5, gripper_state=self.GRIPPER_OPEN):
+            if not self._move_to_square(to_square, 'low', gripper_state=self.GRIPPER_OPEN, trajectory_time=0.5):
                 return f"Failed to open gripper at {to_square}", PrimitiveResult.FAILURE
 
             # STEP 9: Move back to 'to' high position
