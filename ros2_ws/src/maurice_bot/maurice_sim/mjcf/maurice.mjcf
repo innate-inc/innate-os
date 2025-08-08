@@ -91,6 +91,12 @@
                         <geom name="ee_geom" type="sphere" size="0.005" material="bright_orange"/>
                       </body>
                       
+                      <!-- Add End Effector -->
+                      <body name="ee_link" pos="0.09285 0 0">
+                        <inertial pos="0 0 0" mass="0.001" diaginertia="0.00001 0.00001 0.00001"/>
+                        <geom name="ee_geom" type="sphere" size="0.005" material="bright_orange"/>
+                      </body>
+                      
                       <body name="arm_camera_link" pos="0.00454 0 0.05448">
                         <inertial pos="0 0 0" mass="0.01" diaginertia="1e-4 1e-4 1e-4"/>
                         <camera name="camera_arm" mode="fixed" fovy="80" quat="0.6532815 0.2705981 -0.2705981 -0.6532815"/>
