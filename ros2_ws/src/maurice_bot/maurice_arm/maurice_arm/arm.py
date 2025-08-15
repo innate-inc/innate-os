@@ -327,8 +327,15 @@ class MauriceArmNode(Node):
                 config_min = joint2_limits.get("min", -1.5708)  # Default fallback
                 config_max = joint2_limits.get("max", 1.22)     # Default fallback
                 
+                # Since joint2 will be flipped, we need to invert the limits for pre-flip values
+                # After flip: joint2_flipped = -joint2_pos
+                # So if we want joint2_flipped to be within [config_min, config_max]
+                # We need joint2_pos to be within [-config_max, -config_min]
+                joint2_min_limit = -config_max  # Will become config_max after flip
+                joint2_max_limit = -config_min  # Will become config_min after flip
+                
                 # Check if joint2 would be outside the restricted limit after flipping
-                # joint2 after flip = -joint2_pos, so if -joint2_pos < -0.4, then joint2_pos > 0.4
+                # We want the flipped value to be >= -0.4, so -joint2_pos >= -0.4, which means joint2_pos <= 0.4
                 joint2_outside_restricted_limit = joint2_pos > 0.4
                 
                 # Prevent joint1 from going below 1.0 if joint2 is outside the restricted limit
@@ -336,25 +343,18 @@ class MauriceArmNode(Node):
                     self.get_logger().warn(f"Cannot move joint1 below 1.0 (commanded: {command_data[0]:.3f}) because joint2 is outside restricted limit (joint2: {joint2_pos:.3f}, will be {-joint2_pos:.3f} after flip). Clamping joint1 to 1.0.")
                     command_data[0] = 1.0
                 
-                # Determine joint2's minimum limit based on joint1's position
-                # Since joint2 will be flipped, we need to invert the logic
+                # Determine joint2's maximum limit based on joint1's position
                 if joint1_pos < 1.0:
-                    # We want final limit to be -0.4, so pre-flip limit should be +0.4
-                    joint2_max_limit = 0.4    # Will become -0.4 after flip (our desired min)
-                else:
-                    # We want final limit to be -config_max, so pre-flip limit should be +config_max
-                    joint2_max_limit = config_max   # Will become -config_max after flip (our desired min)
+                    # We want final limit to be >= -0.4, so pre-flip limit should be <= 0.4
+                    joint2_max_limit = min(joint2_max_limit, 0.4)
                 
-                # Also enforce the original minimum limit (will become maximum after flip)
-                joint2_min_limit = config_min  # Will become -config_min after flip (max)
-                
-                # Enforce the intelligent limits (before flipping)
+                # Enforce the corrected limits (before flipping)
                 if joint2_pos < joint2_min_limit:
                     self.get_logger().warn(f"Joint2 command {joint2_pos:.3f} exceeds minimum limit {joint2_min_limit:.3f}. Clamping to limit.")
                     command_data[1] = joint2_min_limit
                 
                 if joint2_pos > joint2_max_limit:
-                    self.get_logger().warn(f"Joint2 command {joint2_pos:.3f} exceeds intelligent maximum limit {joint2_max_limit:.3f} (joint1: {joint1_pos:.3f}). Clamping to limit.")
+                    self.get_logger().warn(f"Joint2 command {joint2_pos:.3f} exceeds maximum limit {joint2_max_limit:.3f} (joint1: {joint1_pos:.3f}). Clamping to limit.")
                     command_data[1] = joint2_max_limit
             
             # Flip directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
