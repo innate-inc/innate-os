@@ -23,7 +23,7 @@ arm:
               "servo_id": 2,
               "position_limits": {
                   "min": -1.5708,
-                  "max": 0.6981 # DURING A REBASE THIS WAS LOWERED FROM 1.22 TO 0.6981. MIGHT NEED TO REVERT.
+                  "max": 1.22
               },
               "pwm_limits": 885,
               "control_mode": 2,
