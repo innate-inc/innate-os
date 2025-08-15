@@ -31,6 +31,9 @@ class MauriceArmNode(Node):
         # Get the joints parameter as a string and parse it as JSON
         joints_str = self.get_parameter('joints').value
         joints_param = json.loads(joints_str)
+        
+        # Store joints config for later use in command callback
+        self.joints_config = joints_param
 
         # Wait for servo_manager to be ready and get device name
         self.get_logger().info("Waiting for servo_manager to be ready...")
@@ -311,6 +314,37 @@ class MauriceArmNode(Node):
             
             # Create a copy of the command data to modify
             command_data = list(msg.data)
+            
+            # Intelligent joint limits: adjust joint2 limits based on joint1 position
+            # Note: joint2 (index 1) will be flipped later, so we need to account for that
+            if len(command_data) >= 2:  # Ensure we have at least joint1 and joint2
+                joint1_pos = command_data[0]  # joint1 position in radians
+                joint2_pos = command_data[1]  # joint2 position in radians (before flipping)
+                
+                # Get joint2 limits from config
+                joint2_config = self.joints_config.get("joint_2", {})
+                joint2_limits = joint2_config.get("position_limits", {})
+                config_min = joint2_limits.get("min", -1.5708)  # Default fallback
+                config_max = joint2_limits.get("max", 1.22)     # Default fallback
+                
+                # Since joint2 will be flipped, we need to invert the limits for pre-flip values
+                # After flip: joint2_flipped = -joint2_pos
+                # So if we want joint2_flipped to be within [config_min, config_max]
+                # We need joint2_pos to be within [-config_max, -config_min]
+                joint2_min_limit = -config_max  # Will become config_max after flip
+                joint2_max_limit = -config_min  # Will become config_min after flip
+                
+                # Determine joint2's maximum limit based on joint1's position
+                if joint1_pos < 1.0:
+                    # When joint1 < 1.0, restrict max to 0.4 (in pre-flip regime)
+                    joint2_min_limit = max(joint2_min_limit, -0.4)
+                
+                # Enforce the limits (before flipping)
+                if joint2_pos < joint2_min_limit:
+                    command_data[1] = joint2_min_limit
+                
+                if joint2_pos > joint2_max_limit:
+                    command_data[1] = joint2_max_limit
             
             # Flip directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
             for i in [1, 2, 3, 5]:
