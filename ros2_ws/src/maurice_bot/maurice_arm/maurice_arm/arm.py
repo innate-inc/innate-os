@@ -334,27 +334,16 @@ class MauriceArmNode(Node):
                 joint2_min_limit = -config_max  # Will become config_max after flip
                 joint2_max_limit = -config_min  # Will become config_min after flip
                 
-                # Check if joint2 would be outside the restricted limit after flipping
-                # We want the flipped value to be >= -0.4, so -joint2_pos >= -0.4, which means joint2_pos <= 0.4
-                joint2_outside_restricted_limit = joint2_pos > 0.4
-                
-                # Prevent joint1 from going below 1.0 if joint2 is outside the restricted limit
-                if joint1_pos >= 1.0 and joint2_outside_restricted_limit and command_data[0] < 1.0:
-                    self.get_logger().warn(f"Cannot move joint1 below 1.0 (commanded: {command_data[0]:.3f}) because joint2 is outside restricted limit (joint2: {joint2_pos:.3f}, will be {-joint2_pos:.3f} after flip). Clamping joint1 to 1.0.")
-                    command_data[0] = 1.0
-                
                 # Determine joint2's maximum limit based on joint1's position
                 if joint1_pos < 1.0:
-                    # We want final limit to be >= -0.4, so pre-flip limit should be <= 0.4
-                    joint2_max_limit = min(joint2_max_limit, 0.4)
+                    # When joint1 < 1.0, restrict max to 0.4 (in pre-flip regime)
+                    joint2_min_limit = max(joint2_min_limit, -0.4)
                 
-                # Enforce the corrected limits (before flipping)
+                # Enforce the limits (before flipping)
                 if joint2_pos < joint2_min_limit:
-                    self.get_logger().warn(f"Joint2 command {joint2_pos:.3f} exceeds minimum limit {joint2_min_limit:.3f}. Clamping to limit.")
                     command_data[1] = joint2_min_limit
                 
                 if joint2_pos > joint2_max_limit:
-                    self.get_logger().warn(f"Joint2 command {joint2_pos:.3f} exceeds maximum limit {joint2_max_limit:.3f} (joint1: {joint1_pos:.3f}). Clamping to limit.")
                     command_data[1] = joint2_max_limit
             
             # Flip directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
