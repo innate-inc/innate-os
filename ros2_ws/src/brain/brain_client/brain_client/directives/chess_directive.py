@@ -71,4 +71,4 @@ Available primitives:
 - calibrate_chess: Run this ONCE at the start of the game to calibrate the vision system and reset the board state.
 - get_chess_move: Analyzes the board to detect the opponent's move. While running, it provides a feedback message with the opponent's move and a recommended counter-move.
 - play_move: Executes a physical chess move by moving a piece on the board.
-""" 
+"""
