@@ -68,6 +68,16 @@ class PlayMove(Primitive):
     GRIPPER_OPEN = 0.4
     GRIPPER_CLOSED = -0.1
 
+    # Discard area position (to the right of the board)
+    DISCARD_AREA_POSITION = {
+        "position": [
+            0.35,
+            -0.25,
+            0.15,
+        ],  # X, Y, Z coordinates to the right of the board
+        "orientation_rpy": [0.0, 1.57, 0.0],  # Roll, Pitch, Yaw
+    }
+
     def __init__(self, logger):
         super().__init__(logger)
         self.goto_js_client = None  # Service client for trajectory execution
@@ -112,7 +122,9 @@ class PlayMove(Primitive):
         return (
             "Use this to play a chess move. Provide the move in format 'from_square to_square' "
             "like 'a2 to a4'. This primitive uses inverse kinematics to calculate joint positions "
-            "based on interpolated Cartesian poses. After the move, it will capture an image of the board."
+            "based on interpolated Cartesian poses. It automatically handles captures by first removing "
+            "the opponent's piece to a discard area before placing your piece. After the move, it will "
+            "capture an image of the board."
         )
 
     def get_required_robot_states(self):
@@ -220,6 +232,30 @@ class PlayMove(Primitive):
                     raise ValueError("Invalid move format")
         except Exception as e:
             raise ValueError(f"Could not parse chess move '{move_str}': {e}")
+
+    def _is_capture_move(self, board_fen, move_str):
+        """Check if the move is a capture by examining if there's a piece on the destination square."""
+        try:
+            board = chess.Board(board_fen)
+            from_square, to_square = self._parse_chess_move(move_str)
+            to_sq = chess.parse_square(to_square)
+
+            # Check if there's a piece on the destination square
+            piece_on_destination = board.piece_at(to_sq)
+            is_capture = piece_on_destination is not None
+
+            if is_capture:
+                self.logger.info(
+                    f"Move {move_str} is a capture - piece {piece_on_destination} on {to_square}"
+                )
+            else:
+                self.logger.info(f"Move {move_str} is not a capture")
+
+            return is_capture
+
+        except Exception as e:
+            self.logger.error(f"Error checking if move is capture: {e}")
+            return False
 
     def _update_fen_with_move(self, board_fen, move_str):
         """Update the FEN string by applying the specified move."""
@@ -379,6 +415,43 @@ class PlayMove(Primitive):
             self.ik_solution.position, trajectory_time, gripper_state
         )
 
+    def _move_to_discard_area(self, gripper_state=None, trajectory_time=1.5):
+        """
+        Move the arm to the discard area using IK.
+        """
+        pos = self.DISCARD_AREA_POSITION["position"]
+        rpy = self.DISCARD_AREA_POSITION["orientation_rpy"]
+
+        # 1. Publish target pose to IK node
+        self.ik_solution = None  # Reset previous solution
+        ik_request = Twist()
+        ik_request.linear.x = pos[0]
+        ik_request.linear.y = pos[1]
+        ik_request.linear.z = pos[2]
+        ik_request.angular.x = rpy[0]
+        ik_request.angular.y = rpy[1]
+        ik_request.angular.z = rpy[2]
+
+        self.ik_delta_pub.publish(ik_request)
+        self._send_feedback(f"Requesting IK for discard area at {pos}")
+
+        # 2. Wait for the IK solution
+        wait_start_time = time.time()
+        while self.ik_solution is None and (time.time() - wait_start_time) < 5.0:
+            time.sleep(0.1)
+
+        if self.ik_solution is None:
+            self.logger.error(
+                "IK solution not received for discard area within timeout."
+            )
+            return False
+
+        # 3. Execute trajectory with the received joint state
+        self._send_feedback("Moving to discard area with IK solution")
+        return self._execute_trajectory(
+            self.ik_solution.position, trajectory_time, gripper_state
+        )
+
     def execute(self, **kwargs):
         """
         Execute a complete chess move sequence: rest → from → to → rest.
@@ -458,34 +531,126 @@ class PlayMove(Primitive):
                 self.logger.error(err_msg)
                 return err_msg, PrimitiveResult.FAILURE
 
-            # --- MOVE SEQUENCE ---
-            self._send_feedback(
-                f"📋 Executing chess move sequence: {from_square} → {to_square}"
-            )
+            # Check if this is a capture move
+            is_capture = self._is_capture_move(board_fen, move_str)
 
-            # STEP 1: Move to a safe starting position (d2_high)
+            # --- MOVE SEQUENCE ---
+            if is_capture:
+                self._send_feedback(
+                    f"📋 Executing chess CAPTURE sequence: {from_square} → {to_square} (removing captured piece first)"
+                )
+            else:
+                self._send_feedback(
+                    f"📋 Executing chess move sequence: {from_square} → {to_square}"
+                )
+
+            # STEP 1: Move to a safe starting position
             self._send_feedback("1️⃣ Moving to safe start position")
             if not self._execute_trajectory(
                 self.SAFE_REST_JOINT_POSITIONS, trajectory_time=1
             ):
-                return f"Failed to move to final rest position", PrimitiveResult.FAILURE
+                return f"Failed to move to safe start position", PrimitiveResult.FAILURE
 
-            # STEP 2: Move to 'from' high position, gripper open
-            self._send_feedback(f"2️⃣ Moving above {from_square} (gripper open)")
+            # STEP 2: If this is a capture, remove the piece from the destination square first
+            if is_capture:
+                self._send_feedback(
+                    f"2️⃣ Capturing piece at {to_square} - moving above target square"
+                )
+                if not self._move_to_square(
+                    to_square, "high", gripper_state=self.GRIPPER_OPEN
+                ):
+                    return (
+                        f"Failed to move above {to_square} for capture",
+                        PrimitiveResult.FAILURE,
+                    )
+
+                self._send_feedback(
+                    f"3️⃣ Moving down to {to_square} to grab captured piece"
+                )
+                if not self._move_to_square(
+                    to_square,
+                    "low",
+                    gripper_state=self.GRIPPER_OPEN,
+                    trajectory_time=1.0,
+                ):
+                    return (
+                        f"Failed to move down to {to_square} for capture",
+                        PrimitiveResult.FAILURE,
+                    )
+
+                self._send_feedback(
+                    f"4️⃣ Closing gripper to grab captured piece at {to_square}"
+                )
+                if not self._move_to_square(
+                    to_square,
+                    "low",
+                    gripper_state=self.GRIPPER_CLOSED,
+                    trajectory_time=0.5,
+                ):
+                    return (
+                        f"Failed to grab captured piece at {to_square}",
+                        PrimitiveResult.FAILURE,
+                    )
+
+                self._send_feedback(f"5️⃣ Lifting captured piece from {to_square}")
+                if not self._move_to_square(
+                    to_square, "high", gripper_state=self.GRIPPER_CLOSED
+                ):
+                    return (
+                        f"Failed to lift captured piece from {to_square}",
+                        PrimitiveResult.FAILURE,
+                    )
+
+                self._send_feedback("6️⃣ Moving captured piece to discard area")
+                if not self._move_to_discard_area(gripper_state=self.GRIPPER_CLOSED):
+                    return (
+                        "Failed to move captured piece to discard area",
+                        PrimitiveResult.FAILURE,
+                    )
+
+                self._send_feedback("7️⃣ Releasing captured piece in discard area")
+                if not self._move_to_discard_area(
+                    gripper_state=self.GRIPPER_OPEN, trajectory_time=0.5
+                ):
+                    return (
+                        "Failed to release captured piece in discard area",
+                        PrimitiveResult.FAILURE,
+                    )
+
+                self._send_feedback("8️⃣ Moving back to safe position after capture")
+                if not self._execute_trajectory(
+                    self.SAFE_REST_JOINT_POSITIONS, trajectory_time=1
+                ):
+                    return (
+                        "Failed to move to safe position after capture",
+                        PrimitiveResult.FAILURE,
+                    )
+
+            # Continue with regular move sequence (step numbers adjusted for capture case)
+            step_offset = 8 if is_capture else 1
+
+            # Move to 'from' high position, gripper open
+            self._send_feedback(
+                f"{step_offset + 1}️⃣ Moving above {from_square} (gripper open)"
+            )
             if not self._move_to_square(
                 from_square, "high", gripper_state=self.GRIPPER_OPEN
             ):
                 return f"Failed to move above {from_square}", PrimitiveResult.FAILURE
 
-            # STEP 3: Move to 'from' low position to pick
-            self._send_feedback(f"3️⃣ Moving down to {from_square} to pick piece")
+            # Move to 'from' low position to pick
+            self._send_feedback(
+                f"{step_offset + 2}️⃣ Moving down to {from_square} to pick piece"
+            )
             if not self._move_to_square(
                 from_square, "low", gripper_state=self.GRIPPER_OPEN, trajectory_time=1.0
             ):
                 return f"Failed to move down to {from_square}", PrimitiveResult.FAILURE
 
-            # STEP 4: Close gripper
-            self._send_feedback(f"4️⃣ Closing gripper to grab piece at {from_square}")
+            # Close gripper
+            self._send_feedback(
+                f"{step_offset + 3}️⃣ Closing gripper to grab piece at {from_square}"
+            )
             if not self._move_to_square(
                 from_square,
                 "low",
@@ -497,8 +662,8 @@ class PlayMove(Primitive):
                     PrimitiveResult.FAILURE,
                 )
 
-            # STEP 5: Move back to 'from' high position
-            self._send_feedback(f"5️⃣ Lifting piece from {from_square}")
+            # Move back to 'from' high position
+            self._send_feedback(f"{step_offset + 4}️⃣ Lifting piece from {from_square}")
             if not self._move_to_square(
                 from_square, "high", gripper_state=self.GRIPPER_CLOSED
             ):
@@ -507,42 +672,48 @@ class PlayMove(Primitive):
                     PrimitiveResult.FAILURE,
                 )
 
-            # STEP 6: Move to 'to' high position
-            self._send_feedback(f"6️⃣ Moving to {to_square} high position")
+            # Move to 'to' high position
+            self._send_feedback(
+                f"{step_offset + 5}️⃣ Moving to {to_square} high position"
+            )
             if not self._move_to_square(
                 to_square, "high", gripper_state=self.GRIPPER_CLOSED
             ):
                 return f"Failed to move above {to_square}", PrimitiveResult.FAILURE
 
-            # STEP 7: Move to 'to' low position to place
-            self._send_feedback(f"7️⃣ Moving down to {to_square} to place piece")
+            # Move to 'to' low position to place
+            self._send_feedback(
+                f"{step_offset + 6}️⃣ Moving down to {to_square} to place piece"
+            )
             if not self._move_to_square(
                 to_square, "low", gripper_state=self.GRIPPER_CLOSED, trajectory_time=1.0
             ):
                 return f"Failed to move down to {to_square}", PrimitiveResult.FAILURE
 
-            # STEP 8: Open gripper
-            self._send_feedback(f"8️⃣ Opening gripper to release piece at {to_square}")
+            # Open gripper
+            self._send_feedback(
+                f"{step_offset + 7}️⃣ Opening gripper to release piece at {to_square}"
+            )
             if not self._move_to_square(
                 to_square, "low", gripper_state=self.GRIPPER_OPEN, trajectory_time=0.5
             ):
                 return f"Failed to open gripper at {to_square}", PrimitiveResult.FAILURE
 
-            # STEP 9: Move back to 'to' high position
-            self._send_feedback(f"9️⃣ Moving up from {to_square}")
+            # Move back to 'to' high position
+            self._send_feedback(f"{step_offset + 8}️⃣ Moving up from {to_square}")
             if not self._move_to_square(
                 to_square, "high", gripper_state=self.GRIPPER_OPEN
             ):
                 return f"Failed to move up from {to_square}", PrimitiveResult.FAILURE
 
-            # STEP 10: Move back to safe position
-            self._send_feedback("🔟 Moving back to safe position")
+            # Move back to safe position
+            self._send_feedback(f"{step_offset + 9}️⃣ Moving back to safe position")
             if not self._execute_trajectory(
                 self.SAFE_REST_JOINT_POSITIONS, trajectory_time=1
             ):
                 return f"Failed to move to final rest position", PrimitiveResult.FAILURE
 
-            # STEP 11: Final move to rest position
+            # Final move to rest position
             self._send_feedback("🏠 Moving to final rest position")
             if not self._execute_trajectory(
                 self.FINAL_REST_JOINT_POSITIONS, trajectory_time=2
