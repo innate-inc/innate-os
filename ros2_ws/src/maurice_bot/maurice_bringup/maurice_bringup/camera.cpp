@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <deque>
+#include <thread>
+#include <atomic>
 
 #include "rclcpp/rclcpp.hpp"
 #include "camera_info_manager/camera_info_manager.hpp"
@@ -116,6 +118,10 @@ public:
         // Initialize device with retry logic
         initialize_device_with_retry();
 
+        // Initialize frame timing tracking
+        frame_timestamps_.clear();
+        last_stats_print_ = this->now();
+        
         RCLCPP_INFO(this->get_logger(), "Camera driver node core initialized. Publisher setup deferred.");
     }
 
@@ -156,12 +162,12 @@ private:
         std::tie(pipeline_, video_dims) = create_rgb_pipeline(color_resolution_str_, fps_val_);
 
         // Initialize device
-        dai::DeviceInfo deviceInfo; // Default constructor for first available device
+        dai::DeviceInfo deviceInfo;
         bool deviceFound = false;
         if (!mxId_str_.empty()) {
             RCLCPP_INFO(this->get_logger(), "Attempting to find device with MXID: %s", mxId_str_.c_str());
             try {
-                dai::DeviceInfo di(mxId_str_); // Try to find by MXID
+                dai::DeviceInfo di(mxId_str_);
                 deviceInfo = di;
                 deviceFound = true;
                  RCLCPP_INFO(this->get_logger(), "Device %s found.", mxId_str_.c_str());
@@ -170,7 +176,7 @@ private:
             }
         }
         
-        if (!deviceFound) { // If not found by MXID or MXID not specified, get first available
+        if (!deviceFound) {
             auto availableDevices = dai::Device::getAllAvailableDevices();
             if(availableDevices.empty()){
                 RCLCPP_ERROR(this->get_logger(), "No DepthAI devices found.");
@@ -182,10 +188,12 @@ private:
 
         device_ = std::make_unique<dai::Device>(pipeline_, deviceInfo, usb2Mode_val_);
 
-        // Get output queues
+        // Get output queues with minimal buffer for lowest latency
         if (use_video_) {
-            video_queue_ = device_->getOutputQueue("rgb_video", 8, false);
+            video_queue_ = device_->getOutputQueue("rgb_video", 1, false);  // Single buffer for minimum latency
         }
+
+        RCLCPP_INFO(this->get_logger(), "Device initialized with queue size: 1 (minimum latency mode)");
 
         // Calibration and CameraInfo
         calibrationHandler_ = device_->readCalibration();
@@ -202,10 +210,12 @@ private:
         RCLCPP_WARN(this->get_logger(), "Attempting to restart device due to communication error...");
         
         try {
-            // Stop the publishing timer
-            if (publish_timer_) {
-                publish_timer_->cancel();
-                publish_timer_.reset();
+            // Stop the frame processing thread
+            if (frame_thread_running_) {
+                frame_thread_running_ = false;
+                if (frame_thread_.joinable()) {
+                    frame_thread_.join();
+                }
             }
             
             // Reset device and queues
@@ -224,9 +234,10 @@ private:
             // Reinitialize device
             initialize_device();
             
-            // Restart publishing if we were using video
+            // Restart frame processing if we were using video
             if (use_video_) {
-                setup_video_publisher();
+                frame_thread_running_ = true;
+                frame_thread_ = std::thread(&CameraDriverNode::frame_processing_loop, this);
             }
             
             retry_count_ = 0; // Reset retry count on successful restart
@@ -299,92 +310,214 @@ private:
         RCLCPP_INFO(this->get_logger(), "Created publishers on topics: %s and %s", 
             raw_topic.c_str(), compressed_topic.c_str());
 
-        // Create timer for 30Hz publishing
-        publish_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(33),
-            std::bind(&CameraDriverNode::publish_frame, this)
-        );
+        // Start frame processing thread instead of timer
+        frame_thread_running_ = true;
+        frame_thread_ = std::thread(&CameraDriverNode::frame_processing_loop, this);
+        
+        RCLCPP_INFO(this->get_logger(), "Started frame-based processing thread");
     }
 
-    void publish_frame() {
-        try {
-            auto frame = video_queue_->tryGet<dai::ImgFrame>();
-            if (frame) {
-                auto imgData = frame->getData();
-                if (!imgData.empty()) {
-                    // Convert to OpenCV Mat
-                    cv::Mat cvFrame(frame->getHeight(), frame->getWidth(), CV_8UC3, imgData.data());
-                    
-                    // Create and publish raw image message
-                    sensor_msgs::msg::Image rosImage;
-                    rosImage.header.stamp = this->now();
-                    rosImage.header.frame_id = tf_prefix_ + "_rgb_camera_optical_frame";
-                    rosImage.height = frame->getHeight();
-                    rosImage.width = frame->getWidth();
-                    rosImage.encoding = "bgr8";
-                    rosImage.is_bigendian = false;
-                    rosImage.step = frame->getWidth() * 3;
-                    rosImage.data = std::vector<uint8_t>(imgData.begin(), imgData.end());
-                    image_pub_->publish(rosImage);
+    void update_frame_stats() {
+        auto current_time = this->now();
+        frame_timestamps_.push_back(current_time);
+        
+        // Remove timestamps older than 1 second
+        auto one_second_ago = current_time - rclcpp::Duration::from_nanoseconds(1000000000); // 1 second
+        while (!frame_timestamps_.empty() && frame_timestamps_.front() < one_second_ago) {
+            frame_timestamps_.pop_front();
+        }
+        
+        // Calculate and print stats every second
+        if ((current_time - last_stats_print_).seconds() >= 1.0) {
+            print_frame_stats();
+            last_stats_print_ = current_time;
+        }
+    }
+    
+    void print_frame_stats() {
+        if (frame_timestamps_.size() < 2) {
+            return; // Need at least 2 frames to calculate intervals
+        }
+        
+        // Calculate average framerate (frames in the last second)
+        double avg_framerate = static_cast<double>(frame_timestamps_.size());
+        
+        // Calculate frame intervals for jitter calculation
+        std::vector<double> intervals;
+        for (size_t i = 1; i < frame_timestamps_.size(); ++i) {
+            double interval = (frame_timestamps_[i] - frame_timestamps_[i-1]).seconds();
+            intervals.push_back(interval);
+        }
+        
+        if (intervals.empty()) {
+            return;
+        }
+        
+        // Calculate mean interval
+        double mean_interval = 0.0;
+        for (double interval : intervals) {
+            mean_interval += interval;
+        }
+        mean_interval /= intervals.size();
+        
+        // Calculate standard deviation (jitter)
+        double variance = 0.0;
+        for (double interval : intervals) {
+            double diff = interval - mean_interval;
+            variance += diff * diff;
+        }
+        variance /= intervals.size();
+        double jitter = std::sqrt(variance);
+        
+        // Convert jitter to milliseconds for readability
+        double jitter_ms = jitter * 1000.0;
+        double expected_interval = 1.0 / fps_val_;
+        double interval_error_ms = (mean_interval - expected_interval) * 1000.0;
+        
+        RCLCPP_INFO(this->get_logger(), 
+            "Frame Stats - FPS: %.1f (target: %.1f) | Jitter: %.2f ms | Timing error: %.2f ms | Samples: %zu",
+            avg_framerate, fps_val_, jitter_ms, interval_error_ms, frame_timestamps_.size());
+    }
 
-                    // Create and publish compressed image message
-                    sensor_msgs::msg::CompressedImage compressed_msg;
-                    compressed_msg.header = rosImage.header;
-                    compressed_msg.format = "jpeg";
-                    
-                    // Compress the image using OpenCV
-                    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};  // 80% quality
-                    cv::imencode(".jpg", cvFrame, compressed_msg.data, params);
-                    
-                    compressed_pub_->publish(compressed_msg);
-
-                    // Log frame details periodically
-                    static int frame_count = 0;
-                    if (++frame_count % 30 == 0) {
-                        RCLCPP_INFO(this->get_logger(), "Published frame %d - Raw size: %zu bytes, Compressed size: %zu bytes",
-                            frame_count, rosImage.data.size(), compressed_msg.data.size());
-                    }
-                }
-            }
-        } catch (const std::runtime_error& e) {
-            std::string error_msg = e.what();
-            
-            // Check if this is a communication error
-            if (error_msg.find("Communication exception") != std::string::npos || 
-                error_msg.find("X_LINK_ERROR") != std::string::npos ||
-                error_msg.find("Couldn't read data from stream") != std::string::npos) {
+    void frame_processing_loop() {
+        RCLCPP_INFO(this->get_logger(), "Frame processing loop started");
+        
+        // Add timing diagnostics
+        auto last_frame_time = std::chrono::high_resolution_clock::now();
+        int frame_counter = 0;
+        
+        while (frame_thread_running_ && rclcpp::ok()) {
+            try {
+                // Add timing measurement around frame acquisition
+                auto acquire_start = std::chrono::high_resolution_clock::now();
                 
-                RCLCPP_ERROR(this->get_logger(), "Device communication error detected: %s", e.what());
+                // Blocking call - wait for frame
+                auto frame = video_queue_->get<dai::ImgFrame>();
                 
-                if (retry_count_ < max_retries_) {
-                    retry_count_++;
-                    RCLCPP_WARN(this->get_logger(), "Attempting device restart (attempt %d/%d)", retry_count_, max_retries_);
-                    
-                    try {
-                        restart_device();
-                    } catch (const std::exception& restart_e) {
-                        RCLCPP_ERROR(this->get_logger(), "Device restart failed: %s", restart_e.what());
+                auto acquire_end = std::chrono::high_resolution_clock::now();
+                auto acquire_duration = std::chrono::duration_cast<std::chrono::microseconds>(acquire_end - acquire_start);
+                
+                if (frame) {
+                    auto imgData = frame->getData();
+                    if (!imgData.empty()) {
+                        frame_counter++;
                         
-                        if (retry_count_ >= max_retries_) {
-                            RCLCPP_FATAL(this->get_logger(), "Maximum restart attempts reached. Node will continue but may not function properly.");
-                        } else {
-                            RCLCPP_WARN(this->get_logger(), "Will retry restart in next communication error");
+                        // Measure actual camera frame timing
+                        auto current_frame_time = std::chrono::high_resolution_clock::now();
+                        auto camera_interval = std::chrono::duration_cast<std::chrono::microseconds>(current_frame_time - last_frame_time);
+                        last_frame_time = current_frame_time;
+                        
+                        // Update frame timing statistics (for ROS timing)
+                        update_frame_stats();
+                        
+                        auto processing_start = std::chrono::high_resolution_clock::now();
+                        
+                        // Convert to OpenCV Mat
+                        cv::Mat cvFrame(frame->getHeight(), frame->getWidth(), CV_8UC3, imgData.data());
+                        
+                        // Create and publish raw image message
+                        auto current_time = this->now();
+                        sensor_msgs::msg::Image rosImage;
+                        rosImage.header.stamp = current_time;
+                        rosImage.header.frame_id = tf_prefix_ + "_rgb_camera_optical_frame";
+                        rosImage.height = frame->getHeight();
+                        rosImage.width = frame->getWidth();
+                        rosImage.encoding = "bgr8";
+                        rosImage.is_bigendian = false;
+                        rosImage.step = frame->getWidth() * 3;
+                        rosImage.data = std::vector<uint8_t>(imgData.begin(), imgData.end());
+                        
+                        auto publish_start = std::chrono::high_resolution_clock::now();
+                        image_pub_->publish(rosImage);
+                        
+                        // Create and publish compressed image message
+                        sensor_msgs::msg::CompressedImage compressed_msg;
+                        compressed_msg.header = rosImage.header;
+                        compressed_msg.format = "jpeg";
+                        
+                        // Use faster compression settings
+                        std::vector<int> params = {
+                            cv::IMWRITE_JPEG_QUALITY, 60,  // Lower quality for speed
+                            cv::IMWRITE_JPEG_OPTIMIZE, 0   // Disable optimization for speed
+                        };
+                        cv::imencode(".jpg", cvFrame, compressed_msg.data, params);
+                        
+                        compressed_pub_->publish(compressed_msg);
+                        
+                        auto processing_end = std::chrono::high_resolution_clock::now();
+                        auto processing_duration = std::chrono::duration_cast<std::chrono::microseconds>(processing_end - processing_start);
+                        auto publish_duration = std::chrono::duration_cast<std::chrono::microseconds>(processing_end - publish_start);
+                        
+                        // Log detailed timing every 30 frames
+                        if (frame_counter % 30 == 0) {
+                            RCLCPP_INFO(this->get_logger(), 
+                                "Timing - Camera interval: %ld μs (%.1f fps) | Acquire: %ld μs | Processing: %ld μs | Publish: %ld μs",
+                                camera_interval.count(), 
+                                1000000.0 / camera_interval.count(),
+                                acquire_duration.count(),
+                                processing_duration.count(),
+                                publish_duration.count());
+                        }
+
+                        // Log frame details periodically
+                        static int frame_count = 0;
+                        if (++frame_count % 150 == 0) {
+                            RCLCPP_INFO(this->get_logger(), "Published frame %d - Raw size: %zu bytes, Compressed size: %zu bytes",
+                                frame_count, rosImage.data.size(), compressed_msg.data.size());
                         }
                     }
-                } else {
-                    RCLCPP_FATAL(this->get_logger(), "Maximum restart attempts reached. Node will continue but may not function properly.");
                 }
-            } else {
-                RCLCPP_ERROR(this->get_logger(), "Non-communication error in publish_frame: %s", e.what());
+            } catch (const std::runtime_error& e) {
+                std::string error_msg = e.what();
+                
+                // Check if this is a communication error
+                if (error_msg.find("Communication exception") != std::string::npos || 
+                    error_msg.find("X_LINK_ERROR") != std::string::npos ||
+                    error_msg.find("Couldn't read data from stream") != std::string::npos) {
+                    
+                    RCLCPP_ERROR(this->get_logger(), "Device communication error detected: %s", e.what());
+                    
+                    if (retry_count_ < max_retries_) {
+                        retry_count_++;
+                        RCLCPP_WARN(this->get_logger(), "Attempting device restart (attempt %d/%d)", retry_count_, max_retries_);
+                        
+                        try {
+                            restart_device();
+                        } catch (const std::exception& restart_e) {
+                            RCLCPP_ERROR(this->get_logger(), "Device restart failed: %s", restart_e.what());
+                            
+                            if (retry_count_ >= max_retries_) {
+                                RCLCPP_FATAL(this->get_logger(), "Maximum restart attempts reached. Stopping frame processing.");
+                                frame_thread_running_ = false;
+                                break;
+                            } else {
+                                RCLCPP_WARN(this->get_logger(), "Will retry restart in next communication error");
+                            }
+                        }
+                    } else {
+                        RCLCPP_FATAL(this->get_logger(), "Maximum restart attempts reached. Stopping frame processing.");
+                        frame_thread_running_ = false;
+                        break;
+                    }
+                } else {
+                    RCLCPP_ERROR(this->get_logger(), "Non-communication error in frame processing: %s", e.what());
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Unexpected error in frame processing: %s", e.what());
+                // Brief pause to prevent rapid error loops
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "Unexpected error in publish_frame: %s", e.what());
         }
+        
+        RCLCPP_INFO(this->get_logger(), "Frame processing loop ended");
     }
 
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
-    rclcpp::TimerBase::SharedPtr publish_timer_;
+    
+    // Replace timer with thread
+    std::thread frame_thread_;
+    std::atomic<bool> frame_thread_running_{false};
 
     std::string tf_prefix_;
     std::string camera_model_;
@@ -410,6 +543,10 @@ private:
     int retry_count_;
     int max_retries_;
     int retry_delay_ms_;
+
+    // Frame timing tracking variables
+    std::deque<rclcpp::Time> frame_timestamps_;
+    rclcpp::Time last_stats_print_;
 };
 
 int main(int argc, char** argv) {
