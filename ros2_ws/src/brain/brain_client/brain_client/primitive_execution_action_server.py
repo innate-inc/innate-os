@@ -31,6 +31,9 @@ from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.drop_trash import DropTrash
 from brain_client.primitives.pick_up_sock import PickUpSock
 from brain_client.primitives.drop_socks import DropSocks
+from brain_client.primitives.pick_motor import PickMotor
+from brain_client.primitives.pick_screwdriver import PickScrewdriver
+from brain_client.primitives.give_object import GiveObject
 
 from brain_client.primitives.types import (
     PrimitiveResult,
@@ -100,6 +103,9 @@ class PrimitiveExecutionActionServer(Node):
             TaskType.DROP_TRASH: DropTrash,
             TaskType.PICK_UP_SOCK: PickUpSock,
             TaskType.DROP_SOCKS: DropSocks,
+            TaskType.PICK_MOTOR: PickMotor,
+            TaskType.PICK_SCREWDRIVER: PickScrewdriver,
+            TaskType.GIVE_OBJECT: GiveObject,
         }
 
         self._primitives = {}

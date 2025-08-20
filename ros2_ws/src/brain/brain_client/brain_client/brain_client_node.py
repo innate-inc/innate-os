@@ -62,7 +62,9 @@ from brain_client.primitives.pick_up_trash import PickUpTrash
 from brain_client.primitives.drop_trash import DropTrash
 from brain_client.primitives.pick_up_sock import PickUpSock
 from brain_client.primitives.drop_socks import DropSocks
-
+from brain_client.primitives.pick_screwdriver import PickScrewdriver
+from brain_client.primitives.pick_motor import PickMotor
+from brain_client.primitives.give_object import GiveObject
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.empty_directive import EmptyDirective
 from brain_client.directives.sassy_directive import SassyDirective
@@ -76,6 +78,7 @@ from brain_client.directives.security_patrol_directive import SecurityPatrolDire
 from brain_client.directives.clean_house_directive import CleanHouseDirective
 from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
 from brain_client.directives.socks_tidier_directive import SocksTidierDirective
+from brain_client.directives.tools_giving_directive import ToolsGivingDirective
 
 
 class BrainClientNode(Node):
@@ -404,6 +407,9 @@ class BrainClientNode(Node):
             TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
             TaskType.PICK_UP_SOCK.value: PickUpSock(self.get_logger()),
             TaskType.DROP_SOCKS.value: DropSocks(self.get_logger()),
+            TaskType.PICK_MOTOR.value: PickMotor(self.get_logger()),
+            TaskType.PICK_SCREWDRIVER.value: PickScrewdriver(self.get_logger()),
+            TaskType.GIVE_OBJECT.value: GiveObject(self.get_logger()),
             # Add other primitives here as they become available
         }
 
@@ -429,6 +435,7 @@ class BrainClientNode(Node):
                 CleanHouseDirective(),
                 HideAndSeekDirective(),
                 SocksTidierDirective(),
+                ToolsGivingDirective(),
             ]
         }
         self.current_directive = self.directives["empty_directive"]
@@ -839,6 +846,8 @@ class BrainClientNode(Node):
 
         if payload.stop_current_task:
             self.get_logger().info("\033[91m[BrainClient] Stop signal received.\033[0m")
+
+            self.get_logger().info(f"Payload received: {payload}")
 
             # Cancel the current goal if it exists
             if self._goal_handle is not None:

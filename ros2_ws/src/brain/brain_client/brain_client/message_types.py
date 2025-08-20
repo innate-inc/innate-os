@@ -13,6 +13,9 @@ class TaskType(Enum):
     DROP_TRASH = "drop_trash"
     PICK_UP_SOCK = "pick_up_sock"
     DROP_SOCKS = "drop_socks"
+    PICK_MOTOR = "pick_motor"
+    PICK_SCREWDRIVER = "pick_screwdriver"
+    GIVE_OBJECT = "give_object"
 
 
 class NavigationToPosition(BaseModel):
