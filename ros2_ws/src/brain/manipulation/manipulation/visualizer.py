@@ -184,8 +184,9 @@ class DataViewerNode(Node):
                 img_list = []
                 for cam in camera_names:
                     img = images_group[cam][t]
-                    if len(img.shape) == 3 and img.shape[2] == 3:
-                        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    # Remove the RGB to BGR conversion since images are already in BGR format
+                    # if len(img.shape) == 3 and img.shape[2] == 3:
+                    #     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                     img = cv2.resize(img, (self.image_size[0], self.image_size[1]))
                     img_list.append(img)
 
