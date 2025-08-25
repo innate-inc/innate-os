@@ -1549,11 +1549,22 @@ class BrainClientNode(Node):
 
     def handle_get_available_directives(self, request, response):
         """
-        Service handler that returns a list of all available directives.
+        Service handler that returns detailed information about all available directives.
         """
         self.get_logger().info("Received request for available directives")
-        directive_names = list(self.directives.keys())
-        response.directives = directive_names
+        
+        # Build detailed directive information as JSON
+        directive_details = []
+        for directive_name, directive in self.directives.items():
+            directive_info = {
+                "name": directive.name,
+                "prompt": directive.get_prompt(),
+                "primitives": directive.get_primitives()
+            }
+            directive_details.append(directive_info)
+        
+        # Convert the detailed info to JSON string for the directives field
+        response.directives = [json.dumps(directive_details)]
         response.current_directive = self.current_directive.name
         return response
 
