@@ -7,7 +7,7 @@ from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray, Empty
 from maurice_msgs.srv import GotoJS
 from brain_messages.action import ExecuteBehavior  # You'll need to create this action
-from brain_messages.srv import GetAvailableBehaviors
+from brain_messages.srv import GetAvailableBehaviors, GetDatasetInfo
 from rclpy.action import ActionServer, CancelResponse
 from cv_bridge import CvBridge
 import numpy as np
@@ -16,6 +16,7 @@ import os
 import cv2
 from geometry_msgs.msg import Twist
 import yaml
+import json  # Add this import for JSON handling
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.executors import MultiThreadedExecutor
 import h5py  # Add this import at the top
@@ -82,12 +83,22 @@ class BehaviorServer(Node):
         self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Behavior server started.")
         
-        self.bridge = CvBridge()
-        self.image_size = (640, 480)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
         # Load behavior configurations
         self.behaviors_config = self._load_behaviors_config()
+        
+        # Get data directory from recorder config
+        try:
+            self.declare_parameter('data_directory', '~/maurice-prod/data')
+            self.data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
+            self.get_logger().info(f"Data directory: {self.data_directory}")
+        except Exception as e:
+            self.get_logger().warn(f"Could not load data_directory parameter: {e}")
+            self.data_directory = os.path.expanduser("~/maurice-prod/data")
+        
+        # Keep your existing image_size for the behavior server
+        self.bridge = CvBridge()
+        self.image_size = (640, 480)  # This is for the policy inference
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Print all available behaviors at startup
         if self.behaviors_config:
@@ -148,6 +159,13 @@ class BehaviorServer(Node):
             GetAvailableBehaviors,
             '/behavior/get_available',
             self.get_available_behaviors_callback
+        )
+        
+        # Service server for getting dataset info
+        self.get_dataset_info_service = self.create_service(
+            GetDatasetInfo,
+            '/behavior/get_dataset_info',
+            self.get_dataset_info_callback
         )
         
         self.get_logger().info(f"Behavior server ready. Available behaviors: {list(self.behaviors_config.keys())}")
@@ -816,24 +834,69 @@ class BehaviorServer(Node):
         self.get_logger().info(f"Returning {len(behavior_names)} available behaviors.")
         return response
 
-def _extract_dataset_name(self, file_path):
-    """Extract dataset name from file path."""
-    if not file_path:
-        return ""
-    
-    try:
-        # Get the directory name (folder containing the policy file)
-        expanded_path = os.path.expanduser(file_path)
-        directory_name = os.path.basename(os.path.dirname(expanded_path))
+    def get_dataset_info_callback(self, request, response):
+        """Service callback to provide dataset metadata."""
+        dataset_name = request.dataset_names  # Note: this should probably be dataset_name (singular)
+        self.get_logger().info(f"Request for dataset info received for: {dataset_name}")
         
-        # Remove date/time suffix (format: _YYYYMMDD_HHMMSS)
-        # Use regex to find and remove the pattern
-        dataset_name = re.sub(r'_\d{8}_\d{6}.*$', '', directory_name)
+        try:
+            # Construct path to dataset directory
+            dataset_dir = os.path.join(self.data_directory, dataset_name)
+            metadata_file = os.path.join(dataset_dir, 'metadata.json')
+            
+            # Check if dataset directory exists
+            if not os.path.exists(dataset_dir):
+                error_msg = f"Dataset directory not found: {dataset_dir}"
+                self.get_logger().error(error_msg)
+                response.metadata = json.dumps({"error": error_msg})
+                return response
+            
+            # Check if metadata.json exists
+            if not os.path.exists(metadata_file):
+                error_msg = f"Metadata file not found: {metadata_file}"
+                self.get_logger().error(error_msg)
+                response.metadata = json.dumps({"error": error_msg})
+                return response
+            
+            # Read and return metadata
+            with open(metadata_file, 'r') as f:
+                metadata_content = f.read()
+                
+            # Validate that it's valid JSON
+            try:
+                json.loads(metadata_content)  # Just to validate
+                response.metadata = metadata_content
+                self.get_logger().info(f"Successfully returned metadata for dataset: {dataset_name}")
+            except json.JSONDecodeError as e:
+                error_msg = f"Invalid JSON in metadata file: {e}"
+                self.get_logger().error(error_msg)
+                response.metadata = json.dumps({"error": error_msg})
+                
+        except Exception as e:
+            error_msg = f"Error reading dataset metadata: {str(e)}"
+            self.get_logger().error(error_msg)
+            response.metadata = json.dumps({"error": error_msg})
         
-        return dataset_name
-    except Exception as e:
-        self.get_logger().warn(f"Could not extract dataset name from {file_path}: {e}")
-        return ""
+        return response
+
+    def _extract_dataset_name(self, file_path):
+        """Extract dataset name from file path."""
+        if not file_path:
+            return ""
+        
+        try:
+            # Get the directory name (folder containing the policy file)
+            expanded_path = os.path.expanduser(file_path)
+            directory_name = os.path.basename(os.path.dirname(expanded_path))
+            
+            # Remove date/time suffix (format: _YYYYMMDD_HHMMSS)
+            # Use regex to find and remove the pattern
+            dataset_name = re.sub(r'_\d{8}_\d{6}.*$', '', directory_name)
+            
+            return dataset_name
+        except Exception as e:
+            self.get_logger().warn(f"Could not extract dataset name from {file_path}: {e}")
+            return ""
 
 def main(args=None):
     rclpy.init(args=args)

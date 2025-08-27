@@ -24,6 +24,7 @@ set(srv_files
   "srv/ChangeMap.srv"
   "srv/ChangeNavigationMode.srv"
   "srv/SaveMap.srv"
+  "srv/GetDatasetInfo.srv"
 )
 
 set(msg_files
