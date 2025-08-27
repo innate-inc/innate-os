@@ -42,7 +42,7 @@ class HeadServoNode(Node):
         self.declare_parameter("kp", 400.0)  # PID proportional gain
         self.declare_parameter("ki", 1011.0)   # PID integral gain  
         self.declare_parameter("kd", 0.0)   # PID derivative gain
-        self.declare_parameter("min_position_limit", -30.0)  # Minimum angle limit
+        self.declare_parameter("min_position_limit", -25.0)  # Minimum angle limit
         self.declare_parameter("max_position_limit", 15.0)   # Maximum angle limit
 
         # Get parameters
