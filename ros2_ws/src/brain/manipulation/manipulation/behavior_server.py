@@ -19,6 +19,7 @@ import yaml
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.executors import MultiThreadedExecutor
 import h5py  # Add this import at the top
+import re
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
@@ -796,17 +797,43 @@ class BehaviorServer(Node):
         
         behavior_names = []
         behavior_types = []
+        dataset_names = []
         
         if self.behaviors_config:
             for name, config in self.behaviors_config.items():
                 behavior_names.append(name)
                 behavior_types.append(config.get('type', 'unknown'))
+                
+                # Extract dataset name from file_path
+                file_path = config.get('file_path', '')
+                dataset_name = self._extract_dataset_name(file_path)
+                dataset_names.append(dataset_name)
         
         response.behavior_names = behavior_names
         response.behavior_types = behavior_types
+        response.dataset_names = dataset_names
         
         self.get_logger().info(f"Returning {len(behavior_names)} available behaviors.")
         return response
+
+def _extract_dataset_name(self, file_path):
+    """Extract dataset name from file path."""
+    if not file_path:
+        return ""
+    
+    try:
+        # Get the directory name (folder containing the policy file)
+        expanded_path = os.path.expanduser(file_path)
+        directory_name = os.path.basename(os.path.dirname(expanded_path))
+        
+        # Remove date/time suffix (format: _YYYYMMDD_HHMMSS)
+        # Use regex to find and remove the pattern
+        dataset_name = re.sub(r'_\d{8}_\d{6}.*$', '', directory_name)
+        
+        return dataset_name
+    except Exception as e:
+        self.get_logger().warn(f"Could not extract dataset name from {file_path}: {e}")
+        return ""
 
 def main(args=None):
     rclpy.init(args=args)
