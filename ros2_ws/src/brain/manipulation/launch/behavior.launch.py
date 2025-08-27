@@ -23,6 +23,16 @@ def generate_launch_description():
         description='Path to the behaviors configuration file'
     )
     
+    recorder_config_arg = DeclareLaunchArgument(
+        'recorder_config',
+        default_value=PathJoinSubstitution([
+            manipulation_share,
+            'config',
+            'recorder.yaml'
+        ]),
+        description='Path to the recorder configuration file'
+    )
+    
     log_level_arg = DeclareLaunchArgument(
         'log_level',
         default_value='info',
@@ -35,7 +45,11 @@ def generate_launch_description():
         executable='behavior_server.py',
         name='behavior_server',
         output='screen',
-        parameters=[{'config_file': LaunchConfiguration('config_file')}],
+        parameters=[
+            {'config_file': LaunchConfiguration('config_file')},
+            {'recorder_config': LaunchConfiguration('recorder_config')},
+            LaunchConfiguration('recorder_config')  # This loads the entire YAML file as parameters
+        ],
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
         emulate_tty=True,
         respawn=True,
@@ -44,6 +58,7 @@ def generate_launch_description():
     
     return LaunchDescription([
         config_file_arg,
+        recorder_config_arg,
         log_level_arg,
         behavior_server_node
     ])
