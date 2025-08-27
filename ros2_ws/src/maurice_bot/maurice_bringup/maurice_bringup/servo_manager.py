@@ -20,6 +20,7 @@ ID_RANGE          = range(1, 11)
 MODEL_MAP = {
     1060: "XL430",
     1200: "XL330",
+    1080: "XC430",        # <— add this line
 }
 
 class ServoManager(Node):

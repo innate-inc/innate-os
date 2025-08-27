@@ -357,7 +357,7 @@ class BehaviorServer(Node):
             duration = behavior_config.get('duration', 20.0)
             start_pose = behavior_config.get('start_pose')
             end_pose = behavior_config.get('end_pose')
-            progress_threshold = 0.9  # Threshold for early termination
+            progress_threshold = 0.95  # Threshold for early termination
             
             # Move to start pose if specified
             if start_pose:
