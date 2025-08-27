@@ -6,6 +6,7 @@ from rclpy.parameter import Parameter
 from rcl_interfaces.srv import GetParameters
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import Trigger
 import math
 import time
 import json
@@ -30,6 +31,9 @@ class MauriceArmNode(Node):
         # Get the joints parameter as a string and parse it as JSON
         joints_str = self.get_parameter('joints').value
         joints_param = json.loads(joints_str)
+        
+        # Store joints config for later use in command callback
+        self.joints_config = joints_param
 
         # Wait for servo_manager to be ready and get device name
         self.get_logger().info("Waiting for servo_manager to be ready...")
@@ -109,6 +113,28 @@ class MauriceArmNode(Node):
             dynamixel.set_operating_mode(servo_id, op_mode)
             time.sleep(0.5)
 
+            # Set PID gains AFTER setting operating mode (like in head file)
+            if "pid_gains" in joint:
+                pid_gains = joint["pid_gains"]
+                kp = pid_gains.get("kp", 400)  # Default P gain is 400
+                ki = pid_gains.get("ki", 0)    # Default I gain is 0
+                kd = pid_gains.get("kd", 0)    # Default D gain is 0
+                
+                self.get_logger().info(f"Setting {joint_name} PID gains - kp: {kp}, ki: {ki}, kd: {kd}")
+                try:
+                    dynamixel.set_P(servo_id, int(kp))
+                    self.get_logger().info(f"Successfully set P gain to {int(kp)} for {joint_name}")
+                    time.sleep(0.1)
+                    dynamixel.set_I(servo_id, int(ki))
+                    self.get_logger().info(f"Successfully set I gain to {int(ki)} for {joint_name}")
+                    time.sleep(0.1)
+                    dynamixel.set_D(servo_id, int(kd))
+                    self.get_logger().info(f"Successfully set D gain to {int(kd)} for {joint_name}")
+                    time.sleep(0.1)
+                except Exception as e:
+                    self.get_logger().error(f"Failed to set PID gains for {joint_name}: {str(e)}")
+                    raise
+
             # Finally, enable torque for this servo.
             self.get_logger().info(f"Enabling torque for {joint_name} (Servo ID {servo_id})")
             dynamixel._enable_torque(servo_id)
@@ -116,6 +142,9 @@ class MauriceArmNode(Node):
 
         # Initialize robot interface with the collected servo IDs.
         self.robot = Robot(dynamixel=dynamixel, servo_ids=servo_ids)
+
+        # Store servo_ids as instance variable for service callbacks
+        self.servo_ids = servo_ids
 
         # Create publishers and subscribers
         self.state_pub = self.create_publisher(JointState, '/maurice_arm/state', 10)
@@ -125,16 +154,33 @@ class MauriceArmNode(Node):
             self.command_callback,
             10
         )
+        
+        # Create torque control services
+        self.torque_on_service = self.create_service(
+            Trigger,
+            '/maurice_arm/torque_on',
+            self.torque_on_callback
+        )
+        self.torque_off_service = self.create_service(
+            Trigger,
+            '/maurice_arm/torque_off',
+            self.torque_off_callback
+        )
+        
         self.timer = self.create_timer(1.0 / control_frequency, self.timer_callback)
         
-        # Initialize joint state message (assuming number of joints equals len(servo_ids))
+        # Initialize joint state message with actual URDF joint names
         self.joint_state_msg = JointState()
-        self.joint_state_msg.name = [f'joint_{i}' for i in range(1, len(servo_ids)+1)]
-        
+        # Use actual joint names from URDF instead of generic names
+        self.joint_state_msg.name = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']  # Update these to match your URDF
+
+        # Add debug logging for joint names
+        #self.get_logger().info(f"Publishing joint states with names: {self.joint_state_msg.name}")
+
         self.latest_command = None
 
     def wait_for_servo_manager(self):
-        """Wait for servo_manager to be ready and return the arm device name."""
+        """Wait for servo_manager to provide arm_device parameter."""
         # Create a client to get parameters from servo_manager
         param_client = self.create_client(GetParameters, '/servo_manager/get_parameters')
         
@@ -144,13 +190,13 @@ class MauriceArmNode(Node):
             self.get_logger().error(f"servo_manager parameter service not available after {timeout_sec} seconds")
             return None
         
-        # Poll for the ready parameter
+        # Poll for the arm_device parameter
         max_attempts = 60  # 60 seconds with 1 second intervals
         for attempt in range(max_attempts):
             try:
-                # Create request for the ready parameter
+                # Create request for the arm_device parameter
                 request = GetParameters.Request()
-                request.names = ['ready']
+                request.names = ['arm_device']
                 
                 # Call the service
                 future = param_client.call_async(request)
@@ -158,25 +204,16 @@ class MauriceArmNode(Node):
                 
                 if future.result() is not None:
                     response = future.result()
-                    if len(response.values) > 0 and response.values[0].bool_value:
-                        # servo_manager is ready, get the arm device
-                        request = GetParameters.Request()
-                        request.names = ['arm_device']
-                        
-                        future = param_client.call_async(request)
-                        rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-                        
-                        if future.result() is not None:
-                            response = future.result()
-                            if len(response.values) > 0:
-                                return response.values[0].string_value
-                        
-                        self.get_logger().error("Could not get arm_device parameter")
-                        return None
+                    if len(response.values) > 0:
+                        arm_device = response.values[0].string_value
+                        if arm_device and arm_device.strip():  # Check if not empty and not just whitespace
+                            return arm_device
+                        else:
+                            self.get_logger().info(f"arm_device parameter is empty, attempt {attempt + 1}/{max_attempts}")
                     else:
-                        self.get_logger().info(f"servo_manager not ready yet, attempt {attempt + 1}/{max_attempts}")
+                        self.get_logger().info(f"arm_device parameter not available yet, attempt {attempt + 1}/{max_attempts}")
                 else:
-                    self.get_logger().info(f"ready parameter not available yet, attempt {attempt + 1}/{max_attempts}")
+                    self.get_logger().info(f"Could not get arm_device parameter, attempt {attempt + 1}/{max_attempts}")
                     
             except Exception as e:
                 self.get_logger().warn(f"Error checking servo_manager parameters: {e}")
@@ -184,8 +221,46 @@ class MauriceArmNode(Node):
             # Wait 1 second before next attempt
             time.sleep(1.0)
         
-        self.get_logger().error("Timeout waiting for servo_manager to be ready")
+        self.get_logger().error("Timeout waiting for servo_manager to provide arm_device")
         return None
+
+    def torque_on_callback(self, request, response):
+        """Service callback to enable torque for all servos."""
+        try:
+            self.get_logger().info("Enabling torque for all servos...")
+            for servo_id in self.servo_ids:
+                self.robot.dynamixel._enable_torque(servo_id)
+                time.sleep(0.1)  # Small delay between servos
+            
+            response.success = True
+            response.message = f"Successfully enabled torque for {len(self.servo_ids)} servos"
+            self.get_logger().info("Torque enabled for all servos")
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to enable torque: {str(e)}"
+            self.get_logger().error(f"Error enabling torque: {str(e)}")
+        
+        return response
+
+    def torque_off_callback(self, request, response):
+        """Service callback to disable torque for all servos."""
+        try:
+            self.get_logger().info("Disabling torque for all servos...")
+            for servo_id in self.servo_ids:
+                self.robot.dynamixel._disable_torque(servo_id)
+                time.sleep(0.1)  # Small delay between servos
+            
+            response.success = True
+            response.message = f"Successfully disabled torque for {len(self.servo_ids)} servos"
+            self.get_logger().info("Torque disabled for all servos")
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to disable torque: {str(e)}"
+            self.get_logger().error(f"Error disabling torque: {str(e)}")
+        
+        return response
 
     def timer_callback(self):
         """Publish current joint states and send latest command if available."""
@@ -196,13 +271,30 @@ class MauriceArmNode(Node):
             # Convert positions from encoder counts to radians:
             # Assuming 0 encoder count corresponds to -2048 and full revolution is 4096 counts:
             positions_rad = [((pos - 2048) * (2 * math.pi) / 4096) for pos in positions]
+            
+            # Flip directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
+            for i in [1, 2, 3, 5]:
+                if i < len(positions_rad):
+                    positions_rad[i] = -positions_rad[i]
 
             # Convert velocities to radians per second (if needed)
             velocities_rad = [float(vel) * 2 * math.pi / 4096 for vel in velocities]
+            
+            # Flip velocity directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
+            for i in [1, 2, 3, 5]:
+                if i < len(velocities_rad):
+                    velocities_rad[i] = -velocities_rad[i]
 
             self.joint_state_msg.header.stamp = self.get_clock().now().to_msg()
             self.joint_state_msg.position = positions_rad
             self.joint_state_msg.velocity = velocities_rad
+
+            # Add debug logging occasionally to verify we're publishing valid data
+            if not hasattr(self, '_position_debug_counter'):
+                self._position_debug_counter = 0
+            self._position_debug_counter += 1
+            if self._position_debug_counter % 100 == 0:  # Log every 100 cycles
+                self.get_logger().info(f"Publishing positions (rad): {[f'{p:.3f}' for p in positions_rad[:3]]}")  # Show first 3 joints
 
             self.state_pub.publish(self.joint_state_msg)
 
@@ -219,8 +311,48 @@ class MauriceArmNode(Node):
         try:
             # In this example, we assume the command array has one value per joint.
             # Here you might check against limits (converted to radians) if desired.
+            
+            # Create a copy of the command data to modify
+            command_data = list(msg.data)
+            
+            # Intelligent joint limits: adjust joint2 limits based on joint1 position
+            # Note: joint2 (index 1) will be flipped later, so we need to account for that
+            if len(command_data) >= 2:  # Ensure we have at least joint1 and joint2
+                joint1_pos = command_data[0]  # joint1 position in radians
+                joint2_pos = command_data[1]  # joint2 position in radians (before flipping)
+                
+                # Get joint2 limits from config
+                joint2_config = self.joints_config.get("joint_2", {})
+                joint2_limits = joint2_config.get("position_limits", {})
+                config_min = joint2_limits.get("min", -1.5708)  # Default fallback
+                config_max = joint2_limits.get("max", 1.22)     # Default fallback
+                
+                # Since joint2 will be flipped, we need to invert the limits for pre-flip values
+                # After flip: joint2_flipped = -joint2_pos
+                # So if we want joint2_flipped to be within [config_min, config_max]
+                # We need joint2_pos to be within [-config_max, -config_min]
+                joint2_min_limit = -config_max  # Will become config_max after flip
+                joint2_max_limit = -config_min  # Will become config_min after flip
+                
+                # Determine joint2's maximum limit based on joint1's position
+                if joint1_pos < 1.0:
+                    # When joint1 < 1.0, restrict max to 0.4 (in pre-flip regime)
+                    joint2_min_limit = max(joint2_min_limit, -0.4)
+                
+                # Enforce the limits (before flipping)
+                if joint2_pos < joint2_min_limit:
+                    command_data[1] = joint2_min_limit
+                
+                if joint2_pos > joint2_max_limit:
+                    command_data[1] = joint2_max_limit
+            
+            # Flip directions for links 2, 3, 4, 6 (indices 1, 2, 3, 5)
+            for i in [1, 2, 3, 5]:
+                if i < len(command_data):
+                    command_data[i] = -command_data[i]
+            
             # Then convert the command from radians to encoder counts:
-            command_encoder = [int((pos / (2 * math.pi)) * 4096 + 2048) for pos in msg.data]
+            command_encoder = [int((pos / (2 * math.pi)) * 4096 + 2048) for pos in command_data]
             self.latest_command = command_encoder
         except Exception as e:
             self.get_logger().error(f"Error in command callback: {str(e)}")

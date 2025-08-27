@@ -67,10 +67,10 @@ def generate_launch_description():
 
     # --- Custom Camera Driver Specific Arguments ---
     declare_color_resolution = DeclareLaunchArgument(
-        'color_resolution', default_value='800p',
+        'color_resolution', default_value='720p',
         description='RGB camera resolution for the driver. Supported: 800p, 720p.')
     declare_fps = DeclareLaunchArgument(
-        'fps', default_value='30.0',
+        'fps', default_value='20.0',
         description='RGB camera FPS.')
     declare_use_video = DeclareLaunchArgument(
         'use_video', default_value='True',
@@ -79,7 +79,7 @@ def generate_launch_description():
         'compression_format', default_value='jpeg',
         description='Compression format for the video stream (jpeg or png).')
     declare_jpeg_quality = DeclareLaunchArgument(
-        'jpeg_quality', default_value='90',
+        'jpeg_quality', default_value='65',
         description='JPEG compression quality (0-100).')
 
     # -------------------------------------------------------
