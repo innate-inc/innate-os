@@ -1,509 +1,136 @@
-#!/usr/bin/env python3
-import os, re, math, tempfile, numpy as np, xml.etree.ElementTree as ET
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import JointState
-from ament_index_python.packages import get_package_share_directory
-from urdf_parser_py.urdf import URDF, Mesh as URDFMesh
-from maurice_arm.urdf import treeFromUrdfModel  # your local URDF→KDL parser
-import PyKDL as kdl
-import trimesh
-import fcl
+import serial
+import struct
+import time
+import math
+import sys
 
-# ------------------ CONFIG ------------------
-URDF_PATH   = "/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/urdf/maurice.urdf"
-BASE_LINK   = "base_link"
-LINK_A_NAME = "base_link"
-LINK_B_NAME = "link5"
-JOINT_TOPIC = "/maurice_arm/state"
-TIMER_HZ    = 1.0
-# -------------------------------------------
+# ------------------ CRC-16 (DYNAMIXEL Protocol 2.0) ------------------
+def update_crc(data_blk):
+    crc_table = [
+        0x0000, 0x8005, 0x800F, 0x000A, 0x801B, 0x001E, 0x0014, 0x8011,
+        0x8033, 0x0036, 0x003C, 0x8039, 0x0028, 0x802D, 0x8027, 0x0022,
+        0x8063, 0x0066, 0x006C, 0x8069, 0x0078, 0x807D, 0x8077, 0x0072,
+        0x0050, 0x8055, 0x805F, 0x005A, 0x804B, 0x004E, 0x0044, 0x8041,
+        0x80C3, 0x00C6, 0x00CC, 0x80C9, 0x00D8, 0x80DD, 0x80D7, 0x00D2,
+        0x00F0, 0x80F5, 0x80FF, 0x00FA, 0x80EB, 0x00EE, 0x00E4, 0x80E1,
+        0x00A0, 0x80A5, 0x80AF, 0x00AA, 0x80BB, 0x00BE, 0x00B4, 0x80B1,
+        0x8093, 0x0096, 0x009C, 0x8099, 0x0088, 0x808D, 0x8087, 0x0082,
+        0x8183, 0x0186, 0x018C, 0x8189, 0x0198, 0x819D, 0x8197, 0x0192,
+        0x01B0, 0x81B5, 0x81BF, 0x01BA, 0x81AB, 0x01AE, 0x01A4, 0x81A1,
+        0x01E0, 0x81E5, 0x81EF, 0x01EA, 0x81FB, 0x01FE, 0x01F4, 0x81F1,
+        0x81D3, 0x01D6, 0x01DC, 0x81D9, 0x01C8, 0x81CD, 0x81C7, 0x01C2,
+        0x0140, 0x8145, 0x814F, 0x014A, 0x815B, 0x015E, 0x0154, 0x8151,
+        0x8173, 0x0176, 0x017C, 0x8179, 0x0168, 0x816D, 0x8167, 0x0162,
+        0x8123, 0x0126, 0x012C, 0x8129, 0x0138, 0x813D, 0x8137, 0x0132,
+        0x0110, 0x8115, 0x811F, 0x011A, 0x810B, 0x010E, 0x0104, 0x8101,
+        0x8303, 0x0306, 0x030C, 0x8309, 0x0318, 0x831D, 0x8317, 0x0312,
+        0x0330, 0x8335, 0x833F, 0x033A, 0x832B, 0x032E, 0x0324, 0x8321,
+        0x0360, 0x8365, 0x836F, 0x036A, 0x837B, 0x037E, 0x0374, 0x8371,
+        0x8353, 0x0356, 0x035C, 0x8359, 0x0348, 0x834D, 0x8347, 0x0342,
+        0x03C0, 0x83C5, 0x83CF, 0x03CA, 0x83DB, 0x03DE, 0x03D4, 0x83D1,
+        0x83F3, 0x03F6, 0x03FC, 0x83F9, 0x03E8, 0x83ED, 0x83E7, 0x03E2,
+        0x83A3, 0x03A6, 0x03AC, 0x83A9, 0x03B8, 0x83BD, 0x83B7, 0x03B2,
+        0x0390, 0x8395, 0x839F, 0x039A, 0x838B, 0x038E, 0x0384, 0x8381,
+        0x0280, 0x8285, 0x828F, 0x028A, 0x829B, 0x029E, 0x0294, 0x8291,
+        0x82B3, 0x02B6, 0x02BC, 0x82B9, 0x02A8, 0x82AD, 0x82A7, 0x02A2,
+        0x82E3, 0x02E6, 0x02EC, 0x82E9, 0x02F8, 0x82FD, 0x82F7, 0x02F2,
+        0x02D0, 0x82D5, 0x82DF, 0x02DA, 0x82CB, 0x02CE, 0x02C4, 0x82C1,
+        0x8243, 0x0246, 0x024C, 0x8249, 0x0258, 0x825D, 0x8257, 0x0252,
+        0x0270, 0x8275, 0x827F, 0x027A, 0x826B, 0x026E, 0x0264, 0x8261,
+        0x0220, 0x8225, 0x822F, 0x022A, 0x823B, 0x023E, 0x0234, 0x8231,
+        0x8213, 0x0216, 0x021C, 0x8219, 0x0208, 0x820D, 0x8207, 0x0202
+    ]
+    crc_accum = 0
+    for b in data_blk:
+        i = ((crc_accum >> 8) ^ b) & 0xFF
+        crc_accum = ((crc_accum << 8) ^ crc_table[i]) & 0xFFFF
+    return crc_accum
 
-def resolve_package_uris(text: str) -> str:
-    def repl(m):
-        pkg, rest = m.group(1), m.group(2)
-        try:
-            base = get_package_share_directory(pkg)
-        except Exception:
-            return m.group(0)
-        return os.path.join(base, rest.lstrip('/')).replace('\\', '/')
-    return re.sub(r'package://([A-Za-z0-9_\-]+)/([^"\'\s<]+)', repl, text)
+# ------------------ Packet builders ------------------
+def build_packet(servo_id, instruction, params_bytes):
+    header = [0xFF, 0xFF, 0xFD, 0x00]
+    length = len(params_bytes) + 3
+    core = header + [servo_id, length & 0xFF, (length >> 8) & 0xFF, instruction]
+    packet_wo_crc = core + list(params_bytes)
+    crc = update_crc(packet_wo_crc)
+    return bytes(packet_wo_crc + [crc & 0xFF, (crc >> 8) & 0xFF])
 
-def rpy_to_rot(r, p, y):
-    cr, sr = math.cos(r), math.sin(r)
-    cp, sp = math.cos(p), math.sin(p)
-    cy, sy = math.cos(y), math.sin(y)
-    # URDF uses extrinsic XYZ (roll,pitch,yaw) == intrinsic ZYX
-    return np.array([
-        [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
-        [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
-        [ -sp ,        cp*sr    ,        cp*cr    ],
-    ], dtype=np.float64)
+def params_read(address, length):
+    return [
+        address & 0xFF, (address >> 8) & 0xFF,
+        length & 0xFF, (length >> 8) & 0xFF
+    ]
 
-def mat4_from_xyz_rpy(xyz, rpy):
-    T = np.eye(4, dtype=np.float64)
-    T[:3, :3] = rpy_to_rot(rpy[0], rpy[1], rpy[2])
-    T[:3, 3]  = xyz
-    return T
+def params_write(address, data_bytes_le):
+    return [address & 0xFF, (address >> 8) & 0xFF] + list(data_bytes_le)
 
-def transform_vertices(V, T4):
-    Vh = np.c_[V, np.ones((V.shape[0], 1), dtype=np.float64)]
-    return (T4 @ Vh.T).T[:, :3]
+def build_read(addr, length, servo_id=1):
+    return build_packet(servo_id, 0x02, params_read(addr, length))
 
-class KDLFCLDistanceNode(Node):
-    def __init__(self):
-        super().__init__('kdl_fcl_distance_node')
+def build_write(addr, data_bytes_le, servo_id=1):
+    return build_packet(servo_id, 0x03, params_write(addr, data_bytes_le))
 
-        # -------- Load URDF (resolved paths) --------
-        with open(URDF_PATH, 'r') as f:
-            resolved = resolve_package_uris(f.read())
-        tmp_dir = tempfile.mkdtemp(prefix='urdf_resolved_')
-        self.urdf_resolved_path = os.path.join(tmp_dir, 'robot_resolved.urdf')
-        with open(self.urdf_resolved_path, 'w') as f:
-            f.write(resolved)
+# ------------------ Simple helpers ------------------
+def le_u32(v): return struct.pack("<I", v)
+def le_u16(v): return struct.pack("<H", v)
+def le_u8(v):  return struct.pack("<B", v)
 
-        self.robot_model = URDF.from_xml_file(self.urdf_resolved_path)
+# ------------------ DYNAMIXEL addresses ------------------
+ADDR_TORQUE_ENABLE     = 64     # 1 byte
+ADDR_GOAL_POSITION     = 116    # 4 bytes
+ADDR_PRESENT_POSITION  = 132    # 4 bytes
+ADDR_PROFILE_ACCEL     = 108    # 4 bytes
+ADDR_PROFILE_VELOCITY  = 112    # 4 bytes
+ADDR_STATUS_RETURN_LEVEL = 68   # 1 byte
 
-        # -------- Build KDL tree --------
-        ok, self.kdl_tree = treeFromUrdfModel(self.robot_model)
-        if not ok or self.kdl_tree is None:
-            raise RuntimeError("Failed to build KDL tree from URDF")
+# ------------------ Main ------------------
+if __name__ == "__main__":
+    port = "/dev/ttyTHS1"     # adjust if needed
+    baud = 115200
+    SERVO_ID = 1
 
-        # Chains from base to each link (handle base→base as identity)
-        self.chain_A = self._make_chain(BASE_LINK, LINK_A_NAME)
-        self.chain_B = self._make_chain(BASE_LINK, LINK_B_NAME)
+    # Sine settings
+    center = 2000
+    amplitude = 500            # swings 1500 ↔ 2500
+    freq_hz = 0.25             # 0.25 Hz = 4 s period
+    poll_dt = 0.015           # ~33 ms for 30 Hz polling rate
 
-        self.fk_A = kdl.ChainFkSolverPos_recursive(self.chain_A) if self.chain_A is not None else None
-        self.fk_B = kdl.ChainFkSolverPos_recursive(self.chain_B) if self.chain_B is not None else None
-
-        # Joint name order for each chain (for building JntArray)
-        self.joint_names_A = self._chain_joint_names(self.chain_A)
-        self.joint_names_B = self._chain_joint_names(self.chain_B)
-
-        # -------- Build FCL BVHs for the two links --------
-        self._mesh_cache = {}
-        
-        print("=== BUILDING COLLISION MODELS ===")
-        # Create BVH models first, then collision objects
-        self.bvh_A = self._build_link_bvh(LINK_A_NAME)
-        self.bvh_B = self._build_link_bvh(LINK_B_NAME)
-        # Also build link2 for visualization
-        self.bvh_link2 = self._build_link_bvh("link2")
-        print("=== COLLISION MODELS BUILT ===")
-        
-        # Export collision meshes as STL files for visualization
-        print("=== EXPORTING FCL MESHES ===")
-        self.export_fcl_meshes()
-        print("=== EXPORT COMPLETE ===")
-        
-        # Create collision objects with identity transforms initially
-        self.co_A = fcl.CollisionObject(self.bvh_A)
-        self.co_B = fcl.CollisionObject(self.bvh_B)
-
-        # -------- ROS plumbing --------
-        self.latest_joint = None
-        self.create_subscription(JointState, JOINT_TOPIC, self._on_joint, 10)
-        self.create_timer(1.0 / TIMER_HZ, self._on_timer)
-
-        self.get_logger().info(
-            f"Ready. KDL FK + FCL distance: {LINK_A_NAME} ↔ {LINK_B_NAME} @ {TIMER_HZ:.1f} Hz"
-        )
-
-    # ---------- KDL helpers ----------
-    def _make_chain(self, base: str, tip: str):
-        if tip == base:
-            return None  # identity
-        try:
-            return self.kdl_tree.getChain(base, tip)
-        except Exception:
-            raise ValueError(f"KDL chain not found: {base} -> {tip}")
-
-    @staticmethod
-    def _chain_joint_names(chain: kdl.Chain | None):
-        if chain is None:
-            return []
-        names = []
-        for i in range(chain.getNrOfSegments()):
-            seg = chain.getSegment(i)
-            j = seg.getJoint()
-            if j.getType() != kdl.Joint.Fixed:
-                names.append(j.getName())
-        return names
-
-    def _jntarray_from_jointstate(self, chain_names, joint_msg: JointState):
-        qa = kdl.JntArray(len(chain_names))
-        if not chain_names:
-            return qa  # size 0 for identity
-        name_to_pos = dict(zip(joint_msg.name, joint_msg.position))
-        for i, name in enumerate(chain_names):
-            qa[i] = float(name_to_pos.get(name, 0.0))
-        return qa
-
-    @staticmethod
-    def _frame_to_mat4(F: kdl.Frame):
-        R = np.array([[F.M[0,0], F.M[0,1], F.M[0,2]],
-                      [F.M[1,0], F.M[1,1], F.M[1,2]],
-                      [F.M[2,0], F.M[2,1], F.M[2,2]]], dtype=np.float64)
-        T = np.eye(4, dtype=np.float64)
-        T[:3, :3] = R
-        T[:3, 3]  = [F.p[0], F.p[1], F.p[2]]
-        return T
-
-    def export_fcl_meshes(self):
-        """Export FCL collision objects as STL files for visualization."""
-        
-        # Extract vertices and faces from FCL BVH models
-        for name in [LINK_A_NAME, LINK_B_NAME, "link2"]:
-            try:
-                link = next((l for l in self.robot_model.links if l.name == name), None)
-                if link and link.collisions:
-                    for i, col in enumerate(link.collisions):
-                        if isinstance(col.geometry, URDFMesh):
-                            V, F = self._load_mesh(col.geometry.filename)
-                            
-                            # Apply same transforms as in _build_link_bvh
-                            scale = np.array(col.geometry.scale if col.geometry.scale else [1,1,1])
-                            V = V * scale.reshape(1,3)
-                            
-                            xyz = np.array(col.origin.xyz if col.origin else [0,0,0])
-                            rpy = np.array(col.origin.rpy if col.origin else [0,0,0])
-                            T_local = mat4_from_xyz_rpy(xyz, rpy)
-                            V = transform_vertices(V, T_local)
-                            
-                            # Create trimesh and save
-                            mesh = trimesh.Trimesh(vertices=V, faces=F)
-                            filename = f"fcl_{name}_collision_{i}.stl"
-                            mesh.export(filename)
-                            print(f"Exported {filename}")
-                            
-                            # Also print some info about the exported mesh
-                            print(f"  Vertices: {V.shape[0]}, Faces: {F.shape[0]}")
-                            print(f"  Bounds: {np.min(V, axis=0)} to {np.max(V, axis=0)}")
-                            
-            except Exception as e:
-                print(f"Failed to export {name}: {e}")
-
-    def export_transformed_meshes(self, T_A, T_B):
-        """Export collision meshes in their current world transforms."""
-        
-        # Compute FK for link2 as well
-        chain_link2 = self._make_chain(BASE_LINK, "link2")
-        if chain_link2 is None:
-            T_link2 = np.eye(4, dtype=np.float64)
-        else:
-            fk_link2 = kdl.ChainFkSolverPos_recursive(chain_link2)
-            joint_names_link2 = self._chain_joint_names(chain_link2)
-            q_link2 = self._jntarray_from_jointstate(joint_names_link2, self.latest_joint)
-            F_link2 = kdl.Frame()
-            rc_link2 = fk_link2.JntToCart(q_link2, F_link2)
-            if rc_link2 < 0:
-                T_link2 = np.eye(4, dtype=np.float64)
-            else:
-                T_link2 = self._frame_to_mat4(F_link2)
-        
-        # Include all links with their transforms
-        transforms = {
-            "base_link": np.eye(4, dtype=np.float64),  # Base link is at world origin
-            LINK_A_NAME: T_A, 
-            "link2": T_link2,
-            LINK_B_NAME: T_B
-        }
-        
-        for name, T in transforms.items():
-            try:
-                link = next((l for l in self.robot_model.links if l.name == name), None)
-                if link and link.collisions:
-                    for i, col in enumerate(link.collisions):
-                        if isinstance(col.geometry, URDFMesh):
-                            V, F = self._load_mesh(col.geometry.filename)
-                            
-                            # Apply local transforms (same as in _build_link_bvh)
-                            scale = np.array(col.geometry.scale if col.geometry.scale else [1,1,1])
-                            V = V * scale.reshape(1,3)
-                            
-                            xyz = np.array(col.origin.xyz if col.origin else [0,0,0])
-                            rpy = np.array(col.origin.rpy if col.origin else [0,0,0])
-                            T_local = mat4_from_xyz_rpy(xyz, rpy)
-                            V = transform_vertices(V, T_local)
-                            
-                            # Apply world transform (FK result)
-                            V = transform_vertices(V, T)
-                            
-                            # Create and save mesh
-                            mesh = trimesh.Trimesh(vertices=V, faces=F)
-                            filename = f"world_{name}_collision_{i}.stl"
-                            mesh.export(filename)
-                            print(f"Exported world position: {filename}")
-                            print(f"  World bounds: {np.min(V, axis=0)} to {np.max(V, axis=0)}")
-                            
-            except Exception as e:
-                print(f"Failed to export world {name}: {e}")
-
-    # ---------- URDF mesh → FCL BVH (separated from CollisionObject creation) ----------
-    def _build_link_bvh(self, link_name: str):
-        print(f"\n--- Building BVH for {link_name} ---")
-        # find link
-        link = next((l for l in self.robot_model.links if l.name == link_name), None)
-        if link is None:
-            self.get_logger().warn(f"Link '{link_name}' not in URDF; creating empty BVH.")
-            bvh = fcl.BVHModel()
-            bvh.beginModel(0, 0)
-            bvh.endModel()
-            return bvh
-
-        all_V, all_F, v_ofs = [], [], 0
-        if not link.collisions:
-            self.get_logger().warn(f"Link '{link_name}' has no <collision> geometry; using empty model.")
-        else:
-            for col in link.collisions:
-                geom = col.geometry
-                if not isinstance(geom, URDFMesh):
-                    # (optional) handle primitives: box/sphere/cylinder → FCL primitives
-                    continue
-                filename = geom.filename
-                scale = np.array(geom.scale if geom.scale is not None else [1,1,1], dtype=np.float64)
-
-                V, F = self._load_mesh(filename)
-                print(f"Raw mesh bounds for {link_name}: {np.min(V, axis=0)} to {np.max(V, axis=0)}")
-                
-                # Apply mesh scale from URDF
-                V = V * scale.reshape(1,3)
-                print(f"After scale: {np.min(V, axis=0)} to {np.max(V, axis=0)}")
-
-                # origin is urdf_parser_py.Pose(xyz, rpy)
-                xyz = np.array(col.origin.xyz if col.origin else [0,0,0], dtype=np.float64)
-                rpy = np.array(col.origin.rpy if col.origin else [0,0,0], dtype=np.float64)
-                print(f"Collision origin offset: xyz={xyz}, rpy={rpy}")
-                
-                T_local = mat4_from_xyz_rpy(xyz, rpy)
-                V = transform_vertices(V, T_local)
-                print(f"After local transform: {np.min(V, axis=0)} to {np.max(V, axis=0)}")
-
-                all_V.append(V)
-                all_F.append(F + v_ofs)
-                v_ofs += V.shape[0]
-
-        if not all_V:
-            bvh = fcl.BVHModel()
-            bvh.beginModel(0, 0)
-            bvh.endModel()
-            return bvh
-
-        V_all = np.vstack(all_V).astype(np.float64, copy=False)
-        F_all = np.vstack(all_F).astype(np.int32, copy=False)
-        
-        print(f"Final {link_name} collision mesh bounds: {np.min(V_all, axis=0)} to {np.max(V_all, axis=0)}")
-        
-        # Check distance from origin
-        min_dist_to_origin = np.min(np.linalg.norm(V_all, axis=1))
-        print(f"Minimum distance from {link_name} collision geometry to origin: {min_dist_to_origin:.6f} m")
-
-        bvh = fcl.BVHModel()
-        bvh.beginModel(V_all.shape[0], F_all.shape[0])
-        bvh.addSubModel(V_all, F_all)
-        bvh.endModel()
-
-        return bvh
-
-    # ---------- URDF mesh → FCL ----------
-    def _build_link_fcl(self, link_name: str):
-        # find link
-        link = next((l for l in self.robot_model.links if l.name == link_name), None)
-        if link is None:
-            self.get_logger().warn(f"Link '{link_name}' not in URDF; creating empty FCL object.")
-            bvh = fcl.BVHModel(); bvh.beginModel(0, 0); bvh.endModel()
-            return fcl.CollisionObject(bvh, np.eye(4))
-
-        all_V, all_F, v_ofs = [], [], 0
-        if not link.collisions:
-            self.get_logger().warn(f"Link '{link_name}' has no <collision> geometry; using empty model.")
-        else:
-            for col in link.collisions:
-                geom = col.geometry
-                if not isinstance(geom, URDFMesh):
-                    # (optional) handle primitives: box/sphere/cylinder → FCL primitives
-                    continue
-                filename = geom.filename
-                scale = np.array(geom.scale if geom.scale is not None else [1,1,1], dtype=np.float64)
-
-                V, F = self._load_mesh(filename)
-                V = V * scale.reshape(1,3)
-
-                # origin is urdf_parser_py.Pose(xyz, rpy)
-                xyz = np.array(col.origin.xyz if col.origin else [0,0,0], dtype=np.float64)
-                rpy = np.array(col.origin.rpy if col.origin else [0,0,0], dtype=np.float64)
-                T_local = mat4_from_xyz_rpy(xyz, rpy)
-                V = transform_vertices(V, T_local)
-
-                all_V.append(V)
-                all_F.append(F + v_ofs)
-                v_ofs += V.shape[0]
-
-        if not all_V:
-            bvh = fcl.BVHModel(); bvh.beginModel(0, 0); bvh.endModel()
-            return fcl.CollisionObject(bvh, np.eye(4))
-
-        V_all = np.vstack(all_V).astype(np.float64, copy=False)
-        F_all = np.vstack(all_F).astype(np.int32, copy=False)
-
-        bvh = fcl.BVHModel()
-        bvh.beginModel(V_all.shape[0], F_all.shape[0])
-        bvh.addSubModel(V_all, F_all)
-        bvh.endModel()
-
-        return fcl.CollisionObject(bvh, np.eye(4))
-
-    def _load_mesh(self, filename: str):
-        if not hasattr(self, "_mesh_cache"):
-            self._mesh_cache = {}
-        if filename in self._mesh_cache:
-            return self._mesh_cache[filename]
-        m = trimesh.load(filename, force='mesh')
-        if not isinstance(m, trimesh.Trimesh):
-            m = trimesh.util.concatenate(m.dump())
-        V = np.asarray(m.vertices, dtype=np.float64)
-        F = np.asarray(m.faces, dtype=np.int32)
-        
-        # Debug: Print mesh bounds
-        bounds = m.bounds
-        size = bounds[1] - bounds[0]
-        print(f"Mesh {filename}:")
-        print(f"  Bounds: {bounds}")
-        print(f"  Size: {size}")
-        print(f"  Max dimension: {np.max(size):.4f}")
-        
-        self._mesh_cache[filename] = (V, F)
-        return V, F
-
-    def get_true_distance(self, co_A, co_B):
-        """Get the true distance between two collision objects, handling FCL's collision detection quirks."""
-        
-        # Try distance query first
-        req = fcl.DistanceRequest()
-        req.enable_nearest_points = True
-        req.enable_signed_distance = True
-        req.rel_err = 0.0
-        req.abs_err = 0.0
-        
-        res = fcl.DistanceResult()
-        
-        try:
-            fcl_dist = fcl.distance(co_A, co_B, req, res)
-        except Exception:
-            return None, None, None
-            
-        # Check for collision
-        col_req = fcl.CollisionRequest()
-        col_res = fcl.CollisionResult()
-        is_colliding = fcl.collide(co_A, co_B, col_req, col_res)
-        
-        # Get nearest points
-        nearest_points = None
-        manual_dist = None
-        if hasattr(res, 'nearest_points') and res.nearest_points:
-            pa, pb = res.nearest_points
-            nearest_points = (pa, pb)
-            manual_dist = np.linalg.norm(pa - pb)
-        
-        # Determine the true distance
-        if is_colliding and fcl_dist == 0.0 and manual_dist is not None:
-            # FCL thinks they're colliding but nearest points show they're close
-            true_dist = manual_dist
-            status = "FCL_COLLISION_OVERRIDE"
-        elif fcl_dist < 0.0:
-            # True penetration
-            true_dist = -fcl_dist
-            status = "PENETRATION"
-        else:
-            # Normal case
-            true_dist = fcl_dist
-            status = "NORMAL"
-            
-        return true_dist, nearest_points, status
-
-    # ---------- ROS callbacks ----------
-    def _on_joint(self, msg: JointState):
-        self.latest_joint = msg
-
-    def _on_timer(self):
-        if self.latest_joint is None:
-            return
-
-        # FK for link A
-        if self.chain_A is None:  # base → base
-            T_A = np.eye(4, dtype=np.float64)
-        else:
-            qA = self._jntarray_from_jointstate(self.joint_names_A, self.latest_joint)
-            F_A = kdl.Frame()
-            rcA = self.fk_A.JntToCart(qA, F_A)
-            if rcA < 0:
-                self.get_logger().warn(f"FK failed for {LINK_A_NAME} (rc={rcA}); using identity.")
-                T_A = np.eye(4, dtype=np.float64)
-            else:
-                T_A = self._frame_to_mat4(F_A)
-
-        # FK for link B
-        if self.chain_B is None:
-            T_B = np.eye(4, dtype=np.float64)
-        else:
-            qB = self._jntarray_from_jointstate(self.joint_names_B, self.latest_joint)
-            F_B = kdl.Frame()
-            rcB = self.fk_B.JntToCart(qB, F_B)
-            if rcB < 0:
-                self.get_logger().warn(f"FK failed for {LINK_B_NAME} (rc={rcB}); using identity.")
-                T_B = np.eye(4, dtype=np.float64)
-            else:
-                T_B = self._frame_to_mat4(F_B)
-
-        # Debug: Print link origins (translation parts of transforms)
-        origin_A = T_A[:3, 3]
-        origin_B = T_B[:3, 3]
-        origin_dist = np.linalg.norm(origin_B - origin_A)
-        
-        print(f"Link origins distance: {origin_dist:.4f} m")
-        print(f"  {LINK_A_NAME} origin: {np.array2string(origin_A, precision=4)}")
-        print(f"  {LINK_B_NAME} origin: {np.array2string(origin_B, precision=4)}")
-
-        # Update FCL transforms
-        try:
-            self.co_A.setTransformation(T_A)
-            self.co_B.setTransformation(T_B)
-        except AttributeError:
-            self.co_A.setTransform(T_A)
-            self.co_B.setTransform(T_B)
-
-        # Export world-positioned meshes once for visualization
-        if not hasattr(self, '_exported_world'):
-            print("=== EXPORTING WORLD-POSITIONED MESHES ===")
-            self.export_transformed_meshes(T_A, T_B)
-            print("=== WORLD EXPORT COMPLETE ===")
-            self._exported_world = True
-
-        # Get true distance using our custom function
-        true_dist, nearest_points, status = self.get_true_distance(self.co_A, self.co_B)
-        
-        if true_dist is not None:
-            print(f"Surface distance: {true_dist:.6f} m ({status})")
-            
-            if nearest_points:
-                pa, pb = nearest_points
-                print(f"  {LINK_A_NAME} surface: {np.array2string(pa, precision=4)}")
-                print(f"  {LINK_B_NAME} surface: {np.array2string(pb, precision=4)}")
-        else:
-            print(f"[ERROR] Failed to compute distance")
-        
-        print("---")
-
-def main():
-    rclpy.init()
-    node = KDLFCLDistanceNode()
     try:
-        rclpy.spin(node)  # single-threaded: one sub + one timer
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        with serial.Serial(port, baud, timeout=0.1) as ser:
+            # SRL = 1 (reply only to PING/READ)
+            ser.write(build_write(ADDR_STATUS_RETURN_LEVEL, le_u8(1), SERVO_ID))
+            ser.flush(); time.sleep(0.002); ser.reset_input_buffer()
 
-if __name__ == '__main__':
-    main()
+            # Torque ON
+            ser.write(build_write(ADDR_TORQUE_ENABLE, le_u8(1), SERVO_ID))
+            ser.flush(); time.sleep(0.002)
+
+            t0 = time.time()
+            while True:
+                t = time.time() - t0
+                cmd = int(center + amplitude * math.sin(2 * math.pi * freq_hz * t))
+
+                # WRITE: no status packet now
+                ser.write(build_write(ADDR_GOAL_POSITION, le_u32(cmd), SERVO_ID))
+
+                # READ: this is the only status packet you'll get
+                ser.write(build_read(ADDR_PRESENT_POSITION, 4, SERVO_ID))
+                resp = ser.read(40)
+
+                present = None
+                if resp.startswith(b"\xff\xff\xfd\x00") and len(resp) >= 15:
+                    params = resp[9:-2]
+                    if len(params) >= 4:
+                        present = struct.unpack("<I", params[:4])[0]
+
+                print(f"cmd={cmd:4d}  pos={present if present is not None else '?'}")
+                time.sleep(poll_dt)
+
+    except KeyboardInterrupt:
+        print("\nStopping… turning torque OFF.")
+        try:
+            with serial.Serial(port, baud, timeout=0.1) as ser2:
+                ser2.write(build_write(ADDR_TORQUE_ENABLE, le_u8(0), SERVO_ID))
+        except Exception as e:
+            print("Could not disable torque cleanly:", e)
+        sys.exit(0)
