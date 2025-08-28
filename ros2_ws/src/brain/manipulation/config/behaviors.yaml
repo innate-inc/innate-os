@@ -63,5 +63,5 @@ behavior_manager:
     type: "learned"
     action_dim: 10
     duration: 45.0
-    start_pose: [-0.015, -0.399, 1.456, -1.135, -0.023, 0.833]
-    end_pose: []
+    start_pose: [-0.015, -0.399, 1.456, -1.135, -0.023, 0.0]
+    end_pose: [-0.015, -0.399, 1.456, -1.135, -0.023, 0.0]
