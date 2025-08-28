@@ -34,6 +34,7 @@ from brain_client.primitives.drop_socks import DropSocks
 from brain_client.primitives.pick_motor import PickMotor
 from brain_client.primitives.pick_screwdriver import PickScrewdriver
 from brain_client.primitives.give_object import GiveObject
+from brain_client.primitives.open_door import OpenDoor
 
 from brain_client.primitives.types import (
     PrimitiveResult,
@@ -106,6 +107,7 @@ class PrimitiveExecutionActionServer(Node):
             TaskType.PICK_MOTOR: PickMotor,
             TaskType.PICK_SCREWDRIVER: PickScrewdriver,
             TaskType.GIVE_OBJECT: GiveObject,
+            TaskType.OPEN_DOOR: OpenDoor,
         }
 
         self._primitives = {}

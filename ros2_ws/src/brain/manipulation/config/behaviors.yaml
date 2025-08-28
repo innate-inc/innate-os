@@ -59,7 +59,7 @@ behavior_manager:
       pose_2: [1.57693225, -0.8, 1.4772235, -0.73784476, 0.0, 0.0]
 
   open_door:
-    file_path: "/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/door2_20250826_072615_ddp/act_policy_step_60000.pth"
+    file_path: "/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/door2_20250826_072615_ddp/act_policy_step_100000.pth"
     type: "learned"
     action_dim: 10
     duration: 45.0

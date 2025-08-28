@@ -44,7 +44,7 @@ def create_act_config(action_dim=8):
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,
-        n_action_steps=1,
+        n_action_steps=3,
         speed=2.5,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
@@ -69,7 +69,7 @@ def create_act_config(action_dim=8):
         kl_weight=10.0,
         
         # Temporal ensembling
-        temporal_ensemble_coeff=0.01,
+        temporal_ensemble_coeff=None,
         
         # Optimizer settings
         optimizer_lr=1e-5,
@@ -388,7 +388,7 @@ class BehaviorServer(Node):
             
             # Execute policy inference
             start_time = time.time()
-            inference_hz = 12.0
+            inference_hz = 25.0
             period = 1.0 / inference_hz
             early_termination = False
             
