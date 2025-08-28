@@ -65,6 +65,7 @@ from brain_client.primitives.drop_socks import DropSocks
 from brain_client.primitives.pick_screwdriver import PickScrewdriver
 from brain_client.primitives.pick_motor import PickMotor
 from brain_client.primitives.give_object import GiveObject
+from brain_client.primitives.open_door import OpenDoor
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.empty_directive import EmptyDirective
 from brain_client.directives.sassy_directive import SassyDirective
@@ -75,6 +76,7 @@ from brain_client.directives.interior_designer_directive import (
     InteriorDesignerDirective,
 )
 from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
+from brain_client.directives.security_guard_directive import SecurityGuardDirective
 from brain_client.directives.clean_house_directive import CleanHouseDirective
 from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
 from brain_client.directives.socks_tidier_directive import SocksTidierDirective
@@ -410,6 +412,7 @@ class BrainClientNode(Node):
             TaskType.PICK_MOTOR.value: PickMotor(self.get_logger()),
             TaskType.PICK_SCREWDRIVER.value: PickScrewdriver(self.get_logger()),
             TaskType.GIVE_OBJECT.value: GiveObject(self.get_logger()),
+            TaskType.OPEN_DOOR.value: OpenDoor(self.get_logger()),
             # Add other primitives here as they become available
         }
 
@@ -429,6 +432,7 @@ class BrainClientNode(Node):
                 SassyDirective(),
                 FriendlyGuideDirective(),
                 SecurityPatrolDirective(),
+                SecurityGuardDirective(),
                 InteriorDesignerDirective(),
                 ElderSafetyDirective(),
                 HouseJokerDirective(),
@@ -1549,11 +1553,22 @@ class BrainClientNode(Node):
 
     def handle_get_available_directives(self, request, response):
         """
-        Service handler that returns a list of all available directives.
+        Service handler that returns detailed information about all available directives.
         """
         self.get_logger().info("Received request for available directives")
-        directive_names = list(self.directives.keys())
-        response.directives = directive_names
+        
+        # Build detailed directive information as JSON
+        directive_details = []
+        for directive_name, directive in self.directives.items():
+            directive_info = {
+                "name": directive.name,
+                "prompt": directive.get_prompt(),
+                "primitives": directive.get_primitives()
+            }
+            directive_details.append(directive_info)
+        
+        # Convert the detailed info to JSON string for the directives field
+        response.directives = [json.dumps(directive_details)]
         response.current_directive = self.current_directive.name
         return response
 

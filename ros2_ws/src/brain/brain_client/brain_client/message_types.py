@@ -16,6 +16,7 @@ class TaskType(Enum):
     PICK_MOTOR = "pick_motor"
     PICK_SCREWDRIVER = "pick_screwdriver"
     GIVE_OBJECT = "give_object"
+    OPEN_DOOR = "open_door"
 
 
 class NavigationToPosition(BaseModel):
