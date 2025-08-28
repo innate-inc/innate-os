@@ -65,6 +65,7 @@ from brain_client.primitives.drop_socks import DropSocks
 from brain_client.primitives.pick_screwdriver import PickScrewdriver
 from brain_client.primitives.pick_motor import PickMotor
 from brain_client.primitives.give_object import GiveObject
+from brain_client.primitives.open_door import OpenDoor
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.empty_directive import EmptyDirective
 from brain_client.directives.sassy_directive import SassyDirective
@@ -75,6 +76,7 @@ from brain_client.directives.interior_designer_directive import (
     InteriorDesignerDirective,
 )
 from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
+from brain_client.directives.security_guard_directive import SecurityGuardDirective
 from brain_client.directives.clean_house_directive import CleanHouseDirective
 from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
 from brain_client.directives.socks_tidier_directive import SocksTidierDirective
@@ -410,6 +412,7 @@ class BrainClientNode(Node):
             TaskType.PICK_MOTOR.value: PickMotor(self.get_logger()),
             TaskType.PICK_SCREWDRIVER.value: PickScrewdriver(self.get_logger()),
             TaskType.GIVE_OBJECT.value: GiveObject(self.get_logger()),
+            TaskType.OPEN_DOOR.value: OpenDoor(self.get_logger()),
             # Add other primitives here as they become available
         }
 
@@ -429,6 +432,7 @@ class BrainClientNode(Node):
                 SassyDirective(),
                 FriendlyGuideDirective(),
                 SecurityPatrolDirective(),
+                SecurityGuardDirective(),
                 InteriorDesignerDirective(),
                 ElderSafetyDirective(),
                 HouseJokerDirective(),
