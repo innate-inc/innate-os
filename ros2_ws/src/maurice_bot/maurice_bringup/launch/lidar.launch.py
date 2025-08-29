@@ -16,7 +16,6 @@ def generate_launch_description():
             'frame_id': 'base_laser',
             'inverted': False,
             'angle_compensate': True,
-            'scan_mode': 'Sensitivity'
         }],
         output='screen',
         remappings=[('scan', 'scan_fast')]
