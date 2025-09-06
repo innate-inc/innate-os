@@ -84,4 +84,12 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# --- Build a standalone OpenCV capture tool (no ROS) ---
+add_executable(elp_capture maurice_bringup/elp_capture.cpp)
+target_link_libraries(elp_capture ${OpenCV_LIBS})
+install(TARGETS
+  elp_capture
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
