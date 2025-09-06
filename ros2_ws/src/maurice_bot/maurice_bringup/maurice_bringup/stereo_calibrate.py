@@ -65,8 +65,8 @@ def build_object_points(pattern_size: Tuple[int, int], square_size: float) -> np
     cols, rows = pattern_size
     objp = np.zeros((rows * cols, 3), np.float32)
     grid_x, grid_y = np.meshgrid(np.arange(cols), np.arange(rows))
-    objp[:, 0] = grid_x.flatten() * square_size
-    objp[:, 1] = grid_y.flatten() * square_size
+    objp[:, 0] = grid_x.flatten()  # Don't scale here - scale later in calibration
+    objp[:, 1] = grid_y.flatten()  # Don't scale here - scale later in calibration
     # Z stays 0 (planar chessboard)
     return objp
 
@@ -88,6 +88,15 @@ def find_corners(gray: np.ndarray, pattern_size: Tuple[int, int], use_sb: bool) 
         term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
         corners_refined = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), term)
         return True, corners_refined
+
+
+def _fix_mirrored_order(corners: np.ndarray, cols: int, rows: int) -> np.ndarray:
+    """
+    Flip each row of detected corners horizontally to correct mirrored ordering.
+    """
+    reshaped = corners.reshape(rows, cols, 1, 2)
+    flipped = reshaped[:, ::-1, :, :]
+    return flipped.reshape(rows * cols, 1, 2)
 
 
 def collect_detections(image_paths: List[str], pattern_size: Tuple[int, int], show: bool = False, max_images: int = 0, use_sb: bool = False):
@@ -113,11 +122,15 @@ def collect_detections(image_paths: List[str], pattern_size: Tuple[int, int], sh
 
         found_l, corners_l = find_corners(gray_l, pattern_size, use_sb)
         found_r, corners_r = find_corners(gray_r, pattern_size, use_sb)
-        diff = np.abs(corners_l - corners_r)
-        if diff.mean() > 100.0:
-            print(f"{path}: {diff.mean()}")
 
         if found_l and found_r:
+            # Ensure consistent left-to-right orientation across L/R
+            cols, rows = pattern_size
+            if corners_l.shape[0] >= 2 and corners_r.shape[0] >= 2:
+                v_l = corners_l[1, 0] - corners_l[0, 0]
+                v_r = corners_r[1, 0] - corners_r[0, 0]
+                if float(np.dot(v_l, v_r)) < 0:
+                    corners_r = _fix_mirrored_order(corners_r, cols, rows)
             if example_left_size is None:
                 example_left_size = (gray_l.shape[1], gray_l.shape[0])
 
@@ -185,7 +198,8 @@ def calibrate_stereo(objpoints: List[np.ndarray], imgpoints_l: List[np.ndarray],
                      K1: np.ndarray, D1: np.ndarray, K2: np.ndarray, D2: np.ndarray, image_size: Tuple[int, int],
                      square_size: float, fisheye: bool):
     if fisheye:
-        obj = [op.reshape(-1, 1, 3).astype(np.float64) for op in objpoints]
+        # Scale object points by the real square size for fisheye model
+        obj = [(op * square_size).reshape(-1, 1, 3).astype(np.float64) for op in objpoints]
         img_l = [ip.reshape(-1, 1, 2).astype(np.float64) for ip in imgpoints_l]
         img_r = [ip.reshape(-1, 1, 2).astype(np.float64) for ip in imgpoints_r]
 
