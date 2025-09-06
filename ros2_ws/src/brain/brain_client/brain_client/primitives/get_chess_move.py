@@ -196,8 +196,28 @@ class GetChessMove(Primitive):
             self.logger.error(f"Error encoding image to base64: {e}")
             return None
 
+    def _enumerate_legal_moves(self, board_fen):
+        """Enumerate all legal moves from a FEN as canonical strings 'e2 to e4'.
+
+        Promotions are collapsed to their from-to squares so that any promotion choice
+        matches the simplified format expected from Gemini (we default to queen later).
+        """
+        try:
+            board = chess.Board(board_fen)
+            moves_set = set()
+            for mv in board.legal_moves:
+                from_sq = chess.square_name(mv.from_square)
+                to_sq = chess.square_name(mv.to_square)
+                moves_set.add(f"{from_sq} to {to_sq}")
+            moves = sorted(moves_set)
+            self.logger.debug(f"Enumerated {len(moves)} legal moves from FEN")
+            return moves
+        except Exception as e:
+            self.logger.error(f"Error enumerating legal moves: {e}")
+            return []
+
     def _call_gemini_api(
-        self, before_image_b64, after_image_b64, board_fen, move_history, fen_history
+        self, before_image_b64, after_image_b64, board_fen, move_history, fen_history, legal_moves
     ):
         """Call Gemini 2.5 Pro API to analyze chess move."""
         if not self.gemini_api_key:
@@ -209,6 +229,7 @@ class GetChessMove(Primitive):
 
             # Determine whose turn it is
             turn = "White" if chess.Board(board_fen).turn == chess.WHITE else "Black"
+            moves_text = "\n".join(f"- {m}" for m in legal_moves)
             prompt = (
                 f"You are an expert chess analyst. You are observing a game. It is currently {turn}'s turn to move. "
                 f"The opponent has just made a move, and your task is to identify it by comparing the 'before' and 'after' images. "
@@ -218,8 +239,10 @@ class GetChessMove(Primitive):
                 f"FEN History:\n{fen_history}\n\n"
                 f"The current FEN string before the move is: {board_fen}\n\n"
                 "Analyze the two images provided. Based on the visual change and the game context, identify the single move that was made. "
-                "Every move is legal. If you see a discrepancy, you have made a wrong observation. "
-                "Your answer must be ONLY the move in 'e2 to e4' format."
+                "Choose ONLY from the following list of legal moves derived from the given FEN (write exactly one):\n"
+                f"{moves_text}\n\n"
+                "Your answer must be EXACTLY one line with the move in 'e2 to e4' format, matching one item from the list above. "
+                "Do not include any explanation, SAN, or algebraic notation beyond the from-to squares."
             )
 
             payload = {
@@ -563,10 +586,15 @@ class GetChessMove(Primitive):
                 self.logger.error(f"❌ {error_msg}")
                 return error_msg, PrimitiveResult.FAILURE
 
-            # Step 5: Call Gemini API to detect the move
+            # Step 5: Enumerate legal moves and call Gemini API to detect the move
             self.logger.info("🤖 Calling Gemini API to analyze move")
+            legal_moves = self._enumerate_legal_moves(board_fen)
+            if not legal_moves:
+                error_msg = "Failed to enumerate legal moves from current FEN"
+                self.logger.error(f"❌ {error_msg}")
+                return error_msg, PrimitiveResult.FAILURE
             gemini_response = self._call_gemini_api(
-                before_b64, after_b64, board_fen, move_history, fen_history
+                before_b64, after_b64, board_fen, move_history, fen_history, legal_moves
             )
 
             if not gemini_response:
