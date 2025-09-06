@@ -113,6 +113,9 @@ def collect_detections(image_paths: List[str], pattern_size: Tuple[int, int], sh
 
         found_l, corners_l = find_corners(gray_l, pattern_size, use_sb)
         found_r, corners_r = find_corners(gray_r, pattern_size, use_sb)
+        diff = np.abs(corners_l - corners_r)
+        if diff.mean() > 100.0:
+            print(f"{path}: {diff.mean()}")
 
         if found_l and found_r:
             if example_left_size is None:
@@ -204,10 +207,12 @@ def calibrate_stereo(objpoints: List[np.ndarray], imgpoints_l: List[np.ndarray],
         F = np.zeros((3, 3), dtype=np.float64)
         return rms, (R, T, E, F), (R1, R2, P1, P2, Q)
     else:
+        # Scale object points by the real square size for pinhole model
+        scaled_objpoints = [op * square_size for op in objpoints]
         flags = cv2.CALIB_FIX_INTRINSIC
         criteria = (cv2.TERM_CRITERIA_MAX_ITER + cv2.TERM_CRITERIA_EPS, 100, 1e-6)
         rms, K1, D1, K2, D2, R, T, E, F = cv2.stereoCalibrate(
-            objectPoints=objpoints,
+            objectPoints=scaled_objpoints,
             imagePoints1=imgpoints_l,
             imagePoints2=imgpoints_r,
             cameraMatrix1=K1,
@@ -312,7 +317,7 @@ def main():
     # Stereo calibration with fixed intrinsics
     print("Stereo calibrating (estimating R, T, E, F) ...")
     rms_s, (R, T, E, F), (R1, R2, P1, P2, Q) = calibrate_stereo(
-        [op * args.square_size for op in objpoints], imgpoints_l, imgpoints_r, K1, D1, K2, D2, image_size, args.square_size, args.fisheye
+        objpoints, imgpoints_l, imgpoints_r, K1, D1, K2, D2, image_size, args.square_size, args.fisheye
     )
     print(f"  Stereo RMS reprojection error: {rms_s:.4f}")
 
