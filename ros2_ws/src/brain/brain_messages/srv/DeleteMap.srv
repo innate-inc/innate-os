@@ -1,0 +1,6 @@
+string map_name
+---
+bool success
+string message
+
+
