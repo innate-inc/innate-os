@@ -34,6 +34,8 @@ def initialize_primitives(logger, simulator_mode: bool = False) -> Dict[str, Any
     
     # Load all primitives dynamically
     discovered_primitives = primitive_loader.discover_primitives_in_directory(primitives_directory)
+
+    print(f"Discovered primitives (BRAIN): {list(discovered_primitives.keys())}")
     
     # Handle special case for navigation primitive based on simulator mode
     navigation_primitive = (
