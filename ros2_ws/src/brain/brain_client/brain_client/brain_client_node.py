@@ -54,26 +54,7 @@ from brain_messages.srv import ResetBrain
 from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
-from brain_client.primitive_loader import PrimitiveLoader
-
-# Special imports for primitives that need specific handling
-from brain_client.primitives.navigate_to_position import NavigateToPosition
-from brain_client.primitives.navigate_to_position_sim import NavigateToPositionSim
-from brain_client.directives.default_directive import DefaultDirective
-from brain_client.directives.empty_directive import EmptyDirective
-from brain_client.directives.sassy_directive import SassyDirective
-from brain_client.directives.friendly_guide_directive import FriendlyGuideDirective
-from brain_client.directives.elder_safety_directive import ElderSafetyDirective
-from brain_client.directives.house_joker_directive import HouseJokerDirective
-from brain_client.directives.interior_designer_directive import (
-    InteriorDesignerDirective,
-)
-from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
-from brain_client.directives.security_guard_directive import SecurityGuardDirective
-from brain_client.directives.clean_house_directive import CleanHouseDirective
-from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
-from brain_client.directives.socks_tidier_directive import SocksTidierDirective
-from brain_client.directives.tools_giving_directive import ToolsGivingDirective
+from brain_client.initializers import initialize_primitives, initialize_directives
 
 
 class BrainClientNode(Node):
@@ -391,37 +372,9 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
-        # Initialize primitives using dynamic loading
-        self.primitive_loader = PrimitiveLoader(self.get_logger())
-        
-        # Define directory to scan for primitives
-        import os
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        primitives_directory = os.path.join(base_dir, "primitives")
-        
-        # Load all primitives dynamically
-        discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
-        
-        # Handle special case for navigation primitive based on simulator mode
-        navigation_primitive = (
-            NavigateToPositionSim if self.simulator_mode else NavigateToPosition
-        )
-        
-        # Override the navigation primitive if it was discovered
-        if "navigate_to_position" in discovered_primitives:
-            discovered_primitives["navigate_to_position"] = navigation_primitive
-        
-        # Create primitive instances
-        self.primitives_dict = {}
-        for primitive_name, primitive_class in discovered_primitives.items():
-            try:
-                primitive_instance = primitive_class(self.get_logger())
-                self.primitives_dict[primitive_name] = primitive_instance
-                self.get_logger().debug(f"Loaded primitive: {primitive_name}")
-            except Exception as e:
-                self.get_logger().error(f"Error instantiating primitive {primitive_name}: {e}")
-        
-        self.get_logger().info(f"Successfully loaded {len(self.primitives_dict)} primitives")
+        # Initialize primitives and directives
+        self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
+        self.directives, self.current_directive = initialize_directives(self.get_logger())
 
         self.primitive_running = None
         # Add a variable to store the current goal handle
@@ -431,25 +384,8 @@ class BrainClientNode(Node):
         self.directive_sub = self.create_subscription(
             String, "/set_directive", self.set_directive_callback, 10
         )
-        self.directives = {
-            directive.name: directive
-            for directive in [
-                DefaultDirective(),
-                EmptyDirective(),
-                SassyDirective(),
-                FriendlyGuideDirective(),
-                SecurityPatrolDirective(),
-                SecurityGuardDirective(),
-                InteriorDesignerDirective(),
-                ElderSafetyDirective(),
-                HouseJokerDirective(),
-                CleanHouseDirective(),
-                HideAndSeekDirective(),
-                SocksTidierDirective(),
-                ToolsGivingDirective(),
-            ]
-        }
-        self.current_directive = self.directives["empty_directive"]
+        
+
 
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
@@ -1777,6 +1713,8 @@ class BrainClientNode(Node):
                 response.success = True
                 response.message = "Brain deactivated."
         return response
+
+
 
     def destroy_node(self):
         self.exit_event.set()
