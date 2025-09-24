@@ -1,0 +1,11 @@
+# /etc/udev/rules.d/99-rplidar.rules
+# RPLIDAR A1M8 (CP2102: 10c4:ea60)
+
+# Your rule: stable symlink + wide perms
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
+  SYMLINK+="rplidar", MODE:="0777", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# Optional but recommended: keep the USB device from autosuspending
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="10c4", ATTR{idProduct}=="ea60", \
+  TEST=="power/control", ATTR{power/control}="on"
+
