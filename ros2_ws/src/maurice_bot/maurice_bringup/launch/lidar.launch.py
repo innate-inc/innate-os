@@ -11,11 +11,12 @@ def generate_launch_description():
         name='rplidar_node',
         parameters=[{
             'channel_type': 'serial',
-            'serial_port': '/dev/ttyUSB0',
+            'serial_port': '/dev/rplidar',
             'serial_baudrate': 115200,
             'frame_id': 'base_laser',
             'inverted': False,
             'angle_compensate': True,
+            'scan_mode': 'Standard',
         }],
         output='screen',
         remappings=[('scan', 'scan_fast')]
