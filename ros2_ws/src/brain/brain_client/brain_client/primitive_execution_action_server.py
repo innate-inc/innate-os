@@ -7,6 +7,7 @@ When a goal is received (with a primitive type and its parameters encoded
 as JSON), the corresponding primitive is executed.
 """
 
+import os
 import json
 import rclpy
 from rclpy.node import Node
@@ -82,12 +83,28 @@ class PrimitiveExecutionActionServer(Node):
         self.primitive_loader = PrimitiveLoader(self.get_logger())
         
         # Define directory to scan for primitives
-        import os
+        # Handle both source and install directory structures
         base_dir = os.path.dirname(os.path.abspath(__file__))
         primitives_directory = os.path.join(base_dir, "primitives")
         
+        # If primitives directory doesn't exist at the executable location,
+        # try to find it in the installed package location
+        if not os.path.exists(primitives_directory):
+            try:
+                # Import the brain_client package to get its location
+                import brain_client
+                package_dir = os.path.dirname(brain_client.__file__)
+                primitives_directory = os.path.join(package_dir, "primitives")
+                self.get_logger().info(f"Using installed package primitives directory: {primitives_directory}")
+            except Exception as e:
+                self.get_logger().error(f"Could not locate primitives directory: {e}")
+                # Fallback to original path
+                primitives_directory = os.path.join(base_dir, "primitives")
+        
         # Load all primitives dynamically
         discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
+
+        self.get_logger().info(f"Discovered primitives: {list(discovered_primitives.keys())} in {primitives_directory}")
         
         # Handle special case for navigation primitive based on simulator mode
         navigation_primitive = (
@@ -108,7 +125,7 @@ class PrimitiveExecutionActionServer(Node):
                 primitive_instance = primitive_class(self.get_logger())
                 primitive_instance.node = self  # Inject the node
                 self._primitives[primitive_name] = primitive_instance
-                self.get_logger().debug(f"Loaded primitive: {primitive_name}")
+                self.get_logger().info(f"Loaded primitive: {primitive_name}")
             except Exception as e:
                 self.get_logger().error(f"Error instantiating primitive {primitive_name}: {e}")
         
@@ -180,6 +197,7 @@ class PrimitiveExecutionActionServer(Node):
         primitive_type = goal_handle.request.primitive_type
         if primitive_type not in self._primitives:
             self.get_logger().error(f"Primitive '{primitive_type}' not available")
+            self.get_logger().error(f"Available primitives: {list(self._primitives.keys())}")
             goal_handle.abort()
             return ExecutePrimitive.Result(
                 success=False,
