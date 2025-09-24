@@ -3,7 +3,7 @@ import time  # Keep for delays between service calls if needed, but not for simu
 import rclpy
 from rclpy.node import Node  # For type hinting, though get_ros_node creates it
 from maurice_msgs.srv import GotoJS
-from brain_client.primitives.types import Primitive, PrimitiveResult
+from brain_client.primitive_types import Primitive, PrimitiveResult
 import threading
 
 

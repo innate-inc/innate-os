@@ -4,7 +4,7 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
-from brain_client.primitives.types import Primitive, PrimitiveResult, RobotStateType
+from brain_client.primitive_types import Primitive, PrimitiveResult, RobotStateType
 
 
 class SendPictureViaEmail(Primitive):

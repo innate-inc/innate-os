@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from brain_client.primitives.types import PhysicalPrimitive
+from brain_client.primitive_types import PhysicalPrimitive
 
 class DropSocks(PhysicalPrimitive):
     """

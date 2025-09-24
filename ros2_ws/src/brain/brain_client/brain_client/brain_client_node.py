@@ -40,7 +40,7 @@ from brain_client.message_types import (
     TaskType,
     VisionAgentOutput,
 )
-from brain_client.primitives.types import PrimitiveResult
+from brain_client.primitive_types import PrimitiveResult
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String

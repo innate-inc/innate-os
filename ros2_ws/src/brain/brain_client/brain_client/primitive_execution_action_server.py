@@ -22,26 +22,17 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 # Import the action definition – ensure that it is built and available.
 from brain_messages.action import ExecutePrimitive
 
-# Import available primitive(s) and any needed types.
-from brain_client.primitives.navigate_to_position import NavigateToPosition
-from brain_client.primitives.navigate_to_position_sim import NavigateToPositionSim
-from brain_client.primitives.send_email import SendEmail
-from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
-from brain_client.primitives.pick_up_trash import PickUpTrash
-from brain_client.primitives.drop_trash import DropTrash
-from brain_client.primitives.pick_up_sock import PickUpSock
-from brain_client.primitives.drop_socks import DropSocks
-from brain_client.primitives.pick_motor import PickMotor
-from brain_client.primitives.pick_screwdriver import PickScrewdriver
-from brain_client.primitives.give_object import GiveObject
-from brain_client.primitives.open_door import OpenDoor
-
-from brain_client.primitives.types import (
+# Import primitive loader and types
+from brain_client.primitive_loader import PrimitiveLoader
+from brain_client.primitive_types import (
     PrimitiveResult,
     RobotStateType,
-)  # Import RobotStateType
-
+)
 from brain_client.message_types import TaskType
+
+# Special imports for primitives that need specific handling
+from brain_client.primitives.navigate_to_position import NavigateToPosition
+from brain_client.primitives.navigate_to_position_sim import NavigateToPositionSim
 
 # Import ROS message types for subscriptions
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
@@ -87,34 +78,41 @@ class PrimitiveExecutionActionServer(Node):
             1,  # QoS profile with transient local durability might be better for map
         )
 
-        # Mapping from TaskType to primitive class
-        # Choose navigation primitive based on parameter
+        # Dynamic primitive loading
+        self.primitive_loader = PrimitiveLoader(self.get_logger())
+        
+        # Define directory to scan for primitives
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        primitives_directory = os.path.join(base_dir, "primitives")
+        
+        # Load all primitives dynamically
+        discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
+        
+        # Handle special case for navigation primitive based on simulator mode
         navigation_primitive = (
             NavigateToPositionSim if self.simulator_mode else NavigateToPosition
         )
         self.get_logger().info(
             f"Using {'simulator' if self.simulator_mode else 'Nav2'} navigation primitive"
         )
+        
+        # Override the navigation primitive if it was discovered
+        if "navigate_to_position" in discovered_primitives:
+            discovered_primitives["navigate_to_position"] = navigation_primitive
 
-        primitive_classes = {
-            TaskType.NAVIGATE_TO_POSITION: navigation_primitive,
-            TaskType.SEND_EMAIL: SendEmail,
-            TaskType.SEND_PICTURE_VIA_EMAIL: SendPictureViaEmail,
-            TaskType.PICK_UP_TRASH: PickUpTrash,
-            TaskType.DROP_TRASH: DropTrash,
-            TaskType.PICK_UP_SOCK: PickUpSock,
-            TaskType.DROP_SOCKS: DropSocks,
-            TaskType.PICK_MOTOR: PickMotor,
-            TaskType.PICK_SCREWDRIVER: PickScrewdriver,
-            TaskType.GIVE_OBJECT: GiveObject,
-            TaskType.OPEN_DOOR: OpenDoor,
-        }
-
+        # Create primitive instances
         self._primitives = {}
-        for task_type, primitive_class in primitive_classes.items():
-            primitive_instance = primitive_class(self.get_logger())
-            primitive_instance.node = self  # Inject the node
-            self._primitives[task_type.value] = primitive_instance
+        for primitive_name, primitive_class in discovered_primitives.items():
+            try:
+                primitive_instance = primitive_class(self.get_logger())
+                primitive_instance.node = self  # Inject the node
+                self._primitives[primitive_name] = primitive_instance
+                self.get_logger().debug(f"Loaded primitive: {primitive_name}")
+            except Exception as e:
+                self.get_logger().error(f"Error instantiating primitive {primitive_name}: {e}")
+        
+        self.get_logger().info(f"Successfully loaded {len(self._primitives)} primitives")
 
         self._action_server = ActionServer(
             self,

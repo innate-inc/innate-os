@@ -2,7 +2,7 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from brain_client.primitives.types import Primitive, PrimitiveResult
+from brain_client.primitive_types import Primitive, PrimitiveResult
 
 
 class SendEmail(Primitive):
