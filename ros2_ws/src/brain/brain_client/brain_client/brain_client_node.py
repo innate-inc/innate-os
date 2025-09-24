@@ -54,18 +54,11 @@ from brain_messages.srv import ResetBrain
 from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
+from brain_client.primitive_loader import PrimitiveLoader
 
+# Special imports for primitives that need specific handling
 from brain_client.primitives.navigate_to_position import NavigateToPosition
-from brain_client.primitives.send_email import SendEmail
-from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
-from brain_client.primitives.pick_up_trash import PickUpTrash
-from brain_client.primitives.drop_trash import DropTrash
-from brain_client.primitives.pick_up_sock import PickUpSock
-from brain_client.primitives.drop_socks import DropSocks
-from brain_client.primitives.pick_screwdriver import PickScrewdriver
-from brain_client.primitives.pick_motor import PickMotor
-from brain_client.primitives.give_object import GiveObject
-from brain_client.primitives.open_door import OpenDoor
+from brain_client.primitives.navigate_to_position_sim import NavigateToPositionSim
 from brain_client.directives.default_directive import DefaultDirective
 from brain_client.directives.empty_directive import EmptyDirective
 from brain_client.directives.sassy_directive import SassyDirective
@@ -398,23 +391,37 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
-        # Initialize primitives dictionary
-        self.primitives_dict = {
-            TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
-            TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
-            TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail(
-                self.get_logger()
-            ),
-            TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
-            TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
-            TaskType.PICK_UP_SOCK.value: PickUpSock(self.get_logger()),
-            TaskType.DROP_SOCKS.value: DropSocks(self.get_logger()),
-            TaskType.PICK_MOTOR.value: PickMotor(self.get_logger()),
-            TaskType.PICK_SCREWDRIVER.value: PickScrewdriver(self.get_logger()),
-            TaskType.GIVE_OBJECT.value: GiveObject(self.get_logger()),
-            TaskType.OPEN_DOOR.value: OpenDoor(self.get_logger()),
-            # Add other primitives here as they become available
-        }
+        # Initialize primitives using dynamic loading
+        self.primitive_loader = PrimitiveLoader(self.get_logger())
+        
+        # Define directory to scan for primitives
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        primitives_directory = os.path.join(base_dir, "primitives")
+        
+        # Load all primitives dynamically
+        discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
+        
+        # Handle special case for navigation primitive based on simulator mode
+        navigation_primitive = (
+            NavigateToPositionSim if self.simulator_mode else NavigateToPosition
+        )
+        
+        # Override the navigation primitive if it was discovered
+        if "navigate_to_position" in discovered_primitives:
+            discovered_primitives["navigate_to_position"] = navigation_primitive
+        
+        # Create primitive instances
+        self.primitives_dict = {}
+        for primitive_name, primitive_class in discovered_primitives.items():
+            try:
+                primitive_instance = primitive_class(self.get_logger())
+                self.primitives_dict[primitive_name] = primitive_instance
+                self.get_logger().debug(f"Loaded primitive: {primitive_name}")
+            except Exception as e:
+                self.get_logger().error(f"Error instantiating primitive {primitive_name}: {e}")
+        
+        self.get_logger().info(f"Successfully loaded {len(self.primitives_dict)} primitives")
 
         self.primitive_running = None
         # Add a variable to store the current goal handle
