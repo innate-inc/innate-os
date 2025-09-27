@@ -12,7 +12,7 @@ from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS
 
 # --- CONFIG ---
 PROTOCOL_VERSION  = 2.0
-BAUDRATE          = 1_000_000
+BAUDRATE          = 115_200
 ADDR_MODEL_NUMBER = 0         # control table addr for Model Number (2 bytes)
 ID_RANGE          = range(1, 11)
 
