@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rcl_interfaces.srv import GetParameters
+# from rcl_interfaces.srv import GetParameters  # Not needed when bypassing servo_manager
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
@@ -21,7 +21,7 @@ class MauriceArmNode(Node):
 
         # Get parameters from the new YAML structure
         # Note: parameters are loaded under the node's namespace (e.g. "maurice_arm")
-        self.declare_parameter('baud_rate', 1000000)
+        self.declare_parameter('baud_rate', 115200)
         self.declare_parameter('control_frequency', 100)
         # Declare 'joints' as a string parameter with empty JSON object as default
         self.declare_parameter('joints', '{}')
@@ -35,14 +35,8 @@ class MauriceArmNode(Node):
         # Store joints config for later use in command callback
         self.joints_config = joints_param
 
-        # Wait for servo_manager to be ready and get device name
-        self.get_logger().info("Waiting for servo_manager to be ready...")
-        device_name = self.wait_for_servo_manager()
-        
-        if not device_name:
-            self.get_logger().error("Failed to get device name from servo_manager")
-            return
-
+        # Bypass servo_manager and directly use UART device
+        device_name = "/dev/ttyTHS1"  # UART device for arm
         self.get_logger().info(f"Using arm device: {device_name}")
 
         # Create a list to hold servo IDs (extracted from joint parameters)
@@ -179,50 +173,6 @@ class MauriceArmNode(Node):
 
         self.latest_command = None
 
-    def wait_for_servo_manager(self):
-        """Wait for servo_manager to provide arm_device parameter."""
-        # Create a client to get parameters from servo_manager
-        param_client = self.create_client(GetParameters, '/servo_manager/get_parameters')
-        
-        # Wait for the parameter service to be available
-        timeout_sec = 30.0
-        if not param_client.wait_for_service(timeout_sec=timeout_sec):
-            self.get_logger().error(f"servo_manager parameter service not available after {timeout_sec} seconds")
-            return None
-        
-        # Poll for the arm_device parameter
-        max_attempts = 60  # 60 seconds with 1 second intervals
-        for attempt in range(max_attempts):
-            try:
-                # Create request for the arm_device parameter
-                request = GetParameters.Request()
-                request.names = ['arm_device']
-                
-                # Call the service
-                future = param_client.call_async(request)
-                rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-                
-                if future.result() is not None:
-                    response = future.result()
-                    if len(response.values) > 0:
-                        arm_device = response.values[0].string_value
-                        if arm_device and arm_device.strip():  # Check if not empty and not just whitespace
-                            return arm_device
-                        else:
-                            self.get_logger().info(f"arm_device parameter is empty, attempt {attempt + 1}/{max_attempts}")
-                    else:
-                        self.get_logger().info(f"arm_device parameter not available yet, attempt {attempt + 1}/{max_attempts}")
-                else:
-                    self.get_logger().info(f"Could not get arm_device parameter, attempt {attempt + 1}/{max_attempts}")
-                    
-            except Exception as e:
-                self.get_logger().warn(f"Error checking servo_manager parameters: {e}")
-            
-            # Wait 1 second before next attempt
-            time.sleep(1.0)
-        
-        self.get_logger().error("Timeout waiting for servo_manager to provide arm_device")
-        return None
 
     def torque_on_callback(self, request, response):
         """Service callback to enable torque for all servos."""
