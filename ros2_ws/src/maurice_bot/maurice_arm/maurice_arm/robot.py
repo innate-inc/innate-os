@@ -25,7 +25,7 @@ class MotorControlType(Enum):
 
 class Robot:
     # def __init__(self, device_name: str, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
-    def __init__(self, dynamixel, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
+    def __init__(self, dynamixel, baudrate=115_200, servo_ids=[1, 2, 3, 4, 5]):
         self.servo_ids = servo_ids
         self.dynamixel = dynamixel
         # self.dynamixel = Dynamixel.Config(baudrate=baudrate, device_name=device_name).instantiate()
