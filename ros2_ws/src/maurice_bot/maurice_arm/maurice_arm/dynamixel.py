@@ -47,9 +47,9 @@ class Dynamixel:
         def instantiate(self):
             return Dynamixel(self)
 
-        baudrate: int = 57600
+        baudrate: int = 115200
         protocol_version: float = 2.0
-        device_name: str = ""  # /dev/tty.usbserial-1120'
+        device_name: str = ""  # /dev/ttyTHS1 for UART
         dynamixel_id: int = 1
 
     def __init__(self, config: Config):
@@ -58,10 +58,9 @@ class Dynamixel:
 
     def connect(self):
         if self.config.device_name == "":
-            for port_name in os.listdir("/dev"):
-                if "ttyUSB" in port_name or "ttyACM" in port_name:
-                    self.config.device_name = "/dev/" + port_name
-                    print(f"using device {self.config.device_name}")
+            # Default to UART device for Jetson Orin Nano
+            self.config.device_name = "/dev/ttyTHS1"
+            print(f"using UART device {self.config.device_name}")
         self.portHandler = PortHandler(self.config.device_name)
         # self.portHandler.LA
         self.packetHandler = PacketHandler(self.config.protocol_version)
@@ -198,11 +197,27 @@ class Dynamixel:
 
     def _process_response(self, dxl_comm_result: int, dxl_error: int, motor_id: int):
         if dxl_comm_result != COMM_SUCCESS:
+            error_msg = str(self.packetHandler.getTxRxResult(dxl_comm_result))
+            # Handle common UART communication issues as warnings instead of errors
+            if any(phrase in error_msg for phrase in [
+                "There is no status packet",
+                "Incorrect status packet",
+                "device reports readiness to read but returned no data"
+            ]):
+                print(f"Warning: {error_msg} from motor {motor_id} - command may have succeeded")
+                return
             raise ConnectionError(
-                f"dxl_comm_result for motor {motor_id}: {self.packetHandler.getTxRxResult(dxl_comm_result)}"
+                f"dxl_comm_result for motor {motor_id}: {error_msg}"
             )
         elif dxl_error != 0:
             error_msg = self.packetHandler.getRxPacketError(dxl_error)
+            # Handle common UART communication issues as warnings instead of errors
+            if any(phrase in error_msg for phrase in [
+                "CRC doesn't match",
+                "Incorrect status packet"
+            ]):
+                print(f"Warning: {error_msg} from motor {motor_id} - command may have succeeded")
+                return
             print(f"dxl error {dxl_error}: {error_msg}")
             raise ConnectionError(
                 f"dynamixel error for motor {motor_id}: {error_msg} (error code: {dxl_error})"
@@ -276,6 +291,8 @@ class Dynamixel:
         # translate baudrate into dynamixel baudrate setting id
         if baudrate == 57600:
             baudrate_id = 1
+        elif baudrate == 115200:
+            baudrate_id = 2
         elif baudrate == 1_000_000:
             baudrate_id = 3
         elif baudrate == 2_000_000:

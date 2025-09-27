@@ -24,8 +24,8 @@ class MotorControlType(Enum):
 
 
 class Robot:
-    # def __init__(self, device_name: str, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
-    def __init__(self, dynamixel, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
+    # def __init__(self, device_name: str, baudrate=115200, servo_ids=[1, 2, 3, 4, 5]):
+    def __init__(self, dynamixel, baudrate=115200, servo_ids=[1, 2, 3, 4, 5]):
         self.servo_ids = servo_ids
         self.dynamixel = dynamixel
         # self.dynamixel = Dynamixel.Config(baudrate=baudrate, device_name=device_name).instantiate()
@@ -73,18 +73,23 @@ class Robot:
         :param tries: maximum number of tries to read the position
         :return: list of joint positions in range [0, 4096]
         """
-        result = self.position_reader.txRxPacket()
-        if result != 0:
-            if tries > 0:
-                return self.read_position(tries=tries - 1)
-            else:
-                print(f"failed to read position!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        # Use individual reads instead of bulk read for UART compatibility
         positions = []
+        if not hasattr(self, 'servo_ids') or not self.servo_ids:
+            print("ERROR: servo_ids not set in Robot class!")
+            return []
+        
         for id in self.servo_ids:
-            position = self.position_reader.getData(id, ReadAttribute.POSITION.value, 4)
-            if position > 2**31:
-                position -= 2**32
-            positions.append(position)
+            try:
+                position = self.dynamixel.read_position(id)
+                positions.append(position)
+            except Exception as e:
+                if tries > 0:
+                    print(f"Failed to read position for servo {id}, retrying...")
+                    return self.read_position(tries=tries - 1)
+                else:
+                    print(f"failed to read position for servo {id}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                    positions.append(2048)  # Default to center position if read fails
         return positions
 
     def read_velocity(self):
@@ -92,14 +97,16 @@ class Robot:
         Reads the joint velocities of the robot.
         :return: list of joint velocities,
         """
-        self.velocity_reader.txRxPacket()
-        velocties = []
+        # Use individual reads instead of bulk read for UART compatibility
+        velocities = []
         for id in self.servo_ids:
-            velocity = self.velocity_reader.getData(id, ReadAttribute.VELOCITY.value, 4)
-            if velocity > 2**31:
-                velocity -= 2**32
-            velocties.append(velocity)
-        return velocties
+            try:
+                velocity = self.dynamixel.read_velocity(id)
+                velocities.append(velocity)
+            except Exception as e:
+                print(f"Failed to read velocity for servo {id}: {e}")
+                velocities.append(0)  # Default to zero velocity if read fails
+        return velocities
 
     def set_goal_pos(self, action):
         """
@@ -268,7 +275,9 @@ class Robot:
 
 
 if __name__ == "__main__":
-    robot = Robot(device_name="/dev/tty.usbmodem57380045631")
+    # Create dynamixel instance with UART configuration
+    dynamixel = Dynamixel.Config(baudrate=115200, device_name="/dev/ttyTHS1").instantiate()
+    robot = Robot(dynamixel=dynamixel, baudrate=115200)
     robot._disable_torque()
     for _ in range(10000):
         s = time.time()

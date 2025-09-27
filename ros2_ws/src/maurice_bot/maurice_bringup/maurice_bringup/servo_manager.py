@@ -12,7 +12,7 @@ from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS
 
 # --- CONFIG ---
 PROTOCOL_VERSION  = 2.0
-BAUDRATE          = 1_000_000
+BAUDRATE          = 115200
 ADDR_MODEL_NUMBER = 0         # control table addr for Model Number (2 bytes)
 ID_RANGE          = range(1, 11)
 
@@ -31,7 +31,7 @@ class ServoManager(Node):
         # Start the servo scan
         self.scan_servos()
     
-    def detect_servos(self, dev_path):
+    def detect_servos(self, dev_path, baudrate=None):
         """Open `dev_path`, read model number at addr 0 for IDs 1–10."""
         port    = PortHandler(dev_path)
         handler = PacketHandler(PROTOCOL_VERSION)
@@ -40,7 +40,11 @@ class ServoManager(Node):
         if not port.openPort():
             self.get_logger().error(f"Cannot open {dev_path}")
             return servos
-        port.setBaudRate(BAUDRATE)
+        
+        # Use different baudrates for UART vs USB
+        if baudrate is None:
+            baudrate = 115200 if dev_path == "/dev/ttyTHS1" else BAUDRATE
+        port.setBaudRate(baudrate)
 
         for sid in ID_RANGE:
             # read2ByteTxRx returns (value, comm_result, error)
@@ -69,24 +73,39 @@ class ServoManager(Node):
     
     def scan_servos(self):
         """Scan for Dynamixel chains and set ROS parameters."""
-        self.get_logger().info("Scanning for Dynamixel chains (torque ON, powered servos)...")
+        self.get_logger().info("Scanning for Dynamixel chains (arm on UART, head on USB)...")
         
         arm_device = None
         head_device = None
         
+        # Check UART device for arm (6 servos)
+        uart_dev = "/dev/ttyTHS1"
+        found = self.detect_servos(uart_dev)
+        
+        if len(found) == 6:
+            # Verify this is the arm device
+            if self.verify_servo_configuration(uart_dev, found, 6):
+                arm_device = uart_dev
+                self.get_logger().info(f"Arm device identified on UART: {uart_dev}")
+        elif len(found) > 0:
+            # Log any unexpected servo counts on UART
+            self.verify_servo_configuration(uart_dev, found, len(found))
+            self.get_logger().warn(f"Unexpected servo count on UART {uart_dev}")
+        
+        # Check USB devices for head (1 servo) and arm fallback
         for dev in sorted(glob.glob('/dev/ttyACM*')):
             found = self.detect_servos(dev)
             
-            if len(found) == 6:
-                # Verify this is the arm device
+            if len(found) == 6 and arm_device is None:
+                # Verify this is the arm device (USB fallback)
                 if self.verify_servo_configuration(dev, found, 6):
                     arm_device = dev
-                    self.get_logger().info(f"Arm device identified: {dev}")
+                    self.get_logger().info(f"Arm device identified (USB fallback): {dev}")
             elif len(found) == 1:
-                # Verify this is the head device
+                # Verify this is the head device (USB only)
                 if self.verify_servo_configuration(dev, found, 1):
                     head_device = dev
-                    self.get_logger().info(f"Head device identified: {dev}")
+                    self.get_logger().info(f"Head device identified on USB: {dev}")
             elif len(found) > 0:
                 # Log any unexpected servo counts
                 self.verify_servo_configuration(dev, found, len(found))

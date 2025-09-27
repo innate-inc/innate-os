@@ -61,6 +61,13 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Create entry points for ros2 run
+install(FILES
+  maurice_arm/arm.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME maurice_arm_node
+)
+
 # Install launch files
 install(DIRECTORY
   launch/

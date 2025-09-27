@@ -3,7 +3,6 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rcl_interfaces.srv import GetParameters
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
@@ -19,30 +18,106 @@ class MauriceArmNode(Node):
     def __init__(self):
         super().__init__('maurice_arm')
 
-        # Get parameters from the new YAML structure
-        # Note: parameters are loaded under the node's namespace (e.g. "maurice_arm")
-        self.declare_parameter('baud_rate', 1000000)
-        self.declare_parameter('control_frequency', 100)
-        # Declare 'joints' as a string parameter with empty JSON object as default
-        self.declare_parameter('joints', '{}')
-
-        baud_rate = self.get_parameter('baud_rate').value
-        control_frequency = self.get_parameter('control_frequency').value
-        # Get the joints parameter as a string and parse it as JSON
-        joints_str = self.get_parameter('joints').value
-        joints_param = json.loads(joints_str)
+        # Hardcode parameters for minimal fix
+        baud_rate = 115200
+        control_frequency = 100
+        
+        # Hardcode the joints configuration (minimal change)
+        joints_param = {
+            "joint_1": {
+                "servo_id": 1,
+                "position_limits": {
+                    "min": -1.5708,
+                    "max": 1.5708
+                },
+                "pwm_limits": 885,
+                "control_mode": 2,
+                "pid_gains": {
+                    "kp": 300,
+                    "ki": 10,
+                    "kd": 1000
+                }
+            },
+            "joint_2": {
+                "servo_id": 2,
+                "position_limits": {
+                    "min": -1.5708,
+                    "max": 1.22
+                },
+                "pwm_limits": 885,
+                "control_mode": 2,
+                "pid_gains": {
+                    "kp": 300,
+                    "ki": 200,
+                    "kd": 100
+                }
+            },
+            "joint_3": {
+                "servo_id": 3,
+                "position_limits": {
+                    "min": -1.5708,
+                    "max": 1.7453
+                },
+                "pwm_limits": 885,
+                "control_mode": 2,
+                "pid_gains": {
+                    "kp": 640,
+                    "ki": 100,
+                    "kd": 3600
+                }
+            },
+            "joint_4": {
+                "servo_id": 4,
+                "position_limits": {
+                    "min": -1.9199,
+                    "max": 1.7453
+                },
+                "pwm_limits": 885,
+                "control_mode": 2,
+                "pid_gains": {
+                    "kp": 400,
+                    "ki": 400,
+                    "kd": 1000
+                }
+            },
+            "joint_5": {
+                "servo_id": 5,
+                "position_limits": {
+                    "min": -1.5708,
+                    "max": 1.5708
+                },
+                "pwm_limits": 885,
+                "control_mode": 2,
+                "pid_gains": {
+                    "kp": 400,
+                    "ki": 0,
+                    "kd": 0
+                }
+            },
+            "joint_6": {
+                "servo_id": 6,
+                "position_limits": {
+                    "min": -0.8727,
+                    "max": 0.3491
+                },
+                "pwm_limits": 885,
+                "current_limit": 100,
+                "control_mode": 4,
+                "pid_gains": {
+                    "kp": 400,
+                    "ki": 0,
+                    "kd": 0
+                }
+            }
+        }
+        
+        self.get_logger().info(f"Using hardcoded joint parameters with {len(joints_param)} joints")
         
         # Store joints config for later use in command callback
         self.joints_config = joints_param
 
-        # Wait for servo_manager to be ready and get device name
-        self.get_logger().info("Waiting for servo_manager to be ready...")
-        device_name = self.wait_for_servo_manager()
-        
-        if not device_name:
-            self.get_logger().error("Failed to get device name from servo_manager")
-            return
-
+        # Use hardcoded UART device (no servo_manager dependency)
+        device_name = "/dev/ttyTHS1"
         self.get_logger().info(f"Using arm device: {device_name}")
 
         # Create a list to hold servo IDs (extracted from joint parameters)
@@ -141,10 +216,12 @@ class MauriceArmNode(Node):
             time.sleep(0.5)
 
         # Initialize robot interface with the collected servo IDs.
+        self.get_logger().info(f"Initializing Robot with servo IDs: {servo_ids}")
         self.robot = Robot(dynamixel=dynamixel, servo_ids=servo_ids)
 
         # Store servo_ids as instance variable for service callbacks
         self.servo_ids = servo_ids
+        self.get_logger().info(f"Robot initialized with {len(servo_ids)} servos")
 
         # Create publishers and subscribers
         self.state_pub = self.create_publisher(JointState, '/maurice_arm/state', 10)
@@ -179,50 +256,6 @@ class MauriceArmNode(Node):
 
         self.latest_command = None
 
-    def wait_for_servo_manager(self):
-        """Wait for servo_manager to provide arm_device parameter."""
-        # Create a client to get parameters from servo_manager
-        param_client = self.create_client(GetParameters, '/servo_manager/get_parameters')
-        
-        # Wait for the parameter service to be available
-        timeout_sec = 30.0
-        if not param_client.wait_for_service(timeout_sec=timeout_sec):
-            self.get_logger().error(f"servo_manager parameter service not available after {timeout_sec} seconds")
-            return None
-        
-        # Poll for the arm_device parameter
-        max_attempts = 60  # 60 seconds with 1 second intervals
-        for attempt in range(max_attempts):
-            try:
-                # Create request for the arm_device parameter
-                request = GetParameters.Request()
-                request.names = ['arm_device']
-                
-                # Call the service
-                future = param_client.call_async(request)
-                rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
-                
-                if future.result() is not None:
-                    response = future.result()
-                    if len(response.values) > 0:
-                        arm_device = response.values[0].string_value
-                        if arm_device and arm_device.strip():  # Check if not empty and not just whitespace
-                            return arm_device
-                        else:
-                            self.get_logger().info(f"arm_device parameter is empty, attempt {attempt + 1}/{max_attempts}")
-                    else:
-                        self.get_logger().info(f"arm_device parameter not available yet, attempt {attempt + 1}/{max_attempts}")
-                else:
-                    self.get_logger().info(f"Could not get arm_device parameter, attempt {attempt + 1}/{max_attempts}")
-                    
-            except Exception as e:
-                self.get_logger().warn(f"Error checking servo_manager parameters: {e}")
-            
-            # Wait 1 second before next attempt
-            time.sleep(1.0)
-        
-        self.get_logger().error("Timeout waiting for servo_manager to provide arm_device")
-        return None
 
     def torque_on_callback(self, request, response):
         """Service callback to enable torque for all servos."""
@@ -267,6 +300,14 @@ class MauriceArmNode(Node):
         try:
             positions = self.robot.read_position()
             velocities = self.robot.read_velocity()
+            
+            # Debug logging
+            if not hasattr(self, '_debug_counter'):
+                self._debug_counter = 0
+            self._debug_counter += 1
+            if self._debug_counter % 50 == 0:  # Log every 50 cycles
+                self.get_logger().info(f"Raw positions: {positions}")
+                self.get_logger().info(f"Raw velocities: {velocities}")
 
             # Convert positions from encoder counts to radians:
             # Assuming 0 encoder count corresponds to -2048 and full revolution is 4096 counts:
