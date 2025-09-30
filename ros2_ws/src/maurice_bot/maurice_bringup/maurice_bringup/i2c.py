@@ -223,7 +223,7 @@ class I2CManager:
         
         # Scale and clamp values
         speed_int = int(max(-32767, min(32767, speed * 100)))
-        turn_int = int(max(-32767, min(32767, turn)))
+        turn_int = int(max(-32767, min(32767, turn * 100)))
         
         # Pack: speed (2 bytes), turn (2 bytes), reserved (2 bytes)
         data = struct.pack(">hhH", speed_int, turn_int, 0x0000)
