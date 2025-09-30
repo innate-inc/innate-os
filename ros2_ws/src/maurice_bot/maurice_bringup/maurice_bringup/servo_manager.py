@@ -74,7 +74,7 @@ class ServoManager(Node):
         arm_device = None
         head_device = None
         
-        for dev in sorted(glob.glob('/dev/ttyACM*')):
+        for dev in ['/dev/ttyTHS1']:
             found = self.detect_servos(dev)
             
             if len(found) == 6:

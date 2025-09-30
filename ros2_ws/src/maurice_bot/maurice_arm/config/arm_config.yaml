@@ -1,7 +1,7 @@
 arm:
   ros__parameters:
     # Remove device_name - will be read from servo_manager parameters
-    baud_rate: 1000000
+    baud_rate: 115200
     control_frequency: 100
     joints: |
       {
