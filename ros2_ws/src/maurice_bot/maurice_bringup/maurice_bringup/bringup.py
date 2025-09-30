@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from maurice_bringup.uart import UartManager
+from maurice_bringup.i2c import I2CManager
 from maurice_bringup.battery import BatteryManager
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -26,33 +26,32 @@ class Bringup(Node):
         
         # Initialize managers
         self.battery_manager = BatteryManager(num_cells=self.params['battery']['num_cells'])
-        # Only pass the required UART parameters: port, baud_rate, and timeout
-        self.uart_manager = UartManager(self, **self.params['uart'], debug=self.debug)
+        # Only pass the required I2C parameters: bus_number, device_address, and update_frequency
+        self.i2c_manager = I2CManager(self, **self.params['i2c'], debug=self.debug)
 
         # Setup ROS2 services and topics
         self._setup_services_and_topics()
 
-        self.uart_manager.set_light_command(mode=1, r=255, g=255, b=255, interval=100)
+        self.i2c_manager.set_light_command(mode=1, r=255, g=255, b=255, interval=100)
         time.sleep(5)
-        self.uart_manager.set_light_command(mode=0, r=0, g=0, b=0, interval=0)
+        self.i2c_manager.set_light_command(mode=0, r=0, g=0, b=0, interval=0)
         # Request calibration at startup
         time.sleep(10)
         self.get_logger().info('Requesting initial calibration. Ensure robot is stationary.')
-        self.uart_manager.request_calibration()
+        self.i2c_manager.request_calibration()
 
     def _get_parameters(self):
         """Declare and get all node parameters."""
         if self.debug:
             self.get_logger().debug('Getting node parameters')
         
-        # Declare parameters (only declaring the UART parameters needed for UartManager)
+        # Declare parameters (only declaring the I2C parameters needed for I2CManager)
         self.declare_parameters(
             namespace='',
             parameters=[
-                ('uart.port', '/dev/ttyTHS1'),
-                ('uart.baud_rate', 115200),
-                ('uart.timeout', 0.1),
-                ('uart.update_frequency', 30.0),
+                ('i2c.bus_number', 1),
+                ('i2c.device_address', 0x42),
+                ('i2c.update_frequency', 30.0),
                 ('battery.num_cells', 6),
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
@@ -62,13 +61,12 @@ class Bringup(Node):
             ]
         )
 
-        # Build a structured dictionary with only the parameters needed by UartManager
+        # Build a structured dictionary with only the parameters needed by I2CManager
         params = {
-            'uart': {
-                'port': self.get_parameter('uart.port').value,
-                'baud_rate': self.get_parameter('uart.baud_rate').value,
-                'timeout': self.get_parameter('uart.timeout').value,
-                'update_frequency': self.get_parameter('uart.update_frequency').value,
+            'i2c': {
+                'bus_number': self.get_parameter('i2c.bus_number').value,
+                'device_address': self.get_parameter('i2c.device_address').value,
+                'update_frequency': self.get_parameter('i2c.update_frequency').value,
             },
             'battery': {
                 'num_cells': self.get_parameter('battery.num_cells').value,
@@ -136,8 +134,8 @@ class Bringup(Node):
             10  # QoS profile depth
         )
 
-        # Every minute, enqueue a UART health request (will update battery_voltage)
-        self.status_timer = self.create_timer(60.0, self.uart_manager.request_health)
+        # Every minute, enqueue an I2C health request (will update battery_voltage)
+        self.status_timer = self.create_timer(60.0, self.i2c_manager.request_health)
 
         if self.debug:
             self.get_logger().debug('Finished setting up ROS2 services and topics')
@@ -155,8 +153,8 @@ class Bringup(Node):
 
         self.get_logger().info(f"Limited velocities: linear={limited_linear}, angular={limited_angular}")
         
-        # Forward the limited velocities to the UART manager
-        self.uart_manager.set_speed_command(
+        # Forward the limited velocities to the I2C manager
+        self.i2c_manager.set_speed_command(
             v=limited_linear,
             omega=limited_angular
         )
@@ -185,7 +183,7 @@ class Bringup(Node):
         
         try:
             # Use the request.mode field directly
-            self.uart_manager.set_light_command(
+            self.i2c_manager.set_light_command(
                 mode=request.mode,
                 r=request.r,
                 g=request.g,
@@ -212,7 +210,7 @@ class Bringup(Node):
             self.get_logger().debug('Received calibrate request')
         
         try:
-            self.uart_manager.request_calibration()
+            self.i2c_manager.request_calibration()
             response.success = True
             response.message = "Calibration triggered successfully"
             if self.debug:
@@ -227,8 +225,8 @@ class Bringup(Node):
         return response
 
     def _publish_odometry(self):
-        """Publish odometry data, transform, and battery state from UART readings."""
-        transform = self.uart_manager.current_transform
+        """Publish odometry data, transform, and battery state from I2C readings."""
+        transform = self.i2c_manager.current_transform
         
         # Broadcast the transform
         self.tf_broadcaster.sendTransform(transform)
@@ -248,7 +246,7 @@ class Bringup(Node):
         self.odom_pub.publish(odom)
 
         # Publish battery state
-        voltage = self.uart_manager.battery_voltage
+        voltage = self.i2c_manager.battery_voltage
         percentage = self.battery_manager.get_percentage(voltage)
         
         # Check battery levels and take appropriate action
