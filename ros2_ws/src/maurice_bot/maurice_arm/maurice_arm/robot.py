@@ -79,6 +79,11 @@ class Robot:
                 return self.read_position(tries=tries - 1)
             else:
                 print(f"failed to read position!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        
+        # Add small delay for UART stability
+        if "/dev/ttyTHS" in self.dynamixel.config.device_name:
+            time.sleep(0.002)  # 2ms delay for UART GroupSyncRead
+        
         positions = []
         for id in self.servo_ids:
             position = self.position_reader.getData(id, ReadAttribute.POSITION.value, 4)
