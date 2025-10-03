@@ -276,6 +276,8 @@ class Dynamixel:
         # translate baudrate into dynamixel baudrate setting id
         if baudrate == 57600:
             baudrate_id = 1
+        elif baudrate == 115200:
+            baudrate_id = 2
         elif baudrate == 1_000_000:
             baudrate_id = 3
         elif baudrate == 2_000_000:
