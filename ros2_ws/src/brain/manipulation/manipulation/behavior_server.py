@@ -417,8 +417,8 @@ class BehaviorServer(Node):
             return "FAILURE", f"Replay file not found: {file_path}"
         
         try:
-            # Determine the appropriate replay frequency from metadata
-            replay_hz = self._get_replay_frequency(file_path)
+            # Get replay frequency from config (default to 12.0 Hz)
+            replay_hz = behavior_config['execution'].get('replay_frequency', 12.0)
             
             # Load H5 file and extract actions
             with h5py.File(file_path, 'r') as h5file:
@@ -712,6 +712,7 @@ class BehaviorServer(Node):
         except Exception as e:
             self.get_logger().error(f"Error calling arm goto service: {e}")
             return False
+
 
 
 def main(args=None):
