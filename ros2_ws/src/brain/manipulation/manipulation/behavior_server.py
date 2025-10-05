@@ -6,8 +6,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray, Empty
 from maurice_msgs.srv import GotoJS
-from brain_messages.action import ExecuteBehavior  # You'll need to create this action
-from brain_messages.srv import GetAvailableBehaviors, GetDatasetInfo
+from brain_messages.action import ExecuteBehavior
 from rclpy.action import ActionServer, CancelResponse
 from cv_bridge import CvBridge
 import numpy as np
@@ -15,12 +14,10 @@ import torch
 import os
 import cv2
 from geometry_msgs.msg import Twist
-import yaml
-import json  # Add this import for JSON handling
+import json
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.executors import MultiThreadedExecutor
-import h5py  # Add this import at the top
-import re
+import h5py
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
@@ -83,8 +80,8 @@ class BehaviorServer(Node):
         self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Behavior server started.")
         
-        # Load behavior configurations
-        self.behaviors_config = self._load_behaviors_config()
+        # Primitives directory for loading checkpoints/data
+        self.primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
         
         # Get data directory from recorder config
         try:
@@ -99,16 +96,6 @@ class BehaviorServer(Node):
         self.bridge = CvBridge()
         self.image_size = (640, 480)  # This is for the policy inference
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        # Print all available behaviors at startup
-        if self.behaviors_config:
-            behavior_names = list(self.behaviors_config.keys())
-            self.get_logger().info(f"Available behaviors at startup: {behavior_names}")
-            for name, config in self.behaviors_config.items():
-                behavior_type = config.get('type', 'unknown')
-                self.get_logger().info(f"  - {name} (type: {behavior_type})")
-        else:
-            self.get_logger().warn("No behaviors loaded!")
         
         # Current execution state
         self.execution_running = False
@@ -154,104 +141,8 @@ class BehaviorServer(Node):
             cancel_callback=self.cancel_behavior_callback
         )
         
-        # Service server for getting available behaviors
-        self.get_behaviors_service = self.create_service(
-            GetAvailableBehaviors,
-            '/behavior/get_available',
-            self.get_available_behaviors_callback
-        )
-        
-        # Service server for getting dataset info
-        self.get_dataset_info_service = self.create_service(
-            GetDatasetInfo,
-            '/behavior/get_dataset_info',
-            self.get_dataset_info_callback
-        )
-        
-        self.get_logger().info(f"Behavior server ready. Available behaviors: {list(self.behaviors_config.keys())}")
+        self.get_logger().info("Behavior server ready - pure execution engine using primitives/ directory")
     
-    def _load_behaviors_config(self):
-        """Load behaviors configuration from YAML file."""
-        # Get config file path from parameter or use default
-        self.declare_parameter('config_file', '')
-        config_file_param = self.get_parameter('config_file').value
-        
-        if config_file_param:
-            config_path = config_file_param
-        else:
-            config_path = os.path.join(
-                os.path.dirname(__file__), 
-                '../config/behaviors.yaml'
-            )
-        
-        try:
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
-                behaviors = {}
-                
-                behavior_names = config['behavior_manager'].get('behavior_names', [])
-                for behavior_name in behavior_names:
-                    behavior_config = config['behavior_manager'][behavior_name].copy()
-                    behavior_config['name'] = behavior_name
-                    
-                    # Convert poses structure if it exists
-                    if 'poses' in behavior_config and isinstance(behavior_config['poses'], dict):
-                        poses = []
-                        for key in sorted(behavior_config['poses'].keys()):
-                            poses.append(behavior_config['poses'][key])
-                        behavior_config['poses'] = poses
-                    
-                    behaviors[behavior_name] = behavior_config
-                
-                # Validate all file paths exist
-                self._validate_behavior_paths(behaviors)
-                
-                self.get_logger().info(f"Loaded {len(behaviors)} behavior configurations from {config_path}")
-                return behaviors
-                
-        except FileNotFoundError as e:
-            # Re-raise file validation errors
-            self.get_logger().fatal(str(e))
-            raise
-        except Exception as e:
-            self.get_logger().error(f"Failed to load behaviors config from {config_path}: {e}")
-            return {}
-    
-    def _validate_behavior_paths(self, behaviors):
-        """Validate that all required file paths in behaviors exist."""
-        missing_paths = []
-        
-        for behavior_name, behavior_config in behaviors.items():
-            file_path = behavior_config.get('file_path', '')
-            
-            # Skip empty paths (some behaviors like drop_paper might not have files)
-            if not file_path:
-                continue
-            
-            # Expand user path
-            expanded_path = os.path.expanduser(file_path)
-            
-            # Check if file exists
-            if not os.path.exists(expanded_path):
-                missing_paths.append({
-                    'behavior': behavior_name,
-                    'path': file_path,
-                    'expanded_path': expanded_path
-                })
-        
-        # If any paths are missing, log errors and raise exception
-        if missing_paths:
-            self.get_logger().error("Missing behavior files detected:")
-            for missing in missing_paths:
-                self.get_logger().error(f"  Behavior '{missing['behavior']}': {missing['path']} -> {missing['expanded_path']}")
-            
-            # Raise exception instead of calling exit() directly
-            error_msg = f"Missing {len(missing_paths)} required behavior files. Please ensure all files exist before starting the server."
-            raise FileNotFoundError(error_msg)
-        
-        self.get_logger().info("All behavior file paths validated successfully")
-    
-    def cancel_behavior_callback(self, goal_handle_to_cancel):
         """Handle action cancel requests."""
         self.get_logger().info("Received cancel request...")
         
@@ -275,11 +166,23 @@ class BehaviorServer(Node):
             goal_handle.abort()
             return result
         
-        if behavior_name not in self.behaviors_config:
+        # Get config from goal (from primitive_execution_action_server)
+        if not hasattr(goal_handle.request, 'behavior_config') or not goal_handle.request.behavior_config:
             result = ExecuteBehavior.Result()
             result.success = False
-            result.message = f"Unknown behavior: {behavior_name}"
-            self.get_logger().error(f"Unknown behavior requested: {behavior_name}")
+            result.message = f"No behavior_config provided for behavior: {behavior_name}"
+            self.get_logger().error(f"No behavior_config provided for behavior: {behavior_name}")
+            goal_handle.abort()
+            return result
+        
+        try:
+            behavior_config = json.loads(goal_handle.request.behavior_config)
+            self.get_logger().info(f"Executing behavior: {behavior_name}")
+        except json.JSONDecodeError as e:
+            self.get_logger().error(f"Failed to parse behavior_config JSON: {e}")
+            result = ExecuteBehavior.Result()
+            result.success = False
+            result.message = f"Invalid behavior_config JSON: {e}"
             goal_handle.abort()
             return result
         
@@ -287,7 +190,6 @@ class BehaviorServer(Node):
         self._cancel_requested.clear()
         
         # Execute the behavior
-        behavior_config = self.behaviors_config[behavior_name]
         outcome, reason = self._execute_behavior(goal_handle, behavior_name, behavior_config)
         
         # Set result based on outcome
@@ -349,15 +251,18 @@ class BehaviorServer(Node):
     def _execute_learned_behavior(self, goal_handle, behavior_name, behavior_config):
         """Execute a learned behavior using ACT policy."""
         try:
-            # Load the policy for this behavior
-            checkpoint_path = behavior_config.get('file_path')
-            checkpoint_path = os.path.expanduser(checkpoint_path)
+            # Load from primitives/{behavior_name}/ directory
+            primitive_dir = os.path.join(self.primitives_directory, behavior_name)
+            checkpoint_file = behavior_config['execution'].get('checkpoint')
+            checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
+            action_dim = behavior_config['execution'].get('action_dim', 8)
+            duration = behavior_config['execution'].get('duration', 20.0)
+            start_pose = behavior_config['execution'].get('start_pose')
+            end_pose = behavior_config['execution'].get('end_pose')
+            
             if not checkpoint_path or not os.path.exists(checkpoint_path):
                 self.get_logger().error(f"Checkpoint not found: {checkpoint_path}")
                 return "FAILURE", f"Checkpoint file not found: {checkpoint_path}"
-            
-            # Get action dimension from config (default to 8 if not specified)
-            action_dim = behavior_config.get('action_dim', 8)
             
             # Load policy
             if not self._load_policy_for_behavior(checkpoint_path, action_dim):
@@ -372,11 +277,8 @@ class BehaviorServer(Node):
             self.get_logger().info("Setting head to AI position for optimal camera angle")
             self._set_head_ai_position()
             
-            # Get behavior parameters
-            duration = behavior_config.get('duration', 20.0)
-            start_pose = behavior_config.get('start_pose')
-            end_pose = behavior_config.get('end_pose')
-            progress_threshold = 0.95  # Threshold for early termination
+            # Progress threshold for early termination
+            progress_threshold = 0.95
             
             # Move to start pose if specified
             if start_pose:
@@ -464,12 +366,11 @@ class BehaviorServer(Node):
             return "FAILURE", f"Exception during execution: {str(e)}"
     
     def _execute_poses_behavior(self, goal_handle, behavior_name, behavior_config):
-        """Execute a poses-based behavior (placeholder)."""
+        """Execute a poses-based behavior."""
         self.get_logger().info(f"Executing poses behavior: {behavior_name}")
         
-        # Placeholder implementation
-        poses = behavior_config.get('poses', [])
-        steps = int(behavior_config.get('steps', len(poses)))  # Convert to int here
+        poses = behavior_config['execution'].get('poses', [])
+        steps = int(behavior_config['execution'].get('steps', len(poses)))
         
         try:
             for i, pose in enumerate(poses):
@@ -504,9 +405,11 @@ class BehaviorServer(Node):
         """Execute a replay-based behavior from H5 file."""
         self.get_logger().info(f"Executing replay behavior: {behavior_name}")
         
-        file_path = behavior_config.get('file_path')
-        file_path = os.path.expanduser(file_path)
-        end_pose = behavior_config.get('end_pose')
+        # Load from primitives/{behavior_name}/ directory
+        primitive_dir = os.path.join(self.primitives_directory, behavior_name)
+        replay_file = behavior_config['execution'].get('replay_file')
+        file_path = os.path.join(primitive_dir, replay_file)
+        end_pose = behavior_config['execution'].get('end_pose')
         
         if not file_path or not os.path.exists(file_path):
             self.get_logger().error(f"Replay file not found: {file_path}")
@@ -809,143 +712,6 @@ class BehaviorServer(Node):
             self.get_logger().error(f"Error calling arm goto service: {e}")
             return False
 
-    def get_available_behaviors_callback(self, request, response):
-        """Service callback to provide available behaviors."""
-        self.get_logger().info("Request for available behaviors received.")
-        
-        behavior_names = []
-        behavior_types = []
-        dataset_names = []
-        
-        if self.behaviors_config:
-            for name, config in self.behaviors_config.items():
-                behavior_names.append(name)
-                behavior_types.append(config.get('type', 'unknown'))
-                
-                # Extract dataset name from file_path
-                file_path = config.get('file_path', '')
-                dataset_name = self._extract_dataset_name(file_path)
-                dataset_names.append(dataset_name)
-        
-        response.behavior_names = behavior_names
-        response.behavior_types = behavior_types
-        response.dataset_names = dataset_names
-        
-        self.get_logger().info(f"Returning {len(behavior_names)} available behaviors.")
-        return response
-
-    def get_dataset_info_callback(self, request, response):
-        """Service callback to provide dataset metadata."""
-        dataset_name = request.dataset_names  # Note: this should probably be dataset_name (singular)
-        self.get_logger().info(f"Request for dataset info received for: {dataset_name}")
-        
-        try:
-            # Construct path to dataset directory
-            dataset_dir = os.path.join(self.data_directory, dataset_name)
-            metadata_file = os.path.join(dataset_dir, 'metadata.json')
-            
-            # Check if dataset directory exists
-            if not os.path.exists(dataset_dir):
-                error_msg = f"Dataset directory not found: {dataset_dir}"
-                self.get_logger().error(error_msg)
-                response.metadata = json.dumps({"error": error_msg})
-                return response
-            
-            # Check if metadata.json exists
-            if not os.path.exists(metadata_file):
-                error_msg = f"Metadata file not found: {metadata_file}"
-                self.get_logger().error(error_msg)
-                response.metadata = json.dumps({"error": error_msg})
-                return response
-            
-            # Read and return metadata
-            with open(metadata_file, 'r') as f:
-                metadata_content = f.read()
-                
-            # Validate that it's valid JSON
-            try:
-                json.loads(metadata_content)  # Just to validate
-                response.metadata = metadata_content
-                self.get_logger().info(f"Successfully returned metadata for dataset: {dataset_name}")
-            except json.JSONDecodeError as e:
-                error_msg = f"Invalid JSON in metadata file: {e}"
-                self.get_logger().error(error_msg)
-                response.metadata = json.dumps({"error": error_msg})
-                
-        except Exception as e:
-            error_msg = f"Error reading dataset metadata: {str(e)}"
-            self.get_logger().error(error_msg)
-            response.metadata = json.dumps({"error": error_msg})
-        
-        return response
-
-    def _get_replay_frequency(self, file_path):
-        """
-        Determine the appropriate replay frequency for an H5 file.
-        Checks if the file is an action-only episode and reads frequency from metadata.
-        
-        Args:
-            file_path: Path to the H5 file (e.g., /data/TaskName/action_only/episode_0.h5)
-        
-        Returns:
-            float: Replay frequency in Hz
-        """
-        try:
-            expanded_path = os.path.expanduser(file_path)
-            file_dir = os.path.dirname(expanded_path)
-            parent_dir = os.path.basename(file_dir)
-            
-            # Check if this is an action-only episode (in action_only subdirectory)
-            is_action_only = (parent_dir == "action_only")
-            
-            # Find the task directory (go up one or two levels depending on structure)
-            if is_action_only:
-                task_dir = os.path.dirname(file_dir)  # Go up from action_only to task dir
-            else:
-                task_dir = file_dir  # Already in task directory
-            
-            # Try to load metadata.json
-            metadata_path = os.path.join(task_dir, 'metadata.json')
-            
-            if os.path.exists(metadata_path):
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                
-                if is_action_only:
-                    # Use action_only_frequency if available
-                    frequency = metadata.get('action_only_frequency', 100.0)
-                    return float(frequency)
-                else:
-                    # Use regular data_frequency
-                    frequency = metadata.get('data_frequency', 20.0)
-                    return float(frequency)
-            else:
-                self.get_logger().warn(f"Metadata file not found at {metadata_path}, using default frequency")
-        
-        except Exception as e:
-            self.get_logger().warn(f"Could not determine replay frequency from metadata: {e}")
-        
-        # Fallback default
-        return 12.0
-    
-    def _extract_dataset_name(self, file_path):
-        """Extract dataset name from file path."""
-        if not file_path:
-            return ""
-        
-        try:
-            # Get the directory name (folder containing the policy file)
-            expanded_path = os.path.expanduser(file_path)
-            directory_name = os.path.basename(os.path.dirname(expanded_path))
-            
-            # Remove date/time suffix (format: _YYYYMMDD_HHMMSS)
-            # Use regex to find and remove the pattern
-            dataset_name = re.sub(r'_\d{8}_\d{6}.*$', '', directory_name)
-            
-            return dataset_name
-        except Exception as e:
-            self.get_logger().warn(f"Could not extract dataset name from {file_path}: {e}")
-            return ""
 
 def main(args=None):
     rclpy.init(args=args)
