@@ -5,34 +5,15 @@ from typing import Dict, Optional, List, Any
 from pydantic import BaseModel, field_serializer
 
 
-class TaskType(Enum):
-    NAVIGATE_TO_POSITION = "navigate_to_position"
-    SEND_EMAIL = "send_email"
-    SEND_PICTURE_VIA_EMAIL = "send_picture_via_email"
-    PICK_UP_TRASH = "pick_up_trash"
-    DROP_TRASH = "drop_trash"
-    PICK_UP_SOCK = "pick_up_sock"
-    DROP_SOCKS = "drop_socks"
-    PICK_MOTOR = "pick_motor"
-    PICK_SCREWDRIVER = "pick_screwdriver"
-    GIVE_OBJECT = "give_object"
-    WAVE = "wave"
-    OPEN_DOOR = "open_door"
-
-
 class NavigationToPosition(BaseModel):
     x: float
     y: float
 
 
 class Task(BaseModel):
-    type: TaskType
+    type: str
     inputs: Dict[str, Any]
     primitive_id: str
-
-    @field_serializer("type")
-    def serialize_task_type(self, value: TaskType) -> str:
-        return value.value
 
 
 # These types represent messages coming in from the client (e.g. user or robot data)
@@ -87,7 +68,6 @@ class InternalMessage(BaseModel):
 class VisionAgentOutput(BaseModel):
     """
     Represents the output received from the vision agent backend.
-    If a 'next_task' is provided, Task's serializer will ensure the TaskType is properly converted.
     """
 
     stop_current_task: bool

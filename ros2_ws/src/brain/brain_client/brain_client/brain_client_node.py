@@ -826,7 +826,7 @@ class BrainClientNode(Node):
                 # Store the next task if it exists, prevent immediate execution
                 if payload.next_task is not None:
                     self.get_logger().info(
-                        f"Storing pending task: {payload.next_task.type.value}"
+                        f"Storing pending task: {payload.next_task.type}"
                     )
                     self._pending_next_task = payload.next_task
                     execute_next_task_immediately = False  # Don't execute now
@@ -869,10 +869,10 @@ class BrainClientNode(Node):
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
             self.get_logger().info(
-                f"Primitive task type: {payload.next_task.type.value}"
+                f"Primitive task type: {payload.next_task.type}"
             )
 
-            if payload.next_task.type.value in self.primitives_dict:
+            if payload.next_task.type in self.primitives_dict:
                 self.send_primitive_goal(
                     payload.next_task.type,
                     payload.next_task.inputs,
@@ -880,13 +880,13 @@ class BrainClientNode(Node):
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={
-                        "primitive_name": payload.next_task.type.value,
+                        "primitive_name": payload.next_task.type,
                         "primitive_id": payload.next_task.primitive_id,
                     },
                 )
                 self.ws_bridge.send_message(status_msg)
                 self.primitive_running = {
-                    "primitive_name": payload.next_task.type.value,
+                    "primitive_name": payload.next_task.type,
                     "primitive_id": payload.next_task.primitive_id,
                 }
             else:
@@ -1224,7 +1224,7 @@ class BrainClientNode(Node):
 
     def send_primitive_goal(self, task_type, inputs):
         goal_msg = ExecutePrimitive.Goal()
-        goal_msg.primitive_type = task_type.value
+        goal_msg.primitive_type = task_type
 
         # Inputs are now only the direct arguments for the primitive's execute method.
         # Robot state injection is handled by the PrimitiveExecutionActionServer.
@@ -1377,27 +1377,27 @@ class BrainClientNode(Node):
             and self._pending_next_task is not None
         ):
             self.get_logger().info(
-                f"Executing pending task after internal cancellation: {self._pending_next_task.type.value}"
+                f"Executing pending task after internal cancellation: {self._pending_next_task.type}"
             )
             pending_task = self._pending_next_task
             self._pending_next_task = None  # Clear before sending new goal
             status_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_ACTIVATED,
                 payload={
-                    "primitive_name": pending_task.type.value,
+                    "primitive_name": pending_task.type,
                     "primitive_id": pending_task.primitive_id,
                 },
             )
             self.ws_bridge.send_message(status_msg)
             self.primitive_running = {
-                "primitive_name": pending_task.type.value,
+                "primitive_name": pending_task.type,
                 "primitive_id": pending_task.primitive_id,
             }
             self.send_primitive_goal(pending_task.type, pending_task.inputs)
         elif self._pending_next_task is not None:
             # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
             self.get_logger().warn(
-                f"Clearing pending task {self._pending_next_task.type.value} because previous task finished with type {result.success_type}"
+                f"Clearing pending task {self._pending_next_task.type} because previous task finished with type {result.success_type}"
             )
             self._pending_next_task = None
 

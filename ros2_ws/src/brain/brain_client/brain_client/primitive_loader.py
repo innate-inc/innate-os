@@ -15,7 +15,6 @@ from typing import Dict, List, Type, Optional
 from pathlib import Path
 
 from brain_client.primitive_types import Primitive
-from brain_client.message_types import TaskType
 
 
 class PrimitiveLoader:
@@ -207,36 +206,4 @@ class PrimitiveLoader:
                 self.logger.error(f"Error loading primitives from {directory}: {e}")
                 
         return all_primitives
-    
-    def create_task_type_mapping(self, primitives: Dict[str, Type[Primitive]]) -> Dict[str, Type[Primitive]]:
-        """
-        Create a mapping from TaskType enum values to primitive classes.
-        This tries to match primitive names with existing TaskType enum values.
-        
-        Args:
-            primitives: Dictionary of primitive name to class mappings
-            
-        Returns:
-            Dictionary mapping TaskType values to primitive classes
-        """
-        task_type_mapping = {}
-        
-        # Get all TaskType enum values
-        try:
-            task_types = {task_type.value: task_type for task_type in TaskType}
-        except Exception as e:
-            self.logger.error(f"Error getting TaskType enum values: {e}")
-            return task_type_mapping
-            
-        # Map primitives to task types
-        for primitive_name, primitive_class in primitives.items():
-            if primitive_name in task_types:
-                task_type_mapping[primitive_name] = primitive_class
-                self.logger.debug(f"Mapped {primitive_name} to TaskType.{task_types[primitive_name].name}")
-            else:
-                self.logger.warning(
-                    f"Primitive '{primitive_name}' has no corresponding TaskType enum value. "
-                    f"Add TaskType.{primitive_name.upper()} = '{primitive_name}' to message_types.py"
-                )
-                
-        return task_type_mapping
+
