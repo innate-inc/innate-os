@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class MarsDirective(Directive):
@@ -17,8 +16,8 @@ class MarsDirective(Directive):
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
-            TaskType.NAVIGATE_TO_POSITION.value,
-            TaskType.WAVE.value,
+            "navigate_to_position",
+            "wave",
         ]
 
     def get_prompt(self) -> str:

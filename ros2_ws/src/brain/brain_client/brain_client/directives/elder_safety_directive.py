@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class ElderSafetyDirective(Directive):
@@ -15,7 +14,7 @@ class ElderSafetyDirective(Directive):
 
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
-        return [TaskType.NAVIGATE_TO_POSITION.value, TaskType.SEND_EMAIL.value]
+        return ["navigate_to_position", "send_email"]
 
     def get_prompt(self) -> str:
         """Return the prompt that defines the robot's personality and behavior"""

@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class SecurityGuardDirective(Directive):
@@ -16,9 +15,9 @@ class SecurityGuardDirective(Directive):
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
-            TaskType.NAVIGATE_TO_POSITION.value,
-            TaskType.OPEN_DOOR.value,
-            TaskType.SEND_EMAIL.value,
+            "navigate_to_position",
+            "open_door",
+            "send_email",
         ]
 
     def get_prompt(self) -> str:
