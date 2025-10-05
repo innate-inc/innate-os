@@ -188,7 +188,7 @@ class TaskManager:
         self.metadata = None  # Will hold the task metadata
         self.episodes = []    # List of EpisodeData objects
 
-    def start_new_task(self, task_name, task_description, mobile_flag, data_frequency):
+    def start_new_task(self, task_name, task_description, mobile_flag, data_frequency, action_only_frequency=None):
         """
         Start a new task by creating a task directory and initializing metadata.
         If a task with the given name already exists (i.e., a metadata file is found),
@@ -208,6 +208,12 @@ class TaskManager:
             # Task already exists; resume it.
             print(f"Task '{task_name}' already exists. Resuming task.")
             self.resume_task(task_name)
+            # Optionally update AO frequency on resume if provided
+            if action_only_frequency is not None:
+                if self.metadata is None:
+                    self.load_metadata()
+                self.metadata["action_only_frequency"] = action_only_frequency
+                self._save_metadata()
             return
 
         # Task does not exist; create a new one.
@@ -223,6 +229,9 @@ class TaskManager:
             "number_of_ao_episodes": 0,
             "ao_episodes": []
         }
+        # Record the action-only frequency if provided
+        if action_only_frequency is not None:
+            self.metadata["action_only_frequency"] = action_only_frequency
         self._save_metadata()
         self.episodes = []  # Reset the episodes list.
 

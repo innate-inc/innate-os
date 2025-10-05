@@ -268,7 +268,13 @@ class RecorderNode(Node):
         self.get_logger().info("Setting head to AI position for new task setup")
         self._set_head_ai_position()
         
-        self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
+        self.task_manager.start_new_task(
+            request.task_name,
+            request.task_description,
+            request.mobile_task,
+            self.data_frequency,
+            action_only_frequency=self.action_only_frequency if self.action_only_enabled else None
+        )
         if self.task_manager.metadata:
             self.episode_count = self.task_manager.metadata["number_of_episodes"]
             self.ao_episode_count = self.task_manager.metadata.get("number_of_ao_episodes", 0)
@@ -298,6 +304,21 @@ class RecorderNode(Node):
             self.publish_status(status="ao_failed - episode in progress", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
             response.success = False
             response.message = "An action-only episode is already active or stopped."
+            return response
+        
+        # Check if required topics have received data for action-only recording
+        if self.latest_leader_command is None or self.latest_cmd_vel is None:
+            missing_topics = []
+            if self.latest_leader_command is None:
+                missing_topics.append(self.leader_command_topic)
+            if self.latest_cmd_vel is None:
+                missing_topics.append(self.velocity_topic)
+            
+            error_msg = f"Cannot start action-only episode: Required topics have not received data yet: {missing_topics}"
+            self.get_logger().error(error_msg)
+            self.publish_status(status="ao_failed - topics not ready", episode_number="", current_task_name=self.current_task_name)
+            response.success = False
+            response.message = error_msg
             return response
 
         self.current_ao_episode = EpisodeData()
@@ -395,6 +416,16 @@ class RecorderNode(Node):
             self.publish_status(status=f"failed - episode {self.state.lower()}", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
             response.success = False
             response.message = f"An episode is already {self.state.lower()}. Please save or cancel the current episode first."
+            return response
+        
+        # Check if all required topics have received data
+        if not self.all_topics_received:
+            missing_topics = [topic for topic, received in self.topics_received.items() if not received]
+            error_msg = f"Cannot start episode: Not all topics have received data yet. Missing: {missing_topics}"
+            self.get_logger().error(error_msg)
+            self.publish_status(status="failed - topics not ready", episode_number="", current_task_name=self.current_task_name)
+            response.success = False
+            response.message = error_msg
             return response
         
         self.current_episode = EpisodeData()

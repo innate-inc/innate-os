@@ -1,6 +1,6 @@
 # ROS2 parameter file for manipulation behaviors
 behavior_manager:
-  behavior_names: ["pick_socks", "drop_socks", "drop_paper", "wave", "pick_screwdriver", "pick_motor", "give_object", "open_door"]
+  behavior_names: ["pick_socks", "drop_socks", "drop_paper", "wave", "pick_screwdriver", "pick_motor", "give_object", "open_door", "Test3"]
   
   pick_socks:
     file_path: "/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/socks1wed_socks2wed_filt_merged_20250821_005047_ddp/act_policy_step_135000.pth"
@@ -65,3 +65,10 @@ behavior_manager:
     duration: 45.0
     start_pose: [-0.015, -0.399, 1.456, -1.135, -0.023, 0.0]
     end_pose: [-0.015, -0.399, 1.456, -1.135, -0.023, 0.0]
+
+  Test3:
+    file_path: "~/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Test3/episode_0.h5"
+    type: "replay"
+    duration: 0.0
+    start_pose: []
+    end_pose: [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.0]
