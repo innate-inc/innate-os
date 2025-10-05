@@ -78,3 +78,6 @@ recordings/
 
 #other werid files
 *.mp4
+
+.last_map
+.last_mode
