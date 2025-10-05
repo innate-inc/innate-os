@@ -240,7 +240,11 @@ class ModeManager(Node):
             response = ChangeNavigationMode.Response()
             self.change_mode_callback(request, response)
         elif self.current_mode == "mapfree":
-            self.get_logger().info("Auto-starting in mapfree mode (no launch)")
+            self.get_logger().info("Auto-starting in mapfree mode (local Nav2)")
+            request = ChangeNavigationMode.Request()
+            request.mode = self.current_mode
+            response = ChangeNavigationMode.Response()
+            self.change_mode_callback(request, response)
 
     def publish_status(self):
         """Publish current mode, available maps, and current map"""
@@ -551,22 +555,38 @@ class ModeManager(Node):
             
             # Don't restart if already in the requested mode
             if self.current_mode == target_mode and (
-                (self.current_process and self.current_process.poll() is None) or target_mode == "mapfree"):
+                (self.current_process and self.current_process.poll() is None)):
                 response.success = True
                 response.message = f"Already in {target_mode} mode"
                 self.get_logger().info(response.message)
                 return response
 
-            # For mapfree, just set the mode, do not launch or kill any processes
+            # For mapfree, launch local-only Nav2 (planner, controller, costmaps) without map/AMCL
             if target_mode == "mapfree":
+                # Stop anything running
                 if self.current_process:
                     self.get_logger().info(f"Stopping current mode: {self.current_mode}")
                     self.kill_current_process()
                     time.sleep(2)
+                launch_cmd = [
+                    'ros2', 'launch', 'maurice_nav', 'mapfree_local_nav.launch.py'
+                ]
+                self.get_logger().info("Starting mapfree local navigation stack...")
+                self.current_process = subprocess.Popen(
+                    launch_cmd,
+                    preexec_fn=os.setsid,
+                )
                 self.current_mode = "mapfree"
                 self.save_last_mode("mapfree")
-                response.success = True
-                response.message = "Switched to mapfree mode (no launch)"
+                time.sleep(3)
+                if self.current_process.poll() is None:
+                    response.success = True
+                    response.message = "Switched to mapfree mode (local Nav2 running)"
+                else:
+                    response.success = False
+                    response.message = "Failed to start mapfree local navigation"
+                    self.current_mode = "none"
+                    self.current_process = None
                 self.get_logger().info(response.message)
                 return response
 

@@ -493,6 +493,9 @@ class BrainClientNode(Node):
 
     def fetch_transform_callback(self):
         try:
+            # In mapfree mode there is no global map frame; skip map->base_link TF lookups
+            if getattr(self, "cur_nav_mode", None) == "mapfree":
+                return
             robot_base_frame = "base_link"  # The frame whose pose we want
             map_frame = "map"  # The frame in which we want the pose expressed
             when = rclpy.time.Time()
@@ -903,10 +906,27 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Sending image callback.\033[0m"
             )
             try:
-                # Ensure AMCL pose is available before proceeding with image/map data
-                if not self.last_amcl_pose:
+                # Select pose source based on navigation mode
+                use_mapfree = (self.cur_nav_mode == "mapfree")
+                pose_source = None  # Either AMCL (preferred) or ODOM (mapfree)
+                if not use_mapfree and self.last_amcl_pose:
+                    pose_source = ("amcl", self.last_amcl_pose.pose)
+                elif use_mapfree and self.last_odom is not None:
+                    # Inflate covariance in mapfree mode to communicate uncertainty
+                    try:
+                        cov = getattr(self.last_odom.pose, "covariance", None)
+                        needs_set = cov is None
+                        if not needs_set and hasattr(cov, "__len__"):
+                            needs_set = len(cov) < 36
+                        if needs_set:
+                            self.last_odom.pose.covariance = [1e4] * 36
+                    except Exception:
+                        # If anything goes wrong, still attempt to proceed
+                        pass
+                    pose_source = ("odom", self.last_odom.pose)
+                else:
                     self.get_logger().warn(
-                        "\033[93m[BrainClient] No amcl_pose available. Skipping image callback.\033[0m"
+                        "\033[93m[BrainClient] No suitable pose source (amcl/odom). Skipping image callback.\033[0m"
                     )
                     return
 
@@ -1072,7 +1092,7 @@ class BrainClientNode(Node):
                     }
                     payload["depth"] = depth_payload
 
-                # Include map data if available
+                # Include map data if available; in mapfree mode map may be absent
                 if self.last_map is not None:
                     # Create a simplified map payload with only the necessary information
                     map_data = self.last_map.data
@@ -1098,17 +1118,18 @@ class BrainClientNode(Node):
                     }
                     payload["map"] = map_payload
                     self.get_logger().debug("Including map data in image message")
-
                 else:
-                    self.get_logger().warn(
-                        "\033[93m[BrainClient] No map data available.\033[0m"
-                    )
-                    return
+                    if not use_mapfree:
+                        self.get_logger().warn(
+                            "\033[93m[BrainClient] No map data available. Skipping image callback.\033[0m"
+                        )
+                        return
+                    # In mapfree, proceed without a map
 
-                # Include robot coordinates (if available) in the payload.
-                amcl_pose_data = self.last_amcl_pose.pose
-                pos = amcl_pose_data.pose.position
-                ori = amcl_pose_data.pose.orientation
+                # Include robot coordinates (use selected pose source)
+                pose_msg = pose_source[1]  # PoseWithCovariance or Odometry.pose
+                pos = pose_msg.pose.position
+                ori = pose_msg.pose.orientation
                 siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
                 cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
                 theta = math.atan2(siny_cosp, cosy_cosp)
@@ -1117,13 +1138,24 @@ class BrainClientNode(Node):
                     "y": pos.y,
                     "z": pos.z,
                     "theta": theta,
-                    "frame_id": self.last_amcl_pose.header.frame_id,  # Use amcl_pose frame_id
-                    "cov_x": amcl_pose_data.covariance[0],  # Variance of x
-                    "cov_y": amcl_pose_data.covariance[7],  # Variance of y
-                    "cov_yaw": amcl_pose_data.covariance[
-                        35
-                    ],  # Variance of yaw (renamed from cov_angle_z)
+                    # Frame depends on pose source; use "map" for AMCL and pose.header.frame_id if available for ODOM
+                    "frame_id": (
+                        self.last_amcl_pose.header.frame_id
+                        if pose_source[0] == "amcl"
+                        else (getattr(self.last_odom, "header", None).frame_id if hasattr(self.last_odom, "header") else "odom")
+                    ),
                 }
+                # Add covariance if available
+                cov = getattr(pose_msg, "covariance", None)
+                if cov is not None:
+                    try:
+                        # Ensure we can index expected positions
+                        if not hasattr(cov, "__len__") or len(cov) >= 36:
+                            robot_coords_payload["cov_x"] = cov[0]
+                            robot_coords_payload["cov_y"] = cov[7]
+                            robot_coords_payload["cov_yaw"] = cov[35]
+                    except Exception:
+                        pass
                 payload["robot_coords"] = robot_coords_payload
 
                 # Optionally include arm camera image if enabled and available
