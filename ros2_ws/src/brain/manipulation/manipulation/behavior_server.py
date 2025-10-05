@@ -513,13 +513,16 @@ class BehaviorServer(Node):
             return "FAILURE", f"Replay file not found: {file_path}"
         
         try:
+            # Determine the appropriate replay frequency from metadata
+            replay_hz = self._get_replay_frequency(file_path)
+            
             # Load H5 file and extract actions
             with h5py.File(file_path, 'r') as h5file:
                 if 'action' not in h5file:
                     self.get_logger().error("No 'action' dataset found in H5 file")
                     return "FAILURE", "No 'action' dataset found in H5 file"
                 
-                actions = h5file['action'][:]  # Shape: (n_steps, 8)
+                actions = h5file['action'][:]  # Shape: (n_steps, action_dim)
                 self.get_logger().info(f"Loaded {actions.shape[0]} action steps from {file_path}")
             
             if actions.shape[0] == 0:
@@ -527,8 +530,9 @@ class BehaviorServer(Node):
                 return "FAILURE", "No actions found in replay file"
             
             # Extract first action and arm position
-            first_action = actions[0]  # Shape: (8,)
-            first_arm_position = first_action[0:6].tolist()  # Convert to list for service call
+            # Action format: [arm_joints(6), linear.x, angular.z, progress?, termination?]
+            first_action = actions[0]
+            first_arm_position = first_action[0:6].tolist()  # First 6 elements are arm joint positions
             
             self.get_logger().info(f"Moving to initial arm position: {first_arm_position}")
             
@@ -542,7 +546,6 @@ class BehaviorServer(Node):
             
             # Replay parameters
             total_steps = actions.shape[0]
-            replay_hz = 12.0  # Changed from 25.0 to 12.0 to match inference frequency
             step_duration = 1.0 / replay_hz
             total_duration = total_steps * step_duration
             
@@ -563,14 +566,14 @@ class BehaviorServer(Node):
                     return "CANCELLED", "User requested cancellation"
                 
                 # Get current action
-                action = actions[step_idx]  # Shape: (8,)
+                action = actions[step_idx]
                 
-                # Extract arm commands (first 6 elements)
+                # Extract arm commands (first 6 elements = joint positions)
                 arm_msg = Float64MultiArray()
                 arm_msg.data = [float(v) for v in action[0:6]]
                 self.arm_state_pub.publish(arm_msg)
                 
-                # Extract cmd_vel commands (last 2 elements)
+                # Extract cmd_vel commands (elements 6-7 = linear.x, angular.z)
                 twist_msg = Twist()
                 twist_msg.linear.x = float(action[6])
                 twist_msg.angular.z = float(action[7])
@@ -708,14 +711,11 @@ class BehaviorServer(Node):
                     self.get_logger().error(f"Action has wrong dimensions. Expected {self.current_action_dim}, got {action_np.shape[0]}")
                     return None
 
-                completion = None
                 progress = None
                 
-                # Extract progress/completion values for 10-dimensional actions
+                # Extract progress value for 10-dimensional actions
                 if self.current_action_dim >= 10:
                     progress = float(action_np[8])  # 9th element (index 8) - progress
-                    completion = float(action_np[9])  # 10th element (index 9) - completion
-                    self.get_logger().info(f"Progress: {progress:.4f}, Completion: {completion:.4f}")
 
                 # Publish commands (using first 8 dimensions)
                 twist_msg = Twist()
@@ -879,6 +879,55 @@ class BehaviorServer(Node):
         
         return response
 
+    def _get_replay_frequency(self, file_path):
+        """
+        Determine the appropriate replay frequency for an H5 file.
+        Checks if the file is an action-only episode and reads frequency from metadata.
+        
+        Args:
+            file_path: Path to the H5 file (e.g., /data/TaskName/action_only/episode_0.h5)
+        
+        Returns:
+            float: Replay frequency in Hz
+        """
+        try:
+            expanded_path = os.path.expanduser(file_path)
+            file_dir = os.path.dirname(expanded_path)
+            parent_dir = os.path.basename(file_dir)
+            
+            # Check if this is an action-only episode (in action_only subdirectory)
+            is_action_only = (parent_dir == "action_only")
+            
+            # Find the task directory (go up one or two levels depending on structure)
+            if is_action_only:
+                task_dir = os.path.dirname(file_dir)  # Go up from action_only to task dir
+            else:
+                task_dir = file_dir  # Already in task directory
+            
+            # Try to load metadata.json
+            metadata_path = os.path.join(task_dir, 'metadata.json')
+            
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                
+                if is_action_only:
+                    # Use action_only_frequency if available
+                    frequency = metadata.get('action_only_frequency', 100.0)
+                    return float(frequency)
+                else:
+                    # Use regular data_frequency
+                    frequency = metadata.get('data_frequency', 20.0)
+                    return float(frequency)
+            else:
+                self.get_logger().warn(f"Metadata file not found at {metadata_path}, using default frequency")
+        
+        except Exception as e:
+            self.get_logger().warn(f"Could not determine replay frequency from metadata: {e}")
+        
+        # Fallback default
+        return 12.0
+    
     def _extract_dataset_name(self, file_path):
         """Extract dataset name from file path."""
         if not file_path:
