@@ -17,8 +17,7 @@ class CleanHouseDirective(Directive):
         return [
             "navigate_to_position",
             "send_picture_via_email",
-            "pick_up_trash",
-            "drop_trash",
+            "drop_paper",
         ]
 
     def get_prompt(self) -> str:

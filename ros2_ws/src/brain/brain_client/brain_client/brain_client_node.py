@@ -385,8 +385,12 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
-        # Initialize primitives and directives
-        self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
+        # Initialize primitives - query from primitive_execution_action_server
+        self.primitives_dict = self._query_available_primitives()
+        if not self.primitives_dict:
+            self.get_logger().warn("No primitives available from primitive_execution_action_server, using fallback local loading")
+            self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
+        
         self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
 
         self.primitive_running = None
@@ -423,6 +427,61 @@ class BrainClientNode(Node):
         self.get_logger().info(
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
         )
+
+    def _query_available_primitives(self):
+        """
+        Query available primitives from primitive_execution_action_server.
+        Returns a dict of primitive names mapped to their metadata (for directive validation and registration).
+        """
+        from brain_messages.srv import GetAvailablePrimitives
+        
+        # Create service client
+        client = self.create_client(GetAvailablePrimitives, '/get_available_primitives')
+        
+        # Wait for service to be available
+        self.get_logger().info("Waiting for /get_available_primitives service...")
+        if not client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().error("Timeout waiting for /get_available_primitives service")
+            return {}
+        
+        # Call service
+        request = GetAvailablePrimitives.Request()
+        future = client.call_async(request)
+        
+        # Wait for response
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        
+        if not future.done():
+            self.get_logger().error("Service call timeout")
+            return {}
+        
+        try:
+            response = future.result()
+            primitives_list = json.loads(response.primitives_json)
+            
+            # Store the full primitives list for later use in registration
+            self.primitives_metadata_list = primitives_list
+            
+            # Create a simple dict with primitive instances (mock objects with metadata)
+            primitives_dict = {}
+            for prim in primitives_list:
+                # Create a mock primitive object that has guidelines methods
+                class MockPrimitive:
+                    def __init__(self, metadata):
+                        self.metadata = metadata
+                    def guidelines(self):
+                        return self.metadata.get('guidelines', '')
+                    def guidelines_when_running(self):
+                        return self.metadata.get('guidelines_when_running', '')
+                
+                primitives_dict[prim['name']] = MockPrimitive(prim)
+            
+            self.get_logger().info(f"Loaded {len(primitives_dict)} primitives from service: {list(primitives_dict.keys())}")
+            return primitives_dict
+            
+        except Exception as e:
+            self.get_logger().error(f"Error parsing primitives service response: {e}")
+            return {}
 
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
@@ -1444,49 +1503,55 @@ class BrainClientNode(Node):
             "Collecting primitive and directive definitions for registration..."
         )
 
-        # Prepare the registration data for primitives
-        primitives = []
-        if self.primitives_dict:
-            for primitive_name, primitive in self.primitives_dict.items():
-                # Extract parameter information using introspection
-                params = {}
-                signature = inspect.signature(primitive.execute)
+        # Use primitives metadata from service if available
+        if hasattr(self, 'primitives_metadata_list') and self.primitives_metadata_list:
+            primitives = self.primitives_metadata_list
+            self.get_logger().info(f"Using {len(primitives)} primitives from service")
+        else:
+            self.get_logger().warn("No primitives metadata available, falling back to local introspection")
+            primitives = []
+            if self.primitives_dict:
+                for primitive_name, primitive in self.primitives_dict.items():
+                    # Extract parameter information using introspection
+                    params = {}
+                    if hasattr(primitive, 'execute'):
+                        signature = inspect.signature(primitive.execute)
 
-                for param_name, param in signature.parameters.items():
-                    if param_name == "self":
-                        continue
+                        for param_name, param in signature.parameters.items():
+                            if param_name == "self":
+                                continue
 
-                    # Get parameter type from annotation if available
-                    param_type = "any"
-                    if param.annotation != inspect.Parameter.empty:
-                        # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
-                        if (
-                            isinstance(
-                                param.annotation, (types.UnionType, types.GenericAlias)
-                            )
-                            or hasattr(param.annotation, "_name")
-                            and param.annotation._name
-                            in ["List", "Optional", "Dict", "Tuple", "Union"]
-                        ):  # Covers typing.List, typing.Optional etc.
-                            param_type = str(param.annotation)
-                        elif hasattr(param.annotation, "__name__"):
-                            param_type = param.annotation.__name__
-                        else:
-                            # Fallback for other complex types, str() might be a reasonable default
-                            param_type = str(param.annotation)
-                        # Clean up "typing." prefix if present
-                        param_type = param_type.replace("typing.", "")
+                            # Get parameter type from annotation if available
+                            param_type = "any"
+                            if param.annotation != inspect.Parameter.empty:
+                                # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
+                                if (
+                                    isinstance(
+                                        param.annotation, (types.UnionType, types.GenericAlias)
+                                    )
+                                    or hasattr(param.annotation, "_name")
+                                    and param.annotation._name
+                                    in ["List", "Optional", "Dict", "Tuple", "Union"]
+                                ):  # Covers typing.List, typing.Optional etc.
+                                    param_type = str(param.annotation)
+                                elif hasattr(param.annotation, "__name__"):
+                                    param_type = param.annotation.__name__
+                                else:
+                                    # Fallback for other complex types, str() might be a reasonable default
+                                    param_type = str(param.annotation)
+                                # Clean up "typing." prefix if present
+                                param_type = param_type.replace("typing.", "")
 
-                    params[param_name] = f"{param_type}"
+                            params[param_name] = f"{param_type}"
 
-                primitives.append(
-                    {
-                        "name": primitive_name,
-                        "guidelines": primitive.guidelines(),
-                        "guidelines_when_running": primitive.guidelines_when_running(),
-                        "inputs": params,
-                    }
-                )
+                    primitives.append(
+                        {
+                            "name": primitive_name,
+                            "guidelines": primitive.guidelines(),
+                            "guidelines_when_running": primitive.guidelines_when_running(),
+                            "inputs": params,
+                        }
+                    )
 
         included_primitives = [
             p
