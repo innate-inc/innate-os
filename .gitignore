@@ -81,6 +81,9 @@ primitives/**/*.pt
 primitives/**/*.pth
 primitives/**/__pycache__/
 
+# Directives directory - track all directive files
+directives/**/__pycache__/
+
 # recordings folder
 recordings/
 

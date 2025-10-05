@@ -76,8 +76,8 @@ def initialize_directives(logger, primitives_dict: Optional[Dict[str, Any]] = No
     directive_loader = DirectiveLoader(logger)
     
     # Define directory to scan for directives
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    directives_directory = os.path.join(base_dir, "directives")
+    # Using the unified directives directory at the root of maurice-prod
+    directives_directory = os.path.expanduser("~/maurice-prod/directives")
     
     # Load all directives dynamically
     discovered_directive_classes = directive_loader.discover_directives_in_directory(directives_directory)
