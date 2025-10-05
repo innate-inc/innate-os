@@ -55,6 +55,7 @@ from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
 from brain_client.initializers import initialize_primitives, initialize_directives
+from brain_client.tts_handler import TTSHandler
 
 
 class BrainClientNode(Node):
@@ -120,6 +121,10 @@ class BrainClientNode(Node):
         # --- New: Simulator mode parameter ---
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
+
+        # --- TTS parameters ---
+        self.declare_parameter("cartesia_api_key", "")
+        self.declare_parameter("cartesia_voice_id", "f786b574-daa5-4673-aa0c-cbe3e8534c02")
 
         self.get_logger().info(
             f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode"
@@ -250,6 +255,15 @@ class BrainClientNode(Node):
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
+
+        # Initialize TTS handler
+        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
+        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
+        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id)
+        if self.tts_handler.is_available():
+            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
+        else:
+            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
 
         # Initialize TF2 buffer and listener
         self.tf_buffer = Buffer()
@@ -790,6 +804,10 @@ class BrainClientNode(Node):
         self.get_logger().debug(f"Received chat_out: {chat_entry}")
         out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
+        
+        # Generate speech for robot messages (but not thoughts or anticipation)
+        if sender == "robot" and text and text.strip():
+            self.tts_handler.speak_text_async(text)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         execute_next_task_immediately = True
@@ -1756,6 +1774,9 @@ class BrainClientNode(Node):
         # Cancel the agent timer if it exists
         if self.agent_timer and not self.agent_timer.is_canceled():
             self.agent_timer.cancel()
+        # Clean up TTS handler
+        if hasattr(self, 'tts_handler'):
+            self.tts_handler.close()
         return super().destroy_node()
 
 
