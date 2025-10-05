@@ -1,5 +1,6 @@
 # Request
 string behavior_name
+string behavior_config  # JSON-encoded behavior configuration from metadata.json
 ---
 # Result
 bool success

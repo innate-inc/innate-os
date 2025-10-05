@@ -37,10 +37,9 @@ from brain_client.message_types import (
     MessageInType,
     MessageOutType,
     MessageOut,
-    TaskType,
     VisionAgentOutput,
 )
-from brain_client.primitives.types import PrimitiveResult
+from brain_client.primitive_types import PrimitiveResult
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
@@ -54,33 +53,8 @@ from brain_messages.srv import ResetBrain
 from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
-
-from brain_client.primitives.navigate_to_position import NavigateToPosition
-from brain_client.primitives.send_email import SendEmail
-from brain_client.primitives.send_picture_via_email import SendPictureViaEmail
-from brain_client.primitives.pick_up_trash import PickUpTrash
-from brain_client.primitives.drop_trash import DropTrash
-from brain_client.primitives.pick_up_sock import PickUpSock
-from brain_client.primitives.drop_socks import DropSocks
-from brain_client.primitives.pick_screwdriver import PickScrewdriver
-from brain_client.primitives.pick_motor import PickMotor
-from brain_client.primitives.give_object import GiveObject
-from brain_client.primitives.open_door import OpenDoor
-from brain_client.directives.default_directive import DefaultDirective
-from brain_client.directives.empty_directive import EmptyDirective
-from brain_client.directives.sassy_directive import SassyDirective
-from brain_client.directives.friendly_guide_directive import FriendlyGuideDirective
-from brain_client.directives.elder_safety_directive import ElderSafetyDirective
-from brain_client.directives.house_joker_directive import HouseJokerDirective
-from brain_client.directives.interior_designer_directive import (
-    InteriorDesignerDirective,
-)
-from brain_client.directives.security_patrol_directive import SecurityPatrolDirective
-from brain_client.directives.security_guard_directive import SecurityGuardDirective
-from brain_client.directives.clean_house_directive import CleanHouseDirective
-from brain_client.directives.hide_and_seek_directive import HideAndSeekDirective
-from brain_client.directives.socks_tidier_directive import SocksTidierDirective
-from brain_client.directives.tools_giving_directive import ToolsGivingDirective
+from brain_client.initializers import initialize_primitives, initialize_directives
+from brain_client.tts_handler import TTSHandler
 
 
 class BrainClientNode(Node):
@@ -146,6 +120,10 @@ class BrainClientNode(Node):
         # --- New: Simulator mode parameter ---
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
+
+        # --- TTS parameters ---
+        self.declare_parameter("cartesia_api_key", "")
+        self.declare_parameter("cartesia_voice_id", "f786b574-daa5-4673-aa0c-cbe3e8534c02")
 
         self.get_logger().info(
             f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode"
@@ -277,6 +255,15 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
+        # Initialize TTS handler
+        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
+        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
+        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id)
+        if self.tts_handler.is_available():
+            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
+        else:
+            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
+
         # Initialize TF2 buffer and listener
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -398,23 +385,13 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
-        # Initialize primitives dictionary
-        self.primitives_dict = {
-            TaskType.NAVIGATE_TO_POSITION.value: NavigateToPosition(self.get_logger()),
-            TaskType.SEND_EMAIL.value: SendEmail(self.get_logger()),
-            TaskType.SEND_PICTURE_VIA_EMAIL.value: SendPictureViaEmail(
-                self.get_logger()
-            ),
-            TaskType.PICK_UP_TRASH.value: PickUpTrash(self.get_logger()),
-            TaskType.DROP_TRASH.value: DropTrash(self.get_logger()),
-            TaskType.PICK_UP_SOCK.value: PickUpSock(self.get_logger()),
-            TaskType.DROP_SOCKS.value: DropSocks(self.get_logger()),
-            TaskType.PICK_MOTOR.value: PickMotor(self.get_logger()),
-            TaskType.PICK_SCREWDRIVER.value: PickScrewdriver(self.get_logger()),
-            TaskType.GIVE_OBJECT.value: GiveObject(self.get_logger()),
-            TaskType.OPEN_DOOR.value: OpenDoor(self.get_logger()),
-            # Add other primitives here as they become available
-        }
+        # Initialize primitives - query from primitive_execution_action_server
+        self.primitives_dict = self._query_available_primitives()
+        if not self.primitives_dict:
+            self.get_logger().warn("No primitives available from primitive_execution_action_server, using fallback local loading")
+            self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
+        
+        self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
 
         self.primitive_running = None
         # Add a variable to store the current goal handle
@@ -424,25 +401,8 @@ class BrainClientNode(Node):
         self.directive_sub = self.create_subscription(
             String, "/set_directive", self.set_directive_callback, 10
         )
-        self.directives = {
-            directive.name: directive
-            for directive in [
-                DefaultDirective(),
-                EmptyDirective(),
-                SassyDirective(),
-                FriendlyGuideDirective(),
-                SecurityPatrolDirective(),
-                SecurityGuardDirective(),
-                InteriorDesignerDirective(),
-                ElderSafetyDirective(),
-                HouseJokerDirective(),
-                CleanHouseDirective(),
-                HideAndSeekDirective(),
-                SocksTidierDirective(),
-                ToolsGivingDirective(),
-            ]
-        }
-        self.current_directive = self.directives["empty_directive"]
+        
+
 
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
@@ -467,6 +427,61 @@ class BrainClientNode(Node):
         self.get_logger().info(
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
         )
+
+    def _query_available_primitives(self):
+        """
+        Query available primitives from primitive_execution_action_server.
+        Returns a dict of primitive names mapped to their metadata (for directive validation and registration).
+        """
+        from brain_messages.srv import GetAvailablePrimitives
+        
+        # Create service client
+        client = self.create_client(GetAvailablePrimitives, '/get_available_primitives')
+        
+        # Wait for service to be available
+        self.get_logger().info("Waiting for /get_available_primitives service...")
+        if not client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().error("Timeout waiting for /get_available_primitives service")
+            return {}
+        
+        # Call service
+        request = GetAvailablePrimitives.Request()
+        future = client.call_async(request)
+        
+        # Wait for response
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        
+        if not future.done():
+            self.get_logger().error("Service call timeout")
+            return {}
+        
+        try:
+            response = future.result()
+            primitives_list = json.loads(response.primitives_json)
+            
+            # Store the full primitives list for later use in registration
+            self.primitives_metadata_list = primitives_list
+            
+            # Create a simple dict with primitive instances (mock objects with metadata)
+            primitives_dict = {}
+            for prim in primitives_list:
+                # Create a mock primitive object that has guidelines methods
+                class MockPrimitive:
+                    def __init__(self, metadata):
+                        self.metadata = metadata
+                    def guidelines(self):
+                        return self.metadata.get('guidelines', '')
+                    def guidelines_when_running(self):
+                        return self.metadata.get('guidelines_when_running', '')
+                
+                primitives_dict[prim['name']] = MockPrimitive(prim)
+            
+            self.get_logger().info(f"Loaded {len(primitives_dict)} primitives from service: {list(primitives_dict.keys())}")
+            return primitives_dict
+            
+        except Exception as e:
+            self.get_logger().error(f"Error parsing primitives service response: {e}")
+            return {}
 
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
@@ -550,6 +565,9 @@ class BrainClientNode(Node):
 
     def fetch_transform_callback(self):
         try:
+            # In mapfree mode there is no global map frame; skip map->base_link TF lookups
+            if getattr(self, "cur_nav_mode", None) == "mapfree":
+                return
             robot_base_frame = "base_link"  # The frame whose pose we want
             map_frame = "map"  # The frame in which we want the pose expressed
             when = rclpy.time.Time()
@@ -844,6 +862,10 @@ class BrainClientNode(Node):
         self.get_logger().debug(f"Received chat_out: {chat_entry}")
         out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
+        
+        # Generate speech for robot messages (but not thoughts or anticipation)
+        if sender == "robot" and text and text.strip():
+            self.tts_handler.speak_text_async(text)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         execute_next_task_immediately = True
@@ -862,7 +884,7 @@ class BrainClientNode(Node):
                 # Store the next task if it exists, prevent immediate execution
                 if payload.next_task is not None:
                     self.get_logger().info(
-                        f"Storing pending task: {payload.next_task.type.value}"
+                        f"Storing pending task: {payload.next_task.type}"
                     )
                     self._pending_next_task = payload.next_task
                     execute_next_task_immediately = False  # Don't execute now
@@ -905,10 +927,10 @@ class BrainClientNode(Node):
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
             self.get_logger().info(
-                f"Primitive task type: {payload.next_task.type.value}"
+                f"Primitive task type: {payload.next_task.type}"
             )
 
-            if payload.next_task.type.value in self.primitives_dict:
+            if payload.next_task.type in self.primitives_dict:
                 self.send_primitive_goal(
                     payload.next_task.type,
                     payload.next_task.inputs,
@@ -916,13 +938,13 @@ class BrainClientNode(Node):
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
                     payload={
-                        "primitive_name": payload.next_task.type.value,
+                        "primitive_name": payload.next_task.type,
                         "primitive_id": payload.next_task.primitive_id,
                     },
                 )
                 self.ws_bridge.send_message(status_msg)
                 self.primitive_running = {
-                    "primitive_name": payload.next_task.type.value,
+                    "primitive_name": payload.next_task.type,
                     "primitive_id": payload.next_task.primitive_id,
                 }
             else:
@@ -960,10 +982,27 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Sending image callback.\033[0m"
             )
             try:
-                # Ensure AMCL pose is available before proceeding with image/map data
-                if not self.last_amcl_pose:
+                # Select pose source based on navigation mode
+                use_mapfree = (self.cur_nav_mode == "mapfree")
+                pose_source = None  # Either AMCL (preferred) or ODOM (mapfree)
+                if not use_mapfree and self.last_amcl_pose:
+                    pose_source = ("amcl", self.last_amcl_pose.pose)
+                elif use_mapfree and self.last_odom is not None:
+                    # Inflate covariance in mapfree mode to communicate uncertainty
+                    try:
+                        cov = getattr(self.last_odom.pose, "covariance", None)
+                        needs_set = cov is None
+                        if not needs_set and hasattr(cov, "__len__"):
+                            needs_set = len(cov) < 36
+                        if needs_set:
+                            self.last_odom.pose.covariance = [1e4] * 36
+                    except Exception:
+                        # If anything goes wrong, still attempt to proceed
+                        pass
+                    pose_source = ("odom", self.last_odom.pose)
+                else:
                     self.get_logger().warn(
-                        "\033[93m[BrainClient] No amcl_pose available. Skipping image callback.\033[0m"
+                        "\033[93m[BrainClient] No suitable pose source (amcl/odom). Skipping image callback.\033[0m"
                     )
                     return
 
@@ -1129,7 +1168,7 @@ class BrainClientNode(Node):
                     }
                     payload["depth"] = depth_payload
 
-                # Include map data if available
+                # Include map data if available; in mapfree mode map may be absent
                 if self.last_map is not None:
                     # Create a simplified map payload with only the necessary information
                     map_data = self.last_map.data
@@ -1155,17 +1194,18 @@ class BrainClientNode(Node):
                     }
                     payload["map"] = map_payload
                     self.get_logger().debug("Including map data in image message")
-
                 else:
-                    self.get_logger().warn(
-                        "\033[93m[BrainClient] No map data available.\033[0m"
-                    )
-                    return
+                    if not use_mapfree:
+                        self.get_logger().warn(
+                            "\033[93m[BrainClient] No map data available. Skipping image callback.\033[0m"
+                        )
+                        return
+                    # In mapfree, proceed without a map
 
-                # Include robot coordinates (if available) in the payload.
-                amcl_pose_data = self.last_amcl_pose.pose
-                pos = amcl_pose_data.pose.position
-                ori = amcl_pose_data.pose.orientation
+                # Include robot coordinates (use selected pose source)
+                pose_msg = pose_source[1]  # PoseWithCovariance or Odometry.pose
+                pos = pose_msg.pose.position
+                ori = pose_msg.pose.orientation
                 siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
                 cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
                 theta = math.atan2(siny_cosp, cosy_cosp)
@@ -1174,13 +1214,24 @@ class BrainClientNode(Node):
                     "y": pos.y,
                     "z": pos.z,
                     "theta": theta,
-                    "frame_id": self.last_amcl_pose.header.frame_id,  # Use amcl_pose frame_id
-                    "cov_x": amcl_pose_data.covariance[0],  # Variance of x
-                    "cov_y": amcl_pose_data.covariance[7],  # Variance of y
-                    "cov_yaw": amcl_pose_data.covariance[
-                        35
-                    ],  # Variance of yaw (renamed from cov_angle_z)
+                    # Frame depends on pose source; use "map" for AMCL and pose.header.frame_id if available for ODOM
+                    "frame_id": (
+                        self.last_amcl_pose.header.frame_id
+                        if pose_source[0] == "amcl"
+                        else (getattr(self.last_odom, "header", None).frame_id if hasattr(self.last_odom, "header") else "odom")
+                    ),
                 }
+                # Add covariance if available
+                cov = getattr(pose_msg, "covariance", None)
+                if cov is not None:
+                    try:
+                        # Ensure we can index expected positions
+                        if not hasattr(cov, "__len__") or len(cov) >= 36:
+                            robot_coords_payload["cov_x"] = cov[0]
+                            robot_coords_payload["cov_y"] = cov[7]
+                            robot_coords_payload["cov_yaw"] = cov[35]
+                    except Exception:
+                        pass
                 payload["robot_coords"] = robot_coords_payload
 
                 # Optionally include arm camera image if enabled and available
@@ -1231,7 +1282,7 @@ class BrainClientNode(Node):
 
     def send_primitive_goal(self, task_type, inputs):
         goal_msg = ExecutePrimitive.Goal()
-        goal_msg.primitive_type = task_type.value
+        goal_msg.primitive_type = task_type
 
         # Inputs are now only the direct arguments for the primitive's execute method.
         # Robot state injection is handled by the PrimitiveExecutionActionServer.
@@ -1384,27 +1435,27 @@ class BrainClientNode(Node):
             and self._pending_next_task is not None
         ):
             self.get_logger().info(
-                f"Executing pending task after internal cancellation: {self._pending_next_task.type.value}"
+                f"Executing pending task after internal cancellation: {self._pending_next_task.type}"
             )
             pending_task = self._pending_next_task
             self._pending_next_task = None  # Clear before sending new goal
             status_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_ACTIVATED,
                 payload={
-                    "primitive_name": pending_task.type.value,
+                    "primitive_name": pending_task.type,
                     "primitive_id": pending_task.primitive_id,
                 },
             )
             self.ws_bridge.send_message(status_msg)
             self.primitive_running = {
-                "primitive_name": pending_task.type.value,
+                "primitive_name": pending_task.type,
                 "primitive_id": pending_task.primitive_id,
             }
             self.send_primitive_goal(pending_task.type, pending_task.inputs)
         elif self._pending_next_task is not None:
             # Clear pending task if the goal finished differently (SUCCESS/FAILURE)
             self.get_logger().warn(
-                f"Clearing pending task {self._pending_next_task.type.value} because previous task finished with type {result.success_type}"
+                f"Clearing pending task {self._pending_next_task.type} because previous task finished with type {result.success_type}"
             )
             self._pending_next_task = None
 
@@ -1452,49 +1503,55 @@ class BrainClientNode(Node):
             "Collecting primitive and directive definitions for registration..."
         )
 
-        # Prepare the registration data for primitives
-        primitives = []
-        if self.primitives_dict:
-            for primitive_name, primitive in self.primitives_dict.items():
-                # Extract parameter information using introspection
-                params = {}
-                signature = inspect.signature(primitive.execute)
+        # Use primitives metadata from service if available
+        if hasattr(self, 'primitives_metadata_list') and self.primitives_metadata_list:
+            primitives = self.primitives_metadata_list
+            self.get_logger().info(f"Using {len(primitives)} primitives from service")
+        else:
+            self.get_logger().warn("No primitives metadata available, falling back to local introspection")
+            primitives = []
+            if self.primitives_dict:
+                for primitive_name, primitive in self.primitives_dict.items():
+                    # Extract parameter information using introspection
+                    params = {}
+                    if hasattr(primitive, 'execute'):
+                        signature = inspect.signature(primitive.execute)
 
-                for param_name, param in signature.parameters.items():
-                    if param_name == "self":
-                        continue
+                        for param_name, param in signature.parameters.items():
+                            if param_name == "self":
+                                continue
 
-                    # Get parameter type from annotation if available
-                    param_type = "any"
-                    if param.annotation != inspect.Parameter.empty:
-                        # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
-                        if (
-                            isinstance(
-                                param.annotation, (types.UnionType, types.GenericAlias)
-                            )
-                            or hasattr(param.annotation, "_name")
-                            and param.annotation._name
-                            in ["List", "Optional", "Dict", "Tuple", "Union"]
-                        ):  # Covers typing.List, typing.Optional etc.
-                            param_type = str(param.annotation)
-                        elif hasattr(param.annotation, "__name__"):
-                            param_type = param.annotation.__name__
-                        else:
-                            # Fallback for other complex types, str() might be a reasonable default
-                            param_type = str(param.annotation)
-                        # Clean up "typing." prefix if present
-                        param_type = param_type.replace("typing.", "")
+                            # Get parameter type from annotation if available
+                            param_type = "any"
+                            if param.annotation != inspect.Parameter.empty:
+                                # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
+                                if (
+                                    isinstance(
+                                        param.annotation, (types.UnionType, types.GenericAlias)
+                                    )
+                                    or hasattr(param.annotation, "_name")
+                                    and param.annotation._name
+                                    in ["List", "Optional", "Dict", "Tuple", "Union"]
+                                ):  # Covers typing.List, typing.Optional etc.
+                                    param_type = str(param.annotation)
+                                elif hasattr(param.annotation, "__name__"):
+                                    param_type = param.annotation.__name__
+                                else:
+                                    # Fallback for other complex types, str() might be a reasonable default
+                                    param_type = str(param.annotation)
+                                # Clean up "typing." prefix if present
+                                param_type = param_type.replace("typing.", "")
 
-                    params[param_name] = f"{param_type}"
+                            params[param_name] = f"{param_type}"
 
-                primitives.append(
-                    {
-                        "name": primitive_name,
-                        "guidelines": primitive.guidelines(),
-                        "guidelines_when_running": primitive.guidelines_when_running(),
-                        "inputs": params,
-                    }
-                )
+                    primitives.append(
+                        {
+                            "name": primitive_name,
+                            "guidelines": primitive.guidelines(),
+                            "guidelines_when_running": primitive.guidelines_when_running(),
+                            "inputs": params,
+                        }
+                    )
 
         included_primitives = [
             p
@@ -1771,6 +1828,8 @@ class BrainClientNode(Node):
                 response.message = "Brain deactivated."
         return response
 
+
+
     def destroy_node(self):
         self.exit_event.set()
         # Cancel the pose image timer if it exists
@@ -1779,6 +1838,9 @@ class BrainClientNode(Node):
         # Cancel the agent timer if it exists
         if self.agent_timer and not self.agent_timer.is_canceled():
             self.agent_timer.cancel()
+        # Clean up TTS handler
+        if hasattr(self, 'tts_handler'):
+            self.tts_handler.close()
         return super().destroy_node()
 
 

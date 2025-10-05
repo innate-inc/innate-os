@@ -1,0 +1,21 @@
+{
+    "name": "Test4",
+    "type": "replay",
+    "guidelines": "",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "execution": {
+        "model_type": "replay",
+        "replay_file": "action_only/episode_0.h5",
+        "duration": 0.0,
+        "start_pose": [],
+        "end_pose": [
+            1.57693225,
+            -0.6,
+            1.4772235,
+            -0.73784476,
+            0.0,
+            0.0
+        ]
+    }
+}

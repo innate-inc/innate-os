@@ -21,9 +21,11 @@ set(srv_files
   "srv/UpdateTaskMetadata.srv"
   "srv/ResetBrain.srv"
   "srv/GetAvailableBehaviors.srv"
+  "srv/GetAvailablePrimitives.srv"
   "srv/ChangeMap.srv"
   "srv/ChangeNavigationMode.srv"
   "srv/SaveMap.srv"
+  "srv/DeleteMap.srv"
   "srv/GetDatasetInfo.srv"
 )
 

@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from brain_messages.srv import ChangeMap, ChangeNavigationMode, SaveMap
+from brain_messages.srv import ChangeMap, ChangeNavigationMode, SaveMap, DeleteMap
 import subprocess
 import signal
 import os
@@ -41,6 +41,13 @@ class ModeManager(Node):
             SaveMap,
             '/nav/save_map',
             self.save_map_callback
+        )
+        
+        # Service to delete a map
+        self.delete_map_service = self.create_service(
+            DeleteMap,
+            '/nav/delete_map',
+            self.delete_map_callback
         )
         
         # Publisher to announce current mode
@@ -95,6 +102,7 @@ class ModeManager(Node):
         self.get_logger().info('- Call /nav/change_mode service to switch modes ("navigation" or "mapping")')
         self.get_logger().info('- Call /nav/change_navigation_map service to change map (restarts navigation if running)')
         self.get_logger().info('- Call /nav/save_map service to save current map with new name (mapping mode only, set overwrite=true to replace existing maps)')
+        self.get_logger().info('- Call /nav/delete_map service to delete a saved map (cannot delete active map while navigation is running)')
         self.get_logger().info(f'- Current mode: {self.current_mode} (loaded from persistence)')
         self.get_logger().info(f'- Current map: {self.current_map} (loaded from persistence)')
         self.get_logger().info(f'- Available maps: {self.available_maps}')
@@ -232,7 +240,11 @@ class ModeManager(Node):
             response = ChangeNavigationMode.Response()
             self.change_mode_callback(request, response)
         elif self.current_mode == "mapfree":
-            self.get_logger().info("Auto-starting in mapfree mode (no launch)")
+            self.get_logger().info("Auto-starting in mapfree mode (local Nav2)")
+            request = ChangeNavigationMode.Request()
+            request.mode = self.current_mode
+            response = ChangeNavigationMode.Response()
+            self.change_mode_callback(request, response)
 
     def publish_status(self):
         """Publish current mode, available maps, and current map"""
@@ -321,6 +333,87 @@ class ModeManager(Node):
             response.message = f"Error changing map: {str(e)}"
             self.get_logger().error(response.message)
             
+        return response
+
+    def delete_map_callback(self, request, response):
+        """
+        Service callback to delete a saved map (.yaml and associated image)
+        Accepts either the map base name (e.g., "home") or filename (e.g., "home.yaml")
+        """
+        try:
+            requested_name = request.map_name.strip()
+            if not requested_name:
+                response.success = False
+                response.message = "Map name cannot be empty"
+                self.get_logger().error(response.message)
+                return response
+
+            # Normalize to YAML filename
+            map_yaml_name = requested_name if requested_name.endswith('.yaml') else f"{requested_name}.yaml"
+
+            # Validate that the map exists
+            if map_yaml_name not in self.available_maps:
+                response.success = False
+                response.message = f"Error: Map '{map_yaml_name}' not found. Available maps: {self.available_maps}"
+                self.get_logger().error(response.message)
+                return response
+
+            # Prevent deleting the active map while navigation is running
+            if map_yaml_name == self.current_map and self.current_mode == "navigation" and self.current_process and self.current_process.poll() is None:
+                response.success = False
+                response.message = f"Cannot delete the active map '{map_yaml_name}' while navigation is running. Change map or stop navigation first."
+                self.get_logger().error(response.message)
+                return response
+
+            # If we are deleting the current map (but not running navigation), pick a fallback
+            if map_yaml_name == self.current_map:
+                remaining_maps = [m for m in self.available_maps if m != map_yaml_name]
+                fallback = None
+                if "home.yaml" in remaining_maps:
+                    fallback = "home.yaml"
+                elif remaining_maps:
+                    fallback = remaining_maps[0]
+                else:
+                    # No maps left, default to home.yaml placeholder
+                    fallback = "home.yaml"
+
+                self.current_map = fallback
+                self.save_last_map(fallback)
+                self.get_logger().info(f"Current map changed to '{fallback}' prior to deletion of '{map_yaml_name}'")
+
+            # Delete files (.yaml and associated image files)
+            base_name = os.path.splitext(map_yaml_name)[0]
+            yaml_path = os.path.join(self.maps_dir, map_yaml_name)
+            pgm_path = os.path.join(self.maps_dir, f"{base_name}.pgm")
+            png_path = os.path.join(self.maps_dir, f"{base_name}.png")
+
+            removed_any = False
+            for path in [yaml_path, pgm_path, png_path]:
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                        removed_any = True
+                except Exception as e:
+                    self.get_logger().warning(f"Could not remove '{path}': {e}")
+
+            if not removed_any:
+                response.success = False
+                response.message = f"No files found to delete for map '{map_yaml_name}'"
+                self.get_logger().error(response.message)
+                return response
+
+            # Refresh available maps list
+            self.available_maps = self.discover_maps()
+
+            response.success = True
+            response.message = f"Successfully deleted map '{map_yaml_name}'"
+            self.get_logger().info(response.message)
+
+        except Exception as e:
+            response.success = False
+            response.message = f"Error deleting map: {str(e)}"
+            self.get_logger().error(response.message)
+
         return response
 
     def save_map_callback(self, request, response):
@@ -462,22 +555,38 @@ class ModeManager(Node):
             
             # Don't restart if already in the requested mode
             if self.current_mode == target_mode and (
-                (self.current_process and self.current_process.poll() is None) or target_mode == "mapfree"):
+                (self.current_process and self.current_process.poll() is None)):
                 response.success = True
                 response.message = f"Already in {target_mode} mode"
                 self.get_logger().info(response.message)
                 return response
 
-            # For mapfree, just set the mode, do not launch or kill any processes
+            # For mapfree, launch local-only Nav2 (planner, controller, costmaps) without map/AMCL
             if target_mode == "mapfree":
+                # Stop anything running
                 if self.current_process:
                     self.get_logger().info(f"Stopping current mode: {self.current_mode}")
                     self.kill_current_process()
                     time.sleep(2)
+                launch_cmd = [
+                    'ros2', 'launch', 'maurice_nav', 'mapfree_local_nav.launch.py'
+                ]
+                self.get_logger().info("Starting mapfree local navigation stack...")
+                self.current_process = subprocess.Popen(
+                    launch_cmd,
+                    preexec_fn=os.setsid,
+                )
                 self.current_mode = "mapfree"
                 self.save_last_mode("mapfree")
-                response.success = True
-                response.message = "Switched to mapfree mode (no launch)"
+                time.sleep(3)
+                if self.current_process.poll() is None:
+                    response.success = True
+                    response.message = "Switched to mapfree mode (local Nav2 running)"
+                else:
+                    response.success = False
+                    response.message = "Failed to start mapfree local navigation"
+                    self.current_mode = "none"
+                    self.current_process = None
                 self.get_logger().info(response.message)
                 return response
 
