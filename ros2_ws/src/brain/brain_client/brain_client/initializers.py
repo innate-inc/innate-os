@@ -29,8 +29,8 @@ def initialize_primitives(logger, simulator_mode: bool = False) -> Dict[str, Any
     primitive_loader = PrimitiveLoader(logger)
     
     # Define directory to scan for primitives
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    primitives_directory = os.path.join(base_dir, "primitives")
+    # Using the new unified primitives directory at the root of maurice-prod
+    primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
     
     # Load all primitives dynamically
     discovered_primitives = primitive_loader.discover_primitives_in_directory(primitives_directory)

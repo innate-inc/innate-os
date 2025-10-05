@@ -82,23 +82,12 @@ class PrimitiveExecutionActionServer(Node):
         self.primitive_loader = PrimitiveLoader(self.get_logger())
         
         # Define directory to scan for primitives
-        # Handle both source and install directory structures
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        primitives_directory = os.path.join(base_dir, "primitives")
+        # Using the unified primitives directory at the root of maurice-prod
+        primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
         
-        # If primitives directory doesn't exist at the executable location,
-        # try to find it in the installed package location
         if not os.path.exists(primitives_directory):
-            try:
-                # Import the brain_client package to get its location
-                import brain_client
-                package_dir = os.path.dirname(brain_client.__file__)
-                primitives_directory = os.path.join(package_dir, "primitives")
-                self.get_logger().info(f"Using installed package primitives directory: {primitives_directory}")
-            except Exception as e:
-                self.get_logger().error(f"Could not locate primitives directory: {e}")
-                # Fallback to original path
-                primitives_directory = os.path.join(base_dir, "primitives")
+            self.get_logger().fatal(f"Primitives directory not found: {primitives_directory}")
+            raise FileNotFoundError(f"Primitives directory must exist at {primitives_directory}")
         
         # Load all primitives dynamically
         discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
