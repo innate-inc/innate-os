@@ -28,6 +28,10 @@ class RecorderNode(Node):
         # Load parameters (can be set via a YAML file or launch file)
         self.declare_parameter('data_directory', '/path/to/data')
         self.declare_parameter('data_frequency', 10)
+        # Action-only mode parameters
+        self.declare_parameter('action_only_enabled', False)
+        self.declare_parameter('action_only_frequency', 100)
+        self.declare_parameter('action_only_subdirectory', 'action_only')
         self.declare_parameter('image_topics', ['/camera/image_raw', '/camera/image_processed'])
         self.declare_parameter('arm_state_topic', '/arm/state')
         self.declare_parameter('leader_command_topic', '/leader/command')
@@ -38,6 +42,10 @@ class RecorderNode(Node):
         # Get parameter values
         data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
         self.data_frequency = self.get_parameter('data_frequency').value
+        # Action-only config
+        self.action_only_enabled = bool(self.get_parameter('action_only_enabled').value)
+        self.action_only_frequency = self.get_parameter('action_only_frequency').value
+        self.action_only_subdirectory = self.get_parameter('action_only_subdirectory').value
         self.image_topics = self.get_parameter('image_topics').value
         self.arm_state_topic = self.get_parameter('arm_state_topic').value
         self.leader_command_topic = self.get_parameter('leader_command_topic').value
@@ -49,10 +57,15 @@ class RecorderNode(Node):
         self.current_episode = None  # Holds an EpisodeData instance when an episode is active
         self.state = "IDLE"          # Possible states: "IDLE", "TASK_ACTIVE", "EPISODE_ACTIVE", "EPISODE_STOPPED"
         self.episode_start_time = None
+        # Action-only episode state
+        self.current_ao_episode = None
+        self.ao_state = "AO_IDLE"    # "AO_IDLE", "AO_EPISODE_ACTIVE", "AO_EPISODE_STOPPED"
+        self.ao_episode_start_time = None
         
         # Internal variables to track current task and episode number
         self.current_task_name = ""
         self.episode_count = 0
+        self.ao_episode_count = 0
         
         # Initialize CvBridge for image conversion
         self.bridge = CvBridge()
@@ -110,6 +123,11 @@ class RecorderNode(Node):
         self.save_episode_srv = self.create_service(Trigger, 'recorder/save_episode', self.handle_save_episode)
         self.cancel_episode_srv = self.create_service(Trigger, 'recorder/cancel_episode', self.handle_cancel_episode)
         self.stop_episode_srv = self.create_service(Trigger, 'recorder/stop_episode', self.handle_stop_episode)
+        # Action-only services (Trigger)
+        self.ao_new_episode_srv = self.create_service(Trigger, 'recorder/ao_new_episode', self.handle_ao_new_episode)
+        self.ao_save_episode_srv = self.create_service(Trigger, 'recorder/ao_save_episode', self.handle_ao_save_episode)
+        self.ao_cancel_episode_srv = self.create_service(Trigger, 'recorder/ao_cancel_episode', self.handle_ao_cancel_episode)
+        self.ao_stop_episode_srv = self.create_service(Trigger, 'recorder/ao_stop_episode', self.handle_ao_stop_episode)
         self.end_task_srv = self.create_service(Trigger, 'recorder/end_task', self.handle_end_task)
         self.get_task_metadata_list_srv = self.create_service(GetTaskMetadataList, 'recorder/get_task_metadata_list', self.handle_get_task_metadata_list)
         self.update_task_metadata_srv = self.create_service(UpdateTaskMetadata, 'recorder/update_task_metadata', self.handle_update_task_metadata)
@@ -122,6 +140,10 @@ class RecorderNode(Node):
         self.get_logger().info("  recorder/save_episode")
         self.get_logger().info("  recorder/cancel_episode")
         self.get_logger().info("  recorder/stop_episode")
+        self.get_logger().info("  recorder/ao_new_episode")
+        self.get_logger().info("  recorder/ao_save_episode")
+        self.get_logger().info("  recorder/ao_cancel_episode")
+        self.get_logger().info("  recorder/ao_stop_episode")
         self.get_logger().info("  recorder/end_task")
         self.get_logger().info("  recorder/get_task_metadata_list")
         self.get_logger().info("  recorder/update_task_metadata")
@@ -132,6 +154,13 @@ class RecorderNode(Node):
         
         # Create a timer that will attempt to add sensor data as a new timestep at the specified frequency.
         self.timer = self.create_timer(1.0 / self.data_frequency, self.timer_callback)
+
+        # Create action-only timer if enabled
+        if self.action_only_enabled:
+            self.ao_timer = self.create_timer(1.0 / float(self.action_only_frequency), self.ao_timer_callback)
+            self.get_logger().info(f"Action-only mode enabled at {self.action_only_frequency} Hz, subdir '{self.action_only_subdirectory}'")
+        else:
+            self.ao_timer = None
         
         self.get_logger().info("Recorder Node initialized in IDLE state.")
     
@@ -239,17 +268,140 @@ class RecorderNode(Node):
         self.get_logger().info("Setting head to AI position for new task setup")
         self._set_head_ai_position()
         
-        self.task_manager.start_new_task(request.task_name, request.task_description, request.mobile_task, self.data_frequency)
+        self.task_manager.start_new_task(
+            request.task_name,
+            request.task_description,
+            request.mobile_task,
+            self.data_frequency,
+            action_only_frequency=self.action_only_frequency if self.action_only_enabled else None
+        )
         if self.task_manager.metadata:
             self.episode_count = self.task_manager.metadata["number_of_episodes"]
+            self.ao_episode_count = self.task_manager.metadata.get("number_of_ao_episodes", 0)
         else:
             self.episode_count = 0
+            self.ao_episode_count = 0
         self.current_task_name = request.task_name
         self.state = "TASK_ACTIVE"
         self.get_logger().info(f"New task '{request.task_name}' started.")
         # Publish status update for new task
         self.publish_status(status="active", episode_number="", current_task_name=self.current_task_name)
         response.success = True
+        return response
+
+    # ----------------------------
+    # Action-only service handlers
+    # ----------------------------
+    def handle_ao_new_episode(self, request, response):
+        if self.state == "IDLE":
+            self.get_logger().error("Cannot start a new action-only episode unless a task is active.")
+            self.publish_status(status="ao_failed - no active task", episode_number="", current_task_name="")
+            response.success = False
+            response.message = "No active task. Please start a task first."
+            return response
+        elif self.ao_state in ["AO_EPISODE_ACTIVE", "AO_EPISODE_STOPPED"]:
+            self.get_logger().error("Cannot start a new action-only episode while one is already active or stopped.")
+            self.publish_status(status="ao_failed - episode in progress", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "An action-only episode is already active or stopped."
+            return response
+        
+        # Check if required topics have received data for action-only recording
+        if self.latest_leader_command is None or self.latest_cmd_vel is None:
+            missing_topics = []
+            if self.latest_leader_command is None:
+                missing_topics.append(self.leader_command_topic)
+            if self.latest_cmd_vel is None:
+                missing_topics.append(self.velocity_topic)
+            
+            error_msg = f"Cannot start action-only episode: Required topics have not received data yet: {missing_topics}"
+            self.get_logger().error(error_msg)
+            self.publish_status(status="ao_failed - topics not ready", episode_number="", current_task_name=self.current_task_name)
+            response.success = False
+            response.message = error_msg
+            return response
+
+        self.current_ao_episode = EpisodeData()
+        self.ao_episode_start_time = time.time()
+        self.ao_state = "AO_EPISODE_ACTIVE"
+        self.ao_episode_count += 1
+        self.get_logger().info("Action-only episode started.")
+        self.publish_status(status="ao_active", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+        response.success = True
+        response.message = "Action-only episode started."
+        return response
+
+    def handle_ao_save_episode(self, request, response):
+        if self.ao_state not in ["AO_EPISODE_ACTIVE", "AO_EPISODE_STOPPED"] or self.current_ao_episode is None:
+            self.get_logger().error("No active or stopped action-only episode to save.")
+            self.publish_status(status="ao_failed - no active/stopped episode to save", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "No action-only episode to save."
+            return response
+
+        if self.current_ao_episode.get_episode_length() == 0:
+            self.get_logger().error("Cannot save empty action-only episode.")
+            self.publish_status(status="ao_failed - empty episode", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "Cannot save empty action-only episode."
+            return response
+
+        end_time = time.time()
+        self.task_manager.add_action_only_episode(
+            self.current_ao_episode,
+            time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(self.ao_episode_start_time)),
+            time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_time)),
+            subdirectory_name=self.action_only_subdirectory
+        )
+        self.get_logger().info("Action-only episode saved successfully.")
+        self.publish_status(status="ao_saved", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+        self.current_ao_episode = None
+        self.ao_state = "AO_IDLE"
+        response.success = True
+        response.message = "Action-only episode saved."
+        return response
+
+    def handle_ao_cancel_episode(self, request, response):
+        if self.ao_state not in ["AO_EPISODE_ACTIVE", "AO_EPISODE_STOPPED"] or self.current_ao_episode is None:
+            self.get_logger().error("No active or stopped action-only episode to cancel.")
+            self.publish_status(status="ao_failed - no active/stopped episode to cancel", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "No action-only episode to cancel."
+            return response
+
+        self.current_ao_episode.clear()
+        if self.ao_episode_count > 0:
+            self.ao_episode_count -= 1
+        self.get_logger().info("Action-only episode canceled; buffered data discarded.")
+        self.publish_status(status="ao_cancelled", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+        self.current_ao_episode = None
+        self.ao_state = "AO_IDLE"
+        response.success = True
+        response.message = "Action-only episode canceled."
+        return response
+
+    def handle_ao_stop_episode(self, request, response):
+        if self.ao_state == "AO_EPISODE_ACTIVE":
+            self.ao_state = "AO_EPISODE_STOPPED"
+            self.get_logger().info("Action-only episode recording stopped. Waiting for save or cancel command.")
+            self.publish_status(status="ao_stopped", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+            response.success = True
+            response.message = "Action-only episode stopped."
+        elif self.ao_state == "AO_EPISODE_STOPPED":
+            self.get_logger().warn("Stop action-only episode requested, but episode is already stopped.")
+            self.publish_status(status="ao_failed - episode already stopped", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "Action-only episode is already stopped."
+        elif self.state == "TASK_ACTIVE":
+            self.get_logger().error("Stop action-only episode requested, but no action-only episode is active.")
+            self.publish_status(status="ao_failed - no active episode", episode_number=str(self.ao_episode_count), current_task_name=self.current_task_name)
+            response.success = False
+            response.message = "No active action-only episode to stop."
+        else:  # IDLE
+            self.get_logger().error("Stop action-only episode requested, but no task is active.")
+            self.publish_status(status="ao_failed - no active task", episode_number="", current_task_name="")
+            response.success = False
+            response.message = "No active task or episode to stop."
         return response
 
     def handle_new_episode(self, request, response):
@@ -264,6 +416,16 @@ class RecorderNode(Node):
             self.publish_status(status=f"failed - episode {self.state.lower()}", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
             response.success = False
             response.message = f"An episode is already {self.state.lower()}. Please save or cancel the current episode first."
+            return response
+        
+        # Check if all required topics have received data
+        if not self.all_topics_received:
+            missing_topics = [topic for topic, received in self.topics_received.items() if not received]
+            error_msg = f"Cannot start episode: Not all topics have received data yet. Missing: {missing_topics}"
+            self.get_logger().error(error_msg)
+            self.publish_status(status="failed - topics not ready", episode_number="", current_task_name=self.current_task_name)
+            response.success = False
+            response.message = error_msg
             return response
         
         self.current_episode = EpisodeData()
@@ -374,6 +536,10 @@ class RecorderNode(Node):
             self.current_episode = None
         self.task_manager.end_task()
         self.state = "IDLE"
+        # Reset action-only state as well
+        self.current_ao_episode = None
+        self.ao_state = "AO_IDLE"
+        self.ao_episode_count = 0
         self.get_logger().info("Task ended; recorder state set to IDLE.")
         # Publish status update for ending task
         self.publish_status(status="idle", episode_number="", current_task_name="")
@@ -383,6 +549,32 @@ class RecorderNode(Node):
         response.success = True
         response.message = "Task ended."
         return response
+
+    # ----------------------------
+    # Action-only timer callback
+    # ----------------------------
+    def ao_timer_callback(self):
+        # Record action-only timesteps at high frequency
+        if self.ao_state != "AO_EPISODE_ACTIVE" or self.current_ao_episode is None:
+            return
+        # Require leader command and velocity only
+        if self.latest_leader_command is None or self.latest_cmd_vel is None:
+            return
+
+        # Build action data: leader command + [vx, wz]
+        try:
+            action_data = list(self.latest_leader_command.data)
+        except Exception:
+            # Fallback if Float64MultiArray-like but no .data list
+            action_data = []
+        twist = self.latest_cmd_vel
+        action_data.extend([twist.linear.x, twist.angular.z])
+
+        try:
+            # No observations for action-only episodes
+            self.current_ao_episode.add_timestep(action_data, [], [], [])
+        except ValueError as e:
+            self.get_logger().error(f"Error adding action-only timestep: {e}")
 
     def handle_get_task_metadata_list(self, request, response):
         self.get_logger().info("Received request to get task metadata list.")

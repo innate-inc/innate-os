@@ -114,20 +114,27 @@ class EpisodeData:
         self.add_termination_data()
         
         with h5py.File(path, 'w') as hf:
-            # Create dataset for actions.
+            # Always save actions
             hf.create_dataset('/action', data=np.array(self.actions))
-            
-            # Create the observations group.
-            obs_group = hf.create_group('/observations')
-            obs_group.create_dataset('qpos', data=np.array(self.qpos))
-            obs_group.create_dataset('qvel', data=np.array(self.qvel))
-            
-            # Create a subgroup for images.
-            images_group = obs_group.create_group('images')
-            for cam in self.camera_names:
-                # Convert the list of images to a numpy array.
-                # Assumes that all images for a given camera have consistent shape.
-                images_group.create_dataset(cam, data=np.array(self.images[cam]))
+
+            # Detect available observations
+            has_qpos = isinstance(self.qpos, list) and len(self.qpos) > 0 and any(len(x) > 0 for x in self.qpos)
+            has_qvel = isinstance(self.qvel, list) and len(self.qvel) > 0 and any(len(x) > 0 for x in self.qvel)
+            has_images = isinstance(self.images, dict) and len(self.images) > 0 and any(len(v) > 0 for v in self.images.values())
+
+            # Only create observations if any are present
+            if has_qpos or has_qvel or has_images:
+                obs_group = hf.create_group('/observations')
+                if has_qpos:
+                    obs_group.create_dataset('qpos', data=np.array(self.qpos))
+                if has_qvel:
+                    obs_group.create_dataset('qvel', data=np.array(self.qvel))
+                if has_images:
+                    images_group = obs_group.create_group('images')
+                    for cam_name, image_list in self.images.items():
+                        if len(image_list) == 0:
+                            continue
+                        images_group.create_dataset(cam_name, data=np.array(image_list))
     
     def clear(self):
         """
@@ -181,7 +188,7 @@ class TaskManager:
         self.metadata = None  # Will hold the task metadata
         self.episodes = []    # List of EpisodeData objects
 
-    def start_new_task(self, task_name, task_description, mobile_flag, data_frequency):
+    def start_new_task(self, task_name, task_description, mobile_flag, data_frequency, action_only_frequency=None):
         """
         Start a new task by creating a task directory and initializing metadata.
         If a task with the given name already exists (i.e., a metadata file is found),
@@ -201,6 +208,12 @@ class TaskManager:
             # Task already exists; resume it.
             print(f"Task '{task_name}' already exists. Resuming task.")
             self.resume_task(task_name)
+            # Optionally update AO frequency on resume if provided
+            if action_only_frequency is not None:
+                if self.metadata is None:
+                    self.load_metadata()
+                self.metadata["action_only_frequency"] = action_only_frequency
+                self._save_metadata()
             return
 
         # Task does not exist; create a new one.
@@ -211,8 +224,14 @@ class TaskManager:
             "mobile_task": mobile_flag,
             "data_frequency": data_frequency,
             "number_of_episodes": 0,
-            "episodes": []  # Will contain details for each saved episode.
+            "episodes": [],  # Will contain details for each saved episode.
+            # Track action-only episodes separately
+            "number_of_ao_episodes": 0,
+            "ao_episodes": []
         }
+        # Record the action-only frequency if provided
+        if action_only_frequency is not None:
+            self.metadata["action_only_frequency"] = action_only_frequency
         self._save_metadata()
         self.episodes = []  # Reset the episodes list.
 
@@ -265,6 +284,44 @@ class TaskManager:
         
         # Optionally, store the episode_data object.
         #self.episodes.append(episode_data)
+
+    def add_action_only_episode(self, episode_data, start_timestamp, end_timestamp, subdirectory_name: str = "action_only"):
+        """
+        Save an action-only episode under a dedicated subdirectory and update metadata.
+
+        Args:
+            episode_data (EpisodeData): Contains only actions.
+            start_timestamp (str): Start timestamp.
+            end_timestamp (str): End timestamp.
+            subdirectory_name (str): Subfolder name inside the task directory.
+        """
+        # Ensure subdirectory exists
+        target_dir = os.path.join(self.current_task_dir, subdirectory_name)
+        os.makedirs(target_dir, exist_ok=True)
+
+        # Determine new ID and path
+        ao_id = self.metadata.get("number_of_ao_episodes", 0)
+        file_name = f"episode_{ao_id}.h5"
+        file_path = os.path.join(target_dir, file_name)
+
+        # Save file (will include only /action if no observations)
+        episode_data.save_file(file_path)
+
+        # Update metadata
+        ao_info = {
+            "episode_id": ao_id,
+            "file_name": file_name,
+            "subdirectory": subdirectory_name,
+            "start_timestamp": start_timestamp,
+            "end_timestamp": end_timestamp
+        }
+        if "ao_episodes" not in self.metadata:
+            self.metadata["ao_episodes"] = []
+        if "number_of_ao_episodes" not in self.metadata:
+            self.metadata["number_of_ao_episodes"] = 0
+        self.metadata["ao_episodes"].append(ao_info)
+        self.metadata["number_of_ao_episodes"] += 1
+        self._save_metadata()
 
     def end_task(self):
         """
@@ -377,6 +434,33 @@ class TaskManager:
             "episodes": processed_episodes,
             **{k: v for k, v in task_metadata.items() if k not in ["task_name", "task_description", "mobile_task", "data_frequency", "task_directory", "episodes"]}
         }
+
+        # Also attach processed action-only episodes if present
+        processed_ao_episodes = []
+        if "ao_episodes" in task_metadata and isinstance(task_metadata["ao_episodes"], list):
+            for ao_info in task_metadata["ao_episodes"]:
+                num_timesteps = 0
+                subdir = ao_info.get("subdirectory", "action_only")
+                ao_file = ao_info.get("file_name", "")
+                ao_path = os.path.join(task_directory, subdir, ao_file)
+                if ao_file and os.path.exists(ao_path):
+                    try:
+                        with h5py.File(ao_path, 'r') as hf:
+                            if '/action' in hf:
+                                num_timesteps = len(hf['/action'])
+                    except Exception as e:
+                        print(f"Error reading HDF5 file {ao_path} for timesteps: {e}")
+                processed_ao_episodes.append({
+                    "episode_id": f"episode_{ao_info.get('episode_id', 'N/A')}",
+                    "start_time": ao_info.get("start_timestamp", "N/A"),
+                    "end_time": ao_info.get("end_timestamp", "N/A"),
+                    "num_timesteps": num_timesteps,
+                    "data_file_name": ao_file,
+                    "subdirectory": subdir
+                })
+
+        if processed_ao_episodes:
+            enriched_metadata["ao_episodes"] = processed_ao_episodes
         
         return enriched_metadata, None
 

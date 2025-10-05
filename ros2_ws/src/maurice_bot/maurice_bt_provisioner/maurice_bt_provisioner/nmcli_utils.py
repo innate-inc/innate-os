@@ -113,11 +113,11 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
     base_cmd = ['nmcli', 'connection']
     if exists:
         nm_logger.info(f"Modifying existing connection: {ssid}")
-        cmd = base_cmd + ['modify', ssid]
+        cmd = base_cmd + ['modify', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE]
     else:
         nm_logger.info(f"Adding new connection: {ssid}")
-        # Specify a default interface name like wlan0, adjust if necessary
-        cmd = base_cmd + ['add', 'type', 'wifi', 'con-name', ssid, 'ifname', 'wlan0', 'ssid', ssid]
+        # Bind the profile to the default Wi‑Fi interface
+        cmd = base_cmd + ['add', 'type', 'wifi', 'con-name', ssid, 'ifname', DEFAULT_WIFI_INTERFACE, 'ssid', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE]
     
     # Common settings
     cmd.extend(['connection.autoconnect', 'yes', 'connection.autoconnect-priority', str(priority)])
@@ -132,6 +132,12 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
     if not success:
          action = "modify" if exists else "add"
          return False, f"Failed to {action} connection '{ssid}': {stderr or 'Unknown error'}"
+
+    # Ensure the profile is pinned to the default Wi‑Fi interface
+    # Use an explicit modify call, which works reliably for both add and modify paths
+    success_bind, _, stderr_bind = _run_nmcli(['nmcli', 'connection', 'modify', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE])
+    if not success_bind:
+        return False, f"Failed to bind '{ssid}' to interface {DEFAULT_WIFI_INTERFACE}: {stderr_bind or 'Unknown error'}"
     return True, None # Success
 
 def nmcli_delete_connection(ssid):
