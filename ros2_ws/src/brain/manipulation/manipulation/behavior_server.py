@@ -143,6 +143,7 @@ class BehaviorServer(Node):
         
         self.get_logger().info("Behavior server ready - pure execution engine using primitives/ directory")
     
+    def cancel_behavior_callback(self, goal_handle_to_cancel):
         """Handle action cancel requests."""
         self.get_logger().info("Received cancel request...")
         

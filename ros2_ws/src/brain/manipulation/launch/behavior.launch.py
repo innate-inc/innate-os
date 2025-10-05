@@ -13,16 +13,6 @@ def generate_launch_description():
     manipulation_share = FindPackageShare('manipulation')
     
     # Declare launch arguments
-    config_file_arg = DeclareLaunchArgument(
-        'config_file',
-        default_value=PathJoinSubstitution([
-            manipulation_share,
-            'config',
-            'behaviors.yaml'
-        ]),
-        description='Path to the behaviors configuration file'
-    )
-    
     recorder_config_arg = DeclareLaunchArgument(
         'recorder_config',
         default_value=PathJoinSubstitution([
@@ -46,7 +36,6 @@ def generate_launch_description():
         name='behavior_server',
         output='screen',
         parameters=[
-            {'config_file': LaunchConfiguration('config_file')},
             {'recorder_config': LaunchConfiguration('recorder_config')},
             LaunchConfiguration('recorder_config')  # This loads the entire YAML file as parameters
         ],
@@ -57,7 +46,6 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        config_file_arg,
         recorder_config_arg,
         log_level_arg,
         behavior_server_node

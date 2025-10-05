@@ -493,21 +493,97 @@ class PrimitiveExecutionActionServer(Node):
     def _execute_physical_primitive(self, goal_handle, primitive_type, inputs):
         """
         Execute a physical primitive by delegating to the behavior_server.
-        This method is currently a placeholder - full implementation in Phase 4.
         """
-        self.get_logger().error(
-            f"Physical primitive execution not yet implemented: {primitive_type}"
-        )
-        self.get_logger().info(
-            "Phase 3 complete - physical primitives loaded but delegation to behavior_server pending Phase 4"
-        )
-        goal_handle.abort()
-        return ExecutePrimitive.Result(
-            success=False,
-            message="Physical primitive execution not yet implemented (pending Phase 4)",
-            primitive_type=primitive_type,
-            success_type=PrimitiveResult.FAILURE.value,
-        )
+        self.get_logger().info(f"Delegating physical primitive '{primitive_type}' to behavior_server")
+        
+        # Get the physical primitive metadata
+        physical_data = self._physical_primitives[primitive_type]
+        metadata = physical_data['metadata']
+        
+        # Wait for behavior server to be available
+        if not self._behavior_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error("Behavior server not available!")
+            goal_handle.abort()
+            return ExecutePrimitive.Result(
+                success=False,
+                message="Behavior server not available",
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.FAILURE.value,
+            )
+        
+        # Create behavior goal with config from metadata
+        behavior_goal = ExecuteBehavior.Goal()
+        behavior_goal.behavior_name = primitive_type
+        behavior_goal.behavior_config = json.dumps(metadata)  # Pass entire metadata as config
+        
+        # Send goal and wait for result
+        self.get_logger().info(f"Sending behavior goal to behavior_server: {primitive_type}")
+        send_goal_future = self._behavior_client.send_goal_async(behavior_goal)
+        
+        # Wait for goal acceptance
+        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=5.0)
+        
+        if not send_goal_future.done():
+            self.get_logger().error("Timeout waiting for behavior goal acceptance")
+            goal_handle.abort()
+            return ExecutePrimitive.Result(
+                success=False,
+                message="Timeout waiting for behavior goal acceptance",
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.FAILURE.value,
+            )
+        
+        behavior_goal_handle = send_goal_future.result()
+        if not behavior_goal_handle.accepted:
+            self.get_logger().error("Behavior goal rejected by behavior_server")
+            goal_handle.abort()
+            return ExecutePrimitive.Result(
+                success=False,
+                message="Behavior goal rejected by behavior_server",
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.FAILURE.value,
+            )
+        
+        self.get_logger().info("Behavior goal accepted, waiting for result...")
+        
+        # Wait for result
+        result_future = behavior_goal_handle.get_result_async()
+        
+        # Spin until complete - this blocks but that's okay in an action callback
+        rclpy.spin_until_future_complete(self, result_future)
+        
+        behavior_result = result_future.result().result
+        
+        # Convert behavior result to primitive result
+        if behavior_result.success:
+            self.get_logger().info(f"Physical primitive '{primitive_type}' succeeded: {behavior_result.message}")
+            goal_handle.succeed()
+            return ExecutePrimitive.Result(
+                success=True,
+                message=behavior_result.message,
+                primitive_type=primitive_type,
+                success_type=PrimitiveResult.SUCCESS.value,
+            )
+        else:
+            # Check if it was cancelled
+            if "cancel" in behavior_result.message.lower():
+                self.get_logger().info(f"Physical primitive '{primitive_type}' cancelled: {behavior_result.message}")
+                goal_handle.succeed()
+                return ExecutePrimitive.Result(
+                    success=True,
+                    message=behavior_result.message,
+                    primitive_type=primitive_type,
+                    success_type=PrimitiveResult.CANCELLED.value,
+                )
+            else:
+                self.get_logger().error(f"Physical primitive '{primitive_type}' failed: {behavior_result.message}")
+                goal_handle.abort()
+                return ExecutePrimitive.Result(
+                    success=False,
+                    message=behavior_result.message,
+                    primitive_type=primitive_type,
+                    success_type=PrimitiveResult.FAILURE.value,
+                )
 
     def destroy(self):
         self._action_server.destroy()
