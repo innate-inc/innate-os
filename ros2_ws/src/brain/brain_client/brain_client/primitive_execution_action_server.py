@@ -29,7 +29,6 @@ from brain_client.primitive_types import (
     PrimitiveResult,
     RobotStateType,
 )
-from brain_client.message_types import TaskType
 
 # Special imports for primitives that need specific handling
 from brain_client.primitives.navigate_to_position import NavigateToPosition

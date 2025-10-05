@@ -37,7 +37,6 @@ from brain_client.message_types import (
     MessageInType,
     MessageOutType,
     MessageOut,
-    TaskType,
     VisionAgentOutput,
 )
 from brain_client.primitive_types import PrimitiveResult
