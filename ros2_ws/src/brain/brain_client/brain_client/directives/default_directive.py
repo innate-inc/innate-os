@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class DefaultDirective(Directive):
@@ -16,11 +15,11 @@ class DefaultDirective(Directive):
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
-            TaskType.NAVIGATE_TO_POSITION.value,
-            TaskType.SEND_EMAIL.value,
-            TaskType.SEND_PICTURE_VIA_EMAIL.value,
-            TaskType.PICK_UP_TRASH.value,
-            TaskType.DROP_TRASH.value,
+            "navigate_to_position",
+            "send_email",
+            "send_picture_via_email",
+            "pick_up_trash",
+            "drop_trash",
         ]
 
     def get_prompt(self) -> None:

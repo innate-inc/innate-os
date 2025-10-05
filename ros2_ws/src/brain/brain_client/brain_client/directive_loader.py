@@ -207,12 +207,14 @@ class DirectiveLoader:
                 
         return all_directives
     
-    def create_directive_instances(self, directive_classes: Dict[str, Type[Directive]]) -> Dict[str, Directive]:
+    def create_directive_instances(self, directive_classes: Dict[str, Type[Directive]], 
+                                   available_primitives: Optional[Dict[str, any]] = None) -> Dict[str, Directive]:
         """
         Create instances of directive classes.
         
         Args:
             directive_classes: Dictionary of directive name to class mappings
+            available_primitives: Optional dictionary of available primitive names to validate against
             
         Returns:
             Dictionary mapping directive names to their instances
@@ -222,9 +224,50 @@ class DirectiveLoader:
         for directive_name, directive_class in directive_classes.items():
             try:
                 directive_instance = directive_class()
+                
+                # Validate primitives if available_primitives dict is provided
+                if available_primitives is not None:
+                    self._validate_directive_primitives(directive_instance, available_primitives)
+                
                 directive_instances[directive_name] = directive_instance
                 self.logger.debug(f"Created directive instance: {directive_name}")
             except Exception as e:
                 self.logger.error(f"Error creating directive instance {directive_name}: {e}")
                 
         return directive_instances
+    
+    def _validate_directive_primitives(self, directive_instance: Directive, 
+                                       available_primitives: Dict[str, any]) -> None:
+        """
+        Validates that all primitives referenced by a directive have corresponding
+        primitive files available.
+        
+        Args:
+            directive_instance: The directive instance to validate
+            available_primitives: Dictionary of available primitive names
+            
+        Raises:
+            Warning if a primitive is not found (logged, not raised)
+        """
+        try:
+            directive_primitives = directive_instance.get_primitives()
+            missing_primitives = []
+            
+            for primitive_name in directive_primitives:
+                if primitive_name not in available_primitives:
+                    missing_primitives.append(primitive_name)
+            
+            if missing_primitives:
+                self.logger.warning(
+                    f"Directive '{directive_instance.name}' references primitives that are not available: "
+                    f"{missing_primitives}. Available primitives: {list(available_primitives.keys())}"
+                )
+            else:
+                self.logger.debug(
+                    f"Directive '{directive_instance.name}' primitives validated successfully: "
+                    f"{directive_primitives}"
+                )
+        except Exception as e:
+            self.logger.error(
+                f"Error validating primitives for directive '{directive_instance.name}': {e}"
+            )

@@ -60,12 +60,13 @@ def initialize_primitives(logger, simulator_mode: bool = False) -> Dict[str, Any
     return primitives_dict
 
 
-def initialize_directives(logger) -> Tuple[Dict[str, Any], Optional[Any]]:
+def initialize_directives(logger, primitives_dict: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Optional[Any]]:
     """
     Initialize all directives using dynamic loading.
     
     Args:
         logger: ROS logger instance
+        primitives_dict: Optional dictionary of available primitives for validation
         
     Returns:
         Tuple of (directives_dict, current_directive) where:
@@ -81,8 +82,11 @@ def initialize_directives(logger) -> Tuple[Dict[str, Any], Optional[Any]]:
     # Load all directives dynamically
     discovered_directive_classes = directive_loader.discover_directives_in_directory(directives_directory)
     
-    # Create directive instances
-    directives = directive_loader.create_directive_instances(discovered_directive_classes)
+    # Create directive instances with primitive validation
+    directives = directive_loader.create_directive_instances(
+        discovered_directive_classes, 
+        available_primitives=primitives_dict
+    )
     
     logger.info(f"Successfully loaded {len(directives)} directives")
     

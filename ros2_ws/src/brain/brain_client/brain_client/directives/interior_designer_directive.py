@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class InteriorDesignerDirective(Directive):
@@ -16,8 +15,8 @@ class InteriorDesignerDirective(Directive):
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
-            TaskType.NAVIGATE_TO_POSITION.value,
-            TaskType.SEND_PICTURE_VIA_EMAIL.value,
+            "navigate_to_position",
+            "send_picture_via_email",
         ]
 
     def get_prompt(self) -> str:

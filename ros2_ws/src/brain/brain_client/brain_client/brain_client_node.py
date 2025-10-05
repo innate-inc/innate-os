@@ -388,7 +388,7 @@ class BrainClientNode(Node):
 
         # Initialize primitives and directives
         self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
-        self.directives, self.current_directive = initialize_directives(self.get_logger())
+        self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
 
         self.primitive_running = None
         # Add a variable to store the current goal handle

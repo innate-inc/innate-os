@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class ToolsGivingDirective(Directive):
@@ -15,10 +14,10 @@ class ToolsGivingDirective(Directive):
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
-            TaskType.NAVIGATE_TO_POSITION.value,
-            TaskType.PICK_MOTOR.value,
-            TaskType.PICK_SCREWDRIVER.value,
-            TaskType.GIVE_OBJECT.value,
+            "navigate_to_position",
+            "pick_motor",
+            "pick_screwdriver",
+            "give_object",
         ]
 
     def get_prompt(self) -> None:

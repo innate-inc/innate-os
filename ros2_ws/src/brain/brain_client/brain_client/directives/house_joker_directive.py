@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class HouseJokerDirective(Directive):
@@ -16,7 +15,7 @@ class HouseJokerDirective(Directive):
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
-            TaskType.NAVIGATE_TO_POSITION.value,
+            "navigate_to_position",
         ]
 
     def get_prompt(self) -> None:

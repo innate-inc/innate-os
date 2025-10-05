@@ -1,6 +1,5 @@
 from typing import List
 from brain_client.directives.types import Directive
-from brain_client.message_types import TaskType
 
 
 class SocksTidierDirective(Directive):
@@ -15,9 +14,9 @@ class SocksTidierDirective(Directive):
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
-            TaskType.NAVIGATE_TO_POSITION.value,
-            TaskType.PICK_UP_SOCK.value,
-            TaskType.DROP_SOCKS.value,
+            "navigate_to_position",
+            "pick_up_sock",
+            "drop_socks",
         ]
 
     def get_prompt(self) -> None:
