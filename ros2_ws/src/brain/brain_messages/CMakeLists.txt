@@ -27,6 +27,7 @@ set(srv_files
   "srv/SaveMap.srv"
   "srv/DeleteMap.srv"
   "srv/GetDatasetInfo.srv"
+  "srv/SetDirectiveOnStartup.srv"
 )
 
 set(msg_files
