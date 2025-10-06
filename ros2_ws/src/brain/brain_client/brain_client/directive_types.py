@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+Directive Type Definitions
+
+Base class and types for robot directives.
+"""
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
@@ -39,3 +45,4 @@ class Directive(ABC):
         Subclasses must implement this method.
         """
         pass
+

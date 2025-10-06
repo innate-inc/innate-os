@@ -14,7 +14,7 @@ import inspect
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
-from brain_client.directives.types import Directive
+from brain_client.directive_types import Directive
 
 
 class DirectiveLoader:

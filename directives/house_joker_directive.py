@@ -1,5 +1,5 @@
 from typing import List
-from brain_client.directives.types import Directive
+from brain_client.directive_types import Directive
 
 
 class HouseJokerDirective(Directive):
