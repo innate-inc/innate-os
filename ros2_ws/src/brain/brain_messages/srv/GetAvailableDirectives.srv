@@ -3,3 +3,4 @@
 # Response
 string[] directives      # List of available directive names
 string current_directive # Currently active directive name
+string startup_directive # Directive that will be loaded on next startup (empty if none saved)
