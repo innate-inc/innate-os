@@ -1,6 +1,7 @@
 from __future__ import annotations
 import math
 import os
+import time
 from dynamixel_sdk import *  # Uses Dynamixel SDK library
 from dataclasses import dataclass
 import enum
@@ -197,6 +198,10 @@ class Dynamixel:
         self.torque_enabled[motor_id] = False
 
     def _process_response(self, dxl_comm_result: int, dxl_error: int, motor_id: int):
+        # Add 1ms delay for UART devices (THS) before processing response
+        # if 'THS' in self.config.device_name:
+        #   time.sleep(0.001)  # 1ms delay for UART
+        
         if dxl_comm_result != COMM_SUCCESS:
             raise ConnectionError(
                 f"dxl_comm_result for motor {motor_id}: {self.packetHandler.getTxRxResult(dxl_comm_result)}"
