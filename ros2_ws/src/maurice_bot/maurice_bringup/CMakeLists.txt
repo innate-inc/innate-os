@@ -84,4 +84,19 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# --- Build and install usb_3d_camera_driver C++ node ---
+add_executable(usb_3d_camera_driver maurice_bringup/camera2.cpp)
+
+ament_target_dependencies(usb_3d_camera_driver
+    rclcpp                # Core ROS 2 C++ client library
+    sensor_msgs           # For sensor_msgs::msg::Image and CompressedImage
+)
+
+target_link_libraries(usb_3d_camera_driver ${OpenCV_LIBS})
+
+install(TARGETS
+  usb_3d_camera_driver
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
