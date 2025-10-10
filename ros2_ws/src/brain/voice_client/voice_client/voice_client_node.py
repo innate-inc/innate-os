@@ -5,6 +5,7 @@ import os
 import queue
 import threading
 import time
+import traceback
 from typing import Optional
 import subprocess
 
@@ -47,12 +48,25 @@ class MicStreamer:
         b = bytes(indata)
         try:
             self.queue.put_nowait(b)
+            if not hasattr(self, '_logged_first_chunk'):
+                self._logged_first_chunk = True
+                self.logger.info(f"✅ First audio chunk received: {len(b)} bytes")
         except queue.Full:
             pass
 
     def start(self, device: Optional[str] = None, sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS):
         if not HAS_SD:
             raise RuntimeError("sounddevice not available")
+        
+        # Log available devices
+        try:
+            import sounddevice as sd
+            self.logger.info("Available audio devices:")
+            for i, dev in enumerate(sd.query_devices()):
+                self.logger.info(f"  [{i}] {dev['name']} (in:{dev['max_input_channels']}, out:{dev['max_output_channels']})")
+        except Exception as e:
+            self.logger.warn(f"Could not query audio devices: {e}")
+        
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
         frames_per_chunk = int(self.sample_rate * CHUNK_DURATION_SEC)
@@ -69,8 +83,11 @@ class MicStreamer:
                 kwargs['device'] = int(device) if isinstance(device, str) and device.isdigit() else device
             except Exception:
                 kwargs['device'] = device
+        
+        self.logger.info(f"Opening audio stream with kwargs: {kwargs}")
         self._stream = sd.RawInputStream(**kwargs)
         self._stream.start()
+        self.logger.info("Audio stream started, waiting for audio callbacks...")
 
 
 class ArecordStreamer:
@@ -217,7 +234,7 @@ class RealtimeClient:
             },
         }
         self.send_json(session_update)
-        self.logger.info("Realtime session configured")
+        self.logger.info(f"✅ Realtime session configured (VAD threshold: {self.vad_threshold})")
 
     def _on_message(self, ws, message: str):
         # Node handles messages; this default logs events for visibility
@@ -248,6 +265,7 @@ def pump_audio(mic: MicStreamer, client: RealtimeClient, stop_evt: threading.Eve
     if not client.wait_until_connected(timeout=10):
         logger.error("WebSocket didn't open in time")
         return
+    chunk_count = 0
     while not stop_evt.is_set():
         try:
             chunk = mic.queue.get(timeout=0.1)
@@ -279,6 +297,7 @@ def periodic_commit(client: RealtimeClient, stop_evt: threading.Event, logger, i
         try:
             if should_commit_fn is None or bool(should_commit_fn()):
                 client.send_json({"type": "input_audio_buffer.commit"})
+                logger.debug("Committed audio buffer to OpenAI")
         except Exception:
             pass
         time.sleep(interval_sec)
@@ -408,6 +427,9 @@ class VoiceClientNode(Node):
         vad_threshold = float(self.get_parameter('vad_threshold').get_parameter_value().double_value if hasattr(self.get_parameter('vad_threshold').get_parameter_value(), 'double_value') else self.get_parameter('vad_threshold').value)
         self.client = RealtimeClient(wss_url, headers, self.get_logger(), vad_threshold=vad_threshold)
 
+        # Track speech state for smart commits
+        self._speech_active = False
+        
         # Wire message callback to collect transcripts
         def on_message(ws, message: str):
             try:
@@ -416,15 +438,22 @@ class VoiceClientNode(Node):
                 return
             etype = event.get("type")
             # Info-level visibility into realtime events
-            if etype in (
-                "input_audio_buffer.speech_started",
-                "input_audio_buffer.speech_stopped",
-                "conversation.item.input_audio_transcription.delta",
-                "conversation.item.input_audio_transcription.completed",
-                "error",
-            ):
-                # self.get_logger().info(f"Realtime event: {etype} :: {event}")
-                pass
+            if etype == "input_audio_buffer.speech_started":
+                self._speech_active = True
+                self.get_logger().info("🎤 Speech detected - listening...")
+            elif etype == "input_audio_buffer.speech_stopped":
+                self._speech_active = False
+                self.get_logger().info("🔇 Speech stopped - processing...")
+            elif etype == "conversation.item.input_audio_transcription.delta":
+                delta = event.get("delta", "")
+                if delta:
+                    self.get_logger().info(f"📝 Transcription delta: {delta}")
+            elif etype == "error":
+                error_code = event.get("error", {}).get("code", "")
+                # Suppress harmless empty buffer errors during silence
+                if error_code != "input_audio_buffer_commit_empty":
+                    self.get_logger().error(f"❌ OpenAI error: {event}")
+            
             if etype == "conversation.item.input_audio_transcription.completed":
                 transcript = event.get("transcript", "")
                 if transcript and self.active:
@@ -443,17 +472,28 @@ class VoiceClientNode(Node):
 
             backend = self.get_parameter('capture_backend').get_parameter_value().string_value or 'sounddevice'
 
+            self.get_logger().info(f"Initializing microphone: backend={backend}, device={mic_device or 'default'}, rate={sample_rate}, channels={channels}")
+            
             if backend == 'arecord':
+                if not HAS_SD:
+                    self.get_logger().info("sounddevice not available, using arecord (good!)")
                 self.mic = ArecordStreamer(self.get_logger())
                 self.mic.start(device=mic_device if mic_device else 'default', sample_rate=sample_rate, channels=channels)
+                self.get_logger().info(f"🎙️  Started arecord microphone: {mic_device or 'default'} @ {sample_rate}Hz, {channels}ch")
             else:
+                if not HAS_SD:
+                    raise RuntimeError("sounddevice library not installed. Install with: pip install sounddevice")
                 self.mic = MicStreamer(self.get_logger())
                 self.mic.start(device=mic_device if mic_device else None, sample_rate=sample_rate, channels=channels)
+                self.get_logger().info(f"🎙️  Started sounddevice microphone: {mic_device or 'default'} @ {sample_rate}Hz, {channels}ch")
         except Exception as e:
-            self.get_logger().error(f"Failed to start input capture: {e}")
+            self.get_logger().error(f"❌ Failed to start input capture: {e}")
+            self.get_logger().error(f"Traceback:\n{traceback.format_exc()}")
+            self.mic = None
 
         try:
             self.client.start()
+            self.get_logger().info("🌐 Connecting to OpenAI Realtime API...")
         except Exception as e:
             self.get_logger().error(f"Failed to start WS client: {e}")
 
@@ -499,6 +539,11 @@ class VoiceClientNode(Node):
 
         # Background audio pump
         self.stop_evt = threading.Event()
+        
+        if self.mic is None:
+            self.get_logger().error("❌ Cannot start audio streaming - microphone failed to initialize")
+            return
+        
         def audio_loop():
             if not self.client.wait_until_connected(timeout=10):
                 self.get_logger().error("WebSocket didn't open in time")
@@ -541,11 +586,14 @@ class VoiceClientNode(Node):
 
         self.audio_thread = threading.Thread(target=audio_loop, daemon=True)
         self.audio_thread.start()
+        self.get_logger().info("🔊 Audio streaming thread started")
 
         # Periodic commit to trigger server-side VAD to flush segments
+        # Only commit when speech is active to avoid empty buffer errors
         commit_interval = float(self.get_parameter('commit_interval_s').get_parameter_value().double_value if hasattr(self.get_parameter('commit_interval_s').get_parameter_value(), 'double_value') else self.get_parameter('commit_interval_s').value)
-        self.commit_thread = threading.Thread(target=periodic_commit, args=(self.client, self.stop_evt, self.get_logger(), commit_interval, lambda: not is_ducking_active()), daemon=True)
+        self.commit_thread = threading.Thread(target=periodic_commit, args=(self.client, self.stop_evt, self.get_logger(), commit_interval, lambda: not is_ducking_active() and self._speech_active), daemon=True)
         self.commit_thread.start()
+        self.get_logger().info(f"⏰ Commit thread started (interval: {commit_interval}s, only during speech)")
 
         # Stats timer removed to reduce log verbosity
 
@@ -632,3 +680,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
+if __name__ == '__main__':
+    main()
