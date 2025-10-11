@@ -19,9 +19,9 @@ ROS_COMMAND_GROUPS=(
     # Group 3: Brain Client & Navigation Manager
     "sleep 15 && ros2 service call /maurice_arm/goto_js maurice_msgs/srv/GotoJS '{data: {data: [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.91425255]}, time: 5}' && ros2 launch brain_client brain_client.launch.py|sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
     # Group 4: Behavior (single command)
-    "ros2 launch manipulation behavior.launch.py"
+    "ros2 launch manipulation behavior.launch.py|ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py"
     # Group 5: WebRTC Streamer (low-latency video)
-    "ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py"
+    "ros2 launch voice_client voice_client.launch.py"
 )
 
 # Define window names for better organization
@@ -29,8 +29,8 @@ WINDOW_NAMES=(
     "control-bringup"
     "arm-recorder"
     "brain-nav"
-    "behavior"
-    "webrtc"
+    "behavior-webrtc"
+    "voice"
 )
 # ------
 
