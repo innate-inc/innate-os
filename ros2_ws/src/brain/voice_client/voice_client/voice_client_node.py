@@ -181,7 +181,10 @@ class RealtimeClient:
             "type": "session.update",
             "session": {
                 "input_audio_format": "pcm16",
-                "input_audio_transcription": {"model": transcribe_model},
+                "input_audio_transcription": {
+                    "model": transcribe_model,
+                    "language": "en"
+                },
                 "turn_detection": {
                     "type": "server_vad",
                     "threshold": float(self.vad_threshold),
@@ -189,7 +192,7 @@ class RealtimeClient:
                     "silence_duration_ms": 700,
                     "create_response": False,
                 },
-                "instructions": "Transcribe user audio only; do not reply.",
+                "instructions": "Transcribe user audio only in English; do not reply.",
             },
         }
         self.send_json(session_update)
