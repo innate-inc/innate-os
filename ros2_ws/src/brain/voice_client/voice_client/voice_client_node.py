@@ -531,7 +531,12 @@ class VoiceClientNode(Node):
 
     def publish_chat_in(self, text: str):
         out = String()
-        out.data = text
+        message = {
+            "text": text,
+            "sender": "user",
+            "timestamp": int(time.time())
+        }
+        out.data = json.dumps(message)
         self.chat_in_pub.publish(out)
         self.get_logger().info(f"/chat_in: {text}")
 
