@@ -412,23 +412,19 @@ class VoiceClientNode(Node):
         self.transformer = AudioTransformer(self.get_logger(), in_channels=self.mic.channels, in_rate=self.mic.sample_rate, out_channels=target_ch, out_rate=target_sr)
 
         # Ducking state (suppress capture while robot speaks)
-        def is_audio_playing() -> bool:
-            """Check if system is currently playing audio."""
+        self._tts_is_playing = False
+        
+        def on_tts_status(msg: String):
+            """Listen to /tts/is_playing topic."""
             try:
-                # Check ALSA for active playback streams
-                result = subprocess.run(
-                    ['cat', '/proc/asound/card0/pcm0p/sub0/status'],
-                    capture_output=True,
-                    text=True,
-                    timeout=0.1
-                )
-                # If status shows "RUNNING", audio is playing
-                return 'RUNNING' in result.stdout
-            except:
-                return False
+                self._tts_is_playing = msg.data.lower() in ('true', '1', 'playing')
+            except Exception:
+                pass
+        
+        self.tts_status_sub = self.create_subscription(String, '/tts/is_playing', on_tts_status, 10)
         
         def is_ducking_active() -> bool:
-            return is_audio_playing()
+            return self._tts_is_playing
 
         # Background audio pump
         self.stop_evt = threading.Event()

@@ -21,7 +21,7 @@ class TTSHandler:
     Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
     """
 
-    def __init__(self, api_key: str, logger, voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091"):
+    def __init__(self, api_key: str, logger, voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091", tts_status_pub=None):
         """
         Initialize the TTS handler.
         
@@ -29,6 +29,7 @@ class TTSHandler:
             api_key: Cartesia API key
             logger: ROS logger instance
             voice_id: Voice ID to use for speech synthesis
+            tts_status_pub: Optional ROS publisher for /tts/is_playing status
         """
         self.logger = logger
         self.api_key = api_key
@@ -36,6 +37,7 @@ class TTSHandler:
         self.client = None
         self.is_playing = False
         self.play_lock = threading.Lock()
+        self.tts_status_pub = tts_status_pub
         
         # Initialize client if API key is provided
         if self.api_key and self.api_key.strip():
@@ -51,6 +53,17 @@ class TTSHandler:
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
         return self.client is not None
+    
+    def _publish_tts_status(self, status: str):
+        """Publish TTS playback status to /tts/is_playing topic."""
+        if self.tts_status_pub:
+            try:
+                from std_msgs.msg import String
+                msg = String()
+                msg.data = status
+                self.tts_status_pub.publish(msg)
+            except Exception as e:
+                self.logger.debug(f"Failed to publish TTS status: {e}")
 
     def speak_text(self, text: str, voice_config: Optional[Dict[str, Any]] = None) -> bool:
         """
@@ -77,6 +90,9 @@ class TTSHandler:
                 self.logger.debug("🔊 Audio already playing, skipping new speech request")
                 return False
             self.is_playing = True
+            
+        # Notify that TTS is starting
+        self._publish_tts_status("true")
 
         try:
             self.logger.info(f"🗣️ Generating speech for: '{text[:50]}{'...' if len(text) > 50 else ''}'")
@@ -142,6 +158,9 @@ class TTSHandler:
             # Release the lock
             with self.play_lock:
                 self.is_playing = False
+            
+            # Notify that TTS is done
+            self._publish_tts_status("false")
                 
         return success
 
