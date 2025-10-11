@@ -5,7 +5,6 @@ import os
 import queue
 import threading
 import time
-import traceback
 from typing import Optional
 import subprocess
 
@@ -14,18 +13,8 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
-# Optional deps: sounddevice, websocket-client
-try:
-    import sounddevice as sd
-    HAS_SD = True
-except Exception:
-    HAS_SD = False
-
-try:
-    import websocket  # websocket-client
-    HAS_WS = True
-except Exception:
-    HAS_WS = False
+import sounddevice as sd
+import websocket
 
 
 DEFAULT_SAMPLE_RATE = 24_000
@@ -51,9 +40,6 @@ class MicStreamer:
             pass
 
     def start(self, device: Optional[str] = None, sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS):
-        if not HAS_SD:
-            raise RuntimeError("sounddevice not available")
-        
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
         frames_per_chunk = int(self.sample_rate * CHUNK_DURATION_SEC)
@@ -140,7 +126,7 @@ class ArecordStreamer:
 
 
 class RealtimeClient:
-    def __init__(self, url: str, headers: list[str], logger, vad_threshold: float = 0.5, transcription_mode: bool = False):
+    def __init__(self, url: str, headers: list[str], logger, vad_threshold: float = 0.5):
         self.url = url
         self.headers = headers
         self.ws: Optional[websocket.WebSocketApp] = None
@@ -149,11 +135,8 @@ class RealtimeClient:
         self._connected = threading.Event()
         self.logger = logger
         self.vad_threshold = vad_threshold
-        self.transcription_mode = transcription_mode
 
     def start(self):
-        if not HAS_WS:
-            raise RuntimeError("websocket-client not available")
         self.ws = websocket.WebSocketApp(
             self.url,
             header=self.headers,
@@ -193,27 +176,24 @@ class RealtimeClient:
     # --- callbacks ---
     def _on_open(self, ws):
         self._connected.set()
-        if self.transcription_mode:
-            self.logger.info("✅ Connected to OpenAI")
-        else:
-            transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
-            session_update = {
-                "type": "session.update",
-                "session": {
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": {"model": transcribe_model},
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": float(self.vad_threshold),
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 700,
-                        "create_response": False,
-                    },
-                    "instructions": "Transcribe user audio only; do not reply.",
+        transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+        session_update = {
+            "type": "session.update",
+            "session": {
+                "input_audio_format": "pcm16",
+                "input_audio_transcription": {"model": transcribe_model},
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": float(self.vad_threshold),
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 700,
+                    "create_response": False,
                 },
-            }
-            self.send_json(session_update)
-            self.logger.info("✅ Connected to OpenAI")
+                "instructions": "Transcribe user audio only; do not reply.",
+            },
+        }
+        self.send_json(session_update)
+        self.logger.info("✅ Connected to OpenAI")
 
     def _on_message(self, ws, message: str):
         # Default handler - node overrides this
@@ -225,33 +205,6 @@ class RealtimeClient:
     def _on_close(self, ws, status_code, msg):
         self.logger.warn("WebSocket closed")
         self._connected.clear()
-
-
-def pump_audio(mic: MicStreamer, client: RealtimeClient, stop_evt: threading.Event, logger):
-    if not client.wait_until_connected(timeout=10):
-        logger.error("WebSocket didn't open in time")
-        return
-    chunk_count = 0
-    while not stop_evt.is_set():
-        try:
-            chunk = mic.queue.get(timeout=0.1)
-        except queue.Empty:
-            continue
-        # Compute simple RMS for debug visibility
-        try:
-            import numpy as np
-            arr = np.frombuffer(chunk, dtype=np.int16)
-            rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
-            if rms > 0:
-                logger.debug(f"audio_rms={rms:.1f}")
-        except Exception:
-            pass
-
-        payload = {
-            "type": "input_audio_buffer.append",
-            "audio": base64.b64encode(chunk).decode("ascii"),
-        }
-        client.send_json(payload)
 
 
 def periodic_commit(client: RealtimeClient, stop_evt: threading.Event, logger, interval_sec: float = 1.0, should_commit_fn=None):
@@ -392,8 +345,7 @@ class VoiceClientNode(Node):
             "OpenAI-Beta: realtime=v1",
         ]
         vad_threshold = float(self.get_parameter('vad_threshold').get_parameter_value().double_value if hasattr(self.get_parameter('vad_threshold').get_parameter_value(), 'double_value') else self.get_parameter('vad_threshold').value)
-        # Use regular realtime mode (transcription_mode=False) to enable session.update
-        self.client = RealtimeClient(wss_url, headers, self.get_logger(), vad_threshold=vad_threshold, transcription_mode=False)
+        self.client = RealtimeClient(wss_url, headers, self.get_logger(), vad_threshold=vad_threshold)
 
         # Track speech state for smart commits
         self._speech_active = False
@@ -440,8 +392,6 @@ class VoiceClientNode(Node):
                 self.mic.start(device=mic_device if mic_device else 'default', sample_rate=sample_rate, channels=channels)
                 self.get_logger().info(f"🎙️ Microphone started: {mic_device or 'default'}")
             else:
-                if not HAS_SD:
-                    raise RuntimeError("sounddevice library not installed")
                 self.mic = MicStreamer(self.get_logger())
                 self.mic.start(device=mic_device if mic_device else None, sample_rate=sample_rate, channels=channels)
                 self.get_logger().info(f"🎙️ Microphone started")
@@ -505,12 +455,6 @@ class VoiceClientNode(Node):
             if not self.client.wait_until_connected(timeout=10):
                 self.get_logger().error("WebSocket didn't open in time")
                 return
-            self._audio_bytes_sent_total = 0
-            self._audio_chunks_sent_total = 0
-            self._nonzero_rms_chunks = 0
-            self._last_nonzero_rms_time = 0.0
-            self._last_bytes_sent_check = 0
-            self._last_bytes_sent_total = 0
             while not self.stop_evt.is_set():
                 try:
                     chunk = self.mic.queue.get(timeout=0.1)
@@ -520,24 +464,13 @@ class VoiceClientNode(Node):
                     # Skip sending while ducking
                     if is_ducking_active():
                         continue
-                    import numpy as np
                     # Optionally transform to target format (mono 24k)
                     out_bytes = self.transformer.transform(chunk) if self._force_transform else chunk
-                    # Log RMS after transform
-                    arr = np.frombuffer(out_bytes, dtype=np.int16)
-                    if arr.size:
-                        rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
-                        self.get_logger().debug(f"audio_rms_post={rms:.1f}")
-                        if rms > 0.0:
-                            self._nonzero_rms_chunks += 1
-                            self._last_nonzero_rms_time = time.time()
                     payload = {
                         "type": "input_audio_buffer.append",
                         "audio": base64.b64encode(out_bytes).decode("ascii"),
                     }
                     self.client.send_json(payload)
-                    self._audio_bytes_sent_total += len(out_bytes)
-                    self._audio_chunks_sent_total += 1
                 except Exception as e:
                     self.get_logger().error(f"audio loop error: {e}")
 
