@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
 from launch_ros.actions import Node
+import os
+from pathlib import Path
 
 
 def generate_launch_description():
+    # Load environment variables from .env file if it exists
+    env_file_path = Path("/home/jetson1/maurice-prod/.env")
+    if env_file_path.exists():
+        with open(env_file_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key.strip()] = value.strip()
+    
     return LaunchDescription(
         [
             Node(
