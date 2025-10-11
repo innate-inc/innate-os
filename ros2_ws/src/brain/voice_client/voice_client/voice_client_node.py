@@ -332,9 +332,6 @@ class VoiceClientNode(Node):
         # Activation service
         self.set_active_srv = self.create_service(SetBool, '/voice/set_active', self.handle_set_active)
 
-        # Optional: subscribe to chat_out for future ducking (log only)
-        self.chat_out_sub = self.create_subscription(String, '/chat_out', self.chat_out_callback, 10)
-
         # Mic and WS client
         self.mic = None
         api_key = os.getenv('OPENAI_API_KEY', '')
@@ -415,37 +412,23 @@ class VoiceClientNode(Node):
         self.transformer = AudioTransformer(self.get_logger(), in_channels=self.mic.channels, in_rate=self.mic.sample_rate, out_channels=target_ch, out_rate=target_sr)
 
         # Ducking state (suppress capture while robot speaks)
-        self._duck_until_ts = 0.0
-        self._last_robot_text = ""
-
-        def estimate_duck_seconds(text: str) -> float:
-            # Approximate TTS duration: ~12 chars/sec with 0.5s tail
-            secs = max(1.0, min(8.0, (len(text) / 12.0) + 0.5))
-            return secs
-
-        def on_chat_out_duck(msg: String):
+        def is_audio_playing() -> bool:
+            """Check if system is currently playing audio."""
             try:
-                data = json.loads(msg.data)
-            except Exception:
-                return
-            sender = data.get('sender')
-            text = data.get('text', '') or ''
-            if sender == 'robot' and text:
-                self._last_robot_text = text.strip()
-                self._duck_until_ts = time.time() + estimate_duck_seconds(self._last_robot_text)
-                self.get_logger().info(f"Ducking mic for robot TTS ~{self._duck_until_ts - time.time():.1f}s")
-
-        # Replace existing chat_out subscription with ducking-aware handler
-        try:
-            if hasattr(self, 'chat_out_sub') and self.chat_out_sub:
-                # NOTE: ROS2 doesn't allow reassigning callback; create another sub to same topic
-                pass
-        except Exception:
-            pass
-        self.chat_out_sub = self.create_subscription(String, '/chat_out', on_chat_out_duck, 10)
-
+                # Check ALSA for active playback streams
+                result = subprocess.run(
+                    ['cat', '/proc/asound/card0/pcm0p/sub0/status'],
+                    capture_output=True,
+                    text=True,
+                    timeout=0.1
+                )
+                # If status shows "RUNNING", audio is playing
+                return 'RUNNING' in result.stdout
+            except:
+                return False
+        
         def is_ducking_active() -> bool:
-            return time.time() < self._duck_until_ts
+            return is_audio_playing()
 
         # Background audio pump
         self.stop_evt = threading.Event()
@@ -517,17 +500,6 @@ class VoiceClientNode(Node):
         except Exception:
             pass
         return super().destroy_node()
-
-    def chat_out_callback(self, msg: String):
-        # Placeholder: can be used for ducking
-        try:
-            data = json.loads(msg.data)
-            sender = data.get('sender')
-            text = data.get('text', '')
-            if sender == 'robot' and text:
-                self.get_logger().debug('Robot speaking (chat_out), ducking placeholder')
-        except Exception:
-            pass
 
     def publish_chat_in(self, text: str):
         out = String()
