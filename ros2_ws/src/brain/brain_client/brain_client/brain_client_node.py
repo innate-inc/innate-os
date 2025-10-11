@@ -365,6 +365,15 @@ class BrainClientNode(Node):
             SetBool, "/brain/set_brain_active", self.handle_set_brain_active
         )
 
+        # Initialize TTS handler (after tts_status_pub is created)
+        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
+        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
+        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id, self.tts_status_pub)
+        if self.tts_handler.is_available():
+            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
+        else:
+            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
+
         self.exit_event = threading.Event()
         self.ready_for_image = False
 
