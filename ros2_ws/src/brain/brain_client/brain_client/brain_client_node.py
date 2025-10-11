@@ -256,15 +256,6 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
-        # Initialize TTS handler
-        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
-        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
-        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id)
-        if self.tts_handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
-        else:
-            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
-
         # Directive on startup persistence file
         self.directive_file = os.path.expanduser('~/maurice-prod/.directive_on_startup')
 
@@ -340,6 +331,7 @@ class BrainClientNode(Node):
             String, "/chat_in", self.chat_in_callback, 10
         )
         self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
+        self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
@@ -363,6 +355,15 @@ class BrainClientNode(Node):
         self.set_directive_on_startup_srv = self.create_service(
             SetDirectiveOnStartup, "/set_directive_on_startup", self.handle_set_directive_on_startup
         )
+
+        # Initialize TTS handler (after tts_status_pub is created)
+        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
+        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
+        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id, self.tts_status_pub)
+        if self.tts_handler.is_available():
+            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
+        else:
+            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
 
         self.exit_event = threading.Event()
         self.ready_for_image = False
