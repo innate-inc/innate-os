@@ -12,7 +12,7 @@ def generate_launch_description():
                 name='voice_client_node',
                 output='screen',
                 parameters=[
-                    {'mic_device': 'plughw:3,0'},
+                    {'mic_device': 'plughw:1,0'},
                     {'sample_rate': 24000},
                     {'channels': 1},
                     {'capture_backend': 'arecord'},
@@ -21,8 +21,8 @@ def generate_launch_description():
                     {'target_sample_rate': 24000},
                     {'target_channels': 1},
                     {'force_resample_downmix': True},
-                    {'vad_threshold': 0.35},
-                    {'commit_interval_s': 0.5},
+                    {'vad_threshold': 0.5},
+                    {'commit_interval_s': 0.0},  # 0 = disabled, server_vad handles segmentation
                 ],
             )
         ]

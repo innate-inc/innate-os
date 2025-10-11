@@ -31,7 +31,7 @@ except Exception:
 DEFAULT_SAMPLE_RATE = 24_000
 DEFAULT_CHANNELS = 1
 DTYPE = 'int16'
-CHUNK_DURATION_SEC = 0.05
+CHUNK_DURATION_SEC = 0.02  # 20ms frames improve VAD onset and latency
 
 
 class MicStreamer:
@@ -155,17 +155,9 @@ class ArecordStreamer:
         except Exception:
             pass
 
-    def stop(self):
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-            finally:
-                self._stream.close()
-                self._stream = None
-
 
 class RealtimeClient:
-    def __init__(self, url: str, headers: list[str], logger, vad_threshold: float = 0.5):
+    def __init__(self, url: str, headers: list[str], logger, vad_threshold: float = 0.5, transcription_mode: bool = False):
         self.url = url
         self.headers = headers
         self.ws: Optional[websocket.WebSocketApp] = None
@@ -174,6 +166,7 @@ class RealtimeClient:
         self._connected = threading.Event()
         self.logger = logger
         self.vad_threshold = vad_threshold
+        self.transcription_mode = transcription_mode
 
     def start(self):
         if not HAS_WS:
@@ -217,30 +210,37 @@ class RealtimeClient:
     # --- callbacks ---
     def _on_open(self, ws):
         self._connected.set()
-        transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
-        session_update = {
-            "type": "session.update",
-            "session": {
-                "input_audio_format": "pcm16",
-                "input_audio_transcription": {"model": transcribe_model},
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": float(self.vad_threshold),
-                    "prefix_padding_ms": 200,
-                    "silence_duration_ms": 350,
-                    "create_response": False,
+        if self.transcription_mode:
+            # Transcription mode: no session.update needed, configuration is server-side
+            self.logger.info("✅ Transcription session connected (server-configured)")
+        else:
+            # Realtime mode: configure session with turn detection
+            transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+            session_update = {
+                "type": "session.update",
+                "session": {
+                    "input_audio_format": "pcm16",
+                    "input_audio_transcription": {"model": transcribe_model},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": float(self.vad_threshold),    # set via param; defaults to 0.5
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 700,
+                        "create_response": False,
+                    },
+                    "instructions": "Transcribe user audio only; do not reply.",
                 },
-                "instructions": "Transcribe user audio only; do not reply.",
-            },
-        }
-        self.send_json(session_update)
-        self.logger.info(f"✅ Realtime session configured (VAD threshold: {self.vad_threshold})")
+            }
+            self.send_json(session_update)
+            self.logger.info(f"✅ Realtime session configured (VAD threshold: {self.vad_threshold})")
 
     def _on_message(self, ws, message: str):
         # Node handles messages; this default logs events for visibility
         try:
             event = json.loads(message)
             etype = event.get("type")
+            # Log all events to see what transcription API sends
+            self.logger.info(f"📩 Received event: {etype}")
             if etype in (
                 "input_audio_buffer.speech_started",
                 "input_audio_buffer.speech_stopped",
@@ -250,8 +250,8 @@ class RealtimeClient:
             ):
                 # self.logger.info(f"Realtime event: {etype} :: {event}")
                 pass
-        except Exception:
-            self.logger.debug("Received non-JSON message from Realtime API")
+        except Exception as e:
+            self.logger.debug(f"Received non-JSON message: {e}")
 
     def _on_error(self, ws, error):
         self.logger.error(f"[ws error] {error}")
@@ -399,8 +399,8 @@ class VoiceClientNode(Node):
         self.declare_parameter('target_sample_rate', 24000)
         self.declare_parameter('target_channels', 1)
         self.declare_parameter('force_resample_downmix', True)
-        self.declare_parameter('vad_threshold', 0.4)
-        self.declare_parameter('commit_interval_s', 0.75)
+        self.declare_parameter('vad_threshold', 0.5)
+        self.declare_parameter('commit_interval_s', 0.0)  # 0 = disable periodic commits
 
         self.active = True
 
@@ -418,6 +418,7 @@ class VoiceClientNode(Node):
         api_key = os.getenv('OPENAI_API_KEY', '')
         model = self.get_parameter('openai_realtime_model').get_parameter_value().string_value
         base_url = self.get_parameter('openai_realtime_url').get_parameter_value().string_value
+        # Use regular realtime API with model parameter (transcription via session.update)
         wss_url = f"{base_url}?model={model}"
 
         headers = [
@@ -425,7 +426,8 @@ class VoiceClientNode(Node):
             "OpenAI-Beta: realtime=v1",
         ]
         vad_threshold = float(self.get_parameter('vad_threshold').get_parameter_value().double_value if hasattr(self.get_parameter('vad_threshold').get_parameter_value(), 'double_value') else self.get_parameter('vad_threshold').value)
-        self.client = RealtimeClient(wss_url, headers, self.get_logger(), vad_threshold=vad_threshold)
+        # Use regular realtime mode (transcription_mode=False) to enable session.update
+        self.client = RealtimeClient(wss_url, headers, self.get_logger(), vad_threshold=vad_threshold, transcription_mode=False)
 
         # Track speech state for smart commits
         self._speech_active = False
@@ -434,9 +436,12 @@ class VoiceClientNode(Node):
         def on_message(ws, message: str):
             try:
                 event = json.loads(message)
-            except Exception:
+            except Exception as e:
+                self.get_logger().warn(f"Failed to parse message: {e}")
                 return
             etype = event.get("type")
+            # Log ALL events with full data to debug transcription API
+            self.get_logger().info(f"📩 Event: {etype} | Data: {json.dumps(event)[:200]}")
             # Info-level visibility into realtime events
             if etype == "input_audio_buffer.speech_started":
                 self._speech_active = True
@@ -589,11 +594,15 @@ class VoiceClientNode(Node):
         self.get_logger().info("🔊 Audio streaming thread started")
 
         # Periodic commit to trigger server-side VAD to flush segments
-        # Only commit when speech is active to avoid empty buffer errors
+        # Disabled by default; server VAD handles segmentation
         commit_interval = float(self.get_parameter('commit_interval_s').get_parameter_value().double_value if hasattr(self.get_parameter('commit_interval_s').get_parameter_value(), 'double_value') else self.get_parameter('commit_interval_s').value)
-        self.commit_thread = threading.Thread(target=periodic_commit, args=(self.client, self.stop_evt, self.get_logger(), commit_interval, lambda: not is_ducking_active() and self._speech_active), daemon=True)
-        self.commit_thread.start()
-        self.get_logger().info(f"⏰ Commit thread started (interval: {commit_interval}s, only during speech)")
+        if commit_interval > 0:
+            self.commit_thread = threading.Thread(target=periodic_commit, args=(self.client, self.stop_evt, self.get_logger(), commit_interval, lambda: not is_ducking_active() and self._speech_active), daemon=True)
+            self.commit_thread.start()
+            self.get_logger().info(f"⏰ Commit thread started (interval: {commit_interval}s)")
+        else:
+            self.commit_thread = None
+            self.get_logger().info("⏰ Periodic commits disabled (server_vad controls segmentation)")
 
         # Stats timer removed to reduce log verbosity
 
@@ -608,7 +617,7 @@ class VoiceClientNode(Node):
             self.stop_evt.set()
             if hasattr(self, 'audio_thread'):
                 self.audio_thread.join(timeout=1.0)
-            if hasattr(self, 'commit_thread'):
+            if hasattr(self, 'commit_thread') and self.commit_thread is not None:
                 self.commit_thread.join(timeout=1.0)
         except Exception:
             pass
@@ -624,8 +633,6 @@ class VoiceClientNode(Node):
         except Exception:
             pass
         return super().destroy_node()
-
-        self.get_logger().info('voice_client_node started')
 
     def chat_out_callback(self, msg: String):
         # Placeholder: can be used for ducking
@@ -649,23 +656,6 @@ class VoiceClientNode(Node):
         response.success = True
         response.message = 'voice active' if self.active else 'voice inactive'
         return response
-
-    def destroy_node(self):
-        try:
-            self.stop_evt.set()
-            if hasattr(self, 'audio_thread'):
-                self.audio_thread.join(timeout=1.0)
-        except Exception:
-            pass
-        try:
-            self.mic.stop()
-        except Exception:
-            pass
-        try:
-            self.client.stop()
-        except Exception:
-            pass
-        return super().destroy_node()
 
 
 def main(args=None):
