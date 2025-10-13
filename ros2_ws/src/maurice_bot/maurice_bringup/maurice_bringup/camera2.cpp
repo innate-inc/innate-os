@@ -6,6 +6,8 @@
 #include <deque>
 #include <thread>
 #include <atomic>
+#include <filesystem>
+#include <regex>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -19,7 +21,7 @@ class USB3DCameraNode : public rclcpp::Node {
 public:
     USB3DCameraNode() : Node("usb_3d_camera_driver") {
         // Declare parameters
-        this->declare_parameter<std::string>("device_path", "/dev/video4");
+        this->declare_parameter<std::string>("camera_symlink", "usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0");
         this->declare_parameter<int>("width", 1280);
         this->declare_parameter<int>("height", 480);
         this->declare_parameter<double>("fps", 30.0);
@@ -27,18 +29,40 @@ public:
         this->declare_parameter<int>("jpeg_quality", 60);
 
         // Get parameters
-        device_path_ = this->get_parameter("device_path").as_string();
+        camera_symlink_ = this->get_parameter("camera_symlink").as_string();
         capture_width_ = this->get_parameter("width").as_int();
         capture_height_ = this->get_parameter("height").as_int();
         fps_val_ = this->get_parameter("fps").as_double();
         tf_prefix_ = this->get_parameter("tf_prefix").as_string();
         jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
 
+        // Resolve symlink to device path
+        std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink_;
+        if (!std::filesystem::exists(symlink_path)) {
+            RCLCPP_ERROR(this->get_logger(), "Camera symlink not found: %s", symlink_path.c_str());
+            throw std::runtime_error("Camera symlink not found");
+        }
+        
+        // Resolve the symlink to get actual device path
+        std::string resolved_path = std::filesystem::read_symlink(symlink_path).string();
+        
+        // Handle relative paths properly
+        if (resolved_path.find("/dev/") == 0) {
+            // Already absolute path
+            device_path_ = resolved_path;
+        } else {
+            // Relative path, resolve it properly
+            std::filesystem::path symlink_dir = std::filesystem::path(symlink_path).parent_path();
+            std::filesystem::path full_path = std::filesystem::canonical(symlink_dir / resolved_path);
+            device_path_ = full_path.string();
+        }
+
         // Calculate left image dimensions (half width for stereo camera)
         left_width_ = capture_width_ / 2;
         left_height_ = capture_height_;
 
         RCLCPP_INFO(this->get_logger(), "Initializing USB 3D Camera Driver Node with parameters:");
+        RCLCPP_INFO(this->get_logger(), "  Camera Symlink: %s", camera_symlink_.c_str());
         RCLCPP_INFO(this->get_logger(), "  Device Path: %s", device_path_.c_str());
         RCLCPP_INFO(this->get_logger(), "  Capture Resolution: %dx%d", capture_width_, capture_height_);
         RCLCPP_INFO(this->get_logger(), "  Left Image Resolution: %dx%d", left_width_, left_height_);
@@ -100,40 +124,34 @@ private:
     void initialize_camera() {
         RCLCPP_INFO(this->get_logger(), "Opening camera device: %s", device_path_.c_str());
         
-        // Open camera by device path
-        cap_.open(device_path_, cv::CAP_V4L2);
+        // Create GStreamer pipeline string - simplified for OpenCV compatibility
+        std::string gst_pipeline = 
+            "v4l2src device=" + device_path_ + " ! "
+            "image/jpeg,width=" + std::to_string(capture_width_) + 
+            ",height=" + std::to_string(capture_height_) + 
+            ",framerate=" + std::to_string(static_cast<int>(fps_val_)) + "/1 ! "
+            "jpegdec ! videoconvert ! appsink";
+        
+        RCLCPP_INFO(this->get_logger(), "GStreamer pipeline: %s", gst_pipeline.c_str());
+        
+        // Open camera with GStreamer backend
+        cap_.open(gst_pipeline, cv::CAP_GSTREAMER);
         
         if (!cap_.isOpened()) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to open camera device: %s", device_path_.c_str());
-            throw std::runtime_error("Failed to open camera device");
+            RCLCPP_ERROR(this->get_logger(), "Failed to open camera with GStreamer pipeline");
+            RCLCPP_ERROR(this->get_logger(), "Pipeline: %s", gst_pipeline.c_str());
+            throw std::runtime_error("Failed to open camera with GStreamer pipeline");
         }
-
-        // Set camera properties for MJPEG capture
-        cap_.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
-        cap_.set(cv::CAP_PROP_FRAME_WIDTH, capture_width_);
-        cap_.set(cv::CAP_PROP_FRAME_HEIGHT, capture_height_);
-        cap_.set(cv::CAP_PROP_FPS, fps_val_);
-        
-        // Disable buffering for minimum latency
-        cap_.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
         // Verify settings
         int actual_width = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_WIDTH));
         int actual_height = static_cast<int>(cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
         double actual_fps = cap_.get(cv::CAP_PROP_FPS);
-        int actual_fourcc = static_cast<int>(cap_.get(cv::CAP_PROP_FOURCC));
         
-        char fourcc_str[5];
-        fourcc_str[0] = actual_fourcc & 0xFF;
-        fourcc_str[1] = (actual_fourcc >> 8) & 0xFF;
-        fourcc_str[2] = (actual_fourcc >> 16) & 0xFF;
-        fourcc_str[3] = (actual_fourcc >> 24) & 0xFF;
-        fourcc_str[4] = '\0';
-
-        RCLCPP_INFO(this->get_logger(), "Camera opened successfully:");
+        RCLCPP_INFO(this->get_logger(), "Camera opened successfully with GStreamer:");
         RCLCPP_INFO(this->get_logger(), "  Actual Resolution: %dx%d", actual_width, actual_height);
         RCLCPP_INFO(this->get_logger(), "  Actual FPS: %.2f", actual_fps);
-        RCLCPP_INFO(this->get_logger(), "  Actual Format: %s", fourcc_str);
+        RCLCPP_INFO(this->get_logger(), "  Backend: GStreamer with hardware acceleration");
 
         if (actual_width != capture_width_ || actual_height != capture_height_) {
             RCLCPP_WARN(this->get_logger(), 
@@ -315,6 +333,7 @@ private:
     std::atomic<bool> frame_thread_running_{false};
 
     // Camera parameters
+    std::string camera_symlink_;
     std::string device_path_;
     int capture_width_;
     int capture_height_;
