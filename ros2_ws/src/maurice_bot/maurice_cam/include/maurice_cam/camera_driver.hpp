@@ -6,6 +6,12 @@
 #include <thread>
 #include <atomic>
 #include <deque>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <cstring>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -50,6 +56,27 @@ private:
   std::string createGStreamerPipeline();
 
   /**
+   * @brief Initialize V4L2 controls for manual exposure/gain control
+   * @return true if successful, false otherwise
+   */
+  bool initializeV4L2Controls();
+
+  /**
+   * @brief Set a V4L2 control value
+   * @param control_id V4L2 control ID
+   * @param value Value to set
+   * @return true if successful, false otherwise
+   */
+  bool setV4L2Control(int control_id, int value);
+
+  /**
+   * @brief Get a V4L2 control value
+   * @param control_id V4L2 control ID
+   * @return Control value, or -1 if failed
+   */
+  int getV4L2Control(int control_id);
+
+  /**
    * @brief Main frame processing loop
    */
   void frameProcessingLoop();
@@ -88,6 +115,20 @@ private:
   double fps_;
   std::string frame_id_;
   int jpeg_quality_;
+
+  // V4L2 control interface
+  int camera_fd_{-1};
+  
+  // Camera control parameters
+  int exposure_min_, exposure_max_;
+  int gain_min_, gain_max_;
+  int current_exposure_;
+  int current_gain_;
+  bool v4l2_controls_initialized_{false};
+  int exposure_setting_{-1};
+  int gain_setting_{-1};
+  bool disable_auto_exposure_{false};
+  int default_gain_param_{110};
 
   // OpenCV camera capture
   cv::VideoCapture cap_;
