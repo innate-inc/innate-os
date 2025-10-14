@@ -16,6 +16,10 @@ CameraDriver::CameraDriver()
   this->declare_parameter<double>("fps", 30.0);
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
   this->declare_parameter<int>("jpeg_quality", 80);
+  this->declare_parameter<int>("exposure", -1);  // -1 means use current value
+  this->declare_parameter<int>("gain", -1);      // -1 means use current value
+  this->declare_parameter<bool>("disable_auto_exposure", false);
+  this->declare_parameter<int>("default_gain", 110);  // Default gain for auto-exposure mode
 
   // Get parameter values
   std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
@@ -24,6 +28,12 @@ CameraDriver::CameraDriver()
   fps_ = this->get_parameter("fps").as_double();
   frame_id_ = this->get_parameter("frame_id").as_string();
   jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
+  
+  // Get V4L2 control parameters
+  exposure_setting_ = this->get_parameter("exposure").as_int();
+  gain_setting_ = this->get_parameter("gain").as_int();
+  disable_auto_exposure_ = this->get_parameter("disable_auto_exposure").as_bool();
+  default_gain_param_ = this->get_parameter("default_gain").as_int();
 
   // Resolve symlink to device path
   std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink;
@@ -116,6 +126,12 @@ CameraDriver::~CameraDriver()
     cap_.release();
   }
   
+  // Close V4L2 control file descriptor
+  if (camera_fd_ != -1) {
+    close(camera_fd_);
+    camera_fd_ = -1;
+  }
+  
   RCLCPP_INFO(this->get_logger(), "Camera driver shutdown complete");
 }
 
@@ -156,6 +172,41 @@ bool CameraDriver::initializeCamera()
       capture_width_, capture_height_, actual_width, actual_height);
   }
 
+  // Initialize V4L2 controls
+  if (!initializeV4L2Controls()) {
+    RCLCPP_WARN(this->get_logger(), "Failed to initialize V4L2 controls, using default settings");
+  } else {
+    // Apply parameter settings if specified
+    if (disable_auto_exposure_) {
+      if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
+        RCLCPP_INFO(this->get_logger(), "Disabled auto exposure (Manual Mode)");
+      }
+    } else {
+      if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
+        RCLCPP_INFO(this->get_logger(), "Enabled auto exposure (Aperture Priority Mode)");
+        // Reset gain to default when switching to auto-exposure
+        if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
+          current_gain_ = default_gain_param_;
+          RCLCPP_INFO(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
+        }
+      }
+    }
+    
+    if (exposure_setting_ >= 0) {
+      if (setV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE, exposure_setting_)) {
+        current_exposure_ = exposure_setting_;
+        RCLCPP_INFO(this->get_logger(), "Set exposure to %d", exposure_setting_);
+      }
+    }
+    
+    if (gain_setting_ >= 0) {
+      if (setV4L2Control(V4L2_CID_GAIN, gain_setting_)) {
+        current_gain_ = gain_setting_;
+        RCLCPP_INFO(this->get_logger(), "Set gain to %d", gain_setting_);
+      }
+    }
+  }
+
   return true;
 }
 
@@ -170,6 +221,94 @@ std::string CameraDriver::createGStreamerPipeline()
     "jpegdec ! videoconvert ! appsink";
   
   return pipeline;
+}
+
+bool CameraDriver::initializeV4L2Controls()
+{
+  RCLCPP_INFO(this->get_logger(), "Initializing V4L2 controls...");
+  
+  // Open camera device for control access
+  camera_fd_ = open(camera_device_.c_str(), O_RDWR);
+  if (camera_fd_ == -1) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to open camera for V4L2 controls: %s", 
+                 strerror(errno));
+    return false;
+  }
+  
+  // Get exposure control range
+  struct v4l2_queryctrl qctrl;
+  qctrl.id = V4L2_CID_EXPOSURE_ABSOLUTE;
+  if (ioctl(camera_fd_, VIDIOC_QUERYCTRL, &qctrl) == 0) {
+    exposure_min_ = qctrl.minimum;
+    exposure_max_ = qctrl.maximum;
+    RCLCPP_INFO(this->get_logger(), "Exposure range: %d - %d", exposure_min_, exposure_max_);
+  } else {
+    RCLCPP_WARN(this->get_logger(), "Failed to query exposure control");
+    exposure_min_ = 1;
+    exposure_max_ = 10000;
+  }
+  
+  // Get gain control range
+  qctrl.id = V4L2_CID_GAIN;
+  if (ioctl(camera_fd_, VIDIOC_QUERYCTRL, &qctrl) == 0) {
+    gain_min_ = qctrl.minimum;
+    gain_max_ = qctrl.maximum;
+    RCLCPP_INFO(this->get_logger(), "Gain range: %d - %d", gain_min_, gain_max_);
+  } else {
+    RCLCPP_WARN(this->get_logger(), "Failed to query gain control");
+    gain_min_ = 0;
+    gain_max_ = 255;
+  }
+  
+  // Get current values
+  current_exposure_ = getV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE);
+  current_gain_ = getV4L2Control(V4L2_CID_GAIN);
+  
+  RCLCPP_INFO(this->get_logger(), "Current exposure: %d, gain: %d", current_exposure_, current_gain_);
+  
+  v4l2_controls_initialized_ = true;
+  RCLCPP_INFO(this->get_logger(), "V4L2 controls initialized successfully");
+  
+  return true;
+}
+
+bool CameraDriver::setV4L2Control(int control_id, int value)
+{
+  if (camera_fd_ == -1) {
+    RCLCPP_WARN(this->get_logger(), "Camera file descriptor not open");
+    return false;
+  }
+  
+  struct v4l2_control ctrl;
+  ctrl.id = control_id;
+  ctrl.value = value;
+  
+  if (ioctl(camera_fd_, VIDIOC_S_CTRL, &ctrl) == -1) {
+    RCLCPP_WARN(this->get_logger(), "Failed to set control %d to %d: %s", 
+                control_id, value, strerror(errno));
+    return false;
+  }
+  
+  return true;
+}
+
+int CameraDriver::getV4L2Control(int control_id)
+{
+  if (camera_fd_ == -1) {
+    RCLCPP_WARN(this->get_logger(), "Camera file descriptor not open");
+    return -1;
+  }
+  
+  struct v4l2_control ctrl;
+  ctrl.id = control_id;
+  
+  if (ioctl(camera_fd_, VIDIOC_G_CTRL, &ctrl) == -1) {
+    RCLCPP_WARN(this->get_logger(), "Failed to get control %d: %s", 
+                control_id, strerror(errno));
+    return -1;
+  }
+  
+  return ctrl.value;
 }
 
 void CameraDriver::frameProcessingLoop()
