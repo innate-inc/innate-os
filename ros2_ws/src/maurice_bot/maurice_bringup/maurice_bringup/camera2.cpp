@@ -14,6 +14,10 @@
 #include "sensor_msgs/msg/compressed_image.hpp"
 
 #include <opencv2/opencv.hpp>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 using namespace std::chrono_literals;
 
@@ -121,6 +125,54 @@ public:
     }
 
 private:
+    int camera_fd_ = -1;
+    
+    void set_camera_controls_to_defaults() {
+        // Open the device file directly
+        camera_fd_ = open(device_path_.c_str(), O_RDWR);
+        if (camera_fd_ < 0) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open camera device for controls: %s", 
+                        strerror(errno));
+            return;
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Setting camera controls to default values");
+        
+        // User Controls
+        set_v4l2_control_programmatic(V4L2_CID_BRIGHTNESS, 0);
+        set_v4l2_control_programmatic(V4L2_CID_CONTRAST, 0);
+        set_v4l2_control_programmatic(V4L2_CID_SATURATION, 64);
+        set_v4l2_control_programmatic(V4L2_CID_HUE, 0);
+        set_v4l2_control_programmatic(V4L2_CID_AUTO_WHITE_BALANCE, 1);
+        set_v4l2_control_programmatic(V4L2_CID_GAMMA, 100);
+        set_v4l2_control_programmatic(V4L2_CID_GAIN, 110);
+        set_v4l2_control_programmatic(V4L2_CID_POWER_LINE_FREQUENCY, 1);
+        set_v4l2_control_programmatic(V4L2_CID_WHITE_BALANCE_TEMPERATURE, 4600);
+        set_v4l2_control_programmatic(V4L2_CID_SHARPNESS, 0);
+        set_v4l2_control_programmatic(V4L2_CID_BACKLIGHT_COMPENSATION, 80);
+        
+        // Camera Controls
+        set_v4l2_control_programmatic(V4L2_CID_EXPOSURE_AUTO, 3); // Aperture Priority
+        set_v4l2_control_programmatic(V4L2_CID_EXPOSURE_ABSOLUTE, 156);
+        
+        close(camera_fd_);
+        camera_fd_ = -1;
+        RCLCPP_INFO(this->get_logger(), "Camera controls set to default values");
+    }
+    
+    void set_v4l2_control_programmatic(int control_id, int value) {
+        struct v4l2_control ctrl;
+        ctrl.id = control_id;
+        ctrl.value = value;
+        
+        if (ioctl(camera_fd_, VIDIOC_S_CTRL, &ctrl) == 0) {
+            RCLCPP_DEBUG(this->get_logger(), "Set control 0x%x = %d", control_id, value);
+        } else {
+            RCLCPP_WARN(this->get_logger(), "Failed to set control 0x%x = %d: %s", 
+                       control_id, value, strerror(errno));
+        }
+    }
+    
     void initialize_camera() {
         RCLCPP_INFO(this->get_logger(), "Opening camera device: %s", device_path_.c_str());
         
@@ -259,6 +311,9 @@ private:
                 
                 // Extract left half of the stereo image (left camera only)
                 cv::Mat left_frame = frame(cv::Rect(0, 0, left_width_, left_height_)).clone();
+                
+                // Rotate the image 180 degrees
+                cv::rotate(left_frame, left_frame, cv::ROTATE_180);
                 
                 // Create and publish raw image message
                 auto current_time = this->now();
