@@ -225,8 +225,8 @@ class Dynamixel:
             )
         
         # Add small delay for UART stability
-        if "/dev/ttyTHS" in self.config.device_name:
-            time.sleep(0.001)  # .5ms delay for UART
+        # if "/dev/ttyTHS" in self.config.device_name:
+        #     time.sleep(0.001)  # .5ms delay for UART
 
     def set_operating_mode(self, motor_id: int, operating_mode: OperatingMode):
         dxl_comm_result, dxl_error = self.packetHandler.write1ByteTxRx(
