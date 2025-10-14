@@ -49,7 +49,7 @@ class Dynamixel:
 
         baudrate: int = 57600
         protocol_version: float = 2.0
-        device_name: str = "/dev/ttyTHS1"  # UART device for arm
+        device_name: str = "" #/dev/tty.usbserial-1120'
         dynamixel_id: int = 1
 
     def __init__(self, config: Config):
