@@ -46,6 +46,31 @@ def generate_launch_description():
         description='JPEG compression quality (1-100)'
     )
     
+    # V4L2 control parameters
+    exposure_arg = DeclareLaunchArgument(
+        'exposure',
+        default_value='-1',
+        description='Manual exposure time (-1 = use current value, 1-10000)'
+    )
+    
+    gain_arg = DeclareLaunchArgument(
+        'gain',
+        default_value='-1',
+        description='Manual gain value (-1 = use current value, 0-255)'
+    )
+    
+    disable_auto_exposure_arg = DeclareLaunchArgument(
+        'disable_auto_exposure',
+        default_value='false',
+        description='Disable automatic exposure (true/false)'
+    )
+    
+    default_gain_arg = DeclareLaunchArgument(
+        'default_gain',
+        default_value='110',
+        description='Default gain value for auto-exposure mode (0-255)'
+    )
+    
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
@@ -66,6 +91,10 @@ def generate_launch_description():
                 'fps': LaunchConfiguration('fps'),
                 'frame_id': LaunchConfiguration('frame_id'),
                 'jpeg_quality': LaunchConfiguration('jpeg_quality'),
+                'exposure': LaunchConfiguration('exposure'),
+                'gain': LaunchConfiguration('gain'),
+                'disable_auto_exposure': LaunchConfiguration('disable_auto_exposure'),
+                'default_gain': LaunchConfiguration('default_gain'),
                 'use_sim_time': LaunchConfiguration('use_sim_time')
             }
         ],
@@ -81,6 +110,10 @@ def generate_launch_description():
         fps_arg,
         frame_id_arg,
         jpeg_quality_arg,
+        exposure_arg,
+        gain_arg,
+        disable_auto_exposure_arg,
+        default_gain_arg,
         use_sim_time_arg,
         camera_driver_node
     ])
