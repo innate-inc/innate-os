@@ -20,6 +20,14 @@ CameraDriver::CameraDriver()
   this->declare_parameter<int>("gain", -1);      // -1 means use current value
   this->declare_parameter<bool>("disable_auto_exposure", false);
   this->declare_parameter<int>("default_gain", 110);  // Default gain for auto-exposure mode
+  
+  // Auto exposure parameters
+  this->declare_parameter<bool>("enable_auto_exposure", true);
+  this->declare_parameter<double>("target_brightness", 128.0);
+  this->declare_parameter<double>("ae_kp", 0.5);
+  this->declare_parameter<double>("ae_ki", 0.1);
+  this->declare_parameter<double>("ae_kd", 0.05);
+  this->declare_parameter<int>("auto_exposure_update_interval", 5);
 
   // Get parameter values
   std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
@@ -34,6 +42,14 @@ CameraDriver::CameraDriver()
   gain_setting_ = this->get_parameter("gain").as_int();
   disable_auto_exposure_ = this->get_parameter("disable_auto_exposure").as_bool();
   default_gain_param_ = this->get_parameter("default_gain").as_int();
+  
+  // Get auto exposure parameter values
+  enable_auto_exposure_ = this->get_parameter("enable_auto_exposure").as_bool();
+  target_brightness_ = this->get_parameter("target_brightness").as_double();
+  ae_kp_ = this->get_parameter("ae_kp").as_double();
+  ae_ki_ = this->get_parameter("ae_ki").as_double();
+  ae_kd_ = this->get_parameter("ae_kd").as_double();
+  auto_exposure_update_interval_ = this->get_parameter("auto_exposure_update_interval").as_int();
 
   // Resolve symlink to device path
   std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink;
@@ -176,14 +192,29 @@ bool CameraDriver::initializeCamera()
   if (!initializeV4L2Controls()) {
     RCLCPP_WARN(this->get_logger(), "Failed to initialize V4L2 controls, using default settings");
   } else {
+    // Initialize auto exposure controller if enabled
+    if (enable_auto_exposure_ && !disable_auto_exposure_) {
+      auto_exposure_controller_.initialize(exposure_min_, exposure_max_, 
+                                         target_brightness_, ae_kp_, ae_ki_, ae_kd_);
+      RCLCPP_INFO(this->get_logger(), "Auto exposure controller initialized:");
+      RCLCPP_INFO(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
+      RCLCPP_INFO(this->get_logger(), "  PID gains: Kp=%.2f, Ki=%.2f, Kd=%.2f", ae_kp_, ae_ki_, ae_kd_);
+      RCLCPP_INFO(this->get_logger(), "  Update interval: every %d frames", auto_exposure_update_interval_);
+    }
     // Apply parameter settings if specified
-    if (disable_auto_exposure_) {
+    if (disable_auto_exposure_ || enable_auto_exposure_) {
+      // Use manual mode for either manual control or custom auto exposure
       if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
-        RCLCPP_INFO(this->get_logger(), "Disabled auto exposure (Manual Mode)");
+        if (enable_auto_exposure_) {
+          RCLCPP_INFO(this->get_logger(), "Disabled camera auto exposure (Manual Mode for custom AE)");
+        } else {
+          RCLCPP_INFO(this->get_logger(), "Disabled auto exposure (Manual Mode)");
+        }
       }
     } else {
+      // Use camera's built-in auto exposure
       if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
-        RCLCPP_INFO(this->get_logger(), "Enabled auto exposure (Aperture Priority Mode)");
+        RCLCPP_INFO(this->get_logger(), "Enabled camera auto exposure (Aperture Priority Mode)");
         // Reset gain to default when switching to auto-exposure
         if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
           current_gain_ = default_gain_param_;
@@ -370,6 +401,15 @@ void CameraDriver::processAndPublishFrame(const cv::Mat& frame)
   // Extract left half of the stereo image (left camera only)
   cv::Mat left_frame = frame(cv::Rect(0, 0, left_width_, left_height_)).clone();
   
+  // Apply auto exposure control if enabled
+  if (enable_auto_exposure_ && !disable_auto_exposure_ && v4l2_controls_initialized_) {
+    frame_counter_++;
+    if (frame_counter_ >= auto_exposure_update_interval_) {
+      applyAutoExposure(left_frame);
+      frame_counter_ = 0;
+    }
+  }
+  
   // Rotate the left image 180 degrees
   cv::rotate(left_frame, left_frame, cv::ROTATE_180);
   
@@ -427,6 +467,20 @@ void CameraDriver::processAndPublishFrame(const cv::Mat& frame)
   
   // Publish stereo image
   stereo_pub_->publish(stereo_ros_image);
+}
+
+void CameraDriver::applyAutoExposure(const cv::Mat& frame)
+{
+  // Calculate new exposure value using PID controller
+  int new_exposure = auto_exposure_controller_.calculateExposure(frame, current_exposure_);
+  
+  // Only update if there's a meaningful change
+  if (abs(new_exposure - current_exposure_) > 5) {
+    if (setV4L2Control(V4L2_CID_EXPOSURE_ABSOLUTE, new_exposure)) {
+      current_exposure_ = new_exposure;
+      RCLCPP_INFO(this->get_logger(), "Auto exposure: %d -> %d", current_exposure_, new_exposure);
+    }
+  }
 }
 
 void CameraDriver::updateFrameStats()
@@ -487,8 +541,106 @@ void CameraDriver::printFrameStats()
   double timing_error_ms = (mean_interval - expected_interval) * 1000.0;
   
   RCLCPP_INFO(this->get_logger(), 
-    "Frame Stats - FPS: %.1f (target: %.1f) | Jitter: %.1f ms | Error: %.1f ms | Samples: %zu",
-    current_fps, fps_, jitter_ms, timing_error_ms, frame_timestamps_.size());
+    "Frame Stats - FPS: %.1f (target: %.1f) | Jitter: %.1f ms | Error: %.1f ms | Samples: %zu | Exposure: %d | Gain: %d",
+    current_fps, fps_, jitter_ms, timing_error_ms, frame_timestamps_.size(), current_exposure_, current_gain_);
+}
+
+// AutoExposureController Implementation
+AutoExposureController::AutoExposureController()
+: kp_(0.5), ki_(0.1), kd_(0.05), target_brightness_(128.0),
+  last_error_(0.0), integral_(0.0), min_exposure_(1), max_exposure_(10000),
+  center_weight_(0.7), center_region_size_(0.6)
+{
+}
+
+void AutoExposureController::initialize(int min_exposure, int max_exposure, 
+                                       double target_brightness, double kp, double ki, double kd)
+{
+  min_exposure_ = min_exposure;
+  max_exposure_ = max_exposure;
+  target_brightness_ = target_brightness;
+  kp_ = kp;
+  ki_ = ki;
+  kd_ = kd;
+  last_error_ = 0.0;
+  integral_ = 0.0;
+}
+
+int AutoExposureController::calculateExposure(const cv::Mat& frame, int current_exposure)
+{
+  // Calculate center-weighted brightness
+  double brightness = calculateCenterWeightedBrightness(frame);
+  
+  // Calculate error (target - current)
+  double error = target_brightness_ - brightness;
+  
+  // PID calculation
+  double proportional = kp_ * error;
+  integral_ += ki_ * error;
+  double derivative = kd_ * (error - last_error_);
+  
+  // PID output
+  double output = proportional + integral_ + derivative;
+  last_error_ = error;
+  
+  // Convert to exposure adjustment
+  int exposure_adjustment = static_cast<int>(output);
+  
+  // Calculate new exposure value
+  int new_exposure = current_exposure + exposure_adjustment;
+  
+  // Clamp to limits
+  return std::clamp(new_exposure, min_exposure_, max_exposure_);
+}
+
+double AutoExposureController::calculateCenterWeightedBrightness(const cv::Mat& frame)
+{
+  // Convert to grayscale if needed
+  cv::Mat gray;
+  if (frame.channels() == 3) {
+    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+  } else {
+    gray = frame;
+  }
+  
+  // Get image dimensions
+  int h = gray.rows;
+  int w = gray.cols;
+  
+  // Define center region
+  int center_h = static_cast<int>(h * center_region_size_);
+  int center_w = static_cast<int>(w * center_region_size_);
+  int start_h = (h - center_h) / 2;
+  int start_w = (w - center_w) / 2;
+  
+  cv::Rect center_roi(start_w, start_h, center_w, center_h);
+  
+  // Calculate brightness for center region
+  cv::Scalar center_mean = cv::mean(gray(center_roi));
+  
+  // Calculate brightness for entire image
+  cv::Scalar full_mean = cv::mean(gray);
+  
+  // Return weighted average (center gets higher weight)
+  return center_weight_ * center_mean[0] + (1.0 - center_weight_) * full_mean[0];
+}
+
+void AutoExposureController::reset()
+{
+  last_error_ = 0.0;
+  integral_ = 0.0;
+}
+
+void AutoExposureController::setPID(double kp, double ki, double kd)
+{
+  kp_ = kp;
+  ki_ = ki;
+  kd_ = kd;
+}
+
+void AutoExposureController::setTargetBrightness(double target)
+{
+  target_brightness_ = target;
 }
 
 } // namespace maurice_cam
