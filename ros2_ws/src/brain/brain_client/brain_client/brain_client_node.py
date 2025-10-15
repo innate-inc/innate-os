@@ -260,9 +260,6 @@ class BrainClientNode(Node):
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         self.directive_file = os.path.join(maurice_root, '.directive_on_startup')
 
-        # Directive on startup persistence file
-        self.directive_file = os.path.expanduser('~/maurice-prod/.directive_on_startup')
-
         # Initialize TF2 buffer and listener
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
