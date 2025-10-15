@@ -22,8 +22,9 @@ def generate_launch_description():
     behavior_params_file = os.path.join(share_dir, 'config', 'behavior.yaml')
     smoother_params_file = os.path.join(share_dir, 'config', 'velocity_smoother.yaml')
 
-    # Use the map file located at ~/maurice-prod/maps/map.yaml
-    default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
+    # Use the map file - construct path from environment variable or HOME
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'maurice-prod'))
+    default_map_path = os.path.join(maurice_root, 'maps', 'home.yaml')
     
     # Declare launch arguments so that these paths can be overridden if needed
     map_arg = DeclareLaunchArgument(
@@ -107,12 +108,20 @@ def generate_launch_description():
     )
 
     # Create the BT Navigator node
+    # Override BT XML paths with package-relative paths
+    nav_to_pose_bt_xml = os.path.join(share_dir, 'config', 'nav_to_pose.xml')
+    nav_through_poses_bt_xml = os.path.join(share_dir, 'config', 'nav_through_poses.xml')
+    
     bt_navigator_node = Node(
         package='nav2_bt_navigator',
         executable='bt_navigator',
         name='bt_navigator',
         output='screen',
-        parameters=[bt_navigator_params_file]
+        parameters=[
+            bt_navigator_params_file,
+            {'default_nav_to_pose_bt_xml': nav_to_pose_bt_xml},
+            {'default_nav_through_poses_bt_xml': nav_through_poses_bt_xml}
+        ]
     )
     
     # Create the behavior server node

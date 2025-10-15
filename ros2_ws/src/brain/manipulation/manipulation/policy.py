@@ -92,8 +92,11 @@ class InferenceNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Load normalization stats first
-        checkpoint_path ='/home/jetson1/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/PaperCorner_Filtered_20250526_213031/act_policy_epoch_90000.pth'
-        checkpoint_path = os.path.expanduser(checkpoint_path)
+        # Use package-relative path for checkpoint
+        # Get the manipulation package directory (source, not installed)
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'maurice-prod'))
+        manipulation_pkg_dir = os.path.join(maurice_root, 'ros2_ws', 'src', 'brain', 'manipulation')
+        checkpoint_path = os.path.join(manipulation_pkg_dir, 'ckpts', 'PaperCorner_Filtered_20250526_213031', 'act_policy_epoch_90000.pth')
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pt')
         
