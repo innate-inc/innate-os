@@ -24,6 +24,73 @@ namespace maurice_cam
 {
 
 /**
+ * @brief PID-based auto exposure controller with center weighting
+ */
+class AutoExposureController
+{
+public:
+  AutoExposureController();
+  
+  /**
+   * @brief Initialize the controller with exposure limits and PID parameters
+   * @param min_exposure Minimum exposure value
+   * @param max_exposure Maximum exposure value
+   * @param target_brightness Target brightness (0-255)
+   * @param kp Proportional gain
+   * @param ki Integral gain
+   * @param kd Derivative gain
+   */
+  void initialize(int min_exposure, int max_exposure, double target_brightness = 128.0,
+                 double kp = 0.5, double ki = 0.1, double kd = 0.05);
+  
+  /**
+   * @brief Calculate new exposure value based on frame brightness
+   * @param frame Input frame
+   * @param current_exposure Current exposure value
+   * @return New exposure value
+   */
+  int calculateExposure(const cv::Mat& frame, int current_exposure);
+  
+  /**
+   * @brief Reset PID controller state
+   */
+  void reset();
+  
+  /**
+   * @brief Update PID parameters
+   */
+  void setPID(double kp, double ki, double kd);
+  
+  /**
+   * @brief Update target brightness
+   */
+  void setTargetBrightness(double target);
+
+private:
+  /**
+   * @brief Calculate center-weighted brightness of the frame
+   * @param frame Input frame
+   * @return Center-weighted brightness (0-255)
+   */
+  double calculateCenterWeightedBrightness(const cv::Mat& frame);
+  
+  // PID controller parameters
+  double kp_, ki_, kd_;
+  double target_brightness_;
+  
+  // PID controller state
+  double last_error_;
+  double integral_;
+  
+  // Exposure limits
+  int min_exposure_, max_exposure_;
+  
+  // Center weighting parameters
+  double center_weight_;  // Weight for center region (0.0-1.0)
+  double center_region_size_;  // Size of center region (0.0-1.0)
+};
+
+/**
  * @brief GStreamer-based camera driver node for Maurice robot
  * 
  * This node provides a clean interface to capture frames from a USB camera
@@ -97,6 +164,12 @@ private:
    */
   void processAndPublishFrame(const cv::Mat& frame);
 
+  /**
+   * @brief Apply auto exposure control to frame
+   * @param frame Input frame for brightness analysis
+   */
+  void applyAutoExposure(const cv::Mat& frame);
+
   // ROS 2 publishers
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
@@ -129,6 +202,16 @@ private:
   int gain_setting_{-1};
   bool disable_auto_exposure_{false};
   int default_gain_param_{110};
+
+  // Auto exposure control
+  AutoExposureController auto_exposure_controller_;
+  bool enable_auto_exposure_{true};
+  double target_brightness_{128.0};
+  double ae_kp_{0.5};
+  double ae_ki_{0.1};
+  double ae_kd_{0.05};
+  int auto_exposure_update_interval_{5};  // Update every N frames
+  int frame_counter_{0};
 
   // OpenCV camera capture
   cv::VideoCapture cap_;
