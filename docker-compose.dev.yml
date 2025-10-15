@@ -13,29 +13,30 @@ services:
     networks:
       - x11
 
-  maurice:
+  innate:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: maurice-dev
+    container_name: innate-dev
     # Use host networking if you need direct access to hardware, or use your own approach
     depends_on:
       - novnc
     environment:
       - DISPLAY=novnc:0.0
       - ROS_DISCOVERY_SERVER_IP_OVERRIDE=127.0.0.1
+      - INNATE_OS_ROOT=/root/innate-os
     ports:
       - "9090:9090"
 
     volumes:
       # 1) Mount your local code
-      - ./ros2_ws:/root/maurice-prod/ros2_ws:rw
-      - ./dds:/root/maurice-prod/dds:rw
+      - ./ros2_ws:/root/innate-os/ros2_ws:rw
+      - ./dds:/root/innate-os/dds:rw
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
-      - ros2_ws_build:/root/maurice-prod/ros2_ws/build
-      - ros2_ws_install:/root/maurice-prod/ros2_ws/install
-      - ros2_ws_log:/root/maurice-prod/ros2_ws/log
+      - ros2_ws_build:/root/innate-os/ros2_ws/build
+      - ros2_ws_install:/root/innate-os/ros2_ws/install
+      - ros2_ws_log:/root/innate-os/ros2_ws/log
 
     # 2) Or just do a "do-nothing" command so the container doesn't exit
     command: zsh -l

@@ -32,7 +32,7 @@ def generate_launch_description():
     nav_through_poses_bt_xml = os.path.join(share_dir, 'config', 'nav_through_poses.xml')
 
     # Define the default map path using environment variable or HOME
-    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'maurice-prod'))
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
     default_map_path = os.path.join(maurice_root, 'maps', 'home.yaml')
 
     # Declare launch arguments

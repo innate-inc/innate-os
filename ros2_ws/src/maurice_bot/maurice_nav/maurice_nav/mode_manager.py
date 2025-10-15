@@ -62,14 +62,17 @@ class ModeManager(Node):
         # Track current processes
         self.current_process = None
         
+        # Use environment variable if set, otherwise construct from HOME
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        
         # Maps directory
-        self.maps_dir = os.path.expanduser('~/maurice-prod/maps')
+        self.maps_dir = os.path.join(maurice_root, 'maps')
         
         # Mode persistence file
-        self.mode_file = os.path.expanduser('~/maurice-prod/.last_mode')
+        self.mode_file = os.path.join(maurice_root, '.last_mode')
         
         # Map persistence file  
-        self.map_file = os.path.expanduser('~/maurice-prod/.last_map')
+        self.map_file = os.path.join(maurice_root, '.last_map')
         
         # BasicNavigator for map operations
         self.navigator = None

@@ -257,7 +257,8 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
         # Directive on startup persistence file
-        self.directive_file = os.path.expanduser('~/maurice-prod/.directive_on_startup')
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        self.directive_file = os.path.join(maurice_root, '.directive_on_startup')
 
         # Initialize TF2 buffer and listener
         self.tf_buffer = Buffer()

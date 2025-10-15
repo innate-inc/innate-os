@@ -29,8 +29,9 @@ def initialize_primitives(logger, simulator_mode: bool = False) -> Dict[str, Any
     primitive_loader = PrimitiveLoader(logger)
     
     # Define directory to scan for primitives
-    # Using the new unified primitives directory at the root of maurice-prod
-    primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
+    # Using the new unified primitives directory at the root
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    primitives_directory = os.path.join(maurice_root, 'primitives')
     
     # Load all primitives dynamically
     discovered_primitives = primitive_loader.discover_primitives_in_directory(primitives_directory)
@@ -79,8 +80,9 @@ def initialize_directives(logger, primitives_dict: Optional[Dict[str, Any]] = No
     directive_loader = DirectiveLoader(logger)
     
     # Define directory to scan for directives
-    # Using the unified directives directory at the root of maurice-prod
-    directives_directory = os.path.expanduser("~/maurice-prod/directives")
+    # Using the unified directives directory at the root
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    directives_directory = os.path.join(maurice_root, 'directives')
     
     # Load all directives dynamically
     discovered_directive_classes = directive_loader.discover_directives_in_directory(directives_directory)

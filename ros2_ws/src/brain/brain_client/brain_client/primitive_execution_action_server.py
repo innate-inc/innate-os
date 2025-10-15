@@ -79,8 +79,9 @@ class PrimitiveExecutionActionServer(Node):
         self.primitive_loader = PrimitiveLoader(self.get_logger())
         
         # Define directory to scan for primitives
-        # Using the unified primitives directory at the root of maurice-prod
-        primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
+        # Using the unified primitives directory at the root
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        primitives_directory = os.path.join(maurice_root, 'primitives')
         
         if not os.path.exists(primitives_directory):
             self.get_logger().fatal(f"Primitives directory not found: {primitives_directory}")

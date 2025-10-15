@@ -94,7 +94,7 @@ class InferenceNode(Node):
         # Load normalization stats first
         # Use package-relative path for checkpoint
         # Get the manipulation package directory (source, not installed)
-        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'maurice-prod'))
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         manipulation_pkg_dir = os.path.join(maurice_root, 'ros2_ws', 'src', 'brain', 'manipulation')
         checkpoint_path = os.path.join(manipulation_pkg_dir, 'ckpts', 'PaperCorner_Filtered_20250526_213031', 'act_policy_epoch_90000.pth')
         checkpoint_dir = os.path.dirname(checkpoint_path)

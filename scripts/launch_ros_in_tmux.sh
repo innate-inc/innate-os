@@ -6,8 +6,8 @@
 # --- Configuration ---
 SESSION_NAME="ros_nodes"
 # !! IMPORTANT: Set these paths correctly for your system !!
-ROS_WS_PATH="$HOME/maurice-prod/ros2_ws" # Path to your ROS workspace
-DDS_SETUP_SCRIPT="$HOME/maurice-prod/dds/setup_dds.zsh" # Path to the DDS setup script
+ROS_WS_PATH="$INNATE_OS_ROOT/ros2_ws" # Path to your ROS workspace
+DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh" # Path to the DDS setup script
 
 # Define the ROS launch commands to run, grouped into windows (ZSH arrays are 1-based)
 # Each group will be a window with 2 panes (or 1 if odd number)

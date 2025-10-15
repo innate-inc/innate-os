@@ -10,7 +10,7 @@ from pathlib import Path
 def generate_launch_description():
     # Load environment variables from .env file if it exists
     # Use environment variable if set, otherwise construct from HOME
-    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'maurice-prod'))
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
     env_file_path = Path(maurice_root) / ".env"
     if env_file_path.exists():
         with open(env_file_path) as f:

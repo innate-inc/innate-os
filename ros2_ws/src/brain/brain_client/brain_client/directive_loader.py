@@ -84,8 +84,8 @@ class DirectiveLoader:
             
         module = importlib.util.module_from_spec(spec)
         
-        # Add the maurice-prod root directory to sys.path for imports to work
-        maurice_prod_dir = os.path.expanduser("~/maurice-prod")
+        # Add the root directory to sys.path for imports to work
+        maurice_prod_dir = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         if maurice_prod_dir not in sys.path:
             sys.path.insert(0, maurice_prod_dir)
             

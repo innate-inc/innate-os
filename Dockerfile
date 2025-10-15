@@ -66,14 +66,14 @@ RUN chsh -s /usr/bin/zsh root
 #    RobbyRussell is default; here we switch to `agnoster`, or pick another if you like
 RUN sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' /root/.zshrc
 
-# 5. Copy your entire maurice-prod directory (including dds, ros2_ws, etc.)
-COPY ros2_ws /root/maurice-prod/ros2_ws
-COPY dds /root/maurice-prod/dds
-WORKDIR /root/maurice-prod
+# 5. Copy your entire innate-os directory (including dds, ros2_ws, etc.)
+COPY ros2_ws /root/innate-os/ros2_ws
+COPY dds /root/innate-os/dds
+WORKDIR /root/innate-os
 
 # 6. Build your ROS 2 workspace.
 #    We have to source the system setup.zsh for colcon to find ROS packages.
-WORKDIR /root/maurice-prod/ros2_ws
+WORKDIR /root/innate-os/ros2_ws
 RUN source /opt/ros/humble/setup.zsh && colcon build
 
 #
@@ -91,15 +91,18 @@ RUN source /opt/ros/humble/setup.zsh && colcon build
 #    If you prefer, you can copy a local .zshrc instead.
 #
 RUN echo '\
-# ----- Maurice custom environment -----\n\
+# ----- Innate OS custom environment -----\n\
 # Source the ROS 2 setup\n\
 source /opt/ros/humble/setup.zsh\n\
 \n\
 # Source the workspace setup\n\
-source /root/maurice-prod/ros2_ws/install/setup.zsh\n\
+source /root/innate-os/ros2_ws/install/setup.zsh\n\
 \n\
 # Source the DDS setup\n\
-source /root/maurice-prod/dds/setup_dds.zsh\n\
+source /root/innate-os/dds/setup_dds.zsh\n\
+\n\
+# Set INNATE_OS_ROOT environment variable\n\
+export INNATE_OS_ROOT=/root/innate-os\n\
 ' >> /root/.zshrc
 
 # 8. When the container starts with no command, we just run zsh (login shell).
