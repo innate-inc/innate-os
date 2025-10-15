@@ -21,18 +21,18 @@ When the BLE service connects the robot to a new network and detects an IP addre
 **Important:** Replace placeholders like `jetson1`, `/home/jetson1`, `your_package_name`, and `your_launch_file.py` with your actual username, home directory, ROS package, and launch file names throughout these steps.
 
 1.  **Update Scripts:**
-    *   The script `maurice-prod/dds/setup_dds.zsh` has already been modified to dynamically detect the IP address.
-    *   The script `maurice-prod/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py` has been modified to detect IP changes and call the restart helper script.
+    *   The script `innate-os/dds/setup_dds.zsh` has already been modified to dynamically detect the IP address.
+    *   The script `innate-os/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py` has been modified to detect IP changes and call the restart helper script.
 
 2.  **Place Helper Scripts:**
     *   Copy the restart helper script to `/usr/local/bin`:
         ```bash
-        sudo cp maurice-prod/scripts/restart_robot_networking.sh /usr/local/bin/
+        sudo cp innate-os/scripts/restart_robot_networking.sh /usr/local/bin/
         sudo chmod +x /usr/local/bin/restart_robot_networking.sh
         ```
     *   Copy the tmux launcher script to `/usr/local/bin`:
         ```bash
-        sudo cp maurice-prod/scripts/launch_ros_in_tmux.sh /usr/local/bin/
+        sudo cp innate-os/scripts/launch_ros_in_tmux.sh /usr/local/bin/
         sudo chmod +x /usr/local/bin/launch_ros_in_tmux.sh
         ```
     *   **Crucially, edit `/usr/local/bin/launch_ros_in_tmux.sh`** and update the `ROS_LAUNCH_PACKAGE` and `ROS_LAUNCH_FILE` variables to match your actual ROS application launch details.
@@ -49,9 +49,9 @@ When the BLE service connects the robot to a new network and detects an IP addre
 4.  **Install Systemd Unit Files:**
     *   Copy the generated unit files to the systemd system directory:
         ```bash
-        sudo cp maurice-prod/systemd/discovery-server.service /etc/systemd/system/
-        sudo cp maurice-prod/systemd/ros-app.service /etc/systemd/system/
-        sudo cp maurice-prod/systemd/ble-provisioner.service /etc/systemd/system/
+        sudo cp innate-os/systemd/discovery-server.service /etc/systemd/system/
+        sudo cp innate-os/systemd/ros-app.service /etc/systemd/system/
+        sudo cp innate-os/systemd/ble-provisioner.service /etc/systemd/system/
         ```
     *   **Review the copied files in `/etc/systemd/system/`**: Ensure the `User`, `WorkingDirectory`, `ExecStart`, and script paths within the files are correct for your system setup (especially the `User` in `ros-app.service` and `ble-provisioner.service`).
 
