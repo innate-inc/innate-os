@@ -40,7 +40,7 @@ def generate_launch_description():
 
     # Odom TF broadcaster: run your custom odom broadcaster node.
     odom_broadcaster_script = (
-        "/root/maurice-prod/ros2_ws/install/maurice_sim_bringup/lib/"
+        "/root/innate-os/ros2_ws/install/maurice_sim_bringup/lib/"
         "maurice_sim_bringup/odom_tf_broadcaster.py"
     )
     odom_tf_broadcaster = ExecuteProcess(

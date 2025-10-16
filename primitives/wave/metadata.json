@@ -8,6 +8,7 @@
         "model_type": "replay",
         "replay_file": "episode_0.h5",
         "duration": 0.0,
+        "replay_frequency": 50.0,
         "start_pose": [],
         "end_pose": [
             1.57693225,

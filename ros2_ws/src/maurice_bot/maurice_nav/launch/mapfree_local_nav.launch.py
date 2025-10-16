@@ -54,12 +54,20 @@ def generate_launch_description():
         remappings=[('cmd_vel', '/cmd_vel_raw'), ('cmd_vel_smoothed', '/cmd_vel')]
     )
 
+    # Override BT XML paths with package-relative paths
+    nav_to_pose_bt_xml = os.path.join(share_dir, 'config', 'nav_to_pose.xml')
+    nav_through_poses_bt_xml = os.path.join(share_dir, 'config', 'nav_through_poses.xml')
+    
     bt_navigator_node = Node(
         package='nav2_bt_navigator',
         executable='bt_navigator',
         name='bt_navigator',
         output='screen',
-        parameters=[bt_navigator_params_file]
+        parameters=[
+            bt_navigator_params_file,
+            {'default_nav_to_pose_bt_xml': nav_to_pose_bt_xml},
+            {'default_nav_through_poses_bt_xml': nav_through_poses_bt_xml}
+        ]
     )
 
     behavior_server_node = Node(

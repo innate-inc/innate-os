@@ -13,24 +13,14 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
-# Optional deps: sounddevice, websocket-client
-try:
-    import sounddevice as sd
-    HAS_SD = True
-except Exception:
-    HAS_SD = False
-
-try:
-    import websocket  # websocket-client
-    HAS_WS = True
-except Exception:
-    HAS_WS = False
+import sounddevice as sd
+import websocket
 
 
 DEFAULT_SAMPLE_RATE = 24_000
 DEFAULT_CHANNELS = 1
 DTYPE = 'int16'
-CHUNK_DURATION_SEC = 0.05
+CHUNK_DURATION_SEC = 0.02  # 20ms frames improve VAD onset and latency
 
 
 class MicStreamer:
@@ -44,15 +34,12 @@ class MicStreamer:
     def _callback(self, indata, frames, time_info, status):
         if status:
             self.logger.warn(f"[PortAudio] {status}")
-        b = bytes(indata)
         try:
-            self.queue.put_nowait(b)
+            self.queue.put_nowait(bytes(indata))
         except queue.Full:
             pass
 
     def start(self, device: Optional[str] = None, sample_rate: int = DEFAULT_SAMPLE_RATE, channels: int = DEFAULT_CHANNELS):
-        if not HAS_SD:
-            raise RuntimeError("sounddevice not available")
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
         frames_per_chunk = int(self.sample_rate * CHUNK_DURATION_SEC)
@@ -64,11 +51,11 @@ class MicStreamer:
             callback=self._callback,
         )
         if device:
-            # Accept numeric indices or string device names
             try:
                 kwargs['device'] = int(device) if isinstance(device, str) and device.isdigit() else device
             except Exception:
                 kwargs['device'] = device
+        
         self._stream = sd.RawInputStream(**kwargs)
         self._stream.start()
 
@@ -97,7 +84,6 @@ class ArecordStreamer:
             '-q',  # quiet
             '-'
         ]
-        self.logger.info(f"Starting arecord: {' '.join(cmd)}")
         self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         if not self._proc or not self._proc.stdout:
             raise RuntimeError('Failed to start arecord process')
@@ -138,14 +124,6 @@ class ArecordStreamer:
         except Exception:
             pass
 
-    def stop(self):
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-            finally:
-                self._stream.close()
-                self._stream = None
-
 
 class RealtimeClient:
     def __init__(self, url: str, headers: list[str], logger, vad_threshold: float = 0.5):
@@ -159,8 +137,6 @@ class RealtimeClient:
         self.vad_threshold = vad_threshold
 
     def start(self):
-        if not HAS_WS:
-            raise RuntimeError("websocket-client not available")
         self.ws = websocket.WebSocketApp(
             self.url,
             header=self.headers,
@@ -200,41 +176,31 @@ class RealtimeClient:
     # --- callbacks ---
     def _on_open(self, ws):
         self._connected.set()
-        transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
+        transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
         session_update = {
             "type": "session.update",
             "session": {
                 "input_audio_format": "pcm16",
-                "input_audio_transcription": {"model": transcribe_model},
+                "input_audio_transcription": {
+                    "model": transcribe_model,
+                    "language": "en"
+                },
                 "turn_detection": {
                     "type": "server_vad",
                     "threshold": float(self.vad_threshold),
-                    "prefix_padding_ms": 200,
-                    "silence_duration_ms": 350,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 700,
                     "create_response": False,
                 },
-                "instructions": "Transcribe user audio only; do not reply.",
+                "instructions": "Transcribe user audio only in English; do not reply.",
             },
         }
         self.send_json(session_update)
-        self.logger.info("Realtime session configured")
+        self.logger.info("✅ Connected to OpenAI")
 
     def _on_message(self, ws, message: str):
-        # Node handles messages; this default logs events for visibility
-        try:
-            event = json.loads(message)
-            etype = event.get("type")
-            if etype in (
-                "input_audio_buffer.speech_started",
-                "input_audio_buffer.speech_stopped",
-                "conversation.item.input_audio_transcription.delta",
-                "conversation.item.input_audio_transcription.completed",
-                "error",
-            ):
-                # self.logger.info(f"Realtime event: {etype} :: {event}")
-                pass
-        except Exception:
-            self.logger.debug("Received non-JSON message from Realtime API")
+        # Default handler - node overrides this
+        pass
 
     def _on_error(self, ws, error):
         self.logger.error(f"[ws error] {error}")
@@ -242,32 +208,6 @@ class RealtimeClient:
     def _on_close(self, ws, status_code, msg):
         self.logger.warn("WebSocket closed")
         self._connected.clear()
-
-
-def pump_audio(mic: MicStreamer, client: RealtimeClient, stop_evt: threading.Event, logger):
-    if not client.wait_until_connected(timeout=10):
-        logger.error("WebSocket didn't open in time")
-        return
-    while not stop_evt.is_set():
-        try:
-            chunk = mic.queue.get(timeout=0.1)
-        except queue.Empty:
-            continue
-        # Compute simple RMS for debug visibility
-        try:
-            import numpy as np
-            arr = np.frombuffer(chunk, dtype=np.int16)
-            rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
-            if rms > 0:
-                logger.debug(f"audio_rms={rms:.1f}")
-        except Exception:
-            pass
-
-        payload = {
-            "type": "input_audio_buffer.append",
-            "audio": base64.b64encode(chunk).decode("ascii"),
-        }
-        client.send_json(payload)
 
 
 def periodic_commit(client: RealtimeClient, stop_evt: threading.Event, logger, interval_sec: float = 1.0, should_commit_fn=None):
@@ -279,6 +219,7 @@ def periodic_commit(client: RealtimeClient, stop_evt: threading.Event, logger, i
         try:
             if should_commit_fn is None or bool(should_commit_fn()):
                 client.send_json({"type": "input_audio_buffer.commit"})
+                logger.debug("Committed audio buffer to OpenAI")
         except Exception:
             pass
         time.sleep(interval_sec)
@@ -380,8 +321,8 @@ class VoiceClientNode(Node):
         self.declare_parameter('target_sample_rate', 24000)
         self.declare_parameter('target_channels', 1)
         self.declare_parameter('force_resample_downmix', True)
-        self.declare_parameter('vad_threshold', 0.4)
-        self.declare_parameter('commit_interval_s', 0.75)
+        self.declare_parameter('vad_threshold', 0.5)
+        self.declare_parameter('commit_interval_s', 0.0)  # 0 = disable periodic commits
 
         self.active = True
 
@@ -391,14 +332,12 @@ class VoiceClientNode(Node):
         # Activation service
         self.set_active_srv = self.create_service(SetBool, '/voice/set_active', self.handle_set_active)
 
-        # Optional: subscribe to chat_out for future ducking (log only)
-        self.chat_out_sub = self.create_subscription(String, '/chat_out', self.chat_out_callback, 10)
-
         # Mic and WS client
         self.mic = None
         api_key = os.getenv('OPENAI_API_KEY', '')
         model = self.get_parameter('openai_realtime_model').get_parameter_value().string_value
         base_url = self.get_parameter('openai_realtime_url').get_parameter_value().string_value
+        # Use regular realtime API with model parameter (transcription via session.update)
         wss_url = f"{base_url}?model={model}"
 
         headers = [
@@ -408,6 +347,9 @@ class VoiceClientNode(Node):
         vad_threshold = float(self.get_parameter('vad_threshold').get_parameter_value().double_value if hasattr(self.get_parameter('vad_threshold').get_parameter_value(), 'double_value') else self.get_parameter('vad_threshold').value)
         self.client = RealtimeClient(wss_url, headers, self.get_logger(), vad_threshold=vad_threshold)
 
+        # Track speech state for smart commits
+        self._speech_active = False
+        
         # Wire message callback to collect transcripts
         def on_message(ws, message: str):
             try:
@@ -415,21 +357,23 @@ class VoiceClientNode(Node):
             except Exception:
                 return
             etype = event.get("type")
-            # Info-level visibility into realtime events
-            if etype in (
-                "input_audio_buffer.speech_started",
-                "input_audio_buffer.speech_stopped",
-                "conversation.item.input_audio_transcription.delta",
-                "conversation.item.input_audio_transcription.completed",
-                "error",
-            ):
-                # self.get_logger().info(f"Realtime event: {etype} :: {event}")
-                pass
-            if etype == "conversation.item.input_audio_transcription.completed":
+            
+            if etype == "input_audio_buffer.speech_started":
+                self._speech_active = True
+                self.get_logger().info("🎤 Speech detected")
+            elif etype == "input_audio_buffer.speech_stopped":
+                self._speech_active = False
+                self.get_logger().info("🔇 Speech stopped")
+            elif etype == "conversation.item.input_audio_transcription.completed":
                 transcript = event.get("transcript", "")
                 if transcript and self.active:
                     self.publish_chat_in(transcript)
-        self.client._on_message = on_message  # assign handler
+            elif etype == "error":
+                error_code = event.get("error", {}).get("code", "")
+                if error_code != "input_audio_buffer_commit_empty":
+                    self.get_logger().error(f"❌ OpenAI error: {error_code}")
+        
+        self.client._on_message = on_message
 
         # Start mic and WS
         try:
@@ -446,16 +390,19 @@ class VoiceClientNode(Node):
             if backend == 'arecord':
                 self.mic = ArecordStreamer(self.get_logger())
                 self.mic.start(device=mic_device if mic_device else 'default', sample_rate=sample_rate, channels=channels)
+                self.get_logger().info(f"🎙️ Microphone started: {mic_device or 'default'}")
             else:
                 self.mic = MicStreamer(self.get_logger())
                 self.mic.start(device=mic_device if mic_device else None, sample_rate=sample_rate, channels=channels)
+                self.get_logger().info(f"🎙️ Microphone started")
         except Exception as e:
-            self.get_logger().error(f"Failed to start input capture: {e}")
+            self.get_logger().error(f"❌ Failed to start microphone: {e}")
+            self.mic = None
 
         try:
             self.client.start()
         except Exception as e:
-            self.get_logger().error(f"Failed to start WS client: {e}")
+            self.get_logger().error(f"Failed to connect to OpenAI: {e}")
 
         # Prepare audio transformer
         target_sr = int(self.get_parameter('target_sample_rate').get_parameter_value().integer_value)
@@ -465,50 +412,31 @@ class VoiceClientNode(Node):
         self.transformer = AudioTransformer(self.get_logger(), in_channels=self.mic.channels, in_rate=self.mic.sample_rate, out_channels=target_ch, out_rate=target_sr)
 
         # Ducking state (suppress capture while robot speaks)
-        self._duck_until_ts = 0.0
-        self._last_robot_text = ""
-
-        def estimate_duck_seconds(text: str) -> float:
-            # Approximate TTS duration: ~12 chars/sec with 0.5s tail
-            secs = max(1.0, min(8.0, (len(text) / 12.0) + 0.5))
-            return secs
-
-        def on_chat_out_duck(msg: String):
+        self._tts_is_playing = False
+        
+        def on_tts_status(msg: String):
+            """Listen to /tts/is_playing topic."""
             try:
-                data = json.loads(msg.data)
+                self._tts_is_playing = msg.data.lower() in ('true', '1', 'playing')
             except Exception:
-                return
-            sender = data.get('sender')
-            text = data.get('text', '') or ''
-            if sender == 'robot' and text:
-                self._last_robot_text = text.strip()
-                self._duck_until_ts = time.time() + estimate_duck_seconds(self._last_robot_text)
-                self.get_logger().info(f"Ducking mic for robot TTS ~{self._duck_until_ts - time.time():.1f}s")
-
-        # Replace existing chat_out subscription with ducking-aware handler
-        try:
-            if hasattr(self, 'chat_out_sub') and self.chat_out_sub:
-                # NOTE: ROS2 doesn't allow reassigning callback; create another sub to same topic
                 pass
-        except Exception:
-            pass
-        self.chat_out_sub = self.create_subscription(String, '/chat_out', on_chat_out_duck, 10)
-
+        
+        self.tts_status_sub = self.create_subscription(String, '/tts/is_playing', on_tts_status, 10)
+        
         def is_ducking_active() -> bool:
-            return time.time() < self._duck_until_ts
+            return self._tts_is_playing
 
         # Background audio pump
         self.stop_evt = threading.Event()
+        
+        if self.mic is None:
+            self.get_logger().error("❌ Cannot start audio streaming - microphone failed to initialize")
+            return
+        
         def audio_loop():
             if not self.client.wait_until_connected(timeout=10):
                 self.get_logger().error("WebSocket didn't open in time")
                 return
-            self._audio_bytes_sent_total = 0
-            self._audio_chunks_sent_total = 0
-            self._nonzero_rms_chunks = 0
-            self._last_nonzero_rms_time = 0.0
-            self._last_bytes_sent_check = 0
-            self._last_bytes_sent_total = 0
             while not self.stop_evt.is_set():
                 try:
                     chunk = self.mic.queue.get(timeout=0.1)
@@ -518,34 +446,26 @@ class VoiceClientNode(Node):
                     # Skip sending while ducking
                     if is_ducking_active():
                         continue
-                    import numpy as np
                     # Optionally transform to target format (mono 24k)
                     out_bytes = self.transformer.transform(chunk) if self._force_transform else chunk
-                    # Log RMS after transform
-                    arr = np.frombuffer(out_bytes, dtype=np.int16)
-                    if arr.size:
-                        rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
-                        self.get_logger().debug(f"audio_rms_post={rms:.1f}")
-                        if rms > 0.0:
-                            self._nonzero_rms_chunks += 1
-                            self._last_nonzero_rms_time = time.time()
                     payload = {
                         "type": "input_audio_buffer.append",
                         "audio": base64.b64encode(out_bytes).decode("ascii"),
                     }
                     self.client.send_json(payload)
-                    self._audio_bytes_sent_total += len(out_bytes)
-                    self._audio_chunks_sent_total += 1
                 except Exception as e:
                     self.get_logger().error(f"audio loop error: {e}")
 
         self.audio_thread = threading.Thread(target=audio_loop, daemon=True)
         self.audio_thread.start()
 
-        # Periodic commit to trigger server-side VAD to flush segments
+        # Periodic commit (disabled by default - server VAD handles segmentation)
         commit_interval = float(self.get_parameter('commit_interval_s').get_parameter_value().double_value if hasattr(self.get_parameter('commit_interval_s').get_parameter_value(), 'double_value') else self.get_parameter('commit_interval_s').value)
-        self.commit_thread = threading.Thread(target=periodic_commit, args=(self.client, self.stop_evt, self.get_logger(), commit_interval, lambda: not is_ducking_active()), daemon=True)
-        self.commit_thread.start()
+        if commit_interval > 0:
+            self.commit_thread = threading.Thread(target=periodic_commit, args=(self.client, self.stop_evt, self.get_logger(), commit_interval, lambda: not is_ducking_active() and self._speech_active), daemon=True)
+            self.commit_thread.start()
+        else:
+            self.commit_thread = None
 
         # Stats timer removed to reduce log verbosity
 
@@ -560,7 +480,7 @@ class VoiceClientNode(Node):
             self.stop_evt.set()
             if hasattr(self, 'audio_thread'):
                 self.audio_thread.join(timeout=1.0)
-            if hasattr(self, 'commit_thread'):
+            if hasattr(self, 'commit_thread') and self.commit_thread is not None:
                 self.commit_thread.join(timeout=1.0)
         except Exception:
             pass
@@ -577,22 +497,14 @@ class VoiceClientNode(Node):
             pass
         return super().destroy_node()
 
-        self.get_logger().info('voice_client_node started')
-
-    def chat_out_callback(self, msg: String):
-        # Placeholder: can be used for ducking
-        try:
-            data = json.loads(msg.data)
-            sender = data.get('sender')
-            text = data.get('text', '')
-            if sender == 'robot' and text:
-                self.get_logger().debug('Robot speaking (chat_out), ducking placeholder')
-        except Exception:
-            pass
-
     def publish_chat_in(self, text: str):
         out = String()
-        out.data = text
+        message = {
+            "text": text,
+            "sender": "user",
+            "timestamp": int(time.time())
+        }
+        out.data = json.dumps(message)
         self.chat_in_pub.publish(out)
         self.get_logger().info(f"/chat_in: {text}")
 
@@ -601,23 +513,6 @@ class VoiceClientNode(Node):
         response.success = True
         response.message = 'voice active' if self.active else 'voice inactive'
         return response
-
-    def destroy_node(self):
-        try:
-            self.stop_evt.set()
-            if hasattr(self, 'audio_thread'):
-                self.audio_thread.join(timeout=1.0)
-        except Exception:
-            pass
-        try:
-            self.mic.stop()
-        except Exception:
-            pass
-        try:
-            self.client.stop()
-        except Exception:
-            pass
-        return super().destroy_node()
 
 
 def main(args=None):
@@ -632,3 +527,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
+if __name__ == '__main__':
+    main()

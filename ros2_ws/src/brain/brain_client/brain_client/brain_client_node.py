@@ -50,6 +50,7 @@ from brain_messages.srv import GetChatHistory
 from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
 from brain_messages.srv import ResetBrain
+from brain_messages.srv import SetDirectiveOnStartup
 from std_srvs.srv import SetBool
 
 from brain_client.ws_bridge import WSBridge
@@ -255,14 +256,9 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
-        # Initialize TTS handler
-        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
-        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
-        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id)
-        if self.tts_handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
-        else:
-            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
+        # Directive on startup persistence file
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        self.directive_file = os.path.join(maurice_root, '.directive_on_startup')
 
         # Initialize TF2 buffer and listener
         self.tf_buffer = Buffer()
@@ -336,6 +332,7 @@ class BrainClientNode(Node):
             String, "/chat_in", self.chat_in_callback, 10
         )
         self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
+        self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
         )
@@ -354,6 +351,20 @@ class BrainClientNode(Node):
         self.set_brain_active_srv = self.create_service(
             SetBool, "/set_brain_active", self.handle_set_brain_active
         )
+
+        # --- Service for setting directive on startup ---
+        self.set_directive_on_startup_srv = self.create_service(
+            SetDirectiveOnStartup, "/set_directive_on_startup", self.handle_set_directive_on_startup
+        )
+
+        # Initialize TTS handler (after tts_status_pub is created)
+        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
+        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
+        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id, self.tts_status_pub)
+        if self.tts_handler.is_available():
+            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
+        else:
+            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
 
         self.exit_event = threading.Event()
         self.ready_for_image = False
@@ -392,6 +403,23 @@ class BrainClientNode(Node):
             self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
         
         self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
+
+        # Load startup directive from file
+        startup_directive = self.load_startup_directive()
+        if startup_directive and startup_directive in self.directives:
+            self.current_directive = self.directives[startup_directive]
+            self.get_logger().info(f"Applied startup directive: {startup_directive}")
+            # Auto-activate brain if a startup directive is configured
+            if not self.is_brain_active:
+                self.is_brain_active = True
+                self.get_logger().info(
+                    "\033[1;92m[BrainClient] Auto-activating brain because startup directive is configured\033[0m"
+                )
+        elif startup_directive:
+            self.get_logger().warn(
+                f"Startup directive '{startup_directive}' not found in available directives. "
+                f"Available: {list(self.directives.keys())}. Using default."
+            )
 
         self.primitive_running = None
         # Add a variable to store the current goal handle
@@ -1576,6 +1604,7 @@ class BrainClientNode(Node):
     def set_directive_callback(self, msg: String):
         """
         Callback for changing the AI's directive.
+        Note: This only changes the current directive, NOT the startup directive.
         """
         directive_name = msg.data.strip()
         self.get_logger().info(f"Received directive change request: {directive_name}")
@@ -1627,6 +1656,11 @@ class BrainClientNode(Node):
         # Convert the detailed info to JSON string for the directives field
         response.directives = [json.dumps(directive_details)]
         response.current_directive = self.current_directive.name
+        
+        # Get startup directive from file
+        startup_directive = self.load_startup_directive()
+        response.startup_directive = startup_directive if startup_directive else ""
+        
         return response
 
     def _unregister_primitives(self):
@@ -1774,6 +1808,12 @@ class BrainClientNode(Node):
         self.get_logger().info("\033[1;92m[BrainClient] Reactivating brain...\033[0m")
         self.is_brain_active = True
 
+        # NOTE: We do NOT apply directive_on_startup here - that's only for initial startup
+        # On reactivation, we keep whatever directive was active before
+        self.get_logger().info(
+            f"\033[1;92m[BrainClient] Continuing with current directive: {self.current_directive.name}\033[0m"
+        )
+
         # Restart the agent timer (which sends images based on ready_for_image)
         # The pose_image_timer will be started by _handle_ready_for_image or
         # _handle_primitives_and_directive_registered once the server is ready and primitives are registered.
@@ -1828,7 +1868,112 @@ class BrainClientNode(Node):
                 response.message = "Brain deactivated."
         return response
 
+    def handle_set_directive_on_startup(self, request, response):
+        """
+        Service handler for setting the directive on startup.
+        Accepts directive name or empty string to clear.
+        Note: This only affects the NEXT startup, not reactivation.
+        """
+        directive_name = request.directive_name.strip()
+        
+        if not directive_name:  # Empty string means clear the saved directive
+            # Remove the directive file
+            try:
+                if os.path.exists(self.directive_file):
+                    os.remove(self.directive_file)
+                self.get_logger().info(
+                    "\033[1;92m[BrainClient] Startup directive cleared. "
+                    "Will use default from initialize_directives() on next startup.\033[0m"
+                )
+            except Exception as e:
+                self.get_logger().error(f"Error clearing directive file: {e}")
+            
+            # Publish confirmation
+            chat_entry = {
+                "sender": "system",
+                "text": "Startup directive cleared. Default will be used on next startup.",
+                "timestamp": time.time(),
+            }
+            self.chat_history.append(chat_entry)
+            out_msg = String(data=json.dumps(chat_entry))
+            self.chat_out_pub.publish(out_msg)
+            
+            response.success = True
+            response.message = "Startup directive cleared. Will use default on next startup."
+            
+        elif directive_name in self.directives:
+            # Save directive to file
+            self.save_startup_directive(directive_name)
+            
+            # Also immediately switch to it if brain is active
+            self.current_directive = self.directives[directive_name]
+            self.get_logger().info(
+                f"\033[1;92m[BrainClient] Startup directive set to: {directive_name}\033[0m"
+            )
+            
+            # Re-register primitives and directive with the server to update immediately
+            if self.is_brain_active and self.primitives_registered:
+                self.register_primitives_and_directive()
+            
+            # Publish confirmation
+            chat_entry = {
+                "sender": "system",
+                "text": f"Startup directive set to: {directive_name}. Active now and will be used on next startup.",
+                "timestamp": time.time(),
+            }
+            self.chat_history.append(chat_entry)
+            out_msg = String(data=json.dumps(chat_entry))
+            self.chat_out_pub.publish(out_msg)
+            
+            response.success = True
+            response.message = f"Startup directive set to: {directive_name}. Active now and will be used on next startup."
+            
+        else:
+            self.get_logger().error(
+                f"\033[91m[BrainClient] Unknown directive: {directive_name}\033[0m"
+            )
+            available_directives = list(self.directives.keys())
+            error_msg = {
+                "sender": "system",
+                "text": f"Error: Unknown directive '{directive_name}'. Available directives: {available_directives}",
+                "timestamp": time.time(),
+            }
+            self.chat_history.append(error_msg)
+            out_msg = String(data=json.dumps(error_msg))
+            self.chat_out_pub.publish(out_msg)
+            
+            response.success = False
+            response.message = f"Unknown directive '{directive_name}'. Available directives: {available_directives}"
+        
+        return response
 
+
+
+    def load_startup_directive(self):
+        """Load the startup directive from file, returns None if not configured"""
+        try:
+            if os.path.exists(self.directive_file):
+                with open(self.directive_file, 'r') as f:
+                    saved_directive = f.read().strip()
+                    if saved_directive:
+                        self.get_logger().info(f"Loaded startup directive: {saved_directive}")
+                        return saved_directive
+            self.get_logger().info("No startup directive configured, using default from initialize_directives()")
+            return None
+        except Exception as e:
+            self.get_logger().error(f"Error loading startup directive: {e}")
+            return None
+
+    def save_startup_directive(self, directive_name):
+        """Save the directive to load on startup"""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.directive_file), exist_ok=True)
+            with open(self.directive_file, 'w') as f:
+                f.write(directive_name)
+            self.get_logger().debug(f"Saved startup directive: {directive_name}")
+        except Exception as e:
+            self.get_logger().error(f"Error saving startup directive: {e}")
 
     def destroy_node(self):
         self.exit_event.set()

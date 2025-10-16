@@ -1,11 +1,13 @@
 version: "3.8"
 
 services:
-  maurice:
+  innate:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: maurice-prod
+    container_name: innate-prod
+    environment:
+      - INNATE_OS_ROOT=/root/innate-os
 
     # 2) Or just do a "do-nothing" command so the container doesn't exit
     command: zsh -l

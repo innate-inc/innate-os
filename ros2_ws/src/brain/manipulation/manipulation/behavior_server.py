@@ -80,17 +80,21 @@ class BehaviorServer(Node):
         self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Behavior server started.")
         
+        # Use environment variable if set, otherwise construct from HOME
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        
         # Primitives directory for loading checkpoints/data
-        self.primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
+        self.primitives_directory = os.path.join(maurice_root, 'primitives')
         
         # Get data directory from recorder config
+        default_data_dir = os.path.join(maurice_root, 'data')
         try:
-            self.declare_parameter('data_directory', '~/maurice-prod/data')
+            self.declare_parameter('data_directory', default_data_dir)
             self.data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
             self.get_logger().info(f"Data directory: {self.data_directory}")
         except Exception as e:
             self.get_logger().warn(f"Could not load data_directory parameter: {e}")
-            self.data_directory = os.path.expanduser("~/maurice-prod/data")
+            self.data_directory = default_data_dir
         
         # Keep your existing image_size for the behavior server
         self.bridge = CvBridge()
@@ -260,6 +264,8 @@ class BehaviorServer(Node):
             duration = behavior_config['execution'].get('duration', 20.0)
             start_pose = behavior_config['execution'].get('start_pose')
             end_pose = behavior_config['execution'].get('end_pose')
+            start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
+            end_pose_time = behavior_config['execution'].get('end_pose_time', 1)
             
             if not checkpoint_path or not os.path.exists(checkpoint_path):
                 self.get_logger().error(f"Checkpoint not found: {checkpoint_path}")
@@ -283,11 +289,11 @@ class BehaviorServer(Node):
             
             # Move to start pose if specified
             if start_pose:
-                self.get_logger().info(f"Moving to start pose: {start_pose}")
-                if not self.call_arm_goto_service(start_pose, 5):
+                self.get_logger().info(f"Moving to start pose: {start_pose} (time: {start_pose_time}s)")
+                if not self.call_arm_goto_service(start_pose, start_pose_time):
                     self.get_logger().error("Failed to move to start pose")
                     return "FAILURE", "Failed to move arm to start pose"
-                time.sleep(5.0)
+                time.sleep(start_pose_time)
             
             # Execute policy inference
             start_time = time.time()
@@ -306,7 +312,7 @@ class BehaviorServer(Node):
                     self.get_logger().info("Behavior execution canceled")
                     self._stop_robot()
                     if end_pose:
-                        self.call_arm_goto_service(end_pose, 3)
+                        self.call_arm_goto_service(end_pose, end_pose_time)
                     return "CANCELLED", "User requested cancellation"
                 
                 # Check if duration completed (moved earlier to prevent infinite loop)
@@ -349,8 +355,8 @@ class BehaviorServer(Node):
             # Stop robot and move to end pose
             self._stop_robot()
             if end_pose:
-                self.get_logger().info(f"Moving to end pose: {end_pose}")
-                if not self.call_arm_goto_service(end_pose, 5):
+                self.get_logger().info(f"Moving to end pose: {end_pose} (time: {end_pose_time}s)")
+                if not self.call_arm_goto_service(end_pose, end_pose_time):
                     self.get_logger().error("Failed to move to end pose")
                     return "FAILURE", "Failed to move arm to end pose"
             
@@ -411,6 +417,8 @@ class BehaviorServer(Node):
         replay_file = behavior_config['execution'].get('replay_file')
         file_path = os.path.join(primitive_dir, replay_file)
         end_pose = behavior_config['execution'].get('end_pose')
+        start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
+        end_pose_time = behavior_config['execution'].get('end_pose_time', 1)
         
         if not file_path or not os.path.exists(file_path):
             self.get_logger().error(f"Replay file not found: {file_path}")
@@ -438,15 +446,15 @@ class BehaviorServer(Node):
             first_action = actions[0]
             first_arm_position = first_action[0:6].tolist()  # First 6 elements are arm joint positions
             
-            self.get_logger().info(f"Moving to initial arm position: {first_arm_position}")
+            self.get_logger().info(f"Moving to initial arm position: {first_arm_position} (time: {start_pose_time}s)")
             
             # Move to initial arm position
-            if not self.call_arm_goto_service(first_arm_position, 5):
+            if not self.call_arm_goto_service(first_arm_position, start_pose_time):
                 self.get_logger().error("Failed to move to initial arm position")
                 return "FAILURE", "Failed to move to initial arm position"
             
             # Wait for arm movement to complete
-            time.sleep(5.0)
+            time.sleep(start_pose_time)
             
             # Replay parameters
             total_steps = actions.shape[0]
@@ -466,7 +474,7 @@ class BehaviorServer(Node):
                     self.get_logger().info("Replay execution canceled")
                     self._stop_robot()
                     if end_pose:
-                        self.call_arm_goto_service(end_pose, 3)
+                        self.call_arm_goto_service(end_pose, end_pose_time)
                     return "CANCELLED", "User requested cancellation"
                 
                 # Get current action
@@ -497,13 +505,20 @@ class BehaviorServer(Node):
                 if sleep_time > 0:
                     time.sleep(sleep_time)
             
-            # Stop robot after replay
+            # Stop robot after replay and hold last arm position
             self._stop_robot()
+            
+            # Hold the last arm position to prevent drift
+            last_arm_position = actions[-1][0:6].tolist()
+            arm_msg = Float64MultiArray()
+            arm_msg.data = [float(v) for v in last_arm_position]
+            self.arm_state_pub.publish(arm_msg)
+            self.get_logger().info(f"Holding last arm position: {last_arm_position}")
             
             # Move to end pose if specified
             if end_pose:
-                self.get_logger().info(f"Moving to end pose: {end_pose}")
-                if not self.call_arm_goto_service(end_pose, 5):
+                self.get_logger().info(f"Moving to end pose: {end_pose} (time: {end_pose_time}s)")
+                if not self.call_arm_goto_service(end_pose, end_pose_time):
                     self.get_logger().error("Failed to move to end pose")
                     return "FAILURE", "Failed to move to end pose"
             

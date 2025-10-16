@@ -1,9 +1,15 @@
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess
 from datetime import datetime
+import os
 
 def generate_launch_description():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # Use environment variable if set, otherwise construct from HOME
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    recordings_dir = os.path.join(maurice_root, 'recordings')
+    
     return LaunchDescription([
         ExecuteProcess(
             cmd=[
@@ -15,7 +21,7 @@ def generate_launch_description():
                 '/maurice_arm/commands',
                 '/chat_in',
                 '/chat_out',
-                '-o', f'/home/jetson1/maurice-prod/recordings/recorder_{timestamp}'
+                '-o', f'{recordings_dir}/recorder_{timestamp}'
             ],
             output='screen'
         ),

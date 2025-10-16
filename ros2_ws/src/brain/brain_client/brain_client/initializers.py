@@ -7,12 +7,12 @@ to keep the main brain_client_node.py clean and focused.
 """
 
 import os
+import sys
+import importlib.util
 from typing import Dict, Any, Optional, Tuple
 
 from brain_client.primitive_loader import PrimitiveLoader
 from brain_client.directive_loader import DirectiveLoader
-from brain_client.primitives.navigate_to_position import NavigateToPosition
-from brain_client.primitives.navigate_to_position_sim import NavigateToPositionSim
 
 
 def initialize_primitives(logger, simulator_mode: bool = False) -> Dict[str, Any]:
@@ -29,22 +29,26 @@ def initialize_primitives(logger, simulator_mode: bool = False) -> Dict[str, Any
     primitive_loader = PrimitiveLoader(logger)
     
     # Define directory to scan for primitives
-    # Using the new unified primitives directory at the root of maurice-prod
-    primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
+    # Using the new unified primitives directory at the root
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    primitives_directory = os.path.join(maurice_root, 'primitives')
     
     # Load all primitives dynamically
     discovered_primitives = primitive_loader.discover_primitives_in_directory(primitives_directory)
 
-    print(f"Discovered primitives (BRAIN): {list(discovered_primitives.keys())}")
+    logger.info(f"Discovered primitives: {list(discovered_primitives.keys())}")
     
     # Handle special case for navigation primitive based on simulator mode
-    navigation_primitive = (
-        NavigateToPositionSim if simulator_mode else NavigateToPosition
-    )
-    
-    # Override the navigation primitive if it was discovered
-    if "navigate_to_position" in discovered_primitives:
-        discovered_primitives["navigate_to_position"] = navigation_primitive
+    if simulator_mode and "navigate_to_position_sim" in discovered_primitives:
+        # In simulator mode, use the sim version for navigate_to_position
+        logger.info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
+        discovered_primitives["navigate_to_position"] = discovered_primitives["navigate_to_position_sim"]
+        # Remove the _sim variant so it doesn't appear as a separate primitive
+        del discovered_primitives["navigate_to_position_sim"]
+    elif "navigate_to_position_sim" in discovered_primitives:
+        # In real robot mode, remove the sim version entirely
+        logger.info("Real robot mode: using standard NavigateToPosition")
+        del discovered_primitives["navigate_to_position_sim"]
     
     # Create primitive instances
     primitives_dict = {}
@@ -76,8 +80,9 @@ def initialize_directives(logger, primitives_dict: Optional[Dict[str, Any]] = No
     directive_loader = DirectiveLoader(logger)
     
     # Define directory to scan for directives
-    # Using the unified directives directory at the root of maurice-prod
-    directives_directory = os.path.expanduser("~/maurice-prod/directives")
+    # Using the unified directives directory at the root
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    directives_directory = os.path.join(maurice_root, 'directives')
     
     # Load all directives dynamically
     discovered_directive_classes = directive_loader.discover_directives_in_directory(directives_directory)

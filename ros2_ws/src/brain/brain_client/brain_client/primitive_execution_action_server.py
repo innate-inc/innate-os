@@ -31,10 +31,6 @@ from brain_client.primitive_types import (
     RobotStateType,
 )
 
-# Special imports for primitives that need specific handling
-from brain_client.primitives.navigate_to_position import NavigateToPosition
-from brain_client.primitives.navigate_to_position_sim import NavigateToPositionSim
-
 # Import ROS message types for subscriptions
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
 from nav_msgs.msg import Odometry, OccupancyGrid
@@ -83,8 +79,9 @@ class PrimitiveExecutionActionServer(Node):
         self.primitive_loader = PrimitiveLoader(self.get_logger())
         
         # Define directory to scan for primitives
-        # Using the unified primitives directory at the root of maurice-prod
-        primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
+        # Using the unified primitives directory at the root
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        primitives_directory = os.path.join(maurice_root, 'primitives')
         
         if not os.path.exists(primitives_directory):
             self.get_logger().fatal(f"Primitives directory not found: {primitives_directory}")
@@ -96,16 +93,16 @@ class PrimitiveExecutionActionServer(Node):
         self.get_logger().info(f"Discovered primitives: {list(discovered_primitives.keys())} in {primitives_directory}")
         
         # Handle special case for navigation primitive based on simulator mode
-        navigation_primitive = (
-            NavigateToPositionSim if self.simulator_mode else NavigateToPosition
-        )
-        self.get_logger().info(
-            f"Using {'simulator' if self.simulator_mode else 'Nav2'} navigation primitive"
-        )
-        
-        # Override the navigation primitive if it was discovered
-        if "navigate_to_position" in discovered_primitives:
-            discovered_primitives["navigate_to_position"] = navigation_primitive
+        if self.simulator_mode and "navigate_to_position_sim" in discovered_primitives:
+            # In simulator mode, use the sim version for navigate_to_position
+            self.get_logger().info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
+            discovered_primitives["navigate_to_position"] = discovered_primitives["navigate_to_position_sim"]
+            # Remove the _sim variant so it doesn't appear as a separate primitive
+            del discovered_primitives["navigate_to_position_sim"]
+        elif "navigate_to_position_sim" in discovered_primitives:
+            # In real robot mode, remove the sim version entirely
+            self.get_logger().info("Real robot mode: using standard NavigateToPosition")
+            del discovered_primitives["navigate_to_position_sim"]
 
         # Create code primitive instances
         self._code_primitives = {}

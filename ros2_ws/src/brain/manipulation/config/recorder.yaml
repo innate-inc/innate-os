@@ -1,7 +1,7 @@
 # File: brain/manipulation/config/recorder.yaml
 /**:
   ros__parameters:
-    data_directory: "~/maurice-prod/data"       # Directory where data will be saved
+    data_directory: "~/innate-os/data"       # Fallback directory (overridden by INNATE_OS_ROOT env var in code)
     data_frequency: 20                    # Frequency (e.g., Hz) at which data is recorded
     # Action-only recording configuration
     action_only_enabled: true            # Enable high-frequency action-only recording mode

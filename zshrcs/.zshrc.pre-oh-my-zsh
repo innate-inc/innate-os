@@ -33,10 +33,10 @@ zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,cmd'
 
 # ROS2 and DDS setup
 source /opt/ros/humble/setup.zsh
-source "$HOME/maurice-prod/dds/setup_dds.zsh"
+source "$INNATE_OS_ROOT/dds/setup_dds.zsh"
 
 # Automatically source ROS2 workspace if available
-WORKSPACE="$HOME/maurice-prod/ros2_ws"
+WORKSPACE="$INNATE_OS_ROOT/ros2_ws"
 if [ -f "$WORKSPACE/install/setup.zsh" ]; then
     source "$WORKSPACE/install/setup.zsh"
 fi
@@ -55,7 +55,7 @@ alias jetsonx="ssh jetsonx@jetsonx-desktop"
 alias jetson4="ssh jetson1@jetson4-desktop"
 alias marcel-setup='source ~/marcel-brain/scripts/marcel_venv.zsh'
 alias marcel-build='~/marcel-brain/scripts/build_marcel.zsh'
-alias cb='cd ~/maurice-prod/ros2_ws && colcon build && source install/setup.zsh && \
+alias cb='cd ~/innate-os/ros2_ws && colcon build && source install/setup.zsh && \
 if command -v register-python-argcomplete3 >/dev/null 2>&1; then \
 eval "$(register-python-argcomplete3 ros2)"; \
 eval "$(register-python-argcomplete3 colcon)"; \

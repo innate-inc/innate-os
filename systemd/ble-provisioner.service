@@ -10,13 +10,13 @@ Wants=bluetooth.service
 # Group=jetson1 # Removed
 
 # Set working directory if the script relies on relative paths
-# WorkingDirectory=/home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner # Removed for testing
+# WorkingDirectory=/home/jetson1/innate-os/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner # Removed for testing
 
 # Path to the Python executable and the script, run via sudo -u
 # Use the specific Python environment if necessary (e.g., virtualenv)
 # Ensure the command path is absolute if using sudo
 # Preserve common environment variables that might be needed
-ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,PYTHONPATH,LD_LIBRARY_PATH -- /bin/bash -c 'sleep 10; exec /usr/bin/env python3 /home/jetson1/maurice-prod/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py'
+ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,PYTHONPATH,LD_LIBRARY_PATH -- /bin/bash -c 'sleep 10; exec /usr/bin/env python3 /home/jetson1/innate-os/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py'
 
 # --- Simplified ExecStart for debugging USER directive (Commented out) ---
 # ExecStart=/bin/echo "BLE Service Test Execution"

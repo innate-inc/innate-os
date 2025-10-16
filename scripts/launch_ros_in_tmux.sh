@@ -6,8 +6,8 @@
 # --- Configuration ---
 SESSION_NAME="ros_nodes"
 # !! IMPORTANT: Set these paths correctly for your system !!
-ROS_WS_PATH="$HOME/maurice-prod/ros2_ws" # Path to your ROS workspace
-DDS_SETUP_SCRIPT="$HOME/maurice-prod/dds/setup_dds.zsh" # Path to the DDS setup script
+ROS_WS_PATH="$INNATE_OS_ROOT/ros2_ws" # Path to your ROS workspace
+DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh" # Path to the DDS setup script
 
 # Define the ROS launch commands to run, grouped into windows (ZSH arrays are 1-based)
 # Each group will be a window with 2 panes (or 1 if odd number)
@@ -19,7 +19,9 @@ ROS_COMMAND_GROUPS=(
     # Group 3: Brain Client & Navigation Manager
     "sleep 15 && ros2 service call /maurice_arm/goto_js maurice_msgs/srv/GotoJS '{data: {data: [1.57693225, -0.6, 1.4772235, -0.73784476, 0.0, 0.91425255]}, time: 5}' && ros2 launch brain_client brain_client.launch.py|sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
     # Group 4: Behavior (single command)
-    "ros2 launch manipulation behavior.launch.py"
+    "ros2 launch manipulation behavior.launch.py|ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py"
+    # Group 5: WebRTC Streamer (low-latency video)
+    "ros2 launch voice_client voice_client.launch.py"
 )
 
 # Define window names for better organization
@@ -27,7 +29,8 @@ WINDOW_NAMES=(
     "control-bringup"
     "arm-recorder"
     "brain-nav"
-    "behavior"
+    "behavior-webrtc"
+    "voice"
 )
 # ------
 
@@ -157,9 +160,10 @@ echo "  0: ${WINDOW_NAMES[1]} (control & bringup)"
 echo "  1: ${WINDOW_NAMES[2]} (arm & recorder)" 
 echo "  2: ${WINDOW_NAMES[3]} (brain client & navigation)"
 echo "  3: ${WINDOW_NAMES[4]} (behavior)"
+echo "  4: ${WINDOW_NAMES[5]} (webrtc streamer)"
 echo ""
 echo "Attach with: tmux attach -t $SESSION_NAME"
-echo "Navigate between windows: Ctrl+B then 0-3, or Ctrl+B + n/p"
+echo "Navigate between windows: Ctrl+B then 0-4, or Ctrl+B + n/p"
 echo "Navigate between panes in a window: Ctrl+B then arrow keys"
 
 # Keep the script running as long as the tmux session exists

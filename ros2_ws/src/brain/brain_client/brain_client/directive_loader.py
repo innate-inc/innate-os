@@ -14,7 +14,7 @@ import inspect
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
-from brain_client.directives.types import Directive
+from brain_client.directive_types import Directive
 
 
 class DirectiveLoader:
@@ -84,10 +84,10 @@ class DirectiveLoader:
             
         module = importlib.util.module_from_spec(spec)
         
-        # Add the parent directory to sys.path temporarily for imports to work
-        parent_dir = str(file_path.parent.parent.parent)
-        if parent_dir not in sys.path:
-            sys.path.insert(0, parent_dir)
+        # Add the root directory to sys.path for imports to work
+        maurice_prod_dir = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        if maurice_prod_dir not in sys.path:
+            sys.path.insert(0, maurice_prod_dir)
             
         try:
             spec.loader.exec_module(module)
@@ -96,8 +96,8 @@ class DirectiveLoader:
             return directives
         finally:
             # Remove from sys.path if we added it
-            if parent_dir in sys.path:
-                sys.path.remove(parent_dir)
+            if maurice_prod_dir in sys.path:
+                sys.path.remove(maurice_prod_dir)
         
         # Find all classes in the module that inherit from Directive
         for name, obj in inspect.getmembers(module, inspect.isclass):

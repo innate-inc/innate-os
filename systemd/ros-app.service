@@ -12,15 +12,16 @@ After=discovery-server.service network-online.target
 
 # The launch script handles sourcing, tmux management, and running ros2 launch
 # Ensure this script is executable (chmod +x)
-# Preserve common/ROS environment variables
-ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH -- /home/jetson1/maurice-prod/scripts/launch_ros_in_tmux.sh
+# Preserve common/ROS environment variables including INNATE_OS_ROOT
+Environment="INNATE_OS_ROOT=/home/jetson1/innate-os"
+ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /home/jetson1/innate-os/scripts/launch_ros_in_tmux.sh
 
 # Type=simple should work if the script exits after starting tmux detached.
 # If the script waits for tmux, Type=forking might be needed, but usually not.
 Type=simple
 
 # Set working directory to the ROS workspace if needed by launch files (handled in script)
-# WorkingDirectory=/home/jetson1/maurice-prod/ros2_ws # Removed/Commented
+# WorkingDirectory=/home/jetson1/innate-os/ros2_ws # Removed/Commented
 
 # Restart behavior:
 # 'on-failure' restarts if the ExecStart script exits with non-zero status.
