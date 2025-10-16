@@ -20,11 +20,21 @@ When the BLE service connects the robot to a new network and detects an IP addre
 
 **Important:** Replace placeholders like `jetson1`, `/home/jetson1`, `your_package_name`, and `your_launch_file.py` with your actual username, home directory, ROS package, and launch file names throughout these steps.
 
-1.  **Update Scripts:**
+1.  **Configure I2S Audio (if using MAX98357A speaker):**
+    *   Run the Jetson GPIO configuration tool:
+        ```bash
+        sudo /opt/nvidia/jetson-io/jetson-io.py
+        ```
+    *   Navigate to: **Configure Jetson Expansion Header** → Select **"Adafruit UDA1334A"**
+    *   Save and exit. **Reboot required** for changes to take effect.
+    *   This configures the I2S pins (BCLK, LRCLK, DIN) needed for the MAX98357A audio amplifier.
+    *   After reboot, verify with: `aplay -l` (should show additional audio devices)
+
+2.  **Update Scripts:**
     *   The script `innate-os/dds/setup_dds.zsh` has already been modified to dynamically detect the IP address.
     *   The script `innate-os/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py` has been modified to detect IP changes and call the restart helper script.
 
-2.  **Place Helper Scripts:**
+3.  **Place Helper Scripts:**
     *   Copy the restart helper script to `/usr/local/bin`:
         ```bash
         sudo cp innate-os/scripts/restart_robot_networking.sh /usr/local/bin/
@@ -37,7 +47,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
         ```
     *   **Crucially, edit `/usr/local/bin/launch_ros_in_tmux.sh`** and update the `ROS_LAUNCH_PACKAGE` and `ROS_LAUNCH_FILE` variables to match your actual ROS application launch details.
 
-3.  **Configure Sudoers:**
+4.  **Configure Sudoers:**
     *   Allow the user running the BLE service (`jetson1` in the examples) to run the restart script without a password.
     *   **Use `sudo visudo`** to edit the sudoers file. **Never edit it directly.**
     *   Add the following line at the end (replace `jetson1` if your user is different):
@@ -46,7 +56,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
         ```
     *   Save and exit the editor.
 
-4.  **Install Systemd Unit Files:**
+5.  **Install Systemd Unit Files:**
     *   Copy the generated unit files to the systemd system directory:
         ```bash
         sudo cp innate-os/systemd/discovery-server.service /etc/systemd/system/
@@ -55,7 +65,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
         ```
     *   **Review the copied files in `/etc/systemd/system/`**: Ensure the `User`, `WorkingDirectory`, `ExecStart`, and script paths within the files are correct for your system setup (especially the `User` in `ros-app.service` and `ble-provisioner.service`).
 
-5.  **Enable and Start Services:**
+6.  **Enable and Start Services:**
     *   Reload the systemd daemon to recognize the new files:
         ```bash
         sudo systemctl daemon-reload
@@ -116,3 +126,9 @@ When the BLE service connects the robot to a new network and detects an IP addre
 *   **Tmux Session Issues:** Make sure `tmux` is installed. Check logs (`journalctl -u ros-app.service`). Try running `launch_ros_in_tmux.sh` manually as the correct user to debug.
 *   **IP Address Not Updating:** Verify `hostname -I` gives the expected IP in `setup_dds.zsh`. Check `journalctl -u ble-provisioner.service` to see if the IP change is detected and the restart script is called. 
 *   **Unable to read the topics / discovery server seemingly not working:** Make sure you import the .zshrc properly and if you zsh with oh-my-zsh, make sure you import the right .zshrc (pre-omz) like in the `zhrcs` folder. The .zshrc there imports the thing that has the right ros2 workspace stuff. TODO: Make a good .zshrc for everyone seriously. Not this janky stuff.
+*   **No Audio Output (MAX98357A I2S Amp):** If you're using the MAX98357A speaker and can't hear audio:
+    1. Run `sudo /opt/nvidia/jetson-io/jetson-io.py` to configure GPIO pins
+    2. Navigate to: **Configure Jetson Expansion Header** → **Select "Adafruit UDA1334A"**
+    3. Save and reboot
+    4. This configures the I2S pins (BCLK, LRCLK, DIN) that the MAX98357A requires
+    5. Verify audio devices appear: `aplay -l` should show additional output devices after reboot
