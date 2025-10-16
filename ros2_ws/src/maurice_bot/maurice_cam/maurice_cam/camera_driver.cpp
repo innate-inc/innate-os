@@ -24,10 +24,8 @@ CameraDriver::CameraDriver()
   // Auto exposure parameters
   this->declare_parameter<bool>("enable_auto_exposure", true);
   this->declare_parameter<double>("target_brightness", 128.0);
-  this->declare_parameter<double>("ae_kp", 0.5);
-  this->declare_parameter<double>("ae_ki", 0.1);
-  this->declare_parameter<double>("ae_kd", 0.05);
-  this->declare_parameter<int>("auto_exposure_update_interval", 5);
+  this->declare_parameter<double>("ae_kp", 0.8);
+  this->declare_parameter<int>("auto_exposure_update_interval", 3);
 
   // Get parameter values
   std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
@@ -47,8 +45,6 @@ CameraDriver::CameraDriver()
   enable_auto_exposure_ = this->get_parameter("enable_auto_exposure").as_bool();
   target_brightness_ = this->get_parameter("target_brightness").as_double();
   ae_kp_ = this->get_parameter("ae_kp").as_double();
-  ae_ki_ = this->get_parameter("ae_ki").as_double();
-  ae_kd_ = this->get_parameter("ae_kd").as_double();
   auto_exposure_update_interval_ = this->get_parameter("auto_exposure_update_interval").as_int();
 
   // Resolve symlink to device path
@@ -195,11 +191,12 @@ bool CameraDriver::initializeCamera()
     // Initialize auto exposure controller if enabled
     if (enable_auto_exposure_ && !disable_auto_exposure_) {
       auto_exposure_controller_.initialize(exposure_min_, exposure_max_, 
-                                         target_brightness_, ae_kp_, ae_ki_, ae_kd_);
+                                         target_brightness_, ae_kp_);
       RCLCPP_INFO(this->get_logger(), "Auto exposure controller initialized:");
       RCLCPP_INFO(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
-      RCLCPP_INFO(this->get_logger(), "  PID gains: Kp=%.2f, Ki=%.2f, Kd=%.2f", ae_kp_, ae_ki_, ae_kd_);
-      RCLCPP_INFO(this->get_logger(), "  Update interval: every %d frames", auto_exposure_update_interval_);
+      RCLCPP_INFO(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
+      RCLCPP_INFO(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)", 
+                  auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
     }
     // Apply parameter settings if specified
     if (disable_auto_exposure_ || enable_auto_exposure_) {
@@ -547,23 +544,19 @@ void CameraDriver::printFrameStats()
 
 // AutoExposureController Implementation
 AutoExposureController::AutoExposureController()
-: kp_(0.5), ki_(0.1), kd_(0.05), target_brightness_(128.0),
-  last_error_(0.0), integral_(0.0), min_exposure_(1), max_exposure_(10000),
+: kp_(0.8), target_brightness_(128.0),
+  min_exposure_(1), max_exposure_(10000),
   center_weight_(0.7), center_region_size_(0.6)
 {
 }
 
 void AutoExposureController::initialize(int min_exposure, int max_exposure, 
-                                       double target_brightness, double kp, double ki, double kd)
+                                       double target_brightness, double kp)
 {
   min_exposure_ = min_exposure;
   max_exposure_ = max_exposure;
   target_brightness_ = target_brightness;
   kp_ = kp;
-  ki_ = ki;
-  kd_ = kd;
-  last_error_ = 0.0;
-  integral_ = 0.0;
 }
 
 int AutoExposureController::calculateExposure(const cv::Mat& frame, int current_exposure)
@@ -574,17 +567,13 @@ int AutoExposureController::calculateExposure(const cv::Mat& frame, int current_
   // Calculate error (target - current)
   double error = target_brightness_ - brightness;
   
-  // PID calculation
-  double proportional = kp_ * error;
-  integral_ += ki_ * error;
-  double derivative = kd_ * (error - last_error_);
+  // Simple proportional control
+  double output = kp_ * error;
   
-  // PID output
-  double output = proportional + integral_ + derivative;
-  last_error_ = error;
-  
-  // Convert to exposure adjustment
-  int exposure_adjustment = static_cast<int>(output);
+  // Scale output to exposure range (15% of range per brightness unit error)
+  double exposure_range = max_exposure_ - min_exposure_;
+  double normalized_output = output / 128.0; // Scale by target brightness
+  int exposure_adjustment = static_cast<int>(normalized_output * exposure_range * 0.15);
   
   // Calculate new exposure value
   int new_exposure = current_exposure + exposure_adjustment;
@@ -625,17 +614,9 @@ double AutoExposureController::calculateCenterWeightedBrightness(const cv::Mat& 
   return center_weight_ * center_mean[0] + (1.0 - center_weight_) * full_mean[0];
 }
 
-void AutoExposureController::reset()
-{
-  last_error_ = 0.0;
-  integral_ = 0.0;
-}
-
-void AutoExposureController::setPID(double kp, double ki, double kd)
+void AutoExposureController::setPID(double kp)
 {
   kp_ = kp;
-  ki_ = ki;
-  kd_ = kd;
 }
 
 void AutoExposureController::setTargetBrightness(double target)

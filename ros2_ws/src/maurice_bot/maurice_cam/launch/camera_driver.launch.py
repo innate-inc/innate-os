@@ -87,25 +87,13 @@ def generate_launch_description():
     ae_kp_arg = DeclareLaunchArgument(
         'ae_kp',
         default_value='0.8',
-        description='Auto exposure PID proportional gain (higher = faster response, typical robot range: 0.6-1.2)'
-    )
-    
-    ae_ki_arg = DeclareLaunchArgument(
-        'ae_ki',
-        default_value='0.05',
-        description='Auto exposure PID integral gain (lower = more stable, typical robot range: 0.02-0.1)'
-    )
-    
-    ae_kd_arg = DeclareLaunchArgument(
-        'ae_kd',
-        default_value='0.02',
-        description='Auto exposure PID derivative gain (very low = smooth, typical robot range: 0.01-0.05)'
+        description='Auto exposure proportional gain (0.5-1.5, higher = faster response, 0.8 recommended for robots)'
     )
     
     auto_exposure_update_interval_arg = DeclareLaunchArgument(
         'auto_exposure_update_interval',
-        default_value='5',
-        description='Auto exposure update interval (update every N frames)'
+        default_value='3',
+        description='Auto exposure update interval (update every N frames, 3 = 10Hz for 30Hz camera)'
     )
     
     use_sim_time_arg = DeclareLaunchArgument(
@@ -135,8 +123,6 @@ def generate_launch_description():
                 'enable_auto_exposure': LaunchConfiguration('enable_auto_exposure'),
                 'target_brightness': LaunchConfiguration('target_brightness'),
                 'ae_kp': LaunchConfiguration('ae_kp'),
-                'ae_ki': LaunchConfiguration('ae_ki'),
-                'ae_kd': LaunchConfiguration('ae_kd'),
                 'auto_exposure_update_interval': LaunchConfiguration('auto_exposure_update_interval'),
                 'use_sim_time': LaunchConfiguration('use_sim_time')
             }
@@ -160,8 +146,6 @@ def generate_launch_description():
         enable_auto_exposure_arg,
         target_brightness_arg,
         ae_kp_arg,
-        ae_ki_arg,
-        ae_kd_arg,
         auto_exposure_update_interval_arg,
         use_sim_time_arg,
         camera_driver_node
