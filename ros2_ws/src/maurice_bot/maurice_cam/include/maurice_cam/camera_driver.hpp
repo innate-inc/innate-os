@@ -32,16 +32,14 @@ public:
   AutoExposureController();
   
   /**
-   * @brief Initialize the controller with exposure limits and PID parameters
+   * @brief Initialize the controller with exposure limits and proportional gain
    * @param min_exposure Minimum exposure value
    * @param max_exposure Maximum exposure value
    * @param target_brightness Target brightness (0-255)
    * @param kp Proportional gain
-   * @param ki Integral gain
-   * @param kd Derivative gain
    */
   void initialize(int min_exposure, int max_exposure, double target_brightness = 128.0,
-                 double kp = 0.5, double ki = 0.1, double kd = 0.05);
+                 double kp = 0.8);
   
   /**
    * @brief Calculate new exposure value based on frame brightness
@@ -52,14 +50,9 @@ public:
   int calculateExposure(const cv::Mat& frame, int current_exposure);
   
   /**
-   * @brief Reset PID controller state
+   * @brief Update proportional gain
    */
-  void reset();
-  
-  /**
-   * @brief Update PID parameters
-   */
-  void setPID(double kp, double ki, double kd);
+  void setPID(double kp);
   
   /**
    * @brief Update target brightness
@@ -74,13 +67,9 @@ private:
    */
   double calculateCenterWeightedBrightness(const cv::Mat& frame);
   
-  // PID controller parameters
-  double kp_, ki_, kd_;
+  // Proportional controller parameters
+  double kp_;
   double target_brightness_;
-  
-  // PID controller state
-  double last_error_;
-  double integral_;
   
   // Exposure limits
   int min_exposure_, max_exposure_;
@@ -207,10 +196,8 @@ private:
   AutoExposureController auto_exposure_controller_;
   bool enable_auto_exposure_{true};
   double target_brightness_{128.0};
-  double ae_kp_{0.5};
-  double ae_ki_{0.1};
-  double ae_kd_{0.05};
-  int auto_exposure_update_interval_{5};  // Update every N frames
+  double ae_kp_{0.8};
+  int auto_exposure_update_interval_{3};  // Update every N frames (10Hz for 30Hz camera)
   int frame_counter_{0};
 
   // OpenCV camera capture
