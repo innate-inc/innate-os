@@ -26,7 +26,7 @@ def generate_launch_description():
                 name='voice_client_node',
                 output='screen',
                 parameters=[
-                    {'mic_device': 'plughw:1,0'},
+                    {'mic_device': 'auto'},  # Auto-detect best microphone
                     {'sample_rate': 24000},
                     {'channels': 1},
                     {'capture_backend': 'arecord'},

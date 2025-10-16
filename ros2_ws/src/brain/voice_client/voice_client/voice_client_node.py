@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import queue
+import re
 import threading
 import time
 from typing import Optional
@@ -306,6 +307,68 @@ class AudioTransformer:
             return int16_bytes
 
 
+def detect_audio_devices(logger):
+    """Detect and list available audio capture devices, returning the best microphone device."""
+    devices = []
+    try:
+        # Get list of capture devices using arecord -l
+        result = subprocess.run(['arecord', '-l'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            logger.info("📋 Available audio capture devices:")
+            # Parse arecord output
+            # Format: card X: NAME [LONGNAME], device Y: ...
+            pattern = r'card (\d+):.*?\[([^\]]+)\].*?device (\d+):'
+            for match in re.finditer(pattern, result.stdout):
+                card_num = match.group(1)
+                card_name = match.group(2)
+                device_num = match.group(3)
+                device_id = f"plughw:{card_num},{device_num}"
+                devices.append({
+                    'card': card_num,
+                    'device': device_num,
+                    'name': card_name,
+                    'id': device_id
+                })
+                logger.info(f"  - {device_id}: {card_name}")
+    except Exception as e:
+        logger.warn(f"Could not enumerate devices with arecord: {e}")
+    
+    # Try to find a suitable microphone device
+    # Priority: USB mic > other mics > camera > fallback to first device
+    preferred_device = None
+    
+    # Look for USB microphones (usually better quality)
+    for dev in devices:
+        name_lower = dev['name'].lower()
+        if 'mic' in name_lower and 'usb' in name_lower:
+            preferred_device = dev
+            logger.info(f"✅ Auto-selected USB microphone: {dev['id']} ({dev['name']})")
+            break
+    
+    # Fall back to any mic
+    if not preferred_device:
+        for dev in devices:
+            if 'mic' in dev['name'].lower():
+                preferred_device = dev
+                logger.info(f"✅ Auto-selected microphone: {dev['id']} ({dev['name']})")
+                break
+    
+    # Fall back to camera audio
+    if not preferred_device:
+        for dev in devices:
+            if 'camera' in dev['name'].lower() or 'webcam' in dev['name'].lower():
+                preferred_device = dev
+                logger.info(f"⚠️ Using camera microphone: {dev['id']} ({dev['name']})")
+                break
+    
+    # Last resort: use first available device
+    if not preferred_device and devices:
+        preferred_device = devices[0]
+        logger.info(f"⚠️ Using first available device: {preferred_device['id']} ({preferred_device['name']})")
+    
+    return preferred_device['id'] if preferred_device else None
+
+
 class VoiceClientNode(Node):
     def __init__(self):
         super().__init__('voice_client_node')
@@ -387,14 +450,23 @@ class VoiceClientNode(Node):
 
             backend = self.get_parameter('capture_backend').get_parameter_value().string_value or 'sounddevice'
 
+            # Auto-detect device if not specified or if explicitly set to 'auto'
+            if not mic_device or mic_device == 'auto':
+                detected_device = detect_audio_devices(self.get_logger())
+                if detected_device:
+                    mic_device = detected_device
+                else:
+                    self.get_logger().warn("⚠️ No audio devices detected, using 'default'")
+                    mic_device = 'default'
+
             if backend == 'arecord':
                 self.mic = ArecordStreamer(self.get_logger())
-                self.mic.start(device=mic_device if mic_device else 'default', sample_rate=sample_rate, channels=channels)
-                self.get_logger().info(f"🎙️ Microphone started: {mic_device or 'default'}")
+                self.mic.start(device=mic_device, sample_rate=sample_rate, channels=channels)
+                self.get_logger().info(f"🎙️ Microphone started: {mic_device}")
             else:
                 self.mic = MicStreamer(self.get_logger())
-                self.mic.start(device=mic_device if mic_device else None, sample_rate=sample_rate, channels=channels)
-                self.get_logger().info(f"🎙️ Microphone started")
+                self.mic.start(device=mic_device if mic_device != 'default' else None, sample_rate=sample_rate, channels=channels)
+                self.get_logger().info(f"🎙️ Microphone started: {mic_device if mic_device != 'default' else 'system default'}")
         except Exception as e:
             self.get_logger().error(f"❌ Failed to start microphone: {e}")
             self.mic = None
