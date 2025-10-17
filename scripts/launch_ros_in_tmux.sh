@@ -18,10 +18,10 @@ ROS_COMMAND_GROUPS=(
     "ros2 launch maurice_arm arm.launch.py|ros2 launch manipulation recorder.launch.py"
     # Group 3: Brain Client & Navigation Manager
     "ros2 launch brain_client brain_client.launch.py|sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
-    # Group 4: Behavior (single command) & WebRTC streamer
-    "ros2 launch manipulation behavior.launch.py|ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py"
-    # Group 5: Input manager for the brain
-    "ros2 launch brain_client input_manager.launch.py"
+    # Group 4: Behavior (single command) &  Input manager for the brain
+    "ros2 launch manipulation behavior.launch.py|ros2 launch brain_client input_manager.launch.py"
+    # Group 5: WebRTC streamer
+    "ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py"
 )
 
 # Define window names for better organization
@@ -29,8 +29,8 @@ WINDOW_NAMES=(
     "control-bringup"
     "arm-recorder"
     "brain-nav"
-    "behavior-webrtc"
-    "voice"
+    "behaviors-inputs"
+    "stream"
 )
 # ------
 
@@ -43,9 +43,15 @@ ROS_SOURCE_CMD="source $ROS_WS_PATH/install/setup.zsh"
 
 echo "Attempting to launch ROS commands in tmux session '$SESSION_NAME'..."
 
+# Record startup time
+START_TIME=$(date +%s.%N 2>/dev/null || date +%s)
+echo "=== STARTUP TIMING: Script started at $(date '+%Y-%m-%d %H:%M:%S') ==="
+
 # Add a 10-second delay before starting
 echo "Sleeping for 10 seconds before starting..."
 sleep 10
+AFTER_SLEEP_TIME=$(date +%s.%N 2>/dev/null || date +%s)
+echo "  ⏱ Time after sleep: $(echo "$AFTER_SLEEP_TIME - $START_TIME" | bc 2>/dev/null || echo "$((AFTER_SLEEP_TIME - START_TIME))") seconds"
 
 # Source environment *before* tmux as well (might help tmux itself)
 echo "Sourcing DDS setup (pre-tmux): $DDS_SETUP_SCRIPT"
@@ -61,6 +67,8 @@ else
     echo "ERROR: ROS workspace setup file not found at $ROS_WS_PATH/install/setup.zsh" >&2
     exit 1
 fi
+AFTER_SOURCING_TIME=$(date +%s.%N 2>/dev/null || date +%s)
+echo "  ⏱ Time after sourcing: $(echo "$AFTER_SOURCING_TIME - $START_TIME" | bc 2>/dev/null || echo "$((AFTER_SOURCING_TIME - START_TIME))") seconds"
 
 # Check if there are any command groups defined
 if [ ${#ROS_COMMAND_GROUPS[@]} -eq 0 ]; then
@@ -74,6 +82,8 @@ if tmux has-session -t $SESSION_NAME 2>/dev/null; then
     tmux kill-session -t $SESSION_NAME
     sleep 1 # Give it a moment to die gracefully
 fi
+BEFORE_TMUX_TIME=$(date +%s.%N 2>/dev/null || date +%s)
+echo "  ⏱ Time before creating tmux: $(echo "$BEFORE_TMUX_TIME - $START_TIME" | bc 2>/dev/null || echo "$((BEFORE_TMUX_TIME - START_TIME))") seconds"
 
 # Function to process a command group and create window with panes
 process_command_group() {
@@ -153,6 +163,32 @@ done
 
 # Select the first window by default
 tmux select-window -t $SESSION_NAME:"${WINDOW_NAMES[1]}"
+
+# Calculate and display startup time
+END_TIME=$(date +%s.%N 2>/dev/null || date +%s)
+ELAPSED_TIME=$(echo "$END_TIME - $START_TIME" | bc 2>/dev/null || echo "$((END_TIME - START_TIME))")
+
+# Calculate phase durations
+SLEEP_DURATION=$(echo "$AFTER_SLEEP_TIME - $START_TIME" | bc 2>/dev/null || echo "$((AFTER_SLEEP_TIME - START_TIME))")
+SOURCING_DURATION=$(echo "$AFTER_SOURCING_TIME - $AFTER_SLEEP_TIME" | bc 2>/dev/null || echo "$((AFTER_SOURCING_TIME - AFTER_SLEEP_TIME))")
+TMUX_SETUP_DURATION=$(echo "$BEFORE_TMUX_TIME - $AFTER_SOURCING_TIME" | bc 2>/dev/null || echo "$((BEFORE_TMUX_TIME - AFTER_SOURCING_TIME))")
+TMUX_CREATION_DURATION=$(echo "$END_TIME - $BEFORE_TMUX_TIME" | bc 2>/dev/null || echo "$((END_TIME - BEFORE_TMUX_TIME))")
+
+echo ""
+echo "╔════════════════════════════════════════════════════════════════╗"
+echo "║           STARTUP TIMING SUMMARY                               ║"
+echo "╠════════════════════════════════════════════════════════════════╣"
+echo "║ Completed at: $(date '+%Y-%m-%d %H:%M:%S')                      "
+echo "╠════════════════════════════════════════════════════════════════╣"
+echo "║ Phase Breakdown:                                               ║"
+echo "║   1. Initial sleep delay:      ${SLEEP_DURATION} seconds"
+echo "║   2. Environment sourcing:     ${SOURCING_DURATION} seconds"
+echo "║   3. Pre-tmux setup:           ${TMUX_SETUP_DURATION} seconds"
+echo "║   4. Tmux windows creation:    ${TMUX_CREATION_DURATION} seconds"
+echo "╠════════════════════════════════════════════════════════════════╣"
+echo "║ TOTAL STARTUP TIME:            ${ELAPSED_TIME} seconds"
+echo "╚════════════════════════════════════════════════════════════════╝"
+echo ""
 
 echo "Successfully launched ROS commands in detached tmux session '$SESSION_NAME'."
 echo "Windows created:"
