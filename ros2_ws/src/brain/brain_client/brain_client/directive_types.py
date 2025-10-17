@@ -46,3 +46,16 @@ class Directive(ABC):
         """
         pass
 
+    def get_inputs(self) -> List[str]:
+        """
+        Returns a list of input device names that should be active
+        when this directive is running.
+
+        Subclasses can override this method to specify required inputs.
+        Default: return empty list (no input devices required).
+
+        Example:
+            return ["micro", "camera"]
+        """
+        return []
+

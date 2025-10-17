@@ -23,6 +23,7 @@ class MessageInType(str, Enum):
     IMAGE = "image"
     POSE_IMAGE = "pose_image"
     CHAT_IN = "chat_in"
+    CUSTOM_INPUT = "custom_input"
     PRIMITIVE_ACTIVATED = "primitive_activated"
     PRIMITIVE_COMPLETED = "primitive_completed"
     PRIMITIVE_INTERRUPTED = "primitive_interrupted"
