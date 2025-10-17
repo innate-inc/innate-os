@@ -328,6 +328,10 @@ class BrainClientNode(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
         self.chat_history = []
+        
+        # Wait for input_manager to be ready (optional but recommended)
+        self._wait_for_input_manager()
+        
         self.chat_in_sub = self.create_subscription(
             String, "/chat_in", self.chat_in_callback, 10
         )
@@ -517,6 +521,25 @@ class BrainClientNode(Node):
             self.get_logger().error(f"Error parsing primitives service response: {e}")
             return {}
 
+    def _wait_for_input_manager(self, timeout_sec=5.0):
+        """
+        Wait for input_manager_node to be available.
+        This ensures proper startup ordering when launched separately.
+        """
+        self.get_logger().info("⏳ Waiting for input_manager_node...")
+        start_time = self.get_clock().now()
+        
+        while (self.get_clock().now() - start_time).nanoseconds / 1e9 < timeout_sec:
+            # Check if input_manager_node exists in the node graph
+            node_names = self.get_node_names()
+            if 'input_manager_node' in node_names:
+                self.get_logger().info("✅ input_manager_node is ready")
+                return True
+            time.sleep(0.1)
+        
+        self.get_logger().warning("⚠️ input_manager_node not found - continuing anyway")
+        return False
+    
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)

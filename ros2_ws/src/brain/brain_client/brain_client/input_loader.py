@@ -133,7 +133,7 @@ class InputLoader:
                     return False
                     
             # Check that name is a property
-            if not isinstance(getattr(type(input_class), 'name', None), property):
+            if not isinstance(getattr(input_class, 'name', None), property):
                 self.logger.error(f"Input device {input_class.__name__} 'name' must be a property")
                 return False
                 

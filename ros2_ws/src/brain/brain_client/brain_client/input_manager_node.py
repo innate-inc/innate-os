@@ -72,16 +72,6 @@ class InputManagerNode(Node):
             except Exception as e:
                 self.get_logger().error(f"❌ Error initializing input device '{name}': {e}")
         
-        # Subscribe to /chat_in (from voice_client) to bridge to MicroInput
-        # This is a hardcoded bridge - in the future, could be configurable
-        self.chat_in_sub = self.create_subscription(
-            String,
-            '/chat_in',
-            self._handle_chat_in,
-            10
-        )
-        self.get_logger().info("📡 Subscribed to /chat_in for voice transcripts")
-        
         # Publishers for sending data to brain_client
         self.chat_in_pub = self.create_publisher(String, '/input_manager/chat_in', 10)
         self.custom_pub = self.create_publisher(String, '/input_manager/custom', 10)
@@ -105,22 +95,6 @@ class InputManagerNode(Node):
         # based on directive requirements
         
         self.get_logger().info("✅ Input Manager Node started successfully")
-    
-    def _handle_chat_in(self, msg: String):
-        """
-        Bridge between voice_client and MicroInput device.
-        
-        This is where ROS meets the pure Python input devices.
-        """
-        try:
-            # If we have a micro input device, pass the data to it
-            if 'micro' in self.input_devices:
-                micro_device = self.input_devices['micro']
-                # Call the device's receive method (if it has one)
-                if hasattr(micro_device, 'receive_transcript'):
-                    micro_device.receive_transcript(msg.data)
-        except Exception as e:
-            self.get_logger().error(f"Error bridging chat_in to MicroInput: {e}")
     
     def _handle_device_data(self, device_name: str, data: Dict[str, Any], data_type: str):
         """
