@@ -38,13 +38,12 @@ class InputManagerNode(Node):
         
         self.get_logger().info("🔌 Starting Input Manager Node...")
         
-        # Load input devices from directories
+        # Load input devices from user workspace only
         innate_os_root = os.environ.get('INNATE_OS_ROOT', 
                                         os.path.join(os.path.expanduser('~'), 'innate-os'))
         
         input_directories = [
             os.path.join(innate_os_root, 'inputs'),
-            os.path.join(os.path.dirname(__file__), 'inputs')
         ]
         
         self.input_loader = InputLoader(self.get_logger())
@@ -136,10 +135,12 @@ class InputManagerNode(Node):
         
         Message format: {"inputs": ["micro", "camera"]}
         """
+        self.get_logger().info(f"📥 Received active_inputs message: {msg.data}")
         try:
             import json
             data = json.loads(msg.data)
             required_inputs = data.get('inputs', [])
+            self.get_logger().info(f"🎯 Processing inputs: {required_inputs}")
             
             # Activate/deactivate devices based on requirements
             for name, device in self.input_devices.items():
@@ -167,15 +168,28 @@ class InputManagerNode(Node):
         Request format: SetBool with data=true/false
         """
         try:
-            # For now, this activates/deactivates all devices
-            for device in self.input_devices.values():
-                device.set_active(request.data)
+            # Activate/deactivate all devices
+            for name, device in self.input_devices.items():
+                was_active = device.is_active()
+                should_be_active = request.data
+                
+                if should_be_active and not was_active:
+                    # Activate device
+                    device.set_active(True)
+                    device.on_open()
+                    self.get_logger().info(f"🔌 Opened input device: {name}")
+                elif not should_be_active and was_active:
+                    # Deactivate device
+                    device.on_close()
+                    device.set_active(False)
+                    self.get_logger().info(f"💤 Closed input device: {name}")
             
             response.success = True
             response.message = f"All inputs {'activated' if request.data else 'deactivated'}"
         except Exception as e:
             response.success = False
             response.message = str(e)
+            self.get_logger().error(f"Error in set_input_active: {e}")
         
         return response
     
