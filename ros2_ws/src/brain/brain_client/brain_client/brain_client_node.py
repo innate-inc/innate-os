@@ -335,6 +335,10 @@ class BrainClientNode(Node):
         self.chat_in_sub = self.create_subscription(
             String, "/brain/chat_in", self.chat_in_callback, 10
         )
+        # Subscribe to chat_in from input_manager (NEW input device system)
+        self.input_manager_chat_in_sub = self.create_subscription(
+            String, "/input_manager/chat_in", self.chat_in_callback, 10
+        )
         # Subscribe to custom input from input_manager
         self.custom_input_sub = self.create_subscription(
             String, "/input_manager/custom", self.custom_input_callback, 10
