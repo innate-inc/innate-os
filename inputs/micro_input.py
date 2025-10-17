@@ -144,6 +144,10 @@ class MicroInput(InputDevice):
                     except queue.Empty:
                         continue
                     try:
+                        # Skip sending while ducking (robot is speaking)
+                        if self._is_robot_talking:
+                            continue
+                        
                         payload = {
                             "type": "input_audio_buffer.append",
                             "audio": base64.b64encode(chunk).decode("ascii"),

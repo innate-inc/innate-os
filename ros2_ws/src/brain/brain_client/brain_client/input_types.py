@@ -40,6 +40,7 @@ class InputDevice(ABC):
         self.logger = logger
         self._data_callback: Optional[Callable] = None
         self._active = False  # Start inactive
+        self._is_robot_talking = False  # Ducking state
         self._config = {}
 
     @property
@@ -209,5 +210,19 @@ class InputDevice(ABC):
             Description string
         """
         return self.name
+
+    def set_tts_playing(self, is_playing: bool):
+        """
+        Called when TTS (text-to-speech) status changes.
+        
+        Sets the internal _is_robot_talking flag that devices can check
+        to implement "ducking" - suppressing input while robot speaks.
+        
+        Devices can check self._is_robot_talking in their logic.
+        
+        Args:
+            is_playing: True if robot is speaking, False otherwise
+        """
+        self._is_robot_talking = is_playing
 
 

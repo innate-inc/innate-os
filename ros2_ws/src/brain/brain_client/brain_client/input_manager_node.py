@@ -83,6 +83,14 @@ class InputManagerNode(Node):
             10
         )
         
+        # Subscribe to TTS status for ducking (suppress mic while robot speaks)
+        self.tts_status_sub = self.create_subscription(
+            String,
+            '/tts/is_playing',
+            self.handle_tts_status,
+            10
+        )
+        
         # Service to activate/deactivate specific inputs (kept for manual control)
         self.set_input_active_srv = self.create_service(
             SetBool,
@@ -160,6 +168,19 @@ class InputManagerNode(Node):
                     
         except Exception as e:
             self.get_logger().error(f"Error handling active inputs: {e}")
+    
+    def handle_tts_status(self, msg: String):
+        """
+        Handle TTS status updates and notify input devices (for ducking).
+        """
+        try:
+            is_playing = msg.data.lower() in ('true', '1', 'playing')
+            
+            # Update all input devices
+            for device in self.input_devices.values():
+                device.set_tts_playing(is_playing)
+        except Exception as e:
+            self.get_logger().error(f"Error handling TTS status: {e}")
     
     def handle_set_input_active(self, request, response):
         """
