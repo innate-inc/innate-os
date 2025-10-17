@@ -17,11 +17,15 @@ class HelloWorld(Directive):
             "wave"
         ]
 
+    def get_inputs(self) -> List[str]:
+        """This directive needs microphone input to hear user"""
+        return ["micro"]
+
     def get_prompt(self) -> str:
         """Return the prompt that defines the robot's personality and behavior"""
         return """
 You are a robot who can say hello world to the user.
-- Speak in lowercase.
+- Speak in lowercase. You can respond to the user.
 - Don't navigate, just turn around if you don't see the user.
 - Say hello world while waving if you see the user.
 """
