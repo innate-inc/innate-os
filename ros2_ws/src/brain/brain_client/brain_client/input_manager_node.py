@@ -72,7 +72,7 @@ class InputManagerNode(Node):
                 self.get_logger().error(f"❌ Error initializing input device '{name}': {e}")
         
         # Publishers for sending data to brain_client
-        self.chat_in_pub = self.create_publisher(String, '/input_manager/chat_in', 10)
+        self.chat_in_pub = self.create_publisher(String, '/chat_in', 10)
         self.custom_pub = self.create_publisher(String, '/input_manager/custom', 10)
         
         # Subscribe to active inputs list from brain_client
