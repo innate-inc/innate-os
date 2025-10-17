@@ -36,15 +36,11 @@ else
     echo "ERROR: ROS workspace setup not found at $ROS_WS_PATH/install/setup.zsh" >&2
     exit 1
 fi
-AFTER_SOURCING_TIME=$(date +%s.%N 2>/dev/null || date +%s)
-echo "  ⏱ Time after sourcing: $(echo "$AFTER_SOURCING_TIME - $START_TIME" | bc 2>/dev/null || echo "$((AFTER_SOURCING_TIME - START_TIME))") seconds"
 
 if tmux has-session -t $SESSION_NAME 2>/dev/null; then
     tmux kill-session -t $SESSION_NAME
     sleep 1
 fi
-BEFORE_TMUX_TIME=$(date +%s.%N 2>/dev/null || date +%s)
-echo "  ⏱ Time before creating tmux: $(echo "$BEFORE_TMUX_TIME - $START_TIME" | bc 2>/dev/null || echo "$((BEFORE_TMUX_TIME - START_TIME))") seconds"
 
 process_command_group() {
     local group_index=$1
