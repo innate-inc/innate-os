@@ -430,6 +430,10 @@ class BrainClientNode(Node):
                 f"Startup directive '{startup_directive}' not found in available directives. "
                 f"Available: {list(self.directives.keys())}. Using default."
             )
+        
+        # Activate input devices required by the current directive
+        if self.current_directive:
+            self.activate_directive_inputs()
 
         self.primitive_running = None
         # Add a variable to store the current goal handle
