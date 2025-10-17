@@ -39,7 +39,7 @@ class InputDevice(ABC):
         """
         self.logger = logger
         self._data_callback: Optional[Callable] = None
-        self._active = True
+        self._active = False  # Start inactive
         self._config = {}
 
     @property
