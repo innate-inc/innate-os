@@ -583,6 +583,39 @@ class BrainClientNode(Node):
         except Exception as e:
             self.get_logger().error(f"Error activating directive inputs: {e}")
 
+    def custom_input_callback(self, msg: String):
+        """Handle custom input data from input_manager."""
+        try:
+            import json
+            data = json.loads(msg.data)
+            self.get_logger().info(f"\033[1;94mReceived custom input from {data.get('input_device', 'unknown')}\033[0m")
+            outgoing_msg = MessageIn(type=MessageInType.CUSTOM_INPUT, payload=data)
+            self.ws_bridge.send_message(outgoing_msg)
+        except Exception as e:
+            self.get_logger().error(f"Error processing custom input: {e}")
+
+    def activate_directive_inputs(self):
+        """
+        Publish the list of input devices that should be active based on current directive.
+        The input_manager_node subscribes to this and activates/deactivates inputs accordingly.
+        """
+        if not self.current_directive:
+            return
+        
+        try:
+            import json
+            required_inputs = self.current_directive.get_inputs()
+            msg = String()
+            msg.data = json.dumps({"inputs": required_inputs})
+            self.active_inputs_pub.publish(msg)
+            
+            if required_inputs:
+                self.get_logger().info(f"🔌 Activated inputs for directive '{self.current_directive.name}': {required_inputs}")
+            else:
+                self.get_logger().debug(f"No inputs required for directive '{self.current_directive.name}'")
+        except Exception as e:
+            self.get_logger().error(f"Error activating directive inputs: {e}")
+
     def handle_get_chat_history(self, request, response):
         self.get_logger().debug(
             f"\033[1;94mReceived get_chat_history request. History: {self.chat_history}\033[0m"
@@ -1982,6 +2015,9 @@ class BrainClientNode(Node):
             # Re-register primitives and directive with the server to update immediately
             if self.is_brain_active and self.primitives_registered:
                 self.register_primitives_and_directive()
+            
+            # Activate input devices required by this directive
+            self.activate_directive_inputs()
             
             # Publish confirmation
             chat_entry = {
