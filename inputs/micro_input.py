@@ -238,12 +238,7 @@ class MicroInput(InputDevice):
             if self.logger:
                 self.logger.info(f"🎤 Transcript: {text}")
             
-            self.send_data({
-                "text": text,
-                "sender": "user",
-                "source": "microphone",
-                "timestamp": time.time()
-            }, data_type="chat_in")
+            self.send_data(text, data_type="chat_in")
 
 
 # ========== EXACT COPIES FROM voice_client_node.py ==========
