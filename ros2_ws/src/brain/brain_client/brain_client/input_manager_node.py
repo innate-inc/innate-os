@@ -111,23 +111,28 @@ class InputManagerNode(Node):
         
         Args:
             device_name: Name of the input device
-            data: Data to send
+            data: Data to send (can be a string or dict)
             data_type: Type of data (chat_in, sensory_input, etc.)
         """
         try:
+            # Convert string to dict if needed
+            if isinstance(data, str):
+                data_dict = {"text": data}
+            else:
+                data_dict = data.copy()
+            
             # Add device source to data
-            data_with_source = data.copy()
-            data_with_source['input_device'] = device_name
+            data_dict['input_device'] = device_name
             
             # Serialize to JSON
-            json_data = json.dumps(data_with_source)
+            json_data = json.dumps(data_dict)
             msg = String()
             msg.data = json_data
             
             # Publish to appropriate topic
             if data_type == "chat_in":
                 self.chat_in_pub.publish(msg)
-                self.get_logger().debug(f"📤 Published chat_in from '{device_name}': {data.get('text', '')[:50]}")
+                self.get_logger().debug(f"📤 Published chat_in from '{device_name}': {data_dict.get('text', '')[:50]}")
             elif data_type == "custom":
                 self.custom_pub.publish(msg)
                 self.get_logger().debug(f"📤 Published custom data from '{device_name}'")
