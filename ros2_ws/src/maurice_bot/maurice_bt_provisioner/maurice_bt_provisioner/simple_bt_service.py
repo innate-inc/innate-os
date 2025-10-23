@@ -5,6 +5,7 @@ import signal
 import sys
 import subprocess
 import time
+import os
 
 from bluezero import adapter
 from bluezero import peripheral
@@ -38,8 +39,17 @@ CHARACTERISTIC_UUID = 'abcdef01-1234-5678-1234-56789abcdef0'
 # Path to the helper script for restarting services (adjust if moved)
 RESTART_SCRIPT_PATH = "/usr/local/bin/restart_robot_networking.sh"
 
-# Robot name
-ROBOT_NAME = "Maurice"
+# Load robot name from robot_info.json
+def load_robot_name():
+    """Load robot name from robot_info.json file."""
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    robot_info_path = os.path.join(maurice_root, 'data', 'robot_info.json')
+    
+    with open(robot_info_path, 'r') as f:
+        data = json.load(f)
+        return data.get('robot_name', 'MARS')
+
+ROBOT_NAME = load_robot_name()
 
 # --- BLE Server Class ---
 class BleProvisionerServer:
