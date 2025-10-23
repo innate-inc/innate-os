@@ -11,6 +11,9 @@ LOG_DIR="$REPO_DIR/logs"
 UPDATE_CACHE="/tmp/innate-update-cache"
 BRANCH="${INNATE_UPDATE_BRANCH:-main}"
 
+# Ensure log directory exists
+mkdir -p "$LOG_DIR"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
