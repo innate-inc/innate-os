@@ -1,0 +1,74 @@
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: false
+      footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+      resolution: 0.05
+      track_unknown_space: false
+      rolling_window: true
+      width: 10
+      height: 10
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.3
+      always_send_full_costmap: True
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: false
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+      track_unknown_space: false
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.2
+      goal_checker:
+        plugin: "nav2_controller::SimpleGoalChecker"
+        xy_goal_tolerance: 0.10
+        yaw_goal_tolerance: 0.15
+        stateful: true
+

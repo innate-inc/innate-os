@@ -8,8 +8,9 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # Use the map file located at ~/maurice-prod/maps/map.yaml
-    default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
+    # Use the map file - construct path from environment variable or HOME
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    default_map_path = os.path.join(maurice_root, 'maps', 'home.yaml')
     
     # Get the share directory of the maurice_nav package where the AMCL config is stored
     maurice_nav_share_dir = get_package_share_directory('maurice_nav')

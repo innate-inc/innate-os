@@ -26,9 +26,14 @@ def generate_launch_description():
         share_dir, # Use our package's share dir
         'config',
         'compute_path_to_pose.xml')
+    
+    # Define paths to standard BT XMLs
+    nav_to_pose_bt_xml = os.path.join(share_dir, 'config', 'nav_to_pose.xml')
+    nav_through_poses_bt_xml = os.path.join(share_dir, 'config', 'nav_through_poses.xml')
 
-    # Define the default map path
-    default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
+    # Define the default map path using environment variable or HOME
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    default_map_path = os.path.join(maurice_root, 'maps', 'home.yaml')
 
     # Declare launch arguments
     map_arg = DeclareLaunchArgument(
@@ -81,7 +86,8 @@ def generate_launch_description():
         parameters=[
             bt_navigator_params_file,
             # Point to the BT XML in our package's config directory
-            {'default_nav_to_pose_bt_xml': compute_path_bt_xml_path}
+            {'default_nav_to_pose_bt_xml': compute_path_bt_xml_path},
+            {'default_nav_through_poses_bt_xml': nav_through_poses_bt_xml}
         ]
     )
 
