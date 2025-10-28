@@ -15,7 +15,6 @@ slam_toolbox:
     base_frame: base_footprint
     scan_topic: /scan
     use_map_saver: true
-    #map_file_name: /home/jetson1/maurice-prod/maps/home
     mode: mapping #localization
 
     # if you'd like to immediately start continuing a map at a given pose

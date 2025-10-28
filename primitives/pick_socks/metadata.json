@@ -1,0 +1,23 @@
+{
+    "name": "pick_socks",
+    "type": "learned",
+    "guidelines": "",
+    "guidelines_when_running": "",
+    "inputs": {},
+    "execution": {
+        "model_type": "act_policy",
+        "checkpoint": "act_policy_step_135000.pth",
+        "stats_file": "dataset_stats.pt",
+        "action_dim": 10,
+        "duration": 45.0,
+        "start_pose": [
+            -0.015,
+            -0.399,
+            1.456,
+            -1.135,
+            -0.023,
+            0.833
+        ],
+        "end_pose": []
+    }
+}

@@ -20,6 +20,7 @@ install(PROGRAMS
   brain_client/brain_client_node.py
   brain_client/ws_client_node.py
   brain_client/primitive_execution_action_server.py
+  brain_client/input_manager_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

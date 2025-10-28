@@ -1,10 +1,13 @@
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
 
-source ~/.zshrc.pre-oh-my-zsh
 
 # Path to your Oh My Zsh installation.
 export ZSH="$HOME/.oh-my-zsh"
+export INNATE_OS_ROOT="$HOME/innate-os"
+
+source ~/.zshrc.pre-oh-my-zsh
+
 
 # Set name of the theme to load --- if set to "random", it will
 # load a random theme each time Oh My Zsh is loaded, in which case,
@@ -104,3 +107,9 @@ source $ZSH/oh-my-zsh.sh
 # Example aliases
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
+
+# The next line updates PATH for the Google Cloud SDK.
+if [ -f '/home/jetson1/google-cloud-sdk/path.zsh.inc' ]; then . '/home/jetson1/google-cloud-sdk/path.zsh.inc'; fi
+
+# The next line enables shell command completion for gcloud.
+if [ -f '/home/jetson1/google-cloud-sdk/completion.zsh.inc' ]; then . '/home/jetson1/google-cloud-sdk/completion.zsh.inc'; fi

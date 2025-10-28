@@ -1,0 +1,9 @@
+# brain_messages/srv/SetDirectiveOnStartup.srv
+
+# Request
+string directive_name  # Directive name to set for startup, or empty string to clear
+---
+# Response
+bool success
+string message
+
