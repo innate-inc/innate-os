@@ -31,60 +31,99 @@ class SimpleWebRTCStreamer(Node):
         self.ice_in_sub = self.create_subscription(String, '/webrtc/ice_in', self.on_ice_in, 10)
         self.start_sub = self.create_subscription(String, '/webrtc/start', self.on_start, 10)
         
-        # Subscribe to camera
+        # Subscribe to cameras
         camera_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
-        self.image_sub = self.create_subscription(Image, '/color/image', self.on_image, camera_qos)
+        self.image_sub = self.create_subscription(Image, '/color/image', self.on_image_main, camera_qos)
+        self.image_sub_arm = self.create_subscription(Image, '/image_raw', self.on_image_arm, camera_qos)
         
         self.pipe = None
         self.webrtc = None
-        self.appsrc = None
+        self.appsrc_main = None
+        self.appsrc_arm = None
         
-        self.get_logger().info('Simple WebRTC Streamer ready (camera mode)')
+        self.get_logger().info('Simple WebRTC Streamer ready (dual camera mode)')
     
-    def on_image(self, msg):
-        # Feed camera images to pipeline
-        if not self.appsrc:
-            return
-            
+    def _process_image(self, msg, target_width=640, target_height=480):
+        """Helper to process image messages into RGB format"""
         if msg.encoding == 'bgr8':
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
             img = img[:, :, ::-1]  # BGR to RGB
         elif msg.encoding == 'rgb8':
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
         else:
-            return
+            return None
         
         # Resize if needed
-        if img.shape[0] != 480 or img.shape[1] != 640:
+        if img.shape[0] != target_height or img.shape[1] != target_width:
             import cv2
-            img = cv2.resize(img, (640, 480))
+            img = cv2.resize(img, (target_width, target_height))
         
-        # Push frame - use try_push for non-blocking
+        return img
+    
+    def on_image_main(self, msg):
+        """Feed main camera images to pipeline"""
+        if not self.appsrc_main:
+            return
+        
+        img = self._process_image(msg, 640, 480)
+        if img is None:
+            return
+        
         buf = Gst.Buffer.new_wrapped(img.tobytes())
-        self.appsrc.emit('push-buffer', buf)
+        self.appsrc_main.emit('push-buffer', buf)
+    
+    def on_image_arm(self, msg):
+        """Feed arm camera images to pipeline"""
+        if not self.appsrc_arm:
+            return
+        
+        img = self._process_image(msg, 640, 480)
+        if img is None:
+            return
+        
+        buf = Gst.Buffer.new_wrapped(img.tobytes())
+        self.appsrc_arm.emit('push-buffer', buf)
     
     def on_start(self, msg):
         self.get_logger().info('START received, creating offer...')
         
-        # Create pipeline with camera feed via appsrc
+        # Create pipeline with dual camera feeds via appsrc
+        # Main camera on sink_0, arm camera on sink_1
         self.pipe = Gst.parse_launch(
-            'appsrc name=src is-live=true format=time '
+            'webrtcbin name=webrtc '
+            
+            'appsrc name=src_main is-live=true format=time '
             'caps=video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! '
             'videoconvert ! '
             'vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! '
             'rtpvp8pay pt=96 ! '
             'application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96 ! '
-            'webrtcbin name=webrtc'
+            'webrtc.sink_0 '
+            
+            'appsrc name=src_arm is-live=true format=time '
+            'caps=video/x-raw,format=RGB,width=640,height=480,framerate=15/1 ! '
+            'videoconvert ! '
+            'vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! '
+            'rtpvp8pay pt=97 ! '
+            'application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=97 ! '
+            'webrtc.sink_1'
         )
         
-        self.appsrc = self.pipe.get_by_name('src')
-        self.appsrc.set_property('format', Gst.Format.TIME)
-        self.appsrc.set_property('do-timestamp', True)
-        self.appsrc.set_property('is-live', True)
+        # Get and configure main camera appsrc
+        self.appsrc_main = self.pipe.get_by_name('src_main')
+        self.appsrc_main.set_property('format', Gst.Format.TIME)
+        self.appsrc_main.set_property('do-timestamp', True)
+        self.appsrc_main.set_property('is-live', True)
+        
+        # Get and configure arm camera appsrc
+        self.appsrc_arm = self.pipe.get_by_name('src_arm')
+        self.appsrc_arm.set_property('format', Gst.Format.TIME)
+        self.appsrc_arm.set_property('do-timestamp', True)
+        self.appsrc_arm.set_property('is-live', True)
         
         self.webrtc = self.pipe.get_by_name('webrtc')
         
