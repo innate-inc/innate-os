@@ -31,7 +31,7 @@ class ServoManager(Node):
         # Start the servo scan
         self.scan_servos()
     
-    def detect_servos(self, dev_path):
+    def detect_servos(self, dev_path, baud_rate=BAUDRATE):
         """Open `dev_path`, read model number at addr 0 for IDs 1–10."""
         port    = PortHandler(dev_path)
         handler = PacketHandler(PROTOCOL_VERSION)
@@ -40,7 +40,7 @@ class ServoManager(Node):
         if not port.openPort():
             self.get_logger().error(f"Cannot open {dev_path}")
             return servos
-        port.setBaudRate(BAUDRATE)
+        port.setBaudRate(baud_rate)
 
         for sid in ID_RANGE:
             # read2ByteTxRx returns (value, comm_result, error)
@@ -74,24 +74,25 @@ class ServoManager(Node):
         arm_device = None
         head_device = None
         
-        for dev in ['/dev/ttyTHS1']: #uncomment for UART
+        # for dev in ['/dev/ttyTHS1']: #uncomment for UART
         # for dev in sorted(glob.glob('/dev/ttyACM*')): #uncomment for USB
+        for dev in ['/dev/ttyTHS1'] + sorted(glob.glob('/dev/ttyACM*')):  # Scan both UART and USB
+            # Scan at 115200 (for arm)
             found = self.detect_servos(dev)
-            
             if len(found) == 6:
-                # Verify this is the arm device
                 if self.verify_servo_configuration(dev, found, 6):
                     arm_device = dev
                     self.get_logger().info(f"Arm device identified: {dev}")
-            elif len(found) == 1:
-                # Verify this is the head device
-                if self.verify_servo_configuration(dev, found, 1):
-                    head_device = dev
-                    self.get_logger().info(f"Head device identified: {dev}")
             elif len(found) > 0:
-                # Log any unexpected servo counts
                 self.verify_servo_configuration(dev, found, len(found))
                 self.get_logger().warn(f"Unexpected servo count on {dev}")
+            
+            # Scan at 1M (for head)
+            found_1M = self.detect_servos(dev, 1_000_000)
+            if len(found_1M) == 1:
+                if self.verify_servo_configuration(dev, found_1M, 1):
+                    head_device = dev
+                    self.get_logger().info(f"Head device identified: {dev}")
         
         # Set parameters for any devices found
         self.get_logger().info("Setting ROS parameters...")
