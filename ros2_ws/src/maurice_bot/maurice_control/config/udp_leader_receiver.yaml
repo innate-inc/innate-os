@@ -1,0 +1,14 @@
+udp_leader_receiver:
+  ros__parameters:
+    # UDP port to listen on
+    port: 9999
+    
+    # Socket buffer size in bytes
+    buffer_size: 1024
+    
+    # Auto-start the UDP receiver on launch
+    auto_start: true
+    
+    # How often to log statistics (in seconds)
+    log_rate: 10.0
+
