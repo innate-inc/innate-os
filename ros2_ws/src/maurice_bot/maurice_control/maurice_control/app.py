@@ -9,11 +9,19 @@ import json
 from geometry_msgs.msg import Vector3, Twist
 from std_msgs.msg import Int32MultiArray, Float64MultiArray, String
 
-class AppControl(Node):
-    KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract here
+# Import NetworkManager utilities for WiFi SSID
+from maurice_bt_provisioner.nmcli_utils import nmcli_get_active_wifi_ssid
 
+class AppControl(Node):
+    KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract from JSON
+    
     def __init__(self):
         super().__init__('app_control_node')
+        
+        # Cache for WiFi SSID to avoid frequent subprocess calls
+        self._cached_wifi_ssid = None
+        self._last_wifi_check_time = 0
+        self._wifi_check_interval = 10.0  # Check WiFi every 10 seconds instead of every 1 second
         
         # Declare parameters
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
@@ -60,6 +68,32 @@ class AppControl(Node):
         self.robot_info_timer = self.create_timer(1.0, self.publish_robot_info_callback)
         
         self.get_logger().info("AppControl node started.")
+
+    def get_cached_wifi_ssid(self):
+        """
+        Get WiFi SSID with caching to avoid frequent subprocess calls.
+        Only checks for new SSID if the configured interval has passed.
+        """
+        import time
+        current_time = time.time()
+        
+        # If we haven't checked recently or don't have a cached value, check now
+        if (self._cached_wifi_ssid is None or 
+            current_time - self._last_wifi_check_time > self._wifi_check_interval):
+            
+            new_ssid = nmcli_get_active_wifi_ssid()
+            
+            # Only log if the SSID actually changed or this is the first check
+            if new_ssid != self._cached_wifi_ssid:
+                if new_ssid is not None:
+                    self.get_logger().info(f"WiFi SSID updated: {self._cached_wifi_ssid} -> {new_ssid}")
+                else:
+                    self.get_logger().warn("Could not retrieve WiFi SSID")
+                
+                self._cached_wifi_ssid = new_ssid
+                self._last_wifi_check_time = current_time
+        
+        return self._cached_wifi_ssid
 
     def joystick_callback(self, msg: Vector3):
         """
@@ -124,6 +158,7 @@ class AppControl(Node):
     def publish_robot_info_callback(self):
         """
         Reads robot_info.json, extracts specified keys, and publishes them as a JSON string.
+        For wifi_ssid, gets the current WiFi SSID from NetworkManager.
         Logs errors if file/JSON processing fails or keys are missing.
         Publishes "{}" if no keys are found or an error occurs.
         """
@@ -138,11 +173,17 @@ class AppControl(Node):
             with open(robot_info_file_path, 'r') as f:
                 content = json.load(f)
             
+            # Extract keys from JSON file
             for key in self.KEYS_TO_EXTRACT:
                 if key in content:
                     data_to_publish_dict[key] = content[key]
                 else:
                     self.get_logger().warn(f"Key '{key}' not found in {robot_info_file_path}.")
+            
+            # Always include WiFi SSID (separate from JSON extraction)
+            wifi_ssid = self.get_cached_wifi_ssid()
+            if wifi_ssid is not None:
+                data_to_publish_dict['wifi_ssid'] = wifi_ssid
             
             if data_to_publish_dict:
                 final_json_string_to_publish = json.dumps(data_to_publish_dict)
