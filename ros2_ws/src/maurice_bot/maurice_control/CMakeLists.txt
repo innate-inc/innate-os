@@ -20,6 +20,7 @@ install(PROGRAMS
   maurice_control/joystick.py
   maurice_control/leader.py
   maurice_control/app.py
+  maurice_control/udp_leader_receiver.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
