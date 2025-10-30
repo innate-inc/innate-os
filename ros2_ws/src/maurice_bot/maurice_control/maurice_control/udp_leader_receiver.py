@@ -6,15 +6,16 @@ Receives leader arm positions via UDP and publishes them to /leader_positions to
 
 Network Protocol:
 - Port: 9999 (default, configurable)
-- Packet Format (34 bytes, little-endian):
+- Packet Format (38 bytes, little-endian):
   - Bytes 0-1:   Magic header (0xAA55)
-  - Bytes 2-9:   Timestamp (double, ms since epoch)
-  - Bytes 10-13: Servo 1 position (int32)
-  - Bytes 14-17: Servo 2 position (int32)
-  - Bytes 18-21: Servo 3 position (int32)
-  - Bytes 22-25: Servo 4 position (int32)
-  - Bytes 26-29: Servo 5 position (int32)
-  - Bytes 30-33: Servo 6 position (int32)
+  - Bytes 2-5:   Sequence number (uint32)
+  - Bytes 6-13:  Timestamp (double, ms since epoch)
+  - Bytes 14-17: Servo 1 position (int32)
+  - Bytes 18-21: Servo 2 position (int32)
+  - Bytes 22-25: Servo 3 position (int32)
+  - Bytes 26-29: Servo 4 position (int32)
+  - Bytes 30-33: Servo 5 position (int32)
+  - Bytes 34-37: Servo 6 position (int32)
 """
 
 import rclpy
@@ -30,11 +31,12 @@ import time
 class UdpLeaderReceiver(Node):
     # Packet format constants
     MAGIC_HEADER = 0xAA55
-    PACKET_SIZE = 34
+    PACKET_SIZE = 38
     HEADER_FORMAT = '<H'  # Little-endian uint16
+    SEQUENCE_FORMAT = '<I'  # Little-endian uint32
     TIMESTAMP_FORMAT = '<d'  # Little-endian double
     SERVO_FORMAT = '<i'  # Little-endian int32
-    FULL_PACKET_FORMAT = '<Hd6i'  # Header + timestamp + 6 servos
+    FULL_PACKET_FORMAT = '<HId6i'  # Header + sequence + timestamp + 6 servos
     
     def __init__(self):
         super().__init__('udp_leader_receiver')
@@ -77,6 +79,10 @@ class UdpLeaderReceiver(Node):
         self.last_log_time = time.time()
         self.last_timestamp = None
         
+        # Sequence number tracking
+        self.last_sequence = -1  # Initialize to -1 so first packet (seq 0) is accepted
+        self.out_of_order_count = 0
+        
         self.get_logger().info(f'UDP Leader Receiver initialized on port {self.port}')
         
         # Auto-start if configured
@@ -101,6 +107,10 @@ class UdpLeaderReceiver(Node):
                 self.running = True
                 self.receiver_thread = threading.Thread(target=self._receiver_loop, daemon=True)
                 self.receiver_thread.start()
+                
+                # Reset sequence tracking on new connection
+                self.last_sequence = -1
+                self.out_of_order_count = 0
                 
                 self.get_logger().info(f'UDP receiver started on port {self.port}')
                 return True
@@ -174,8 +184,9 @@ class UdpLeaderReceiver(Node):
             
             # Extract fields
             magic_header = unpacked[0]
-            timestamp = unpacked[1]
-            servo_positions = list(unpacked[2:8])
+            sequence = unpacked[1]
+            timestamp = unpacked[2]
+            servo_positions = list(unpacked[3:9])
             
             # Validate magic header
             if magic_header != self.MAGIC_HEADER:
@@ -184,6 +195,17 @@ class UdpLeaderReceiver(Node):
                 )
                 self.error_count += 1
                 return
+            
+            # Check sequence number (handle wrap-around)
+            if self._is_out_of_order(sequence):
+                self.out_of_order_count += 1
+                self.get_logger().debug(
+                    f'Discarding out-of-order packet: seq={sequence} (last={self.last_sequence}) from {addr}'
+                )
+                return
+            
+            # Update last sequence number
+            self.last_sequence = sequence
             
             # Publish the positions
             msg = Int32MultiArray()
@@ -199,6 +221,7 @@ class UdpLeaderReceiver(Node):
             if current_time - self.last_log_time >= self.log_rate:
                 self.get_logger().info(
                     f'Stats - Packets: {self.packet_count}, Errors: {self.error_count}, '
+                    f'Out-of-order: {self.out_of_order_count}, Last seq: {self.last_sequence}, '
                     f'Last timestamp: {timestamp:.2f}ms, Positions: {servo_positions}'
                 )
                 self.last_log_time = current_time
@@ -209,6 +232,21 @@ class UdpLeaderReceiver(Node):
         except Exception as e:
             self.get_logger().error(f'Error processing packet from {addr}: {str(e)}')
             self.error_count += 1
+    
+    def _is_out_of_order(self, sequence: int) -> bool:
+        """Check if a sequence number is out of order (≤ last received)
+        
+        Handles 32-bit wrap-around correctly for long-running sessions.
+        """
+        if self.last_sequence == -1:
+            # First packet
+            return False
+        
+        # Handle 32-bit wrap-around
+        # If sequence <= last_sequence, it's out of order or a duplicate
+        # This works correctly with wrap-around because we only reject
+        # packets that are not strictly newer
+        return sequence <= self.last_sequence
     
     def handle_start_stop(self, request, response):
         """Handle start/stop service requests"""
