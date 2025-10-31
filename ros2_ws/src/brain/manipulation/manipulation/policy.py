@@ -150,16 +150,16 @@ class InferenceNode(Node):
         self.end_position = [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
         
         # Subscribers for images and joint state with sensor QoS
-        self.create_subscription(Image, '/color/image', self.image1_callback, image_qos)
-        self.create_subscription(Image, '/image_raw', self.image2_callback, image_qos)
-        self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
+        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
+        self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
 
         # Publishers for twist and arm commands
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/mars/arm/commands', 10)
 
         # Service client for arm positioning
-        self.arm_goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
+        self.arm_goto_client = self.create_client(GotoJS, '/mars/arm/goto_js')
         
         # Action server for policy execution (replaces service server)
         self.action_server = ActionServer(

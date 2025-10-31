@@ -37,8 +37,8 @@ class SimpleWebRTCStreamer(Node):
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
-        self.image_sub = self.create_subscription(Image, '/color/image', self.on_image_main, camera_qos)
-        self.image_sub_arm = self.create_subscription(Image, '/image_raw', self.on_image_arm, camera_qos)
+        self.image_sub = self.create_subscription(Image, '/mars/main_camera/image', self.on_image_main, camera_qos)
+        self.image_sub_arm = self.create_subscription(Image, '/mars/arm/image_raw', self.on_image_arm, camera_qos)
         
         self.pipe = None
         self.webrtc = None
