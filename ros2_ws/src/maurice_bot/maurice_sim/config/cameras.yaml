@@ -3,7 +3,7 @@
     rendering_resolution: 640
     cameras:
       base:
-        topic: /color/image
+        topic: /mars/main_camera/image
         vertical_fov: 40.0
         aspect_ratio: 2.5
         resolution:
@@ -11,7 +11,7 @@
           height: 320
       
       arm:
-        topic: /image_raw
+        topic: /mars/arm/image_raw
         vertical_fov: 80.0
         aspect_ratio: 1.33
         resolution:

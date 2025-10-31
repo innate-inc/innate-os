@@ -147,10 +147,10 @@ class MauriceArmNode(Node):
         self.servo_ids = servo_ids
 
         # Create publishers and subscribers
-        self.state_pub = self.create_publisher(JointState, '/maurice_arm/state', 10)
+        self.state_pub = self.create_publisher(JointState, '/mars/arm/state', 10)
         self.command_sub = self.create_subscription(
             Float64MultiArray,
-            '/maurice_arm/commands',
+            '/mars/arm/commands',
             self.command_callback,
             10
         )

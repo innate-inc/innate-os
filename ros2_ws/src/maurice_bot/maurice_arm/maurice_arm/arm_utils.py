@@ -13,7 +13,7 @@ class ArmCommanderNode(Node):
         # Subscriber to arm state. We store the latest state for trajectory planning.
         self.state_subscriber = self.create_subscription(
             JointState,
-            '/maurice_arm/state',
+            '/mars/arm/state',
             self.state_callback,
             10
         )
@@ -22,14 +22,14 @@ class ArmCommanderNode(Node):
         # Publisher to arm commands
         self.command_publisher = self.create_publisher(
             Float64MultiArray,
-            '/maurice_arm/commands',
+            '/mars/arm/commands',
             10
         )
 
         # Service: accepts a target joint state and trajectory time, returns a success flag.
         self.goto_js_service = self.create_service(
             GotoJS,
-            'maurice_arm/goto_js',
+            '/mars/arm/goto_js',
             self.goto_js_callback
         )
 
@@ -68,7 +68,7 @@ class ArmCommanderNode(Node):
 
     def goto_js_callback(self, request, response):
         """
-        Service callback for 'maurice_arm/goto_js'.
+        Service callback for 'mars/arm/goto_js'.
         Expects:
           - request.data: a Float64MultiArray containing the target joint positions.
           - request.time: an int32 representing the total trajectory time in seconds.

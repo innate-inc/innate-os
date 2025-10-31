@@ -65,7 +65,7 @@ class BrainClientNode(Node):
         # Parameters
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
-        self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
+        self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
 
         # New parameters for optional depth processing:
@@ -77,7 +77,7 @@ class BrainClientNode(Node):
         self.declare_parameter("map_topic", "/map")
 
         # New parameters for arm camera
-        self.declare_parameter("arm_camera_image_topic", "/image_raw/compressed")
+        self.declare_parameter("arm_camera_image_topic", "/mars/arm/image_raw/compressed")
         self.declare_parameter("send_arm_camera_image", True)
 
         # Set to True if you wish to receive and forward depth images as well
@@ -320,7 +320,7 @@ class BrainClientNode(Node):
         # Subscribe to head position topic
         self.head_position_sub = self.create_subscription(
             String,
-            "head/current_position",
+            "/mars/head/current_position",
             self.head_position_callback,
             10,
         )
