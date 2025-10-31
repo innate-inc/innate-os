@@ -72,7 +72,7 @@ class InputManagerNode(Node):
                 self.get_logger().error(f"❌ Error initializing input device '{name}': {e}")
         
         # Publishers for sending data to brain_client
-        self.chat_in_pub = self.create_publisher(String, '/chat_in', 10)
+        self.chat_in_pub = self.create_publisher(String, '/brain/chat_in', 10)
         self.custom_pub = self.create_publisher(String, '/input_manager/custom', 10)
         
         # Subscribe to active inputs list from brain_client
@@ -132,7 +132,7 @@ class InputManagerNode(Node):
             # Publish to appropriate topic
             if data_type == "chat_in":
                 self.chat_in_pub.publish(msg)
-                self.get_logger().debug(f"📤 Published chat_in from '{device_name}': {data_dict.get('text', '')[:50]}")
+                self.get_logger().debug(f"📤 Published brain/chat_in from '{device_name}': {data_dict.get('text', '')[:50]}")
             elif data_type == "custom":
                 self.custom_pub.publish(msg)
                 self.get_logger().debug(f"📤 Published custom data from '{device_name}'")

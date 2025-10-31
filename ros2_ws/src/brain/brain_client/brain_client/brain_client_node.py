@@ -333,7 +333,7 @@ class BrainClientNode(Node):
         self._wait_for_input_manager()
         
         self.chat_in_sub = self.create_subscription(
-            String, "/chat_in", self.chat_in_callback, 10
+            String, "/brain/chat_in", self.chat_in_callback, 10
         )
         # Subscribe to custom input from input_manager
         self.custom_input_sub = self.create_subscription(
@@ -341,7 +341,7 @@ class BrainClientNode(Node):
         )
         # Publisher to tell input_manager which inputs should be active
         self.active_inputs_pub = self.create_publisher(String, "/input_manager/active_inputs", 10)
-        self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
+        self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/get_chat_history", self.handle_get_chat_history
@@ -441,7 +441,7 @@ class BrainClientNode(Node):
 
         # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
-            String, "/set_directive", self.set_directive_callback, 10
+            String, "/brain/set_directive", self.set_directive_callback, 10
         )
         
 
@@ -547,7 +547,7 @@ class BrainClientNode(Node):
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().info(f"\033[1;92mReceived chat_in: {chat_entry}\033[0m")
+        self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {chat_entry}\033[0m")
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
         self.ws_bridge.send_message(outgoing_msg)
 
@@ -953,7 +953,7 @@ class BrainClientNode(Node):
         text = msg.payload.get("text", "")
         chat_entry = {"sender": sender, "text": text, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().debug(f"Received chat_out: {chat_entry}")
+        self.get_logger().debug(f"Received brain/chat_out: {chat_entry}")
         out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
         

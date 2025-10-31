@@ -130,7 +130,7 @@ class InputDevice(ABC):
         Args:
             data: Dictionary containing the processed data
             data_type: Type of data - one of:
-                      - "chat_in": Text input from user (voice, keyboard, etc.)
+                      - "brain/chat_in": Text input from user (voice, keyboard, etc.)
                       - "custom": Any other data type
         
         Example:
@@ -138,7 +138,7 @@ class InputDevice(ABC):
                 "text": "Hello robot",
                 "confidence": 0.95,
                 "source": "microphone"
-            }, data_type="chat_in")
+            }, data_type="brain/chat_in")
         """
         if self._data_callback:
             try:
