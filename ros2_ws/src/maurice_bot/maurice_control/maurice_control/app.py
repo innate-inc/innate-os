@@ -50,10 +50,10 @@ class AppControl(Node):
             10
         )
         
-        # Publisher for leader arm commands (Float64MultiArray) on /maurice_arm/commands
+        # Publisher for leader arm commands (Float64MultiArray) on /mars/arm/commands
         self.cmd_pub = self.create_publisher(
             Float64MultiArray,
-            '/maurice_arm/commands',
+            '/mars/arm/commands',
             10
         )
         

@@ -51,7 +51,7 @@ class PrimitiveExecutionActionServer(Node):
             depth=10,
         )
 
-        self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
+        self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
         self.image_topic = self.get_parameter("image_topic").value
 
         self.declare_parameter("simulator_mode", False)

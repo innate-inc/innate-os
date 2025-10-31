@@ -98,13 +98,13 @@ class InferenceNode(Node):
         self.latest_joint_state = None
 
         # Subscribers
-        self.create_subscription(Image, '/color/image', self.image1_callback, image_qos)
-        self.create_subscription(Image, '/image_raw', self.image2_callback, image_qos)
-        self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
+        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
+        self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
 
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/mars/arm/commands', 10)
 
         # Timer for inference loop
         self.timer = self.create_timer(1/30.0, self.inference_loop)

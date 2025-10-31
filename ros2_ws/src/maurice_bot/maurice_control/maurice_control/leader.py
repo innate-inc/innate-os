@@ -31,7 +31,7 @@ class LeaderArmNode(Node):
         
         # Publishers
         self.state_pub = self.create_publisher(JointState, '/leader/state', 10)
-        self.cmd_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
+        self.cmd_pub = self.create_publisher(Float64MultiArray, '/mars/arm/commands', 10)
         
         # Timer for state publishing
         self.timer = self.create_timer(1.0/control_freq, self.timer_callback)

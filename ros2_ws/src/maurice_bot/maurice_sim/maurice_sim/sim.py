@@ -34,13 +34,13 @@ class MauriceBotNode(Node):
         self.declare_parameter('cameras.base.aspect_ratio', 4.44)
         self.declare_parameter('cameras.base.resolution.width', 1280)
         self.declare_parameter('cameras.base.resolution.height', 800)
-        self.declare_parameter('cameras.base.topic', '/camera_base/image_raw')
+        self.declare_parameter('cameras.base.topic', '/mars/main_camera/image')
 
         self.declare_parameter('cameras.arm.vertical_fov', 150.0)
         self.declare_parameter('cameras.arm.aspect_ratio', 1.33)
         self.declare_parameter('cameras.arm.resolution.width', 640)
         self.declare_parameter('cameras.arm.resolution.height', 480)
-        self.declare_parameter('cameras.arm.topic', '/camera_arm/image_raw')
+        self.declare_parameter('cameras.arm.topic', '/mars/arm/image_raw')
 
         self.rendering_resolution = self.get_parameter('rendering_resolution').value
 
@@ -68,13 +68,13 @@ class MauriceBotNode(Node):
 
         # --- Publishers & Subscribers ---
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self.joint_state_pub = self.create_publisher(JointState, 'maurice_arm/state', 10)
+        self.joint_state_pub = self.create_publisher(JointState, '/mars/arm/state', 10)
         # Publishers for offscreen camera images
         self.camera_base_pub = self.create_publisher(Image, self.camera_params['base']['topic'], 10)
         self.camera_arm_pub  = self.create_publisher(Image, self.camera_params['arm']['topic'], 10)
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
-        self.create_subscription(Float64MultiArray, '/maurice_arm/commands', self.arm_commands_callback, 10)
+        self.create_subscription(Float64MultiArray, '/mars/arm/commands', self.arm_commands_callback, 10)
 
         # --- Timers for simulation and publishing ---
         self.simulation_timer = self.create_timer(0.002, self.simulation_timer_callback)
