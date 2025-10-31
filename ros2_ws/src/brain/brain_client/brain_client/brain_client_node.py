@@ -344,27 +344,27 @@ class BrainClientNode(Node):
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         self.get_chat_history_srv = self.create_service(
-            GetChatHistory, "/get_chat_history", self.handle_get_chat_history
+            GetChatHistory, "/brain/get_chat_history", self.handle_get_chat_history
         )
 
         # Create service for setting logging configuration
         self.set_logging_srv = self.create_service(
-            SetBool, "/set_logging_config", self.handle_set_logging_config
+            SetBool, "/brain/set_logging_config", self.handle_set_logging_config
         )
 
         # Create service for resetting the brain
         self.reset_srv = self.create_service(
-            ResetBrain, "/reset_brain", self.handle_reset_brain
+            ResetBrain, "/brain/reset_brain", self.handle_reset_brain
         )
 
         # --- New: Service for activating/deactivating the brain ---
         self.set_brain_active_srv = self.create_service(
-            SetBool, "/set_brain_active", self.handle_set_brain_active
+            SetBool, "/brain/set_brain_active", self.handle_set_brain_active
         )
 
         # --- Service for setting directive on startup ---
         self.set_directive_on_startup_srv = self.create_service(
-            SetDirectiveOnStartup, "/set_directive_on_startup", self.handle_set_directive_on_startup
+            SetDirectiveOnStartup, "/brain/set_directive_on_startup", self.handle_set_directive_on_startup
         )
 
         # Initialize TTS handler (after tts_status_pub is created)
@@ -449,7 +449,7 @@ class BrainClientNode(Node):
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
             GetAvailableDirectives,
-            "/get_available_directives",
+            "/brain/get_available_directives",
             self.handle_get_available_directives,
         )
 
@@ -478,12 +478,12 @@ class BrainClientNode(Node):
         from brain_messages.srv import GetAvailablePrimitives
         
         # Create service client
-        client = self.create_client(GetAvailablePrimitives, '/get_available_primitives')
+        client = self.create_client(GetAvailablePrimitives, '/brain/get_available_primitives')
         
         # Wait for service to be available
-        self.get_logger().info("Waiting for /get_available_primitives service...")
+        self.get_logger().info("Waiting for /brain/get_available_primitives service...")
         if not client.wait_for_service(timeout_sec=10.0):
-            self.get_logger().error("Timeout waiting for /get_available_primitives service")
+            self.get_logger().error("Timeout waiting for /brain/get_available_primitives service")
             return {}
         
         # Call service
