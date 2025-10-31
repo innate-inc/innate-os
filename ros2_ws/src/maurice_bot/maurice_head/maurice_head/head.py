@@ -96,22 +96,22 @@ class HeadServoNode(Node):
 
         # Subscription for position control
         self.subscription = self.create_subscription(
-            Int32, "head/set_position", self.position_callback, 10
+            Int32, "/mars/head/set_position", self.position_callback, 10
         )
 
         # Subscription for AI position control
         self.ai_position_subscription = self.create_subscription(
-            Empty, "head/set_ai_position", self.ai_position_callback, 10
+            Empty, "/mars/head/set_ai_position", self.ai_position_callback, 10
         )
 
         # Publisher for current position (JSON format)
         self.position_publisher = self.create_publisher(
-            String, "head/current_position", 10
+            String, "/mars/head/current_position", 10
         )
 
         # Service for enabling/disabling servo
         self.srv = self.create_service(
-            SetBool, "head/enable_servo", self.enable_servo_callback
+            SetBool, "/mars/head/enable_servo", self.enable_servo_callback
         )
         
         # Create timer for frequent position publishing

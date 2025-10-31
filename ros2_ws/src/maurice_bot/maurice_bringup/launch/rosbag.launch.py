@@ -15,12 +15,12 @@ def generate_launch_description():
             cmd=[
                 'ros2', 'bag', 'record',
                 '/cmd_vel',
-                '/color/image/compressed',
-                '/image_raw/compressed',
-                '/maurice_arm/state',
-                '/maurice_arm/commands',
-                '/chat_in',
-                '/chat_out',
+                '/mars/main_camera/image/compressed',
+                '/mars/arm/image_raw/compressed',
+                '/mars/arm/state',
+                '/mars/arm/commands',
+                '/brain/chat_in',
+                '/brain/chat_out',
                 '-o', f'{recordings_dir}/recorder_{timestamp}'
             ],
             output='screen'

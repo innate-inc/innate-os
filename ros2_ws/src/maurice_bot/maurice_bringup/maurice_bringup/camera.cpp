@@ -294,8 +294,8 @@ private:
         }
 
         // Create publishers with sensor QoS profile
-        std::string raw_topic = "/color/image";
-        std::string compressed_topic = "/color/image/compressed";
+        std::string raw_topic = "/mars/main_camera/image";
+        std::string compressed_topic = "/mars/main_camera/image/compressed";
         
         image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
             raw_topic,

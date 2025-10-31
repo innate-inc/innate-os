@@ -65,7 +65,7 @@ class BrainClientNode(Node):
         # Parameters
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
-        self.declare_parameter("image_topic", "/camera/color/image_raw/compressed")
+        self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
 
         # New parameters for optional depth processing:
@@ -77,7 +77,7 @@ class BrainClientNode(Node):
         self.declare_parameter("map_topic", "/map")
 
         # New parameters for arm camera
-        self.declare_parameter("arm_camera_image_topic", "/image_raw/compressed")
+        self.declare_parameter("arm_camera_image_topic", "/mars/arm/image_raw/compressed")
         self.declare_parameter("send_arm_camera_image", True)
 
         # Set to True if you wish to receive and forward depth images as well
@@ -320,7 +320,7 @@ class BrainClientNode(Node):
         # Subscribe to head position topic
         self.head_position_sub = self.create_subscription(
             String,
-            "head/current_position",
+            "/mars/head/current_position",
             self.head_position_callback,
             10,
         )
@@ -333,7 +333,7 @@ class BrainClientNode(Node):
         self._wait_for_input_manager()
         
         self.chat_in_sub = self.create_subscription(
-            String, "/chat_in", self.chat_in_callback, 10
+            String, "/brain/chat_in", self.chat_in_callback, 10
         )
         # Subscribe to custom input from input_manager
         self.custom_input_sub = self.create_subscription(
@@ -341,30 +341,30 @@ class BrainClientNode(Node):
         )
         # Publisher to tell input_manager which inputs should be active
         self.active_inputs_pub = self.create_publisher(String, "/input_manager/active_inputs", 10)
-        self.chat_out_pub = self.create_publisher(String, "/chat_out", 10)
+        self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         self.get_chat_history_srv = self.create_service(
-            GetChatHistory, "/get_chat_history", self.handle_get_chat_history
+            GetChatHistory, "/brain/get_chat_history", self.handle_get_chat_history
         )
 
         # Create service for setting logging configuration
         self.set_logging_srv = self.create_service(
-            SetBool, "/set_logging_config", self.handle_set_logging_config
+            SetBool, "/brain/set_logging_config", self.handle_set_logging_config
         )
 
         # Create service for resetting the brain
         self.reset_srv = self.create_service(
-            ResetBrain, "/reset_brain", self.handle_reset_brain
+            ResetBrain, "/brain/reset_brain", self.handle_reset_brain
         )
 
         # --- New: Service for activating/deactivating the brain ---
         self.set_brain_active_srv = self.create_service(
-            SetBool, "/set_brain_active", self.handle_set_brain_active
+            SetBool, "/brain/set_brain_active", self.handle_set_brain_active
         )
 
         # --- Service for setting directive on startup ---
         self.set_directive_on_startup_srv = self.create_service(
-            SetDirectiveOnStartup, "/set_directive_on_startup", self.handle_set_directive_on_startup
+            SetDirectiveOnStartup, "/brain/set_directive_on_startup", self.handle_set_directive_on_startup
         )
 
         # Initialize TTS handler (after tts_status_pub is created)
@@ -441,7 +441,7 @@ class BrainClientNode(Node):
 
         # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
-            String, "/set_directive", self.set_directive_callback, 10
+            String, "/brain/set_directive", self.set_directive_callback, 10
         )
         
 
@@ -449,7 +449,7 @@ class BrainClientNode(Node):
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
             GetAvailableDirectives,
-            "/get_available_directives",
+            "/brain/get_available_directives",
             self.handle_get_available_directives,
         )
 
@@ -478,12 +478,12 @@ class BrainClientNode(Node):
         from brain_messages.srv import GetAvailablePrimitives
         
         # Create service client
-        client = self.create_client(GetAvailablePrimitives, '/get_available_primitives')
+        client = self.create_client(GetAvailablePrimitives, '/brain/get_available_primitives')
         
         # Wait for service to be available
-        self.get_logger().info("Waiting for /get_available_primitives service...")
+        self.get_logger().info("Waiting for /brain/get_available_primitives service...")
         if not client.wait_for_service(timeout_sec=10.0):
-            self.get_logger().error("Timeout waiting for /get_available_primitives service")
+            self.get_logger().error("Timeout waiting for /brain/get_available_primitives service")
             return {}
         
         # Call service
@@ -518,7 +518,14 @@ class BrainClientNode(Node):
                 
                 primitives_dict[prim['name']] = MockPrimitive(prim)
             
-            self.get_logger().info(f"Loaded {len(primitives_dict)} primitives from service: {list(primitives_dict.keys())}")
+            # Log validation status
+            learned_count = sum(1 for prim in primitives_list if prim.get('type') == 'learned')
+            replay_count = sum(1 for prim in primitives_list if prim.get('type') == 'replay')
+            code_count = sum(1 for prim in primitives_list if prim.get('type') == 'code')
+            
+            self.get_logger().info(f"Loaded {len(primitives_dict)} validated primitives from service: {list(primitives_dict.keys())}")
+            self.get_logger().info(f"Primitive types: {code_count} code, {learned_count} learned, {replay_count} replay")
+            
             return primitives_dict
             
         except Exception as e:
@@ -547,7 +554,7 @@ class BrainClientNode(Node):
     def chat_in_callback(self, msg: String):
         chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().info(f"\033[1;92mReceived chat_in: {chat_entry}\033[0m")
+        self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {chat_entry}\033[0m")
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
         self.ws_bridge.send_message(outgoing_msg)
 
@@ -953,7 +960,7 @@ class BrainClientNode(Node):
         text = msg.payload.get("text", "")
         chat_entry = {"sender": sender, "text": text, "timestamp": time.time()}
         self.chat_history.append(chat_entry)
-        self.get_logger().debug(f"Received chat_out: {chat_entry}")
+        self.get_logger().debug(f"Received brain/chat_out: {chat_entry}")
         out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
         
