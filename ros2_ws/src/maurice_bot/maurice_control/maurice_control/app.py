@@ -237,6 +237,10 @@ class AppControl(Node):
             if wifi_ssid is not None:
                 data_to_publish_dict['wifi_ssid'] = wifi_ssid
             
+            # Include robot version
+            robot_version = get_robot_version()
+            data_to_publish_dict['version'] = robot_version
+            
             if data_to_publish_dict:
                 final_json_string_to_publish = json.dumps(data_to_publish_dict)
 
