@@ -22,7 +22,7 @@ def generate_launch_description():
     )
     image_topic_arg = DeclareLaunchArgument(
         "image_topic",
-        default_value="/camera/color/image_raw/compressed",
+        default_value="/mars/main_camera/image/compressed",
         description="Image topic",
     )
     cmd_vel_topic_arg = DeclareLaunchArgument(

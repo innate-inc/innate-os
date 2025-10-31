@@ -124,17 +124,17 @@ class BehaviorServer(Node):
         )
         
         # Subscribers
-        self.create_subscription(Image, '/color/image', self.image1_callback, image_qos)
-        self.create_subscription(Image, '/image_raw', self.image2_callback, image_qos)
-        self.create_subscription(JointState, '/maurice_arm/state', self.joint_state_callback, 10)
+        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
+        self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
         
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
-        self.head_ai_position_pub = self.create_publisher(Empty, '/head/set_ai_position', 10)
+        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/mars/arm/commands', 10)
+        self.head_ai_position_pub = self.create_publisher(Empty, '/mars/head/set_ai_position', 10)
         
         # Service client
-        self.arm_goto_client = self.create_client(GotoJS, '/maurice_arm/goto_js')
+        self.arm_goto_client = self.create_client(GotoJS, '/mars/arm/goto_js')
         
         # Action server
         self.action_server = ActionServer(
@@ -677,15 +677,15 @@ class BehaviorServer(Node):
         
         # Check if we have received any data at all
         if self.latest_image1 is None:
-            self.get_logger().warn("Camera 1 (/color/image) has never received data")
+            self.get_logger().warn("Camera 1 (/mars/main_camera/image) has never received data")
             return False
         
         if self.latest_image2 is None:
-            self.get_logger().warn("Camera 2 (/image_raw) has never received data")
+            self.get_logger().warn("Camera 2 (/mars/arm/image_raw) has never received data")
             return False
         
         if self.latest_joint_state is None:
-            self.get_logger().warn("Joint state (/maurice_arm/state) has never received data")
+            self.get_logger().warn("Joint state (/mars/arm/state) has never received data")
             return False
         
         # Check if data is recent (within timeout threshold)
