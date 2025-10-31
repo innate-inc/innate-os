@@ -15,7 +15,7 @@ ROS_COMMAND_GROUPS=(
 )
 
 WINDOW_NAMES=(
-    "control-bringup"
+    "app-bringup"
     "arm-recorder"
     "brain-nav"
     "behaviors-inputs"
