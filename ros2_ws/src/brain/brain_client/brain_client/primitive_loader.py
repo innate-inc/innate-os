@@ -11,6 +11,9 @@ import os
 import sys
 import importlib.util
 import inspect
+import json
+import h5py
+import re
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
@@ -24,18 +27,8 @@ class PrimitiveLoader:
     
     def __init__(self, logger):
         self.logger = logger
-        self._loaded_primitives: Dict[str, Type[Primitive]] = {}
         
     def discover_primitives_in_directory(self, directory_path: str) -> Dict[str, Type[Primitive]]:
-        """
-        Scans a directory for Python files and attempts to load primitive classes.
-        
-        Args:
-            directory_path: Path to directory containing primitive files
-            
-        Returns:
-            Dictionary mapping primitive names to their classes
-        """
         primitives = {}
         directory = Path(directory_path)
         
@@ -64,15 +57,6 @@ class PrimitiveLoader:
         return primitives
     
     def _load_primitives_from_file(self, file_path: Path) -> Dict[str, Type[Primitive]]:
-        """
-        Loads primitive classes from a single Python file.
-        
-        Args:
-            file_path: Path to the Python file
-            
-        Returns:
-            Dictionary mapping primitive names to their classes
-        """
         primitives = {}
         module_name = file_path.stem
         
@@ -116,46 +100,21 @@ class PrimitiveLoader:
         return primitives
     
     def _validate_primitive_class(self, primitive_class: Type[Primitive]) -> bool:
-        """
-        Validates that a primitive class is properly implemented.
-        
-        Args:
-            primitive_class: The primitive class to validate
-            
-        Returns:
-            True if valid, False otherwise
-        """
-        try:
-            # Check that required abstract methods are implemented
-            required_methods = ['name', 'execute', 'cancel']
-            for method_name in required_methods:
-                if not hasattr(primitive_class, method_name):
-                    self.logger.error(f"Primitive {primitive_class.__name__} missing required method: {method_name}")
-                    return False
-                    
-            # Try to get the name property (this will fail if not implemented properly)
-            # We can't instantiate without a logger, so we'll check if the property exists
-            if not hasattr(primitive_class, 'name') or not isinstance(primitive_class.name, property):
-                self.logger.error(f"Primitive {primitive_class.__name__} name must be a property")
+        # Check that required abstract methods are implemented
+        required_methods = ['name', 'execute', 'cancel']
+        for method_name in required_methods:
+            if not hasattr(primitive_class, method_name):
+                self.logger.error(f"Primitive {primitive_class.__name__} missing required method: {method_name}")
                 return False
                 
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error validating primitive {primitive_class.__name__}: {e}")
+        # Check that name is a property
+        if not hasattr(primitive_class, 'name') or not isinstance(primitive_class.name, property):
+            self.logger.error(f"Primitive {primitive_class.__name__} name must be a property")
             return False
+            
+        return True
     
     def _get_primitive_name(self, primitive_class: Type[Primitive]) -> str:
-        """
-        Gets the primitive name by creating a temporary instance.
-        This is needed because the name is a property that requires instantiation.
-        
-        Args:
-            primitive_class: The primitive class
-            
-        Returns:
-            The primitive's name
-        """
         try:
             # Create a temporary logger for this purpose
             import logging
@@ -170,22 +129,11 @@ class PrimitiveLoader:
             return fallback_name
     
     def _class_name_to_snake_case(self, class_name: str) -> str:
-        """Convert CamelCase to snake_case."""
-        import re
         # Insert underscore before uppercase letters that follow lowercase letters
         s1 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', class_name)
         return s1.lower()
     
     def load_primitives_from_directories(self, directories: List[str]) -> Dict[str, Type[Primitive]]:
-        """
-        Load primitives from multiple directories.
-        
-        Args:
-            directories: List of directory paths to scan
-            
-        Returns:
-            Dictionary mapping primitive names to their classes
-        """
         all_primitives = {}
         
         for directory in directories:
@@ -206,4 +154,66 @@ class PrimitiveLoader:
                 self.logger.error(f"Error loading primitives from {directory}: {e}")
                 
         return all_primitives
+
+    def validate_physical_primitive(self, primitive_dir: str, metadata: dict) -> bool:
+        primitive_type = metadata.get('type', '').lower()
+        execution = metadata.get('execution', {})
+        
+        if primitive_type == 'learned':
+            return self._validate_learned_primitive(primitive_dir, execution)
+        elif primitive_type == 'replay':
+            return self._validate_replay_primitive(primitive_dir, execution)
+        else:
+            self.logger.warning(f"Unknown primitive type '{primitive_type}' in {primitive_dir}")
+            return True  # Allow unknown types but log warning
+    
+    def _validate_learned_primitive(self, primitive_dir: str, execution: dict) -> bool:
+        checkpoint_file = execution.get('checkpoint')
+        if not checkpoint_file:
+            self.logger.error(f"Learned primitive in {primitive_dir} missing checkpoint file in execution config")
+            return False
+        
+        checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
+        if not os.path.exists(checkpoint_path):
+            self.logger.error(f"Learned primitive checkpoint not found: {checkpoint_path}")
+            return False
+        
+        # Check for stats file (optional but commonly needed)
+        stats_file = execution.get('stats_file', 'dataset_stats.pt')
+        stats_path = os.path.join(primitive_dir, stats_file)
+        if not os.path.exists(stats_path):
+            self.logger.warning(f"Learned primitive stats file not found: {stats_path} (optional)")
+        
+        self.logger.info(f"Learned primitive validation passed: {primitive_dir}")
+        return True
+    
+    def _validate_replay_primitive(self, primitive_dir: str, execution: dict) -> bool:
+        replay_file = execution.get('replay_file')
+        if not replay_file:
+            self.logger.error(f"Replay primitive in {primitive_dir} missing replay_file in execution config")
+            return False
+        
+        replay_path = os.path.join(primitive_dir, replay_file)
+        if not os.path.exists(replay_path):
+            self.logger.error(f"Replay primitive file not found: {replay_path}")
+            return False
+        
+        # Validate H5 file structure
+        try:
+            with h5py.File(replay_path, 'r') as h5file:
+                if 'action' not in h5file:
+                    self.logger.error(f"Replay file {replay_path} missing required 'action' dataset")
+                    return False
+                
+                actions = h5file['action'][:]
+                if actions.shape[0] == 0:
+                    self.logger.error(f"Replay file {replay_path} contains no actions")
+                    return False
+        
+        except Exception as e:
+            self.logger.error(f"Failed to validate replay file {replay_path}: {e}")
+            return False
+        
+        self.logger.info(f"Replay primitive validation passed: {primitive_dir}")
+        return True
 

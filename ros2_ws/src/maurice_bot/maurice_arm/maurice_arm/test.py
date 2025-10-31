@@ -15,7 +15,7 @@ URDF_PATH   = "/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/ur
 BASE_LINK   = "base_link"
 LINK_A_NAME = "base_link"
 LINK_B_NAME = "link5"
-JOINT_TOPIC = "/maurice_arm/state"
+JOINT_TOPIC = "/mars/arm/state"
 TIMER_HZ    = 1.0
 # -------------------------------------------
 

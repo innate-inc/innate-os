@@ -19,7 +19,7 @@ def nanoseconds_to_datetime(nanoseconds):
 
 def extract_chat_dialogue(bag_path, output_file):
     """
-    Extract chat_in and chat_out topics from ROS bag and create a dialogue file.
+    Extract brain/chat_in and brain/chat_out topics from ROS bag and create a dialogue file.
     
     Args:
         bag_path (str): Path to the ROS bag directory
@@ -64,9 +64,9 @@ def extract_chat_dialogue(bag_path, output_file):
             msg = deserialize_message(serialized_data, msg_cls)
             
             # Determine speaker based on topic
-            if 'chat_out' in topic:
+            if 'brain/chat_out' in topic:
                 speaker = "Bot"
-            elif 'chat_in' in topic:
+            elif 'brain/chat_in' in topic:
                 speaker = "User"
             else:
                 speaker = f"Unknown({topic})"
@@ -108,7 +108,7 @@ def extract_chat_dialogue(bag_path, output_file):
 
 def extract_video(bag_path, output_file, fps=30):
     """
-    Extract images from /color/image/compressed topic and create an MP4 video.
+    Extract images from /mars/main_camera/image/compressed topic and create an MP4 video.
     
     Args:
         bag_path (str): Path to the ROS bag directory
@@ -131,10 +131,10 @@ def extract_video(bag_path, output_file, fps=30):
     
     # Find compressed image topics
     image_topics = {topic: msg_type for topic, msg_type in topics_and_types.items() 
-                   if 'color/image/compressed' in topic}
+                   if 'mars/main_camera/image/compressed' in topic or 'mars/arm/image_raw/compressed' in topic}
     
     if not image_topics:
-        print("No color/image/compressed topics found in the bag file.")
+        print("No mars/main_camera/image/compressed or mars/arm/image_raw/compressed topics found in the bag file.")
         print("Available topics:", list(topics_and_types.keys()))
         return
     
