@@ -22,7 +22,7 @@ class MessageInType(str, Enum):
     DIRECTIVE = "directive"
     IMAGE = "image"
     POSE_IMAGE = "pose_image"
-    CHAT_IN = "chat_in"
+    CHAT_IN = "brain/chat_in"
     CUSTOM_INPUT = "custom_input"
     PRIMITIVE_ACTIVATED = "primitive_activated"
     PRIMITIVE_COMPLETED = "primitive_completed"
@@ -37,7 +37,7 @@ class MessageInType(str, Enum):
 class MessageOutType(str, Enum):
     READY_FOR_IMAGE = "ready_for_image"
     VISION_AGENT_OUTPUT = "vision_agent_output"
-    CHAT_OUT = "chat_out"
+    CHAT_OUT = "brain/chat_out"
     THOUGHTS = "thoughts"
     ERROR = "error"
     STOP_AND_GO_BACK = "stop_and_go_back"

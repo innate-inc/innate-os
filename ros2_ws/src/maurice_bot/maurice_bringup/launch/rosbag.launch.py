@@ -19,8 +19,8 @@ def generate_launch_description():
                 '/mars/arm/image_raw/compressed',
                 '/mars/arm/state',
                 '/mars/arm/commands',
-                '/chat_in',
-                '/chat_out',
+                '/brain/chat_in',
+                '/brain/chat_out',
                 '-o', f'{recordings_dir}/recorder_{timestamp}'
             ],
             output='screen'

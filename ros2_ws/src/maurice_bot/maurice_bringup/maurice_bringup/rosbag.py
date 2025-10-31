@@ -19,7 +19,7 @@ def nanoseconds_to_datetime(nanoseconds):
 
 def extract_chat_dialogue(bag_path, output_file):
     """
-    Extract chat_in and chat_out topics from ROS bag and create a dialogue file.
+    Extract brain/chat_in and brain/chat_out topics from ROS bag and create a dialogue file.
     
     Args:
         bag_path (str): Path to the ROS bag directory
@@ -64,9 +64,9 @@ def extract_chat_dialogue(bag_path, output_file):
             msg = deserialize_message(serialized_data, msg_cls)
             
             # Determine speaker based on topic
-            if 'chat_out' in topic:
+            if 'brain/chat_out' in topic:
                 speaker = "Bot"
-            elif 'chat_in' in topic:
+            elif 'brain/chat_in' in topic:
                 speaker = "User"
             else:
                 speaker = f"Unknown({topic})"
