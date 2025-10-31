@@ -136,7 +136,7 @@ class PrimitiveExecutionActionServer(Node):
         # Create unified service endpoint for getting all primitives
         self._get_primitives_service = self.create_service(
             GetAvailablePrimitives,
-            '/get_available_primitives',
+            '/brain/get_available_primitives',
             self._handle_get_available_primitives
         )
         
