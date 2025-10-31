@@ -70,6 +70,9 @@ class AppControl(Node):
     def __init__(self):
         super().__init__('app_control_node')
         
+        # Load app configuration
+        self._load_app_config()
+        
         # Cache for WiFi SSID to avoid frequent subprocess calls
         self._cached_wifi_ssid = None
         self._last_wifi_check_time = 0
@@ -120,6 +123,14 @@ class AppControl(Node):
         self.robot_info_timer = self.create_timer(1.0, self.publish_robot_info_callback)
         
         self.get_logger().info("AppControl node started.")
+
+    def _load_app_config(self):
+        """Load app configuration from config file."""
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        config_file_path = os.path.join(maurice_root, 'os_config.json')
+        
+        with open(config_file_path, 'r') as f:
+            self.app_config = json.load(f)
 
     def get_cached_wifi_ssid(self):
         """
@@ -240,6 +251,9 @@ class AppControl(Node):
             # Include robot version
             robot_version = get_robot_version()
             data_to_publish_dict['version'] = robot_version
+            
+            # Include minimum compatible app version
+            data_to_publish_dict['minimum_app_version'] = self.app_config['minimum_app_version']
             
             if data_to_publish_dict:
                 final_json_string_to_publish = json.dumps(data_to_publish_dict)
