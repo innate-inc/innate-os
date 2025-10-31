@@ -362,6 +362,11 @@ class BrainClientNode(Node):
             SetBool, "/brain/set_brain_active", self.handle_set_brain_active
         )
 
+        # --- Service for setting directive on startup ---
+        self.set_directive_on_startup_srv = self.create_service(
+            SetDirectiveOnStartup, "/brain/set_directive_on_startup", self.handle_set_directive_on_startup
+        )
+
         # Initialize TTS handler (after tts_status_pub is created)
         cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
         cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
