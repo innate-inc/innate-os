@@ -5,12 +5,64 @@ import math
 import numpy as np
 import os
 import json
+import subprocess
 
 from geometry_msgs.msg import Vector3, Twist
 from std_msgs.msg import Int32MultiArray, Float64MultiArray, String
 
 # Import NetworkManager utilities for WiFi SSID
 from maurice_bt_provisioner.nmcli_utils import nmcli_get_active_wifi_ssid
+
+def get_robot_version():
+    """
+    Get the current robot version.
+    - If on main branch and there are tags, returns the latest tag
+    - If in development (not on main), returns dev version using latest tag
+    - Raises RuntimeError if no tags exist (this should not happen)
+    """
+    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    
+    # Get current branch
+    result = subprocess.run(['git', 'branch', '--show-current'], 
+                          cwd=maurice_root, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to get current git branch: {result.stderr}")
+    current_branch = result.stdout.strip()
+    
+    # Get all tags sorted by version
+    result = subprocess.run(['git', 'tag', '--list', '--sort=-version:refname'], 
+                          cwd=maurice_root, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to get git tags: {result.stderr}")
+    
+    if not result.stdout.strip():
+        raise RuntimeError("No git tags found - repository must have at least one tag")
+    
+    tags = result.stdout.strip().split('\n')
+    latest_tag = tags[0] if tags else None
+    
+    # If on main branch and we have tags, return the latest tag
+    if current_branch == 'main' and latest_tag:
+        # Check if we're exactly on this tag
+        result = subprocess.run(['git', 'describe', '--exact-match', '--tags', 'HEAD'], 
+                              cwd=maurice_root, capture_output=True, text=True)
+        if result.returncode == 0:
+            return latest_tag
+    
+    # If we have tags, get the dev version using the latest tag
+    if latest_tag:
+        try:
+            # Validate tag format
+            parts = latest_tag.split('.')
+            if len(parts) == 3:
+                major, minor, patch = map(int, parts)
+                return f"{major}.{minor}.{patch}-dev"
+            else:
+                raise RuntimeError(f"Invalid tag format: {latest_tag}. Expected format: x.y.z")
+        except ValueError:
+            raise RuntimeError(f"Invalid tag format: {latest_tag}. Expected format: x.y.z")
+    
+    raise RuntimeError("Failed to determine robot version")
 
 class AppControl(Node):
     KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract from JSON
