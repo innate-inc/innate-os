@@ -518,7 +518,14 @@ class BrainClientNode(Node):
                 
                 primitives_dict[prim['name']] = MockPrimitive(prim)
             
-            self.get_logger().info(f"Loaded {len(primitives_dict)} primitives from service: {list(primitives_dict.keys())}")
+            # Log validation status
+            learned_count = sum(1 for prim in primitives_list if prim.get('type') == 'learned')
+            replay_count = sum(1 for prim in primitives_list if prim.get('type') == 'replay')
+            code_count = sum(1 for prim in primitives_list if prim.get('type') == 'code')
+            
+            self.get_logger().info(f"Loaded {len(primitives_dict)} validated primitives from service: {list(primitives_dict.keys())}")
+            self.get_logger().info(f"Primitive types: {code_count} code, {learned_count} learned, {replay_count} replay")
+            
             return primitives_dict
             
         except Exception as e:

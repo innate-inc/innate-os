@@ -144,43 +144,32 @@ class PrimitiveExecutionActionServer(Node):
         self.get_logger().info(f"Total primitives available: {len(self._code_primitives) + len(self._physical_primitives)}")
 
     def _load_physical_primitives(self, primitives_directory):
-        """
-        Load physical primitives from folders containing metadata.json files.
-        
-        Returns:
-            Dict mapping primitive names to their metadata
-        """
         physical_primitives = {}
         
-        try:
-            for item in os.listdir(primitives_directory):
-                item_path = os.path.join(primitives_directory, item)
-                
-                # Check if it's a directory with metadata.json
-                if os.path.isdir(item_path):
-                    metadata_path = os.path.join(item_path, 'metadata.json')
-                    if os.path.exists(metadata_path):
-                        try:
-                            with open(metadata_path, 'r') as f:
-                                metadata = json.load(f)
-                                primitive_name = metadata.get('name', item)
-                                physical_primitives[primitive_name] = {
-                                    'metadata': metadata,
-                                    'directory': item_path
-                                }
-                                self.get_logger().info(f"Loaded physical primitive: {primitive_name} (type: {metadata.get('type', 'unknown')})")
-                        except Exception as e:
-                            self.get_logger().error(f"Error loading metadata from {metadata_path}: {e}")
-        except Exception as e:
-            self.get_logger().error(f"Error scanning for physical primitives: {e}")
+        for item in os.listdir(primitives_directory):
+            item_path = os.path.join(primitives_directory, item)
+            
+            # Check if it's a directory with metadata.json
+            if os.path.isdir(item_path):
+                metadata_path = os.path.join(item_path, 'metadata.json')
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                        primitive_name = metadata.get('name', item)
+                        
+                        # Validate primitive before loading
+                        if self.primitive_loader.validate_physical_primitive(item_path, metadata):
+                            physical_primitives[primitive_name] = {
+                                'metadata': metadata,
+                                'directory': item_path
+                            }
+                            self.get_logger().info(f"Loaded physical primitive: {primitive_name} (type: {metadata.get('type', 'unknown')})")
+                        else:
+                            self.get_logger().warn(f"Skipped invalid physical primitive: {primitive_name}")
         
         return physical_primitives
 
     def _handle_get_available_primitives(self, request, response):
-        """
-        Service handler to return all available primitives (code + physical).
-        Returns JSON-encoded list of primitive metadata.
-        """
         all_primitives = []
         
         # Add code primitives
@@ -217,11 +206,6 @@ class PrimitiveExecutionActionServer(Node):
         return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):
-        """
-        Handle cancellation requests by calling the cancel method on the primitive.
-        """
-        self.get_logger().info("Received cancel request.")
-
         try:
             # Get the primitive type from the goal handle
             primitive_type = goal_handle.request.primitive_type
@@ -291,7 +275,6 @@ class PrimitiveExecutionActionServer(Node):
             )
 
     def _execute_code_primitive(self, goal_handle, primitive_type, inputs):
-        """Execute a code-based primitive."""
         primitive = self._code_primitives[primitive_type]
         self.get_logger().debug(
             f"Starting primitive '{primitive_type}' with inputs: {inputs}"
@@ -299,20 +282,12 @@ class PrimitiveExecutionActionServer(Node):
 
         # Define a feedback publisher for the primitive
         def _publish_feedback(update_message: str):
-            try:
-                # Assuming ExecutePrimitive.Feedback is the correct type
-                # and it has a string field.
-                feedback_msg = ExecutePrimitive.Feedback()
-                feedback_msg.feedback = update_message
-
-                goal_handle.publish_feedback(feedback_msg)
-                self.get_logger().debug(
-                    f"Published feedback for '{primitive_type}': {update_message}; feedback_msg: {feedback_msg}"
-                )
-            except Exception as e:
-                self.get_logger().error(
-                    f"Failed to publish feedback for '{primitive_type}': {e}"
-                )
+            feedback_msg = ExecutePrimitive.Feedback()
+            feedback_msg.feedback = update_message
+            goal_handle.publish_feedback(feedback_msg)
+            self.get_logger().debug(
+                f"Published feedback for '{primitive_type}': {update_message}"
+            )
 
         # Pass the feedback callback to the primitive if it supports it
         primitive.set_feedback_callback(_publish_feedback)
@@ -488,9 +463,6 @@ class PrimitiveExecutionActionServer(Node):
             )
 
     def _execute_physical_primitive(self, goal_handle, primitive_type, inputs):
-        """
-        Execute a physical primitive by delegating to the behavior_server.
-        """
         self.get_logger().info(f"Delegating physical primitive '{primitive_type}' to behavior_server")
         
         # Get the physical primitive metadata
