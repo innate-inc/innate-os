@@ -31,12 +31,15 @@ import time
 class UdpLeaderReceiver(Node):
     # Packet format constants
     MAGIC_HEADER = 0xAA55
+    RESET_MAGIC_HEADER = 0xAA56  # Special header for reset packets
     PACKET_SIZE = 38
+    RESET_PACKET_SIZE = 6  # Header + sequence only for reset packets
     HEADER_FORMAT = '<H'  # Little-endian uint16
     SEQUENCE_FORMAT = '<I'  # Little-endian uint32
     TIMESTAMP_FORMAT = '<d'  # Little-endian double
     SERVO_FORMAT = '<i'  # Little-endian int32
     FULL_PACKET_FORMAT = '<HId6i'  # Header + sequence + timestamp + 6 servos
+    RESET_PACKET_FORMAT = '<HI'  # Reset header + sequence
     
     def __init__(self):
         super().__init__('udp_leader_receiver')
@@ -170,7 +173,12 @@ class UdpLeaderReceiver(Node):
     
     def _process_packet(self, data: bytes, addr: tuple):
         """Process a received UDP packet"""
-        # Check packet size
+        # Check for reset packet first
+        if len(data) == self.RESET_PACKET_SIZE:
+            self._process_reset_packet(data, addr)
+            return
+        
+        # Check packet size for normal data packets
         if len(data) != self.PACKET_SIZE:
             self.get_logger().warn(
                 f'Invalid packet size: {len(data)} bytes (expected {self.PACKET_SIZE}) from {addr}'
@@ -247,6 +255,41 @@ class UdpLeaderReceiver(Node):
         # This works correctly with wrap-around because we only reject
         # packets that are not strictly newer
         return sequence <= self.last_sequence
+    
+    def _process_reset_packet(self, data: bytes, addr: tuple):
+        """Process a reset packet to reset sequence tracking"""
+        try:
+            # Unpack reset packet
+            unpacked = struct.unpack(self.RESET_PACKET_FORMAT, data)
+            
+            # Extract fields
+            reset_header = unpacked[0]
+            reset_sequence = unpacked[1]
+            
+            # Validate reset magic header
+            if reset_header != self.RESET_MAGIC_HEADER:
+                self.get_logger().warn(
+                    f'Invalid reset magic header: 0x{reset_header:04X} (expected 0x{self.RESET_MAGIC_HEADER:04X}) from {addr}'
+                )
+                self.error_count += 1
+                return
+            
+            # Reset sequence tracking
+            old_sequence = self.last_sequence
+            self.last_sequence = -1  # Reset to accept next packet as first
+            self.out_of_order_count = 0
+            
+            self.get_logger().info(
+                f'Sequence tracking reset via UDP packet from {addr} '
+                f'(reset_seq={reset_sequence}, old_last_seq={old_sequence})'
+            )
+            
+        except struct.error as e:
+            self.get_logger().error(f'Failed to unpack reset packet from {addr}: {str(e)}')
+            self.error_count += 1
+        except Exception as e:
+            self.get_logger().error(f'Error processing reset packet from {addr}: {str(e)}')
+            self.error_count += 1
     
     def handle_start_stop(self, request, response):
         """Handle start/stop service requests"""
