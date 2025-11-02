@@ -44,27 +44,30 @@ def main():
         ),
     )
 
-    # Run the simulation node in another thread (Genesis convenience)
-    if platform.system() == "Darwin":  # macOS
-        gs.tools.run_in_another_thread(fn=sim_node.run, args=())
-    else:
-        sim_node.run()  # run directly on non-macOS platforms
+    # Run the simulation node
+    sim_node.run()
 
-    # If visualization is requested, we drive the viewer in the main thread
+    # If visualization is requested, keep main thread alive for viewer
     if args.vis:
-        sim_node.scene.viewer.start()
-
-    try:
-        # Keep main thread alive until user interrupts
-        while not shared_queues.exit_event.is_set():
-            time.sleep(1.0)
-    except KeyboardInterrupt:
+        try:
+            # Keep the simulation running and responsive
+            while not shared_queues.exit_event.is_set():
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            pass
         print("Keyboard interrupt, shutting down...")
-    finally:
-        # Signal both threads to stop
-        shared_queues.exit_event.set()
-        agent_thread.join()
-        print("Main finished.")
+    else:
+        print("No viewer requested. Press Ctrl+C to stop.")
+        try:
+            while not shared_queues.exit_event.is_set():
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            pass
+
+    # Signal both threads to stop
+    shared_queues.exit_event.set()
+    agent_thread.join()
+    print("Main finished.")
 
 
 if __name__ == "__main__":
