@@ -37,7 +37,7 @@ fonttools==4.58.2
 fqdn==1.5.1
 freetype-py==2.5.1
 fsspec==2025.5.1
-genesis-world @ git+https://github.com/Genesis-Embodied-AI/Genesis.git@9db9c56dbe9786a50aabea55753c842987c8893e
+genesis-world==0.3.6
 glfw==2.9.0
 h11==0.16.0
 httpcore==1.0.9

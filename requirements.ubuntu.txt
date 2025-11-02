@@ -76,7 +76,7 @@ future==1.0.0
 gast==0.6.0
 gdown==5.2.0
 genesis==0.9.2
-genesis-world @ git+https://github.com/Genesis-Embodied-AI/Genesis.git@9db9c56dbe9786a50aabea55753c842987c8893e
+genesis-world==0.3.6
 glfw==2.9.0
 google-auth==2.40.3
 google-auth-oauthlib==1.2.2
