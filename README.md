@@ -25,7 +25,7 @@ docker compose -f docker-compose.dev.yml up -d
 And then drop into the container:
 
 ```bash
-docker compose -f docker-compose.dev.yml exec maurice zsh -l
+docker compose -f docker-compose.dev.yml exec innate zsh -l
 ```
 
 See the nodes running with tmux
