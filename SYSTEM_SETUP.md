@@ -16,6 +16,61 @@ The system uses `systemd` to manage three main services:
 
 When the BLE service connects the robot to a new network and detects an IP address change, it uses `sudo` to execute a helper script (`restart_robot_networking.sh`) which in turn uses `systemctl` to restart the `discovery-server` and `ros-app` services. The `setup_dds.zsh` script has been modified to dynamically detect the current IP, ensuring restarted services use the correct configuration.
 
+## Rust ROS2 Development Setup
+
+For developing ROS2 nodes in Rust (like `mars_control_rust`), additional setup is required beyond the standard ROS2 environment:
+
+### Prerequisites
+
+1. **Install Rust toolchain:**
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source ~/.cargo/env
+   ```
+
+2. **Install Rust ROS2 dependencies:**
+   ```bash
+   sudo apt install -y git libclang-dev python3-pip python3-vcstool
+   pip install git+https://github.com/colcon/colcon-cargo.git
+   pip install git+https://github.com/colcon/colcon-ros-cargo.git
+   ```
+
+3. **Clone and import ros2_rust workspace:**
+   ```bash
+   cd /home/jetson1/innate-os/ros2_ws/src/maurice_bot
+   git clone https://github.com/ros2-rust/ros2_rust.git
+   cd /home/jetson1/innate-os/ros2_ws
+   vcs import src/maurice_bot < src/maurice_bot/ros2_rust/ros2_rust_humble.repos
+   ```
+
+### Building Rust ROS2 Packages
+
+1. **Build with dependencies:**
+   ```bash
+   cd /home/jetson1/innate-os/ros2_ws
+   colcon build --packages-up-to mars_control_rust --allow-overriding std_msgs geometry_msgs builtin_interfaces
+   ```
+
+2. **Launch Rust nodes:**
+   ```bash
+   source /opt/ros/humble/setup.bash
+   AMENT_PREFIX_PATH=/home/jetson1/innate-os/ros2_ws/install/mars_control_rust:/opt/ros/humble:$AMENT_PREFIX_PATH
+   ros2 launch mars_control_rust mars_control.launch.py
+   ```
+
+### Important Notes
+
+- **Workspace Dependencies:** Rust ROS2 requires workspace-built message bindings. The `vcs import` step is essential - it clones the necessary ROS2 message repositories that `rosidl_generator_rs` uses to create Rust bindings.
+- **Cargo Patching:** The build process automatically creates `.cargo/config.toml` patches that redirect Cargo to use workspace-built message crates instead of crates.io versions (which are often yanked/incompatible).
+- **Clean Builds:** If you delete `build/log/install` directories, you only need to rebuild with `colcon build` - the source repositories remain in place.
+- **If Deleted:** If you accidentally delete the `ros2/` or `ros2-rust/` directories, re-run the `vcs import` command to restore them.
+
+### Troubleshooting Rust Issues
+
+- **"Yanked version" errors:** Ensure you've run `vcs import` to get workspace message repositories.
+- **Build failures:** Make sure `libclang-dev` is installed and colcon plugins are up to date.
+- **Missing patches:** Check that `.cargo/config.toml` exists and contains the necessary `[patch.crates-io.*]` entries.
+
 ## Setup Steps
 
 **Important:** Replace placeholders like `jetson1`, `/home/jetson1`, `your_package_name`, and `your_launch_file.py` with your actual username, home directory, ROS package, and launch file names throughout these steps.
