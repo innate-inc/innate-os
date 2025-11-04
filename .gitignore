@@ -5,12 +5,6 @@ log/
 dds/super_client_configuration.xml
 ros2_ws/src/brain/manipulation/ckpts/*
 
-# Rust specific artifacts
-.cargo/
-**/Cargo.lock
-target/
-**/target/
-
 # Python artifacts
 __pycache__/
 *.py[cod]
