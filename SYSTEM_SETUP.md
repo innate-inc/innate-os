@@ -22,23 +22,28 @@ For developing ROS2 nodes in Rust (like `mars_control_rust`), additional setup i
 
 ### Prerequisites
 
-1. **Install Rust toolchain:**
+1. **Clone repository with submodules:**
+   ```bash
+   git clone --recursive git@github.com:innate-inc/maurice-prod.git
+   # Or if already cloned:
+   git submodule update --init --recursive
+   ```
+
+2. **Install Rust toolchain:**
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    source ~/.cargo/env
    ```
 
-2. **Install Rust ROS2 dependencies:**
+3. **Install Rust ROS2 dependencies:**
    ```bash
    sudo apt install -y git libclang-dev python3-pip python3-vcstool
    pip install git+https://github.com/colcon/colcon-cargo.git
    pip install git+https://github.com/colcon/colcon-ros-cargo.git
    ```
 
-3. **Clone and import ros2_rust workspace:**
+4. **Import ros2 workspace dependencies:**
    ```bash
-   cd /home/jetson1/innate-os/ros2_ws/src/maurice_bot
-   git clone https://github.com/ros2-rust/ros2_rust.git
    cd /home/jetson1/innate-os/ros2_ws
    vcs import src/maurice_bot < src/maurice_bot/ros2_rust/ros2_rust_humble.repos
    ```
