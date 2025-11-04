@@ -1,0 +1,20 @@
+[patch.crates-io.test_msgs]
+path = "/home/jetson1/innate-os/ros2_ws/install/test_msgs/share/test_msgs/rust"
+
+[patch.crates-io.example_interfaces]
+path = "/home/jetson1/innate-os/ros2_ws/install/example_interfaces/share/example_interfaces/rust"
+
+[patch.crates-io.action_msgs]
+path = "/home/jetson1/innate-os/ros2_ws/install/action_msgs/share/action_msgs/rust"
+
+[patch.crates-io.unique_identifier_msgs]
+path = "/home/jetson1/innate-os/ros2_ws/install/unique_identifier_msgs/share/unique_identifier_msgs/rust"
+
+[patch.crates-io.geometry_msgs]
+path = "/home/jetson1/innate-os/ros2_ws/install/geometry_msgs/share/geometry_msgs/rust"
+
+[patch.crates-io.std_msgs]
+path = "/home/jetson1/innate-os/ros2_ws/install/std_msgs/share/std_msgs/rust"
+
+[patch.crates-io.builtin_interfaces]
+path = "/home/jetson1/innate-os/ros2_ws/install/builtin_interfaces/share/builtin_interfaces/rust"
