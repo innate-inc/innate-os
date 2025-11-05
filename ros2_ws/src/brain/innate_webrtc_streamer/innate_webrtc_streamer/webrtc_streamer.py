@@ -14,7 +14,7 @@ from gi.repository import Gst, GstWebRTC, GstSdp
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import String
 
 
@@ -37,8 +37,8 @@ class SimpleWebRTCStreamer(Node):
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
-        self.image_sub = self.create_subscription(Image, '/mars/main_camera/image', self.on_image_main, camera_qos)
-        self.image_sub_arm = self.create_subscription(Image, '/mars/arm/image_raw', self.on_image_arm, camera_qos)
+        self.image_sub = self.create_subscription(CompressedImage, '/mars/main_camera/image/compressed', self.on_image_main, camera_qos)
+        self.image_sub_arm = self.create_subscription(CompressedImage, '/mars/arm/image_raw/compressed', self.on_image_arm, camera_qos)
         
         self.pipe = None
         self.webrtc = None
@@ -48,18 +48,21 @@ class SimpleWebRTCStreamer(Node):
         self.get_logger().info('Simple WebRTC Streamer ready (dual camera mode)')
     
     def _process_image(self, msg, target_width=640, target_height=480):
-        """Helper to process image messages into RGB format"""
-        if msg.encoding == 'bgr8':
-            img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
-            img = img[:, :, ::-1]  # BGR to RGB
-        elif msg.encoding == 'rgb8':
-            img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
-        else:
+        """Helper to process compressed image messages into RGB format"""
+        import cv2
+        
+        # Decode compressed image
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        if img is None:
             return None
+            
+        # Convert BGR to RGB (OpenCV uses BGR by default)
+        img = img[:, :, ::-1]
         
         # Resize if needed
         if img.shape[0] != target_height or img.shape[1] != target_width:
-            import cv2
             img = cv2.resize(img, (target_width, target_height))
         
         return img
