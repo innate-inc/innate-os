@@ -13,6 +13,7 @@ This keeps ROS complexity separate from the input device implementations.
 """
 
 import os
+import time
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -117,12 +118,23 @@ class InputManagerNode(Node):
         try:
             # Convert string to dict if needed
             if isinstance(data, str):
-                data_dict = {"text": data}
+                text = data
             else:
-                data_dict = data.copy()
-            
-            # Add device source to data
-            data_dict['input_device'] = device_name
+                text = data.get('text', '')
+            # Format chat messages in standard JavaScript format
+            if data_type == "chat_in":
+                data_dict = {
+                    "text": text,
+                    "sender": "user",
+                    "timestamp": time.time()
+                }
+            else:
+                # For non-chat data, preserve original structure and add device source
+                if isinstance(data, str):
+                    data_dict = {"text": data}
+                else:
+                    data_dict = data.copy()
+                data_dict['input_device'] = device_name
             
             # Serialize to JSON
             json_data = json.dumps(data_dict)
@@ -132,7 +144,7 @@ class InputManagerNode(Node):
             # Publish to appropriate topic
             if data_type == "chat_in":
                 self.chat_in_pub.publish(msg)
-                self.get_logger().debug(f"📤 Published brain/chat_in from '{device_name}': {data_dict.get('text', '')[:50]}")
+                self.get_logger().debug(f"📤 Published brain/chat_in from '{device_name}': {text[:50]}")
             elif data_type == "custom":
                 self.custom_pub.publish(msg)
                 self.get_logger().debug(f"📤 Published custom data from '{device_name}'")
