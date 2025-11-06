@@ -6,7 +6,7 @@
 set -e  # Exit on error
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
+REPO_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 LOG_FILE="$REPO_DIR/logs/post_update.log"
 
 # Create logs directory if it doesn't exist
@@ -86,7 +86,7 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     
     # Run as the actual user, not root
     ACTUAL_USER=${SUDO_USER:-jetson1}
-    su - "$ACTUAL_USER" -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && colcon build --symlink-install"
+    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
     
     if [ $? -eq 0 ]; then
         log "ROS2 workspace rebuilt successfully"
