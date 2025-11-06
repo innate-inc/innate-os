@@ -17,6 +17,15 @@ log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
+# Ensure log file has correct ownership
+ensure_log_ownership() {
+    if [ -f "$LOG_FILE" ]; then
+        # Get the actual user who started the script (not the sudo user)
+        ACTUAL_USER=${SUDO_USER:-$USER}
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$LOG_FILE" 2>/dev/null || true
+    fi
+}
+
 log "========================================"
 log "Starting post-update script"
 log "Repository: $REPO_DIR"
@@ -85,7 +94,7 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     cd "$REPO_DIR/ros2_ws"
     
     # Run as the actual user, not root
-    ACTUAL_USER=${SUDO_USER:-jetson1}
+    ACTUAL_USER=${SUDO_USER:-$USER}
     sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
     
     if [ $? -eq 0 ]; then
@@ -128,8 +137,8 @@ log "========================================"
 log "Post-update script completed successfully"
 log "========================================"
 
-# Send notification (optional - requires notification system)
-# echo "Innate-OS update completed on $(hostname)" | mail -s "Update Notification" admin@example.com
+# Fix log file ownership
+ensure_log_ownership
 
 exit 0
 
