@@ -552,11 +552,12 @@ class BrainClientNode(Node):
         return False
     
     def chat_in_callback(self, msg: String):
-        chat_entry = {"sender": "user", "text": msg.data, "timestamp": time.time()}
-        self.chat_history.append(chat_entry)
-        self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {chat_entry}\033[0m")
-        outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": msg.data})
+        data = json.loads(msg.data)
+        self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {data}\033[0m")
+        self.chat_history.append(data)
+        outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": data['text']})
         self.ws_bridge.send_message(outgoing_msg)
+        self.get_logger().info(f"\033[1;92mSent MessageIn: {outgoing_msg}\033[0m")
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
