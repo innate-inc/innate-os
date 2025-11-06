@@ -81,16 +81,16 @@ class BehaviorServer(Node):
         self.get_logger().info("Behavior server started.")
         
         # Primitives directory for loading checkpoints/data
-        self.primitives_directory = os.path.expanduser("~/maurice-prod/primitives")
+        self.primitives_directory = os.path.expanduser("~/innate-os/primitives")
         
         # Get data directory from recorder config
         try:
-            self.declare_parameter('data_directory', '~/maurice-prod/data')
+            self.declare_parameter('data_directory', '~/innate-os/data')
             self.data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
             self.get_logger().info(f"Data directory: {self.data_directory}")
         except Exception as e:
             self.get_logger().warn(f"Could not load data_directory parameter: {e}")
-            self.data_directory = os.path.expanduser("~/maurice-prod/data")
+            self.data_directory = os.path.expanduser("~/innate-os/data")
         
         # Keep your existing image_size for the behavior server
         self.bridge = CvBridge()

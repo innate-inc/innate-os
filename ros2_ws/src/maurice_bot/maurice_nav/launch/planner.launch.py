@@ -28,7 +28,7 @@ def generate_launch_description():
         'compute_path_to_pose.xml')
 
     # Define the default map path
-    default_map_path = os.path.expanduser('~/maurice-prod/maps/home.yaml')
+    default_map_path = os.path.expanduser('~/innate-os/maps/home.yaml')
 
     # Declare launch arguments
     map_arg = DeclareLaunchArgument(

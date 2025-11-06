@@ -15,7 +15,7 @@ def generate_launch_description():
                 '/maurice_arm/commands',
                 '/chat_in',
                 '/chat_out',
-                '-o', f'/home/jetson1/maurice-prod/recordings/recorder_{timestamp}'
+                '-o', f'/home/jetson1/innate-os/recordings/recorder_{timestamp}'
             ],
             output='screen'
         ),

@@ -16,7 +16,7 @@ class AppControl(Node):
         super().__init__('app_control_node')
         
         # Declare parameters
-        self.declare_parameter('data_directory', os.path.expanduser('~/maurice-prod/data'))
+        self.declare_parameter('data_directory', os.path.expanduser('~/innate-os/data'))
         
         # Subscribe to joystick messages (Vector3)
         self.joystick_sub = self.create_subscription(

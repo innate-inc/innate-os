@@ -19,7 +19,7 @@ def generate_launch_description():
         name='maurice_app',
         output='screen',
         parameters=[{
-            'data_directory': os.path.expanduser('~/maurice-prod/data')
+            'data_directory': os.path.expanduser('~/innate-os/data')
         }]
     )
 

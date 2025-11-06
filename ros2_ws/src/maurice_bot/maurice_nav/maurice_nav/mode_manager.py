@@ -63,13 +63,13 @@ class ModeManager(Node):
         self.current_process = None
         
         # Maps directory
-        self.maps_dir = os.path.expanduser('~/maurice-prod/maps')
+        self.maps_dir = os.path.expanduser('~/innate-os/maps')
         
         # Mode persistence file
-        self.mode_file = os.path.expanduser('~/maurice-prod/.last_mode')
+        self.mode_file = os.path.expanduser('~/innate-os/.last_mode')
         
         # Map persistence file  
-        self.map_file = os.path.expanduser('~/maurice-prod/.last_map')
+        self.map_file = os.path.expanduser('~/innate-os/.last_map')
         
         # BasicNavigator for map operations
         self.navigator = None

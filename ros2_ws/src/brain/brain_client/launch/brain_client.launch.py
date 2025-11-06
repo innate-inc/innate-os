@@ -9,7 +9,7 @@ from pathlib import Path
 
 def generate_launch_description():
     # Load environment variables from .env file if it exists
-    env_file_path = Path("/home/jetson1/maurice-prod/.env")
+    env_file_path = Path("/home/jetson1/innate-os/.env")
     if env_file_path.exists():
         with open(env_file_path) as f:
             for line in f:

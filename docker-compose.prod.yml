@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: maurice-prod
+    container_name: innate-os
 
     # 2) Or just do a "do-nothing" command so the container doesn't exit
     command: zsh -l

@@ -54,7 +54,7 @@ class InferenceNode(Node):
         self.policy = ViTPolicy(policy_config).to(self.device).half()
         
         # Load checkpoint and stats
-        checkpoint_path = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Axel_wednesday_20250517_1828/policy_epoch_9895_seed_100.ckpt'
+        checkpoint_path = '/home/vignesh/innate-os/ros2_ws/src/brain/manipulation/ckpts/Axel_wednesday_20250517_1828/policy_epoch_9895_seed_100.ckpt'
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')

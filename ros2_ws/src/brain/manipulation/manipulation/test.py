@@ -41,7 +41,7 @@ class ImageCapture(Node):
     
     def load_hdf5_images(self):
         """Load first frames from HDF5 dataset"""
-        file_path = "/home/vignesh/maurice-prod/data/TestData/episode_0.h5"
+        file_path = "/home/vignesh/innate-os/data/TestData/episode_0.h5"
         try:
             with h5py.File(file_path, 'r') as f:
                 # Extract first frames from both cameras

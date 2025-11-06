@@ -11,7 +11,7 @@ import trimesh
 import fcl
 
 # ------------------ CONFIG ------------------
-URDF_PATH   = "/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/urdf/maurice.urdf"
+URDF_PATH   = "/home/vignesh/innate-os/ros2_ws/src/maurice_bot/maurice_sim/urdf/maurice.urdf"
 BASE_LINK   = "base_link"
 LINK_A_NAME = "base_link"
 LINK_B_NAME = "link5"
