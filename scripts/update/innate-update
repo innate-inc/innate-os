@@ -82,7 +82,15 @@ check_updates() {
         echo "Latest:  ${remote:0:7}"
         echo ""
         echo "Recent changes:"
-        git -C "$REPO_DIR" log --oneline HEAD..origin/$BRANCH | head -5
+        # Show changelog without pager, limit to reasonable number of commits
+        local commit_count=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
+        if [ "$commit_count" -gt 10 ]; then
+            echo "Showing first 10 of $commit_count commits:"
+            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -10
+            echo "... and $((commit_count - 10)) more commits"
+        else
+            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
+        fi
         echo ""
         echo "Run 'innate-update apply' to install updates"
         return 1
@@ -136,7 +144,15 @@ apply_updates() {
     # Show what will be updated
     echo ""
     echo "Changes to be applied:"
-    git -C "$REPO_DIR" log --oneline HEAD..origin/$BRANCH
+    # Show changelog without pager, limit to reasonable number of commits
+    local commit_count=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
+    if [ "$commit_count" -gt 20 ]; then
+        echo "Showing first 20 of $commit_count commits:"
+        git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -20
+        echo "... and $((commit_count - 20)) more commits"
+    else
+        git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
+    fi
     echo ""
     
     # Confirm
