@@ -30,11 +30,46 @@ When the BLE service connects the robot to a new network and detects an IP addre
     *   This configures the I2S pins (BCLK, LRCLK, DIN) needed for the MAX98357A audio amplifier.
     *   After reboot, verify with: `aplay -l` (should show additional audio devices)
 
-2.  **Update Scripts:**
+2.  **Disable WiFi Power Management:**
+    *   WiFi power saving can cause intermittent network connectivity issues that may disrupt ROS/DDS communication.
+    *   Create global config directory (if missing):
+        ```bash
+        sudo mkdir -p /etc/NetworkManager/conf.d
+        ```
+    *   Create the override file:
+        ```bash
+        sudo nano /etc/NetworkManager/conf.d/default-wifi-powersave-off.conf
+        ```
+    *   Add the following content:
+        ```
+        [connection]
+        wifi.powersave = 2
+        ```
+    *   Save and exit (`Ctrl+X`, then `Y`, then `Enter`).
+    *   Remove any conflicting "on" config (this file re-enables power saving):
+        ```bash
+        sudo rm /etc/NetworkManager/conf.d/default-wifi-powersave-on.conf
+        ```
+    *   Restart NetworkManager:
+        ```bash
+        sudo systemctl restart NetworkManager
+        ```
+    *   Verify it worked (replace `wlP1p1s0` with your WiFi interface name if different):
+        ```bash
+        iwconfig wlP1p1s0 | grep "Power Management"
+        ```
+        → Should output `Power Management:off`
+    *   (Optional) Confirm via logs:
+        ```bash
+        journalctl -u NetworkManager | grep powersave
+        ```
+        → Should mention only `default-wifi-powersave-off.conf`
+
+3.  **Update Scripts:**
     *   The script `innate-os/dds/setup_dds.zsh` has already been modified to dynamically detect the IP address.
     *   The script `innate-os/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py` has been modified to detect IP changes and call the restart helper script.
 
-3.  **Place Helper Scripts:**
+4.  **Place Helper Scripts:**
     *   Copy the restart helper script to `/usr/local/bin`:
         ```bash
         sudo cp innate-os/scripts/restart_robot_networking.sh /usr/local/bin/
@@ -47,7 +82,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
         ```
     *   **Crucially, edit `/usr/local/bin/launch_ros_in_tmux.sh`** and update the `ROS_LAUNCH_PACKAGE` and `ROS_LAUNCH_FILE` variables to match your actual ROS application launch details.
 
-4.  **Configure Sudoers:**
+5.  **Configure Sudoers:**
     *   Allow the user running the BLE service (`jetson1` in the examples) to run the restart script without a password.
     *   **Use `sudo visudo`** to edit the sudoers file. **Never edit it directly.**
     *   Add the following line at the end (replace `jetson1` if your user is different):
@@ -56,7 +91,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
         ```
     *   Save and exit the editor.
 
-5.  **Install Systemd Unit Files:**
+6.  **Install Systemd Unit Files:**
     *   Copy the generated unit files to the systemd system directory:
         ```bash
         sudo cp innate-os/systemd/discovery-server.service /etc/systemd/system/
@@ -65,7 +100,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
         ```
     *   **Review the copied files in `/etc/systemd/system/`**: Ensure the `User`, `WorkingDirectory`, `ExecStart`, and script paths within the files are correct for your system setup (especially the `User` in `ros-app.service` and `ble-provisioner.service`).
 
-6.  **Enable and Start Services:**
+7.  **Enable and Start Services:**
     *   Reload the systemd daemon to recognize the new files:
         ```bash
         sudo systemctl daemon-reload
