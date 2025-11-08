@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from maurice_arm.dynamixel import Dynamixel
-from maurice_arm.robot import Robot
+from maurice_control.dynamixel import Dynamixel
+from maurice_control.robot import Robot
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 import numpy as np
@@ -12,7 +12,7 @@ class LeaderArmNode(Node):
         super().__init__('leader_arm')
         
         # Declare and get parameters
-        self.declare_parameter('device_name', '/dev/ttyACM0')
+        self.declare_parameter('device_name', '/dev/ttyACM1')
         self.declare_parameter('baud_rate', 1000000)
         self.declare_parameter('control_frequency', 100.0)
         self.declare_parameter('servo_ids', [1, 2, 3, 4, 5, 6])
