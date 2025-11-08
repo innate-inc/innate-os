@@ -14,6 +14,7 @@ public:
 
     std::vector<int> readPosition(int tries = 2);
     std::vector<int> readVelocity();
+    std::pair<std::vector<int>, std::vector<int>> readState(int tries = 2);  // Read both position and velocity in one transaction
     void setGoalPos(const std::vector<int>& action);
 
 private:
@@ -22,6 +23,7 @@ private:
     
     std::unique_ptr<dynamixel::GroupSyncRead> position_reader_;
     std::unique_ptr<dynamixel::GroupSyncRead> velocity_reader_;
+    std::unique_ptr<dynamixel::GroupSyncRead> state_reader_;  // Combined reader for both velocity and position
     std::unique_ptr<dynamixel::GroupSyncWrite> pos_writer_;
     
     static constexpr int ADDR_PRESENT_POSITION = 132;
