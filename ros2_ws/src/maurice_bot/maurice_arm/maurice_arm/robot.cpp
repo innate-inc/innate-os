@@ -39,6 +39,13 @@ Robot::Robot(std::shared_ptr<Dynamixel> dynamixel, const std::vector<int>& servo
         ADDR_GOAL_POSITION,
         4  // 4 bytes for position
     );
+    
+    // Initialize parameters for each servo with dummy data
+    // This is required before using changeParam()
+    for (int id : servo_ids_) {
+        uint8_t dummy_param[4] = {0, 0, 0, 0};
+        pos_writer_->addParam(id, dummy_param);
+    }
 }
 
 Robot::~Robot() {
