@@ -241,7 +241,7 @@ private:
             // ========== ARM CONTROL ==========
             // Read positions and velocities for arm servos
             auto positions = robot_->readPosition();
-            auto velocities = robot_->readVelocity();
+            // auto velocities = robot_->readVelocity();  // COMMENTED OUT FOR SPEED
             
             // Convert to radians
             std::vector<double> positions_rad;
@@ -249,24 +249,26 @@ private:
                 positions_rad.push_back(((pos - 2048) * 2 * M_PI) / 4096.0);
             }
             
-            std::vector<double> velocities_rad;
-            for (int vel : velocities) {
-                velocities_rad.push_back((vel * 2 * M_PI) / 4096.0);
-            }
+            // COMMENTED OUT - No longer reading velocities
+            // std::vector<double> velocities_rad;
+            // for (int vel : velocities) {
+            //     velocities_rad.push_back((vel * 2 * M_PI) / 4096.0);
+            // }
             
             // Flip directions for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
             std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
             for (size_t idx : flip_indices) {
                 if (idx < positions_rad.size()) {
                     positions_rad[idx] = -positions_rad[idx];
-                    velocities_rad[idx] = -velocities_rad[idx];
+                    // velocities_rad[idx] = -velocities_rad[idx];  // COMMENTED OUT
                 }
             }
             
             // Publish arm joint state (only first 6 servos, excluding head servo 7)
             joint_state_msg_.header.stamp = this->now();
             joint_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
-            joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
+            // joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);  // COMMENTED OUT
+            joint_state_msg_.velocity.clear();  // Clear velocity field
             arm_state_pub_->publish(joint_state_msg_);
             
             // Process arm command if available
