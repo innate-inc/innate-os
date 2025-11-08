@@ -6,6 +6,12 @@
 #include <thread>
 #include <atomic>
 #include <deque>
+#include <map>
+#include <vector>
+#include <fstream>
+#include <mutex>
+#include <limits>
+#include <cmath>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
@@ -159,6 +165,32 @@ private:
    */
   void applyAutoExposure(const cv::Mat& frame);
 
+  /**
+   * @brief Initialize performance logging system
+   */
+  void initializeLogging();
+
+  /**
+   * @brief Log frame data to CSV file
+   * @param timestamp Frame timestamp
+   * @param interval_ms Frame interval in milliseconds
+   * @param fps Current FPS
+   * @param jitter_ms Frame timing jitter in milliseconds
+   */
+  void logFrameToFile(const rclcpp::Time& timestamp, double interval_ms, 
+                      double fps, double jitter_ms);
+
+  /**
+   * @brief Update detailed performance statistics
+   * @param current_time Current timestamp
+   */
+  void updateDetailedStats(const rclcpp::Time& current_time);
+
+  /**
+   * @brief Close logging file and cleanup
+   */
+  void closeLogging();
+
   // ROS 2 publishers
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
@@ -210,6 +242,26 @@ private:
   // Statistics
   std::atomic<int> frame_count_{0};
   std::atomic<bool> camera_initialized_{false};
+
+  // Enhanced statistics tracking
+  struct FrameStats {
+    uint64_t total_frames = 0;
+    uint64_t expected_frames = 0;
+    uint64_t dropped_frames = 0;
+    double min_interval_ms = std::numeric_limits<double>::max();
+    double max_interval_ms = 0.0;
+    double sum_intervals = 0.0;
+    double sum_squared_intervals = 0.0;
+    std::map<int, int> interval_histogram;  // Interval bucket (ms) -> count
+    rclcpp::Time start_time;
+    rclcpp::Time last_frame_time;
+  };
+
+  FrameStats stats_;
+  std::ofstream log_file_;
+  bool enable_file_logging_{true};
+  std::string log_file_path_;
+  std::mutex stats_mutex_;
 };
 
 } // namespace maurice_cam

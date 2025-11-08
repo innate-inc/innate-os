@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+from datetime import datetime
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -9,6 +10,21 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    # Get package directory and create logs path
+    package_dir = get_package_share_directory('maurice_cam')
+    # Navigate from install/share/maurice_cam back to workspace root, then to source
+    # package_dir is like: /home/jetson1/innate-os/ros2_ws/install/maurice_cam/share/maurice_cam
+    # We need: /home/jetson1/innate-os/ros2_ws/src/maurice_bot/maurice_cam/logs
+    workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(package_dir))))
+    logs_dir = os.path.join(workspace_root, 'src', 'maurice_bot', 'maurice_cam', 'logs')
+    
+    # Create logs directory if it doesn't exist
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Generate timestamped log filename
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    default_log_path = os.path.join(logs_dir, f'camera_performance_{timestamp}.csv')
+
     # Declare launch arguments
     camera_symlink_arg = DeclareLaunchArgument(
         'camera_symlink',
@@ -102,6 +118,18 @@ def generate_launch_description():
         description='Use simulation time'
     )
     
+    enable_file_logging_arg = DeclareLaunchArgument(
+        'enable_file_logging',
+        default_value='true',
+        description='Enable performance logging to CSV file'
+    )
+    
+    log_file_path_arg = DeclareLaunchArgument(
+        'log_file_path',
+        default_value=default_log_path,
+        description='Path to performance log CSV file'
+    )
+    
     # Camera driver node
     camera_driver_node = Node(
         package='maurice_cam',
@@ -124,7 +152,9 @@ def generate_launch_description():
                 'target_brightness': LaunchConfiguration('target_brightness'),
                 'ae_kp': LaunchConfiguration('ae_kp'),
                 'auto_exposure_update_interval': LaunchConfiguration('auto_exposure_update_interval'),
-                'use_sim_time': LaunchConfiguration('use_sim_time')
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'enable_file_logging': LaunchConfiguration('enable_file_logging'),
+                'log_file_path': LaunchConfiguration('log_file_path')
             }
         ],
         remappings=[
@@ -148,5 +178,7 @@ def generate_launch_description():
         ae_kp_arg,
         auto_exposure_update_interval_arg,
         use_sim_time_arg,
+        enable_file_logging_arg,
+        log_file_path_arg,
         camera_driver_node
     ])

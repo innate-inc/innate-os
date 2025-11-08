@@ -26,6 +26,10 @@ CameraDriver::CameraDriver()
   this->declare_parameter<double>("target_brightness", 128.0);
   this->declare_parameter<double>("ae_kp", 0.8);
   this->declare_parameter<int>("auto_exposure_update_interval", 3);
+  
+  // Performance logging parameters
+  this->declare_parameter<bool>("enable_file_logging", true);
+  this->declare_parameter<std::string>("log_file_path", "/tmp/camera_performance.csv");  // Overridden by launch file
 
   // Get parameter values
   std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
@@ -46,6 +50,10 @@ CameraDriver::CameraDriver()
   target_brightness_ = this->get_parameter("target_brightness").as_double();
   ae_kp_ = this->get_parameter("ae_kp").as_double();
   auto_exposure_update_interval_ = this->get_parameter("auto_exposure_update_interval").as_int();
+  
+  // Get logging parameters
+  enable_file_logging_ = this->get_parameter("enable_file_logging").as_bool();
+  log_file_path_ = this->get_parameter("log_file_path").as_string();
 
   // Resolve symlink to device path
   std::string symlink_path = "/dev/v4l/by-id/" + camera_symlink;
@@ -110,6 +118,15 @@ CameraDriver::CameraDriver()
     frame_timestamps_.clear();
     last_stats_print_ = this->now();
     
+    // Initialize statistics start time (always needed)
+    stats_.start_time = this->now();
+    stats_.last_frame_time = stats_.start_time;
+    
+    // Initialize performance logging
+    if (enable_file_logging_) {
+      initializeLogging();
+    }
+    
     // Start frame processing thread
     frame_thread_running_ = true;
     frame_thread_ = std::thread(&CameraDriver::frameProcessingLoop, this);
@@ -132,6 +149,9 @@ CameraDriver::~CameraDriver()
       frame_thread_.join();
     }
   }
+  
+  // Close performance logging
+  closeLogging();
   
   // Release camera
   if (cap_.isOpened()) {
@@ -483,6 +503,13 @@ void CameraDriver::applyAutoExposure(const cv::Mat& frame)
 void CameraDriver::updateFrameStats()
 {
   auto current_time = this->now();
+  
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  
+  // Update detailed statistics
+  updateDetailedStats(current_time);
+  
+  // Keep rolling window for real-time FPS calculation
   frame_timestamps_.push_back(current_time);
   
   // Remove timestamps older than 1 second
@@ -500,46 +527,171 @@ void CameraDriver::updateFrameStats()
 
 void CameraDriver::printFrameStats()
 {
-  if (frame_timestamps_.size() < 2) {
-    return;
-  }
+  // Note: This function is called from updateFrameStats() which already holds stats_mutex_
+  // Do not lock here to avoid deadlock!
   
-  // Calculate current framerate
-  double current_fps = static_cast<double>(frame_timestamps_.size());
-  
-  // Calculate frame intervals for jitter analysis
-  std::vector<double> intervals;
-  for (size_t i = 1; i < frame_timestamps_.size(); ++i) {
-    double interval = (frame_timestamps_[i] - frame_timestamps_[i-1]).seconds();
-    intervals.push_back(interval);
-  }
-  
-  if (intervals.empty()) {
+  if (stats_.total_frames < 2) {
     return;
   }
   
   // Calculate statistics
-  double mean_interval = 0.0;
-  for (double interval : intervals) {
-    mean_interval += interval;
+  double elapsed_sec = (this->now() - stats_.start_time).seconds();
+  double actual_fps = stats_.total_frames / elapsed_sec;
+  
+  double mean_interval_ms = stats_.sum_intervals / (stats_.total_frames - 1);
+  double variance = (stats_.sum_squared_intervals / (stats_.total_frames - 1)) 
+                    - (mean_interval_ms * mean_interval_ms);
+  double stddev_ms = std::sqrt(std::max(0.0, variance));
+  
+  double drop_rate = stats_.expected_frames > 0 
+                     ? (static_cast<double>(stats_.dropped_frames) / stats_.expected_frames * 100.0)
+                     : 0.0;
+  
+  // Current FPS from recent window
+  double current_fps = static_cast<double>(frame_timestamps_.size());
+  
+  RCLCPP_INFO(this->get_logger(), "=== Camera Performance Stats (%.1f sec) ===", elapsed_sec);
+  RCLCPP_INFO(this->get_logger(), "  Frames: %lu / %lu expected (%.1f%% capture rate)",
+              stats_.total_frames, stats_.expected_frames, 100.0 - drop_rate);
+  RCLCPP_INFO(this->get_logger(), "  Dropped: %lu frames (%.2f%%)", 
+              stats_.dropped_frames, drop_rate);
+  RCLCPP_INFO(this->get_logger(), "  FPS: Current=%.1f, Average=%.1f, Target=%.1f",
+              current_fps, actual_fps, fps_);
+  RCLCPP_INFO(this->get_logger(), "  Interval: Mean=%.2f ms, StdDev=%.2f ms, Min=%.2f ms, Max=%.2f ms",
+              mean_interval_ms, stddev_ms, stats_.min_interval_ms, stats_.max_interval_ms);
+  RCLCPP_INFO(this->get_logger(), "  Exposure: %d, Gain: %d", current_exposure_, current_gain_);
+  
+  // Print histogram of most common intervals
+  if (!stats_.interval_histogram.empty()) {
+    std::vector<std::pair<int, int>> histogram_vec(stats_.interval_histogram.begin(), 
+                                                     stats_.interval_histogram.end());
+    std::sort(histogram_vec.begin(), histogram_vec.end(), 
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    
+    RCLCPP_INFO(this->get_logger(), "  Top frame intervals:");
+    for (size_t i = 0; i < std::min(size_t(5), histogram_vec.size()); ++i) {
+      double percent = (histogram_vec[i].second * 100.0) / (stats_.total_frames - 1);
+      RCLCPP_INFO(this->get_logger(), "    %d ms: %d times (%.1f%%)",
+                  histogram_vec[i].first, histogram_vec[i].second, percent);
+    }
   }
-  mean_interval /= intervals.size();
+}
+
+void CameraDriver::initializeLogging()
+{
+  log_file_.open(log_file_path_, std::ios::out | std::ios::trunc);
   
-  // Calculate jitter (standard deviation)
-  double variance = 0.0;
-  for (double interval : intervals) {
-    double diff = interval - mean_interval;
-    variance += diff * diff;
+  if (!log_file_.is_open()) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to open log file: %s", log_file_path_.c_str());
+    enable_file_logging_ = false;
+    return;
   }
-  variance /= intervals.size();
-  double jitter_ms = std::sqrt(variance) * 1000.0;
   
-  double expected_interval = 1.0 / fps_;
-  double timing_error_ms = (mean_interval - expected_interval) * 1000.0;
+  // Write CSV header
+  log_file_ << "timestamp_sec,frame_number,interval_ms,fps,jitter_ms,"
+            << "expected_frames,actual_frames,dropped_frames,drop_rate_percent,"
+            << "exposure,gain\n";
+  log_file_.flush();
   
-  RCLCPP_INFO(this->get_logger(), 
-    "Frame Stats - FPS: %.1f (target: %.1f) | Jitter: %.1f ms | Error: %.1f ms | Samples: %zu | Exposure: %d | Gain: %d",
-    current_fps, fps_, jitter_ms, timing_error_ms, frame_timestamps_.size(), current_exposure_, current_gain_);
+  RCLCPP_INFO(this->get_logger(), "Performance logging enabled: %s", log_file_path_.c_str());
+}
+
+void CameraDriver::updateDetailedStats(const rclcpp::Time& current_time)
+{
+  stats_.total_frames++;
+  
+  // Calculate expected frames based on configured FPS
+  double elapsed_sec = (current_time - stats_.start_time).seconds();
+  stats_.expected_frames = static_cast<uint64_t>(elapsed_sec * fps_);
+  
+  // Calculate dropped frames
+  stats_.dropped_frames = (stats_.expected_frames > stats_.total_frames) 
+                          ? (stats_.expected_frames - stats_.total_frames) : 0;
+  
+  // Calculate frame interval
+  if (stats_.total_frames > 1) {
+    double interval_sec = (current_time - stats_.last_frame_time).seconds();
+    double interval_ms = interval_sec * 1000.0;
+    
+    // Update min/max
+    stats_.min_interval_ms = std::min(stats_.min_interval_ms, interval_ms);
+    stats_.max_interval_ms = std::max(stats_.max_interval_ms, interval_ms);
+    
+    // Update running sum for mean and variance calculation
+    stats_.sum_intervals += interval_ms;
+    stats_.sum_squared_intervals += (interval_ms * interval_ms);
+    
+    // Update histogram (bucket by 1ms intervals)
+    int bucket = static_cast<int>(std::round(interval_ms));
+    stats_.interval_histogram[bucket]++;
+    
+    // Log to file if enabled
+    if (enable_file_logging_ && log_file_.is_open()) {
+      // Calculate current FPS from recent window
+      double current_fps = frame_timestamps_.size();
+      
+      // Calculate jitter from recent frames
+      double jitter_ms = 0.0;
+      if (frame_timestamps_.size() >= 2) {
+        std::vector<double> intervals;
+        for (size_t i = 1; i < frame_timestamps_.size(); ++i) {
+          intervals.push_back((frame_timestamps_[i] - frame_timestamps_[i-1]).seconds() * 1000.0);
+        }
+        
+        double mean = 0.0;
+        for (double iv : intervals) mean += iv;
+        mean /= intervals.size();
+        
+        double variance = 0.0;
+        for (double iv : intervals) {
+          double diff = iv - mean;
+          variance += diff * diff;
+        }
+        variance /= intervals.size();
+        jitter_ms = std::sqrt(variance);
+      }
+      
+      logFrameToFile(current_time, interval_ms, current_fps, jitter_ms);
+    }
+  }
+  
+  stats_.last_frame_time = current_time;
+}
+
+void CameraDriver::logFrameToFile(const rclcpp::Time& timestamp, 
+                                   double interval_ms,
+                                   double fps, 
+                                   double jitter_ms)
+{
+  double drop_rate = stats_.expected_frames > 0 
+                     ? (static_cast<double>(stats_.dropped_frames) / stats_.expected_frames * 100.0)
+                     : 0.0;
+  
+  log_file_ << timestamp.seconds() << ","
+            << stats_.total_frames << ","
+            << interval_ms << ","
+            << fps << ","
+            << jitter_ms << ","
+            << stats_.expected_frames << ","
+            << stats_.total_frames << ","
+            << stats_.dropped_frames << ","
+            << drop_rate << ","
+            << current_exposure_ << ","
+            << current_gain_ << "\n";
+  
+  // Flush every 100 frames to balance performance and data safety
+  if (stats_.total_frames % 100 == 0) {
+    log_file_.flush();
+  }
+}
+
+void CameraDriver::closeLogging()
+{
+  if (log_file_.is_open()) {
+    log_file_.flush();
+    log_file_.close();
+    RCLCPP_INFO(this->get_logger(), "Performance log saved to: %s", log_file_path_.c_str());
+  }
 }
 
 // AutoExposureController Implementation
