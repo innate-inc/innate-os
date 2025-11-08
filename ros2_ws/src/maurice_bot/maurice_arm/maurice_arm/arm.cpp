@@ -236,6 +236,8 @@ private:
     // Timer callback for unified control loop (replaces thread-based loop)
     void controlTimerCallback() {
         try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
             // ========== ARM CONTROL ==========
             // Read positions and velocities for arm servos
             auto positions = robot_->readPosition();
@@ -345,6 +347,8 @@ private:
         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         RCLCPP_INFO(this->get_logger(), "Service called: /maurice_arm/torque_on");
         try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
             for (int id = 1; id <= 6; ++id) {
                 RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", id);
                 dynamixel_->enableTorque(id);
@@ -365,6 +369,8 @@ private:
         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         RCLCPP_INFO(this->get_logger(), "Service called: /maurice_arm/torque_off");
         try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
             for (int id = 1; id <= 6; ++id) {
                 RCLCPP_INFO(this->get_logger(), "  Disabling torque on servo %d", id);
                 dynamixel_->disableTorque(id);
@@ -405,6 +411,7 @@ private:
     }
     
     void moveHeadToAngle(double logical_angle_deg) {
+        std::lock_guard<std::mutex> lock(dynamixel_mutex_);
         int encoder_value = logicalAngleToEncoder(logical_angle_deg);
         dynamixel_->setGoalPosition(7, encoder_value);
     }
@@ -473,6 +480,8 @@ private:
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
         RCLCPP_INFO(this->get_logger(), "Service called: head/enable_servo (enable=%s)", request->data ? "true" : "false");
         try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
             if (request->data) {
                 RCLCPP_INFO(this->get_logger(), "  Enabling torque on head servo (ID 7)");
                 dynamixel_->enableTorque(7);
@@ -539,6 +548,9 @@ private:
     // Callback groups for parallel execution
     rclcpp::CallbackGroup::SharedPtr timer_callback_group_;
     rclcpp::CallbackGroup::SharedPtr service_callback_group_;
+    
+    // Mutex to protect Dynamixel serial bus access
+    std::mutex dynamixel_mutex_;
 };
 
 } // namespace maurice_arm
