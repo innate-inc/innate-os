@@ -26,7 +26,7 @@ public:
         service_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
         
         // Declare parameters
-        this->declare_parameter("baud_rate", 115200);
+        this->declare_parameter("baud_rate", 1000000);
         this->declare_parameter("control_frequency", 100.0);
         this->declare_parameter("joints", "{}");
         
@@ -239,9 +239,8 @@ private:
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
             // ========== ARM CONTROL ==========
-            // Read positions and velocities for arm servos
-            auto positions = robot_->readPosition();
-            // auto velocities = robot_->readVelocity();  // COMMENTED OUT FOR SPEED
+            // Read positions and velocities in ONE transaction (combined for speed!)
+            auto [positions, velocities] = robot_->readState();
             
             // Convert to radians
             std::vector<double> positions_rad;
@@ -249,26 +248,24 @@ private:
                 positions_rad.push_back(((pos - 2048) * 2 * M_PI) / 4096.0);
             }
             
-            // COMMENTED OUT - No longer reading velocities
-            // std::vector<double> velocities_rad;
-            // for (int vel : velocities) {
-            //     velocities_rad.push_back((vel * 2 * M_PI) / 4096.0);
-            // }
+            std::vector<double> velocities_rad;
+            for (int vel : velocities) {
+                velocities_rad.push_back((vel * 2 * M_PI) / 4096.0);
+            }
             
             // Flip directions for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
             std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
             for (size_t idx : flip_indices) {
                 if (idx < positions_rad.size()) {
                     positions_rad[idx] = -positions_rad[idx];
-                    // velocities_rad[idx] = -velocities_rad[idx];  // COMMENTED OUT
+                    velocities_rad[idx] = -velocities_rad[idx];
                 }
             }
             
             // Publish arm joint state (only first 6 servos, excluding head servo 7)
             joint_state_msg_.header.stamp = this->now();
             joint_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
-            // joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);  // COMMENTED OUT
-            joint_state_msg_.velocity.clear();  // Clear velocity field
+            joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
             arm_state_pub_->publish(joint_state_msg_);
             
             // Process arm command if available
