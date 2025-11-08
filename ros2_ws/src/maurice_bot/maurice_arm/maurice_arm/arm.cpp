@@ -275,7 +275,10 @@ private:
             {
                 std::lock_guard<std::mutex> lock(arm_command_mutex_);
                 if (has_arm_command_) {
-                    robot_->setGoalPos(latest_arm_command_);
+                    // Add current head position to the 6 arm positions
+                    auto full_command = latest_arm_command_;
+                    full_command.push_back(positions[6]);  // Add head (servo 7)
+                    robot_->setGoalPos(full_command);
                     has_arm_command_ = false;
                 }
             }
@@ -321,6 +324,12 @@ private:
         try {
             std::vector<double> command_data(msg->data.begin(), msg->data.end());
             
+            // Validate that we have exactly 6 arm joints
+            if (command_data.size() != 6) {
+                RCLCPP_ERROR(this->get_logger(), "Action size must match number of servos. Expected 6, got %zu", command_data.size());
+                return;
+            }
+            
             // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
             std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
             for (size_t idx : flip_indices) {
@@ -329,15 +338,16 @@ private:
                 }
             }
             
-            // Convert to encoder counts
-            std::vector<int> command_encoder;
-            for (double pos : command_data) {
-                command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-            }
-            
-            std::lock_guard<std::mutex> lock(arm_command_mutex_);
-            latest_arm_command_ = command_encoder;
-            has_arm_command_ = true;
+        // Convert to encoder counts (only 6 arm joints)
+        std::vector<int> command_encoder;
+        for (double pos : command_data) {
+            command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+        }
+        
+        // Store only the 6 arm positions - timer will add head position
+        std::lock_guard<std::mutex> lock(arm_command_mutex_);
+        latest_arm_command_ = command_encoder;
+        has_arm_command_ = true;
             
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in arm command callback: %s", e.what());
