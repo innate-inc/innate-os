@@ -9,6 +9,7 @@ import subprocess
 
 from geometry_msgs.msg import Vector3, Twist
 from std_msgs.msg import Int32MultiArray, Float64MultiArray, String
+from maurice_msgs.srv import SetRobotName
 
 # Import NetworkManager utilities for WiFi SSID
 from maurice_bt_provisioner.nmcli_utils import nmcli_get_active_wifi_ssid
@@ -65,7 +66,7 @@ def get_robot_version():
     raise RuntimeError("Failed to determine robot version")
 
 class AppControl(Node):
-    KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract from JSON
+    KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract from JSON (including from os_config.json)
     
     def __init__(self):
         super().__init__('app_control_node')
@@ -81,6 +82,7 @@ class AppControl(Node):
         # Declare parameters
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         self.declare_parameter('data_directory', os.path.join(maurice_root, 'data'))
+        self.declare_parameter('robot_name', '')
         
         # Subscribe to joystick messages (Vector3)
         self.joystick_sub = self.create_subscription(
@@ -121,6 +123,13 @@ class AppControl(Node):
         
         # Timer for publishing robot info
         self.robot_info_timer = self.create_timer(1.0, self.publish_robot_info_callback)
+        
+        # Service for setting robot name
+        self.set_robot_name_srv = self.create_service(
+            SetRobotName,
+            '/set_robot_name',
+            self.set_robot_name_callback
+        )
         
         self.get_logger().info("AppControl node started.")
 
@@ -220,7 +229,7 @@ class AppControl(Node):
 
     def publish_robot_info_callback(self):
         """
-        Reads robot_info.json, extracts specified keys, and publishes them as a JSON string.
+        Reads robot_info.json and os_config.json, extracts specified keys, and publishes them as a JSON string.
         For wifi_ssid, gets the current WiFi SSID from NetworkManager.
         Logs errors if file/JSON processing fails or keys are missing.
         Publishes "{}" if no keys are found or an error occurs.
@@ -245,12 +254,24 @@ class AppControl(Node):
             with open(robot_info_file_path, 'r') as f:
                 content = json.load(f)
             
-            # Extract keys from JSON file
-            for key in self.KEYS_TO_EXTRACT:
-                if key in content:
-                    data_to_publish_dict[key] = content[key]
-                else:
-                    self.get_logger().warn(f"Key '{key}' not found in {robot_info_file_path}.")
+            # Then, try to read from robot_info.json for any additional keys
+            try:
+                with open(robot_info_file_path, 'r') as f:
+                    content = json.load(f)
+                
+                # Extract keys from JSON file (excluding robot_name since we already got it from os_config.json)
+                for key in self.KEYS_TO_EXTRACT:
+                    if key != 'robot_name' and key in content:
+                        data_to_publish_dict[key] = content[key]
+                    elif key == 'robot_name' and key not in data_to_publish_dict:
+                        # Fallback: get robot_name from robot_info.json if not in os_config.json
+                        data_to_publish_dict[key] = content[key]
+                    elif key not in data_to_publish_dict:
+                        self.get_logger().warn(f"Key '{key}' not found in either os_config.json or {robot_info_file_path}.")
+            except FileNotFoundError:
+                self.get_logger().info(f"{robot_info_file_path} not found, using only os_config.json data")
+            except Exception as e:
+                self.get_logger().warn(f"Error reading {robot_info_file_path}: {str(e)}")
             
             # Always include WiFi SSID (separate from JSON extraction)
             wifi_ssid = self.get_cached_wifi_ssid()
@@ -268,7 +289,7 @@ class AppControl(Node):
                 final_json_string_to_publish = json.dumps(data_to_publish_dict)
 
         except Exception as e:
-            self.get_logger().error(f"Error processing robot info from {robot_info_file_path}: {str(e)}")
+            self.get_logger().error(f"Error processing robot info: {str(e)}")
             # final_json_string_to_publish remains "{}" as initialized
 
         msg = String()
@@ -277,6 +298,40 @@ class AppControl(Node):
         # Optional: log what was published if it's not an empty dict or if debugging
         # if final_json_string_to_publish != "{}":
         #     self.get_logger().info(f"Published robot data: {final_json_string_to_publish}")
+
+    def set_robot_name_callback(self, request, response):
+        """
+        Service callback to change the robot name in os_config.json.
+        """
+        try:
+            maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+            config_file_path = os.path.join(maurice_root, 'os_config.json')
+            
+            # Load current config
+            with open(config_file_path, 'r') as f:
+                config = json.load(f)
+            
+            # Update robot name
+            old_name = config.get('robot_name', 'Not set')
+            config['robot_name'] = request.robot_name
+            
+            # Save updated config
+            with open(config_file_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            # Reload app config to update internal state
+            self._load_app_config()
+            
+            response.success = True
+            response.message = f"Robot name changed from '{old_name}' to '{request.robot_name}'"
+            self.get_logger().info(response.message)
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to change robot name: {str(e)}"
+            self.get_logger().error(response.message)
+        
+        return response
 
 def main(args=None):
     rclpy.init(args=args)
