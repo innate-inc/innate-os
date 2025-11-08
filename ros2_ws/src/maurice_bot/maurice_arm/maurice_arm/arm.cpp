@@ -24,7 +24,7 @@ public:
         
         // Declare parameters
         this->declare_parameter("baud_rate", 115200);
-        this->declare_parameter("control_frequency", 100);
+        this->declare_parameter("control_frequency", 100.0);
         this->declare_parameter("joints", "{}");
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
