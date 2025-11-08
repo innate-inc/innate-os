@@ -32,6 +32,18 @@ Robot::Robot(std::shared_ptr<Dynamixel> dynamixel, const std::vector<int>& servo
         velocity_reader_->addParam(id);
     }
     
+    // Initialize GroupSyncRead for combined state (velocity + position in one transaction)
+    state_reader_ = std::make_unique<GroupSyncRead>(
+        dynamixel_->portHandler(),
+        dynamixel_->packetHandler(),
+        ADDR_PRESENT_VELOCITY,  // Start at velocity (128)
+        8  // 8 bytes: 4 for velocity + 4 for position
+    );
+    
+    for (int id : servo_ids_) {
+        state_reader_->addParam(id);
+    }
+    
     // Initialize GroupSyncWrite for positions
     pos_writer_ = std::make_unique<GroupSyncWrite>(
         dynamixel_->portHandler(),
@@ -97,6 +109,43 @@ std::vector<int> Robot::readVelocity() {
     }
     
     return velocities;
+}
+
+std::pair<std::vector<int>, std::vector<int>> Robot::readState(int tries) {
+    int result = state_reader_->txRxPacket();
+    
+    if (result != COMM_SUCCESS) {
+        if (tries > 0) {
+            return readState(tries - 1);
+        } else {
+            std::cerr << "Failed to read state!" << std::endl;
+            return {std::vector<int>(servo_ids_.size(), 0), 
+                    std::vector<int>(servo_ids_.size(), 0)};
+        }
+    }
+    
+    std::vector<int> positions;
+    std::vector<int> velocities;
+    
+    for (int id : servo_ids_) {
+        // Read velocity (first 4 bytes at address 128)
+        uint32_t velocity = state_reader_->getData(id, ADDR_PRESENT_VELOCITY, 4);
+        int signed_velocity = static_cast<int>(velocity);
+        if (signed_velocity > (1LL << 31)) {
+            signed_velocity -= (1LL << 32);
+        }
+        velocities.push_back(signed_velocity);
+        
+        // Read position (next 4 bytes at address 132)
+        uint32_t position = state_reader_->getData(id, ADDR_PRESENT_POSITION, 4);
+        int signed_position = static_cast<int>(position);
+        if (signed_position > (1LL << 31)) {
+            signed_position -= (1LL << 32);
+        }
+        positions.push_back(signed_position);
+    }
+    
+    return {positions, velocities};
 }
 
 void Robot::setGoalPos(const std::vector<int>& action) {
