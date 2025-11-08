@@ -1,6 +1,6 @@
 arm:
   ros__parameters:
-    # Remove device_name - will be read from servo_manager parameters
+    # Device detection automatic - looks for 7 servos at 115200 baud
     baud_rate: 115200
     control_frequency: 100
     joints: |
@@ -88,6 +88,28 @@ arm:
                   "kp": 400,
                   "ki": 0,
                   "kd": 0
+              }
+          },
+          "joint_7": {
+              "servo_id": 7,
+              "position_limits": {
+                  "min": -0.4363,
+                  "max": 0.2618
+              },
+              "pwm_limits": 885,
+              "current_limit": 500,
+              "control_mode": 3,
+              "homing_offset": 341,
+              "pid_gains": {
+                  "kp": 400,
+                  "ki": 1011,
+                  "kd": 0
+              },
+              "head_config": {
+                  "min_angle_deg": -25.0,
+                  "max_angle_deg": 15.0,
+                  "ai_position_deg": -20.0,
+                  "direction_reversed": true
               }
           }
       }
