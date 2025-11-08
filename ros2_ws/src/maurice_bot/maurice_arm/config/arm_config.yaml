@@ -1,7 +1,7 @@
 maurice_arm:
   ros__parameters:
-    # Device detection automatic - looks for 7 servos at 115200 baud
-    baud_rate: 115200
+    # Device detection automatic - looks for 7 servos at 1M baud
+    baud_rate: 1000000
     control_frequency: 100.0
     joints: |
       {
