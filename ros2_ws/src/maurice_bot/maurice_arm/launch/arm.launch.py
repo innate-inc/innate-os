@@ -16,7 +16,7 @@ def generate_launch_description():
     maurice_arm_node = Node(
         package='maurice_arm',
         executable='arm',
-        name='arm',
+        name='maurice_arm',
         parameters=[config_file],
         output='screen'
     )
