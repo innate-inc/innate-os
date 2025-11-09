@@ -57,36 +57,36 @@ public:
         
         // Setup ARM publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up ARM publishers/subscribers/services");
-        arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/maurice_arm/state", 10);
+        arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/mars/arm/state", 10);
         arm_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
-            "/maurice_arm/commands", 10,
+            "/mars/arm/commands", 10,
             std::bind(&MauriceArmNode::armCommandCallback, this, std::placeholders::_1));
         
         arm_torque_on_service_ = this->create_service<std_srvs::srv::Trigger>(
-            "/maurice_arm/torque_on",
+            "/mars/arm/torque_on",
             std::bind(&MauriceArmNode::armTorqueOnCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
         
         arm_torque_off_service_ = this->create_service<std_srvs::srv::Trigger>(
-            "/maurice_arm/torque_off",
+            "/mars/arm/torque_off",
             std::bind(&MauriceArmNode::armTorqueOffCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
         
         // Setup HEAD publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
-        head_position_pub_ = this->create_publisher<std_msgs::msg::String>("head/current_position", 10);
+        head_position_pub_ = this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", 10);
         head_position_sub_ = this->create_subscription<std_msgs::msg::Int32>(
-            "head/set_position", 10,
+            "/mars/head/set_position", 10,
             std::bind(&MauriceArmNode::headPositionCallback, this, std::placeholders::_1));
         
         head_ai_position_sub_ = this->create_subscription<std_msgs::msg::Empty>(
-            "head/set_ai_position", 10,
+            "/mars/head/set_ai_position", 10,
             std::bind(&MauriceArmNode::headAiPositionCallback, this, std::placeholders::_1));
         
         head_enable_service_ = this->create_service<std_srvs::srv::SetBool>(
-            "head/enable_servo",
+            "/mars/head/enable_servo",
             std::bind(&MauriceArmNode::headEnableServoCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
@@ -344,7 +344,7 @@ private:
     void armTorqueOnCallback(
         const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-        RCLCPP_INFO(this->get_logger(), "Service called: /maurice_arm/torque_on");
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/torque_on");
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
@@ -366,7 +366,7 @@ private:
     void armTorqueOffCallback(
         const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
         std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-        RCLCPP_INFO(this->get_logger(), "Service called: /maurice_arm/torque_off");
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/torque_off");
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
@@ -479,7 +479,7 @@ private:
     void headEnableServoCallback(
         const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
         std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
-        RCLCPP_INFO(this->get_logger(), "Service called: head/enable_servo (enable=%s)", request->data ? "true" : "false");
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/head/enable_servo (enable=%s)", request->data ? "true" : "false");
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
