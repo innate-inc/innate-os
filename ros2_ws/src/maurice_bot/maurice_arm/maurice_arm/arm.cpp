@@ -95,6 +95,13 @@ public:
         RCLCPP_INFO(this->get_logger(), "Initializing joint state message with 6 joint names");
         joint_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
         
+        // Initialize command buffers with current positions
+        RCLCPP_INFO(this->get_logger(), "Initializing command buffers with current positions");
+        auto [initial_positions, initial_velocities] = robot_->readState();
+        latest_arm_command_ = std::vector<int>(initial_positions.begin(), initial_positions.begin() + 6);
+        latest_head_command_ = initial_positions[6];
+        RCLCPP_INFO(this->get_logger(), "Command buffers initialized (arm: 6 joints, head: 1 joint)");
+        
         // Create timer for control loop
         RCLCPP_INFO(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
         auto period = std::chrono::duration<double>(1.0 / control_frequency_);
@@ -238,10 +245,10 @@ private:
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
-            // ========== ARM CONTROL ==========
-            // Read positions and velocities in ONE transaction (combined for speed!)
+            // ========== READ STATE ==========
             auto [positions, velocities] = robot_->readState();
             
+            // ========== PUBLISH ARM STATE ==========
             // Convert to radians
             std::vector<double> positions_rad;
             for (int pos : positions) {
@@ -262,54 +269,37 @@ private:
                 }
             }
             
-            // Publish arm joint state (only first 6 servos, excluding head servo 7)
+            // Publish arm joint state (only first 6 servos)
             joint_state_msg_.header.stamp = this->now();
             joint_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
             joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
             arm_state_pub_->publish(joint_state_msg_);
             
-            // Process arm command if available
-            {
-                std::lock_guard<std::mutex> lock(arm_command_mutex_);
-                if (has_arm_command_) {
-                    // Add current head position to the 6 arm positions
-                    auto full_command = latest_arm_command_;
-                    full_command.push_back(positions[6]);  // Add head (servo 7)
-                    robot_->setGoalPos(full_command);
-                    has_arm_command_ = false;
-                }
-            }
-            
-            // ========== HEAD CONTROL ==========
-            // Read head position (servo 7)
+            // ========== PUBLISH HEAD POSITION ==========
             int head_encoder = positions[6];  // Index 6 = servo 7
-            
-            // Publish head position
             publishHeadPosition(head_encoder);
             
-            // Process head command if available
-            if (has_head_command_) {
-                double angle;
+            // ========== SEND COMMANDS IF AVAILABLE ==========
+            if (has_arm_command_.load() || has_head_command_.load()) {
+                // Assemble full 7-servo command from latest commanded values
+                std::vector<int> full_command(7);
+                
+                // Get 6 arm positions from latest arm command
                 {
-                    std::lock_guard<std::mutex> lock(head_command_mutex_);
-                    angle = head_command_angle_;
+                    std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+                    std::copy(latest_arm_command_.begin(), latest_arm_command_.end(), full_command.begin());
+                    has_arm_command_ = false;
+                }
+                
+                // Get 1 head position from latest head command
+                {
+                    std::lock_guard<std::mutex> head_lock(head_command_mutex_);
+                    full_command[6] = latest_head_command_;
                     has_head_command_ = false;
                 }
                 
-                int head_goal_encoder = logicalAngleToEncoder(angle);
-                
-                // Update the goal position for servo 7
-                {
-                    std::lock_guard<std::mutex> lock(arm_command_mutex_);
-                    if (has_arm_command_ && latest_arm_command_.size() == 7) {
-                        latest_arm_command_[6] = head_goal_encoder;
-                    } else {
-                        // Create command with current positions + new head position
-                        latest_arm_command_ = positions;
-                        latest_arm_command_[6] = head_goal_encoder;
-                        has_arm_command_ = true;
-                    }
-                }
+                // Send the combined command
+                robot_->setGoalPos(full_command);
             }
             
         } catch (const std::exception& e) {
@@ -456,9 +446,10 @@ private:
                 return;
             }
             
-            // Just update state variable - control loop will handle it
+            int head_goal_encoder = logicalAngleToEncoder(logical_position);
+            
             std::lock_guard<std::mutex> lock(head_command_mutex_);
-            head_command_angle_ = logical_position;
+            latest_head_command_ = head_goal_encoder;
             has_head_command_ = true;
             
         } catch (const std::exception& e) {
@@ -474,9 +465,10 @@ private:
             RCLCPP_INFO(this->get_logger(), "Moving head to AI position (%f deg)", 
                 head_config.head_ai_position_deg);
             
-            // Just update state variable - control loop will handle it
+            int head_goal_encoder = logicalAngleToEncoder(head_config.head_ai_position_deg);
+            
             std::lock_guard<std::mutex> lock(head_command_mutex_);
-            head_command_angle_ = head_config.head_ai_position_deg;
+            latest_head_command_ = head_goal_encoder;
             has_head_command_ = true;
             
         } catch (const std::exception& e) {
@@ -546,7 +538,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr head_position_sub_;
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr head_ai_position_sub_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr head_enable_service_;
-    double head_command_angle_{0.0};
+    int latest_head_command_{0};
     std::mutex head_command_mutex_;
     std::atomic<bool> has_head_command_{false};
     
