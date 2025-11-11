@@ -83,24 +83,24 @@ CameraDriver::CameraDriver()
 
   // Initialize publishers
   image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    "/color/image",
+    "/mars/main_camera/image",
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
   compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-    "/color/image/compressed",
+    "/mars/main_camera/image/compressed",
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
   stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    "/color/stereo",
+    "/mars/main_camera/stereo",
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
   RCLCPP_INFO(this->get_logger(), "Publishers created:");
-  RCLCPP_INFO(this->get_logger(), "  - /color/image (left camera, rotated)");
-  RCLCPP_INFO(this->get_logger(), "  - /color/image/compressed (left camera, rotated)");
-  RCLCPP_INFO(this->get_logger(), "  - /color/stereo (full stereo, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (left camera, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (full stereo, rotated)");
 
   // Initialize camera
   if (initializeCamera()) {
