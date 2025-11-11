@@ -74,7 +74,7 @@ def generate_launch_description():
     # Auto exposure parameters
     enable_auto_exposure_arg = DeclareLaunchArgument(
         'enable_auto_exposure',
-        default_value='true',
+        default_value='false',
         description='Enable custom auto exposure algorithm (true/false)'
     )
     
