@@ -7,6 +7,7 @@ import os
 def generate_launch_description():
     # Get the package share directory
     pkg_dir = get_package_share_directory('maurice_bringup')
+    cam_pkg_dir = get_package_share_directory('maurice_cam')
     
     # Include the bringup_core launch file
     bringup_core_launch = IncludeLaunchDescription(
@@ -22,9 +23,10 @@ def generate_launch_description():
         )
     )
     
+    # Include the camera driver from maurice_cam
     camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_dir, 'launch', 'camera.launch.py')
+            os.path.join(cam_pkg_dir, 'launch', 'camera_driver.launch.py')
         )
     )
     
