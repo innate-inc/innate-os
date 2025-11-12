@@ -158,20 +158,39 @@ class AppControl(Node):
         
         return self._cached_wifi_ssid
 
+    def apply_curve(self, value, deadband=0.15):
+        """
+        Apply deadband and quadratic curve to input value.
+        - Deadband filters out small inputs
+        - Quadratic curve provides smooth, balanced response
+        """
+        if abs(value) < deadband:
+            return 0.0
+        
+        # Normalize value beyond deadband to range [0, 1] or [-1, 0]
+        sign = 1.0 if value > 0 else -1.0
+        normalized = (abs(value) - deadband) / (1.0 - deadband)
+        
+        # Apply quadratic curve for balanced progressive response
+        curved = normalized ** 2
+        
+        return sign * curved
+    
     def joystick_callback(self, msg: Vector3):
         """
         Converts joystick input to velocity commands:
-          - Linear velocity (x) is scaled from [-1, 1] to [-0.4, 0.4].
+          - Linear velocity (x) is scaled from [-1, 1] to [-0.7, 0.7].
           - Angular velocity (z) is scaled from [-1, 1] to [-1.5, 1.5].
-          - Applies deadband of 0.1 to filter out small inputs.
+          - Applies deadband of 0.15 (15%) to filter out small inputs.
+          - Applies cubic curve for smooth, progressive control response.
         """
-        # Apply deadband
-        x = 0.0 if abs(msg.x) < 0.1 else msg.x
-        y = 0.0 if abs(msg.y) < 0.1 else msg.y
+        # Apply deadband and curve
+        x = self.apply_curve(msg.x, deadband=0.15)
+        y = self.apply_curve(msg.y, deadband=0.15)
 
         twist_msg = Twist()
-        twist_msg.linear.x = y * 0.4
-        twist_msg.angular.z = -x * 1.5
+        twist_msg.linear.x = y * 0.5  # Max forward speed: 0.5 m/s
+        twist_msg.angular.z = -x * 1.0  # Max angular speed: 1.0 rad/s
         
         # Set other components to zero.
         twist_msg.linear.y = 0.0
