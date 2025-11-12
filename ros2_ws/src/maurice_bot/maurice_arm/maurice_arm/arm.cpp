@@ -317,6 +317,41 @@ private:
                 return;
             }
             
+            // ===== INTELLIGENT JOINT LIMITS =====
+            // Adjust joint2 limits based on joint1 position (collision avoidance)
+            if (command_data.size() >= 2) {
+                double joint1_pos = command_data[0];  // joint1 position in radians
+                double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
+                
+                // Get joint2 limits from config (index 1 = joint_2)
+                const auto& joint2_config = joint_configs_[1];
+                double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
+                double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
+                
+                // Since joint2 will be flipped, we need to invert the limits for pre-flip values
+                // After flip: joint2_flipped = -joint2_pos
+                // So if we want joint2_flipped to be within [config_min, config_max]
+                // We need joint2_pos to be within [-config_max, -config_min]
+                double joint2_min_limit = -config_max;  // Will become config_max after flip
+                double joint2_max_limit = -config_min;  // Will become config_min after flip
+                
+                // Determine joint2's maximum limit based on joint1's position
+                if (joint1_pos < 1.0) {
+                    // When joint1 < 1.0, restrict max to 0.4 (in pre-flip regime)
+                    // This prevents collision when joint1 is at certain angles
+                    joint2_min_limit = std::max(joint2_min_limit, -0.4);
+                    
+                    if (joint2_pos < joint2_min_limit) {
+                        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                            "Joint2 limited due to joint1 < 1.0: requested %.3f, clamped to %.3f", 
+                            joint2_pos, joint2_min_limit);
+                    }
+                }
+                
+                // Enforce the limits (before flipping)
+                command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
+            }
+            
             // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
             std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
             for (size_t idx : flip_indices) {
