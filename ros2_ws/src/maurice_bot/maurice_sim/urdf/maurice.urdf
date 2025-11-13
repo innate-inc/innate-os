@@ -219,28 +219,28 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="bright_orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
 
-  <!-- joint6 → link6 -->
-  <joint name="joint6" type="revolute">
+  <!-- joint61 → link61 (main gripper finger) -->
+  <joint name="joint61" type="revolute">
     <parent link="link5"/>
-    <child  link="link6"/>
-    <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
+    <child  link="link61"/>
+    <origin xyz="0.044 -0.0091 0" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.57" upper="1.57" effort="2.0" velocity="2.0"/>
   </joint>
-  <link name="link6">
+  <link name="link61">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0.012"/>
@@ -249,14 +249,45 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link6.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link61.STL" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link6.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link61.STL" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- joint62 → link62 (mirrored gripper finger, geared with joint61) -->
+  <joint name="joint62" type="revolute">
+    <parent link="link5"/>
+    <child  link="link62"/>
+    <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
+    <axis  xyz="0 0 1"/>
+    <dynamics damping="5"/>
+    <limit lower="-1.57" upper="1.57" effort="2.0" velocity="2.0"/>
+    <mimic joint="joint61" multiplier="-1" offset="0"/>
+  </joint>
+  <link name="link62">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.012"/>
+      <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/link62.STL" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/link62.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
