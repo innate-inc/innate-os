@@ -231,8 +231,8 @@
     </collision>
   </link>
 
-  <!-- joint61 → link61 (main gripper finger) -->
-  <joint name="joint61" type="revolute">
+  <!-- joint6 → link61 (main gripper finger) -->
+  <joint name="joint6" type="revolute">
     <parent link="link5"/>
     <child  link="link61"/>
     <origin xyz="0.044 -0.0091 0" rpy="0 0 0"/>
@@ -261,15 +261,15 @@
     </collision>
   </link>
 
-  <!-- joint62 → link62 (mirrored gripper finger, geared with joint61) -->
-  <joint name="joint62" type="revolute">
+  <!-- joint6M → link62 (mirrored gripper finger, geared with joint6) -->
+  <joint name="joint6M" type="revolute">
     <parent link="link5"/>
     <child  link="link62"/>
     <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
     <limit lower="-1.57" upper="1.57" effort="2.0" velocity="2.0"/>
-    <mimic joint="joint61" multiplier="-1" offset="0"/>
+    <mimic joint="joint6" multiplier="-1" offset="0"/>
   </joint>
   <link name="link62">
     <inertial>
