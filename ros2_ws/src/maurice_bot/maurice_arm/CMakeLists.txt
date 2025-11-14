@@ -37,10 +37,11 @@ target_link_libraries(camera_node
   ${OpenCV_LIBS}
 )
 
-# Add arm node (dynamixel + robot + arm with head)
+# Add arm node (dynamixel + robot + arm with head + collision checker)
 add_executable(arm
   maurice_arm/dynamixel.cpp
   maurice_arm/robot.cpp
+  maurice_arm/collision_checker.cpp
   maurice_arm/arm.cpp
 )
 
@@ -49,12 +50,24 @@ ament_target_dependencies(arm
   sensor_msgs
   std_msgs
   std_srvs
+  visualization_msgs
   dynamixel_sdk
+  Eigen3
 )
 
-# Add collision checker node
+target_link_libraries(arm
+  fcl
+)
+
+target_include_directories(arm PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+# Add collision checker node (standalone)
 add_executable(collision_checker
   maurice_arm/collision_checker.cpp
+  maurice_arm/collision_checker_main.cpp
 )
 
 ament_target_dependencies(collision_checker
