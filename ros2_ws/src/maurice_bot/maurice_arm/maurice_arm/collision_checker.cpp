@@ -4,15 +4,11 @@
 
 namespace maurice_arm {
 
-CollisionChecker::CollisionChecker() 
-    : Node("collision_checker") {
-    
-    RCLCPP_INFO(this->get_logger(), "Collision Checker Node starting...");
-    
-    // Declare parameters
-    this->declare_parameter("publish_markers", true);
-    publish_markers_ = this->get_parameter("publish_markers").as_bool();
-    
+// ============================================================================
+// CollisionCheckerCore Implementation (No ROS dependencies)
+// ============================================================================
+
+CollisionCheckerCore::CollisionCheckerCore() {
     // Setup collision geometries (hardcoded from URDF)
     setupCollisionGeometries();
     
@@ -22,26 +18,9 @@ CollisionChecker::CollisionChecker()
     // Create ground plane (large box at z=0)
     ground_plane_ = std::make_shared<fcl::Boxd>(100.0, 100.0, 0.01);  // 100m x 100m x 1cm
     ground_ignore_links_ = {"base_link"};  // Ignore base_link collisions with ground
-    
-    RCLCPP_INFO(this->get_logger(), "Ground plane created, ignoring collisions with base_link");
-    
-    // Create subscribers and publishers
-    joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
-        "/mars/arm/state", 10,
-        std::bind(&CollisionChecker::jointStateCallback, this, std::placeholders::_1));
-    
-    collision_pub_ = this->create_publisher<std_msgs::msg::Bool>(
-        "/mars/arm/collision", 10);
-    
-    if (publish_markers_) {
-        marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-            "/collision_shapes", 10);
-    }
-    
-    RCLCPP_INFO(this->get_logger(), "Collision Checker ready!");
 }
 
-void CollisionChecker::setupCollisionGeometries() {
+void CollisionCheckerCore::setupCollisionGeometries() {
     // base_link: Box 187.8mm x 182mm x 167.6mm
     CollisionGeometry base_geom;
     base_geom.type = CollisionGeometry::Type::BOX;
@@ -87,21 +66,15 @@ void CollisionChecker::setupCollisionGeometries() {
     link62_geom.link_name = "link62";
     collision_geometries_["link62"] = link62_geom;
     
-    RCLCPP_INFO(this->get_logger(), "Loaded %zu collision geometries", 
-                collision_geometries_.size());
-    
     // Define adjacent links to IGNORE in collision checking
     // Only ignore: link2<->link3 (adjacent in chain) and link61<->link62 (gripper fingers)
     adjacent_links_ = {
         {"link2", "link3"},     // Adjacent in kinematic chain
         {"link61", "link62"}    // Gripper fingers (always close/touching)
     };
-    
-    RCLCPP_INFO(this->get_logger(), "Ignoring collisions between %zu adjacent pairs", 
-                adjacent_links_.size());
 }
 
-void CollisionChecker::setupKinematics() {
+void CollisionCheckerCore::setupKinematics() {
     // Hardcode joint information from URDF
     
     // joint1: base_link -> link1
@@ -159,12 +132,9 @@ void CollisionChecker::setupKinematics() {
         Eigen::Vector3d(0, 0, 1),
         "link5", "link62"
     };
-    
-    RCLCPP_INFO(this->get_logger(), "Configured %zu joints for forward kinematics", 
-                joints_.size());
 }
 
-Eigen::Isometry3d CollisionChecker::createTransform(
+Eigen::Isometry3d CollisionCheckerCore::createTransform(
     const Eigen::Vector3d& xyz, 
     const Eigen::Vector3d& rpy) {
     
@@ -182,7 +152,7 @@ Eigen::Isometry3d CollisionChecker::createTransform(
     return transform;
 }
 
-std::map<std::string, Eigen::Isometry3d> CollisionChecker::computeForwardKinematics(
+std::map<std::string, Eigen::Isometry3d> CollisionCheckerCore::computeForwardKinematics(
     const std::vector<double>& joint_positions) {
     
     std::map<std::string, Eigen::Isometry3d> transforms;
@@ -230,7 +200,7 @@ std::map<std::string, Eigen::Isometry3d> CollisionChecker::computeForwardKinemat
     return transforms;
 }
 
-bool CollisionChecker::areAdjacent(const std::string& link1, const std::string& link2) {
+bool CollisionCheckerCore::areAdjacent(const std::string& link1, const std::string& link2) {
     for (const auto& pair : adjacent_links_) {
         if ((pair.first == link1 && pair.second == link2) ||
             (pair.first == link2 && pair.second == link1)) {
@@ -240,10 +210,13 @@ bool CollisionChecker::areAdjacent(const std::string& link1, const std::string& 
     return false;
 }
 
-bool CollisionChecker::checkCollisions(
-    const std::map<std::string, Eigen::Isometry3d>& transforms) {
+bool CollisionCheckerCore::checkCollisions(
+    const std::map<std::string, Eigen::Isometry3d>& transforms,
+    double& min_clearance,
+    std::string& closest_pair) {
     
     bool collision_detected = false;
+    min_clearance = std::numeric_limits<double>::max();
     
     // Create FCL collision objects with current transforms
     std::vector<std::pair<std::string, fcl::CollisionObjectd>> fcl_objects;
@@ -263,7 +236,7 @@ bool CollisionChecker::checkCollisions(
         }
     }
     
-    // Check all pairs for collision
+    // Check all pairs for collision and distance
     for (size_t i = 0; i < fcl_objects.size(); ++i) {
         for (size_t j = i + 1; j < fcl_objects.size(); ++j) {
             const std::string& link1 = fcl_objects[i].first;
@@ -274,16 +247,38 @@ bool CollisionChecker::checkCollisions(
                 continue;
             }
             
-            // Perform collision check
-            fcl::CollisionRequestd request;
-            fcl::CollisionResultd result;
+            // Perform collision check with contact info
+            fcl::CollisionRequestd coll_request;
+            coll_request.enable_contact = true;
+            coll_request.num_max_contacts = 1;
+            fcl::CollisionResultd coll_result;
             
-            fcl::collide(&fcl_objects[i].second, &fcl_objects[j].second, request, result);
+            fcl::collide(&fcl_objects[i].second, &fcl_objects[j].second, coll_request, coll_result);
             
-            if (result.isCollision()) {
+            if (coll_result.isCollision()) {
                 collision_detected = true;
-                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                    "Self-collision detected: %s <-> %s", link1.c_str(), link2.c_str());
+                // Penetration depth is negative clearance
+                std::vector<fcl::Contactd> contacts;
+                coll_result.getContacts(contacts);
+                if (!contacts.empty()) {
+                    double penetration = contacts[0].penetration_depth;
+                    if (-penetration < min_clearance) {
+                        min_clearance = -penetration;
+                        closest_pair = link1 + " <-> " + link2;
+                    }
+                }
+            } else {
+                // Not colliding, check distance
+                fcl::DistanceRequestd dist_request;
+                dist_request.enable_nearest_points = false;
+                fcl::DistanceResultd dist_result;
+                
+                fcl::distance(&fcl_objects[i].second, &fcl_objects[j].second, dist_request, dist_result);
+                
+                if (dist_result.min_distance < min_clearance) {
+                    min_clearance = dist_result.min_distance;
+                    closest_pair = link1 + " <-> " + link2;
+                }
             }
         }
     }
@@ -291,10 +286,13 @@ bool CollisionChecker::checkCollisions(
     return collision_detected;
 }
 
-bool CollisionChecker::checkGroundCollisions(
-    const std::map<std::string, Eigen::Isometry3d>& transforms) {
+bool CollisionCheckerCore::checkGroundCollisions(
+    const std::map<std::string, Eigen::Isometry3d>& transforms,
+    double& min_clearance,
+    std::string& closest_link) {
     
     bool collision_detected = false;
+    min_clearance = std::numeric_limits<double>::max();
     
     // Create ground plane collision object at z=0
     Eigen::Isometry3d ground_transform = Eigen::Isometry3d::Identity();
@@ -321,15 +319,37 @@ bool CollisionChecker::checkGroundCollisions(
             fcl::CollisionObjectd link_obj(geom.shape, final_transform);
             
             // Perform collision check with ground
-            fcl::CollisionRequestd request;
-            fcl::CollisionResultd result;
+            fcl::CollisionRequestd coll_request;
+            coll_request.enable_contact = true;
+            coll_request.num_max_contacts = 1;
+            fcl::CollisionResultd coll_result;
             
-            fcl::collide(&link_obj, &ground_obj, request, result);
+            fcl::collide(&link_obj, &ground_obj, coll_request, coll_result);
             
-            if (result.isCollision()) {
+            if (coll_result.isCollision()) {
                 collision_detected = true;
-                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                    "Ground collision detected: %s", link_name.c_str());
+                // Get penetration depth
+                std::vector<fcl::Contactd> contacts;
+                coll_result.getContacts(contacts);
+                if (!contacts.empty()) {
+                    double penetration = contacts[0].penetration_depth;
+                    if (-penetration < min_clearance) {
+                        min_clearance = -penetration;
+                        closest_link = link_name + " <-> ground";
+                    }
+                }
+            } else {
+                // Not colliding, check distance
+                fcl::DistanceRequestd dist_request;
+                dist_request.enable_nearest_points = false;
+                fcl::DistanceResultd dist_result;
+                
+                fcl::distance(&link_obj, &ground_obj, dist_request, dist_result);
+                
+                if (dist_result.min_distance < min_clearance) {
+                    min_clearance = dist_result.min_distance;
+                    closest_link = link_name + " <-> ground";
+                }
             }
         }
     }
@@ -337,41 +357,93 @@ bool CollisionChecker::checkGroundCollisions(
     return collision_detected;
 }
 
+CollisionCheckResult CollisionCheckerCore::checkConfiguration(
+    const std::vector<double>& joint_positions) {
+    
+    CollisionCheckResult result;
+    
+    // Compute forward kinematics
+    auto transforms = computeForwardKinematics(joint_positions);
+    
+    // Check self-collisions
+    double self_clearance = std::numeric_limits<double>::max();
+    std::string self_pair;
+    bool self_collision = checkCollisions(transforms, self_clearance, self_pair);
+    
+    // Check ground collisions
+    double ground_clearance = std::numeric_limits<double>::max();
+    std::string ground_link;
+    bool ground_collision = checkGroundCollisions(transforms, ground_clearance, ground_link);
+    
+    // Combine results
+    result.in_collision = self_collision || ground_collision;
+    
+    if (self_clearance < ground_clearance) {
+        result.min_clearance = self_clearance;
+        result.closest_pair = self_pair;
+    } else {
+        result.min_clearance = ground_clearance;
+        result.closest_pair = ground_link;
+    }
+    
+    return result;
+}
+
+// ============================================================================
+// CollisionChecker ROS Node Implementation
+// ============================================================================
+
+CollisionChecker::CollisionChecker() 
+    : Node("collision_checker") {
+    
+    RCLCPP_INFO(this->get_logger(), "Collision Checker Node starting...");
+    
+    // Declare parameters
+    this->declare_parameter("publish_markers", true);
+    publish_markers_ = this->get_parameter("publish_markers").as_bool();
+    
+    // Create collision checker core
+    collision_checker_core_ = std::make_unique<CollisionCheckerCore>();
+    
+    RCLCPP_INFO(this->get_logger(), "Collision checker core initialized");
+    
+    // Create subscribers and publishers
+    joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+        "/mars/arm/state", 10,
+        std::bind(&CollisionChecker::jointStateCallback, this, std::placeholders::_1));
+    
+    collision_pub_ = this->create_publisher<std_msgs::msg::Bool>(
+        "/mars/arm/collision", 10);
+    
+    if (publish_markers_) {
+        marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/collision_shapes", 10);
+    }
+    
+    RCLCPP_INFO(this->get_logger(), "Collision Checker ready!");
+}
+
 void CollisionChecker::jointStateCallback(
     const sensor_msgs::msg::JointState::SharedPtr msg) {
     
     auto callback_start = std::chrono::high_resolution_clock::now();
     
-    // Compute forward kinematics
-    auto fk_start = std::chrono::high_resolution_clock::now();
-    auto transforms = computeForwardKinematics(msg->position);
-    auto fk_end = std::chrono::high_resolution_clock::now();
-    auto fk_duration = std::chrono::duration_cast<std::chrono::microseconds>(fk_end - fk_start);
-    
-    // Check for self-collisions
-    auto self_col_start = std::chrono::high_resolution_clock::now();
-    bool self_collision = checkCollisions(transforms);
-    auto self_col_end = std::chrono::high_resolution_clock::now();
-    auto self_col_duration = std::chrono::duration_cast<std::chrono::microseconds>(self_col_end - self_col_start);
-    
-    // Check for ground collisions
-    auto ground_col_start = std::chrono::high_resolution_clock::now();
-    bool ground_collision = checkGroundCollisions(transforms);
-    auto ground_col_end = std::chrono::high_resolution_clock::now();
-    auto ground_col_duration = std::chrono::duration_cast<std::chrono::microseconds>(ground_col_end - ground_col_start);
-    
-    // Combine collision results
-    bool collision = self_collision || ground_collision;
+    // Use collision checker core
+    auto check_start = std::chrono::high_resolution_clock::now();
+    auto result = collision_checker_core_->checkConfiguration(msg->position);
+    auto check_end = std::chrono::high_resolution_clock::now();
+    auto check_duration = std::chrono::duration_cast<std::chrono::microseconds>(check_end - check_start);
     
     // Publish collision status
     auto collision_msg = std_msgs::msg::Bool();
-    collision_msg.data = collision;
+    collision_msg.data = result.in_collision;
     collision_pub_->publish(collision_msg);
     
     // Publish visualization markers
     auto viz_start = std::chrono::high_resolution_clock::now();
     if (publish_markers_) {
-        publishCollisionMarkers(transforms, collision);
+        auto transforms = collision_checker_core_->computeForwardKinematics(msg->position);
+        publishCollisionMarkers(transforms, result.in_collision);
     }
     auto viz_end = std::chrono::high_resolution_clock::now();
     auto viz_duration = std::chrono::duration_cast<std::chrono::microseconds>(viz_end - viz_start);
@@ -382,20 +454,19 @@ void CollisionChecker::jointStateCallback(
     // Log profiling information (throttled to once per second)
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
         "⏱️  Collision Checker Profile:\n"
-        "   Forward Kinematics: %ld μs\n"
-        "   Self-Collision:     %ld μs (8 pairs)\n"
-        "   Ground Collision:   %ld μs (4 links)\n"
+        "   Collision Check:    %ld μs (clearance: %.1f mm)\n"
         "   Visualization:      %ld μs\n"
         "   ═══════════════════════════════\n"
         "   TOTAL:              %ld μs (%.3f ms)\n"
-        "   Max Frequency:      %.1f Hz",
-        fk_duration.count(),
-        self_col_duration.count(),
-        ground_col_duration.count(),
+        "   Max Frequency:      %.1f Hz\n"
+        "   Closest pair:       %s",
+        check_duration.count(),
+        result.min_clearance * 1000.0,
         viz_duration.count(),
         total_duration.count(),
         total_duration.count() / 1000.0,
-        1000000.0 / total_duration.count());
+        1000000.0 / total_duration.count(),
+        result.closest_pair.c_str());
 }
 
 void CollisionChecker::publishCollisionMarkers(
@@ -406,7 +477,8 @@ void CollisionChecker::publishCollisionMarkers(
     int id = 0;
     
     // Publish collision shape markers
-    for (const auto& [link_name, geom] : collision_geometries_) {
+    const auto& collision_geometries = collision_checker_core_->getCollisionGeometries();
+    for (const auto& [link_name, geom] : collision_geometries) {
         if (transforms.find(link_name) == transforms.end()) continue;
         
         auto marker = visualization_msgs::msg::Marker();
@@ -418,7 +490,7 @@ void CollisionChecker::publishCollisionMarkers(
         
         // Get transform
         Eigen::Isometry3d link_transform = transforms.at(link_name);
-        Eigen::Isometry3d offset_transform = createTransform(geom.offset, geom.rpy);
+        Eigen::Isometry3d offset_transform = collision_checker_core_->createTransform(geom.offset, geom.rpy);
         Eigen::Isometry3d final_transform = link_transform * offset_transform;
         
         // Set pose
@@ -485,12 +557,4 @@ void CollisionChecker::publishCollisionMarkers(
 }
 
 } // namespace maurice_arm
-
-int main(int argc, char** argv) {
-    rclcpp::init(argc, argv);
-    auto node = std::make_shared<maurice_arm::CollisionChecker>();
-    rclcpp::spin(node);
-    rclcpp::shutdown();
-    return 0;
-}
 

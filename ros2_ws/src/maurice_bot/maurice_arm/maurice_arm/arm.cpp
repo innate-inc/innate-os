@@ -8,6 +8,7 @@
 #include <std_srvs/srv/set_bool.hpp>
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
+#include "maurice_arm/collision_checker.hpp"
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -101,6 +102,22 @@ public:
         latest_arm_command_ = std::vector<int>(initial_positions.begin(), initial_positions.begin() + 6);
         latest_head_command_ = initial_positions[6];
         RCLCPP_INFO(this->get_logger(), "Command buffers initialized (arm: 6 joints, head: 1 joint)");
+        
+        // Initialize collision checker
+        RCLCPP_INFO(this->get_logger(), "Initializing collision checker...");
+        collision_checker_ = std::make_unique<CollisionCheckerCore>();
+        
+        // Initialize last_safe_position_ with current position
+        last_safe_position_.resize(6);
+        for (size_t i = 0; i < 6; ++i) {
+            last_safe_position_[i] = ((initial_positions[i] - 2048) * 2 * M_PI) / 4096.0;
+        }
+        // Apply direction flips to match joint convention
+        std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
+        for (size_t idx : flip_indices) {
+            last_safe_position_[idx] = -last_safe_position_[idx];
+        }
+        RCLCPP_INFO(this->get_logger(), "Collision checker initialized with current position as safe");
         
         // Create timer for control loop
         RCLCPP_INFO(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
@@ -307,7 +324,70 @@ private:
         }
     }
     
+    // Distance-based command scaling for collision avoidance
+    std::vector<double> scaleCommandByClearance(const std::vector<double>& commanded_pos) {
+        auto check_start = std::chrono::high_resolution_clock::now();
+        
+        // Check collision at commanded position
+        auto check_result = collision_checker_->checkConfiguration(commanded_pos);
+        
+        auto check_end = std::chrono::high_resolution_clock::now();
+        auto check_duration = std::chrono::duration_cast<std::chrono::microseconds>(check_end - check_start);
+        
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 200,
+            "Collision check: %ld μs, clearance: %.1f mm, %s",
+            check_duration.count(),
+            check_result.min_clearance * 1000.0,
+            check_result.closest_pair.c_str());
+        
+        // If in collision, reject command
+        if (check_result.in_collision) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                "Command in collision (%s), holding last safe position",
+                check_result.closest_pair.c_str());
+            return last_safe_position_;
+        }
+        
+        // If too close to collision boundary, reject
+        if (check_result.min_clearance < safety_margin_) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                "Too close to collision (%.1f mm < %.1f mm), holding position",
+                check_result.min_clearance * 1000.0,
+                safety_margin_ * 1000.0);
+            return last_safe_position_;
+        }
+        
+        // If far from obstacles, accept command as-is
+        if (check_result.min_clearance >= warning_distance_) {
+            last_safe_position_ = commanded_pos;
+            return commanded_pos;
+        }
+        
+        // In warning zone - scale down motion based on clearance
+        // Scale factor: 1.0 at warning_distance, 0.0 at safety_margin
+        double scale = (check_result.min_clearance - safety_margin_) / 
+                      (warning_distance_ - safety_margin_);
+        scale = std::clamp(scale, 0.0, 1.0);
+        
+        // Interpolate between last safe position and commanded
+        std::vector<double> scaled_pos(6);
+        for (size_t i = 0; i < 6; ++i) {
+            scaled_pos[i] = last_safe_position_[i] + 
+                           scale * (commanded_pos[i] - last_safe_position_[i]);
+        }
+        
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 200,
+            "Scaled command to %.0f%% (clearance: %.1f mm)",
+            scale * 100.0,
+            check_result.min_clearance * 1000.0);
+        
+        last_safe_position_ = scaled_pos;
+        return scaled_pos;
+    }
+    
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+        auto callback_start = std::chrono::high_resolution_clock::now();
+        
         try {
             std::vector<double> command_data(msg->data.begin(), msg->data.end());
             
@@ -315,41 +395,6 @@ private:
             if (command_data.size() != 6) {
                 RCLCPP_ERROR(this->get_logger(), "Action size must match number of servos. Expected 6, got %zu", command_data.size());
                 return;
-            }
-            
-            // ===== INTELLIGENT JOINT LIMITS =====
-            // Adjust joint2 limits based on joint1 position (collision avoidance)
-            if (command_data.size() >= 2) {
-                double joint1_pos = command_data[0];  // joint1 position in radians
-                double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
-                
-                // Get joint2 limits from config (index 1 = joint_2)
-                const auto& joint2_config = joint_configs_[1];
-                double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
-                double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
-                
-                // Since joint2 will be flipped, we need to invert the limits for pre-flip values
-                // After flip: joint2_flipped = -joint2_pos
-                // So if we want joint2_flipped to be within [config_min, config_max]
-                // We need joint2_pos to be within [-config_max, -config_min]
-                double joint2_min_limit = -config_max;  // Will become config_max after flip
-                double joint2_max_limit = -config_min;  // Will become config_min after flip
-                
-                // Determine joint2's maximum limit based on joint1's position
-                if (joint1_pos < 1.0) {
-                    // When joint1 < 1.0, restrict max to 0.4 (in pre-flip regime)
-                    // This prevents collision when joint1 is at certain angles
-                    joint2_min_limit = std::max(joint2_min_limit, -0.4);
-                    
-                    if (joint2_pos < joint2_min_limit) {
-                        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                            "Joint2 limited due to joint1 < 1.0: requested %.3f, clamped to %.3f", 
-                            joint2_pos, joint2_min_limit);
-                    }
-                }
-                
-                // Enforce the limits (before flipping)
-                command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
             }
             
             // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
@@ -360,20 +405,29 @@ private:
                 }
             }
             
-        // Convert to encoder counts (only 6 arm joints)
-        std::vector<int> command_encoder;
-        for (double pos : command_data) {
-            command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-        }
-        
-        // Store only the 6 arm positions - timer will add head position
-        std::lock_guard<std::mutex> lock(arm_command_mutex_);
-        latest_arm_command_ = command_encoder;
-        has_arm_command_ = true;
+            // ===== COLLISION-BASED COMMAND FILTERING =====
+            std::vector<double> safe_command = scaleCommandByClearance(command_data);
+            
+            // Convert to encoder counts (only 6 arm joints)
+            std::vector<int> command_encoder;
+            for (double pos : safe_command) {
+                command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+            }
+            
+            // Store only the 6 arm positions - timer will add head position
+            std::lock_guard<std::mutex> lock(arm_command_mutex_);
+            latest_arm_command_ = command_encoder;
+            has_arm_command_ = true;
             
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in arm command callback: %s", e.what());
         }
+        
+        auto callback_end = std::chrono::high_resolution_clock::now();
+        auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(callback_end - callback_start);
+        
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            "Command callback total: %ld μs", total_duration.count());
     }
     
     void armTorqueOnCallback(
@@ -587,6 +641,14 @@ private:
     
     // Mutex to protect Dynamixel serial bus access
     std::mutex dynamixel_mutex_;
+    
+    // Collision checker for safe command filtering
+    std::unique_ptr<CollisionCheckerCore> collision_checker_;
+    std::vector<double> last_safe_position_;  // Last known safe position (6 joints, in radians)
+    
+    // Collision avoidance parameters
+    const double safety_margin_ = 0.005;      // 5mm hard safety margin
+    const double warning_distance_ = 0.020;   // 20mm warning distance (start scaling)
 };
 
 } // namespace maurice_arm
