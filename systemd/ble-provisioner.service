@@ -27,6 +27,7 @@ ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,PYTHONPATH,LD_LIBRARY_PAT
 # Restart the service if it crashes
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
 
 # Log output to journald
 StandardOutput=journal
