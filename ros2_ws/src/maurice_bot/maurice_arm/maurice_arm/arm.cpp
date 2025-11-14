@@ -6,6 +6,8 @@
 #include <std_msgs/msg/empty.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
 #include "maurice_arm/collision_checker.hpp"
@@ -30,10 +32,12 @@ public:
         this->declare_parameter("baud_rate", 1000000);
         this->declare_parameter("control_frequency", 100.0);
         this->declare_parameter("joints", "{}");
+        this->declare_parameter("publish_collision_markers", true);
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
         control_frequency_ = this->get_parameter("control_frequency").as_double();
         std::string joints_str = this->get_parameter("joints").as_string();
+        publish_collision_markers_ = this->get_parameter("publish_collision_markers").as_bool();
         
         // Parse joints configuration
         parseJointConfig(joints_str);
@@ -59,6 +63,13 @@ public:
         // Setup ARM publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up ARM publishers/subscribers/services");
         arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/mars/arm/state", 10);
+        
+        if (publish_collision_markers_) {
+            collision_marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+                "/mars/arm/collision_shapes", 10);
+            RCLCPP_INFO(this->get_logger(), "Collision shape markers enabled on /mars/arm/collision_shapes");
+        }
+        
         arm_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
             "/mars/arm/commands", 10,
             std::bind(&MauriceArmNode::armCommandCallback, this, std::placeholders::_1));
@@ -107,17 +118,17 @@ public:
         RCLCPP_INFO(this->get_logger(), "Initializing collision checker...");
         collision_checker_ = std::make_unique<CollisionCheckerCore>();
         
-        // Initialize last_safe_position_ with current position
+        // Initialize last_safe_position_ with current position (EXTERNAL convention)
         last_safe_position_.resize(6);
         for (size_t i = 0; i < 6; ++i) {
             last_safe_position_[i] = ((initial_positions[i] - 2048) * 2 * M_PI) / 4096.0;
         }
-        // Apply direction flips to match joint convention
+        // Apply direction flips to convert to EXTERNAL convention (same as published joint states)
         std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
         for (size_t idx : flip_indices) {
             last_safe_position_[idx] = -last_safe_position_[idx];
         }
-        RCLCPP_INFO(this->get_logger(), "Collision checker initialized with current position as safe");
+        RCLCPP_INFO(this->get_logger(), "Collision checker initialized with current position as safe (external convention)");
         
         // Create timer for control loop
         RCLCPP_INFO(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
@@ -292,6 +303,12 @@ private:
             joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
             arm_state_pub_->publish(joint_state_msg_);
             
+            // ========== PUBLISH COLLISION MARKERS ==========
+            if (publish_collision_markers_) {
+                std::vector<double> current_joint_pos(positions_rad.begin(), positions_rad.begin() + 6);
+                publishCollisionMarkers(current_joint_pos);
+            }
+            
             // ========== PUBLISH HEAD POSITION ==========
             int head_encoder = positions[6];  // Index 6 = servo 7
             publishHeadPosition(head_encoder);
@@ -325,10 +342,11 @@ private:
     }
     
     // Distance-based command scaling for collision avoidance
+    // NOTE: commanded_pos should be in EXTERNAL convention (same as published joint states)
     std::vector<double> scaleCommandByClearance(const std::vector<double>& commanded_pos) {
         auto check_start = std::chrono::high_resolution_clock::now();
         
-        // Check collision at commanded position
+        // Check collision at commanded position (external convention)
         auto check_result = collision_checker_->checkConfiguration(commanded_pos);
         
         auto check_end = std::chrono::high_resolution_clock::now();
@@ -389,6 +407,7 @@ private:
         auto callback_start = std::chrono::high_resolution_clock::now();
         
         try {
+            // Commands come in EXTERNAL convention (same as published joint states)
             std::vector<double> command_data(msg->data.begin(), msg->data.end());
             
             // Validate that we have exactly 6 arm joints
@@ -397,18 +416,21 @@ private:
                 return;
             }
             
+            // ===== COLLISION-BASED COMMAND FILTERING =====
+            // Pass EXTERNAL convention to collision checker (same as visualization)
+            std::vector<double> safe_command = scaleCommandByClearance(command_data);
+            
+            // Now convert from EXTERNAL to HARDWARE convention for servos
             // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
             std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
             for (size_t idx : flip_indices) {
-                if (idx < command_data.size()) {
-                    command_data[idx] = -command_data[idx];
+                if (idx < safe_command.size()) {
+                    safe_command[idx] = -safe_command[idx];
                 }
             }
             
-            // ===== COLLISION-BASED COMMAND FILTERING =====
-            std::vector<double> safe_command = scaleCommandByClearance(command_data);
-            
             // Convert to encoder counts (only 6 arm joints)
+            // Using safe_command (collision-filtered, hardware convention)
             std::vector<int> command_encoder;
             for (double pos : safe_command) {
                 command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
@@ -592,6 +614,101 @@ private:
         }
     }
     
+    // Publish collision shape visualization markers
+    // NOTE: joint_positions should be in EXTERNAL convention (same as published joint states)
+    void publishCollisionMarkers(const std::vector<double>& joint_positions) {
+        auto marker_array = visualization_msgs::msg::MarkerArray();
+        int id = 0;
+        
+        // Compute forward kinematics (external convention)
+        auto transforms = collision_checker_->computeForwardKinematics(joint_positions);
+        
+        // Get collision geometries from collision checker
+        const auto& collision_geometries = collision_checker_->getCollisionGeometries();
+        
+        // Check current collision status
+        auto check_result = collision_checker_->checkConfiguration(joint_positions);
+        bool collision_detected = check_result.in_collision;
+        
+        // Publish collision shape markers
+        for (const auto& [link_name, geom] : collision_geometries) {
+            if (transforms.find(link_name) == transforms.end()) continue;
+            
+            auto marker = visualization_msgs::msg::Marker();
+            marker.header.frame_id = "base_link";
+            marker.header.stamp = this->now();
+            marker.ns = "collision_shapes";
+            marker.id = id++;
+            marker.action = visualization_msgs::msg::Marker::ADD;
+            
+            // Get transform
+            Eigen::Isometry3d link_transform = transforms.at(link_name);
+            Eigen::Isometry3d offset_transform = collision_checker_->createTransform(geom.offset, geom.rpy);
+            Eigen::Isometry3d final_transform = link_transform * offset_transform;
+            
+            // Set pose
+            marker.pose.position.x = final_transform.translation().x();
+            marker.pose.position.y = final_transform.translation().y();
+            marker.pose.position.z = final_transform.translation().z();
+            
+            Eigen::Quaterniond q(final_transform.rotation());
+            marker.pose.orientation.x = q.x();
+            marker.pose.orientation.y = q.y();
+            marker.pose.orientation.z = q.z();
+            marker.pose.orientation.w = q.w();
+            
+            // Set shape
+            if (geom.type == CollisionGeometry::Type::BOX) {
+                marker.type = visualization_msgs::msg::Marker::CUBE;
+                auto box = std::static_pointer_cast<fcl::Boxd>(geom.shape);
+                marker.scale.x = box->side[0];
+                marker.scale.y = box->side[1];
+                marker.scale.z = box->side[2];
+            } else if (geom.type == CollisionGeometry::Type::CYLINDER) {
+                marker.type = visualization_msgs::msg::Marker::CYLINDER;
+                auto cyl = std::static_pointer_cast<fcl::Cylinderd>(geom.shape);
+                marker.scale.x = cyl->radius * 2;
+                marker.scale.y = cyl->radius * 2;
+                marker.scale.z = cyl->lz;
+            }
+            
+            // Set color (green if no collision, red if collision)
+            marker.color.r = collision_detected ? 1.0 : 0.0;
+            marker.color.g = collision_detected ? 0.0 : 1.0;
+            marker.color.b = 0.0;
+            marker.color.a = 0.5;
+            
+            marker_array.markers.push_back(marker);
+        }
+        
+        // Publish ground plane marker
+        auto ground_marker = visualization_msgs::msg::Marker();
+        ground_marker.header.frame_id = "base_link";
+        ground_marker.header.stamp = this->now();
+        ground_marker.ns = "collision_shapes";
+        ground_marker.id = id++;
+        ground_marker.action = visualization_msgs::msg::Marker::ADD;
+        ground_marker.type = visualization_msgs::msg::Marker::CUBE;
+        
+        ground_marker.pose.position.x = 0.0;
+        ground_marker.pose.position.y = 0.0;
+        ground_marker.pose.position.z = -0.005;
+        ground_marker.pose.orientation.w = 1.0;
+        
+        ground_marker.scale.x = 2.0;  // 2m x 2m for visualization
+        ground_marker.scale.y = 2.0;
+        ground_marker.scale.z = 0.01;
+        
+        ground_marker.color.r = 0.5;
+        ground_marker.color.g = 0.5;
+        ground_marker.color.b = 0.5;
+        ground_marker.color.a = 0.3;
+        
+        marker_array.markers.push_back(ground_marker);
+        
+        collision_marker_pub_->publish(marker_array);
+    }
+    
     struct JointConfig {
         int servo_id;
         double min_pos_rad;
@@ -614,6 +731,7 @@ private:
     
     // ARM members
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_marker_pub_;
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
@@ -621,6 +739,7 @@ private:
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
+    bool publish_collision_markers_;
     
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
