@@ -5,6 +5,12 @@
 
 set -e  # Exit on error
 
+# Check for root privileges
+if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run as root. Please use sudo." >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 LOG_FILE="$REPO_DIR/logs/post_update.log"
@@ -31,14 +37,25 @@ log "Starting post-update script"
 log "Repository: $REPO_DIR"
 log "========================================"
 
-# Make sure services are stopped before updating
-log "Ensuring services are stopped..."
+# Stop running services before updating
+log "Stopping services to begin update..."
+
+# Kill tmux sessions if running
+ACTUAL_USER=${SUDO_USER:-$USER}
+if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
+    log "Stopping tmux session: ros_nodes"
+    sudo -u "$ACTUAL_USER" tmux kill-session -t ros_nodes
+fi
+
+# Stop systemd services
 for service in discovery-server.service ros-app.service; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         log "Stopping $service"
         systemctl stop "$service"
     fi
 done
+
+log "All services stopped."
 
 # 1. Update systemd service files if changed
 log "Checking systemd service files..."
@@ -87,7 +104,22 @@ if [ -d "$REPO_DIR/udev" ]; then
     log "Udev rules reloaded"
 fi
 
-# 4. Rebuild ROS2 workspace if needed
+# 4. Update Bluetooth configurations
+log "Checking Bluetooth configurations..."
+if [ -f "$REPO_DIR/config/bluetooth/main.conf" ]; then
+    log "Updating /etc/bluetooth/main.conf"
+    cp "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
+fi
+
+if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
+    log "Updating bluetooth service override..."
+    mkdir -p /lib/systemd/system/bluetooth.service.d/
+    cp "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
+    systemctl daemon-reload
+    log "Systemd daemon reloaded after bluetooth override"
+fi
+
+# 5. Rebuild ROS2 workspace if needed
 log "Checking ROS2 workspace..."
 if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     log "Rebuilding ROS2 workspace..."
@@ -105,27 +137,30 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     fi
 fi
 
-# 5. Install/update Python dependencies if requirements.txt changed
+# 6. Install/update Python dependencies if requirements.txt changed
 log "Checking Python dependencies..."
 if [ -f "$REPO_DIR/requirements.txt" ]; then
     log "Updating Python dependencies..."
     pip3 install -r "$REPO_DIR/requirements.txt" --upgrade
 fi
 
-# 6. Restart relevant services
+# 7. Restart relevant services
 log "Restarting services..."
-SERVICES_TO_RESTART=("discovery-server.service" "ros-app.service")
+SERVICES_TO_RESTART=("bluetooth.service" "discovery-server.service" "ros-app.service")
 
 for service in "${SERVICES_TO_RESTART[@]}"; do
-    if systemctl is-active --quiet "$service"; then
-        log "Restarting $service"
-        systemctl restart "$service"
-    else
-        log "Service $service is not active, skipping restart"
-    fi
+    log "Enabling and restarting $service"
+    systemctl enable "$service"
+    systemctl restart "$service"
 done
 
-# 7. Optional: Restart Docker containers if using them
+# 8. Launch ROS nodes in Tmux
+log "Launching ROS nodes in tmux..."
+ACTUAL_USER=${SUDO_USER:-$USER}
+# Run as the actual user in the background
+sudo -u "$ACTUAL_USER" INNATE_OS_ROOT="$REPO_DIR" zsh "$REPO_DIR/scripts/launch_ros_in_tmux.sh" &
+
+# 9. Optional: Restart Docker containers if using them
 # if command -v docker-compose &> /dev/null; then
 #     log "Restarting Docker containers..."
 #     cd "$REPO_DIR"
