@@ -1,5 +1,6 @@
 #include "maurice_arm/collision_checker.hpp"
 #include <cmath>
+#include <chrono>
 
 namespace maurice_arm {
 
@@ -335,14 +336,25 @@ bool CollisionChecker::checkGroundCollisions(
 void CollisionChecker::jointStateCallback(
     const sensor_msgs::msg::JointState::SharedPtr msg) {
     
+    auto callback_start = std::chrono::high_resolution_clock::now();
+    
     // Compute forward kinematics
+    auto fk_start = std::chrono::high_resolution_clock::now();
     auto transforms = computeForwardKinematics(msg->position);
+    auto fk_end = std::chrono::high_resolution_clock::now();
+    auto fk_duration = std::chrono::duration_cast<std::chrono::microseconds>(fk_end - fk_start);
     
     // Check for self-collisions
+    auto self_col_start = std::chrono::high_resolution_clock::now();
     bool self_collision = checkCollisions(transforms);
+    auto self_col_end = std::chrono::high_resolution_clock::now();
+    auto self_col_duration = std::chrono::duration_cast<std::chrono::microseconds>(self_col_end - self_col_start);
     
     // Check for ground collisions
+    auto ground_col_start = std::chrono::high_resolution_clock::now();
     bool ground_collision = checkGroundCollisions(transforms);
+    auto ground_col_end = std::chrono::high_resolution_clock::now();
+    auto ground_col_duration = std::chrono::duration_cast<std::chrono::microseconds>(ground_col_end - ground_col_start);
     
     // Combine collision results
     bool collision = self_collision || ground_collision;
@@ -353,9 +365,33 @@ void CollisionChecker::jointStateCallback(
     collision_pub_->publish(collision_msg);
     
     // Publish visualization markers
+    auto viz_start = std::chrono::high_resolution_clock::now();
     if (publish_markers_) {
         publishCollisionMarkers(transforms, collision);
     }
+    auto viz_end = std::chrono::high_resolution_clock::now();
+    auto viz_duration = std::chrono::duration_cast<std::chrono::microseconds>(viz_end - viz_start);
+    
+    auto callback_end = std::chrono::high_resolution_clock::now();
+    auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(callback_end - callback_start);
+    
+    // Log profiling information (throttled to once per second)
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "⏱️  Collision Checker Profile:\n"
+        "   Forward Kinematics: %ld μs\n"
+        "   Self-Collision:     %ld μs (8 pairs)\n"
+        "   Ground Collision:   %ld μs (4 links)\n"
+        "   Visualization:      %ld μs\n"
+        "   ═══════════════════════════════\n"
+        "   TOTAL:              %ld μs (%.3f ms)\n"
+        "   Max Frequency:      %.1f Hz",
+        fk_duration.count(),
+        self_col_duration.count(),
+        ground_col_duration.count(),
+        viz_duration.count(),
+        total_duration.count(),
+        total_duration.count() / 1000.0,
+        1000000.0 / total_duration.count());
 }
 
 void CollisionChecker::publishCollisionMarkers(
