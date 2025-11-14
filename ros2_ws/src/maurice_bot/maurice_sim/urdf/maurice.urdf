@@ -134,10 +134,11 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Cylinder length 138.5mm, diameter 50mm -->
     <collision>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0.06925" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link2.STL" scale="1 1 1"/>
+        <cylinder radius="0.025" length="0.1385"/>
       </geometry>
     </collision>
   </link>
