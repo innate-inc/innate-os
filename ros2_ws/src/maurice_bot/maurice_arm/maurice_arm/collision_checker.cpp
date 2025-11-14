@@ -51,10 +51,10 @@ void CollisionChecker::setupCollisionGeometries() {
     base_geom.link_name = "base_link";
     collision_geometries_["base_link"] = base_geom;
     
-    // link2: Cylinder length 138.5mm, radius 25mm
+    // link2: Box 20mm x 54mm x 138.5mm (length along link direction)
     CollisionGeometry link2_geom;
-    link2_geom.type = CollisionGeometry::Type::CYLINDER;
-    link2_geom.shape = std::make_shared<fcl::Cylinderd>(0.025, 0.1385);
+    link2_geom.type = CollisionGeometry::Type::BOX;
+    link2_geom.shape = std::make_shared<fcl::Boxd>(0.020, 0.054, 0.1385);
     link2_geom.offset = Eigen::Vector3d(0, 0, 0.06925);
     link2_geom.rpy = Eigen::Vector3d(0, 0, 0);
     link2_geom.link_name = "link2";
@@ -203,22 +203,26 @@ std::map<std::string, Eigen::Isometry3d> CollisionChecker::computeForwardKinemat
         // Joint origin transform
         Eigen::Isometry3d joint_origin = createTransform(joint.xyz, joint.rpy);
         
-        // Joint rotation
+        // Joint rotation (flip direction for joint6)
         Eigen::Isometry3d joint_rotation = Eigen::Isometry3d::Identity();
-        Eigen::AngleAxisd rotation(joint_positions[i], joint.axis);
+        double joint_angle = joint_positions[i];
+        if (i == 5) {  // joint6 (index 5)
+            joint_angle = -joint_angle;  // Flip direction
+        }
+        Eigen::AngleAxisd rotation(joint_angle, joint.axis);
         joint_rotation.rotate(rotation);
         
         // Child link transform
         transforms[joint.child_link] = parent_transform * joint_origin * joint_rotation;
     }
     
-    // Handle mirrored gripper (joint6M mirrors joint6)
+    // Handle mirrored gripper (joint6M mirrors joint6 with flipped direction)
     if (joint_positions.size() >= 6) {
         const auto& joint6M = joints_["joint6M"];
         Eigen::Isometry3d parent_transform = transforms["link5"];
         Eigen::Isometry3d joint_origin = createTransform(joint6M.xyz, joint6M.rpy);
         Eigen::Isometry3d joint_rotation = Eigen::Isometry3d::Identity();
-        Eigen::AngleAxisd rotation(-joint_positions[5], joint6M.axis);  // Note: -1 multiplier for mimic
+        Eigen::AngleAxisd rotation(joint_positions[5], joint6M.axis);  // Same direction as flipped joint6
         joint_rotation.rotate(rotation);
         transforms["link62"] = parent_transform * joint_origin * joint_rotation;
     }
@@ -406,7 +410,7 @@ void CollisionChecker::publishCollisionMarkers(
         if (transforms.find(link_name) == transforms.end()) continue;
         
         auto marker = visualization_msgs::msg::Marker();
-        marker.header.frame_id = "base_root";
+        marker.header.frame_id = "base_link";
         marker.header.stamp = this->now();
         marker.ns = "collision_shapes";
         marker.id = id++;
@@ -454,7 +458,7 @@ void CollisionChecker::publishCollisionMarkers(
     
     // Publish ground plane marker
     auto ground_marker = visualization_msgs::msg::Marker();
-    ground_marker.header.frame_id = "base_root";
+    ground_marker.header.frame_id = "base_link";
     ground_marker.header.stamp = this->now();
     ground_marker.ns = "collision_shapes";
     ground_marker.id = id++;
