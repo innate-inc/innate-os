@@ -73,10 +73,11 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 187.8mm x 182mm x 167.6mm, front face 35.2mm forward -->
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 -1.5708"/>
+      <origin xyz="-0.0587 0 0.0838" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/base.STL" scale="1 1 1"/>
+        <box size="0.1878 0.182 0.1676"/>
       </geometry>
     </collision>
   </link>
