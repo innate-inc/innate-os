@@ -1,6 +1,12 @@
 <mujoco model="maurice_bot">
   <compiler angle="radian" coordinate="local" meshdir="/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/meshes" eulerseq="zyx"/>
+  <!-- COLLISION DISABLED: Testing external collision checker -->
   <option gravity="0 0 -9.81" />
+  
+  <!-- Disable all collisions globally -->
+  <default>
+    <geom contype="0" conaffinity="0"/>
+  </default>
 
   <asset>
     <mesh name="base_mesh" file="base.STL" scale="1 1 1"/>
