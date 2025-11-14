@@ -16,6 +16,9 @@ find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
+find_package(fcl REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -49,10 +52,33 @@ ament_target_dependencies(arm
   dynamixel_sdk
 )
 
+# Add collision checker node
+add_executable(collision_checker
+  maurice_arm/collision_checker.cpp
+)
+
+ament_target_dependencies(collision_checker
+  rclcpp
+  sensor_msgs
+  std_msgs
+  visualization_msgs
+  Eigen3
+)
+
+target_link_libraries(collision_checker
+  fcl
+)
+
+target_include_directories(collision_checker PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
 # Install C++ targets
 install(TARGETS
   camera_node
   arm
+  collision_checker
   DESTINATION lib/${PROJECT_NAME}
 )
 
