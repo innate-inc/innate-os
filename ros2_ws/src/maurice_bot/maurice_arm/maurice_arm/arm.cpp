@@ -692,12 +692,12 @@ private:
         
         ground_marker.pose.position.x = 0.0;
         ground_marker.pose.position.y = 0.0;
-        ground_marker.pose.position.z = -0.005;
+        ground_marker.pose.position.z = -0.05;  // Show thin surface layer at ground level
         ground_marker.pose.orientation.w = 1.0;
         
-        ground_marker.scale.x = 2.0;  // 2m x 2m for visualization
-        ground_marker.scale.y = 2.0;
-        ground_marker.scale.z = 0.01;
+        ground_marker.scale.x = 10.0;  // 10m x 10m for visualization (actual collision plane is 100m x 100m)
+        ground_marker.scale.y = 10.0;
+        ground_marker.scale.z = 0.1;  // Thin visualization layer (actual collision extends 10m deep)
         
         ground_marker.color.r = 0.5;
         ground_marker.color.g = 0.5;
@@ -766,8 +766,8 @@ private:
     std::vector<double> last_safe_position_;  // Last known safe position (6 joints, in radians)
     
     // Collision avoidance parameters
-    const double safety_margin_ = 0.005;      // 5mm hard safety margin
-    const double warning_distance_ = 0.020;   // 20mm warning distance (start scaling)
+    const double safety_margin_ = 0.001;      // 1mm hard safety margin
+    const double warning_distance_ = 0.008;   // 8mm warning distance (start scaling)
 };
 
 } // namespace maurice_arm
