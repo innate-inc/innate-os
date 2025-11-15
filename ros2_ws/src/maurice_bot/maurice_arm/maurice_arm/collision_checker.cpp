@@ -213,7 +213,9 @@ bool CollisionCheckerCore::areAdjacent(const std::string& link1, const std::stri
 bool CollisionCheckerCore::checkCollisions(
     const std::map<std::string, Eigen::Isometry3d>& transforms,
     double& min_clearance,
-    std::string& closest_pair) {
+    std::string& closest_pair,
+    std::map<std::string, double>& link_clearances,
+    std::map<std::string, std::string>& link_closest_to) {
     
     bool collision_detected = false;
     min_clearance = std::numeric_limits<double>::max();
@@ -255,6 +257,7 @@ bool CollisionCheckerCore::checkCollisions(
             
             fcl::collide(&fcl_objects[i].second, &fcl_objects[j].second, coll_request, coll_result);
             
+            double clearance;
             if (coll_result.isCollision()) {
                 collision_detected = true;
                 // Penetration depth is negative clearance
@@ -262,10 +265,13 @@ bool CollisionCheckerCore::checkCollisions(
                 coll_result.getContacts(contacts);
                 if (!contacts.empty()) {
                     double penetration = contacts[0].penetration_depth;
-                    if (-penetration < min_clearance) {
-                        min_clearance = -penetration;
+                    clearance = -penetration;
+                    if (clearance < min_clearance) {
+                        min_clearance = clearance;
                         closest_pair = link1 + " <-> " + link2;
                     }
+                } else {
+                    clearance = 0.0;  // In collision but no contact info
                 }
             } else {
                 // Not colliding, check distance
@@ -274,11 +280,22 @@ bool CollisionCheckerCore::checkCollisions(
                 fcl::DistanceResultd dist_result;
                 
                 fcl::distance(&fcl_objects[i].second, &fcl_objects[j].second, dist_request, dist_result);
+                clearance = dist_result.min_distance;
                 
-                if (dist_result.min_distance < min_clearance) {
-                    min_clearance = dist_result.min_distance;
+                if (clearance < min_clearance) {
+                    min_clearance = clearance;
                     closest_pair = link1 + " <-> " + link2;
                 }
+            }
+            
+            // Update per-link clearances
+            if (clearance < link_clearances[link1]) {
+                link_clearances[link1] = clearance;
+                link_closest_to[link1] = link2;
+            }
+            if (clearance < link_clearances[link2]) {
+                link_clearances[link2] = clearance;
+                link_closest_to[link2] = link1;
             }
         }
     }
@@ -289,7 +306,9 @@ bool CollisionCheckerCore::checkCollisions(
 bool CollisionCheckerCore::checkGroundCollisions(
     const std::map<std::string, Eigen::Isometry3d>& transforms,
     double& min_clearance,
-    std::string& closest_link) {
+    std::string& closest_link,
+    std::map<std::string, double>& link_clearances,
+    std::map<std::string, std::string>& link_closest_to) {
     
     bool collision_detected = false;
     min_clearance = std::numeric_limits<double>::max();
@@ -326,6 +345,7 @@ bool CollisionCheckerCore::checkGroundCollisions(
             
             fcl::collide(&link_obj, &ground_obj, coll_request, coll_result);
             
+            double clearance;
             if (coll_result.isCollision()) {
                 collision_detected = true;
                 // Get penetration depth
@@ -333,10 +353,13 @@ bool CollisionCheckerCore::checkGroundCollisions(
                 coll_result.getContacts(contacts);
                 if (!contacts.empty()) {
                     double penetration = contacts[0].penetration_depth;
-                    if (-penetration < min_clearance) {
-                        min_clearance = -penetration;
+                    clearance = -penetration;
+                    if (clearance < min_clearance) {
+                        min_clearance = clearance;
                         closest_link = link_name + " <-> ground";
                     }
+                } else {
+                    clearance = 0.0;  // In collision but no contact info
                 }
             } else {
                 // Not colliding, check distance
@@ -345,11 +368,18 @@ bool CollisionCheckerCore::checkGroundCollisions(
                 fcl::DistanceResultd dist_result;
                 
                 fcl::distance(&link_obj, &ground_obj, dist_request, dist_result);
+                clearance = dist_result.min_distance;
                 
-                if (dist_result.min_distance < min_clearance) {
-                    min_clearance = dist_result.min_distance;
+                if (clearance < min_clearance) {
+                    min_clearance = clearance;
                     closest_link = link_name + " <-> ground";
                 }
+            }
+            
+            // Update per-link clearance to ground
+            if (clearance < link_clearances[link_name]) {
+                link_clearances[link_name] = clearance;
+                link_closest_to[link_name] = "ground";
             }
         }
     }
@@ -365,15 +395,23 @@ CollisionCheckResult CollisionCheckerCore::checkConfiguration(
     // Compute forward kinematics
     auto transforms = computeForwardKinematics(joint_positions);
     
-    // Check self-collisions
+    // Initialize per-link clearances to max
+    for (const auto& [link_name, geom] : collision_geometries_) {
+        result.link_clearances[link_name] = std::numeric_limits<double>::max();
+        result.link_closest_to[link_name] = "";
+    }
+    
+    // Check self-collisions (also populates per-link clearances)
     double self_clearance = std::numeric_limits<double>::max();
     std::string self_pair;
-    bool self_collision = checkCollisions(transforms, self_clearance, self_pair);
+    bool self_collision = checkCollisions(transforms, self_clearance, self_pair, 
+                                         result.link_clearances, result.link_closest_to);
     
-    // Check ground collisions
+    // Check ground collisions (also populates per-link clearances)
     double ground_clearance = std::numeric_limits<double>::max();
     std::string ground_link;
-    bool ground_collision = checkGroundCollisions(transforms, ground_clearance, ground_link);
+    bool ground_collision = checkGroundCollisions(transforms, ground_clearance, ground_link,
+                                                  result.link_clearances, result.link_closest_to);
     
     // Combine results
     result.in_collision = self_collision || ground_collision;

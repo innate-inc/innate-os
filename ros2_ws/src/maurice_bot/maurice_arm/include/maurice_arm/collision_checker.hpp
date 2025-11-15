@@ -37,6 +37,10 @@ struct CollisionCheckResult {
     double min_clearance;  // Minimum distance to any obstacle (negative if penetrating)
     std::string closest_pair;  // Description of closest link pair
     
+    // Per-link clearance information for selective joint scaling
+    std::map<std::string, double> link_clearances;  // Minimum clearance for each link
+    std::map<std::string, std::string> link_closest_to;  // What each link is closest to
+    
     CollisionCheckResult() 
         : in_collision(false), 
           min_clearance(std::numeric_limits<double>::max()),
@@ -73,12 +77,16 @@ private:
     bool checkCollisions(
         const std::map<std::string, Eigen::Isometry3d>& transforms,
         double& min_clearance,
-        std::string& closest_pair);
+        std::string& closest_pair,
+        std::map<std::string, double>& link_clearances,
+        std::map<std::string, std::string>& link_closest_to);
     
     bool checkGroundCollisions(
         const std::map<std::string, Eigen::Isometry3d>& transforms,
         double& min_clearance,
-        std::string& closest_link);
+        std::string& closest_link,
+        std::map<std::string, double>& link_clearances,
+        std::map<std::string, std::string>& link_closest_to);
     
     bool areAdjacent(const std::string& link1, const std::string& link2);
     
