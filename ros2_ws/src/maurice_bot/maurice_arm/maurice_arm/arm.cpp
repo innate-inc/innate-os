@@ -341,7 +341,7 @@ private:
         }
     }
     
-    // Distance-based command scaling for collision avoidance
+    // Distance-based command scaling for collision avoidance with per-link and per-joint scaling
     // NOTE: commanded_pos should be in EXTERNAL convention (same as published joint states)
     std::vector<double> scaleCommandByClearance(const std::vector<double>& commanded_pos) {
         auto check_start = std::chrono::high_resolution_clock::now();
@@ -358,48 +358,120 @@ private:
             check_result.min_clearance * 1000.0,
             check_result.closest_pair.c_str());
         
-        // If in collision, reject command
-        if (check_result.in_collision) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                "Command in collision (%s), holding last safe position",
-                check_result.closest_pair.c_str());
-            return last_safe_position_;
+        // Compute per-joint scale factors based on link clearances
+        std::vector<double> joint_scales(6, 1.0);  // Start with full motion for all joints
+        bool any_restriction = false;
+        
+        // Debug: log all link clearances when there's a collision
+        if (check_result.in_collision || check_result.min_clearance < 0.010) {
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                "Link clearances: link2=%.1fmm link3=%.1fmm link61=%.1fmm link62=%.1fmm",
+                check_result.link_clearances["link2"] * 1000.0,
+                check_result.link_clearances["link3"] * 1000.0,
+                check_result.link_clearances["link61"] * 1000.0,
+                check_result.link_clearances["link62"] * 1000.0);
         }
         
-        // If too close to collision boundary, reject
-        if (check_result.min_clearance < safety_margin_) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                "Too close to collision (%.1f mm < %.1f mm), holding position",
-                check_result.min_clearance * 1000.0,
-                safety_margin_ * 1000.0);
-            return last_safe_position_;
+        for (const auto& [link_name, clearance] : check_result.link_clearances) {
+            // Skip base_link - it's fixed and shouldn't restrict motion
+            if (link_name == "base_link") {
+                continue;
+            }
+            
+            // Get link-specific margins
+            double safety_margin = link_safety_margins_[link_name];
+            double warning_distance = link_warning_distances_[link_name];
+            
+            double link_scale = 1.0;
+            
+            // Handle collision (negative or very small clearance)
+            if (clearance <= 0.0 || (check_result.in_collision && clearance < safety_margin)) {
+                // In collision - freeze all joints affecting this link
+                link_scale = 0.0;
+                any_restriction = true;
+                
+                // Only warn if this link has joints to freeze
+                if (!link_to_joints_.at(link_name).empty()) {
+                    auto closest_it = check_result.link_closest_to.find(link_name);
+                    std::string closest = (closest_it != check_result.link_closest_to.end()) 
+                                          ? closest_it->second : "unknown";
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                        "%s IN COLLISION with %s, freezing dependent joints",
+                        link_name.c_str(), closest.c_str());
+                }
+            }
+            // Handle too close (within safety margin)
+            else if (clearance < safety_margin) {
+                // Too close - stop all joints affecting this link
+                link_scale = 0.0;
+                any_restriction = true;
+                
+                if (!link_to_joints_.at(link_name).empty()) {
+                    auto closest_it = check_result.link_closest_to.find(link_name);
+                    std::string closest = (closest_it != check_result.link_closest_to.end()) 
+                                          ? closest_it->second : "unknown";
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                        "%s too close (%.1f mm < %.1f mm) to %s, freezing dependent joints",
+                        link_name.c_str(), clearance * 1000.0, safety_margin * 1000.0,
+                        closest.c_str());
+                }
+            }
+            // Handle warning zone (between safety margin and warning distance)
+            else if (clearance < warning_distance) {
+                // In warning zone - scale between 0 and 1 based on clearance
+                link_scale = (clearance - safety_margin) / (warning_distance - safety_margin);
+                link_scale = std::clamp(link_scale, 0.0, 1.0);
+                any_restriction = true;
+                
+                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                    "%s in warning zone (%.1f mm), scaling to %.0f%%",
+                    link_name.c_str(), clearance * 1000.0, link_scale * 100.0);
+            }
+            
+            // Apply this scale to all joints that affect this link (take minimum scale)
+            if (link_scale < 1.0) {
+                std::string frozen_joints = "";
+                for (size_t joint_idx : link_to_joints_[link_name]) {
+                    joint_scales[joint_idx] = std::min(joint_scales[joint_idx], link_scale);
+                    frozen_joints += "J" + std::to_string(joint_idx + 1) + " ";
+                }
+                if (!frozen_joints.empty() && link_scale == 0.0) {
+                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                        "  -> Freezing joints %sdue to %s (clearance: %.1fmm)", 
+                        frozen_joints.c_str(), link_name.c_str(), clearance * 1000.0);
+                }
+            }
         }
         
-        // If far from obstacles, accept command as-is
-        if (check_result.min_clearance >= warning_distance_) {
+        // If no restrictions, accept command as-is
+        if (!any_restriction) {
             last_safe_position_ = commanded_pos;
             return commanded_pos;
         }
         
-        // In warning zone - scale down motion based on clearance
-        // Scale factor: 1.0 at warning_distance, 0.0 at safety_margin
-        double scale = (check_result.min_clearance - safety_margin_) / 
-                      (warning_distance_ - safety_margin_);
-        scale = std::clamp(scale, 0.0, 1.0);
-        
-        // Interpolate between last safe position and commanded
+        // Apply per-joint scaling
         std::vector<double> scaled_pos(6);
         for (size_t i = 0; i < 6; ++i) {
             scaled_pos[i] = last_safe_position_[i] + 
-                           scale * (commanded_pos[i] - last_safe_position_[i]);
+                           joint_scales[i] * (commanded_pos[i] - last_safe_position_[i]);
         }
         
-        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 200,
-            "Scaled command to %.0f%% (clearance: %.1f mm)",
-            scale * 100.0,
-            check_result.min_clearance * 1000.0);
+        // Log joint scales when there's any restriction
+        if (any_restriction) {
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                "Joint scales: J1=%.0f%% J2=%.0f%% J3=%.0f%% J4=%.0f%% J5=%.0f%% J6=%.0f%%",
+                joint_scales[0] * 100.0, joint_scales[1] * 100.0, joint_scales[2] * 100.0,
+                joint_scales[3] * 100.0, joint_scales[4] * 100.0, joint_scales[5] * 100.0);
+        }
         
-        last_safe_position_ = scaled_pos;
+        // Update last safe position for joints that were allowed to move
+        for (size_t i = 0; i < 6; ++i) {
+            if (joint_scales[i] > 0.0) {
+                last_safe_position_[i] = scaled_pos[i];
+            }
+            // If joint_scales[i] == 0.0, keep the last safe position for that joint
+        }
+        
         return scaled_pos;
     }
     
@@ -765,9 +837,34 @@ private:
     std::unique_ptr<CollisionCheckerCore> collision_checker_;
     std::vector<double> last_safe_position_;  // Last known safe position (6 joints, in radians)
     
-    // Collision avoidance parameters
-    const double safety_margin_ = 0.001;      // 1mm hard safety margin
-    const double warning_distance_ = 0.008;   // 8mm warning distance (start scaling)
+    // Link-to-joint dependency mapping: which joints affect which links
+    // Links: base_link, link2, link3, link61, link62
+    // Joints: 0=joint1, 1=joint2, 2=joint3, 3=joint4, 4=joint5, 5=joint6
+    std::map<std::string, std::vector<size_t>> link_to_joints_ = {
+        {"base_link", {}},                    // Fixed base, no joints affect it
+        {"link2", {0, 1}},                    // Affected by joint1, joint2
+        {"link3", {0, 1, 2}},                 // Affected by joint1, joint2, joint3
+        {"link61", {0, 1, 2, 3, 4, 5}},      // Affected by all joints (gripper finger)
+        {"link62", {0, 1, 2, 3, 4, 5}}       // Affected by all joints (gripper finger)
+    };
+    
+    // Link-specific safety margins (hard stop distance)
+    std::map<std::string, double> link_safety_margins_ = {
+        {"base_link", 0.002},    // 2mm for base (less critical, mostly fixed)
+        {"link2", 0.002},        // 2mm for proximal link
+        {"link3", 0.003},        // 3mm for main arm link (moves faster)
+        {"link61", 0.001},       // 1mm for gripper finger (needs precision)
+        {"link62", 0.001}        // 1mm for gripper finger (needs precision)
+    };
+    
+    // Link-specific warning distances (start scaling motion)
+    std::map<std::string, double> link_warning_distances_ = {
+        {"base_link", 0.010},    // 10mm warning zone for base
+        {"link2", 0.010},        // 10mm warning zone
+        {"link3", 0.015},        // 15mm warning zone (larger due to speed)
+        {"link61", 0.008},       // 8mm warning zone for gripper
+        {"link62", 0.008}        // 8mm warning zone for gripper
+    };
 };
 
 } // namespace maurice_arm
