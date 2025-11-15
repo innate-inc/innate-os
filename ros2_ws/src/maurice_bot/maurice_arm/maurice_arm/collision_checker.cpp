@@ -15,8 +15,8 @@ CollisionCheckerCore::CollisionCheckerCore() {
     // Setup kinematics
     setupKinematics();
     
-    // Create ground plane (large box at z=0)
-    ground_plane_ = std::make_shared<fcl::Boxd>(100.0, 100.0, 0.01);  // 100m x 100m x 1cm
+    // Create ground plane (large box at z=0, extends deep underground)
+    ground_plane_ = std::make_shared<fcl::Boxd>(100.0, 100.0, 10.0);  // 100m x 100m x 10m deep
     ground_ignore_links_ = {"base_link"};  // Ignore base_link collisions with ground
 }
 
@@ -294,9 +294,9 @@ bool CollisionCheckerCore::checkGroundCollisions(
     bool collision_detected = false;
     min_clearance = std::numeric_limits<double>::max();
     
-    // Create ground plane collision object at z=0
+    // Create ground plane collision object at z=0 (top surface at z=0, extends down)
     Eigen::Isometry3d ground_transform = Eigen::Isometry3d::Identity();
-    ground_transform.translation() = Eigen::Vector3d(0, 0, -0.005);  // Ground at z=-0.005 (half thickness)
+    ground_transform.translation() = Eigen::Vector3d(0, 0, -5.0);  // Ground at z=-5.0 (half thickness of 10m)
     fcl::CollisionObjectd ground_obj(ground_plane_, ground_transform);
     
     // Check each link against ground
@@ -539,12 +539,12 @@ void CollisionChecker::publishCollisionMarkers(
     
     ground_marker.pose.position.x = 0.0;
     ground_marker.pose.position.y = 0.0;
-    ground_marker.pose.position.z = -0.005;
+    ground_marker.pose.position.z = -0.05;  // Show thin surface layer at ground level
     ground_marker.pose.orientation.w = 1.0;
     
-    ground_marker.scale.x = 2.0;  // 2m x 2m for visualization
-    ground_marker.scale.y = 2.0;
-    ground_marker.scale.z = 0.01;
+    ground_marker.scale.x = 10.0;  // 10m x 10m for visualization (actual collision plane is 100m x 100m)
+    ground_marker.scale.y = 10.0;
+    ground_marker.scale.z = 0.1;  // Thin visualization layer (actual collision extends 10m deep)
     
     ground_marker.color.r = 0.5;
     ground_marker.color.g = 0.5;
