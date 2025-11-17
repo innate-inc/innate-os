@@ -224,11 +224,16 @@ class I2CManager:
         elif resp_id == self.RESP_RESET:
             # Reset status
             try:
-                status = data[0]  # 0x01 if in progress, 0x00 if not accepted/not started
+                status = data[0]  # 0x01 if in progress, 0x00 if not accepted/not started, 0x02 if completed
                 target = data[1]  # Which component(s) were reset
                 self.reset_status = status
                 self.reset_target_response = target
-                status_str = "In Progress" if status == 0x01 else "Not Accepted/Not Started"
+                if status == 0x01:
+                    status_str = "In Progress"
+                elif status == 0x02:
+                    status_str = "Completed"
+                else:
+                    status_str = "Not Accepted/Not Started"
                 target_str = {self.RESET_NONE: "None", self.RESET_HSSW: "HSSW", 
                              self.RESET_EFUSE: "EFUSE", self.RESET_BOTH: "Both"}.get(target, "Unknown")
                 if self.debug:
@@ -365,6 +370,7 @@ class I2CManager:
         if target not in [self.RESET_HSSW, self.RESET_EFUSE, self.RESET_BOTH]:
             self.logger.warning(f"Invalid reset target: {target}. Use RESET_HSSW, RESET_EFUSE, or RESET_BOTH")
             return
+        # Allow new reset requests even if one is pending (will overwrite previous)
         self.reset_target = target
         self.reset_requested = True
 

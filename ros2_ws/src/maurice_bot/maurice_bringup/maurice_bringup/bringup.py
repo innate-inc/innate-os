@@ -9,7 +9,7 @@ from nav_msgs.msg import Odometry
 from maurice_msgs.srv import LightCommand
 from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import BatteryState
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 import time
 
 class Bringup(Node):
@@ -28,6 +28,14 @@ class Bringup(Node):
         self.battery_manager = BatteryManager(num_cells=self.params['battery']['num_cells'])
         # Only pass the required I2C parameters: bus_number, device_address, and update_frequency
         self.i2c_manager = I2CManager(self, **self.params['i2c'], debug=self.debug)
+        
+        # Track HSSW reset state for torque re-enable
+        self.hssw_reset_pending = False
+        self.last_reset_status = None
+        self.last_reset_target = None
+        self.hssw_reset_completion_time = None
+        self.torque_enable_attempts = 0
+        self.max_torque_enable_attempts = 3
 
         # Setup ROS2 services and topics
         self._setup_services_and_topics()
@@ -154,6 +162,13 @@ class Bringup(Node):
         # Every minute, enqueue an I2C health request (will update battery_voltage)
         self.status_timer = self.create_timer(60.0, self.i2c_manager.request_health)
 
+        # Create clients for arm and head services (for HSSW reset recovery)
+        self.arm_torque_client = self.create_client(Trigger, '/mars/arm/torque_on')
+        self.head_enable_client = self.create_client(SetBool, '/mars/head/enable_servo')
+        
+        # Timer to monitor HSSW reset completion and re-enable torque
+        self.reset_monitor_timer = self.create_timer(0.1, self._monitor_hssw_reset_completion)
+
         if self.debug:
             self.get_logger().debug('Finished setting up ROS2 services and topics')
 
@@ -243,27 +258,136 @@ class Bringup(Node):
 
     def _handle_reset_request(self, request, response, target):
         """Handle incoming reset requests."""
-        target_str = {self.i2c_manager.RESET_HSSW: "HSSW", 
-                     self.i2c_manager.RESET_EFUSE: "EFUSE", 
-                     self.i2c_manager.RESET_BOTH: "Both"}.get(target, "Unknown")
-        
-        if self.debug:
-            self.get_logger().debug(f'Received reset request for {target_str}')
+        response.success = False
+        response.message = "Unknown error"
         
         try:
+            target_str = {self.i2c_manager.RESET_HSSW: "HSSW", 
+                         self.i2c_manager.RESET_EFUSE: "EFUSE", 
+                         self.i2c_manager.RESET_BOTH: "Both"}.get(target, "Unknown")
+            
+            # Reset state tracking for new reset (especially important for HSSW)
+            if target == self.i2c_manager.RESET_HSSW:
+                # Clear any previous reset state
+                self.hssw_reset_pending = False
+                self.hssw_reset_completion_time = None
+                self.last_reset_status = None
+                self.last_reset_target = None
+            
+            # Request the reset
             self.i2c_manager.request_reset(target)
+            
+            # Track HSSW-only resets for torque re-enable
+            if target == self.i2c_manager.RESET_HSSW:
+                self.hssw_reset_pending = True
+                self.get_logger().info("HSSW reset initiated - will re-enable arm torque on completion")
+            
             response.success = True
             response.message = f"Reset triggered successfully for {target_str}"
-            if self.debug:
-                self.get_logger().debug(f"Reset response: {response.success}, {response.message}")
+                
         except Exception as e:
             response.success = False
             response.message = f"Error triggering reset: {str(e)}"
             self.get_logger().error(f"Error triggering reset: {str(e)}")
-            if self.debug:
-                self.get_logger().debug(f"Reset response: {response.success}, {response.message}")
+        finally:
+            return response
+
+    def _monitor_hssw_reset_completion(self):
+        """Monitor for HSSW reset completion and re-enable arm torque."""
+        current_status = self.i2c_manager.reset_status
+        current_target = self.i2c_manager.reset_target_response
         
-        return response
+        # Detect completion: status == 0x02 (Completed) and target == RESET_HSSW
+        if (current_status == 0x02 and 
+            current_target == self.i2c_manager.RESET_HSSW and
+            (self.last_reset_status != 0x02 or self.last_reset_target != self.i2c_manager.RESET_HSSW)):
+            
+            # First time we see completion - record the time
+            if self.hssw_reset_completion_time is None:
+                self.hssw_reset_completion_time = self.get_clock().now()
+                self.get_logger().info("HSSW reset completed - waiting for arm to power up")
+                self.hssw_reset_pending = True
+        
+        # If we detected completion and enough time has passed, enable torque
+        if (self.hssw_reset_pending and 
+            self.hssw_reset_completion_time is not None and
+            current_status == 0x02 and
+            current_target == self.i2c_manager.RESET_HSSW):
+            
+            # Wait 0.5 seconds after completion for arm to power up
+            elapsed = (self.get_clock().now() - self.hssw_reset_completion_time).nanoseconds / 1e9
+            if elapsed >= 0.5:
+                # Only try once per timer callback to avoid spam
+                if self.torque_enable_attempts < self.max_torque_enable_attempts:
+                    self.torque_enable_attempts += 1
+                    self.get_logger().info(f"Re-enabling arm and head (attempt {self.torque_enable_attempts})")
+                    
+                    # Call arm torque_on service with timeout
+                    if self.arm_torque_client.wait_for_service(timeout_sec=1.0):
+                        arm_request = Trigger.Request()
+                        try:
+                            arm_future = self.arm_torque_client.call_async(arm_request)
+                            # Add callback to verify success
+                            arm_future.add_done_callback(self._torque_enable_callback)
+                        except Exception as e:
+                            self.get_logger().error(f"Failed to call arm torque service: {e}")
+                            # Will retry on next timer cycle if attempts < max
+                    else:
+                        self.get_logger().warn(f"Arm torque service unavailable (attempt {self.torque_enable_attempts})")
+                        # Will retry on next timer cycle if attempts < max
+                    
+                    # Call head enable service with timeout
+                    if self.head_enable_client.wait_for_service(timeout_sec=1.0):
+                        head_request = SetBool.Request()
+                        head_request.data = True
+                        try:
+                            head_future = self.head_enable_client.call_async(head_request)
+                            # Add callback to verify success
+                            head_future.add_done_callback(self._head_enable_callback)
+                        except Exception as e:
+                            self.get_logger().error(f"Failed to call head enable service: {e}")
+                    else:
+                        self.get_logger().warn(f"Head enable service unavailable (attempt {self.torque_enable_attempts})")
+                else:
+                    # Max attempts reached - give up and clear state
+                    if self.torque_enable_attempts == self.max_torque_enable_attempts:
+                        self.get_logger().error("Max torque enable attempts reached - manual re-enable required")
+                        self.torque_enable_attempts += 1  # Increment to avoid repeated logging
+                    self.hssw_reset_pending = False
+                    self.hssw_reset_completion_time = None
+                    self.torque_enable_attempts = 0
+        
+        # Update last known state
+        self.last_reset_status = current_status
+        self.last_reset_target = current_target
+
+    def _torque_enable_callback(self, future):
+        """Callback to verify arm torque enable succeeded."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f"Arm torque re-enabled: {response.message}")
+                # Clear state on success
+                self.hssw_reset_pending = False
+                self.hssw_reset_completion_time = None
+                self.torque_enable_attempts = 0
+            else:
+                self.get_logger().warn(f"Arm torque enable failed: {response.message}")
+                # Will retry on next timer cycle if attempts < max
+        except Exception as e:
+            self.get_logger().error(f"Arm torque enable callback error: {e}")
+            # Will retry on next timer cycle if attempts < max
+
+    def _head_enable_callback(self, future):
+        """Callback to verify head servo enable succeeded."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f"Head servo re-enabled: {response.message}")
+            else:
+                self.get_logger().warn(f"Head enable failed: {response.message}")
+        except Exception as e:
+            self.get_logger().error(f"Head enable callback error: {e}")
 
     def _publish_odometry(self):
         """Publish odometry data, transform, and battery state from I2C readings."""
