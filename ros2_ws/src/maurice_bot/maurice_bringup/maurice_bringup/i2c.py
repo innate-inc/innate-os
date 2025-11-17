@@ -22,11 +22,19 @@ class I2CManager:
     CMD_MOVE = 0x01
     CMD_STATUS = 0x03
     CMD_CALIBRATE = 0x04
+    CMD_RESET = 0x05
 
     # Response definitions (MCU → Jetson)
     RESP_MOVE = 0x81      # Position feedback
     RESP_STATUS = 0x83    # Health data
     RESP_CALIBRATE = 0x84 # Calibration status
+    RESP_RESET = 0x85     # Component Reset
+
+    # Reset target definitions
+    RESET_NONE = 0x00
+    RESET_HSSW = 0x01
+    RESET_EFUSE = 0x02
+    RESET_BOTH = 0x03
     def __init__(self, node: Node, bus_number=1, device_address=0x42, update_frequency=30.0, debug=False, speed_command_timeout=5.0):
         self.node = node
         self.debug = debug
@@ -51,6 +59,8 @@ class I2CManager:
         self.last_speed_command_time = 0.0
         self.status_requested = False
         self.calibration_requested = False
+        self.reset_requested = False
+        self.reset_target = self.RESET_NONE
         
         # -------------------------
         # Stored responses
@@ -61,6 +71,8 @@ class I2CManager:
         self.motor_temperature = 0.0
         self.fault_code = 0
         self.calibration_status = None
+        self.reset_status = None
+        self.reset_target_response = None
         
         # Communication thread control
         self.running = True
@@ -209,6 +221,21 @@ class I2CManager:
                 self.logger.info(f"Calibration Status: {status_str} ({status})")
             except Exception as e:
                 self.logger.error(f"Failed to unpack calibration response: {e}")
+        elif resp_id == self.RESP_RESET:
+            # Reset status
+            try:
+                status = data[0]  # 0x01 if in progress, 0x00 if not accepted/not started
+                target = data[1]  # Which component(s) were reset
+                self.reset_status = status
+                self.reset_target_response = target
+                status_str = "In Progress" if status == 0x01 else "Not Accepted/Not Started"
+                target_str = {self.RESET_NONE: "None", self.RESET_HSSW: "HSSW", 
+                             self.RESET_EFUSE: "EFUSE", self.RESET_BOTH: "Both"}.get(target, "Unknown")
+                if self.debug:
+                    self.logger.debug(f"Reset Status: {status_str} ({status}), Target: {target_str} (0x{target:02X})")
+                self.logger.info(f"Reset Status: {status_str} ({status}), Target: {target_str} (0x{target:02X})")
+            except Exception as e:
+                self.logger.error(f"Failed to unpack reset response: {e}")
         else:
             self.logger.warning(f"Unknown Response ID: {resp_id}")
 
@@ -257,6 +284,18 @@ class I2CManager:
             self.calibration_requested = False  # Clear after sending
         return success
 
+    def _send_reset_command(self):
+        """Send reset command if pending"""
+        if not self.reset_requested:
+            return False
+        
+        # Format: [target] + [5 reserved bytes]
+        data = bytes([self.reset_target]) + bytes([0x00] * 5)
+        success = self._send_command(self.CMD_RESET, data)
+        if success:
+            self.reset_requested = False  # Clear after sending
+        return success
+
     def _communication_loop(self):
         """Main communication loop running at fixed frequency"""
         while self.running:
@@ -273,6 +312,10 @@ class I2CManager:
             
             if self.calibration_requested:
                 self._send_calibrate_command()
+                self._read_response()
+            
+            if self.reset_requested:
+                self._send_reset_command()
                 self._read_response()
             
             # Maintain fixed update rate
@@ -312,6 +355,18 @@ class I2CManager:
         Triggers a calibration command.
         """
         self.calibration_requested = True
+
+    def request_reset(self, target):
+        """
+        Triggers a reset command for the specified component(s).
+        Args:
+            target: One of RESET_HSSW, RESET_EFUSE, or RESET_BOTH
+        """
+        if target not in [self.RESET_HSSW, self.RESET_EFUSE, self.RESET_BOTH]:
+            self.logger.warning(f"Invalid reset target: {target}. Use RESET_HSSW, RESET_EFUSE, or RESET_BOTH")
+            return
+        self.reset_target = target
+        self.reset_requested = True
 
     # --- Destructor ---
     def __del__(self):

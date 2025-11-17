@@ -113,6 +113,23 @@ class Bringup(Node):
             self._handle_calibrate_request
         )
 
+        # Add the reset services
+        self.reset_hssw_srv = self.create_service(
+            Trigger,
+            '/reset_hssw',
+            lambda req, resp: self._handle_reset_request(req, resp, self.i2c_manager.RESET_HSSW)
+        )
+        self.reset_efuse_srv = self.create_service(
+            Trigger,
+            '/reset_efuse',
+            lambda req, resp: self._handle_reset_request(req, resp, self.i2c_manager.RESET_EFUSE)
+        )
+        self.reset_both_srv = self.create_service(
+            Trigger,
+            '/reset_both',
+            lambda req, resp: self._handle_reset_request(req, resp, self.i2c_manager.RESET_BOTH)
+        )
+
         # Create odometry publisher
         self.odom_pub = self.create_publisher(
             Odometry,
@@ -221,6 +238,30 @@ class Bringup(Node):
             self.get_logger().error(f"Error triggering calibration: {str(e)}")
             if self.debug:
                 self.get_logger().debug(f"Calibration response: {response.success}, {response.message}")
+        
+        return response
+
+    def _handle_reset_request(self, request, response, target):
+        """Handle incoming reset requests."""
+        target_str = {self.i2c_manager.RESET_HSSW: "HSSW", 
+                     self.i2c_manager.RESET_EFUSE: "EFUSE", 
+                     self.i2c_manager.RESET_BOTH: "Both"}.get(target, "Unknown")
+        
+        if self.debug:
+            self.get_logger().debug(f'Received reset request for {target_str}')
+        
+        try:
+            self.i2c_manager.request_reset(target)
+            response.success = True
+            response.message = f"Reset triggered successfully for {target_str}"
+            if self.debug:
+                self.get_logger().debug(f"Reset response: {response.success}, {response.message}")
+        except Exception as e:
+            response.success = False
+            response.message = f"Error triggering reset: {str(e)}"
+            self.get_logger().error(f"Error triggering reset: {str(e)}")
+            if self.debug:
+                self.get_logger().debug(f"Reset response: {response.success}, {response.message}")
         
         return response
 
