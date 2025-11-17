@@ -2,9 +2,9 @@
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
-from sensor_msgs.msg import BatteryState, LaserScan
+from sensor_msgs.msg import BatteryState
+from diagnostic_msgs.msg import DiagnosticArray
+from std_msgs.msg import String
 
 class LoggerNode(Node):
     def __init__(self):
@@ -12,38 +12,38 @@ class LoggerNode(Node):
         self.get_logger().info('Logger node started')
 
         # Subscribers
-        self.cmd_vel_sub = self.create_subscription(
-            Twist,
-            '/cmd_vel',
-            self.cmd_vel_callback,
-            10)
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            '/odom',
-            self.odom_callback,
-            10)
         self.battery_sub = self.create_subscription(
             BatteryState,
             '/battery_state',
             self.battery_callback,
             10)
-        self.scan_sub = self.create_subscription(
-            LaserScan,
-            '/scan',
-            self.scan_callback,
+        self.diagnostics_sub = self.create_subscription(
+            DiagnosticArray,
+            '/diagnostics',
+            self.diagnostics_callback,
             10)
-
-    def cmd_vel_callback(self, msg):
-        self.get_logger().info(f'Received cmd_vel: {msg}')
-
-    def odom_callback(self, msg):
-        self.get_logger().info(f'Received odom: {msg}')
+        self.directive_sub = self.create_subscription(
+            String,
+            '/brain/set_directive',
+            self.directive_callback,
+            10)
+        self.chat_out_sub = self.create_subscription(
+            String,
+            '/brain/chat_out',
+            self.chat_out_callback,
+            10)
 
     def battery_callback(self, msg):
         self.get_logger().info(f'Received battery_state: {msg}')
 
-    def scan_callback(self, msg):
-        self.get_logger().info(f'Received scan: {msg}')
+    def diagnostics_callback(self, msg):
+        self.get_logger().info(f'Received diagnostics: {msg}')
+
+    def directive_callback(self, msg):
+        self.get_logger().info(f'Received directive: {msg.data}')
+
+    def chat_out_callback(self, msg):
+        self.get_logger().info(f'Received chat_out: {msg.data}')
 
 def main(args=None):
     rclpy.init(args=args)
