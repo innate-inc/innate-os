@@ -564,6 +564,10 @@ class ModeManager(Node):
                 self.get_logger().info(response.message)
                 return response
 
+            # Set mode to switching
+            self.current_mode = "switching"
+            self.publish_status() # Immediately publish the change
+
             # For mapfree, launch local-only Nav2 (planner, controller, costmaps) without map/AMCL
             if target_mode == "mapfree":
                 # Stop anything running
@@ -579,12 +583,12 @@ class ModeManager(Node):
                     launch_cmd,
                     preexec_fn=os.setsid,
                 )
-                self.current_mode = "mapfree"
                 self.save_last_mode("mapfree")
                 time.sleep(3)
                 if self.current_process.poll() is None:
                     response.success = True
                     response.message = "Switched to mapfree mode (local Nav2 running)"
+                    self.current_mode = "mapfree"
                 else:
                     response.success = False
                     response.message = "Failed to start mapfree local navigation"
@@ -623,8 +627,6 @@ class ModeManager(Node):
                 # stdout and stderr will go to the terminal where mode_manager is running
             )
             
-            self.current_mode = target_mode
-            
             # Save the mode for persistence
             self.save_last_mode(target_mode)
             
@@ -639,6 +641,9 @@ class ModeManager(Node):
             
             # Give it a moment to start
             time.sleep(3)
+            
+            # Set the current mode after launch attempt
+            self.current_mode = target_mode
             
             # Check if process is still running
             if self.current_process.poll() is None:
