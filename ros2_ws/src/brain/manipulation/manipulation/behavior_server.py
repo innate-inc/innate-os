@@ -416,6 +416,7 @@ class BehaviorServer(Node):
         primitive_dir = os.path.join(self.primitives_directory, behavior_name)
         replay_file = behavior_config['execution'].get('replay_file')
         file_path = os.path.join(primitive_dir, replay_file)
+        start_pose = behavior_config['execution'].get('start_pose')
         end_pose = behavior_config['execution'].get('end_pose')
         start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
         end_pose_time = behavior_config['execution'].get('end_pose_time', 1)
@@ -441,17 +442,22 @@ class BehaviorServer(Node):
                 self.get_logger().error("No actions found in replay file")
                 return "FAILURE", "No actions found in replay file"
             
-            # Extract first action and arm position
-            # Action format: [arm_joints(6), linear.x, angular.z, progress?, termination?]
-            first_action = actions[0]
-            first_arm_position = first_action[0:6].tolist()  # First 6 elements are arm joint positions
-            
-            self.get_logger().info(f"Moving to initial arm position: {first_arm_position} (time: {start_pose_time}s)")
-            
-            # Move to initial arm position
-            if not self.call_arm_goto_service(first_arm_position, start_pose_time):
-                self.get_logger().error("Failed to move to initial arm position")
-                return "FAILURE", "Failed to move to initial arm position"
+            # Move to start pose if specified, otherwise use first action from H5
+            if start_pose:
+                # Use start_pose from metadata
+                self.get_logger().info(f"Moving to start pose from metadata: {start_pose} (time: {start_pose_time}s)")
+                if not self.call_arm_goto_service(start_pose, start_pose_time):
+                    self.get_logger().error("Failed to move to start pose")
+                    return "FAILURE", "Failed to move to start pose"
+            else:
+                # Fall back to first action from H5 file
+                # Action format: [arm_joints(6), linear.x, angular.z, progress?, termination?]
+                first_action = actions[0]
+                first_arm_position = first_action[0:6].tolist()  # First 6 elements are arm joint positions
+                self.get_logger().info(f"Moving to initial arm position from H5: {first_arm_position} (time: {start_pose_time}s)")
+                if not self.call_arm_goto_service(first_arm_position, start_pose_time):
+                    self.get_logger().error("Failed to move to initial arm position")
+                    return "FAILURE", "Failed to move to initial arm position"
             
             # Wait for arm movement to complete
             time.sleep(start_pose_time)
