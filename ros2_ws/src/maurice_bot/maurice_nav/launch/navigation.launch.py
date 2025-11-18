@@ -4,7 +4,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -95,6 +95,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'autostart': True,
+            'bond_timeout': 20.0,
             'node_names': [
                 'map_server', 
                 'amcl', 
@@ -148,5 +149,8 @@ def generate_launch_description():
         velocity_smoother_node,
         bt_navigator_node,
         behavior_server_node,
-        lifecycle_manager_node
+        TimerAction(
+            period=5.0,
+            actions=[lifecycle_manager_node]
+        )
     ])
