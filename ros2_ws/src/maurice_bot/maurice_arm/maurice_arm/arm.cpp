@@ -6,11 +6,8 @@
 #include <std_msgs/msg/empty.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <std_srvs/srv/set_bool.hpp>
-#include <visualization_msgs/msg/marker.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
-#include "maurice_arm/collision_checker.hpp"
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -32,12 +29,10 @@ public:
         this->declare_parameter("baud_rate", 1000000);
         this->declare_parameter("control_frequency", 100.0);
         this->declare_parameter("joints", "{}");
-        this->declare_parameter("publish_collision_markers", true);
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
         control_frequency_ = this->get_parameter("control_frequency").as_double();
         std::string joints_str = this->get_parameter("joints").as_string();
-        publish_collision_markers_ = this->get_parameter("publish_collision_markers").as_bool();
         
         // Parse joints configuration
         parseJointConfig(joints_str);
@@ -63,13 +58,6 @@ public:
         // Setup ARM publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up ARM publishers/subscribers/services");
         arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/mars/arm/state", 10);
-        
-        if (publish_collision_markers_) {
-            collision_marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-                "/mars/arm/collision_shapes", 10);
-            RCLCPP_INFO(this->get_logger(), "Collision shape markers enabled on /mars/arm/collision_shapes");
-        }
-        
         arm_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
             "/mars/arm/commands", 10,
             std::bind(&MauriceArmNode::armCommandCallback, this, std::placeholders::_1));
@@ -113,22 +101,6 @@ public:
         latest_arm_command_ = std::vector<int>(initial_positions.begin(), initial_positions.begin() + 6);
         latest_head_command_ = initial_positions[6];
         RCLCPP_INFO(this->get_logger(), "Command buffers initialized (arm: 6 joints, head: 1 joint)");
-        
-        // Initialize collision checker
-        RCLCPP_INFO(this->get_logger(), "Initializing collision checker...");
-        collision_checker_ = std::make_unique<CollisionCheckerCore>();
-        
-        // Initialize last_safe_position_ with current position (EXTERNAL convention)
-        last_safe_position_.resize(6);
-        for (size_t i = 0; i < 6; ++i) {
-            last_safe_position_[i] = ((initial_positions[i] - 2048) * 2 * M_PI) / 4096.0;
-        }
-        // Apply direction flips to convert to EXTERNAL convention (same as published joint states)
-        std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-        for (size_t idx : flip_indices) {
-            last_safe_position_[idx] = -last_safe_position_[idx];
-        }
-        RCLCPP_INFO(this->get_logger(), "Collision checker initialized with current position as safe (external convention)");
         
         // Create timer for control loop
         RCLCPP_INFO(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
@@ -303,12 +275,6 @@ private:
             joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
             arm_state_pub_->publish(joint_state_msg_);
             
-            // ========== PUBLISH COLLISION MARKERS ==========
-            if (publish_collision_markers_) {
-                std::vector<double> current_joint_pos(positions_rad.begin(), positions_rad.begin() + 6);
-                publishCollisionMarkers(current_joint_pos);
-            }
-            
             // ========== PUBLISH HEAD POSITION ==========
             int head_encoder = positions[6];  // Index 6 = servo 7
             publishHeadPosition(head_encoder);
@@ -341,143 +307,8 @@ private:
         }
     }
     
-    // Distance-based command scaling for collision avoidance with per-link and per-joint scaling
-    // NOTE: commanded_pos should be in EXTERNAL convention (same as published joint states)
-    std::vector<double> scaleCommandByClearance(const std::vector<double>& commanded_pos) {
-        auto check_start = std::chrono::high_resolution_clock::now();
-        
-        // Check collision at commanded position (external convention)
-        auto check_result = collision_checker_->checkConfiguration(commanded_pos);
-        
-        auto check_end = std::chrono::high_resolution_clock::now();
-        auto check_duration = std::chrono::duration_cast<std::chrono::microseconds>(check_end - check_start);
-        
-        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 200,
-            "Collision check: %ld μs, clearance: %.1f mm, %s",
-            check_duration.count(),
-            check_result.min_clearance * 1000.0,
-            check_result.closest_pair.c_str());
-        
-        // Compute per-joint scale factors based on link clearances
-        std::vector<double> joint_scales(6, 1.0);  // Start with full motion for all joints
-        bool any_restriction = false;
-        
-        // Debug: log all link clearances when there's a collision
-        if (check_result.in_collision || check_result.min_clearance < 0.010) {
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                "Link clearances: link2=%.1fmm link3=%.1fmm link61=%.1fmm link62=%.1fmm",
-                check_result.link_clearances["link2"] * 1000.0,
-                check_result.link_clearances["link3"] * 1000.0,
-                check_result.link_clearances["link61"] * 1000.0,
-                check_result.link_clearances["link62"] * 1000.0);
-        }
-        
-        for (const auto& [link_name, clearance] : check_result.link_clearances) {
-            // Skip base_link - it's fixed and shouldn't restrict motion
-            if (link_name == "base_link") {
-                continue;
-            }
-            
-            // Get link-specific margins
-            double safety_margin = link_safety_margins_[link_name];
-            double warning_distance = link_warning_distances_[link_name];
-            
-            double link_scale = 1.0;
-            
-            // Handle collision (negative or very small clearance)
-            if (clearance <= 0.0 || (check_result.in_collision && clearance < safety_margin)) {
-                // In collision - freeze all joints affecting this link
-                link_scale = 0.0;
-                any_restriction = true;
-                
-                // Only warn if this link has joints to freeze
-                if (!link_to_joints_.at(link_name).empty()) {
-                    auto closest_it = check_result.link_closest_to.find(link_name);
-                    std::string closest = (closest_it != check_result.link_closest_to.end()) 
-                                          ? closest_it->second : "unknown";
-                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                        "%s IN COLLISION with %s, freezing dependent joints",
-                        link_name.c_str(), closest.c_str());
-                }
-            }
-            // Handle too close (within safety margin)
-            else if (clearance < safety_margin) {
-                // Too close - stop all joints affecting this link
-                link_scale = 0.0;
-                any_restriction = true;
-                
-                if (!link_to_joints_.at(link_name).empty()) {
-                    auto closest_it = check_result.link_closest_to.find(link_name);
-                    std::string closest = (closest_it != check_result.link_closest_to.end()) 
-                                          ? closest_it->second : "unknown";
-                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                        "%s too close (%.1f mm < %.1f mm) to %s, freezing dependent joints",
-                        link_name.c_str(), clearance * 1000.0, safety_margin * 1000.0,
-                        closest.c_str());
-                }
-            }
-            // Handle warning zone (between safety margin and warning distance)
-            else if (clearance < warning_distance) {
-                // In warning zone - scale between 0 and 1 based on clearance
-                link_scale = (clearance - safety_margin) / (warning_distance - safety_margin);
-                link_scale = std::clamp(link_scale, 0.0, 1.0);
-                any_restriction = true;
-                
-                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                    "%s in warning zone (%.1f mm), scaling to %.0f%%",
-                    link_name.c_str(), clearance * 1000.0, link_scale * 100.0);
-            }
-            
-            // Apply this scale to all joints that affect this link (take minimum scale)
-            if (link_scale < 1.0) {
-                std::string frozen_joints = "";
-                for (size_t joint_idx : link_to_joints_[link_name]) {
-                    joint_scales[joint_idx] = std::min(joint_scales[joint_idx], link_scale);
-                    frozen_joints += "J" + std::to_string(joint_idx + 1) + " ";
-                }
-                if (!frozen_joints.empty() && link_scale == 0.0) {
-                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                        "  -> Freezing joints %sdue to %s (clearance: %.1fmm)", 
-                        frozen_joints.c_str(), link_name.c_str(), clearance * 1000.0);
-                }
-            }
-        }
-        
-        // If no restrictions, accept command as-is
-        if (!any_restriction) {
-            last_safe_position_ = commanded_pos;
-            return commanded_pos;
-        }
-        
-        // Apply per-joint scaling
-        std::vector<double> scaled_pos(6);
-        for (size_t i = 0; i < 6; ++i) {
-            scaled_pos[i] = last_safe_position_[i] + 
-                           joint_scales[i] * (commanded_pos[i] - last_safe_position_[i]);
-        }
-        
-        // Log joint scales when there's any restriction
-        if (any_restriction) {
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                "Joint scales: J1=%.0f%% J2=%.0f%% J3=%.0f%% J4=%.0f%% J5=%.0f%% J6=%.0f%%",
-                joint_scales[0] * 100.0, joint_scales[1] * 100.0, joint_scales[2] * 100.0,
-                joint_scales[3] * 100.0, joint_scales[4] * 100.0, joint_scales[5] * 100.0);
-        }
-        
-        // Update last safe position for joints that were allowed to move
-        for (size_t i = 0; i < 6; ++i) {
-            if (joint_scales[i] > 0.0) {
-                last_safe_position_[i] = scaled_pos[i];
-            }
-            // If joint_scales[i] == 0.0, keep the last safe position for that joint
-        }
-        
-        return scaled_pos;
-    }
     
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
-        auto callback_start = std::chrono::high_resolution_clock::now();
-        
         try {
             // Commands come in EXTERNAL convention (same as published joint states)
             std::vector<double> command_data(msg->data.begin(), msg->data.end());
@@ -488,23 +319,62 @@ private:
                 return;
             }
             
-            // ===== COLLISION-BASED COMMAND FILTERING =====
-            // Pass EXTERNAL convention to collision checker (same as visualization)
-            std::vector<double> safe_command = scaleCommandByClearance(command_data);
+            // ===== INTELLIGENT JOINT LIMITS =====
+            // Adjust joint2 limits based on joint1 position (collision avoidance)
+            if (command_data.size() >= 2) {
+                double joint1_pos = command_data[0];  // joint1 position in radians
+                double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
+                
+                // Get joint2 limits from config (index 1 = joint_2)
+                const auto& joint2_config = joint_configs_[1];
+                double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
+                double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
+                
+                // Since joint2 will be flipped, we need to invert the limits for pre-flip values
+                // After flip: joint2_flipped = -joint2_pos
+                // So if we want joint2_flipped to be within [config_min, config_max]
+                // We need joint2_pos to be within [-config_max, -config_min]
+                double joint2_min_limit = -config_max;  // Will become config_max after flip
+                double joint2_max_limit = -config_min;  // Will become config_min after flip
+                
+                // Determine joint2's minimum limit based on joint1's position with linear slope
+                const double original_min_limit = -config_max;
+                const double restricted_limit = -0.5;  // Restricted limit (pre-flip)
+                
+                if (joint1_pos < 1.0) {
+                    // Below 1.0 rad: fully restricted to -0.5
+                    joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
+                } else if (joint1_pos < 1.25) {
+                    // Between 1.0 and 1.25 rad: linear interpolation
+                    double t = (joint1_pos - 1.0) / (1.25 - 1.0);  // 0 at 1.0, 1 at 1.25
+                    double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
+                    joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
+                }
+                // Above 1.25 rad: use original config limits (no additional restriction)
+                
+                // Warn if clamping occurs
+                if (joint2_pos < joint2_min_limit) {
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                        "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", 
+                        joint1_pos, joint2_pos, joint2_min_limit);
+                }
+                
+                // Enforce the limits (before flipping)
+                command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
+            }
             
             // Now convert from EXTERNAL to HARDWARE convention for servos
             // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
             std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
             for (size_t idx : flip_indices) {
-                if (idx < safe_command.size()) {
-                    safe_command[idx] = -safe_command[idx];
+                if (idx < command_data.size()) {
+                    command_data[idx] = -command_data[idx];
                 }
             }
             
             // Convert to encoder counts (only 6 arm joints)
-            // Using safe_command (collision-filtered, hardware convention)
             std::vector<int> command_encoder;
-            for (double pos : safe_command) {
+            for (double pos : command_data) {
                 command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
             }
             
@@ -516,12 +386,6 @@ private:
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in arm command callback: %s", e.what());
         }
-        
-        auto callback_end = std::chrono::high_resolution_clock::now();
-        auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(callback_end - callback_start);
-        
-        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-            "Command callback total: %ld μs", total_duration.count());
     }
     
     void armTorqueOnCallback(
@@ -686,100 +550,6 @@ private:
         }
     }
     
-    // Publish collision shape visualization markers
-    // NOTE: joint_positions should be in EXTERNAL convention (same as published joint states)
-    void publishCollisionMarkers(const std::vector<double>& joint_positions) {
-        auto marker_array = visualization_msgs::msg::MarkerArray();
-        int id = 0;
-        
-        // Compute forward kinematics (external convention)
-        auto transforms = collision_checker_->computeForwardKinematics(joint_positions);
-        
-        // Get collision geometries from collision checker
-        const auto& collision_geometries = collision_checker_->getCollisionGeometries();
-        
-        // Check current collision status
-        auto check_result = collision_checker_->checkConfiguration(joint_positions);
-        bool collision_detected = check_result.in_collision;
-        
-        // Publish collision shape markers
-        for (const auto& [link_name, geom] : collision_geometries) {
-            if (transforms.find(link_name) == transforms.end()) continue;
-            
-            auto marker = visualization_msgs::msg::Marker();
-            marker.header.frame_id = "base_link";
-            marker.header.stamp = this->now();
-            marker.ns = "collision_shapes";
-            marker.id = id++;
-            marker.action = visualization_msgs::msg::Marker::ADD;
-            
-            // Get transform
-            Eigen::Isometry3d link_transform = transforms.at(link_name);
-            Eigen::Isometry3d offset_transform = collision_checker_->createTransform(geom.offset, geom.rpy);
-            Eigen::Isometry3d final_transform = link_transform * offset_transform;
-            
-            // Set pose
-            marker.pose.position.x = final_transform.translation().x();
-            marker.pose.position.y = final_transform.translation().y();
-            marker.pose.position.z = final_transform.translation().z();
-            
-            Eigen::Quaterniond q(final_transform.rotation());
-            marker.pose.orientation.x = q.x();
-            marker.pose.orientation.y = q.y();
-            marker.pose.orientation.z = q.z();
-            marker.pose.orientation.w = q.w();
-            
-            // Set shape
-            if (geom.type == CollisionGeometry::Type::BOX) {
-                marker.type = visualization_msgs::msg::Marker::CUBE;
-                auto box = std::static_pointer_cast<fcl::Boxd>(geom.shape);
-                marker.scale.x = box->side[0];
-                marker.scale.y = box->side[1];
-                marker.scale.z = box->side[2];
-            } else if (geom.type == CollisionGeometry::Type::CYLINDER) {
-                marker.type = visualization_msgs::msg::Marker::CYLINDER;
-                auto cyl = std::static_pointer_cast<fcl::Cylinderd>(geom.shape);
-                marker.scale.x = cyl->radius * 2;
-                marker.scale.y = cyl->radius * 2;
-                marker.scale.z = cyl->lz;
-            }
-            
-            // Set color (green if no collision, red if collision)
-            marker.color.r = collision_detected ? 1.0 : 0.0;
-            marker.color.g = collision_detected ? 0.0 : 1.0;
-            marker.color.b = 0.0;
-            marker.color.a = 0.5;
-            
-            marker_array.markers.push_back(marker);
-        }
-        
-        // Publish ground plane marker
-        auto ground_marker = visualization_msgs::msg::Marker();
-        ground_marker.header.frame_id = "base_link";
-        ground_marker.header.stamp = this->now();
-        ground_marker.ns = "collision_shapes";
-        ground_marker.id = id++;
-        ground_marker.action = visualization_msgs::msg::Marker::ADD;
-        ground_marker.type = visualization_msgs::msg::Marker::CUBE;
-        
-        ground_marker.pose.position.x = 0.0;
-        ground_marker.pose.position.y = 0.0;
-        ground_marker.pose.position.z = -0.05;  // Show thin surface layer at ground level
-        ground_marker.pose.orientation.w = 1.0;
-        
-        ground_marker.scale.x = 10.0;  // 10m x 10m for visualization (actual collision plane is 100m x 100m)
-        ground_marker.scale.y = 10.0;
-        ground_marker.scale.z = 0.1;  // Thin visualization layer (actual collision extends 10m deep)
-        
-        ground_marker.color.r = 0.5;
-        ground_marker.color.g = 0.5;
-        ground_marker.color.b = 0.5;
-        ground_marker.color.a = 0.3;
-        
-        marker_array.markers.push_back(ground_marker);
-        
-        collision_marker_pub_->publish(marker_array);
-    }
     
     struct JointConfig {
         int servo_id;
@@ -803,7 +573,6 @@ private:
     
     // ARM members
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_marker_pub_;
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
@@ -811,7 +580,6 @@ private:
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
-    bool publish_collision_markers_;
     
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
@@ -832,39 +600,6 @@ private:
     
     // Mutex to protect Dynamixel serial bus access
     std::mutex dynamixel_mutex_;
-    
-    // Collision checker for safe command filtering
-    std::unique_ptr<CollisionCheckerCore> collision_checker_;
-    std::vector<double> last_safe_position_;  // Last known safe position (6 joints, in radians)
-    
-    // Link-to-joint dependency mapping: which joints affect which links
-    // Links: base_link, link2, link3, link61, link62
-    // Joints: 0=joint1, 1=joint2, 2=joint3, 3=joint4, 4=joint5, 5=joint6
-    std::map<std::string, std::vector<size_t>> link_to_joints_ = {
-        {"base_link", {}},                    // Fixed base, no joints affect it
-        {"link2", {0, 1}},                    // Affected by joint1, joint2
-        {"link3", {0, 1, 2}},                 // Affected by joint1, joint2, joint3
-        {"link61", {0, 1, 2, 3, 4, 5}},      // Affected by all joints (gripper finger)
-        {"link62", {0, 1, 2, 3, 4, 5}}       // Affected by all joints (gripper finger)
-    };
-    
-    // Link-specific safety margins (hard stop distance)
-    std::map<std::string, double> link_safety_margins_ = {
-        {"base_link", 0.002},    // 2mm for base (less critical, mostly fixed)
-        {"link2", 0.002},        // 2mm for proximal link
-        {"link3", 0.003},        // 3mm for main arm link (moves faster)
-        {"link61", 0.001},       // 1mm for gripper finger (needs precision)
-        {"link62", 0.001}        // 1mm for gripper finger (needs precision)
-    };
-    
-    // Link-specific warning distances (start scaling motion)
-    std::map<std::string, double> link_warning_distances_ = {
-        {"base_link", 0.010},    // 10mm warning zone for base
-        {"link2", 0.010},        // 10mm warning zone
-        {"link3", 0.015},        // 15mm warning zone (larger due to speed)
-        {"link61", 0.008},       // 8mm warning zone for gripper
-        {"link62", 0.008}        // 8mm warning zone for gripper
-    };
 };
 
 } // namespace maurice_arm
