@@ -1,0 +1,158 @@
+# ============================================================================
+# MoveIt Configuration for Maurice Arm - RRTstar Only
+# Optimized for path quality with collision-aware planning
+# ============================================================================
+
+# Which planning plugin to use
+planning_plugin: ompl_interface/OMPLPlanner
+
+# Request adapters - pre-process plans before planning
+request_adapters: >-
+  default_planner_request_adapters/AddTimeOptimalParameterization
+  default_planner_request_adapters/ResolveConstraintFrames
+  default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds
+  default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/FixStartStatePathConstraints
+
+# Response adapters - post-process plans after planning
+response_adapters: >-
+  default_planner_response_adapters/AddTimeOptimalParameterization
+  default_planner_response_adapters/ValidateSolution
+  default_planner_response_adapters/DisplayMotionPath
+
+# How much error to tolerate in start state (radians)
+start_state_max_bounds_error: 0.1
+
+# ============================================================================
+# Planner Configuration - RRTstar (Asymptotically Optimal)
+# ============================================================================
+planner_configs:
+  RRTstar:
+    type: geometric::RRTstar
+    range: 0.0                      # Max step size (0 = auto-calculate)
+    goal_bias: 0.05                 # 5% chance to sample goal directly
+    rewire_factor: 1.1              # Neighborhood size for rewiring (1.0-1.5)
+    delay_collision_checking: 1     # Optimize tree before collision checks
+    use_k_nearest: true             # Use k-nearest instead of radius
+    
+# ============================================================================
+# Planning Group: arm (5-DOF manipulator)
+# ============================================================================
+arm:
+  # Only RRTstar available
+  planner_configs:
+    - RRTstar
+  
+  # Default (and only) planner
+  default_planner_config: RRTstar
+  
+  # Projection evaluator - uses first 2 joints for sampling efficiency
+  projection_evaluator: joints(joint1,joint2)
+  
+  # Collision checking resolution
+  # 0.005 = check every 0.5% of motion (fine resolution for quality)
+  longest_valid_segment_fraction: 0.005
+  
+  # Strictly enforce joint limits
+  enforce_constrained_state_space: true
+
+# ============================================================================
+# Joint Limits - 2 rad/s for all joints
+# ============================================================================
+joint_limits:
+  joint1:
+    has_velocity_limits: true
+    max_velocity: 2.0              # rad/s
+    has_acceleration_limits: true
+    max_acceleration: 3.0          # rad/s²
+    has_jerk_limits: false
+  
+  joint2:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+  
+  joint3:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+  
+  joint4:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+  
+  joint5:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+
+# ============================================================================
+# Kinematics Solver - KDL Plugin
+# ============================================================================
+robot_description_kinematics:
+  arm:
+    kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+    kinematics_solver_search_resolution: 0.005
+    kinematics_solver_timeout: 0.05
+    kinematics_solver_attempts: 3
+
+# ============================================================================
+# Trajectory Execution
+# ============================================================================
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.2
+  allowed_goal_duration_margin: 0.5
+  allowed_start_tolerance: 0.01
+
+# Move group capabilities
+move_group:
+  capabilities: >-
+    move_group/MoveGroupCartesianPathService
+    move_group/MoveGroupExecuteTrajectoryAction
+    move_group/MoveGroupKinematicsService
+    move_group/MoveGroupMoveAction
+    move_group/MoveGroupPlanService
+    move_group/MoveGroupQueryPlannersService
+    move_group/MoveGroupStateValidationService
+    move_group/MoveGroupGetPlanningSceneService
+    move_group/ApplyPlanningSceneService
+
+# ============================================================================
+# Static Collision Objects - Ground Plane
+# ============================================================================
+# Ground plane: Thick box below surface to prevent underground paths
+# Checked against: base_link, link2, link3, link61, link62 (5 links)
+# ============================================================================
+world_geometry:
+  collision_objects:
+    - id: "ground_plane"
+      header:
+        frame_id: "base_link"
+      pose:
+        position:
+          x: 0.0
+          y: 0.0
+          z: -1.0            # Center 1m below base (extends from 0 to -2m)
+        orientation:
+          x: 0.0
+          y: 0.0
+          z: 0.0
+          w: 1.0
+      primitives:
+        - type: 1             # BOX type
+          dimensions:
+            - 10.0            # 10m x-length (large area)
+            - 10.0            # 10m y-length
+            - 2.0             # 2m thick (z=-0 to z=-2m)
+      operation: 0            # ADD operation
+

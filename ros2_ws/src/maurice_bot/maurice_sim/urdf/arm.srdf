@@ -25,10 +25,61 @@
     <passive_joint name="base_y"/>
     <passive_joint name="base_yaw"/>
     <!--DISABLE COLLISIONS: By default it is assumed that any link of the robot could potentially come into collision with any other link in the robot. This tag disables collision checking between a specified pair of links. -->
-    <disable_collisions link1="base_link" link2="link1" reason="Adjacent"/>
-    <disable_collisions link1="link1" link2="link2" reason="Adjacent"/>
+    
+    <!-- ================================================================ -->
+    <!-- COLLISION CONFIGURATION                                         -->
+    <!-- Checked links: base_link, link2, link3, link61, link62          -->
+    <!-- Ignored links: link1, link4, link5 (mesh-based, no simplified)  -->
+    <!-- ================================================================ -->
+    
+    <!-- Disable link1 entirely (uses mesh, no simplified geometry) -->
+    <disable_collisions link1="link1" link2="base_link" reason="Never"/>
+    <disable_collisions link1="link1" link2="link2" reason="Never"/>
+    <disable_collisions link1="link1" link2="link3" reason="Never"/>
+    <disable_collisions link1="link1" link2="link4" reason="Never"/>
+    <disable_collisions link1="link1" link2="link5" reason="Never"/>
+    <disable_collisions link1="link1" link2="link61" reason="Never"/>
+    <disable_collisions link1="link1" link2="link62" reason="Never"/>
+    
+    <!-- Disable link4 entirely (uses mesh, no simplified geometry) -->
+    <disable_collisions link1="link4" link2="base_link" reason="Never"/>
+    <disable_collisions link1="link4" link2="link2" reason="Never"/>
+    <disable_collisions link1="link4" link2="link3" reason="Never"/>
+    <disable_collisions link1="link4" link2="link5" reason="Never"/>
+    <disable_collisions link1="link4" link2="link61" reason="Never"/>
+    <disable_collisions link1="link4" link2="link62" reason="Never"/>
+    
+    <!-- Disable link5 entirely (uses mesh, no simplified geometry) -->
+    <disable_collisions link1="link5" link2="base_link" reason="Never"/>
+    <disable_collisions link1="link5" link2="link2" reason="Never"/>
+    <disable_collisions link1="link5" link2="link3" reason="Never"/>
+    <disable_collisions link1="link5" link2="link61" reason="Never"/>
+    <disable_collisions link1="link5" link2="link62" reason="Never"/>
+    
+    <!-- ================================================================ -->
+    <!-- ADJACENT / UNLIKELY TO COLLIDE PAIRS                            -->
+    <!-- ================================================================ -->
+    <disable_collisions link1="base_link" link2="link2" reason="Adjacent"/>
     <disable_collisions link1="link2" link2="link3" reason="Adjacent"/>
-    <disable_collisions link1="link3" link2="link4" reason="Adjacent"/>
-    <disable_collisions link1="link4" link2="link5" reason="Adjacent"/>
-    <disable_collisions link1="link5" link2="link6" reason="Adjacent"/>
+    <disable_collisions link1="link61" link2="link62" reason="Adjacent"/>
+    
+    <!-- ================================================================ -->
+    <!-- NEVER COLLIDE (geometrically impossible)                        -->
+    <!-- ================================================================ -->
+    <disable_collisions link1="base_link" link2="link61" reason="Never"/>
+    <disable_collisions link1="base_link" link2="link62" reason="Never"/>
+    
+    <!-- ================================================================ -->
+    <!-- ACTIVE COLLISION CHECKS (what gets checked):                    -->
+    <!-- Self-collision pairs:                                           -->
+    <!--   1. base_link <-> link3                                        -->
+    <!--   2. link2 <-> link61                                           -->
+    <!--   3. link2 <-> link62                                           -->
+    <!--   4. link3 <-> link61                                           -->
+    <!--   5. link3 <-> link62                                           -->
+    <!-- Ground collision:                                               -->
+    <!--   base_link, link2, link3, link61, link62 vs ground (5 checks)  -->
+    <!-- Total: 5 self + 5 ground = 10 collision checks                  -->
+    <!-- ================================================================ -->
+    
 </robot>

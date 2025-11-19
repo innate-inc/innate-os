@@ -93,7 +93,7 @@
     <origin xyz="0.086 -0.05285 0.04025" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.5708" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link1">
     <inertial>
@@ -123,7 +123,7 @@
     <origin xyz="0 0 0.04225" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.22" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link2">
     <inertial>
@@ -155,7 +155,7 @@
     <origin xyz="0.02825 0 0.12125" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.7453" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link3">
     <inertial>
@@ -187,7 +187,7 @@
     <origin xyz="0.1375 0 -0.0045" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.9199" upper="1.7453" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link4">
     <inertial>
@@ -217,7 +217,7 @@
     <origin xyz="0.019 0 0" rpy="0 0 0"/>
     <axis  xyz="1 0 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.5708" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link5">
     <inertial>
@@ -247,7 +247,7 @@
     <origin xyz="0.044 -0.0091 0" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
-    <limit lower="-1.57" upper="1.57" effort="2.0" velocity="2.0"/>
+    <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link61">
     <inertial>
@@ -279,7 +279,7 @@
     <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
-    <limit lower="-1.57" upper="1.57" effort="2.0" velocity="2.0"/>
+    <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
     <mimic joint="joint6" multiplier="-1" offset="0"/>
   </joint>
   <link name="link62">
