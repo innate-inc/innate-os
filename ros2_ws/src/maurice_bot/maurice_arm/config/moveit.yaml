@@ -130,29 +130,8 @@ move_group:
 # ============================================================================
 # Static Collision Objects - Ground Plane
 # ============================================================================
-# Ground plane: Thick box below surface to prevent underground paths
-# Checked against: base_link, link2, link3, link61, link62 (5 links)
+# NOTE: Ground plane is added programmatically in planner.cpp
+# - 10m x 10m x 2m box centered at z=-1.0m (extends from 0 to -2m)
+# - Attached to base_link frame
+# - Checked against: base_link, link2, link3, link61, link62 (5 links)
 # ============================================================================
-world_geometry:
-  collision_objects:
-    - id: "ground_plane"
-      header:
-        frame_id: "base_link"
-      pose:
-        position:
-          x: 0.0
-          y: 0.0
-          z: -1.0            # Center 1m below base (extends from 0 to -2m)
-        orientation:
-          x: 0.0
-          y: 0.0
-          z: 0.0
-          w: 1.0
-      primitives:
-        - type: 1             # BOX type
-          dimensions:
-            - 10.0            # 10m x-length (large area)
-            - 10.0            # 10m y-length
-            - 2.0             # 2m thick (z=-0 to z=-2m)
-      operation: 0            # ADD operation
-

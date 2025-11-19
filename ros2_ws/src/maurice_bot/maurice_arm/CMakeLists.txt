@@ -25,6 +25,9 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
 find_package(moveit_core REQUIRED)
 
+# Maurice messages
+find_package(maurice_msgs REQUIRED)
+
 # Include directories
 include_directories(include)
 
@@ -75,6 +78,7 @@ ament_target_dependencies(arm
   visualization_msgs
   dynamixel_sdk
   Eigen3
+  maurice_msgs
 )
 
 target_link_libraries(arm
@@ -110,13 +114,34 @@ target_include_directories(collision_checker PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
-# Install C++ targets
+# Install C++ executables
 install(TARGETS
   camera_node
   arm
   collision_checker
-  maurice_planner
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install shared library (needs to go to lib/ not lib/${PROJECT_NAME}/)
+install(TARGETS maurice_planner
+  EXPORT maurice_planner
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+# Install headers
+install(DIRECTORY include/
+  DESTINATION include
+)
+
+# Export the library for downstream packages
+ament_export_targets(maurice_planner HAS_LIBRARY_TARGET)
+ament_export_dependencies(
+  rclcpp
+  moveit_ros_planning_interface
+  moveit_ros_planning
+  moveit_core
 )
 
 # Install Python files

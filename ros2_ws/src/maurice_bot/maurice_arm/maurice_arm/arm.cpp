@@ -8,6 +8,8 @@
 #include <std_srvs/srv/set_bool.hpp>
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
+#include "maurice_arm/planner.hpp"
+#include "maurice_msgs/srv/goto_js.hpp"
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -74,6 +76,12 @@ public:
             rmw_qos_profile_services_default,
             service_callback_group_);
         
+        arm_plan_service_ = this->create_service<maurice_msgs::srv::GotoJS>(
+            "/mars/arm/goto_js",
+            std::bind(&MauriceArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
+        
         // Setup HEAD publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
         head_position_pub_ = this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", 10);
@@ -115,6 +123,22 @@ public:
     
     ~MauriceArmNode() {
         // Timer automatically stops when destroyed
+    }
+    
+    /**
+     * @brief Initialize the MoveIt motion planner
+     * @note Must be called after node is fully constructed (i.e., from main())
+     */
+    void initializePlanner() {
+        try {
+            RCLCPP_INFO(this->get_logger(), "Initializing MoveIt motion planner...");
+            planner_ = std::make_shared<maurice_arm::MauricePlanner>(shared_from_this());
+            RCLCPP_INFO(this->get_logger(), "✓ Motion planner ready");
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to initialize planner: %s", e.what());
+            RCLCPP_WARN(this->get_logger(), "Planning services will not be available");
+            planner_ = nullptr;
+        }
     }
 
 private:
@@ -550,6 +574,135 @@ private:
         }
     }
     
+    // ARM PLANNING
+    void armGotoJSCallback(
+        const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> request,
+        std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response) {
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js");
+        
+        // Check if planner is available
+        if (!planner_) {
+            RCLCPP_ERROR(this->get_logger(), "❌ Planner not initialized");
+            response->success = false;
+            return;
+        }
+        
+        // Extract goal positions from request
+        std::vector<double> goal_positions(request->data.data.begin(), request->data.data.end());
+        
+        // Validate size (should be 5 joints)
+        if (goal_positions.size() != 5) {
+            RCLCPP_ERROR(this->get_logger(), "❌ Expected 5 joint positions, got %zu", goal_positions.size());
+            response->success = false;
+            return;
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Planning to: [%.3f, %.3f, %.3f, %.3f, %.3f]",
+                   goal_positions[0], goal_positions[1], goal_positions[2],
+                   goal_positions[3], goal_positions[4]);
+        
+        // Plan the motion
+        auto plan_result = planArmMotion(goal_positions, static_cast<double>(request->time));
+        
+        response->success = plan_result.success;
+        
+        if (plan_result.success) {
+            RCLCPP_INFO(this->get_logger(), "✓ Planning succeeded: %d waypoints", plan_result.num_waypoints);
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "✗ Planning failed: %s", plan_result.error_message.c_str());
+        }
+    }
+    
+    maurice_arm::PlanResult planArmMotion(const std::vector<double>& goal, double planning_time = 5.0) {
+        maurice_arm::PlanResult result;
+        result.success = false;
+        
+        if (!planner_) {
+            result.error_message = "Planner not initialized";
+            return result;
+        }
+        
+        // Get current arm positions (servos 1-5)
+        std::vector<double> current_positions(5);
+        {
+            std::lock_guard<std::mutex> lock(arm_command_mutex_);
+            
+            // Convert encoder values to radians
+            for (size_t i = 0; i < 5; ++i) {
+                // Encoder to radians: (encoder - 2048) / 4096 * 2*pi
+                current_positions[i] = ((latest_arm_command_[i] - 2048.0) / 4096.0) * 2.0 * M_PI;
+            }
+            
+            // Apply inverse flipping for external convention (joints 2, 3, 4)
+            // The arm.cpp uses internal hardware convention, but MoveIt uses external convention
+            std::array<size_t, 3> flip_indices = {1, 2, 3};  // joints 2, 3, 4 (0-indexed)
+            for (size_t idx : flip_indices) {
+                current_positions[idx] = -current_positions[idx];
+            }
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Current state: [%.3f, %.3f, %.3f, %.3f, %.3f]",
+                   current_positions[0], current_positions[1], current_positions[2],
+                   current_positions[3], current_positions[4]);
+        
+        // Update planner with current state
+        planner_->updateCurrentState(current_positions);
+        
+        // Pre-check states
+        bool start_safe = !planner_->isInCollision(current_positions);
+        bool goal_safe = planner_->isGoalValid(goal);
+        
+        RCLCPP_INFO(this->get_logger(), "State validation: start=%s, goal=%s",
+                   start_safe ? "safe" : "COLLISION",
+                   goal_safe ? "safe" : "COLLISION");
+        
+        // Choose planning strategy based on collision states
+        if (start_safe && goal_safe) {
+            // Both safe: use strict planning
+            RCLCPP_INFO(this->get_logger(), "Using strict planning (both states safe)");
+            result = planner_->planToGoal(goal, planning_time);
+            
+        } else if (!start_safe && goal_safe) {
+            // Stuck in collision: escape to safe goal
+            RCLCPP_WARN(this->get_logger(), "⚠️  Start in collision, planning escape trajectory");
+            result = planner_->planRelaxed(goal, planning_time, true, false);
+            
+        } else if (start_safe && !goal_safe) {
+            // Goal unreachable: get as close as possible
+            RCLCPP_WARN(this->get_logger(), "⚠️  Goal in collision, approaching as close as possible");
+            result = planner_->planRelaxed(goal, planning_time, false, true);
+            
+        } else {
+            // Both problematic: full relaxed planning
+            RCLCPP_ERROR(this->get_logger(), "⚠️  Both states in collision, attempting recovery");
+            result = planner_->planRelaxed(goal, planning_time * 1.5, true, true);
+        }
+        
+        // Log detailed results
+        if (result.success) {
+            RCLCPP_INFO(this->get_logger(), 
+                       "✓ Planned trajectory: %d waypoints, %.1fms planning time",
+                       result.num_waypoints, result.planning_time_ms);
+            
+            // Log trajectory details
+            RCLCPP_DEBUG(this->get_logger(), "Trajectory waypoints:");
+            for (size_t i = 0; i < result.waypoints.size(); ++i) {
+                const auto& wp = result.waypoints[i];
+                RCLCPP_DEBUG(this->get_logger(), 
+                           "  [%zu] t=%.3fs: [%.3f, %.3f, %.3f, %.3f, %.3f]",
+                           i, result.time_from_start[i],
+                           wp[0], wp[1], wp[2], wp[3], wp[4]);
+            }
+        } else {
+            RCLCPP_ERROR(this->get_logger(), 
+                        "✗ Planning failed: %s (code: %d)",
+                        result.error_message.c_str(),
+                        static_cast<int>(result.error_code));
+        }
+        
+        return result;
+    }
+    
     
     struct JointConfig {
         int servo_id;
@@ -576,10 +729,14 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
+    rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_plan_service_;
     sensor_msgs::msg::JointState joint_state_msg_;
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
+    
+    // Motion planner
+    std::shared_ptr<maurice_arm::MauricePlanner> planner_;
     
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
@@ -607,6 +764,9 @@ private:
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<maurice_arm::MauriceArmNode>();
+    
+    // Initialize planner after node construction (requires shared_ptr)
+    node->initializePlanner();
     
     // Use multi-threaded executor with 4 threads to handle callbacks in parallel
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
