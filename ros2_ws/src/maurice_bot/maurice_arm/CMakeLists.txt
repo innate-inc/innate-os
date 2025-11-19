@@ -20,6 +20,11 @@ find_package(fcl REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
+# MoveIt dependencies
+find_package(moveit_ros_planning_interface REQUIRED)
+find_package(moveit_ros_planning REQUIRED)
+find_package(moveit_core REQUIRED)
+
 # Include directories
 include_directories(include)
 
@@ -35,6 +40,23 @@ ament_target_dependencies(camera_node
 
 target_link_libraries(camera_node
   ${OpenCV_LIBS}
+)
+
+# Create planner library
+add_library(maurice_planner SHARED
+  maurice_arm/planner.cpp
+)
+
+target_include_directories(maurice_planner PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(maurice_planner
+  rclcpp
+  moveit_ros_planning_interface
+  moveit_ros_planning
+  moveit_core
 )
 
 # Add arm node (dynamixel + robot + arm with head + collision checker)
@@ -57,6 +79,7 @@ ament_target_dependencies(arm
 
 target_link_libraries(arm
   fcl
+  maurice_planner
 )
 
 target_include_directories(arm PUBLIC
@@ -92,6 +115,7 @@ install(TARGETS
   camera_node
   arm
   collision_checker
+  maurice_planner
   DESTINATION lib/${PROJECT_NAME}
 )
 
