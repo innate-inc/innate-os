@@ -26,7 +26,8 @@ def generate_launch_description():
     # Declare new launch arguments
     websocket_uri_arg = DeclareLaunchArgument(
         "websocket_uri",
-        default_value="wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
+        # default_value="wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
+        default_value="ws://192.168.0.180:8765",
         description="Websocket URI",
     )
     token_arg = DeclareLaunchArgument(

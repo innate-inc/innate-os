@@ -30,6 +30,7 @@ class Primitive(ABC):
     def __init__(self, logger):
         self.logger = logger
         self.node: Node | None = None
+        self.manipulation = None  # Will be injected by primitive_execution_action_server
         self._feedback_callback = None
 
     @property

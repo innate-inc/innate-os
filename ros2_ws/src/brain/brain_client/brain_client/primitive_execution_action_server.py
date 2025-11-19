@@ -33,6 +33,7 @@ from brain_client.primitive_types import (
     PrimitiveResult,
     RobotStateType,
 )
+from brain_client.manipulation_interface import ManipulationInterface
 
 # Import ROS message types for subscriptions
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
@@ -78,6 +79,9 @@ class PrimitiveExecutionActionServer(Node):
             1,  # QoS profile with transient local durability might be better for map
         )
 
+        # Create manipulation interface for primitives to use
+        self.manipulation = ManipulationInterface(self, self.get_logger())
+        
         # Dynamic primitive loading
         self.primitive_loader = PrimitiveLoader(self.get_logger())
         
@@ -113,6 +117,7 @@ class PrimitiveExecutionActionServer(Node):
             try:
                 primitive_instance = primitive_class(self.get_logger())
                 primitive_instance.node = self  # Inject the node
+                primitive_instance.manipulation = self.manipulation  # Inject manipulation interface
                 self._code_primitives[primitive_name] = primitive_instance
                 self.get_logger().info(f"Loaded code primitive: {primitive_name}")
             except Exception as e:
