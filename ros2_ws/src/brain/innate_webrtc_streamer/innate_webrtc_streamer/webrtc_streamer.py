@@ -40,6 +40,7 @@ class SimpleWebRTCStreamer(Node):
         self.image_sub = self.create_subscription(CompressedImage, '/mars/main_camera/image/compressed', self.on_image_main, camera_qos)
         self.image_sub_arm = self.create_subscription(CompressedImage, '/mars/arm/image_raw/compressed', self.on_image_arm, camera_qos)
         
+        # Single pipeline for single client
         self.pipe = None
         self.webrtc = None
         self.appsrc_main = None
@@ -91,10 +92,28 @@ class SimpleWebRTCStreamer(Node):
         buf = Gst.Buffer.new_wrapped(img.tobytes())
         self.appsrc_arm.emit('push-buffer', buf)
     
+    def cleanup_pipeline(self):
+        """Clean up the pipeline and resources"""
+        if self.pipe:
+            self.get_logger().info('Cleaning up pipeline...')
+            # Stop the pipeline
+            self.pipe.set_state(Gst.State.NULL)
+            self.pipe.get_state(Gst.CLOCK_TIME_NONE)
+            # Clear references
+            self.appsrc_main = None
+            self.appsrc_arm = None
+            self.webrtc = None
+            self.pipe = None
+            self.get_logger().info('Pipeline cleaned up')
+    
     def on_start(self, msg):
+        """Handle start request - cleanup old connection and create new one"""
         self.get_logger().info('START received, creating offer...')
         
-        # Create pipeline with dual camera feeds via appsrc
+        # Always cleanup existing pipeline to handle reconnection
+        self.cleanup_pipeline()
+        
+        # Create fresh pipeline with dual camera feeds via appsrc
         # Main camera on sink_0, arm camera on sink_1
         self.pipe = Gst.parse_launch(
             'webrtcbin name=webrtc '
@@ -154,7 +173,7 @@ class SimpleWebRTCStreamer(Node):
         # Set local description (don't wait)
         self.webrtc.emit('set-local-description', offer, Gst.Promise.new())
         
-        # Send offer
+        # Send offer (raw SDP)
         msg = String()
         msg.data = offer.sdp.as_text()
         self.offer_pub.publish(msg)
@@ -191,9 +210,15 @@ class SimpleWebRTCStreamer(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SimpleWebRTCStreamer()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Clean up shared pipeline on shutdown
+        node.cleanup_pipeline()
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
