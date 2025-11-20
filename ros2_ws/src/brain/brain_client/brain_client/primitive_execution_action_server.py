@@ -34,6 +34,7 @@ from brain_client.primitive_types import (
     RobotStateType,
 )
 from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.mobility_interface import MobilityInterface
 
 # Import ROS message types for subscriptions
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
@@ -58,6 +59,10 @@ class PrimitiveExecutionActionServer(Node):
         self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
         self.image_topic = self.get_parameter("image_topic").value
 
+        # Topic for base velocity commands
+        self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        self.cmd_vel_topic = self.get_parameter("cmd_vel_topic").value
+
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
 
@@ -81,6 +86,8 @@ class PrimitiveExecutionActionServer(Node):
 
         # Create manipulation interface for primitives to use
         self.manipulation = ManipulationInterface(self, self.get_logger())
+        # Create mobility interface for base/wheel motion
+        self.mobility = MobilityInterface(self, self.get_logger(), self.cmd_vel_topic)
         
         # Dynamic primitive loading
         self.primitive_loader = PrimitiveLoader(self.get_logger())
@@ -118,6 +125,7 @@ class PrimitiveExecutionActionServer(Node):
                 primitive_instance = primitive_class(self.get_logger())
                 primitive_instance.node = self  # Inject the node
                 primitive_instance.manipulation = self.manipulation  # Inject manipulation interface
+                primitive_instance.mobility = self.mobility  # Inject mobility interface
                 self._code_primitives[primitive_name] = primitive_instance
                 self.get_logger().info(f"Loaded code primitive: {primitive_name}")
             except Exception as e:

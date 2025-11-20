@@ -31,6 +31,7 @@ class Primitive(ABC):
         self.logger = logger
         self.node: Node | None = None
         self.manipulation = None  # Will be injected by primitive_execution_action_server
+        self.mobility = None  # Will be injected by primitive_execution_action_server
         self._feedback_callback = None
 
     @property
