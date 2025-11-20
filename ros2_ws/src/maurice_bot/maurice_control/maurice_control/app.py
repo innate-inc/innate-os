@@ -250,9 +250,6 @@ class AppControl(Node):
                 default_robot_info = {"robot_name": "MARS"}
                 with open(robot_info_file_path, 'w') as f:
                     json.dump(default_robot_info, f)
-
-            with open(robot_info_file_path, 'r') as f:
-                content = json.load(f)
             
             # Then, try to read from robot_info.json for any additional keys
             try:
