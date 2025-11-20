@@ -233,6 +233,15 @@ class AppControl(Node):
         final_json_string_to_publish = "{}"
 
         try:
+            # Ensure data directory exists
+            os.makedirs(data_dir, exist_ok=True)
+
+            # If robot_info.json does not exist, create it with default values
+            if not os.path.exists(robot_info_file_path):
+                default_robot_info = {"robot_name": "MARS"}
+                with open(robot_info_file_path, 'w') as f:
+                    json.dump(default_robot_info, f)
+
             with open(robot_info_file_path, 'r') as f:
                 content = json.load(f)
             
