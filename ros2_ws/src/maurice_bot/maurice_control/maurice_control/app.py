@@ -6,7 +6,6 @@ import numpy as np
 import os
 import json
 import subprocess
-import glob
 
 from geometry_msgs.msg import Vector3, Twist
 from std_msgs.msg import Int32MultiArray, Float64MultiArray, String
@@ -21,14 +20,10 @@ def get_bluetooth_device_id():
     Returns the MAC address as a string, or None if not available.
     """
     try:
-        # Try to get the first Bluetooth adapter's address from /sys
-        adapter_paths = glob.glob('/sys/class/bluetooth/hci*')
-        if adapter_paths:
-            adapter_path = adapter_paths[0]
-            address_file = os.path.join(adapter_path, 'address')
-            if os.path.exists(address_file):
-                with open(address_file, 'r') as f:
-                    return f.read().strip()
+        from bluezero import adapter
+        available_adapters = list(adapter.Adapter.available())
+        if available_adapters:
+            return available_adapters[0].address
         return None
     except Exception as e:
         return None
