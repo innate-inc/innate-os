@@ -50,9 +50,11 @@ class ManipulationInterface:
             PoseStamped, 'fk_pose', self._fk_pose_callback, 10
         )
         
-        # Service client for joint space control (lazy initialization)
-        self._goto_js_client = None
-        
+        # Service client for joint space control. We create the client once
+        # here, but deliberately avoid any blocking wait_for_service calls
+        # to keep the executor responsive.
+        self._goto_js_client = self.node.create_client(GotoJS, '/mars/arm/goto_js')
+
         self.logger.info("ManipulationInterface initialized")
     
     def _ik_solution_callback(self, msg: JointState):
@@ -117,24 +119,30 @@ class ManipulationInterface:
         target.angular.y = pitch
         target.angular.z = yaw
         
-        self.logger.info(f"Requesting IK solution for pose: x={x:.3f}, y={y:.3f}, z={z:.3f}, "
-                        f"roll={roll:.3f}, pitch={pitch:.3f}, yaw={yaw:.3f}")
-        
         self._ik_target_pub.publish(target)
         
         # Wait for solution
         start_time = time.time()
+        iteration = 0
         while time.time() - start_time < timeout:
             if self._ik_solution is not None:
                 joint_positions = list(self._ik_solution.position)
-                self.logger.info(f"IK solution received: {[f'{j:.3f}' for j in joint_positions]}")
+                
+                # Validate that we received a non-empty solution
+                if len(joint_positions) == 0:
+                    self.logger.error(f"[ManipulationInterface] IK solver returned empty solution (IK failed)")
+                    return None
+                
                 return joint_positions
-            
-            # Spin to process callbacks
-            rclpy.spin_once(self.node, timeout_sec=0.01)
+
             time.sleep(0.01)
+            iteration += 1
+            
+            # Log every 50 iterations (roughly every 0.5 seconds)
+            if iteration % 50 == 0:
+                pass
         
-        self.logger.error(f"IK solution timeout after {timeout}s")
+        self.logger.error(f"[ManipulationInterface] IK solution timeout after {timeout}s ({iteration} iterations)")
         return None
     
     def move_to_joint_positions(self, joint_positions: List[float], 
@@ -154,49 +162,33 @@ class ManipulationInterface:
         if len(joint_positions) != 6:
             self.logger.error(f"Expected 6 joint positions, got {len(joint_positions)}")
             return False
-        
-        # Lazy initialization of service client
+
+        # Ensure GotoJS client is available
         if self._goto_js_client is None:
-            self.logger.info("Creating GotoJS service client")
-            self._goto_js_client = self.node.create_client(GotoJS, '/mars/arm/goto_js')
-        
-        # Wait for service to be available
-        if not self._goto_js_client.wait_for_service(timeout_sec=5.0):
-            self.logger.error("GotoJS service not available")
+            self.logger.error("[ManipulationInterface] GotoJS client is not initialized")
             return False
-        
-        # Create service request
+
+        # Non-blocking check for service readiness
+        if not self._goto_js_client.service_is_ready():
+            self.logger.error("[ManipulationInterface] GotoJS service is not ready")
+            return False
+
+        # Build request
         request = GotoJS.Request()
         request.data = Float64MultiArray()
         request.data.data = joint_positions
         request.time = duration
-        
-        self.logger.info(f"Commanding arm to joint positions: {[f'{j:.3f}' for j in joint_positions]} "
-                        f"over {duration}s")
-        
-        # Call service
-        future = self._goto_js_client.call_async(request)
-        
-        if wait_for_completion:
-            # Wait for service response
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
-            
-            if future.done():
-                response = future.result()
-                if response.success:
-                    self.logger.info("Arm motion command accepted")
-                    # Wait for motion to complete
-                    time.sleep(duration + 0.5)  # Add buffer time
-                    return True
-                else:
-                    self.logger.error("Arm motion command rejected")
-                    return False
-            else:
-                self.logger.error("Service call timeout")
-                return False
-        else:
-            # Non-blocking - just send the command
-            return True
+
+        try:
+            # Fire-and-forget: do not wait on the future here to avoid
+            # blocking the action callback. Any lower-level failures should
+            # be handled/logged by the GotoJS server.
+            self._goto_js_client.call_async(request)
+        except Exception as e:
+            self.logger.error(f"[ManipulationInterface] Exception calling GotoJS: {e}")
+            return False
+
+        return True
     
     def move_to_cartesian_pose(self, x: float, y: float, z: float,
                               roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0,
@@ -214,9 +206,9 @@ class ManipulationInterface:
         Returns:
             True if successful, False otherwise
         """
-        # Solve IK
+        # Reintroduce IK solving, but with solve_ik no longer performing
+        # rclpy.spin_once inside the loop.
         joint_positions = self.solve_ik(x, y, z, roll, pitch, yaw, timeout=ik_timeout)
-        
         if joint_positions is None:
             self.logger.error("Failed to solve IK for target pose")
             return False
@@ -224,10 +216,13 @@ class ManipulationInterface:
         # IK returns 5 joints, but we need 6 (add joint6/gripper with default value of 0.0)
         if len(joint_positions) == 5:
             joint_positions.append(0.0)
-            self.logger.info("Added joint6 (gripper) with default value 0.0")
         
-        # Execute motion
-        return self.move_to_joint_positions(joint_positions, duration=duration)
+        # Execute motion (non-blocking to avoid blocking the action server callback)
+        return self.move_to_joint_positions(
+            joint_positions,
+            duration=duration,
+            wait_for_completion=False,
+        )
     
     def get_joint_limits(self) -> dict:
         """
