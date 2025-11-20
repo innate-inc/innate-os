@@ -6,6 +6,7 @@ import numpy as np
 import os
 import json
 import subprocess
+import glob
 
 from geometry_msgs.msg import Vector3, Twist
 from std_msgs.msg import Int32MultiArray, Float64MultiArray, String
@@ -13,6 +14,24 @@ from maurice_msgs.srv import SetRobotName
 
 # Import NetworkManager utilities for WiFi SSID
 from maurice_bt_provisioner.nmcli_utils import nmcli_get_active_wifi_ssid
+
+def get_bluetooth_device_id():
+    """
+    Get the Bluetooth device ID (MAC address) of the first available adapter.
+    Returns the MAC address as a string, or None if not available.
+    """
+    try:
+        # Try to get the first Bluetooth adapter's address from /sys
+        adapter_paths = glob.glob('/sys/class/bluetooth/hci*')
+        if adapter_paths:
+            adapter_path = adapter_paths[0]
+            address_file = os.path.join(adapter_path, 'address')
+            if os.path.exists(address_file):
+                with open(address_file, 'r') as f:
+                    return f.read().strip()
+        return None
+    except Exception as e:
+        return None
 
 def get_robot_version():
     """
@@ -232,6 +251,7 @@ class AppControl(Node):
         - minimum_app_version: from os_config.json
         - wifi_ssid: gets the current WiFi SSID from NetworkManager
         - version: from git
+        - device_id: Bluetooth MAC address from system
         Logs errors if file/JSON processing fails or keys are missing.
         Publishes "{}" if no keys are found or an error occurs.
         """
@@ -270,6 +290,11 @@ class AppControl(Node):
             robot_version = get_robot_version()
             data_to_publish_dict['version'] = robot_version
             
+            # Include Bluetooth device ID
+            device_id = get_bluetooth_device_id()
+            if device_id is not None:
+                data_to_publish_dict['device_id'] = device_id
+            
             if data_to_publish_dict:
                 final_json_string_to_publish = json.dumps(data_to_publish_dict)
 
@@ -286,26 +311,24 @@ class AppControl(Node):
 
     def set_robot_name_callback(self, request, response):
         """
-        Service callback to change the robot name in os_config.json.
+        Service callback to change the robot name in robot_info.json.
         """
         try:
-            maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
-            config_file_path = os.path.join(maurice_root, 'os_config.json')
+            data_directory_param = self.get_parameter('data_directory').get_parameter_value().string_value
+            data_dir = os.path.expanduser(data_directory_param)
+            robot_info_file_path = os.path.join(data_dir, 'robot_info.json')
             
-            # Load current config
-            with open(config_file_path, 'r') as f:
-                config = json.load(f)
+            # Load current robot_info
+            with open(robot_info_file_path, 'r') as f:
+                robot_info = json.load(f)
             
             # Update robot name
-            old_name = config.get('robot_name', 'Not set')
-            config['robot_name'] = request.robot_name
+            old_name = robot_info.get('robot_name', 'Not set')
+            robot_info['robot_name'] = request.robot_name
             
-            # Save updated config
-            with open(config_file_path, 'w') as f:
-                json.dump(config, f, indent=2)
-            
-            # Reload app config to update internal state
-            self._load_app_config()
+            # Save updated robot_info
+            with open(robot_info_file_path, 'w') as f:
+                json.dump(robot_info, f, indent=2)
             
             response.success = True
             response.message = f"Robot name changed from '{old_name}' to '{request.robot_name}'"
