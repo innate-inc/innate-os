@@ -676,7 +676,11 @@ class PrimitiveExecutionActionServer(Node):
 def main(args=None):
     rclpy.init(args=args)
     action_server = PrimitiveExecutionActionServer()
-    rclpy.spin(action_server)
+    # Use a MultiThreadedExecutor so long-running action callbacks (e.g.,
+    # ones that wait on IK solutions) do not block subscriber callbacks.
+    executor = MultiThreadedExecutor()
+    executor.add_node(action_server)
+    executor.spin()
     action_server.destroy()
     rclpy.shutdown()
 
