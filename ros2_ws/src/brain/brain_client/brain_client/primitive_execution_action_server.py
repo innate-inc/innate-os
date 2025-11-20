@@ -36,10 +36,12 @@ from brain_client.primitive_types import (
 )
 from brain_client.manipulation_interface import ManipulationInterface
 from brain_client.mobility_interface import MobilityInterface
+from brain_client.head_interface import HeadInterface
 
 # Import ROS message types for subscriptions
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
 from nav_msgs.msg import Odometry, OccupancyGrid
+from std_msgs.msg import String
 
 
 class PrimitiveExecutionActionServer(Node):
@@ -50,6 +52,7 @@ class PrimitiveExecutionActionServer(Node):
         self.last_main_camera_image = None  # Stores cv2 image object
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
+        self.last_head_position = None  # Stores head position dict (parsed JSON)
         
         # Track currently executing primitive for continuous state updates
         self._current_primitive = None
@@ -68,6 +71,12 @@ class PrimitiveExecutionActionServer(Node):
         # Topic for base velocity commands
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.cmd_vel_topic = self.get_parameter("cmd_vel_topic").value
+        
+        # Topics for head control
+        self.declare_parameter("head_position_topic", "/mars/head/set_position")
+        self.head_position_topic = self.get_parameter("head_position_topic").value
+        self.declare_parameter("head_current_position_topic", "/mars/head/current_position")
+        self.head_current_position_topic = self.get_parameter("head_current_position_topic").value
 
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
@@ -89,11 +98,16 @@ class PrimitiveExecutionActionServer(Node):
             self.map_callback,
             1,  # QoS profile with transient local durability might be better for map
         )
+        self.head_position_sub = self.create_subscription(
+            String, self.head_current_position_topic, self.head_position_callback, 10
+        )
 
         # Create manipulation interface for primitives to use
         self.manipulation = ManipulationInterface(self, self.get_logger())
         # Create mobility interface for base/wheel motion
         self.mobility = MobilityInterface(self, self.get_logger(), self.cmd_vel_topic)
+        # Create head interface for head tilt control
+        self.head = HeadInterface(self, self.get_logger(), self.head_position_topic)
         
         # Dynamic primitive loading
         self.primitive_loader = PrimitiveLoader(self.get_logger())
@@ -132,6 +146,7 @@ class PrimitiveExecutionActionServer(Node):
                 primitive_instance.node = self  # Inject the node
                 primitive_instance.manipulation = self.manipulation  # Inject manipulation interface
                 primitive_instance.mobility = self.mobility  # Inject mobility interface
+                primitive_instance.head = self.head  # Inject head interface
                 self._code_primitives[primitive_name] = primitive_instance
                 self.get_logger().info(f"Loaded code primitive: {primitive_name}")
             except Exception as e:
@@ -499,6 +514,15 @@ class PrimitiveExecutionActionServer(Node):
                     "none available."
                 )
 
+        if RobotStateType.LAST_HEAD_POSITION in required_states:
+            if self.last_head_position is not None:
+                robot_state_to_inject[RobotStateType.LAST_HEAD_POSITION.value] = self.last_head_position
+            else:
+                self.get_logger().warn(
+                    "Primitive requires LAST_HEAD_POSITION but "
+                    "none available."
+                )
+
         if robot_state_to_inject:  # Only call if there is state to update
             primitive.update_robot_state(**robot_state_to_inject)
     
@@ -721,6 +745,15 @@ class PrimitiveExecutionActionServer(Node):
     def map_callback(self, msg: OccupancyGrid):
         self.last_map = msg
         # self.get_logger().debug('Received new map for primitives.')
+    
+    def head_position_callback(self, msg: String):
+        """Parse head position JSON and store it."""
+        try:
+            import json
+            self.last_head_position = json.loads(msg.data)
+            # self.get_logger().debug(f'Received head position: {self.last_head_position}')
+        except Exception as e:
+            self.get_logger().error(f"Failed to parse head position JSON: {e}")
 
 
 def main(args=None):

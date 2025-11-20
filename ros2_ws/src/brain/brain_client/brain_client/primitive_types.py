@@ -24,6 +24,7 @@ class RobotStateType(Enum):
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
     LAST_ODOM = "last_odom"
     LAST_MAP = "last_map"
+    LAST_HEAD_POSITION = "last_head_position"
 
 
 class Primitive(ABC):
@@ -32,6 +33,7 @@ class Primitive(ABC):
         self.node: Node | None = None
         self.manipulation = None  # Will be injected by primitive_execution_action_server
         self.mobility = None  # Will be injected by primitive_execution_action_server
+        self.head = None  # Will be injected by primitive_execution_action_server
         self._feedback_callback = None
 
     @property
