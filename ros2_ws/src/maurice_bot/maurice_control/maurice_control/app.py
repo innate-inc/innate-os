@@ -66,8 +66,6 @@ def get_robot_version():
     raise RuntimeError("Failed to determine robot version")
 
 class AppControl(Node):
-    KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract from JSON (including from os_config.json)
-    
     def __init__(self):
         super().__init__('app_control_node')
         
@@ -230,7 +228,10 @@ class AppControl(Node):
     def publish_robot_info_callback(self):
         """
         Reads robot_info.json and os_config.json, extracts specified keys, and publishes them as a JSON string.
-        For wifi_ssid, gets the current WiFi SSID from NetworkManager.
+        - robot_name: from robot_info.json
+        - minimum_app_version: from os_config.json
+        - wifi_ssid: gets the current WiFi SSID from NetworkManager
+        - version: from git
         Logs errors if file/JSON processing fails or keys are missing.
         Publishes "{}" if no keys are found or an error occurs.
         """
@@ -251,26 +252,16 @@ class AppControl(Node):
                 with open(robot_info_file_path, 'w') as f:
                     json.dump(default_robot_info, f)
             
-            # Then, try to read from robot_info.json for any additional keys
-            try:
-                with open(robot_info_file_path, 'r') as f:
-                    content = json.load(f)
-                
-                # Extract keys from JSON file (excluding robot_name since we already got it from os_config.json)
-                for key in self.KEYS_TO_EXTRACT:
-                    if key != 'robot_name' and key in content:
-                        data_to_publish_dict[key] = content[key]
-                    elif key == 'robot_name' and key not in data_to_publish_dict:
-                        # Fallback: get robot_name from robot_info.json if not in os_config.json
-                        data_to_publish_dict[key] = content[key]
-                    elif key not in data_to_publish_dict:
-                        self.get_logger().warn(f"Key '{key}' not found in either os_config.json or {robot_info_file_path}.")
-            except FileNotFoundError:
-                self.get_logger().info(f"{robot_info_file_path} not found, using only os_config.json data")
-            except Exception as e:
-                self.get_logger().warn(f"Error reading {robot_info_file_path}: {str(e)}")
+            # Read robot_name from robot_info.json
+            with open(robot_info_file_path, 'r') as f:
+                robot_info = json.load(f)
+            data_to_publish_dict['robot_name'] = robot_info['robot_name']
             
-            # Always include WiFi SSID (separate from JSON extraction)
+            # Read minimum_app_version from os_config.json
+            os_config = self.app_config
+            data_to_publish_dict['minimum_app_version'] = os_config['minimum_app_version']
+            
+            # Include WiFi SSID
             wifi_ssid = self.get_cached_wifi_ssid()
             if wifi_ssid is not None:
                 data_to_publish_dict['wifi_ssid'] = wifi_ssid
@@ -278,9 +269,6 @@ class AppControl(Node):
             # Include robot version
             robot_version = get_robot_version()
             data_to_publish_dict['version'] = robot_version
-            
-            # Include minimum compatible app version
-            data_to_publish_dict['minimum_app_version'] = self.app_config['minimum_app_version']
             
             if data_to_publish_dict:
                 final_json_string_to_publish = json.dumps(data_to_publish_dict)
