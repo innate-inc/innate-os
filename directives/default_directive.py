@@ -22,6 +22,7 @@ class DefaultDirective(Directive):
             "move_arm_to_pose",
             "get_end_effector_pose",
             "move_arm_to_joint_positions",
+            "turn_by_degrees",
         ]
 
     def get_prompt(self) -> None:
