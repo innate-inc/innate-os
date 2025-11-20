@@ -97,28 +97,7 @@ check_updates() {
     fi
 }
 
-# Stop running services
-stop_services() {
-    log "Stopping services..."
-    
-    # Kill tmux sessions
-    if tmux has-session -t ros_nodes 2>/dev/null; then
-        warning "Stopping tmux session: ros_nodes"
-        tmux kill-session -t ros_nodes
-        success "Tmux session stopped"
-    fi
-    
-    # Stop systemd services if running
-    local services=("ros-app.service" "discovery-server.service")
-    for service in "${services[@]}"; do
-        if systemctl is-active --quiet "$service" 2>/dev/null; then
-            warning "Stopping $service"
-            sudo systemctl stop "$service"
-        fi
-    done
-    
-    success "All services stopped"
-}
+
 
 # Apply updates
 apply_updates() {
@@ -163,8 +142,6 @@ apply_updates() {
         exit 0
     fi
     
-    # Stop services first
-    stop_services
     
     # Stash any local changes
     log "Checking for local changes..."
@@ -203,6 +180,7 @@ apply_updates() {
     echo "║          UPDATE COMPLETED SUCCESSFULLY                 ║"
     echo "╚════════════════════════════════════════════════════════╝"
     echo ""
+    
     
     # Clear cache
     rm -f "$UPDATE_CACHE"
