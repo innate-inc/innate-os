@@ -22,12 +22,14 @@ class BoundingBox(BaseModel):
 class RotateFollow(Primitive):
     """
     Primitive that uses Gemini API to detect a target object and tracks it
-    by rotating the robot to keep the object centered in the camera view.
+    by rotating the robot base (horizontal) and tilting the head (vertical)
+    to keep the object centered in the camera view.
     """
 
     def __init__(self, logger):
         super().__init__(logger)
         self.last_main_camera_image_b64 = None
+        self.last_head_position = None
         self._cancel_requested = False
         self.gemini_client = None
         
@@ -36,18 +38,25 @@ class RotateFollow(Primitive):
         return "rotate_follow"
 
     def get_required_robot_states(self) -> list[RobotStateType]:
-        """Require camera image for object detection and tracking."""
-        return [RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64]
+        """Require camera image and head position for object detection and tracking."""
+        return [
+            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64,
+            RobotStateType.LAST_HEAD_POSITION
+        ]
 
     def update_robot_state(self, **kwargs):
-        """Store the latest camera image."""
+        """Store the latest camera image and head position."""
         self.last_main_camera_image_b64 = kwargs.get(
             RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
+        )
+        self.last_head_position = kwargs.get(
+            RobotStateType.LAST_HEAD_POSITION.value
         )
 
     def guidelines(self):
         return (
-            "Track and follow a target object by rotating the robot to keep it centered. "
+            "Track and follow a target object by rotating the robot base (horizontal) "
+            "and tilting the head (vertical) to keep it centered in the camera view. "
             "Uses Gemini API to detect the target, then OpenCV tracker to follow it. "
             "Parameters: target (str, e.g., 'person', 'red cup'), "
             "duration (float, optional, default 60.0 seconds, use -1 for infinite)."
@@ -186,8 +195,14 @@ class RotateFollow(Primitive):
         if self.mobility is None:
             return "Mobility interface not available", PrimitiveResult.FAILURE
         
+        if self.head is None:
+            return "Head interface not available", PrimitiveResult.FAILURE
+        
         if not self.last_main_camera_image_b64:
             return "No camera image available", PrimitiveResult.FAILURE
+        
+        if not self.last_head_position:
+            return "No head position data available", PrimitiveResult.FAILURE
         
         self._cancel_requested = False
         
@@ -218,6 +233,11 @@ class RotateFollow(Primitive):
         
         height, width = frame.shape[:2]
         center_x = width / 2
+        center_y = height / 2
+        
+        # Get head position limits
+        min_head_angle = self.last_head_position.get("min_angle", -25.0)
+        max_head_angle = self.last_head_position.get("max_angle", 15.0)
         
         self._send_feedback(f"Tracker initialized. Following {target}...")
         
@@ -226,10 +246,15 @@ class RotateFollow(Primitive):
         last_feedback_time = start_time
         tracking_active = True
         
-        # PID-like control parameters
-        angular_speed_scale = 0.005  # rad/s per pixel error
+        # PID-like control parameters for base rotation (horizontal)
+        angular_speed_scale = 0.003  # rad/s per pixel error
         max_angular_speed = 1.0  # rad/s
-        deadband = 30  # pixels - don't rotate if within this range of center
+        deadband_x = 30  # pixels - don't rotate if within this range of center
+        
+        # PID-like control parameters for head tilt (vertical)
+        head_angle_scale = 0.045  # degrees per pixel error
+        max_head_adjustment = 2.0  # max degrees per update
+        deadband_y = 30  # pixels - don't tilt if within this range of center
         
         while tracking_active:
             # Check timeout
@@ -270,12 +295,18 @@ class RotateFollow(Primitive):
                 
                 # Calculate center of bounding box
                 bbox_center_x = x + w / 2
+                bbox_center_y = y + h / 2
                 
-                # Calculate error from image center
+                # Calculate horizontal error from image center
                 error_x = bbox_center_x - center_x
                 
-                # Apply deadband
-                if abs(error_x) > deadband:
+                # Calculate vertical error from image center
+                # Positive error_y = object is below center (need to tilt down = negative angle)
+                # Negative error_y = object is above center (need to tilt up = positive angle)
+                error_y = bbox_center_y - center_y
+                
+                # HORIZONTAL CONTROL: Base rotation
+                if abs(error_x) > deadband_x:
                     # Calculate angular velocity (positive = CCW, negative = CW)
                     # If object is to the right (error_x > 0), rotate CW (negative)
                     angular_vel = -error_x * angular_speed_scale
@@ -284,14 +315,35 @@ class RotateFollow(Primitive):
                     # Send rotation command
                     self.mobility.send_cmd_vel(linear_x=0.0, angular_z=angular_vel)
                 else:
-                    # Object centered, stop rotation
+                    # Object centered horizontally, stop rotation
                     self.mobility.send_cmd_vel(linear_x=0.0, angular_z=0.0)
+                
+                # VERTICAL CONTROL: Head tilt
+                if abs(error_y) > deadband_y and self.last_head_position:
+                    # Get current head angle
+                    current_head_angle = self.last_head_position.get("current_position", 0.0)
+                    
+                    # Calculate angle adjustment
+                    # If object is below center (error_y > 0), tilt down (negative)
+                    # If object is above center (error_y < 0), tilt up (positive)
+                    angle_adjustment = -error_y * head_angle_scale
+                    angle_adjustment = max(-max_head_adjustment, min(max_head_adjustment, angle_adjustment))
+                    
+                    # Calculate new target angle
+                    target_head_angle = current_head_angle + angle_adjustment
+                    
+                    # Clamp to limits
+                    target_head_angle = max(min_head_angle, min(max_head_angle, target_head_angle))
+                    
+                    # Send head tilt command
+                    self.head.set_position(int(target_head_angle))
                 
                 # Periodic feedback
                 if time.time() - last_feedback_time >= 2.0:
+                    current_head = self.last_head_position.get("current_position", 0.0) if self.last_head_position else 0.0
                     self._send_feedback(
-                        f"Tracking {target}: error={error_x:.0f}px, "
-                        f"elapsed={elapsed:.1f}s"
+                        f"Tracking {target}: horiz_err={error_x:.0f}px, vert_err={error_y:.0f}px, "
+                        f"head={current_head:.1f}°, elapsed={elapsed:.1f}s"
                     )
                     last_feedback_time = time.time()
                     
