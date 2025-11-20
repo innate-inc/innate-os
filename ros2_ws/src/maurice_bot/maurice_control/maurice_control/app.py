@@ -9,9 +9,24 @@ import subprocess
 
 from geometry_msgs.msg import Vector3, Twist
 from std_msgs.msg import Int32MultiArray, Float64MultiArray, String
+from maurice_msgs.srv import SetRobotName
 
 # Import NetworkManager utilities for WiFi SSID
 from maurice_bt_provisioner.nmcli_utils import nmcli_get_active_wifi_ssid
+
+def get_bluetooth_device_id():
+    """
+    Get the Bluetooth device ID (MAC address) of the first available adapter.
+    Returns the MAC address as a string, or None if not available.
+    """
+    try:
+        from bluezero import adapter
+        available_adapters = list(adapter.Adapter.available())
+        if available_adapters:
+            return available_adapters[0].address
+        return None
+    except Exception as e:
+        return None
 
 def get_robot_version():
     """
@@ -65,8 +80,6 @@ def get_robot_version():
     raise RuntimeError("Failed to determine robot version")
 
 class AppControl(Node):
-    KEYS_TO_EXTRACT = ['robot_name'] # Define keys to extract from JSON
-    
     def __init__(self):
         super().__init__('app_control_node')
         
@@ -81,6 +94,7 @@ class AppControl(Node):
         # Declare parameters
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         self.declare_parameter('data_directory', os.path.join(maurice_root, 'data'))
+        self.declare_parameter('robot_name', '')
         
         # Subscribe to joystick messages (Vector3)
         self.joystick_sub = self.create_subscription(
@@ -121,6 +135,13 @@ class AppControl(Node):
         
         # Timer for publishing robot info
         self.robot_info_timer = self.create_timer(1.0, self.publish_robot_info_callback)
+        
+        # Service for setting robot name
+        self.set_robot_name_srv = self.create_service(
+            SetRobotName,
+            '/set_robot_name',
+            self.set_robot_name_callback
+        )
         
         self.get_logger().info("AppControl node started.")
 
@@ -220,8 +241,12 @@ class AppControl(Node):
 
     def publish_robot_info_callback(self):
         """
-        Reads robot_info.json, extracts specified keys, and publishes them as a JSON string.
-        For wifi_ssid, gets the current WiFi SSID from NetworkManager.
+        Reads robot_info.json and os_config.json, extracts specified keys, and publishes them as a JSON string.
+        - robot_name: from robot_info.json
+        - minimum_app_version: from os_config.json
+        - wifi_ssid: gets the current WiFi SSID from NetworkManager
+        - version: from git
+        - device_id: Bluetooth MAC address from system
         Logs errors if file/JSON processing fails or keys are missing.
         Publishes "{}" if no keys are found or an error occurs.
         """
@@ -241,18 +266,17 @@ class AppControl(Node):
                 default_robot_info = {"robot_name": "MARS"}
                 with open(robot_info_file_path, 'w') as f:
                     json.dump(default_robot_info, f)
-
+            
+            # Read robot_name from robot_info.json
             with open(robot_info_file_path, 'r') as f:
-                content = json.load(f)
+                robot_info = json.load(f)
+            data_to_publish_dict['robot_name'] = robot_info['robot_name']
             
-            # Extract keys from JSON file
-            for key in self.KEYS_TO_EXTRACT:
-                if key in content:
-                    data_to_publish_dict[key] = content[key]
-                else:
-                    self.get_logger().warn(f"Key '{key}' not found in {robot_info_file_path}.")
+            # Read minimum_app_version from os_config.json
+            os_config = self.app_config
+            data_to_publish_dict['minimum_app_version'] = os_config['minimum_app_version']
             
-            # Always include WiFi SSID (separate from JSON extraction)
+            # Include WiFi SSID
             wifi_ssid = self.get_cached_wifi_ssid()
             if wifi_ssid is not None:
                 data_to_publish_dict['wifi_ssid'] = wifi_ssid
@@ -261,14 +285,16 @@ class AppControl(Node):
             robot_version = get_robot_version()
             data_to_publish_dict['version'] = robot_version
             
-            # Include minimum compatible app version
-            data_to_publish_dict['minimum_app_version'] = self.app_config['minimum_app_version']
+            # Include Bluetooth device ID
+            device_id = get_bluetooth_device_id()
+            if device_id is not None:
+                data_to_publish_dict['device_id'] = device_id
             
             if data_to_publish_dict:
                 final_json_string_to_publish = json.dumps(data_to_publish_dict)
 
         except Exception as e:
-            self.get_logger().error(f"Error processing robot info from {robot_info_file_path}: {str(e)}")
+            self.get_logger().error(f"Error processing robot info: {str(e)}")
             # final_json_string_to_publish remains "{}" as initialized
 
         msg = String()
@@ -277,6 +303,38 @@ class AppControl(Node):
         # Optional: log what was published if it's not an empty dict or if debugging
         # if final_json_string_to_publish != "{}":
         #     self.get_logger().info(f"Published robot data: {final_json_string_to_publish}")
+
+    def set_robot_name_callback(self, request, response):
+        """
+        Service callback to change the robot name in robot_info.json.
+        """
+        try:
+            data_directory_param = self.get_parameter('data_directory').get_parameter_value().string_value
+            data_dir = os.path.expanduser(data_directory_param)
+            robot_info_file_path = os.path.join(data_dir, 'robot_info.json')
+            
+            # Load current robot_info
+            with open(robot_info_file_path, 'r') as f:
+                robot_info = json.load(f)
+            
+            # Update robot name
+            old_name = robot_info.get('robot_name', 'Not set')
+            robot_info['robot_name'] = request.robot_name
+            
+            # Save updated robot_info
+            with open(robot_info_file_path, 'w') as f:
+                json.dump(robot_info, f, indent=2)
+            
+            response.success = True
+            response.message = f"Robot name changed from '{old_name}' to '{request.robot_name}'"
+            self.get_logger().info(response.message)
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to change robot name: {str(e)}"
+            self.get_logger().error(response.message)
+        
+        return response
 
 def main(args=None):
     rclpy.init(args=args)
