@@ -105,7 +105,7 @@ class TTSHandler:
             
             # Generate speech using Cartesia
             response = self.client.tts.bytes(
-                model_id="sonic-2",  # Latest Cartesia model
+                model_id="sonic-3",  # Latest Cartesia model
                 transcript=text,
                 voice=voice,
                 output_format={
@@ -115,34 +115,81 @@ class TTSHandler:
                 },
             )
             
-            # Convert generator to bytes if needed
+            # If response is an iterator of chunks, stream directly into aplay.
+            # Otherwise, fall back to the existing temp-file approach.
             if hasattr(response, '__iter__') and not isinstance(response, (bytes, bytearray)):
-                # Response is a generator, collect all chunks
-                audio_data = b''.join(response)
+                self.logger.info("🔊 Streaming TTS audio to aplay via stdin")
+                player = subprocess.Popen(
+                    ["aplay", "-"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=False,
+                )
+
+                try:
+                    for chunk in response:
+                        if not chunk:
+                            continue
+                        try:
+                            player.stdin.write(chunk)
+                            player.stdin.flush()
+                        except BrokenPipeError:
+                            # aplay exited early; stop streaming
+                            self.logger.warn("🔊 aplay pipe closed early during streaming")
+                            break
+
+                    # Close stdin to signal end of stream and wait for aplay to finish
+                    try:
+                        if player.stdin:
+                            player.stdin.close()
+                    except Exception:
+                        pass
+
+                    player.wait()
+                    if player.returncode == 0:
+                        self.logger.info("✅ Speech playback completed successfully (streaming)")
+                        success = True
+                    else:
+                        self.logger.error(f"❌ Audio playback failed (streaming), return code {player.returncode}")
+                        success = False
+                except Exception as stream_error:
+                    self.logger.error(f"❌ Streaming TTS playback failed: {stream_error}")
+                    # Ensure the process is cleaned up
+                    try:
+                        if player.stdin and not player.stdin.closed:
+                            player.stdin.close()
+                    except Exception:
+                        pass
+                    try:
+                        player.kill()
+                    except Exception:
+                        pass
+                    success = False
             else:
-                # Response is already bytes
+                # Response is already bytes: use the original temp-file playback path.
                 audio_data = response
-            
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_file.write(audio_data)
-                temp_filename = temp_file.name
-            
-            # Play the audio using aplay
-            self.logger.debug(f"🔊 Playing audio file: {temp_filename}")
-            result = subprocess.run(
-                ["aplay", temp_filename],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            
-            if result.returncode == 0:
-                self.logger.info("✅ Speech playback completed successfully")
-                success = True
-            else:
-                self.logger.error(f"❌ Audio playback failed: {result.stderr}")
-                success = False
+                
+                # Save to temporary file
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                    temp_file.write(audio_data)
+                    temp_filename = temp_file.name
+                
+                # Play the audio using aplay
+                self.logger.debug(f"🔊 Playing audio file: {temp_filename}")
+                result = subprocess.run(
+                    ["aplay", temp_filename],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                
+                if result.returncode == 0:
+                    self.logger.info("✅ Speech playback completed successfully")
+                    success = True
+                else:
+                    self.logger.error(f"❌ Audio playback failed: {result.stderr}")
+                    success = False
                 
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
