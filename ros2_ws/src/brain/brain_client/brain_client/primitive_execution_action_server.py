@@ -12,10 +12,13 @@ import json
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, ActionClient, GoalResponse, CancelResponse
+from rclpy.executors import MultiThreadedExecutor
 import cv2  # For image processing
 import base64  # For encoding
 import numpy as np  # For map data
 import math  # For yaw calculation
+import inspect
+import types
 
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
@@ -174,13 +177,46 @@ class PrimitiveExecutionActionServer(Node):
         
         # Add code primitives
         for name, primitive_instance in self._code_primitives.items():
+            # Extract parameter information using introspection
+            inputs = {}
+            if hasattr(primitive_instance, 'execute'):
+                signature = inspect.signature(primitive_instance.execute)
+                
+                for param_name, param in signature.parameters.items():
+                    if param_name == "self":
+                        continue
+                    
+                    # Get parameter type from annotation if available
+                    param_type = "any"
+                    if param.annotation != inspect.Parameter.empty:
+                        # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
+                        if (
+                            isinstance(
+                                param.annotation, (types.UnionType, types.GenericAlias)
+                            )
+                            or hasattr(param.annotation, "_name")
+                            and param.annotation._name
+                            in ["List", "Optional", "Dict", "Tuple", "Union"]
+                        ):  # Covers typing.List, typing.Optional etc.
+                            param_type = str(param.annotation)
+                        elif hasattr(param.annotation, "__name__"):
+                            param_type = param.annotation.__name__
+                        else:
+                            # Fallback for other complex types, str() might be a reasonable default
+                            param_type = str(param.annotation)
+                        # Clean up "typing." prefix if present
+                        param_type = param_type.replace("typing.", "")
+                    
+                    inputs[param_name] = f"{param_type}"
+            
             primitive_info = {
                 "name": name,
                 "type": "code",
                 "guidelines": primitive_instance.guidelines() if hasattr(primitive_instance, 'guidelines') else "",
                 "guidelines_when_running": primitive_instance.guidelines_when_running() if hasattr(primitive_instance, 'guidelines_when_running') else "",
-                "inputs": {}  # TODO: Extract from signature if needed
+                "inputs": inputs
             }
+            self.get_logger().info(f"Code primitive '{name}' has inputs: {inputs}")
             all_primitives.append(primitive_info)
         
         # Add physical primitives
@@ -193,10 +229,11 @@ class PrimitiveExecutionActionServer(Node):
                 "guidelines_when_running": metadata.get('guidelines_when_running', ''),
                 "inputs": metadata.get('inputs', {})
             }
+            self.get_logger().info(f"Physical primitive '{name}' has inputs: {metadata.get('inputs', {})}")
             all_primitives.append(primitive_info)
         
         response.primitives_json = json.dumps(all_primitives)
-        self.get_logger().debug(f"Returned {len(all_primitives)} primitives to service caller")
+        self.get_logger().info(f"Returned {len(all_primitives)} primitives to service caller")
         return response
 
     def goal_callback(self, goal_request):
@@ -236,8 +273,9 @@ class PrimitiveExecutionActionServer(Node):
         return CancelResponse.ACCEPT
 
     def execute_callback(self, goal_handle):
-        self.get_logger().debug(
-            f"Executing primitive: '{goal_handle.request.primitive_type}'"
+        # Trace entry into the execute callback for debugging
+        self.get_logger().info(
+            f"[PEAS] execute_callback ENTER for primitive: '{goal_handle.request.primitive_type}'"
         )
         # Decode the inputs (assumed to be JSON)
         try:
@@ -255,10 +293,16 @@ class PrimitiveExecutionActionServer(Node):
         
         # Check if it's a code primitive
         if primitive_type in self._code_primitives:
+            self.get_logger().info(
+                f"[PEAS] execute_callback DISPATCH to _execute_code_primitive for '{primitive_type}'"
+            )
             return self._execute_code_primitive(goal_handle, primitive_type, inputs)
         
         # Check if it's a physical primitive
         elif primitive_type in self._physical_primitives:
+            self.get_logger().info(
+                f"[PEAS] execute_callback DISPATCH to _execute_physical_primitive for '{primitive_type}'"
+            )
             return self._execute_physical_primitive(goal_handle, primitive_type, inputs)
         
         # Primitive not found
@@ -276,8 +320,9 @@ class PrimitiveExecutionActionServer(Node):
 
     def _execute_code_primitive(self, goal_handle, primitive_type, inputs):
         primitive = self._code_primitives[primitive_type]
-        self.get_logger().debug(
-            f"Starting primitive '{primitive_type}' with inputs: {inputs}"
+        # Trace start of code primitive execution
+        self.get_logger().info(
+            f"[PEAS] _execute_code_primitive START '{primitive_type}' with inputs: {inputs}"
         )
 
         # Define a feedback publisher for the primitive
@@ -416,6 +461,11 @@ class PrimitiveExecutionActionServer(Node):
 
             # Execute the primitive with its direct inputs
             result_message, result_status = primitive.execute(**inputs)
+
+            # Trace completion of the primitive before result handling
+            self.get_logger().info(
+                f"[PEAS] _execute_code_primitive DONE '{primitive_type}' with status {result_status}"
+            )
 
             # Handle the result based on the PrimitiveResult enum
             if result_status == PrimitiveResult.SUCCESS:
