@@ -208,5 +208,15 @@ void Dynamixel::setGoalPosition(int motor_id, int goal_position) {
     }
 }
 
+void Dynamixel::reboot(int motor_id) {
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->reboot(
+        port_handler_, motor_id, &dxl_error);
+    
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to reboot motor " + std::to_string(motor_id));
+    }
+}
+
 } // namespace maurice_arm
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
+#include <thread>
 
 using json = nlohmann::json;
 
@@ -71,6 +72,12 @@ public:
         arm_torque_off_service_ = this->create_service<std_srvs::srv::Trigger>(
             "/mars/arm/torque_off",
             std::bind(&MauriceArmNode::armTorqueOffCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
+        
+        arm_reboot_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/mars/arm/reboot",
+            std::bind(&MauriceArmNode::armRebootServosCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
         
@@ -385,6 +392,26 @@ private:
         }
     }
     
+    void armRebootServosCallback(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/reboot");
+        try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
+            RCLCPP_INFO(this->get_logger(), "Rebooting all servos (IDs 1-7)");
+            robot_->rebootAllServos();
+            
+            response->success = true;
+            response->message = "Rebooted all servos";
+            RCLCPP_INFO(this->get_logger(), "Successfully rebooted all servos");
+        } catch (const std::exception& e) {
+            response->success = false;
+            response->message = std::string("Failed: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "Failed to reboot servos: %s", e.what());
+        }
+    }
+    
     // HEAD control methods
     int logicalAngleToEncoder(double logical_angle_deg) {
         // Get head config (servo 7)
@@ -528,6 +555,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
     sensor_msgs::msg::JointState joint_state_msg_;
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
