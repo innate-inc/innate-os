@@ -16,14 +16,19 @@ find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
-find_package(fcl REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(visualization_msgs REQUIRED)
 
-# MoveIt dependencies
-find_package(moveit_ros_planning_interface REQUIRED)
-find_package(moveit_ros_planning REQUIRED)
-find_package(moveit_core REQUIRED)
+# fcl is only needed for the standalone collision_checker executable
+# Make it optional so the build can proceed without it if collision_checker isn't needed
+find_package(fcl QUIET)
+set(BUILD_COLLISION_CHECKER FALSE)
+if(fcl_FOUND)
+    set(BUILD_COLLISION_CHECKER TRUE)
+    message(STATUS "Found fcl - building collision_checker executable")
+else()
+    message(WARNING "fcl not found - collision_checker executable will not be built")
+endif()
+find_package(visualization_msgs REQUIRED)
 
 # Maurice messages
 find_package(maurice_msgs REQUIRED)
@@ -45,28 +50,10 @@ target_link_libraries(camera_node
   ${OpenCV_LIBS}
 )
 
-# Create planner library
-add_library(maurice_planner SHARED
-  maurice_arm/planner.cpp
-)
-
-target_include_directories(maurice_planner PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-
-ament_target_dependencies(maurice_planner
-  rclcpp
-  moveit_ros_planning_interface
-  moveit_ros_planning
-  moveit_core
-)
-
-# Add arm node (dynamixel + robot + arm with head + collision checker)
+# Add arm node (dynamixel + robot + arm with head)
 add_executable(arm
   maurice_arm/dynamixel.cpp
   maurice_arm/robot.cpp
-  maurice_arm/collision_checker.cpp
   maurice_arm/arm.cpp
 )
 
@@ -81,67 +68,54 @@ ament_target_dependencies(arm
   maurice_msgs
 )
 
-target_link_libraries(arm
-  fcl
-  maurice_planner
-)
-
 target_include_directories(arm PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 
-# Add collision checker node (standalone)
-add_executable(collision_checker
-  maurice_arm/collision_checker.cpp
-  maurice_arm/collision_checker_main.cpp
-)
+# Add collision checker node (standalone) - only if fcl is available
+if(BUILD_COLLISION_CHECKER)
+    add_executable(collision_checker
+      maurice_arm/collision_checker.cpp
+      maurice_arm/collision_checker_main.cpp
+    )
 
-ament_target_dependencies(collision_checker
-  rclcpp
-  sensor_msgs
-  std_msgs
-  visualization_msgs
-  Eigen3
-)
+    ament_target_dependencies(collision_checker
+      rclcpp
+      sensor_msgs
+      std_msgs
+      visualization_msgs
+      Eigen3
+    )
 
-target_link_libraries(collision_checker
-  fcl
-)
+    target_link_libraries(collision_checker
+      fcl
+    )
 
-target_include_directories(collision_checker PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
+    target_include_directories(collision_checker PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+    )
+endif()
 
 # Install C++ executables
 install(TARGETS
   camera_node
   arm
-  collision_checker
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install shared library (needs to go to lib/ not lib/${PROJECT_NAME}/)
-install(TARGETS maurice_planner
-  EXPORT maurice_planner
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
-)
+# Install collision_checker only if it was built
+if(BUILD_COLLISION_CHECKER)
+    install(TARGETS
+      collision_checker
+      DESTINATION lib/${PROJECT_NAME}
+    )
+endif()
 
 # Install headers
 install(DIRECTORY include/
   DESTINATION include
-)
-
-# Export the library for downstream packages
-ament_export_targets(maurice_planner HAS_LIBRARY_TARGET)
-ament_export_dependencies(
-  rclcpp
-  moveit_ros_planning_interface
-  moveit_ros_planning
-  moveit_core
 )
 
 # Install Python files
