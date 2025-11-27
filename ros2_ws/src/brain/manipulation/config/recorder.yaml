@@ -1,17 +1,14 @@
 # File: brain/manipulation/config/recorder.yaml
 /**:
   ros__parameters:
-    data_directory: "~/innate-os/data"       # Fallback directory (overridden by INNATE_OS_ROOT env var in code)
+    data_directory: "~/innate-os/primitives"  # Base directory for primitives (each task stores episodes in {task}/data/)
     data_frequency: 20                    # Frequency (e.g., Hz) at which data is recorded
-    # Action-only recording configuration
-    action_only_enabled: true            # Enable high-frequency action-only recording mode
-    action_only_frequency: 100            # Frequency in Hz for action-only recording
-    action_only_subdirectory: "action_only"  # Subfolder name inside each task directory
     image_topics:                         # List of image topic names
       - "/mars/main_camera/image"
       - "/mars/arm/image_raw"
     arm_state_topic: "/mars/arm/state"          # Topic for the arm state
     leader_command_topic: "/mars/arm/commands"  # Single leader command topic
     velocity_topic: "/cmd_vel"             # Topic for velocity data
+    odom_topic: "/odom"                    # Topic for odometry data (used to verify robot is alive)
     image_size: [640, 480]
     head_ai_position_topic: "/mars/head/set_ai_position"     # Topic to set head to AI position for recording
