@@ -1,5 +1,7 @@
 #include "maurice_arm/robot.hpp"
 #include <iostream>
+#include <chrono>
+#include <thread>
 
 using namespace dynamixel;
 
@@ -166,6 +168,16 @@ void Robot::setGoalPos(const std::vector<int>& action) {
     
     // Send packet
     pos_writer_->txPacket();
+}
+
+void Robot::rebootAllServos() {
+    for (int id : servo_ids_) {
+        dynamixel_->reboot(id);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    
+    // Give servos time to complete reboot before next command
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 }
 
 } // namespace maurice_arm
