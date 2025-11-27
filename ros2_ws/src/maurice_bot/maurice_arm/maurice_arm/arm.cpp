@@ -13,6 +13,7 @@
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
+#include <thread>
 
 using json = nlohmann::json;
 
@@ -79,6 +80,12 @@ public:
         arm_plan_service_ = this->create_service<maurice_msgs::srv::GotoJS>(
             "/mars/arm/goto_js",
             std::bind(&MauriceArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
+        
+        arm_reboot_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/mars/arm/reboot",
+            std::bind(&MauriceArmNode::armRebootServosCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
         
@@ -195,6 +202,11 @@ private:
     }
     
     void initializeServos() {
+        std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+        configureServosLocked();
+    }
+
+    void configureServosLocked() {
         RCLCPP_INFO(this->get_logger(), "Configuring all 7 servos...");
         
         // Configure all servos (IDs 1-7) uniformly
@@ -261,7 +273,7 @@ private:
         
         // Move head to default position
         RCLCPP_INFO(this->get_logger(), "Moving head to default position (0.0 deg)");
-        moveHeadToAngle(0.0);
+        moveHeadToAngleLocked(0.0);
     }
     
     // Timer callback for unified control loop (replaces thread-based loop)
@@ -456,6 +468,29 @@ private:
         }
     }
     
+    void armRebootServosCallback(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/reboot");
+        try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
+            RCLCPP_INFO(this->get_logger(), "Rebooting all servos (IDs 1-7)");
+            robot_->rebootAllServos();
+            
+            RCLCPP_INFO(this->get_logger(), "Reapplying configuration after reboot");
+            configureServosLocked();
+            
+            response->success = true;
+            response->message = "Rebooted and reinitialized all servos";
+            RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
+        } catch (const std::exception& e) {
+            response->success = false;
+            response->message = std::string("Failed: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "Failed to reboot servos: %s", e.what());
+        }
+    }
+    
     // HEAD control methods
     int logicalAngleToEncoder(double logical_angle_deg) {
         // Get head config (servo 7)
@@ -482,6 +517,10 @@ private:
     
     void moveHeadToAngle(double logical_angle_deg) {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+        moveHeadToAngleLocked(logical_angle_deg);
+    }
+    
+    void moveHeadToAngleLocked(double logical_angle_deg) {
         int encoder_value = logicalAngleToEncoder(logical_angle_deg);
         dynamixel_->setGoalPosition(7, encoder_value);
     }
@@ -730,6 +769,7 @@ private:
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
     rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_plan_service_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
     sensor_msgs::msg::JointState joint_state_msg_;
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;

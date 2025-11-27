@@ -16,6 +16,7 @@ public:
     std::vector<int> readVelocity();
     std::pair<std::vector<int>, std::vector<int>> readState(int tries = 2);  // Read both position and velocity in one transaction
     void setGoalPos(const std::vector<int>& action);
+    void rebootAllServos();
 
 private:
     std::shared_ptr<Dynamixel> dynamixel_;
