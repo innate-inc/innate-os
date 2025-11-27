@@ -384,14 +384,17 @@ class ModeManager(Node):
                 self.save_last_map(fallback)
                 self.get_logger().info(f"Current map changed to '{fallback}' prior to deletion of '{map_yaml_name}'")
 
-            # Delete files (.yaml and associated image files)
+            # Delete files (.yaml, image files, and posegraph files)
             base_name = os.path.splitext(map_yaml_name)[0]
             yaml_path = os.path.join(self.maps_dir, map_yaml_name)
             pgm_path = os.path.join(self.maps_dir, f"{base_name}.pgm")
             png_path = os.path.join(self.maps_dir, f"{base_name}.png")
+            # Posegraph files (for SLAM Toolbox localization)
+            posegraph_path = os.path.join(self.maps_dir, f"{base_name}_posegraph.posegraph")
+            posegraph_data_path = os.path.join(self.maps_dir, f"{base_name}_posegraph.data")
 
             removed_any = False
-            for path in [yaml_path, pgm_path, png_path]:
+            for path in [yaml_path, pgm_path, png_path, posegraph_path, posegraph_data_path]:
                 try:
                     if os.path.exists(path):
                         os.remove(path)
@@ -418,6 +421,65 @@ class ModeManager(Node):
             self.get_logger().error(response.message)
 
         return response
+
+    def _save_posegraph(self, posegraph_path: str, is_overwriting: bool) -> bool:
+        """
+        Save the SLAM Toolbox posegraph for localization.
+        The posegraph contains raw scan data and is used for SLAM Toolbox localization mode.
+        
+        Args:
+            posegraph_path: Full path without extension (will create .posegraph and .data files)
+            is_overwriting: Whether we're overwriting an existing map
+            
+        Returns:
+            True if posegraph was saved successfully, False otherwise
+        """
+        try:
+            # Remove old posegraph files if overwriting
+            if is_overwriting:
+                for ext in ['.posegraph', '.data']:
+                    old_file = f"{posegraph_path}{ext}"
+                    if os.path.exists(old_file):
+                        os.remove(old_file)
+                        self.get_logger().info(f"Removed old posegraph file: {old_file}")
+            
+            # Call slam_toolbox serialize_map service
+            serialize_cmd = [
+                'ros2', 'service', 'call',
+                '/slam_toolbox/serialize_map',
+                'slam_toolbox/srv/SerializePoseGraph',
+                f"{{filename: '{posegraph_path}'}}"
+            ]
+            
+            self.get_logger().info(f"Serializing posegraph to: {posegraph_path}")
+            
+            result = subprocess.run(
+                serialize_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            # Check if files were created
+            posegraph_file = f"{posegraph_path}.posegraph"
+            data_file = f"{posegraph_path}.data"
+            
+            if os.path.exists(posegraph_file) and os.path.exists(data_file):
+                self.get_logger().info(f"Posegraph saved successfully: {posegraph_path}")
+                return True
+            else:
+                self.get_logger().warning(
+                    f"Posegraph serialization completed but files not found. "
+                    f"This may happen if slam_toolbox is not running or service unavailable."
+                )
+                return False
+                
+        except subprocess.TimeoutExpired:
+            self.get_logger().warning("Posegraph serialization timed out after 30 seconds")
+            return False
+        except Exception as e:
+            self.get_logger().warning(f"Failed to save posegraph: {e}")
+            return False
 
     def save_map_callback(self, request, response):
         """
@@ -495,9 +557,18 @@ class ModeManager(Node):
                 pgm_file = f"{map_path}.pgm"
                 
                 if os.path.exists(yaml_file) and os.path.exists(pgm_file):
+                    self.get_logger().info(f"PGM/YAML map saved successfully")
+                    
+                    # Also save the posegraph for SLAM Toolbox localization
+                    posegraph_path = f"{map_path}_posegraph"
+                    posegraph_saved = self._save_posegraph(posegraph_path, is_overwriting)
+                    
                     response.success = True
                     action_word = "overwritten" if is_overwriting else "saved"
-                    response.message = f"Successfully {action_word} map as '{map_name}.yaml'"
+                    if posegraph_saved:
+                        response.message = f"Successfully {action_word} map '{map_name}' (PGM + posegraph)"
+                    else:
+                        response.message = f"Successfully {action_word} map '{map_name}' (PGM only, posegraph save failed)"
                     self.get_logger().info(response.message)
                     
                     # Refresh available maps list
