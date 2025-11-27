@@ -168,13 +168,14 @@ class PrimitiveExecutionActionServer(Node):
                         primitive_name = metadata.get('name', item)
                         
                         # Validate primitive before loading
-                        is_valid, is_in_training = self.primitive_loader.validate_physical_primitive(item_path, metadata)
+                        is_valid, is_in_training, episode_count = self.primitive_loader.validate_physical_primitive(item_path, metadata)
                         
                         if is_valid:
                             primitive_data = {
                                 'metadata': metadata,
                                 'directory': item_path,
-                                'in_training': is_in_training
+                                'in_training': is_in_training,
+                                'episode_count': episode_count
                             }
                             
                             if is_in_training:
@@ -245,9 +246,10 @@ class PrimitiveExecutionActionServer(Node):
                 "guidelines": metadata.get('guidelines', ''),
                 "guidelines_when_running": metadata.get('guidelines_when_running', ''),
                 "inputs": metadata.get('inputs', {}),
-                "in_training": False
+                "in_training": False,
+                "episode_count": physical_data.get('episode_count', 0)
             }
-            self.get_logger().info(f"Physical primitive '{name}' has inputs: {metadata.get('inputs', {})}")
+            self.get_logger().info(f"Physical primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {physical_data.get('episode_count', 0)}")
             all_primitives.append(primitive_info)
         
         # Add in-training primitives if requested
@@ -260,9 +262,10 @@ class PrimitiveExecutionActionServer(Node):
                     "guidelines": metadata.get('guidelines', ''),
                     "guidelines_when_running": metadata.get('guidelines_when_running', ''),
                     "inputs": metadata.get('inputs', {}),
-                    "in_training": True
+                    "in_training": True,
+                    "episode_count": physical_data.get('episode_count', 0)
                 }
-                self.get_logger().info(f"In-training primitive '{name}' has inputs: {metadata.get('inputs', {})}")
+                self.get_logger().info(f"In-training primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {physical_data.get('episode_count', 0)}")
                 all_primitives.append(primitive_info)
         
         response.primitives_json = json.dumps(all_primitives)
