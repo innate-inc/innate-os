@@ -43,6 +43,7 @@ public:
     int readPosition(int motor_id);
     int readVelocity(int motor_id);
     void setGoalPosition(int motor_id, int goal_position);
+    void reboot(int motor_id);
     
     // Access to SDK objects for GroupSync operations
     dynamixel::PortHandler* portHandler() { return port_handler_; }
