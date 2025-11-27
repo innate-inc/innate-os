@@ -111,7 +111,7 @@ class RecorderNode(Node):
         self.head_ai_position_pub = self.create_publisher(Empty, self.head_ai_position_topic, 10)
         
         # Create service servers with updated names prefixed with "recorder/"
-        self.new_task_srv = self.create_service(ManipulationTask, 'brain/recorder/new_task', self.handle_new_task)
+        self.new_physical_primitive_srv = self.create_service(ManipulationTask, 'brain/recorder/new_physical_primitive', self.handle_new_physical_primitive)
         self.new_episode_srv = self.create_service(Trigger, 'brain/recorder/new_episode', self.handle_new_episode)
         self.save_episode_srv = self.create_service(Trigger, 'brain/recorder/save_episode', self.handle_save_episode)
         self.cancel_episode_srv = self.create_service(Trigger, 'brain/recorder/cancel_episode', self.handle_cancel_episode)
@@ -123,7 +123,7 @@ class RecorderNode(Node):
         
         # Log the services it is hosting
         self.get_logger().info("Hosting services:")
-        self.get_logger().info("  brain/recorder/new_task")
+        self.get_logger().info("  brain/recorder/new_physical_primitive")
         self.get_logger().info("  brain/recorder/new_episode")
         self.get_logger().info("  brain/recorder/save_episode")
         self.get_logger().info("  brain/recorder/cancel_episode")
@@ -247,24 +247,27 @@ class RecorderNode(Node):
             self.get_logger().error(f"Error setting AI position: {e}")
 
     # Service handlers.
-    def handle_new_task(self, request, response):
+    def handle_new_physical_primitive(self, request, response):
+        """Handle request to create a new physical primitive (type: learned)."""
         if self.state in ["EPISODE_ACTIVE", "EPISODE_STOPPED"]:
-            self.get_logger().warn(f"New task requested during an {self.state.lower()} episode; canceling current episode.")
+            self.get_logger().warn(f"New physical primitive requested during an {self.state.lower()} episode; canceling current episode.")
             # Publish status update for cancelled episode
             self.publish_status(status="cancelled", episode_number=str(self.episode_count), current_task_name=self.current_task_name)
             if self.current_episode:
                 self.current_episode.clear()
             self.current_episode = None
             # self.state will be set to TASK_ACTIVE by the rest of the method.
-            # Episode count for the new task will effectively start fresh.
+            # Episode count for the new primitive will effectively start fresh.
         
         # Set head to AI position for optimal camera angle during recording
-        self.get_logger().info("Setting head to AI position for new task setup")
+        self.get_logger().info("Setting head to AI position for new physical primitive setup")
         self._set_head_ai_position()
         
+        # Start new task with type set to 'learned'
         self.task_manager.start_new_task(
             request.task_name,
-            self.data_frequency
+            self.data_frequency,
+            primitive_type='learned'  # Physical primitives are of type 'learned'
         )
         if self.task_manager.metadata:
             self.episode_count = self.task_manager.metadata["number_of_episodes"]
@@ -272,8 +275,8 @@ class RecorderNode(Node):
             self.episode_count = 0
         self.current_task_name = request.task_name
         self.state = "TASK_ACTIVE"
-        self.get_logger().info(f"New task '{request.task_name}' started.")
-        # Publish status update for new task
+        self.get_logger().info(f"New physical primitive '{request.task_name}' (type: learned) started.")
+        # Publish status update for new primitive
         self.publish_status(status="active", episode_number="", current_task_name=self.current_task_name)
         response.success = True
         return response
