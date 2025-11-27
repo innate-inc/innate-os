@@ -240,6 +240,8 @@ class PrimitiveExecutionActionServer(Node):
         # Add physical primitives
         for name, physical_data in self._physical_primitives.items():
             metadata = physical_data['metadata']
+            # Fetch episode count dynamically (not cached)
+            episode_count = self.primitive_loader._get_episode_count(physical_data['directory'])
             primitive_info = {
                 "name": metadata.get('name', name),
                 "type": metadata.get('type', 'physical'),
@@ -247,15 +249,17 @@ class PrimitiveExecutionActionServer(Node):
                 "guidelines_when_running": metadata.get('guidelines_when_running', ''),
                 "inputs": metadata.get('inputs', {}),
                 "in_training": False,
-                "episode_count": physical_data.get('episode_count', 0)
+                "episode_count": episode_count
             }
-            self.get_logger().info(f"Physical primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {physical_data.get('episode_count', 0)}")
+            self.get_logger().info(f"Physical primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}")
             all_primitives.append(primitive_info)
         
         # Add in-training primitives if requested
         if include_in_training:
             for name, physical_data in self._in_training_primitives.items():
                 metadata = physical_data['metadata']
+                # Fetch episode count dynamically (not cached)
+                episode_count = self.primitive_loader._get_episode_count(physical_data['directory'])
                 primitive_info = {
                     "name": metadata.get('name', name),
                     "type": metadata.get('type', 'physical'),
@@ -263,9 +267,9 @@ class PrimitiveExecutionActionServer(Node):
                     "guidelines_when_running": metadata.get('guidelines_when_running', ''),
                     "inputs": metadata.get('inputs', {}),
                     "in_training": True,
-                    "episode_count": physical_data.get('episode_count', 0)
+                    "episode_count": episode_count
                 }
-                self.get_logger().info(f"In-training primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {physical_data.get('episode_count', 0)}")
+                self.get_logger().info(f"In-training primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}")
                 all_primitives.append(primitive_info)
         
         response.primitives_json = json.dumps(all_primitives)
