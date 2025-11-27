@@ -178,6 +178,11 @@ private:
     }
     
     void initializeServos() {
+        std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+        configureServosLocked();
+    }
+
+    void configureServosLocked() {
         RCLCPP_INFO(this->get_logger(), "Configuring all 7 servos...");
         
         // Configure all servos (IDs 1-7) uniformly
@@ -244,7 +249,7 @@ private:
         
         // Move head to default position
         RCLCPP_INFO(this->get_logger(), "Moving head to default position (0.0 deg)");
-        moveHeadToAngle(0.0);
+        moveHeadToAngleLocked(0.0);
     }
     
     // Timer callback for unified control loop (replaces thread-based loop)
@@ -402,9 +407,12 @@ private:
             RCLCPP_INFO(this->get_logger(), "Rebooting all servos (IDs 1-7)");
             robot_->rebootAllServos();
             
+            RCLCPP_INFO(this->get_logger(), "Reapplying configuration after reboot");
+            configureServosLocked();
+            
             response->success = true;
-            response->message = "Rebooted all servos";
-            RCLCPP_INFO(this->get_logger(), "Successfully rebooted all servos");
+            response->message = "Rebooted and reinitialized all servos";
+            RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
         } catch (const std::exception& e) {
             response->success = false;
             response->message = std::string("Failed: ") + e.what();
@@ -438,6 +446,10 @@ private:
     
     void moveHeadToAngle(double logical_angle_deg) {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+        moveHeadToAngleLocked(logical_angle_deg);
+    }
+    
+    void moveHeadToAngleLocked(double logical_angle_deg) {
         int encoder_value = logicalAngleToEncoder(logical_angle_deg);
         dynamixel_->setGoalPosition(7, encoder_value);
     }
