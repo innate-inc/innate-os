@@ -188,27 +188,29 @@ class TaskManager:
         self.metadata = None  # Will hold the task metadata
         self.episodes = []    # List of EpisodeData objects
 
-    def start_new_task(self, task_name, data_frequency):
+    def start_new_task(self, task_name, data_frequency, primitive_type='learned'):
         """
         Start a new task by creating the data directory and initializing dataset metadata.
         If dataset_metadata.json already exists, the task will be resumed instead.
+        Also creates the primitive metadata.json file for the primitive server.
 
         Args:
             task_name (str): The name for the new task (primitive name).
             data_frequency (float): The frequency at which data is collected (in Hz).
+            primitive_type (str): The type of primitive being created (default: 'learned').
         """
         self.current_task_name = task_name
         self.current_task_dir = os.path.join(self.base_data_directory, task_name)
         data_dir = os.path.join(self.current_task_dir, "data")
-        metadata_path = os.path.join(data_dir, "dataset_metadata.json")
+        dataset_metadata_path = os.path.join(data_dir, "dataset_metadata.json")
 
-        if os.path.exists(metadata_path):
+        if os.path.exists(dataset_metadata_path):
             # Dataset already exists; resume it.
             print(f"Dataset for '{task_name}' already exists. Resuming.")
             self.resume_task(task_name)
             return
 
-        # Create data directory and initialize metadata.
+        # Create data directory and initialize dataset metadata.
         os.makedirs(data_dir, exist_ok=True)
         self.metadata = {
             "data_frequency": data_frequency,
@@ -217,6 +219,9 @@ class TaskManager:
         }
         self._save_metadata()
         self.episodes = []  # Reset the episodes list.
+        
+        # Create the primitive metadata.json file for the primitive server
+        self._create_primitive_metadata(task_name, primitive_type)
 
     def resume_task(self, task_name):
         """
@@ -295,6 +300,43 @@ class TaskManager:
         metadata_path = os.path.join(data_dir, "dataset_metadata.json")
         with open(metadata_path, 'w') as f:
             json.dump(self.metadata, f, indent=4)
+
+    def _create_primitive_metadata(self, task_name, primitive_type):
+        """
+        Create the metadata.json file for the primitive server.
+        This file is placed in the root of the primitive directory (not in data/).
+        
+        Args:
+            task_name (str): The name of the primitive.
+            primitive_type (str): The type of primitive ('learned', 'replay', etc.).
+        """
+        if self.current_task_dir is None:
+            raise RuntimeError("No active task directory to create primitive metadata.")
+        
+        primitive_metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        
+        # Only create if it doesn't already exist
+        if os.path.exists(primitive_metadata_path):
+            print(f"Primitive metadata.json already exists for '{task_name}'. Skipping creation.")
+            return
+        
+        primitive_metadata = {
+            "name": task_name,
+            "type": primitive_type,
+            "guidelines": "",
+            "guidelines_when_running": "",
+            "inputs": {},
+            "execution": {
+                # Checkpoint will be filled in after training
+                # "checkpoint": "best_model.pt",
+                # "stats_file": "dataset_stats.pt"
+            }
+        }
+        
+        with open(primitive_metadata_path, 'w') as f:
+            json.dump(primitive_metadata, f, indent=4)
+        
+        print(f"Created primitive metadata.json for '{task_name}' (type: {primitive_type})")
 
     def load_metadata(self):
         """
