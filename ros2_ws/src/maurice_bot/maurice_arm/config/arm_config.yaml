@@ -94,7 +94,7 @@ maurice_arm:
               "servo_id": 7,
               "position_limits": {
                   "min": -0.4363,
-                  "max": 0.2618
+                  "max": 0.4363
               },
               "pwm_limits": 885,
               "current_limit": 500,
