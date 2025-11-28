@@ -121,8 +121,9 @@ class PrimitiveExecutionActionServer(Node):
         self.get_logger().info(f"Successfully loaded {len(self._code_primitives)} code primitives")
         
         # Load physical primitives from metadata.json files
-        self._physical_primitives = self._load_physical_primitives(primitives_directory)
+        self._physical_primitives, self._in_training_primitives = self._load_physical_primitives(primitives_directory)
         self.get_logger().info(f"Successfully loaded {len(self._physical_primitives)} physical primitives")
+        self.get_logger().info(f"Found {len(self._in_training_primitives)} in-training primitives")
         
         # Create action client to delegate physical primitives to behavior_server
         self._behavior_client = ActionClient(self, ExecuteBehavior, '/behavior/execute')
@@ -147,7 +148,13 @@ class PrimitiveExecutionActionServer(Node):
         self.get_logger().info(f"Total primitives available: {len(self._code_primitives) + len(self._physical_primitives)}")
 
     def _load_physical_primitives(self, primitives_directory):
+        """Load physical primitives from metadata.json files.
+        
+        Returns:
+            tuple: (physical_primitives dict, in_training_primitives dict)
+        """
         physical_primitives = {}
+        in_training_primitives = {}
         
         for item in os.listdir(primitives_directory):
             item_path = os.path.join(primitives_directory, item)
@@ -161,19 +168,30 @@ class PrimitiveExecutionActionServer(Node):
                         primitive_name = metadata.get('name', item)
                         
                         # Validate primitive before loading
-                        if self.primitive_loader.validate_physical_primitive(item_path, metadata):
-                            physical_primitives[primitive_name] = {
+                        is_valid, is_in_training, episode_count = self.primitive_loader.validate_physical_primitive(item_path, metadata)
+                        
+                        if is_valid:
+                            primitive_data = {
                                 'metadata': metadata,
-                                'directory': item_path
+                                'directory': item_path,
+                                'in_training': is_in_training,
+                                'episode_count': episode_count
                             }
-                            self.get_logger().info(f"Loaded physical primitive: {primitive_name} (type: {metadata.get('type', 'unknown')})")
+                            
+                            if is_in_training:
+                                in_training_primitives[primitive_name] = primitive_data
+                                self.get_logger().info(f"Loaded in-training primitive: {primitive_name} (type: {metadata.get('type', 'unknown')})")
+                            else:
+                                physical_primitives[primitive_name] = primitive_data
+                                self.get_logger().info(f"Loaded physical primitive: {primitive_name} (type: {metadata.get('type', 'unknown')})")
                         else:
                             self.get_logger().warn(f"Skipped invalid physical primitive: {primitive_name}")
         
-        return physical_primitives
+        return physical_primitives, in_training_primitives
 
     def _handle_get_available_primitives(self, request, response):
         all_primitives = []
+        include_in_training = request.include_in_training
         
         # Add code primitives
         for name, primitive_instance in self._code_primitives.items():
@@ -222,15 +240,37 @@ class PrimitiveExecutionActionServer(Node):
         # Add physical primitives
         for name, physical_data in self._physical_primitives.items():
             metadata = physical_data['metadata']
+            # Fetch episode count dynamically (not cached)
+            episode_count = self.primitive_loader._get_episode_count(physical_data['directory'])
             primitive_info = {
                 "name": metadata.get('name', name),
                 "type": metadata.get('type', 'physical'),
                 "guidelines": metadata.get('guidelines', ''),
                 "guidelines_when_running": metadata.get('guidelines_when_running', ''),
-                "inputs": metadata.get('inputs', {})
+                "inputs": metadata.get('inputs', {}),
+                "in_training": False,
+                "episode_count": episode_count
             }
-            self.get_logger().info(f"Physical primitive '{name}' has inputs: {metadata.get('inputs', {})}")
+            self.get_logger().info(f"Physical primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}")
             all_primitives.append(primitive_info)
+        
+        # Add in-training primitives if requested
+        if include_in_training:
+            for name, physical_data in self._in_training_primitives.items():
+                metadata = physical_data['metadata']
+                # Fetch episode count dynamically (not cached)
+                episode_count = self.primitive_loader._get_episode_count(physical_data['directory'])
+                primitive_info = {
+                    "name": metadata.get('name', name),
+                    "type": metadata.get('type', 'physical'),
+                    "guidelines": metadata.get('guidelines', ''),
+                    "guidelines_when_running": metadata.get('guidelines_when_running', ''),
+                    "inputs": metadata.get('inputs', {}),
+                    "in_training": True,
+                    "episode_count": episode_count
+                }
+                self.get_logger().info(f"In-training primitive '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}")
+                all_primitives.append(primitive_info)
         
         response.primitives_json = json.dumps(all_primitives)
         self.get_logger().info(f"Returned {len(all_primitives)} primitives to service caller")

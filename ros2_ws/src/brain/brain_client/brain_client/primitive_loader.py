@@ -155,28 +155,45 @@ class PrimitiveLoader:
                 
         return all_primitives
 
-    def validate_physical_primitive(self, primitive_dir: str, metadata: dict) -> bool:
+    def validate_physical_primitive(self, primitive_dir: str, metadata: dict) -> tuple:
+        """Validate a physical primitive.
+        
+        Returns:
+            tuple: (is_valid: bool, is_in_training: bool, episode_count: int)
+                - is_valid: True if the primitive can be loaded (either ready or in training)
+                - is_in_training: True if the primitive is a learned type missing its checkpoint
+                - episode_count: Number of recorded episodes (0 if not applicable or not found)
+        """
         primitive_type = metadata.get('type', '').lower()
         execution = metadata.get('execution', {})
         
         if primitive_type == 'learned':
-            return self._validate_learned_primitive(primitive_dir, execution)
+            is_valid, is_in_training = self._validate_learned_primitive(primitive_dir, execution)
+            episode_count = self._get_episode_count(primitive_dir)
+            return (is_valid, is_in_training, episode_count)
         elif primitive_type == 'replay':
-            return self._validate_replay_primitive(primitive_dir, execution)
+            is_valid = self._validate_replay_primitive(primitive_dir, execution)
+            return (is_valid, False, 0)  # Replay primitives are never "in training", no episodes
         else:
             self.logger.warning(f"Unknown primitive type '{primitive_type}' in {primitive_dir}")
-            return True  # Allow unknown types but log warning
+            return (True, False, 0)  # Allow unknown types but log warning
     
-    def _validate_learned_primitive(self, primitive_dir: str, execution: dict) -> bool:
+    def _validate_learned_primitive(self, primitive_dir: str, execution: dict) -> tuple:
+        """Validate a learned primitive.
+        
+        Returns:
+            tuple: (is_valid: bool, is_in_training: bool)
+        """
         checkpoint_file = execution.get('checkpoint')
+        # If no checkpoint specified, it's in training
         if not checkpoint_file:
-            self.logger.error(f"Learned primitive in {primitive_dir} missing checkpoint file in execution config")
-            return False
+            self.logger.info(f"Learned primitive in {primitive_dir} has no checkpoint - marked as in_training")
+            return (True, True)  # Valid but in training
         
         checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
         if not os.path.exists(checkpoint_path):
-            self.logger.error(f"Learned primitive checkpoint not found: {checkpoint_path}")
-            return False
+            self.logger.info(f"Learned primitive checkpoint not found: {checkpoint_path} - marked as in_training")
+            return (True, True)  # Valid but in training
         
         # Check for stats file (optional but commonly needed)
         stats_file = execution.get('stats_file', 'dataset_stats.pt')
@@ -185,9 +202,34 @@ class PrimitiveLoader:
             self.logger.warning(f"Learned primitive stats file not found: {stats_path} (optional)")
         
         self.logger.info(f"Learned primitive validation passed: {primitive_dir}")
-        return True
+        return (True, False)  # Valid and ready
     
-    def _validate_replay_primitive(self, primitive_dir: str, execution: dict) -> bool:
+    def _get_episode_count(self, primitive_dir: str) -> int:
+        """Get the number of recorded episodes for a learned primitive.
+        
+        Looks for data/dataset_metadata.json and reads the number_of_episodes field.
+        
+        Args:
+            primitive_dir: Path to the primitive directory.
+            
+        Returns:
+            int: Number of episodes, or 0 if not found.
+        """
+        dataset_metadata_path = os.path.join(primitive_dir, 'data', 'dataset_metadata.json')
+        
+        if not os.path.exists(dataset_metadata_path):
+            return 0
+        
+        try:
+            with open(dataset_metadata_path, 'r') as f:
+                dataset_metadata = json.load(f)
+                return dataset_metadata.get('number_of_episodes', 0)
+        except Exception as e:
+            self.logger.warning(f"Error reading dataset metadata from {dataset_metadata_path}: {e}")
+            return 0
+    
+    def _validate_replay_primitive_internal(self, primitive_dir: str, execution: dict) -> bool:
+        """Internal validation for replay primitives. Returns bool for validity."""
         replay_file = execution.get('replay_file')
         if not replay_file:
             self.logger.error(f"Replay primitive in {primitive_dir} missing replay_file in execution config")
@@ -216,4 +258,8 @@ class PrimitiveLoader:
         
         self.logger.info(f"Replay primitive validation passed: {primitive_dir}")
         return True
+
+    def _validate_replay_primitive(self, primitive_dir: str, execution: dict) -> bool:
+        """Validate a replay primitive. Returns bool for backwards compatibility."""
+        return self._validate_replay_primitive_internal(primitive_dir, execution)
 

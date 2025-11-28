@@ -188,68 +188,57 @@ class TaskManager:
         self.metadata = None  # Will hold the task metadata
         self.episodes = []    # List of EpisodeData objects
 
-    def start_new_task(self, task_name, task_description, mobile_flag, data_frequency, action_only_frequency=None):
+    def start_new_task(self, task_name, data_frequency, primitive_type='learned'):
         """
-        Start a new task by creating a task directory and initializing metadata.
-        If a task with the given name already exists (i.e., a metadata file is found),
-        the task will be resumed instead.
+        Start a new task by creating the data directory and initializing dataset metadata.
+        If dataset_metadata.json already exists, the task will be resumed instead.
+        Also creates the primitive metadata.json file for the primitive server.
 
         Args:
-            task_name (str): The name for the new task.
-            task_description (str): A description for the task.
-            mobile_flag (bool): Indicates if the task involves mobile data.
+            task_name (str): The name for the new task (primitive name).
             data_frequency (float): The frequency at which data is collected (in Hz).
+            primitive_type (str): The type of primitive being created (default: 'learned').
         """
         self.current_task_name = task_name
         self.current_task_dir = os.path.join(self.base_data_directory, task_name)
-        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        data_dir = os.path.join(self.current_task_dir, "data")
+        dataset_metadata_path = os.path.join(data_dir, "dataset_metadata.json")
 
-        if os.path.exists(metadata_path):
-            # Task already exists; resume it.
-            print(f"Task '{task_name}' already exists. Resuming task.")
+        if os.path.exists(dataset_metadata_path):
+            # Dataset already exists; resume it.
+            print(f"Dataset for '{task_name}' already exists. Resuming.")
             self.resume_task(task_name)
-            # Optionally update AO frequency on resume if provided
-            if action_only_frequency is not None:
-                if self.metadata is None:
-                    self.load_metadata()
-                self.metadata["action_only_frequency"] = action_only_frequency
-                self._save_metadata()
             return
 
-        # Task does not exist; create a new one.
-        os.makedirs(self.current_task_dir, exist_ok=True)
+        # Create data directory and initialize dataset metadata.
+        os.makedirs(data_dir, exist_ok=True)
         self.metadata = {
-            "task_name": task_name,
-            "task_description": task_description,
-            "mobile_task": mobile_flag,
             "data_frequency": data_frequency,
             "number_of_episodes": 0,
-            "episodes": [],  # Will contain details for each saved episode.
-            # Track action-only episodes separately
-            "number_of_ao_episodes": 0,
-            "ao_episodes": []
+            "episodes": []  # Will contain details for each saved episode.
         }
-        # Record the action-only frequency if provided
-        if action_only_frequency is not None:
-            self.metadata["action_only_frequency"] = action_only_frequency
         self._save_metadata()
         self.episodes = []  # Reset the episodes list.
+        
+        # Create the primitive metadata.json file for the primitive server
+        self._create_primitive_metadata(task_name, primitive_type)
 
     def resume_task(self, task_name):
         """
-        Resume a previously started task by loading its metadata and setting the current task context.
+        Resume a previously started task by loading its dataset metadata.
         
         Args:
             task_name (str): The name of the task to resume.
         
         Raises:
-            FileNotFoundError: If the task directory or metadata file does not exist.
+            FileNotFoundError: If the data directory or dataset_metadata.json does not exist.
         """
         self.current_task_name = task_name
         self.current_task_dir = os.path.join(self.base_data_directory, task_name)
-        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        data_dir = os.path.join(self.current_task_dir, "data")
+        metadata_path = os.path.join(data_dir, "dataset_metadata.json")
         if not os.path.exists(metadata_path):
-            raise FileNotFoundError(f"Metadata file not found for task '{task_name}' at {self.current_task_dir}")
+            raise FileNotFoundError(f"Dataset metadata not found for task '{task_name}' at {metadata_path}")
         self.load_metadata()
         # Optionally, the episodes list can be updated if needed by reading from the HDF5 files.
         # For now, we leave self.episodes as an empty list.
@@ -257,16 +246,21 @@ class TaskManager:
     def add_episode(self, episode_data, start_timestamp, end_timestamp):
         """
         Save an episode's data to an HDF5 file and update the task's metadata.
+        Episodes are stored in the 'data/' subdirectory of the task.
 
         Args:
             episode_data (EpisodeData): The EpisodeData object containing buffered data.
             start_timestamp (str): Start timestamp of the episode (e.g., ISO format).
             end_timestamp (str): End timestamp of the episode.
         """
+        # Ensure data subdirectory exists
+        data_dir = os.path.join(self.current_task_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        
         # Determine new episode ID and filename.
         episode_id = self.metadata["number_of_episodes"]
         file_name = f"episode_{episode_id}.h5"
-        file_path = os.path.join(self.current_task_dir, file_name)
+        file_path = os.path.join(data_dir, file_name)
         
         # Save the episode HDF5 file.
         episode_data.save_file(file_path)
@@ -274,7 +268,7 @@ class TaskManager:
         # Update metadata with new episode info.
         episode_info = {
             "episode_id": episode_id,
-            "file_name": file_name,
+            "file_name": file_name,  # Just the filename since metadata is in data/ directory
             "start_timestamp": start_timestamp,
             "end_timestamp": end_timestamp
         }
@@ -284,44 +278,6 @@ class TaskManager:
         
         # Optionally, store the episode_data object.
         #self.episodes.append(episode_data)
-
-    def add_action_only_episode(self, episode_data, start_timestamp, end_timestamp, subdirectory_name: str = "action_only"):
-        """
-        Save an action-only episode under a dedicated subdirectory and update metadata.
-
-        Args:
-            episode_data (EpisodeData): Contains only actions.
-            start_timestamp (str): Start timestamp.
-            end_timestamp (str): End timestamp.
-            subdirectory_name (str): Subfolder name inside the task directory.
-        """
-        # Ensure subdirectory exists
-        target_dir = os.path.join(self.current_task_dir, subdirectory_name)
-        os.makedirs(target_dir, exist_ok=True)
-
-        # Determine new ID and path
-        ao_id = self.metadata.get("number_of_ao_episodes", 0)
-        file_name = f"episode_{ao_id}.h5"
-        file_path = os.path.join(target_dir, file_name)
-
-        # Save file (will include only /action if no observations)
-        episode_data.save_file(file_path)
-
-        # Update metadata
-        ao_info = {
-            "episode_id": ao_id,
-            "file_name": file_name,
-            "subdirectory": subdirectory_name,
-            "start_timestamp": start_timestamp,
-            "end_timestamp": end_timestamp
-        }
-        if "ao_episodes" not in self.metadata:
-            self.metadata["ao_episodes"] = []
-        if "number_of_ao_episodes" not in self.metadata:
-            self.metadata["number_of_ao_episodes"] = 0
-        self.metadata["ao_episodes"].append(ao_info)
-        self.metadata["number_of_ao_episodes"] += 1
-        self._save_metadata()
 
     def end_task(self):
         """
@@ -335,21 +291,60 @@ class TaskManager:
 
     def _save_metadata(self):
         """
-        Save the current metadata to a JSON file in the task directory.
+        Save the current metadata to dataset_metadata.json in the data directory.
         """
         if self.current_task_dir is None:
             raise RuntimeError("No active task directory to save metadata.")
-        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        data_dir = os.path.join(self.current_task_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        metadata_path = os.path.join(data_dir, "dataset_metadata.json")
         with open(metadata_path, 'w') as f:
             json.dump(self.metadata, f, indent=4)
 
+    def _create_primitive_metadata(self, task_name, primitive_type):
+        """
+        Create the metadata.json file for the primitive server.
+        This file is placed in the root of the primitive directory (not in data/).
+        
+        Args:
+            task_name (str): The name of the primitive.
+            primitive_type (str): The type of primitive ('learned', 'replay', etc.).
+        """
+        if self.current_task_dir is None:
+            raise RuntimeError("No active task directory to create primitive metadata.")
+        
+        primitive_metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        
+        # Only create if it doesn't already exist
+        if os.path.exists(primitive_metadata_path):
+            print(f"Primitive metadata.json already exists for '{task_name}'. Skipping creation.")
+            return
+        
+        primitive_metadata = {
+            "name": task_name,
+            "type": primitive_type,
+            "guidelines": "",
+            "guidelines_when_running": "",
+            "inputs": {},
+            "execution": {
+                # Checkpoint will be filled in after training
+                # "checkpoint": "best_model.pt",
+                # "stats_file": "dataset_stats.pt"
+            }
+        }
+        
+        with open(primitive_metadata_path, 'w') as f:
+            json.dump(primitive_metadata, f, indent=4)
+        
+        print(f"Created primitive metadata.json for '{task_name}' (type: {primitive_type})")
+
     def load_metadata(self):
         """
-        Load the metadata from the JSON file in the current task directory.
+        Load the metadata from dataset_metadata.json in the data directory.
         """
         if self.current_task_dir is None:
             raise RuntimeError("No active task directory to load metadata from.")
-        metadata_path = os.path.join(self.current_task_dir, "metadata.json")
+        metadata_path = os.path.join(self.current_task_dir, "data", "dataset_metadata.json")
         with open(metadata_path, 'r') as f:
             self.metadata = json.load(f)
 
@@ -373,7 +368,7 @@ class TaskManager:
 
     def _get_enriched_metadata_for_task(self, task_directory):
         """
-        Loads, enriches (with episode num_timesteps), and returns metadata for a single task
+        Loads, enriches (with episode num_timesteps), and returns dataset metadata for a single task
         using its absolute directory path.
 
         Args:
@@ -381,33 +376,34 @@ class TaskManager:
 
         Returns:
             tuple: (dict_or_None, error_message_or_None)
-                   - dict_or_None: The enriched task metadata.
+                   - dict_or_None: The enriched dataset metadata.
                    - error_message_or_None: Description of error if any.
         """
-        metadata_file_path = os.path.join(task_directory, "metadata.json")
-        # Extract task name from directory path for fallback if not in metadata
-        task_name_for_fallback = os.path.basename(task_directory) 
+        data_dir = os.path.join(task_directory, "data")
+        metadata_file_path = os.path.join(data_dir, "dataset_metadata.json")
+        task_name = os.path.basename(task_directory)
 
         if not os.path.exists(task_directory) or not os.path.isdir(task_directory):
             return None, f"Task directory {task_directory} not found or is not a directory."
         
         if not os.path.exists(metadata_file_path):
-            return None, f"Metadata.json not found in {task_directory}."
+            return None, f"dataset_metadata.json not found in {data_dir}."
 
         try:
             with open(metadata_file_path, 'r') as f:
-                task_metadata = json.load(f)
+                dataset_metadata = json.load(f)
         except json.JSONDecodeError as e:
-            return None, f"Error decoding metadata.json in {task_directory}: {e}"
+            return None, f"Error decoding dataset_metadata.json in {data_dir}: {e}"
         except Exception as e:
-            return None, f"Error reading metadata.json in {task_directory}: {e}"
+            return None, f"Error reading dataset_metadata.json in {data_dir}: {e}"
 
         processed_episodes = []
-        if "episodes" in task_metadata and isinstance(task_metadata["episodes"], list):
-            for episode_info in task_metadata["episodes"]:
+        if "episodes" in dataset_metadata and isinstance(dataset_metadata["episodes"], list):
+            for episode_info in dataset_metadata["episodes"]:
                 num_timesteps = 0
                 episode_file_name = episode_info.get("file_name", "")
-                episode_file_path = os.path.join(task_directory, episode_file_name)
+                # Episodes are in data/ directory alongside dataset_metadata.json
+                episode_file_path = os.path.join(data_dir, episode_file_name)
                 
                 if episode_file_name and os.path.exists(episode_file_path):
                     try:
@@ -422,45 +418,16 @@ class TaskManager:
                     "start_time": episode_info.get("start_timestamp", "N/A"),
                     "end_time": episode_info.get("end_timestamp", "N/A"),
                     "num_timesteps": num_timesteps,
-                    "data_file_name": episode_file_name
+                    "file_name": episode_file_name
                 })
         
         enriched_metadata = {
-            "task_name": task_metadata.get("task_name", task_name_for_fallback),
-            "task_description": task_metadata.get("task_description", "N/A"),
-            "mobile_task": task_metadata.get("mobile_task", False),
-            "data_frequency": task_metadata.get("data_frequency", 0),
-            "task_directory": task_directory, 
-            "episodes": processed_episodes,
-            **{k: v for k, v in task_metadata.items() if k not in ["task_name", "task_description", "mobile_task", "data_frequency", "task_directory", "episodes"]}
+            "task_name": task_name,
+            "task_directory": task_directory,
+            "data_frequency": dataset_metadata.get("data_frequency", 0),
+            "number_of_episodes": dataset_metadata.get("number_of_episodes", 0),
+            "episodes": processed_episodes
         }
-
-        # Also attach processed action-only episodes if present
-        processed_ao_episodes = []
-        if "ao_episodes" in task_metadata and isinstance(task_metadata["ao_episodes"], list):
-            for ao_info in task_metadata["ao_episodes"]:
-                num_timesteps = 0
-                subdir = ao_info.get("subdirectory", "action_only")
-                ao_file = ao_info.get("file_name", "")
-                ao_path = os.path.join(task_directory, subdir, ao_file)
-                if ao_file and os.path.exists(ao_path):
-                    try:
-                        with h5py.File(ao_path, 'r') as hf:
-                            if '/action' in hf:
-                                num_timesteps = len(hf['/action'])
-                    except Exception as e:
-                        print(f"Error reading HDF5 file {ao_path} for timesteps: {e}")
-                processed_ao_episodes.append({
-                    "episode_id": f"episode_{ao_info.get('episode_id', 'N/A')}",
-                    "start_time": ao_info.get("start_timestamp", "N/A"),
-                    "end_time": ao_info.get("end_timestamp", "N/A"),
-                    "num_timesteps": num_timesteps,
-                    "data_file_name": ao_file,
-                    "subdirectory": subdir
-                })
-
-        if processed_ao_episodes:
-            enriched_metadata["ao_episodes"] = processed_ao_episodes
         
         return enriched_metadata, None
 

@@ -235,10 +235,6 @@ class AppControl(Node):
         cmd_msg.data = positions_rad.tolist()
         self.cmd_pub.publish(cmd_msg)
         
-        self.get_logger().info(
-            f"Leader positions: {msg.data} -> Transformed (rad): {cmd_msg.data}"
-        )
-
     def publish_robot_info_callback(self):
         """
         Reads robot_info.json and os_config.json, extracts specified keys, and publishes them as a JSON string.
