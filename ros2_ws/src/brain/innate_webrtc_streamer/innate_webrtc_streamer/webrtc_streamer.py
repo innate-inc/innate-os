@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-MINIMAL WebRTC Streamer - Barebone implementation for testing.
+WebRTC Streamer with switchable video sources.
+
+Supports:
+- Live camera feeds (default)
+- Replay feeds from recorder node
+
+The source can be switched via the /webrtc/start message:
+- Empty or {"source": "live"} -> use live camera topics
+- {"source": "replay"} -> use replay topics from recorder
 """
 
 import json
@@ -23,6 +31,21 @@ class SimpleWebRTCStreamer(Node):
         super().__init__('simple_webrtc_streamer')
         Gst.init(None)
         
+        # Declare parameters for topic configuration
+        self.declare_parameter('live_main_camera_topic', '/mars/main_camera/image/compressed')
+        self.declare_parameter('live_arm_camera_topic', '/mars/arm/image_raw/compressed')
+        self.declare_parameter('replay_main_camera_topic', '/brain/recorder/replay/main_camera/compressed')
+        self.declare_parameter('replay_arm_camera_topic', '/brain/recorder/replay/arm_camera/compressed')
+        
+        # Get parameter values
+        self.live_main_topic = self.get_parameter('live_main_camera_topic').value
+        self.live_arm_topic = self.get_parameter('live_arm_camera_topic').value
+        self.replay_main_topic = self.get_parameter('replay_main_camera_topic').value
+        self.replay_arm_topic = self.get_parameter('replay_arm_camera_topic').value
+        
+        # Current source mode: "live" or "replay"
+        self.current_source = "live"
+        
         # Simple publishers and subscribers (default QoS)
         self.offer_pub = self.create_publisher(String, '/webrtc/offer', 10)
         self.ice_out_pub = self.create_publisher(String, '/webrtc/ice_out', 10)
@@ -31,14 +54,19 @@ class SimpleWebRTCStreamer(Node):
         self.ice_in_sub = self.create_subscription(String, '/webrtc/ice_in', self.on_ice_in, 10)
         self.start_sub = self.create_subscription(String, '/webrtc/start', self.on_start, 10)
         
-        # Subscribe to cameras
-        camera_qos = QoSProfile(
+        # QoS for camera subscriptions
+        self.camera_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
-        self.image_sub = self.create_subscription(CompressedImage, '/mars/main_camera/image/compressed', self.on_image_main, camera_qos)
-        self.image_sub_arm = self.create_subscription(CompressedImage, '/mars/arm/image_raw/compressed', self.on_image_arm, camera_qos)
+        
+        # Dynamic subscriptions (will be created/destroyed on source switch)
+        self.image_sub_main = None
+        self.image_sub_arm = None
+        
+        # Create initial subscriptions for live source
+        self._create_subscriptions("live")
         
         # Single pipeline for single client
         self.pipe = None
@@ -46,7 +74,39 @@ class SimpleWebRTCStreamer(Node):
         self.appsrc_main = None
         self.appsrc_arm = None
         
-        self.get_logger().info('Simple WebRTC Streamer ready (dual camera mode)')
+        self.get_logger().info(f'WebRTC Streamer ready (source: {self.current_source})')
+        self.get_logger().info(f'  Live topics: {self.live_main_topic}, {self.live_arm_topic}')
+        self.get_logger().info(f'  Replay topics: {self.replay_main_topic}, {self.replay_arm_topic}')
+    
+    def _destroy_subscriptions(self):
+        """Destroy current image subscriptions"""
+        if self.image_sub_main is not None:
+            self.destroy_subscription(self.image_sub_main)
+            self.image_sub_main = None
+        if self.image_sub_arm is not None:
+            self.destroy_subscription(self.image_sub_arm)
+            self.image_sub_arm = None
+    
+    def _create_subscriptions(self, source: str):
+        """Create image subscriptions for the given source"""
+        self._destroy_subscriptions()
+        
+        if source == "replay":
+            main_topic = self.replay_main_topic
+            arm_topic = self.replay_arm_topic
+        else:  # default to live
+            main_topic = self.live_main_topic
+            arm_topic = self.live_arm_topic
+        
+        self.image_sub_main = self.create_subscription(
+            CompressedImage, main_topic, self.on_image_main, self.camera_qos
+        )
+        self.image_sub_arm = self.create_subscription(
+            CompressedImage, arm_topic, self.on_image_arm, self.camera_qos
+        )
+        
+        self.current_source = source
+        self.get_logger().info(f'Subscribed to {source} sources: {main_topic}, {arm_topic}')
     
     def _process_image(self, msg, target_width=640, target_height=480):
         """Helper to process compressed image messages into RGB format"""
@@ -107,8 +167,27 @@ class SimpleWebRTCStreamer(Node):
             self.get_logger().info('Pipeline cleaned up')
     
     def on_start(self, msg):
-        """Handle start request - cleanup old connection and create new one"""
-        self.get_logger().info('START received, creating offer...')
+        """Handle start request - cleanup old connection and create new one.
+        
+        Message format (JSON string):
+        - Empty or {"source": "live"} -> use live camera topics
+        - {"source": "replay"} -> use replay topics from recorder
+        """
+        # Parse source from message
+        source = "live"  # default
+        if msg.data.strip():
+            try:
+                data = json.loads(msg.data)
+                source = data.get("source", "live")
+            except json.JSONDecodeError:
+                # Not JSON, treat as empty (use default)
+                pass
+        
+        self.get_logger().info(f'START received (source={source}), creating offer...')
+        
+        # Switch subscriptions if source changed
+        if source != self.current_source:
+            self._create_subscriptions(source)
         
         # Always cleanup existing pipeline to handle reconnection
         self.cleanup_pipeline()
