@@ -8,3 +8,4 @@ string message            # Status message or error details
 int32 num_frames          # Total number of frames in the episode
 float32 fps               # Playback frame rate (from data_frequency)
 float32 duration_sec      # Total duration in seconds
+string arm_data_json
