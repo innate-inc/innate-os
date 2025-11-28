@@ -35,7 +35,7 @@ class RecorderNode(Node):
         self.declare_parameter('velocity_topic', '/cmd_vel')
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('image_size', [640, 480])
-        self.declare_parameter('head_ai_position_topic', '/head/set_ai_position')
+        self.declare_parameter('head_ai_position_topic', '/mars/head/set_ai_position')
         
         # Get parameter values
         data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
