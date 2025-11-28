@@ -273,19 +273,34 @@ class RecorderNode(Node):
         qpos = list(self.latest_arm_state.position)
         qvel = list(self.latest_arm_state.velocity)
         
+        # Get timestamp from arm state message (seconds since epoch)
+        arm_stamp = self.latest_arm_state.header.stamp
+        arm_timestamp = arm_stamp.sec + arm_stamp.nanosec * 1e-9
+        
         # Convert each ROS image message to a NumPy array using cv_bridge.
+        # Also capture image timestamps
         images_converted = []
+        image_timestamps = []
         for topic in self.image_topics:
             try:
-                cv_image = self.bridge.imgmsg_to_cv2(self.latest_images[topic], desired_encoding='passthrough')
+                img_msg = self.latest_images[topic]
+                cv_image = self.bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
                 cv_image = cv2.resize(cv_image, (self.image_size[0], self.image_size[1]))
                 images_converted.append(cv_image)
+                
+                # Get timestamp from image message
+                img_stamp = img_msg.header.stamp
+                image_timestamps.append(img_stamp.sec + img_stamp.nanosec * 1e-9)
             except Exception as e:
                 self.get_logger().error(f"Error converting image from topic {topic}: {e}")
                 return
         
         try:
-            self.current_episode.add_timestep(action_data, qpos, qvel, images_converted)
+            self.current_episode.add_timestep(
+                action_data, qpos, qvel, images_converted,
+                arm_timestamp=arm_timestamp,
+                image_timestamps=image_timestamps
+            )
             timestep_count = self.current_episode.get_episode_length()
             # Log progress every 20 timesteps (roughly every second at 20Hz)
             if timestep_count % 20 == 0:
@@ -591,6 +606,7 @@ class RecorderNode(Node):
                 response.num_frames = 0
                 response.fps = 0.0
                 response.duration_sec = 0.0
+                response.arm_data_json = "{}"
                 return response
             
             # Load dataset metadata to get fps
@@ -610,6 +626,7 @@ class RecorderNode(Node):
                     response.num_frames = 0
                     response.fps = 0.0
                     response.duration_sec = 0.0
+                    response.arm_data_json = "{}"
                     return response
                 
                 images_group = hf['/observations/images']
@@ -621,6 +638,7 @@ class RecorderNode(Node):
                     response.num_frames = 0
                     response.fps = 0.0
                     response.duration_sec = 0.0
+                    response.arm_data_json = "{}"
                     return response
                 
                 # Load all camera images into buffer
@@ -642,6 +660,52 @@ class RecorderNode(Node):
             
             duration = self.replay_total_frames / self.replay_fps
             
+            # Load arm state data and timestamps for frame drop detection
+            arm_data = {
+                "arm_timestamps": [],
+                "image_timestamps": {},  # camera_name -> [timestamps]
+                "qpos": [],
+                "qvel": []
+            }
+            with h5py.File(h5_path, 'r') as hf:
+                # Load arm timestamps
+                if '/timestamps/arm' in hf:
+                    arm_ts = np.array(hf['/timestamps/arm'])
+                    if len(arm_ts) > 0:
+                        arm_data["arm_timestamps"] = (arm_ts - arm_ts[0]).tolist()
+                    self.get_logger().info(f"Loaded arm timestamps: {len(arm_ts)} frames")
+                elif '/timestamps' in hf and not isinstance(hf['/timestamps'], h5py.Group):
+                    # Legacy format: single timestamps array
+                    timestamps_data = np.array(hf['/timestamps'])
+                    if len(timestamps_data) > 0:
+                        arm_data["arm_timestamps"] = (timestamps_data - timestamps_data[0]).tolist()
+                    self.get_logger().info(f"Loaded legacy timestamps: {len(timestamps_data)} frames")
+                else:
+                    # Fallback: compute expected timestamps based on fps
+                    arm_data["arm_timestamps"] = [i / self.replay_fps for i in range(self.replay_total_frames)]
+                    self.get_logger().info(f"No timestamps in H5, using computed timestamps")
+                
+                # Load image timestamps for each camera
+                if '/timestamps/images' in hf:
+                    img_ts_group = hf['/timestamps/images']
+                    for cam_name in img_ts_group.keys():
+                        img_ts = np.array(img_ts_group[cam_name])
+                        if len(img_ts) > 0:
+                            arm_data["image_timestamps"][cam_name] = (img_ts - img_ts[0]).tolist()
+                        self.get_logger().info(f"Loaded {cam_name} timestamps: {len(img_ts)} frames")
+                
+                # Load qpos if available
+                if '/observations/qpos' in hf:
+                    qpos_data = np.array(hf['/observations/qpos'])
+                    arm_data["qpos"] = qpos_data.tolist()
+                    self.get_logger().info(f"Loaded qpos: {qpos_data.shape}")
+                
+                # Load qvel if available
+                if '/observations/qvel' in hf:
+                    qvel_data = np.array(hf['/observations/qvel'])
+                    arm_data["qvel"] = qvel_data.tolist()
+                    self.get_logger().info(f"Loaded qvel: {qvel_data.shape}")
+            
             self.get_logger().info(f"Episode loaded: {self.replay_total_frames} frames, {self.replay_fps} fps, {duration:.1f}s")
             
             # Publish status
@@ -652,6 +716,7 @@ class RecorderNode(Node):
             response.num_frames = self.replay_total_frames
             response.fps = self.replay_fps
             response.duration_sec = duration
+            response.arm_data_json = json.dumps(arm_data)
             
         except Exception as e:
             self.get_logger().error(f"Error loading episode: {e}")
@@ -660,6 +725,7 @@ class RecorderNode(Node):
             response.num_frames = 0
             response.fps = 0.0
             response.duration_sec = 0.0
+            response.arm_data_json = "{}"
         
         return response
     
