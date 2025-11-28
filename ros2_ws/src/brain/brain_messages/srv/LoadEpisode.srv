@@ -1,0 +1,10 @@
+# Request - Load an episode from an H5 file into memory buffer for replay
+string task_directory     # The absolute path of the task directory
+int32 episode_id          # The episode ID to load (e.g., 0, 1, 2...)
+---
+# Response
+bool success              # True if the episode was loaded successfully
+string message            # Status message or error details
+int32 num_frames          # Total number of frames in the episode
+float32 fps               # Playback frame rate (from data_frequency)
+float32 duration_sec      # Total duration in seconds
