@@ -23,13 +23,17 @@ class EpisodeData:
         self.qpos = []
         self.qvel = []
         
+        # Separate timestamps for each data source (in seconds)
+        self.arm_timestamps = []      # From arm_state.header.stamp
+        self.image_timestamps = {}    # Dict: camera_name -> [timestamps]
+        
         # Initialize images dict only if camera_names is provided
         if camera_names is not None:
             self.images = {cam: [] for cam in self.camera_names}
         else:
             self.images = {}
     
-    def add_timestep(self, action, qpos, qvel, images):
+    def add_timestep(self, action, qpos, qvel, images, arm_timestamp=None, image_timestamps=None):
         """
         Add a new time step of data.
         
@@ -41,6 +45,8 @@ class EpisodeData:
             qpos: Data representing the robot's position at the current time step.
             qvel: Data representing the robot's velocity at the current time step.
             images (list): A list of images.
+            arm_timestamp (float, optional): Timestamp in seconds from arm_state message.
+            image_timestamps (list, optional): List of timestamps for each image (same order as images).
         
         Raises:
             ValueError: If a subsequent call does not provide the same number of images as initially determined.
@@ -49,12 +55,23 @@ class EpisodeData:
             # Dynamically set camera names based on the number of images in the first timestep
             self.camera_names = [f"camera_{i+1}" for i in range(len(images))]
             self.images = {cam: [] for cam in self.camera_names}
+            self.image_timestamps = {cam: [] for cam in self.camera_names}
         elif len(images) != len(self.camera_names):
             raise ValueError(f"Expected {len(self.camera_names)} images, but got {len(images)}")
         
         self.actions.append(action)
         self.qpos.append(qpos)
         self.qvel.append(qvel)
+        
+        # Store arm timestamp
+        if arm_timestamp is not None:
+            self.arm_timestamps.append(arm_timestamp)
+        
+        # Store image timestamps
+        if image_timestamps is not None:
+            for idx, cam in enumerate(self.camera_names):
+                if idx < len(image_timestamps):
+                    self.image_timestamps[cam].append(image_timestamps[idx])
         
         # Append each image to the appropriate camera's list
         for idx, cam in enumerate(self.camera_names):
@@ -99,6 +116,11 @@ class EpisodeData:
         The file will have the following structure:
         
             /action         -> Dataset containing the action data.
+            /timestamps
+                ├── arm       -> Timestamps from arm_state messages
+                └── images
+                      ├── camera_1 -> Timestamps for camera 1
+                      └── camera_2 -> Timestamps for camera 2
             /observations
                 ├── qpos  -> Dataset containing the qpos data.
                 ├── qvel  -> Dataset containing the qvel data.
@@ -116,6 +138,20 @@ class EpisodeData:
         with h5py.File(path, 'w') as hf:
             # Always save actions
             hf.create_dataset('/action', data=np.array(self.actions))
+            
+            # Save timestamps if available
+            has_arm_ts = len(self.arm_timestamps) > 0
+            has_img_ts = any(len(ts) > 0 for ts in self.image_timestamps.values())
+            
+            if has_arm_ts or has_img_ts:
+                ts_group = hf.create_group('/timestamps')
+                if has_arm_ts:
+                    ts_group.create_dataset('arm', data=np.array(self.arm_timestamps))
+                if has_img_ts:
+                    img_ts_group = ts_group.create_group('images')
+                    for cam_name, ts_list in self.image_timestamps.items():
+                        if len(ts_list) > 0:
+                            img_ts_group.create_dataset(cam_name, data=np.array(ts_list))
 
             # Detect available observations
             has_qpos = isinstance(self.qpos, list) and len(self.qpos) > 0 and any(len(x) > 0 for x in self.qpos)
@@ -146,6 +182,8 @@ class EpisodeData:
         self.actions = []
         self.qpos = []
         self.qvel = []
+        self.arm_timestamps = []
+        self.image_timestamps = {cam: [] for cam in self.camera_names} if self.camera_names else {}
         self.images = {cam: [] for cam in self.camera_names} if self.camera_names else {}
     
     def get_episode_length(self):
@@ -168,6 +206,8 @@ class EpisodeData:
         """
         return {
             'actions': self.actions,
+            'arm_timestamps': self.arm_timestamps,
+            'image_timestamps': self.image_timestamps,
             'qpos': self.qpos,
             'qvel': self.qvel,
             'images': self.images
