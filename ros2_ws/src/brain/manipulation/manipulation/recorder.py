@@ -7,20 +7,22 @@ from brain_messages.srv import ManipulationTask
 from manipulation.DataUtils import EpisodeData, TaskManager
 
 # Import message types for sensor data
-from sensor_msgs.msg import Image, JointState
+from sensor_msgs.msg import Image, JointState, CompressedImage
 from std_msgs.msg import Float64MultiArray, Empty
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge  # For image conversion
 import cv2
+import numpy as np
+import h5py
 # Import RecorderStatus message
-from brain_messages.msg import RecorderStatus
+from brain_messages.msg import RecorderStatus, ReplayStatus
 import os
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import json # Added for JSON manipulation
 
-# Assuming you will create this service in brain_messages/srv:
-from brain_messages.srv import GetTaskMetadataList, UpdateTaskMetadata, GetTaskMetadata # Placeholder for actual import
+# Service imports
+from brain_messages.srv import GetTaskMetadataList, UpdateTaskMetadata, GetTaskMetadata, LoadEpisode
 
 class RecorderNode(Node):
     def __init__(self):
@@ -139,6 +141,62 @@ class RecorderNode(Node):
         # Create a timer that will attempt to add sensor data as a new timestep at the specified frequency.
         self.timer = self.create_timer(1.0 / self.data_frequency, self.timer_callback)
         
+        # ========== REPLAY FUNCTIONALITY ==========
+        # Replay state: "idle", "ready", "playing", "paused", "finished"
+        self.replay_state = "idle"
+        self.replay_buffer = {}  # Will hold {'main_camera': [...], 'arm_camera': [...]}
+        self.replay_frame_index = 0
+        self.replay_total_frames = 0
+        self.replay_fps = 10.0
+        self.replay_task_name = ""
+        self.replay_episode_id = ""
+        self.replay_timer = None
+        
+        # Replay publishers (CompressedImage for WebRTC compatibility)
+        self.replay_main_pub = self.create_publisher(
+            CompressedImage, 
+            '/brain/recorder/replay/main_camera/compressed', 
+            10
+        )
+        self.replay_arm_pub = self.create_publisher(
+            CompressedImage, 
+            '/brain/recorder/replay/arm_camera/compressed', 
+            10
+        )
+        self.replay_status_pub = self.create_publisher(
+            ReplayStatus, 
+            '/brain/recorder/replay_status', 
+            10
+        )
+        
+        # Replay services
+        self.load_episode_srv = self.create_service(
+            LoadEpisode, 
+            'brain/recorder/load_episode', 
+            self.handle_load_episode
+        )
+        self.play_replay_srv = self.create_service(
+            Trigger, 
+            'brain/recorder/play_replay', 
+            self.handle_play_replay
+        )
+        self.pause_replay_srv = self.create_service(
+            Trigger, 
+            'brain/recorder/pause_replay', 
+            self.handle_pause_replay
+        )
+        self.stop_replay_srv = self.create_service(
+            Trigger, 
+            'brain/recorder/stop_replay', 
+            self.handle_stop_replay
+        )
+        
+        self.get_logger().info("Replay services initialized:")
+        self.get_logger().info("  brain/recorder/load_episode")
+        self.get_logger().info("  brain/recorder/play_replay")
+        self.get_logger().info("  brain/recorder/pause_replay")
+        self.get_logger().info("  brain/recorder/stop_replay")
+        
         self.get_logger().info("Recorder Node initialized in IDLE state.")
     
     def check_all_topics_received(self):
@@ -215,19 +273,34 @@ class RecorderNode(Node):
         qpos = list(self.latest_arm_state.position)
         qvel = list(self.latest_arm_state.velocity)
         
+        # Get timestamp from arm state message (seconds since epoch)
+        arm_stamp = self.latest_arm_state.header.stamp
+        arm_timestamp = arm_stamp.sec + arm_stamp.nanosec * 1e-9
+        
         # Convert each ROS image message to a NumPy array using cv_bridge.
+        # Also capture image timestamps
         images_converted = []
+        image_timestamps = []
         for topic in self.image_topics:
             try:
-                cv_image = self.bridge.imgmsg_to_cv2(self.latest_images[topic], desired_encoding='passthrough')
+                img_msg = self.latest_images[topic]
+                cv_image = self.bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
                 cv_image = cv2.resize(cv_image, (self.image_size[0], self.image_size[1]))
                 images_converted.append(cv_image)
+                
+                # Get timestamp from image message
+                img_stamp = img_msg.header.stamp
+                image_timestamps.append(img_stamp.sec + img_stamp.nanosec * 1e-9)
             except Exception as e:
                 self.get_logger().error(f"Error converting image from topic {topic}: {e}")
                 return
         
         try:
-            self.current_episode.add_timestep(action_data, qpos, qvel, images_converted)
+            self.current_episode.add_timestep(
+                action_data, qpos, qvel, images_converted,
+                arm_timestamp=arm_timestamp,
+                image_timestamps=image_timestamps
+            )
             timestep_count = self.current_episode.get_episode_length()
             # Log progress every 20 timesteps (roughly every second at 20Hz)
             if timestep_count % 20 == 0:
@@ -510,6 +583,292 @@ class RecorderNode(Node):
         msg.episode_number = episode_number
         msg.status = status
         self.status_pub.publish(msg)
+
+    # ========== REPLAY SERVICE HANDLERS ==========
+    
+    def handle_load_episode(self, request, response):
+        """Load an episode from H5 file into memory buffer for replay."""
+        self.get_logger().info(f"Loading episode {request.episode_id} from {request.task_directory}")
+        
+        try:
+            # Stop any current replay
+            if self.replay_state in ["playing", "paused"]:
+                self._stop_replay_timer()
+                self.replay_state = "idle"
+            
+            # Construct path to H5 file
+            data_dir = os.path.join(request.task_directory, "data")
+            h5_path = os.path.join(data_dir, f"episode_{request.episode_id}.h5")
+            
+            if not os.path.exists(h5_path):
+                response.success = False
+                response.message = f"Episode file not found: {h5_path}"
+                response.num_frames = 0
+                response.fps = 0.0
+                response.duration_sec = 0.0
+                response.arm_data_json = "{}"
+                return response
+            
+            # Load dataset metadata to get fps
+            metadata_path = os.path.join(data_dir, "dataset_metadata.json")
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                    self.replay_fps = float(metadata.get('data_frequency', 10))
+            else:
+                self.replay_fps = float(self.data_frequency)
+            
+            # Load images from H5 file
+            with h5py.File(h5_path, 'r') as hf:
+                if '/observations/images' not in hf:
+                    response.success = False
+                    response.message = "No images found in episode file"
+                    response.num_frames = 0
+                    response.fps = 0.0
+                    response.duration_sec = 0.0
+                    response.arm_data_json = "{}"
+                    return response
+                
+                images_group = hf['/observations/images']
+                camera_names = list(images_group.keys())
+                
+                if len(camera_names) == 0:
+                    response.success = False
+                    response.message = "No camera data found in episode"
+                    response.num_frames = 0
+                    response.fps = 0.0
+                    response.duration_sec = 0.0
+                    response.arm_data_json = "{}"
+                    return response
+                
+                # Load all camera images into buffer
+                self.replay_buffer = {}
+                for cam_name in camera_names:
+                    # Load entire dataset into memory (numpy array)
+                    self.replay_buffer[cam_name] = np.array(images_group[cam_name])
+                    self.get_logger().info(f"Loaded {cam_name}: {self.replay_buffer[cam_name].shape}")
+                
+                # Get frame count from first camera
+                first_cam = camera_names[0]
+                self.replay_total_frames = len(self.replay_buffer[first_cam])
+            
+            # Set replay metadata
+            self.replay_frame_index = 0
+            self.replay_task_name = os.path.basename(request.task_directory)
+            self.replay_episode_id = f"episode_{request.episode_id}"
+            self.replay_state = "ready"
+            
+            duration = self.replay_total_frames / self.replay_fps
+            
+            # Load arm state data and timestamps for frame drop detection
+            arm_data = {
+                "arm_timestamps": [],
+                "image_timestamps": {},  # camera_name -> [timestamps]
+                "qpos": [],
+                "qvel": []
+            }
+            with h5py.File(h5_path, 'r') as hf:
+                # Load arm timestamps
+                if '/timestamps/arm' in hf:
+                    arm_ts = np.array(hf['/timestamps/arm'])
+                    if len(arm_ts) > 0:
+                        arm_data["arm_timestamps"] = (arm_ts - arm_ts[0]).tolist()
+                    self.get_logger().info(f"Loaded arm timestamps: {len(arm_ts)} frames")
+                elif '/timestamps' in hf and not isinstance(hf['/timestamps'], h5py.Group):
+                    # Legacy format: single timestamps array
+                    timestamps_data = np.array(hf['/timestamps'])
+                    if len(timestamps_data) > 0:
+                        arm_data["arm_timestamps"] = (timestamps_data - timestamps_data[0]).tolist()
+                    self.get_logger().info(f"Loaded legacy timestamps: {len(timestamps_data)} frames")
+                else:
+                    # Fallback: compute expected timestamps based on fps
+                    arm_data["arm_timestamps"] = [i / self.replay_fps for i in range(self.replay_total_frames)]
+                    self.get_logger().info(f"No timestamps in H5, using computed timestamps")
+                
+                # Load image timestamps for each camera
+                if '/timestamps/images' in hf:
+                    img_ts_group = hf['/timestamps/images']
+                    for cam_name in img_ts_group.keys():
+                        img_ts = np.array(img_ts_group[cam_name])
+                        if len(img_ts) > 0:
+                            arm_data["image_timestamps"][cam_name] = (img_ts - img_ts[0]).tolist()
+                        self.get_logger().info(f"Loaded {cam_name} timestamps: {len(img_ts)} frames")
+                
+                # Load qpos if available
+                if '/observations/qpos' in hf:
+                    qpos_data = np.array(hf['/observations/qpos'])
+                    arm_data["qpos"] = qpos_data.tolist()
+                    self.get_logger().info(f"Loaded qpos: {qpos_data.shape}")
+                
+                # Load qvel if available
+                if '/observations/qvel' in hf:
+                    qvel_data = np.array(hf['/observations/qvel'])
+                    arm_data["qvel"] = qvel_data.tolist()
+                    self.get_logger().info(f"Loaded qvel: {qvel_data.shape}")
+            
+            self.get_logger().info(f"Episode loaded: {self.replay_total_frames} frames, {self.replay_fps} fps, {duration:.1f}s")
+            
+            # Publish status
+            self._publish_replay_status()
+            
+            response.success = True
+            response.message = f"Episode loaded successfully"
+            response.num_frames = self.replay_total_frames
+            response.fps = self.replay_fps
+            response.duration_sec = duration
+            response.arm_data_json = json.dumps(arm_data)
+            
+        except Exception as e:
+            self.get_logger().error(f"Error loading episode: {e}")
+            response.success = False
+            response.message = f"Error loading episode: {str(e)}"
+            response.num_frames = 0
+            response.fps = 0.0
+            response.duration_sec = 0.0
+            response.arm_data_json = "{}"
+        
+        return response
+    
+    def handle_play_replay(self, request, response):
+        """Start or resume replay playback."""
+        if self.replay_state == "idle":
+            response.success = False
+            response.message = "No episode loaded. Call load_episode first."
+            return response
+        
+        if self.replay_state == "playing":
+            response.success = False
+            response.message = "Replay is already playing."
+            return response
+        
+        if self.replay_state == "finished":
+            # Restart from beginning
+            self.replay_frame_index = 0
+        
+        # Start the replay timer
+        self._start_replay_timer()
+        self.replay_state = "playing"
+        
+        self.get_logger().info(f"Replay started from frame {self.replay_frame_index}")
+        self._publish_replay_status()
+        
+        response.success = True
+        response.message = f"Replay started from frame {self.replay_frame_index}"
+        return response
+    
+    def handle_pause_replay(self, request, response):
+        """Pause replay playback."""
+        if self.replay_state != "playing":
+            response.success = False
+            response.message = f"Cannot pause: replay is {self.replay_state}"
+            return response
+        
+        self._stop_replay_timer()
+        self.replay_state = "paused"
+        
+        self.get_logger().info(f"Replay paused at frame {self.replay_frame_index}")
+        self._publish_replay_status()
+        
+        response.success = True
+        response.message = f"Replay paused at frame {self.replay_frame_index}"
+        return response
+    
+    def handle_stop_replay(self, request, response):
+        """Stop replay and reset to beginning."""
+        if self.replay_state == "idle":
+            response.success = False
+            response.message = "No episode loaded."
+            return response
+        
+        self._stop_replay_timer()
+        self.replay_frame_index = 0
+        self.replay_state = "ready"
+        
+        self.get_logger().info("Replay stopped and reset to frame 0")
+        self._publish_replay_status()
+        
+        response.success = True
+        response.message = "Replay stopped and reset to frame 0"
+        return response
+    
+    def _start_replay_timer(self):
+        """Start the replay timer."""
+        if self.replay_timer is not None:
+            self.destroy_timer(self.replay_timer)
+        self.replay_timer = self.create_timer(1.0 / self.replay_fps, self._replay_timer_callback)
+    
+    def _stop_replay_timer(self):
+        """Stop the replay timer."""
+        if self.replay_timer is not None:
+            self.destroy_timer(self.replay_timer)
+            self.replay_timer = None
+    
+    def _replay_timer_callback(self):
+        """Timer callback to publish replay frames."""
+        if self.replay_state != "playing":
+            return
+        
+        if self.replay_frame_index >= self.replay_total_frames:
+            # Reached end of episode
+            self._stop_replay_timer()
+            self.replay_state = "finished"
+            self.get_logger().info("Replay finished")
+            self._publish_replay_status()
+            return
+        
+        # Get camera names and publish frames
+        camera_names = list(self.replay_buffer.keys())
+        
+        for i, cam_name in enumerate(camera_names):
+            # Get the frame (numpy array, likely BGR or RGB)
+            frame = self.replay_buffer[cam_name][self.replay_frame_index]
+            
+            # Encode as JPEG for CompressedImage
+            try:
+                # Ensure frame is uint8
+                if frame.dtype != np.uint8:
+                    frame = frame.astype(np.uint8)
+                
+                # Encode to JPEG
+                success, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if not success:
+                    self.get_logger().warn(f"Failed to encode frame for {cam_name}")
+                    continue
+                
+                # Create CompressedImage message
+                msg = CompressedImage()
+                msg.header.stamp = self.get_clock().now().to_msg()
+                msg.header.frame_id = cam_name
+                msg.format = "jpeg"
+                msg.data = encoded.tobytes()
+                
+                # Publish to appropriate topic
+                # camera_1 -> main, camera_2 -> arm (based on typical setup)
+                if i == 0 or 'main' in cam_name.lower() or cam_name == 'camera_1':
+                    self.replay_main_pub.publish(msg)
+                else:
+                    self.replay_arm_pub.publish(msg)
+                    
+            except Exception as e:
+                self.get_logger().error(f"Error publishing frame for {cam_name}: {e}")
+        
+        self.replay_frame_index += 1
+        
+        # Publish status periodically (every 10 frames)
+        if self.replay_frame_index % 10 == 0:
+            self._publish_replay_status()
+    
+    def _publish_replay_status(self):
+        """Publish current replay status."""
+        msg = ReplayStatus()
+        msg.state = self.replay_state
+        msg.current_frame = self.replay_frame_index
+        msg.total_frames = self.replay_total_frames
+        msg.current_time_sec = self.replay_frame_index / self.replay_fps if self.replay_fps > 0 else 0.0
+        msg.total_time_sec = self.replay_total_frames / self.replay_fps if self.replay_fps > 0 else 0.0
+        msg.episode_id = self.replay_episode_id
+        msg.task_name = self.replay_task_name
+        self.replay_status_pub.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
