@@ -7,16 +7,20 @@ from std_msgs.msg import Float64MultiArray
 from maurice_msgs.srv import GotoJS
 import time
 from threading import Lock
-from rclpy.action import ActionClient
-from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import PlanningScene, CollisionObject
+from moveit_msgs.srv import GetMotionPlan, GetPlanningScene
+from moveit_msgs.msg import (
+    MotionPlanRequest, 
+    PlanningScene, 
+    CollisionObject,
+    RobotState,
+    Constraints,
+    JointConstraint,
+    PositionIKRequest,
+    WorkspaceParameters
+)
 from shape_msgs.msg import SolidPrimitive
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from moveit_msgs.msg import Constraints, JointConstraint
-from moveit_msgs.srv import GetPlanningScene
-from moveit_msgs.msg import RobotState
-from sensor_msgs.msg import JointState as SensorJointState
 
 class ArmCommanderNode(Node):
     def __init__(self):
@@ -56,8 +60,11 @@ class ArmCommanderNode(Node):
         # MoveIt planning group name
         self.planning_group = "arm"
         
-        # MoveIt action client for planning
-        self.move_group_action_client = ActionClient(self, MoveGroup, '/move_group')
+        # MoveIt service clients (NOT action - use services instead!)
+        self.plan_kinematic_path_client = self.create_client(
+            GetMotionPlan, 
+            '/plan_kinematic_path'
+        )
         
         # Planning scene client (for collision checking)
         self.planning_scene_client = self.create_client(GetPlanningScene, '/get_planning_scene')
@@ -66,31 +73,51 @@ class ArmCommanderNode(Node):
         self.joint_names = ["joint1", "joint2", "joint3", "joint4", "joint5"]
         
         # Planner configuration
-        self.planner_id = "RRTstar"
+        self.planner_id = "chomp"
         self.planning_time = 5.0
         self.max_planning_attempts = 3
         
-        # Initialize MoveIt planner
-        self.initialize_moveit_planner()
+        # Initialize MoveIt availability flag
+        self.moveit_available = False
         
-        self.get_logger().info("Arm Commander Node has started with MoveIt planning.")
+        # Defer MoveIt initialization to a timer (needs executor spinning)
+        self.moveit_init_timer = self.create_timer(0.5, self.initialize_moveit_planner_once)
+        
+        self.get_logger().info("Arm Commander Node has started. Initializing MoveIt...")
 
+    def initialize_moveit_planner_once(self):
+        """One-time initialization of MoveIt (called by timer after executor starts)."""
+        # Cancel the timer so this only runs once
+        self.moveit_init_timer.cancel()
+        self.initialize_moveit_planner()
+    
     def initialize_moveit_planner(self):
         """Initialize MoveIt2 planning components."""
         self.get_logger().info("Initializing MoveIt motion planner...")
         
-        # Wait for action server
-        self.get_logger().info("Waiting for MoveIt action server...")
-        if not self.move_group_action_client.wait_for_server(timeout_sec=10.0):
-            self.get_logger().error("MoveIt action server not available after 10 seconds")
-            raise RuntimeError("MoveIt action server not available")
+        # Wait for planning service with longer timeout
+        self.get_logger().info("Waiting for MoveIt planning service...")
+        timeout_sec = 30.0
+        start_time = self.get_clock().now()
+        
+        while not self.plan_kinematic_path_client.wait_for_service(timeout_sec=1.0):
+            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            if elapsed > timeout_sec:
+                self.get_logger().warn(f"MoveIt planning service not available after {timeout_sec} seconds")
+                self.get_logger().warn("Will continue and retry when service is called")
+                self.moveit_available = False
+                return
+            self.get_logger().info(f"Still waiting for MoveIt planning service... ({elapsed:.1f}s)")
+        
+        self.moveit_available = True
+        self.get_logger().info("✓ MoveIt planner connected!")
+        self.get_logger().info(f"  Planning group: {self.planning_group}")
+        self.get_logger().info(f"  Planner ID: {self.planner_id}")
+        self.get_logger().info(f"  Joint names: {self.joint_names}")
+        self.get_logger().info(f"  Using service: /plan_kinematic_path")
         
         # Add ground plane collision object
         self.add_ground_plane()
-        
-        self.get_logger().info("✓ MoveIt planner initialized")
-        self.get_logger().info(f"  Planning group: {self.planning_group}")
-        self.get_logger().info(f"  Planner ID: {self.planner_id}")
 
     def add_ground_plane(self):
         """Add ground plane collision object to prevent underground planning."""
@@ -133,10 +160,19 @@ class ArmCommanderNode(Node):
 
     def plan_with_moveit(self, start, goal, planning_time):
         """
-        Plan a trajectory using MoveIt2.
+        Plan a trajectory using MoveIt2 service interface.
         Returns trajectory waypoints and times, or None if planning fails.
-        Mirrors the logic from arm.cpp planArmMotion() method.
         """
+        # Check if MoveIt is available
+        if not self.moveit_available:
+            self.get_logger().warn("MoveIt not available, checking again...")
+            if not self.plan_kinematic_path_client.wait_for_service(timeout_sec=2.0):
+                self.get_logger().error("MoveIt planning service still not available")
+                return None
+            else:
+                self.moveit_available = True
+                self.get_logger().info("✓ MoveIt planning service now available!")
+        
         # Ensure we have 5 joints
         if len(goal) != 5:
             self.get_logger().error(f"Expected 5 joint positions, got {len(goal)}")
@@ -146,35 +182,10 @@ class ArmCommanderNode(Node):
             self.get_logger().error(f"Expected 5 start joint positions, got {len(start)}")
             return None
         
-        self.get_logger().info(f"Planning to goal: [{goal[0]:.3f}, {goal[1]:.3f}, {goal[2]:.3f}, {goal[3]:.3f}, {goal[4]:.3f}]")
+        self.get_logger().info(f"Planning to goal: [{goal[0]:.3f}, {goal[1]:.3f}, {goal[2]:.3f}, {goal[4]:.3f}, {goal[4]:.3f}]")
         
-        # Pre-check states for collision
-        start_safe = not self.is_in_collision(start)
-        goal_safe = self.is_goal_valid(goal)
-        
-        self.get_logger().info(f"State validation: start={'safe' if start_safe else 'COLLISION'}, "
-                             f"goal={'safe' if goal_safe else 'COLLISION'}")
-        
-        # Choose planning strategy based on collision states (matching arm.cpp logic)
-        if start_safe and goal_safe:
-            # Both safe: use strict planning
-            self.get_logger().info("Using strict planning (both states safe)")
-            plan_result = self.plan_to_goal_strict(start, goal, planning_time)
-        elif not start_safe and goal_safe:
-            # Stuck in collision: escape to safe goal
-            self.get_logger().warn("⚠️  Start in collision, planning escape trajectory")
-            plan_result = self.plan_relaxed(start, goal, planning_time, allow_start_collision=True, 
-                                           allow_goal_collision=False)
-        elif start_safe and not goal_safe:
-            # Goal unreachable: get as close as possible
-            self.get_logger().warn("⚠️  Goal in collision, approaching as close as possible")
-            plan_result = self.plan_relaxed(start, goal, planning_time, allow_start_collision=False,
-                                           allow_goal_collision=True)
-        else:
-            # Both problematic: full relaxed planning
-            self.get_logger().error("⚠️  Both states in collision, attempting recovery")
-            plan_result = self.plan_relaxed(start, goal, planning_time * 1.5, 
-                                           allow_start_collision=True, allow_goal_collision=True)
+        # Use simple planning for now (no collision state validation)
+        plan_result = self.plan_to_goal_service(start, goal, planning_time)
         
         if plan_result and plan_result.get("success"):
             waypoints = plan_result["waypoints"]
@@ -203,6 +214,98 @@ class ArmCommanderNode(Node):
         # Simplified check - in practice would validate joint limits and collisions
         # For now, return True (valid) since full validation requires planning scene access
         return True
+
+    def plan_to_goal_service(self, start, goal, planning_time):
+        """Plan using MoveIt service interface (/plan_kinematic_path)."""
+        start_time_sec = time.time()
+        
+        try:
+            # Create motion plan request
+            req = GetMotionPlan.Request()
+            
+            # Set motion plan request parameters
+            req.motion_plan_request.group_name = self.planning_group
+            req.motion_plan_request.num_planning_attempts = self.max_planning_attempts
+            req.motion_plan_request.allowed_planning_time = planning_time
+            req.motion_plan_request.planner_id = self.planner_id
+            
+            # Set start state
+            req.motion_plan_request.start_state.joint_state.name = self.joint_names
+            req.motion_plan_request.start_state.joint_state.position = start
+            req.motion_plan_request.start_state.is_diff = False
+            
+            # Set goal constraints (joint space goal)
+            goal_constraint = Constraints()
+            for i, (joint_name, joint_value) in enumerate(zip(self.joint_names, goal)):
+                jc = JointConstraint()
+                jc.joint_name = joint_name
+                jc.position = joint_value
+                jc.tolerance_above = 0.01
+                jc.tolerance_below = 0.01
+                jc.weight = 1.0
+                goal_constraint.joint_constraints.append(jc)
+            
+            req.motion_plan_request.goal_constraints.append(goal_constraint)
+            
+            # Set workspace parameters (optional but good practice)
+            ws = WorkspaceParameters()
+            ws.header.frame_id = "base_link"
+            ws.min_corner.x = -1.0
+            ws.min_corner.y = -1.0
+            ws.min_corner.z = -0.5
+            ws.max_corner.x = 1.0
+            ws.max_corner.y = 1.0
+            ws.max_corner.z = 1.0
+            req.motion_plan_request.workspace_parameters = ws
+            
+            # Call service
+            self.get_logger().debug("Calling /plan_kinematic_path service...")
+            future = self.plan_kinematic_path_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=planning_time + 5.0)
+            
+            if not future.done():
+                return {
+                    "success": False,
+                    "error_message": "Planning service call timed out",
+                    "planning_time_ms": (time.time() - start_time_sec) * 1000.0
+                }
+            
+            response = future.result()
+            planning_time_ms = (time.time() - start_time_sec) * 1000.0
+            
+            # Check if planning succeeded (error_code.val == 1 means SUCCESS)
+            if response.motion_plan_response.error_code.val == 1:
+                # Extract trajectory
+                trajectory = response.motion_plan_response.trajectory.joint_trajectory
+                waypoints = []
+                time_from_start = []
+                
+                for point in trajectory.points:
+                    waypoints.append(list(point.positions))
+                    time_sec = point.time_from_start.sec + point.time_from_start.nanosec * 1e-9
+                    time_from_start.append(time_sec)
+                
+                return {
+                    "success": True,
+                    "waypoints": waypoints,
+                    "time_from_start": time_from_start,
+                    "planning_time_ms": planning_time_ms,
+                    "num_waypoints": len(waypoints)
+                }
+            else:
+                error_msg = f"Planning failed with error code {response.motion_plan_response.error_code.val}"
+                return {
+                    "success": False,
+                    "error_message": error_msg,
+                    "planning_time_ms": planning_time_ms
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error_message": str(e),
+                "planning_time_ms": (time.time() - start_time_sec) * 1000.0
+            }
 
     def plan_to_goal_strict(self, start, goal, planning_time):
         """Plan with strict collision checking."""
