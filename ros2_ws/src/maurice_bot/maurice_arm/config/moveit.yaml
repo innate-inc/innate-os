@@ -1,10 +1,10 @@
 # ============================================================================
-# MoveIt Configuration for Maurice Arm - RRTstar Only
-# Optimized for path quality with collision-aware planning
+# MoveIt Configuration for Maurice Arm - CHOMP
+# Optimized for Jetson platform with gradient-based planning
 # ============================================================================
 
 # Which planning plugin to use
-planning_plugin: ompl_interface/OMPLPlanner
+planning_plugin: chomp_interface/CHOMPPlanner
 
 # Request adapters - pre-process plans before planning
 request_adapters: >-
@@ -25,34 +25,42 @@ response_adapters: >-
 start_state_max_bounds_error: 0.1
 
 # ============================================================================
-# Planner Configuration - RRTstar (Asymptotically Optimal)
+# Planner Configuration - CHOMP (Gradient-based Optimization)
 # ============================================================================
-planner_configs:
-  RRTstar:
-    type: geometric::RRTstar
-    range: 0.0                      # Max step size (0 = auto-calculate)
-    goal_bias: 0.05                 # 5% chance to sample goal directly
-    rewire_factor: 1.1              # Neighborhood size for rewiring (1.0-1.5)
-    delay_collision_checking: 1     # Optimize tree before collision checks
-    use_k_nearest: true             # Use k-nearest instead of radius
-    
+planning_plugin: chomp_interface/CHOMPPlanner
+
+# CHOMP-specific parameters
+chomp:
+  planning_time_limit: 5.0                    # Max planning time (seconds)
+  max_iterations: 100                         # Max optimization iterations
+  max_iterations_after_collision_free: 5      # Iterations after collision-free
+  smoothness_cost_weight: 0.1                 # Smoothness vs obstacle avoidance
+  obstacle_cost_weight: 1.0                   # Obstacle avoidance weight
+  learning_rate: 0.01                         # Gradient descent step size
+  smoothness_cost_velocity: 0.0               # Velocity smoothness weight
+  smoothness_cost_acceleration: 1.0           # Acceleration smoothness weight
+  smoothness_cost_jerk: 0.0                   # Jerk smoothness weight
+  ridge_factor: 0.001                         # Numerical stability factor
+  use_pseudo_inverse: false                   # Use pseudo-inverse for updates
+  pseudo_inverse_ridge_factor: 1e-4           # Pseudo-inverse regularization
+  joint_update_limit: 0.1                     # Max joint change per iteration
+  min_clearance: 0.2                          # Minimum obstacle clearance (m)
+  collision_threshold: 0.07                   # Collision distance threshold (m)
+  use_stochastic_descent: true                # Use stochastic gradient descent
+  enable_failure_recovery: true               # Retry on failure
+  max_recovery_attempts: 5                    # Max retry attempts
+
 # ============================================================================
 # Planning Group: arm (5-DOF manipulator)
 # ============================================================================
 arm:
-  # Only RRTstar available
   planner_configs:
-    - RRTstar
+    - chomp
   
-  # Default (and only) planner
-  default_planner_config: RRTstar
-  
-  # Projection evaluator - uses first 2 joints for sampling efficiency
-  projection_evaluator: joints(joint1,joint2)
+  default_planner_config: chomp
   
   # Collision checking resolution
-  # 0.005 = check every 0.5% of motion (fine resolution for quality)
-  longest_valid_segment_fraction: 0.005
+  longest_valid_segment_fraction: 0.01
   
   # Strictly enforce joint limits
   enforce_constrained_state_space: true
