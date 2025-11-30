@@ -9,10 +9,18 @@
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
 #include "maurice_msgs/srv/goto_js.hpp"
+#include <moveit_msgs/srv/get_motion_plan.hpp>
+#include <moveit_msgs/msg/motion_plan_request.hpp>
+#include <moveit_msgs/msg/robot_state.hpp>
+#include <moveit_msgs/msg/constraints.hpp>
+#include <moveit_msgs/msg/joint_constraint.hpp>
+#include <moveit_msgs/msg/workspace_parameters.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <future>
 
 using json = nlohmann::json;
 
@@ -76,17 +84,30 @@ public:
             rmw_qos_profile_services_default,
             service_callback_group_);
         
-        arm_plan_service_ = this->create_service<maurice_msgs::srv::GotoJS>(
-            "/mars/arm/goto_js",
-            std::bind(&MauriceArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
-            rmw_qos_profile_services_default,
-            service_callback_group_);
-        
         arm_reboot_service_ = this->create_service<std_srvs::srv::Trigger>(
             "/mars/arm/reboot",
             std::bind(&MauriceArmNode::armRebootServosCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
+        
+        arm_goto_js_service_ = this->create_service<maurice_msgs::srv::GotoJS>(
+            "/mars/arm/goto_js",
+            std::bind(&MauriceArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
+        
+        // MoveIt planning service client
+        moveit_plan_client_ = this->create_client<moveit_msgs::srv::GetMotionPlan>(
+            "/plan_kinematic_path");
+        
+        RCLCPP_INFO(this->get_logger(), "Waiting for MoveIt planning service...");
+        if (moveit_plan_client_->wait_for_service(std::chrono::seconds(5))) {
+            RCLCPP_INFO(this->get_logger(), "MoveIt planning service is available");
+            moveit_available_ = true;
+        } else {
+            RCLCPP_WARN(this->get_logger(), "MoveIt planning service not available - goto_js will fail");
+            moveit_available_ = false;
+        }
         
         // Setup HEAD publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
@@ -116,7 +137,7 @@ public:
         latest_head_command_ = initial_positions[6];
         RCLCPP_INFO(this->get_logger(), "Command buffers initialized (arm: 6 joints, head: 1 joint)");
         
-        // Create timer for control loop
+        // Create timer for control loop (also handles trajectory execution)
         RCLCPP_INFO(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
         auto period = std::chrono::duration<double>(1.0 / control_frequency_);
         control_timer_ = this->create_wall_timer(
@@ -293,6 +314,12 @@ private:
             joint_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
             joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
             arm_state_pub_->publish(joint_state_msg_);
+            
+            // Store latest joint positions for trajectory planning
+            {
+                std::lock_guard<std::mutex> js_lock(joint_state_mutex_);
+                latest_joint_positions_ = joint_state_msg_.position;
+            }
             
             // ========== PUBLISH HEAD POSITION ==========
             int head_encoder = positions[6];  // Index 6 = servo 7
@@ -596,16 +623,296 @@ private:
         }
     }
     
-    // ARM PLANNING (handled by arm_utils.py node)
-    void armGotoJSCallback(
-        const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> /*request*/,
-        std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response) {
-        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js");
-        RCLCPP_INFO(this->get_logger(), "Note: Planning is handled by arm_utils.py node");
+    // ========== TRAJECTORY PLANNING AND EXECUTION ==========
+    
+    /**
+     * Call MoveIt to plan a collision-free trajectory.
+     * Returns waypoints and time_from_start if successful.
+     * Note: Plans for 6 DOF arm (joint1-6) including gripper.
+     */
+    std::pair<std::vector<std::vector<double>>, std::vector<double>> 
+    planWithMoveIt(const std::vector<double>& start, const std::vector<double>& goal, double planning_time) {
         
-        // Planning is now handled by the arm_utils.py node, so just acknowledge
-        // The actual planning and trajectory execution happens in Python
-        response->success = true;
+        if (!moveit_available_) {
+            RCLCPP_ERROR(this->get_logger(), "MoveIt is not available");
+            return {};
+        }
+        
+        // Create motion plan request
+        auto request = std::make_shared<moveit_msgs::srv::GetMotionPlan::Request>();
+        
+        // Set planning group and parameters
+        request->motion_plan_request.group_name = "arm";
+        request->motion_plan_request.num_planning_attempts = 3;
+        request->motion_plan_request.allowed_planning_time = planning_time;
+        request->motion_plan_request.planner_id = "RRTConnect";  // or "chomp"
+        
+        // Set start state
+        request->motion_plan_request.start_state.joint_state.name = joint_names_;
+        request->motion_plan_request.start_state.joint_state.position = start;
+        request->motion_plan_request.start_state.is_diff = false;
+        
+        // Set goal constraints (joint space goal)
+        moveit_msgs::msg::Constraints goal_constraint;
+        for (size_t i = 0; i < goal.size(); ++i) {
+            moveit_msgs::msg::JointConstraint jc;
+            jc.joint_name = joint_names_[i];
+            jc.position = goal[i];
+            jc.tolerance_above = 0.01;
+            jc.tolerance_below = 0.01;
+            jc.weight = 1.0;
+            goal_constraint.joint_constraints.push_back(jc);
+        }
+        request->motion_plan_request.goal_constraints.push_back(goal_constraint);
+        
+        // Set workspace parameters
+        request->motion_plan_request.workspace_parameters.header.frame_id = "base_link";
+        request->motion_plan_request.workspace_parameters.min_corner.x = -1.0;
+        request->motion_plan_request.workspace_parameters.min_corner.y = -1.0;
+        request->motion_plan_request.workspace_parameters.min_corner.z = -0.5;
+        request->motion_plan_request.workspace_parameters.max_corner.x = 1.0;
+        request->motion_plan_request.workspace_parameters.max_corner.y = 1.0;
+        request->motion_plan_request.workspace_parameters.max_corner.z = 1.0;
+        
+        // Call service
+        RCLCPP_INFO(this->get_logger(), "Calling MoveIt planning service...");
+        auto future = moveit_plan_client_->async_send_request(request);
+        
+        // Wait for response
+        auto timeout = std::chrono::duration<double>(planning_time + 5.0);
+        if (future.wait_for(timeout) != std::future_status::ready) {
+            RCLCPP_ERROR(this->get_logger(), "MoveIt planning service call timed out");
+            return {};
+        }
+        
+        auto response = future.get();
+        
+        // Check if planning succeeded (error_code.val == 1 means SUCCESS)
+        if (response->motion_plan_response.error_code.val != 1) {
+            RCLCPP_ERROR(this->get_logger(), "MoveIt planning failed with error code %d", 
+                        response->motion_plan_response.error_code.val);
+            return {};
+        }
+        
+        // Extract trajectory waypoints and timing
+        auto& trajectory = response->motion_plan_response.trajectory.joint_trajectory;
+        std::vector<std::vector<double>> waypoints;
+        std::vector<double> time_from_start;
+        
+        for (const auto& point : trajectory.points) {
+            waypoints.push_back(std::vector<double>(point.positions.begin(), point.positions.end()));
+            double time_sec = point.time_from_start.sec + point.time_from_start.nanosec * 1e-9;
+            time_from_start.push_back(time_sec);
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "MoveIt planning succeeded with %zu waypoints", waypoints.size());
+        return {waypoints, time_from_start};
+    }
+    
+    /**
+     * Interpolate MoveIt trajectory waypoints to 30 Hz.
+     * Note: Waypoints are 6 joints (including gripper).
+     */
+    std::vector<std::vector<double>> interpolateMoveItTrajectory(
+        const std::vector<std::vector<double>>& waypoints,
+        const std::vector<double>& time_from_start,
+        double dt) {
+        
+        if (waypoints.empty() || time_from_start.empty()) {
+            return {};
+        }
+        
+        std::vector<std::vector<double>> trajectory;
+        double total_duration = time_from_start.back();
+        double current_time = 0.0;
+        
+        RCLCPP_INFO(this->get_logger(), "Interpolating trajectory: %zu waypoints, %.2f sec duration, %.3f sec timestep",
+                    waypoints.size(), total_duration, dt);
+        
+        while (current_time <= total_duration) {
+            // Find the two waypoints to interpolate between
+            size_t wp_idx = 0;
+            for (size_t i = 0; i < time_from_start.size() - 1; ++i) {
+                if (current_time <= time_from_start[i + 1]) {
+                    wp_idx = i;
+                    break;
+                }
+                wp_idx = i + 1;
+            }
+            
+            if (wp_idx >= waypoints.size() - 1) {
+                // At or past last waypoint - add it and finish
+                trajectory.push_back(waypoints.back());
+                break;  // Don't keep adding the last point
+            }
+            
+            // Linear interpolation between waypoints
+            double t1 = time_from_start[wp_idx];
+            double t2 = time_from_start[wp_idx + 1];
+            
+            if (t2 > t1) {
+                double alpha = (current_time - t1) / (t2 - t1);
+                const auto& wp1 = waypoints[wp_idx];
+                const auto& wp2 = waypoints[wp_idx + 1];
+                
+                std::vector<double> interpolated(wp1.size());
+                for (size_t j = 0; j < wp1.size(); ++j) {
+                    interpolated[j] = wp1[j] + alpha * (wp2[j] - wp1[j]);
+                }
+                trajectory.push_back(interpolated);
+            } else {
+                trajectory.push_back(waypoints[wp_idx]);
+            }
+            
+            current_time += dt;
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Interpolation complete: %zu trajectory points", trajectory.size());
+        return trajectory;
+    }
+    
+    /**
+     * Internal function to plan and execute a trajectory to a target joint state.
+     * This can be called from the service callback or any other part of the code.
+     * 
+     * @param target_positions Target joint positions in radians (6 joints including gripper)
+     * @param trajectory_time Total time for trajectory execution in seconds (not used for MoveIt)
+     * @return true if planning succeeded, false otherwise
+     */
+    bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time) {
+        // Validate inputs - 6 joints (arm + gripper)
+        if (target_positions.size() != 6) {
+            RCLCPP_ERROR(this->get_logger(), "Target must have 6 joint positions, got %zu", target_positions.size());
+            return false;
+        }
+        
+        if (trajectory_time <= 0.0) {
+            RCLCPP_ERROR(this->get_logger(), "Trajectory time must be positive, got %.3f", trajectory_time);
+            return false;
+        }
+        
+        // Get current joint state (6 joints including gripper)
+        std::vector<double> current_positions;
+        {
+            std::lock_guard<std::mutex> lock(joint_state_mutex_);
+            if (latest_joint_positions_.empty()) {
+                RCLCPP_ERROR(this->get_logger(), "No current joint state available");
+                return false;
+            }
+            current_positions = latest_joint_positions_;
+        }
+        
+        if (current_positions.size() != 6) {
+            RCLCPP_ERROR(this->get_logger(), "Current state has %zu joints, expected 6", current_positions.size());
+            return false;
+        }
+        
+        // Plan with MoveIt (6 DOF arm including gripper)
+        RCLCPP_INFO(this->get_logger(), "Planning with MoveIt for 6-DOF arm (including gripper)...");
+        auto [waypoints, time_from_start] = planWithMoveIt(current_positions, target_positions, trajectory_time);
+        
+        if (waypoints.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "MoveIt planning failed");
+            return false;
+        }
+        
+        // Check if MoveIt provided timing info, if not, create our own
+        bool has_timing = !time_from_start.empty() && time_from_start.back() > 0.0;
+        
+        if (!has_timing) {
+            RCLCPP_WARN(this->get_logger(), "MoveIt didn't time-parameterize trajectory, doing it manually");
+            // Distribute waypoints evenly over the requested trajectory_time
+            time_from_start.clear();
+            for (size_t i = 0; i < waypoints.size(); ++i) {
+                double t = (static_cast<double>(i) / (waypoints.size() - 1)) * trajectory_time;
+                time_from_start.push_back(t);
+            }
+        }
+        
+        // Interpolate trajectory to 30 Hz
+        const double dt = 1.0 / 30.0;
+        auto interpolated_trajectory = interpolateMoveItTrajectory(waypoints, time_from_start, dt);
+        
+        if (interpolated_trajectory.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "Trajectory interpolation failed");
+            return false;
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Executing trajectory with %zu waypoints over %.2f seconds", 
+                    interpolated_trajectory.size(), trajectory_time);
+        
+        // Execute trajectory by sending each waypoint with a sleep
+        auto sleep_duration = std::chrono::duration<double>(dt);
+        for (size_t i = 0; i < interpolated_trajectory.size(); ++i) {
+            const auto& point = interpolated_trajectory[i];
+            
+            // Send command
+            {
+                std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+                
+                // Convert radians to encoder counts
+                std::vector<double> command_data = point;
+                
+                // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
+                std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
+                for (size_t idx : flip_indices) {
+                    if (idx < command_data.size()) {
+                        command_data[idx] = -command_data[idx];
+                    }
+                }
+                
+                // Convert to encoder counts
+                std::vector<int> command_encoder;
+                for (double pos : command_data) {
+                    command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+                }
+                
+                latest_arm_command_ = command_encoder;
+                has_arm_command_ = true;
+            }
+            
+            // Sleep until next waypoint (except for last point)
+            if (i < interpolated_trajectory.size() - 1) {
+                std::this_thread::sleep_for(sleep_duration);
+            }
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Trajectory execution complete");
+        return true;
+    }
+    
+    /**
+     * Service callback for goto_js service.
+     * Calls the internal planning function.
+     * Plans for 6 joints (joint1-6) including gripper.
+     */
+    void armGotoJSCallback(
+        const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> request,
+        std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response) {
+        
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js");
+        
+        // Extract target positions and time from request
+        std::vector<double> target_positions(request->data.data.begin(), request->data.data.end());
+        double trajectory_time = request->time;
+        
+        RCLCPP_INFO(this->get_logger(), "Target (6 DOF): [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f], Time: %.2fs",
+                    target_positions.size() > 0 ? target_positions[0] : 0.0,
+                    target_positions.size() > 1 ? target_positions[1] : 0.0,
+                    target_positions.size() > 2 ? target_positions[2] : 0.0,
+                    target_positions.size() > 3 ? target_positions[3] : 0.0,
+                    target_positions.size() > 4 ? target_positions[4] : 0.0,
+                    target_positions.size() > 5 ? target_positions[5] : 0.0,
+                    trajectory_time);
+        
+        // Call internal planning function (6 joints including gripper)
+        response->success = planAndExecuteTrajectory(target_positions, trajectory_time);
+        
+        if (response->success) {
+            RCLCPP_INFO(this->get_logger(), "Successfully planned trajectory");
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Failed to plan trajectory");
+        }
     }
     
     struct JointConfig {
@@ -633,12 +940,22 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
-    rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_plan_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
+    rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_goto_js_service_;
     sensor_msgs::msg::JointState joint_state_msg_;
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
+    
+    
+    // Joint state tracking for planning
+    std::vector<double> latest_joint_positions_;
+    std::mutex joint_state_mutex_;
+    
+    // MoveIt planning (6 DOF arm including gripper joint6)
+    rclcpp::Client<moveit_msgs::srv::GetMotionPlan>::SharedPtr moveit_plan_client_;
+    bool moveit_available_{false};
+    std::vector<std::string> joint_names_{"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
     
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
@@ -667,7 +984,7 @@ int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<maurice_arm::MauriceArmNode>();
     
-    // Note: Planning is now handled by arm_utils.py node, not here
+    // Motion planning via /mars/arm/goto_js is handled internally using MoveIt
     
     // Use multi-threaded executor with 4 threads to handle callbacks in parallel
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);

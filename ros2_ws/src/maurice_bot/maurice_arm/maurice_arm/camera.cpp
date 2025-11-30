@@ -339,8 +339,8 @@ private:
         static int frame_count = 0;
         frame_count++;
         
-        // Log every 100 frames for health monitoring
-        if (frame_count % 100 == 0) {
+        // Log every 1000 frames for health monitoring (~33 seconds at 30 fps)
+        if (frame_count % 1000 == 0) {
             RCLCPP_INFO(this->get_logger(), "Camera health check - Frame %d, Device: %s", 
                         frame_count, device_path_.c_str());
         }

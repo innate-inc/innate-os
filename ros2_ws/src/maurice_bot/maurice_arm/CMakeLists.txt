@@ -17,6 +17,9 @@ find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(moveit_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 
 # fcl is only needed for the standalone collision_checker executable
 # Make it optional so the build can proceed without it if collision_checker isn't needed
@@ -66,6 +69,9 @@ ament_target_dependencies(arm
   dynamixel_sdk
   Eigen3
   maurice_msgs
+  moveit_msgs
+  geometry_msgs
+  trajectory_msgs
 )
 
 target_include_directories(arm PUBLIC
