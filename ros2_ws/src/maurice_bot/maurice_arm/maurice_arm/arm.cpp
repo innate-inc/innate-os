@@ -130,6 +130,10 @@ public:
         RCLCPP_INFO(this->get_logger(), "Initializing joint state message with 6 joint names");
         joint_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
         
+        // Define home position
+        home_position_ = {1.445009902188274, -1.3882526130365052, 1.517106999218899, 
+                          0.44638840927472156, -0.08897088569736719, 0.0015339807878856412};
+        
         // Initialize command buffers with current positions
         RCLCPP_INFO(this->get_logger(), "Initializing command buffers with current positions");
         auto [initial_positions, initial_velocities] = robot_->readState();
@@ -146,6 +150,21 @@ public:
             timer_callback_group_);
         
         RCLCPP_INFO(this->get_logger(), "Maurice Arm Node ready!");
+        
+        // Wait a bit for MoveIt to be ready, then go to home position
+        RCLCPP_INFO(this->get_logger(), "Waiting 3 seconds for MoveIt to initialize...");
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        
+        if (moveit_available_) {
+            RCLCPP_INFO(this->get_logger(), "Moving to home position...");
+            if (planAndExecuteTrajectory(home_position_, 5.0)) {
+                RCLCPP_INFO(this->get_logger(), "Reached home position");
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Failed to reach home position");
+            }
+        } else {
+            RCLCPP_WARN(this->get_logger(), "MoveIt not available, skipping home position");
+        }
     }
     
     ~MauriceArmNode() {
@@ -956,6 +975,7 @@ private:
     rclcpp::Client<moveit_msgs::srv::GetMotionPlan>::SharedPtr moveit_plan_client_;
     bool moveit_available_{false};
     std::vector<std::string> joint_names_{"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
+    std::vector<double> home_position_;  // Home position for startup
     
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
