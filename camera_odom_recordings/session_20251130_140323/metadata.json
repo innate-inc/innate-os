@@ -1,0 +1,14 @@
+{
+  "session_name": "session_20251130_140323",
+  "data_frequency": 10,
+  "start_time": "2025-11-30T14:03:23",
+  "duration_sec": 71.29329895973206,
+  "num_frames": 713,
+  "camera_topics": [
+    "/mars/main_camera/image/compressed"
+  ],
+  "camera_info_topics": [],
+  "odom_topic": "/odom",
+  "head_position_topic": "/mars/head/current_position",
+  "streaming_mode": "disk"
+}

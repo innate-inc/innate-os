@@ -1,0 +1,27 @@
+# File: brain/manipulation/config/camera_odom_recorder.yaml
+# Configuration for Camera + Odometry Recorder Node
+# Uses HDF5 disk streaming (no in-memory buffering)
+/**:
+  ros__parameters:
+    # Base directory for recordings (each session creates a subdirectory)
+    data_directory: "~/innate-os/camera_odom_recordings"
+    
+    # Recording frequency in Hz
+    data_frequency: 10
+    
+    # Compressed image topics to subscribe to
+    camera_topics:
+      - "/mars/main_camera/image/compressed"
+    
+    # Odometry topic
+    odom_topic: "/odom"
+    
+    # Head position topic (JSON string with current_position, etc.)
+    head_position_topic: "/mars/head/current_position"
+    
+    # Prefix for session directory names
+    session_name_prefix: "session"
+    
+    # HDF5 chunk size (number of frames per chunk)
+    # Larger chunks = better compression, smaller = faster random access
+    chunk_size: 100
