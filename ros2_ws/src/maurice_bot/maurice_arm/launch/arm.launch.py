@@ -1,18 +1,22 @@
+import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import PathJoinSubstitution
-from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # Get package directory
+    maurice_arm_dir = get_package_share_directory('maurice_arm')
+    
     # Get the path to the config file
-    config_file = PathJoinSubstitution([
-        FindPackageShare('maurice_arm'),
-        'config',
-        'arm_config.yaml'
-    ])
+    config_file = os.path.join(maurice_arm_dir, 'config', 'arm_config.yaml')
+    
+    # Path to planning launch file
+    planning_launch_file = os.path.join(maurice_arm_dir, 'launch', 'planning.launch.py')
 
-    # Create the arm node (C++ - includes arm + head servo 7)
+    # Create the arm node (C++ - includes arm + head servo 7 + MoveIt planning client)
     maurice_arm_node = Node(
         package='maurice_arm',
         executable='arm',
@@ -28,17 +32,14 @@ def generate_launch_description():
         name='camera',
         output='screen'
     )
-
-    # Create the arm utils node
-    arm_utils_node = Node(
-        package='maurice_arm',
-        executable='arm_utils.py',
-        name='arm_utils',
-        output='screen'
+    
+    # Include the planning launch file (MoveIt move_group)
+    planning_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(planning_launch_file)
     )
 
     return LaunchDescription([
         maurice_arm_node,
         camera_node,
-        arm_utils_node
+        planning_launch
     ])

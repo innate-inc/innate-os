@@ -1,6 +1,12 @@
 <mujoco model="maurice_bot">
   <compiler angle="radian" coordinate="local" meshdir="/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/meshes" eulerseq="zyx"/>
+  <!-- COLLISION DISABLED: Testing external collision checker -->
   <option gravity="0 0 -9.81" />
+  
+  <!-- Disable all collisions globally -->
+  <default>
+    <geom contype="0" conaffinity="0"/>
+  </default>
 
   <asset>
     <mesh name="base_mesh" file="base.STL" scale="1 1 1"/>
@@ -8,8 +14,9 @@
     <mesh name="link2_mesh" file="link2.STL" scale="1 1 1"/>
     <mesh name="link3_mesh" file="link3.STL" scale="1 1 1"/>
     <mesh name="link4_mesh" file="link4.STL" scale="1 1 1"/>
-    <mesh name="link5_mesh" file="link5.STL" scale="1 1 1"/>
-    <mesh name="link6_mesh" file="link6.STL" scale="1 1 1"/>
+    <mesh name="link5_mesh" file="link5.STL" scale="0.001 0.001 0.001"/>
+    <mesh name="link61_mesh" file="link61.STL" scale="0.001 0.001 0.001"/>
+    <mesh name="link62_mesh" file="link62.STL" scale="0.001 0.001 0.001"/>
     
     <!-- Add grid texture and material -->
     <texture type="2d" name="grid" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" width="512" height="512" mark="edge" markrgb=".8 .8 .8"/>
@@ -79,10 +86,16 @@
                       <joint name="joint5" type="hinge" axis="1 0 0" limited="true" range="-3.14 3.14" damping="5"/>
                       <geom name="link5_geom" type="mesh" mesh="link5_mesh" material="bright_orange" euler="1.5708 0 1.5708"/>
                       
-                      <body name="link6" pos="0.044 0.0091 0">
+                      <body name="link61" pos="0.044 -0.0091 0">
                         <inertial pos="0 0 0" mass="0.012" diaginertia="0.00002 0.00002 0.00002"/>
-                        <joint name="joint6" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="5"/>
-                        <geom name="link6_geom" type="mesh" mesh="link6_mesh" material="matt_black" euler="1.5708 0 1.5708"/>
+                        <joint name="joint6" type="hinge" axis="0 0 -1" limited="true" range="-1.57 1.57" damping="5"/>
+                        <geom name="link61_geom" type="mesh" mesh="link61_mesh" material="matt_black" euler="1.5708 0 1.5708"/>
+                      </body>
+                      
+                      <body name="link62" pos="0.044 0.0091 0">
+                        <inertial pos="0 0 0" mass="0.012" diaginertia="0.00002 0.00002 0.00002"/>
+                        <joint name="joint6M" type="hinge" axis="0 0 1" limited="true" range="-1.57 1.57" damping="5"/>
+                        <geom name="link62_geom" type="mesh" mesh="link62_mesh" material="matt_black" euler="1.5708 0 1.5708"/>
                       </body>
                       
                       <!-- Add End Effector -->
@@ -116,8 +129,14 @@
     <exclude name="ex_link2_link3" body1="link2" body2="link3"/>
     <exclude name="ex_link3_link4" body1="link3" body2="link4"/>
     <exclude name="ex_link4_link5" body1="link4" body2="link5"/>
-    <exclude name="ex_link5_link6" body1="link5" body2="link6"/>
+    <exclude name="ex_link5_link61" body1="link5" body2="link61"/>
+    <exclude name="ex_link5_link62" body1="link5" body2="link62"/>
   </contact>
+  
+  <!-- Geared gripper constraint: joint6M mimics joint6 with 1:1 ratio -->
+  <equality>
+    <joint name="gripper_gear" joint1="joint6" joint2="joint6M" polycoef="0 1 0 0 0" solref="0.001 1" solimp="0.99 0.999 0.001"/>
+  </equality>
 
   <actuator>
     <!-- Velocity control actuators -->
@@ -132,5 +151,6 @@
     <position joint="joint4" kp="1000"/>
     <position joint="joint5" kp="1000"/>
     <position joint="joint6" kp="1000"/>
+    <!-- joint6M is controlled via equality constraint, no separate actuator needed -->
   </actuator>
 </mujoco>

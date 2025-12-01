@@ -16,6 +16,14 @@ find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(moveit_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+
+# Maurice messages
+find_package(maurice_msgs REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -46,14 +54,30 @@ ament_target_dependencies(arm
   sensor_msgs
   std_msgs
   std_srvs
+  visualization_msgs
   dynamixel_sdk
+  Eigen3
+  maurice_msgs
+  moveit_msgs
+  geometry_msgs
+  trajectory_msgs
 )
 
-# Install C++ targets
+target_include_directories(arm PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+# Install C++ executables
 install(TARGETS
   camera_node
   arm
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install headers
+install(DIRECTORY include/
+  DESTINATION include
 )
 
 # Install Python files
