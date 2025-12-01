@@ -19,6 +19,11 @@ class DefaultDirective(Directive):
             "send_email",
             "send_picture_via_email",
             "drop_paper",
+            "move_arm_to_pose",
+            "get_end_effector_pose",
+            "move_arm_to_joint_positions",
+            "turn_by_degrees",
+            "rotate_follow",
         ]
 
     def get_prompt(self) -> None:
