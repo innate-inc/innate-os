@@ -19,16 +19,23 @@ class MoveArmToPose(Primitive):
     def name(self):
         return "move_arm_to_pose"
     
+    # Position limits for safe IK operation
+    X_MIN, X_MAX = 0.0, 0.3
+    Y_MIN, Y_MAX = -0.1, 0.3
+    Z_MIN, Z_MAX = 0.05, 0.3
+    
     def guidelines(self):
         return """Move the robot's arm to a specific position and orientation in 3D space.
         
 Parameters:
-- x, y, z: Target position in meters relative to base_link
+- x: Target x position in meters (range: 0.0 to 0.3)
+- y: Target y position in meters (range: -0.1 to 0.3)
+- z: Target z position in meters (range: 0.05 to 0.3)
 - roll, pitch, yaw: Target orientation in radians (optional, defaults to 0)
 - duration: Time in seconds for the motion (optional, default 3)
 
 Example usage:
-- Move arm to position (0.3, 0.1, 0.2) with default orientation over 3 seconds
+- Move arm to position (0.2, 0.1, 0.15) with default orientation over 3 seconds
 - Move arm to position (0.25, 0.0, 0.15) with pitch of 1.57 radians over 5 seconds
 """
     
@@ -51,6 +58,14 @@ Example usage:
         """
         if self.manipulation is None:
             return "Manipulation interface not available", PrimitiveResult.FAILURE
+        
+        # Validate position limits
+        if not (self.X_MIN <= x <= self.X_MAX):
+            return f"x={x:.3f} out of range [{self.X_MIN}, {self.X_MAX}]", PrimitiveResult.FAILURE
+        if not (self.Y_MIN <= y <= self.Y_MAX):
+            return f"y={y:.3f} out of range [{self.Y_MIN}, {self.Y_MAX}]", PrimitiveResult.FAILURE
+        if not (self.Z_MIN <= z <= self.Z_MAX):
+            return f"z={z:.3f} out of range [{self.Z_MIN}, {self.Z_MAX}]", PrimitiveResult.FAILURE
         
         self._send_feedback(f"Moving arm to position ({x:.3f}, {y:.3f}, {z:.3f})")
         
