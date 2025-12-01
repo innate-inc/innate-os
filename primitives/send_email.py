@@ -19,7 +19,7 @@ class SendEmail(Primitive):
         self.smtp_server = "smtp.gmail.com"  # Example using Gmail
         self.smtp_port = 587
         self.sender_email = "axel@innate.bot"  # Replace with robot's email
-        self.password = "ncbtviozpktktsdm"  # Use app password for Gmail
+        self.password = ""  # Use app password for Gmail
 
     @property
     def name(self):

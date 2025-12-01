@@ -19,6 +19,7 @@ import numpy as np  # For map data
 import math  # For yaw calculation
 import inspect
 import types
+import threading
 
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
@@ -33,10 +34,14 @@ from brain_client.primitive_types import (
     PrimitiveResult,
     RobotStateType,
 )
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.mobility_interface import MobilityInterface
+from brain_client.head_interface import HeadInterface
 
 # Import ROS message types for subscriptions
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
 from nav_msgs.msg import Odometry, OccupancyGrid
+from std_msgs.msg import String
 
 
 class PrimitiveExecutionActionServer(Node):
@@ -47,6 +52,12 @@ class PrimitiveExecutionActionServer(Node):
         self.last_main_camera_image = None  # Stores cv2 image object
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
+        self.last_head_position = None  # Stores head position dict (parsed JSON)
+        
+        # Track currently executing primitive for continuous state updates
+        self._current_primitive = None
+        self._current_primitive_lock = threading.Lock()
+        self._state_update_timer = None
 
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -56,6 +67,16 @@ class PrimitiveExecutionActionServer(Node):
 
         self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
         self.image_topic = self.get_parameter("image_topic").value
+
+        # Topic for base velocity commands
+        self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        self.cmd_vel_topic = self.get_parameter("cmd_vel_topic").value
+        
+        # Topics for head control
+        self.declare_parameter("head_position_topic", "/mars/head/set_position")
+        self.head_position_topic = self.get_parameter("head_position_topic").value
+        self.declare_parameter("head_current_position_topic", "/mars/head/current_position")
+        self.head_current_position_topic = self.get_parameter("head_current_position_topic").value
 
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
@@ -77,7 +98,17 @@ class PrimitiveExecutionActionServer(Node):
             self.map_callback,
             1,  # QoS profile with transient local durability might be better for map
         )
+        self.head_position_sub = self.create_subscription(
+            String, self.head_current_position_topic, self.head_position_callback, 10
+        )
 
+        # Create manipulation interface for primitives to use
+        self.manipulation = ManipulationInterface(self, self.get_logger())
+        # Create mobility interface for base/wheel motion
+        self.mobility = MobilityInterface(self, self.get_logger(), self.cmd_vel_topic)
+        # Create head interface for head tilt control
+        self.head = HeadInterface(self, self.get_logger(), self.head_position_topic)
+        
         # Dynamic primitive loading
         self.primitive_loader = PrimitiveLoader(self.get_logger())
         
@@ -113,6 +144,9 @@ class PrimitiveExecutionActionServer(Node):
             try:
                 primitive_instance = primitive_class(self.get_logger())
                 primitive_instance.node = self  # Inject the node
+                primitive_instance.manipulation = self.manipulation  # Inject manipulation interface
+                primitive_instance.mobility = self.mobility  # Inject mobility interface
+                primitive_instance.head = self.head  # Inject head interface
                 self._code_primitives[primitive_name] = primitive_instance
                 self.get_logger().info(f"Loaded code primitive: {primitive_name}")
             except Exception as e:
@@ -358,6 +392,149 @@ class PrimitiveExecutionActionServer(Node):
                 success_type=PrimitiveResult.FAILURE.value,
             )
 
+    def _update_primitive_robot_state(self, primitive):
+        """Helper to update a primitive's robot state from current sensor data."""
+        required_states = primitive.get_required_robot_states()
+        if not required_states:
+            return
+        
+        robot_state_to_inject = {}
+
+        if RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64 in required_states:
+            if self.last_main_camera_image is not None:
+                try:
+                    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+                    success, encoded_img_bytes = cv2.imencode(
+                        ".jpg", self.last_main_camera_image, encode_params
+                    )
+                    if success:
+                        robot_state_to_inject[
+                            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
+                        ] = base64.b64encode(encoded_img_bytes.tobytes()).decode(
+                            "utf-8"
+                        )
+                    else:
+                        self.get_logger().error(
+                            "Failed to encode last_main_camera_image for primitive state"
+                        )
+                except Exception as e_img:
+                    self.get_logger().error(
+                        f"Error encoding last_main_camera_image for primitive: {e_img}"
+                    )
+            else:
+                self.get_logger().warn(
+                    "Primitive requires "
+                    "LAST_MAIN_CAMERA_IMAGE_B64 but none available."
+                )
+
+        if RobotStateType.LAST_ODOM in required_states:
+            if self.last_odom is not None:
+                pos = self.last_odom.pose.pose.position
+                ori = self.last_odom.pose.pose.orientation
+                siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+                cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+                theta = math.atan2(siny_cosp, cosy_cosp)
+                robot_state_to_inject[RobotStateType.LAST_ODOM.value] = {
+                    "header": {
+                        "stamp": {
+                            "sec": self.last_odom.header.stamp.sec,
+                            "nanosec": self.last_odom.header.stamp.nanosec,
+                        },
+                        "frame_id": self.last_odom.header.frame_id,
+                    },
+                    "child_frame_id": self.last_odom.child_frame_id,
+                    "pose": {
+                        "pose": {
+                            "position": {"x": pos.x, "y": pos.y, "z": pos.z},
+                            "orientation": {
+                                "x": ori.x,
+                                "y": ori.y,
+                                "z": ori.z,
+                                "w": ori.w,
+                            },
+                        }
+                    },
+                    "theta_degrees": math.degrees(theta),
+                }
+            else:
+                self.get_logger().warn(
+                    "Primitive requires LAST_ODOM "
+                    "but none available."
+                )
+
+        if RobotStateType.LAST_MAP in required_states:
+            if self.last_map is not None:
+                map_data_bytes = np.array(
+                    self.last_map.data, dtype=np.int8
+                ).tobytes()
+                ori_map = self.last_map.info.origin.orientation
+                siny_cosp_map = 2.0 * (
+                    ori_map.w * ori_map.z + ori_map.x * ori_map.y
+                )
+                cosy_cosp_map = 1.0 - 2.0 * (
+                    ori_map.y * ori_map.y + ori_map.z * ori_map.z
+                )
+                yaw_map = math.atan2(siny_cosp_map, cosy_cosp_map)
+                robot_state_to_inject[RobotStateType.LAST_MAP.value] = {
+                    "header": {
+                        "stamp": {
+                            "sec": self.last_map.header.stamp.sec,
+                            "nanosec": self.last_map.header.stamp.nanosec,
+                        },
+                        "frame_id": self.last_map.header.frame_id,
+                    },
+                    "info": {
+                        "map_load_time": {
+                            "sec": self.last_map.info.map_load_time.sec,
+                            "nanosec": self.last_map.info.map_load_time.nanosec,
+                        },
+                        "resolution": self.last_map.info.resolution,
+                        "width": self.last_map.info.width,
+                        "height": self.last_map.info.height,
+                        "origin": {
+                            "position": {
+                                "x": self.last_map.info.origin.position.x,
+                                "y": self.last_map.info.origin.position.y,
+                                "z": self.last_map.info.origin.position.z,
+                            },
+                            "orientation": {
+                                "x": ori_map.x,
+                                "y": ori_map.y,
+                                "z": ori_map.z,
+                                "w": ori_map.w,
+                            },
+                            "yaw_degrees": math.degrees(yaw_map),
+                        },
+                    },
+                    "data_b64": base64.b64encode(map_data_bytes).decode("utf-8"),
+                }
+            else:
+                self.get_logger().warn(
+                    "Primitive requires LAST_MAP but "
+                    "none available."
+                )
+
+        if RobotStateType.LAST_HEAD_POSITION in required_states:
+            if self.last_head_position is not None:
+                robot_state_to_inject[RobotStateType.LAST_HEAD_POSITION.value] = self.last_head_position
+            else:
+                self.get_logger().warn(
+                    "Primitive requires LAST_HEAD_POSITION but "
+                    "none available."
+                )
+
+        if robot_state_to_inject:  # Only call if there is state to update
+            primitive.update_robot_state(**robot_state_to_inject)
+    
+    def _continuous_state_update_callback(self):
+        """Timer callback to continuously update robot state for running primitive."""
+        with self._current_primitive_lock:
+            if self._current_primitive is not None:
+                try:
+                    self._update_primitive_robot_state(self._current_primitive)
+                except Exception as e:
+                    self.get_logger().error(f"Error in continuous state update: {e}")
+    
     def _execute_code_primitive(self, goal_handle, primitive_type, inputs):
         primitive = self._code_primitives[primitive_type]
         # Trace start of code primitive execution
@@ -378,130 +555,32 @@ class PrimitiveExecutionActionServer(Node):
         primitive.set_feedback_callback(_publish_feedback)
 
         try:
-            # Get required states and inject them into the primitive
+            # Initial robot state injection
+            self._update_primitive_robot_state(primitive)
+            
+            # Start continuous state updates if primitive needs real-time data
             required_states = primitive.get_required_robot_states()
-            robot_state_to_inject = {}
-
-            if RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64 in required_states:
-                if self.last_main_camera_image is not None:
-                    try:
-                        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-                        success, encoded_img_bytes = cv2.imencode(
-                            ".jpg", self.last_main_camera_image, encode_params
-                        )
-                        if success:
-                            robot_state_to_inject[
-                                RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
-                            ] = base64.b64encode(encoded_img_bytes.tobytes()).decode(
-                                "utf-8"
-                            )
-                        else:
-                            self.get_logger().error(
-                                "Failed to encode last_main_camera_image for primitive state"
-                            )
-                    except Exception as e_img:
-                        self.get_logger().error(
-                            f"Error encoding last_main_camera_image for primitive: {e_img}"
-                        )
-                else:
-                    self.get_logger().warn(
-                        f"Primitive {primitive_type} requires "
-                        f"LAST_MAIN_CAMERA_IMAGE_B64 but none available."
-                    )
-
-            if RobotStateType.LAST_ODOM in required_states:
-                if self.last_odom is not None:
-                    pos = self.last_odom.pose.pose.position
-                    ori = self.last_odom.pose.pose.orientation
-                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                    theta = math.atan2(siny_cosp, cosy_cosp)
-                    robot_state_to_inject[RobotStateType.LAST_ODOM.value] = {
-                        "header": {
-                            "stamp": {
-                                "sec": self.last_odom.header.stamp.sec,
-                                "nanosec": self.last_odom.header.stamp.nanosec,
-                            },
-                            "frame_id": self.last_odom.header.frame_id,
-                        },
-                        "child_frame_id": self.last_odom.child_frame_id,
-                        "pose": {
-                            "pose": {
-                                "position": {"x": pos.x, "y": pos.y, "z": pos.z},
-                                "orientation": {
-                                    "x": ori.x,
-                                    "y": ori.y,
-                                    "z": ori.z,
-                                    "w": ori.w,
-                                },
-                            }
-                        },
-                        "theta_degrees": math.degrees(theta),
-                    }
-                else:
-                    self.get_logger().warn(
-                        f"Primitive {primitive_type} requires LAST_ODOM "
-                        f"but none available."
-                    )
-
-            if RobotStateType.LAST_MAP in required_states:
-                if self.last_map is not None:
-                    map_data_bytes = np.array(
-                        self.last_map.data, dtype=np.int8
-                    ).tobytes()
-                    ori_map = self.last_map.info.origin.orientation
-                    siny_cosp_map = 2.0 * (
-                        ori_map.w * ori_map.z + ori_map.x * ori_map.y
-                    )
-                    cosy_cosp_map = 1.0 - 2.0 * (
-                        ori_map.y * ori_map.y + ori_map.z * ori_map.z
-                    )
-                    yaw_map = math.atan2(siny_cosp_map, cosy_cosp_map)
-                    robot_state_to_inject[RobotStateType.LAST_MAP.value] = {
-                        "header": {
-                            "stamp": {
-                                "sec": self.last_map.header.stamp.sec,
-                                "nanosec": self.last_map.header.stamp.nanosec,
-                            },
-                            "frame_id": self.last_map.header.frame_id,
-                        },
-                        "info": {
-                            "map_load_time": {
-                                "sec": self.last_map.info.map_load_time.sec,
-                                "nanosec": self.last_map.info.map_load_time.nanosec,
-                            },
-                            "resolution": self.last_map.info.resolution,
-                            "width": self.last_map.info.width,
-                            "height": self.last_map.info.height,
-                            "origin": {
-                                "position": {
-                                    "x": self.last_map.info.origin.position.x,
-                                    "y": self.last_map.info.origin.position.y,
-                                    "z": self.last_map.info.origin.position.z,
-                                },
-                                "orientation": {
-                                    "x": ori_map.x,
-                                    "y": ori_map.y,
-                                    "z": ori_map.z,
-                                    "w": ori_map.w,
-                                },
-                                "yaw_degrees": math.degrees(yaw_map),
-                            },
-                        },
-                        "data_b64": base64.b64encode(map_data_bytes).decode("utf-8"),
-                    }
-                else:
-                    self.get_logger().warn(
-                        f"Primitive {primitive_type} requires LAST_MAP but "
-                        f"none available."
-                    )
-
-            if robot_state_to_inject:  # Only call if there is state to update
-                primitive.update_robot_state(**robot_state_to_inject)
+            if required_states:
+                with self._current_primitive_lock:
+                    self._current_primitive = primitive
+                # Create timer for 10Hz updates (100ms)
+                self._state_update_timer = self.create_timer(
+                    0.02, self._continuous_state_update_callback
+                )
+                self.get_logger().info(
+                    f"Started continuous state updates for '{primitive_type}' at 10Hz"
+                )
 
             # Execute the primitive with its direct inputs
             result_message, result_status = primitive.execute(**inputs)
 
+            # Stop continuous state updates
+            if self._state_update_timer is not None:
+                self._state_update_timer.cancel()
+                self._state_update_timer = None
+            with self._current_primitive_lock:
+                self._current_primitive = None
+            
             # Trace completion of the primitive before result handling
             self.get_logger().info(
                 f"[PEAS] _execute_code_primitive DONE '{primitive_type}' with status {result_status}"
@@ -666,12 +745,25 @@ class PrimitiveExecutionActionServer(Node):
     def map_callback(self, msg: OccupancyGrid):
         self.last_map = msg
         # self.get_logger().debug('Received new map for primitives.')
+    
+    def head_position_callback(self, msg: String):
+        """Parse head position JSON and store it."""
+        try:
+            import json
+            self.last_head_position = json.loads(msg.data)
+            # self.get_logger().debug(f'Received head position: {self.last_head_position}')
+        except Exception as e:
+            self.get_logger().error(f"Failed to parse head position JSON: {e}")
 
 
 def main(args=None):
     rclpy.init(args=args)
     action_server = PrimitiveExecutionActionServer()
-    rclpy.spin(action_server)
+    # Use a MultiThreadedExecutor so long-running action callbacks (e.g.,
+    # ones that wait on IK solutions) do not block subscriber callbacks.
+    executor = MultiThreadedExecutor()
+    executor.add_node(action_server)
+    executor.spin()
     action_server.destroy()
     rclpy.shutdown()
 
