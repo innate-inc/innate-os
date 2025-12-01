@@ -134,12 +134,3 @@ move_group:
     move_group/MoveGroupStateValidationService
     move_group/MoveGroupGetPlanningSceneService
     move_group/ApplyPlanningSceneService
-
-# ============================================================================
-# Static Collision Objects - Ground Plane
-# ============================================================================
-# NOTE: Ground plane is added programmatically in planner.cpp
-# - 10m x 10m x 2m box centered at z=-1.0m (extends from 0 to -2m)
-# - Attached to base_link frame
-# - Checked against: base_link, link2, link3, link61, link62 (5 links)
-# ============================================================================

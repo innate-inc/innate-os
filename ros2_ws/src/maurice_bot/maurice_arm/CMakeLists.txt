@@ -20,17 +20,6 @@ find_package(Eigen3 REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
-
-# fcl is only needed for the standalone collision_checker executable
-# Make it optional so the build can proceed without it if collision_checker isn't needed
-find_package(fcl QUIET)
-set(BUILD_COLLISION_CHECKER FALSE)
-if(fcl_FOUND)
-    set(BUILD_COLLISION_CHECKER TRUE)
-    message(STATUS "Found fcl - building collision_checker executable")
-else()
-    message(WARNING "fcl not found - collision_checker executable will not be built")
-endif()
 find_package(visualization_msgs REQUIRED)
 
 # Maurice messages
@@ -79,45 +68,12 @@ target_include_directories(arm PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
-# Add collision checker node (standalone) - only if fcl is available
-if(BUILD_COLLISION_CHECKER)
-    add_executable(collision_checker
-      maurice_arm/collision_checker.cpp
-      maurice_arm/collision_checker_main.cpp
-    )
-
-    ament_target_dependencies(collision_checker
-      rclcpp
-      sensor_msgs
-      std_msgs
-      visualization_msgs
-      Eigen3
-    )
-
-    target_link_libraries(collision_checker
-      fcl
-    )
-
-    target_include_directories(collision_checker PUBLIC
-      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-      $<INSTALL_INTERFACE:include>
-    )
-endif()
-
 # Install C++ executables
 install(TARGETS
   camera_node
   arm
   DESTINATION lib/${PROJECT_NAME}
 )
-
-# Install collision_checker only if it was built
-if(BUILD_COLLISION_CHECKER)
-    install(TARGETS
-      collision_checker
-      DESTINATION lib/${PROJECT_NAME}
-    )
-endif()
 
 # Install headers
 install(DIRECTORY include/
