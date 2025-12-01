@@ -52,5 +52,7 @@ install(
     manipulation/trajectory.py
     manipulation/policyViT.py
     manipulation/behavior_server.py
+    manipulation/camera_odom_recorder.py
+    manipulation/camera_odom_recorder_cli.py
   DESTINATION lib/${PROJECT_NAME}
 )
