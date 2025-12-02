@@ -3,10 +3,9 @@
 Telemetry logger for robot data.
 
 Sends telemetry to a Cloud Run proxy service which writes to BigQuery.
-No GCP credentials needed on the robot - just the API endpoint and key.
+No GCP credentials needed on the robot - just the API endpoint.
 """
 
-import os
 import json
 import logging
 from typing import Dict, Any, Optional
@@ -15,23 +14,15 @@ from urllib.error import URLError, HTTPError
 
 
 class RobotTelemetryLogger:
-    """
-    Logger for sending robot telemetry to Cloud Run service.
-    
-    Environment variables:
-    - TELEMETRY_URL: Cloud Run service URL (e.g., https://logs.innate.bot)
-    """
+    """Logger for sending robot telemetry to Cloud Run service."""
 
-    def __init__(self, robot_id: Optional[str] = None):
+    def __init__(self, url: str, robot_id: Optional[str] = None):
         self.logger = logging.getLogger(__name__)
-        self.base_url = os.getenv("TELEMETRY_URL", "").rstrip("/")
+        self.base_url = url.rstrip("/")
         self.robot_id = robot_id
         self.timeout = 5.0  # seconds
 
-        if not self.base_url:
-            self.logger.warning("TELEMETRY_URL not set. Telemetry logging disabled.")
-            self.enabled = False
-        elif not self.robot_id:
+        if not self.robot_id:
             self.logger.warning("robot_id not provided. Telemetry logging disabled.")
             self.enabled = False
         else:

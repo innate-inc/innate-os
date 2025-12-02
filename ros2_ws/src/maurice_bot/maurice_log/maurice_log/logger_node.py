@@ -17,8 +17,12 @@ class LoggerNode(Node):
         super().__init__('logger_node')
         self.get_logger().info('Logger node started')
 
+        # Declare and get telemetry URL parameter
+        self.declare_parameter('telemetry_url', 'https://logs.innate.bot')
+        telemetry_url = self.get_parameter('telemetry_url').get_parameter_value().string_value
+
         # Telemetry logger (initialized without robot_id, set when /robot/info received)
-        self.bq_logger = RobotTelemetryLogger(robot_id=None)
+        self.bq_logger = RobotTelemetryLogger(url=telemetry_url, robot_id=None)
 
         # Subscribe to robot info to get robot_id
         self.robot_info_sub = self.create_subscription(
