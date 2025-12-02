@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
+import json
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
 from diagnostic_msgs.msg import DiagnosticArray
 from std_msgs.msg import String
+
+from maurice_log.bigquery_logger import RobotTelemetryLogger
+
 
 class LoggerNode(Node):
     LOG_INTERVAL = 5.0  # 0.2Hz = every 5 seconds
@@ -12,6 +16,16 @@ class LoggerNode(Node):
     def __init__(self):
         super().__init__('logger_node')
         self.get_logger().info('Logger node started')
+
+        # Telemetry logger (initialized without robot_id, set when /robot/info received)
+        self.bq_logger = RobotTelemetryLogger(robot_id=None)
+
+        # Subscribe to robot info to get robot_id
+        self.robot_info_sub = self.create_subscription(
+            String,
+            '/robot/info',
+            self._on_robot_info,
+            10)
 
         # Latest message cache (updated on every message, logged on timer)
         self._latest_battery = None
@@ -43,6 +57,18 @@ class LoggerNode(Node):
         # Timer for throttled logging at 0.2Hz
         self.log_timer = self.create_timer(self.LOG_INTERVAL, self._log_vitals)
 
+    def _on_robot_info(self, msg):
+        """Handle robot info updates from /robot/info topic."""
+        try:
+            data = json.loads(msg.data)
+            robot_id = data.get("robot_id")
+            if robot_id and robot_id != self.bq_logger.robot_id:
+                self.bq_logger.robot_id = robot_id
+                self.bq_logger.enabled = bool(self.bq_logger.base_url and robot_id)
+                self.get_logger().info(f'Robot ID set: {robot_id}')
+        except json.JSONDecodeError:
+            pass
+
     def _on_battery(self, msg):
         self._latest_battery = msg
 
@@ -50,17 +76,40 @@ class LoggerNode(Node):
         self._latest_diagnostics = msg
 
     def _log_vitals(self):
-        """Log cached vitals at throttled rate."""
+        """Log cached vitals at throttled rate to console and BigQuery."""
         if self._latest_battery is not None:
-            self.get_logger().info(f'battery_state: {self._latest_battery}')
+            bat = self._latest_battery
+            self.get_logger().info(
+                f'battery: {bat.voltage:.2f}V ({bat.percentage:.1%})'
+            )
+            self.bq_logger.log_battery(
+                voltage=bat.voltage,
+                percentage=bat.percentage,
+                status=bat.power_supply_status,
+                health=bat.power_supply_health,
+            )
+
         if self._latest_diagnostics is not None:
-            self.get_logger().info(f'diagnostics: {self._latest_diagnostics}')
+            diag = self._latest_diagnostics
+            # Log first status entry if available
+            if diag.status:
+                entry = diag.status[0]
+                self.get_logger().info(
+                    f'diagnostics: [{entry.level}] {entry.name}: {entry.message}'
+                )
+                self.bq_logger.log_diagnostics(
+                    status=entry.level,
+                    message=entry.message,
+                    hardware_id=entry.hardware_id,
+                )
 
     def directive_callback(self, msg):
         self.get_logger().info(f'Received directive: {msg.data}')
+        self.bq_logger.log_directive(msg.data)
 
     def chat_out_callback(self, msg):
         self.get_logger().info(f'Received chat_out: {msg.data}')
+        self.bq_logger.log_chat(msg.data)
 
 def main(args=None):
     rclpy.init(args=args)
