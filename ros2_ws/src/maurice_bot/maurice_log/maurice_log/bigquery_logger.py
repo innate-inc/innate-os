@@ -77,9 +77,3 @@ class RobotTelemetryLogger:
         self._post("/log/directive", {
             "directive": directive,
         })
-
-    def log_chat(self, message: str):
-        """Log chat output event."""
-        self._post("/log/chat", {
-            "message": message,
-        })

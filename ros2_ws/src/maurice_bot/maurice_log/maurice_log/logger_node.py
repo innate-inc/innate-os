@@ -46,16 +46,11 @@ class LoggerNode(Node):
             '/diagnostics',
             self._on_diagnostics,
             1)
-        # Directive and chat_out are events - log immediately, don't throttle
+        # Directive events - log immediately, don't throttle
         self.directive_sub = self.create_subscription(
             String,
             '/brain/set_directive',
             self.directive_callback,
-            10)
-        self.chat_out_sub = self.create_subscription(
-            String,
-            '/brain/chat_out',
-            self.chat_out_callback,
             10)
 
         # Timer for throttled logging at 0.2Hz
@@ -98,11 +93,13 @@ class LoggerNode(Node):
             # Log first status entry if available
             if diag.status:
                 entry = diag.status[0]
+                # entry.level is bytes, convert to int
+                level = entry.level[0] if isinstance(entry.level, bytes) else entry.level
                 self.get_logger().info(
-                    f'diagnostics: [{entry.level}] {entry.name}: {entry.message}'
+                    f'diagnostics: [{level}] {entry.name}: {entry.message}'
                 )
                 self.bq_logger.log_diagnostics(
-                    status=entry.level,
+                    status=level,
                     message=entry.message,
                     hardware_id=entry.hardware_id,
                 )
@@ -110,10 +107,6 @@ class LoggerNode(Node):
     def directive_callback(self, msg):
         self.get_logger().info(f'Received directive: {msg.data}')
         self.bq_logger.log_directive(msg.data)
-
-    def chat_out_callback(self, msg):
-        self.get_logger().info(f'Received chat_out: {msg.data}')
-        self.bq_logger.log_chat(msg.data)
 
 def main(args=None):
     rclpy.init(args=args)
