@@ -20,25 +20,14 @@ class SendPictureViaEmail(Primitive):
         self.smtp_port = 587
         self.sender_email = "axel@innate.bot"
         self.password = ""  # Use app password for Gmail
-        self.last_main_camera_image_b64 = None
 
     @property
     def name(self):
         return "send_picture_via_email"
 
     def get_required_robot_states(self) -> list[RobotStateType]:
-        """Declare that this primitive needs the last image."""
-        return [RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64]
-
-    def update_robot_state(self, **kwargs):
-        """Store the last image received from the robot state."""
-        self.last_main_camera_image_b64 = kwargs.get(
-            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
-        )
-        if self.last_main_camera_image_b64:
-            self.logger.info("[SendPictureViaEmail] Received image for email.")
-        else:
-            self.logger.warn("[SendPictureViaEmail] Did not receive image for email.")
+        """No continuous state needed - camera accessed via node.get_camera_image_b64()."""
+        return []
 
     def guidelines(self):
         return (
@@ -62,7 +51,8 @@ class SendPictureViaEmail(Primitive):
         if not recipient:  # Checks for None or empty string
             recipient = self.default_recipient
 
-        if not self.last_main_camera_image_b64:
+        image_b64 = self.camera.get_image_b64()
+        if not image_b64:
             self.logger.error("[SendPictureViaEmail] No image available to send.")
             return "No image available to send", PrimitiveResult.FAILURE
 
@@ -72,7 +62,7 @@ class SendPictureViaEmail(Primitive):
 
         try:
             # Decode the base64 image
-            image_data = base64.b64decode(self.last_main_camera_image_b64)
+            image_data = base64.b64decode(image_b64)
 
             # Create message
             msg = MIMEMultipart()

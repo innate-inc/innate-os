@@ -28,7 +28,6 @@ class RotateFollow(Primitive):
 
     def __init__(self, logger):
         super().__init__(logger)
-        self.last_main_camera_image_b64 = None
         self.last_head_position = None
         self._cancel_requested = False
         self.gemini_client = None
@@ -38,17 +37,11 @@ class RotateFollow(Primitive):
         return "rotate_follow"
 
     def get_required_robot_states(self) -> list[RobotStateType]:
-        """Require camera image and head position for object detection and tracking."""
-        return [
-            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64,
-            RobotStateType.LAST_HEAD_POSITION
-        ]
+        """Require head position for tracking (camera accessed via node.get_camera_image*)."""
+        return [RobotStateType.LAST_HEAD_POSITION]
 
     def update_robot_state(self, **kwargs):
-        """Store the latest camera image and head position."""
-        self.last_main_camera_image_b64 = kwargs.get(
-            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
-        )
+        """Store the latest head position."""
         self.last_head_position = kwargs.get(
             RobotStateType.LAST_HEAD_POSITION.value
         )
@@ -198,7 +191,8 @@ class RotateFollow(Primitive):
         if self.head is None:
             return "Head interface not available", PrimitiveResult.FAILURE
         
-        if not self.last_main_camera_image_b64:
+        image_b64 = self.camera.get_image_b64()
+        if not image_b64:
             return "No camera image available", PrimitiveResult.FAILURE
         
         if not self.last_head_position:
@@ -209,16 +203,14 @@ class RotateFollow(Primitive):
         self._send_feedback(f"Detecting {target} using Gemini API...")
         
         # Detect target with Gemini
-        bbox = self._detect_target_with_gemini(self.last_main_camera_image_b64, target)
+        bbox = self._detect_target_with_gemini(image_b64, target)
         
         if bbox is None:
             return f"Failed to detect {target}", PrimitiveResult.FAILURE
         
-        # Decode current image for tracker initialization
+        # Get current image for tracker initialization
         try:
-            image_data = base64.b64decode(self.last_main_camera_image_b64)
-            nparr = np.frombuffer(image_data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            frame = self.camera.get_image()
             
             if frame is None:
                 return "Failed to decode camera image", PrimitiveResult.FAILURE
@@ -268,23 +260,14 @@ class RotateFollow(Primitive):
                 self._send_feedback("Tracking canceled")
                 break
             
-            # Get fresh image (continuously updated by action server at 10Hz)
-            if not self.last_main_camera_image_b64:
-                self.logger.warn("No camera image available, stopping tracking")
-                break
-            
+            # Get fresh image from node
             try:
-                # Decode the continuously-updated base64 image
-                image_data = base64.b64decode(self.last_main_camera_image_b64)
-                nparr = np.frombuffer(image_data, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                
+                frame = self.camera.get_image()
                 if frame is None:
-                    self.logger.warn("Failed to decode frame, stopping tracking")
+                    self.logger.warn("No camera image available, stopping tracking")
                     break
-                
             except Exception as e:
-                self.logger.error(f"Frame decode error: {e}")
+                self.logger.error(f"Frame fetch error: {e}")
                 break
             
             # Update tracker
