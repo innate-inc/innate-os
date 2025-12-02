@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import psutil
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
@@ -103,6 +104,11 @@ class LoggerNode(Node):
                     message=entry.message,
                     hardware_id=entry.hardware_id,
                 )
+
+        # Log CPU usage
+        cpu_usage = psutil.cpu_percent(interval=None)
+        self.get_logger().info(f'cpu: {cpu_usage:.1f}%')
+        self.bq_logger.log_cpu(cpu_usage=cpu_usage)
 
     def directive_callback(self, msg):
         self.get_logger().info(f'Received directive: {msg.data}')

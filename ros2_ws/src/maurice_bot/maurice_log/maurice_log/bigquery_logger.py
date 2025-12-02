@@ -77,3 +77,9 @@ class RobotTelemetryLogger:
         self._post("/log/directive", {
             "directive": directive,
         })
+
+    def log_cpu(self, cpu_usage: float):
+        """Log CPU usage percentage."""
+        self._post("/log/cpu", {
+            "cpu_usage": cpu_usage,
+        })
