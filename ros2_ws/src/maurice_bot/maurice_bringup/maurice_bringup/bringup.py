@@ -251,7 +251,8 @@ class Bringup(Node):
         # Publish the odometry message
         self.odom_pub.publish(odom)
 
-        # Publish battery state
+    def _publish_battery(self):
+        """Publish battery state at low frequency (0.2Hz)."""
         voltage = self.i2c_manager.battery_voltage
         percentage = self.battery_manager.get_percentage(voltage)
         
