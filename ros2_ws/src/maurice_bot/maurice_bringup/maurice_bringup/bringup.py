@@ -57,6 +57,7 @@ class Bringup(Node):
                 ('battery.warning_percentage', 20),
                 ('battery.critical_percentage', 10),
                 ('ros_topics.odom_frequency', 30.0),
+                ('ros_topics.battery_state_frequency', 0.2),
                 ('motion_control.max_speed', 2.5),
                 ('motion_control.max_angular_speed', 2.5),
             ]
@@ -81,6 +82,7 @@ class Bringup(Node):
             },
             'ros_topics': {
                 'odom_frequency': self.get_parameter('ros_topics.odom_frequency').value,
+                'battery_state_frequency': self.get_parameter('ros_topics.battery_state_frequency').value,
             }
         }
         
@@ -138,6 +140,10 @@ class Bringup(Node):
 
         # Every minute, enqueue a UART health request (will update battery_voltage)
         self.status_timer = self.create_timer(60.0, self.uart_manager.request_health)
+        
+        # Publish battery at configured frequency (default 0.2Hz)
+        battery_period = 1.0 / self.params['ros_topics']['battery_state_frequency']
+        self.battery_timer = self.create_timer(battery_period, self._publish_battery)
 
         if self.debug:
             self.get_logger().debug('Finished setting up ROS2 services and topics')
@@ -248,6 +254,8 @@ class Bringup(Node):
         self.odom_pub.publish(odom)
 
         # Publish battery state
+    def _publish_battery(self):
+        """Publish battery state at low frequency (0.2Hz)."""
         voltage = self.uart_manager.battery_voltage
         percentage = self.battery_manager.get_percentage(voltage)
         
