@@ -20,13 +20,11 @@ class RobotTelemetryLogger:
     
     Environment variables:
     - TELEMETRY_URL: Cloud Run service URL (e.g., https://logs.innate.bot)
-    - TELEMETRY_API_KEY: API key for authentication
     """
 
     def __init__(self, robot_id: Optional[str] = None):
         self.logger = logging.getLogger(__name__)
         self.base_url = os.getenv("TELEMETRY_URL", "").rstrip("/")
-        self.api_key = os.getenv("TELEMETRY_API_KEY", "")
         self.robot_id = robot_id
         self.timeout = 5.0  # seconds
 
@@ -52,10 +50,7 @@ class RobotTelemetryLogger:
             req = Request(
                 url,
                 data=json.dumps(data).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "X-API-Key": self.api_key,
-                },
+                headers={"Content-Type": "application/json"},
                 method="POST",
             )
             with urlopen(req, timeout=self.timeout) as response:
