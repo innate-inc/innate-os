@@ -7,21 +7,28 @@ from diagnostic_msgs.msg import DiagnosticArray
 from std_msgs.msg import String
 
 class LoggerNode(Node):
+    LOG_INTERVAL = 5.0  # 0.2Hz = every 5 seconds
+
     def __init__(self):
         super().__init__('logger_node')
         self.get_logger().info('Logger node started')
 
-        # Subscribers
+        # Latest message cache (updated on every message, logged on timer)
+        self._latest_battery = None
+        self._latest_diagnostics = None
+
+        # Subscribers (queue depth 1 since we only care about latest)
         self.battery_sub = self.create_subscription(
             BatteryState,
             '/battery_state',
-            self.battery_callback,
-            10)
+            self._on_battery,
+            1)
         self.diagnostics_sub = self.create_subscription(
             DiagnosticArray,
             '/diagnostics',
-            self.diagnostics_callback,
-            10)
+            self._on_diagnostics,
+            1)
+        # Directive and chat_out are events - log immediately, don't throttle
         self.directive_sub = self.create_subscription(
             String,
             '/brain/set_directive',
@@ -33,11 +40,21 @@ class LoggerNode(Node):
             self.chat_out_callback,
             10)
 
-    def battery_callback(self, msg):
-        self.get_logger().info(f'Received battery_state: {msg}')
+        # Timer for throttled logging at 0.2Hz
+        self.log_timer = self.create_timer(self.LOG_INTERVAL, self._log_vitals)
 
-    def diagnostics_callback(self, msg):
-        self.get_logger().info(f'Received diagnostics: {msg}')
+    def _on_battery(self, msg):
+        self._latest_battery = msg
+
+    def _on_diagnostics(self, msg):
+        self._latest_diagnostics = msg
+
+    def _log_vitals(self):
+        """Log cached vitals at throttled rate."""
+        if self._latest_battery is not None:
+            self.get_logger().info(f'battery_state: {self._latest_battery}')
+        if self._latest_diagnostics is not None:
+            self.get_logger().info(f'diagnostics: {self._latest_diagnostics}')
 
     def directive_callback(self, msg):
         self.get_logger().info(f'Received directive: {msg.data}')
