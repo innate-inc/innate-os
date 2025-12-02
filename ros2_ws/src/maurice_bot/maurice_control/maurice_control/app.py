@@ -278,14 +278,15 @@ class AppControl(Node):
 
             # If robot_info.json does not exist, create it with default values
             if not os.path.exists(robot_info_file_path):
-                default_robot_info = {"robot_name": "MARS"}
+                default_robot_info = {"robot_name": "MARS", "robot_id": None}
                 with open(robot_info_file_path, 'w') as f:
                     json.dump(default_robot_info, f)
             
-            # Read robot_name from robot_info.json
+            # Read robot_name and robot_id from robot_info.json
             with open(robot_info_file_path, 'r') as f:
                 robot_info = json.load(f)
-            data_to_publish_dict['robot_name'] = robot_info['robot_name']
+            data_to_publish_dict['robot_name'] = robot_info.get('robot_name')
+            data_to_publish_dict['robot_id'] = robot_info.get('robot_id')
             
             # Read minimum_app_version from os_config.json
             os_config = self.app_config
