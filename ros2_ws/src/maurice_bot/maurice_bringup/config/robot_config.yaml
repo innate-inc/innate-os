@@ -12,4 +12,6 @@
     motion_control:
       max_speed: 0.4
       max_angular_speed: 2.5
+    ros_topics:
       odom_frequency: 30.0
+      battery_state_frequency: 0.2
