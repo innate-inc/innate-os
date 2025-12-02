@@ -21,8 +21,6 @@ import inspect
 import types
 import threading
 
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-
 
 # Import the action definition – ensure that it is built and available.
 from brain_messages.action import ExecutePrimitive, ExecuteBehavior
@@ -37,9 +35,9 @@ from brain_client.primitive_types import (
 from brain_client.manipulation_interface import ManipulationInterface
 from brain_client.mobility_interface import MobilityInterface
 from brain_client.head_interface import HeadInterface
+from brain_client.camera_interface import CameraInterface
 
 # Import ROS message types for subscriptions
-from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
 from nav_msgs.msg import Odometry, OccupancyGrid
 from std_msgs.msg import String
 
@@ -49,7 +47,6 @@ class PrimitiveExecutionActionServer(Node):
         super().__init__("primitive_execution_action_server")
 
         # Robot state storage
-        self.last_main_camera_image = None  # Stores cv2 image object
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
         self.last_head_position = None  # Stores head position dict (parsed JSON)
@@ -58,12 +55,6 @@ class PrimitiveExecutionActionServer(Node):
         self._current_primitive = None
         self._current_primitive_lock = threading.Lock()
         self._state_update_timer = None
-
-        image_qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
 
         self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
         self.image_topic = self.get_parameter("image_topic").value
@@ -82,13 +73,6 @@ class PrimitiveExecutionActionServer(Node):
         self.simulator_mode = self.get_parameter("simulator_mode").value
 
         # Subscribers for robot state
-        # TODO: Make topic names configurable if needed (e.g., via parameters)
-        self.main_camera_image_sub = self.create_subscription(
-            CompressedImage,
-            self.image_topic,
-            self.main_camera_image_callback,
-            image_qos,
-        )
         self.odom_sub = self.create_subscription(
             Odometry, "/odom", self.odom_callback, 10
         )
@@ -102,12 +86,11 @@ class PrimitiveExecutionActionServer(Node):
             String, self.head_current_position_topic, self.head_position_callback, 10
         )
 
-        # Create manipulation interface for primitives to use
+        # Create interfaces for primitives to use
         self.manipulation = ManipulationInterface(self, self.get_logger())
-        # Create mobility interface for base/wheel motion
         self.mobility = MobilityInterface(self, self.get_logger(), self.cmd_vel_topic)
-        # Create head interface for head tilt control
         self.head = HeadInterface(self, self.get_logger(), self.head_position_topic)
+        self.camera = CameraInterface(self, self.get_logger(), self.image_topic)
         
         # Dynamic primitive loading
         self.primitive_loader = PrimitiveLoader(self.get_logger())
@@ -144,9 +127,10 @@ class PrimitiveExecutionActionServer(Node):
             try:
                 primitive_instance = primitive_class(self.get_logger())
                 primitive_instance.node = self  # Inject the node
-                primitive_instance.manipulation = self.manipulation  # Inject manipulation interface
-                primitive_instance.mobility = self.mobility  # Inject mobility interface
-                primitive_instance.head = self.head  # Inject head interface
+                primitive_instance.manipulation = self.manipulation
+                primitive_instance.mobility = self.mobility
+                primitive_instance.head = self.head
+                primitive_instance.camera = self.camera
                 self._code_primitives[primitive_name] = primitive_instance
                 self.get_logger().info(f"Loaded code primitive: {primitive_name}")
             except Exception as e:
@@ -400,32 +384,8 @@ class PrimitiveExecutionActionServer(Node):
         
         robot_state_to_inject = {}
 
-        if RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64 in required_states:
-            if self.last_main_camera_image is not None:
-                try:
-                    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-                    success, encoded_img_bytes = cv2.imencode(
-                        ".jpg", self.last_main_camera_image, encode_params
-                    )
-                    if success:
-                        robot_state_to_inject[
-                            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
-                        ] = base64.b64encode(encoded_img_bytes.tobytes()).decode(
-                            "utf-8"
-                        )
-                    else:
-                        self.get_logger().error(
-                            "Failed to encode last_main_camera_image for primitive state"
-                        )
-                except Exception as e_img:
-                    self.get_logger().error(
-                        f"Error encoding last_main_camera_image for primitive: {e_img}"
-                    )
-            else:
-                self.get_logger().warn(
-                    "Primitive requires "
-                    "LAST_MAIN_CAMERA_IMAGE_B64 but none available."
-                )
+        # Note: Camera images are accessed via node.get_camera_image_b64() / get_camera_image()
+        # instead of being pushed through hydration (avoids unnecessary encoding)
 
         if RobotStateType.LAST_ODOM in required_states:
             if self.last_odom is not None:
@@ -728,16 +688,6 @@ class PrimitiveExecutionActionServer(Node):
         super().destroy_node()
 
     # Callbacks for state subscriptions
-    def main_camera_image_callback(self, msg: CompressedImage):
-        try:
-            np_arr = np.frombuffer(msg.data, np.uint8)
-            self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            self.get_logger().debug("Received and decoded new image for primitives.")
-        except Exception as e:
-            self.get_logger().error(
-                f"Failed to decode compressed image for primitive state: {e}"
-            )
-
     def odom_callback(self, msg: Odometry):
         self.last_odom = msg
         # self.get_logger().debug('Received new odometry for primitives.')
