@@ -9,19 +9,19 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(nav_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 
-install(
-    PROGRAMS maurice_log/logger_node.py
-    DESTINATION lib/${PROJECT_NAME}
+# Install Python modules
+ament_python_install_package(${PROJECT_NAME}
+  PACKAGE_DIR maurice_log
 )
 
-install(
-    DIRECTORY maurice_log
-    DESTINATION share/${PROJECT_NAME}
+# Install Python executables
+install(PROGRAMS
+  maurice_log/logger_node.py
+  DESTINATION lib/${PROJECT_NAME}
 )
-
 
 ament_package()
