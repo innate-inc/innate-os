@@ -54,5 +54,6 @@ install(
     manipulation/behavior_server.py
     manipulation/camera_odom_recorder.py
     manipulation/camera_odom_recorder_cli.py
+    manipulation/spline_path_server.py
   DESTINATION lib/${PROJECT_NAME}
 )

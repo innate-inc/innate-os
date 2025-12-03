@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spline Path Viewer + Recorder</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a24;
+            --accent-primary: #00ff88;
+            --accent-secondary: #00ccff;
+            --accent-warning: #ffaa00;
+            --accent-danger: #ff4466;
+            --text-primary: #e8e8e8;
+            --text-secondary: #888899;
+            --border-color: #2a2a3a;
+        }
+        
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .header h1::before {
+            content: '◈';
+            font-size: 20px;
+        }
+        
+        .connection-panel {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .connection-panel input {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            width: 280px;
+        }
+        
+        .connection-panel input:focus {
+            outline: none;
+            border-color: var(--accent-secondary);
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent-danger);
+            transition: background 0.3s;
+        }
+        
+        .status-dot.connected {
+            background: var(--accent-primary);
+            box-shadow: 0 0 10px var(--accent-primary);
+        }
+        
+        /* Main content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        /* Canvas container */
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            background: var(--bg-secondary);
+            overflow: hidden;
+        }
+        
+        #mapCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 340px;
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .panel {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .panel-title {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+        
+        /* Buttons */
+        .btn {
+            padding: 10px 18px;
+            border: none;
+            border-radius: 6px;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: var(--accent-primary);
+            color: var(--bg-primary);
+        }
+        
+        .btn-primary:hover {
+            background: #00dd77;
+            transform: translateY(-1px);
+        }
+        
+        .btn-primary:disabled {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--border-color);
+        }
+        
+        .btn-danger {
+            background: var(--accent-danger);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #ff2244;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        /* Task label input */
+        .task-input-group {
+            margin-bottom: 12px;
+        }
+        
+        .task-input-group label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        
+        .task-input-group input {
+            width: 100%;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+        }
+        
+        .task-input-group input:focus {
+            outline: none;
+            border-color: var(--accent-secondary);
+        }
+        
+        /* Control point list */
+        .point-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+        
+        .point-item {
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+        
+        .point-item .index {
+            color: var(--accent-secondary);
+            margin-right: 10px;
+        }
+        
+        .point-item .coords {
+            color: var(--text-secondary);
+        }
+        
+        .point-item .delete-btn {
+            background: none;
+            border: none;
+            color: var(--accent-danger);
+            cursor: pointer;
+            font-size: 16px;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+        
+        .point-item .delete-btn:hover {
+            opacity: 1;
+        }
+        
+        /* Settings */
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        
+        .setting-row label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .setting-row input[type="range"] {
+            width: 120px;
+            accent-color: var(--accent-primary);
+        }
+        
+        .setting-row input[type="number"] {
+            width: 70px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+        
+        /* Info panel */
+        .info-panel {
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        
+        .info-row:last-child {
+            margin-bottom: 0;
+        }
+        
+        .info-label {
+            color: var(--text-secondary);
+        }
+        
+        .info-value {
+            color: var(--accent-secondary);
+        }
+        
+        /* Recording count */
+        .recording-count {
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 12px;
+            text-align: center;
+        }
+        
+        .recording-count .count {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--accent-primary);
+        }
+        
+        .recording-count .label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        
+        .toast {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-top: 8px;
+            animation: slideIn 0.3s ease;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            max-width: 350px;
+        }
+        
+        .toast.error {
+            border-color: var(--accent-danger);
+        }
+        
+        .toast.success {
+            border-color: var(--accent-primary);
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        /* Zoom controls */
+        .zoom-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .zoom-btn {
+            width: 36px;
+            height: 36px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .zoom-btn:hover {
+            background: var(--border-color);
+        }
+        
+        /* Mouse coords display */
+        .mouse-coords {
+            position: absolute;
+            bottom: 20px;
+            right: 360px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        /* Executing indicator */
+        .executing-indicator {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--accent-warning);
+            color: var(--bg-primary);
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: 600;
+            display: none;
+            animation: pulse 1.5s infinite;
+        }
+        
+        .executing-indicator.active {
+            display: block;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        /* Progress bar */
+        .progress-container {
+            position: absolute;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 20px;
+            min-width: 300px;
+            display: none;
+        }
+        
+        .progress-container.active {
+            display: block;
+        }
+        
+        .progress-label {
+            font-size: 13px;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+        
+        .progress-bar {
+            height: 6px;
+            background: var(--bg-primary);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-primary);
+            transition: width 0.3s;
+            border-radius: 3px;
+        }
+        
+        /* Save directory input */
+        .save-dir-group {
+            margin-top: 12px;
+        }
+        
+        .save-dir-group label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        
+        .save-dir-group input {
+            width: 100%;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Spline Path Viewer + Recorder</h1>
+        <div class="connection-panel">
+            <input type="text" id="wsUrl" placeholder="ws://localhost:8770" value="ws://localhost:8770">
+            <button class="btn btn-secondary" id="connectBtn" onclick="toggleConnection()">Connect</button>
+            <div class="status-indicator">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Disconnected</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="canvas-container" id="canvasContainer">
+            <canvas id="mapCanvas"></canvas>
+            
+            <div class="zoom-controls">
+                <button class="zoom-btn" onclick="zoomIn()">+</button>
+                <button class="zoom-btn" onclick="zoomOut()">−</button>
+                <button class="zoom-btn" onclick="resetView()">⟲</button>
+            </div>
+            
+            <div class="mouse-coords" id="mouseCoords">X: 0.00m  Y: 0.00m</div>
+            
+            <div class="executing-indicator" id="executingIndicator">
+                ⚡ Executing...
+            </div>
+            
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-label" id="progressLabel">Starting...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="sidebar">
+            <div class="panel">
+                <div class="panel-title">Task Configuration</div>
+                <div class="task-input-group">
+                    <label for="taskLabel">Task Label</label>
+                    <input type="text" id="taskLabel" placeholder="e.g., pick_object, navigate_to_door">
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="executeBtn" onclick="executePath()" disabled>
+                        ▶ Record & Run
+                    </button>
+                    <button class="btn btn-danger" id="stopBtn" onclick="stopExecution()" disabled>
+                        ⏹ Stop
+                    </button>
+                </div>
+                <div class="btn-group" style="margin-top: 10px;">
+                    <button class="btn btn-secondary" onclick="clearPoints()">Clear All</button>
+                    <button class="btn btn-secondary" onclick="undoPoint()">Undo</button>
+                </div>
+                
+                <div class="recording-count">
+                    <div class="count" id="recordingCount">0</div>
+                    <div class="label">Recordings this session</div>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-title">Path Settings</div>
+                <div class="setting-row">
+                    <label>Point Spacing (m)</label>
+                    <input type="number" id="pointSpacing" value="0.1" min="0.02" max="0.5" step="0.01">
+                </div>
+                <div class="setting-row">
+                    <label>Spline Tension</label>
+                    <input type="range" id="splineTension" value="0.5" min="0" max="1" step="0.1">
+                </div>
+                <div class="setting-row">
+                    <label>Show Interpolated</label>
+                    <input type="checkbox" id="showInterpolated" checked>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-title">Map Info</div>
+                <div class="info-panel" id="mapInfo">
+                    <div class="info-row">
+                        <span class="info-label">Status</span>
+                        <span class="info-value" id="mapStatus">No map loaded</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Size</span>
+                        <span class="info-value" id="mapSize">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Resolution</span>
+                        <span class="info-value" id="mapResolution">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="panel" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                <div class="panel-title">Control Points (<span id="pointCount">0</span>)</div>
+                <div class="point-list" id="pointList">
+                    <div style="color: var(--text-secondary); font-size: 13px; text-align: center; padding: 20px;">
+                        Click on map to add control points
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script>
+        // State
+        let ws = null;
+        let isConnected = false;
+        let mapData = null;
+        let mapMetadata = null;
+        let controlPoints = [];
+        let robotPose = null;
+        let isExecuting = false;
+        let recordingCount = 0;
+        
+        // View state
+        let viewOffset = { x: 0, y: 0 };
+        let viewScale = 1.0;
+        let isDragging = false;
+        let lastMousePos = { x: 0, y: 0 };
+        
+        // Canvas
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Initialize
+        function init() {
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            canvas.addEventListener('mousedown', onMouseDown);
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('wheel', onWheel);
+            canvas.addEventListener('contextmenu', e => e.preventDefault());
+            
+            requestAnimationFrame(render);
+        }
+        
+        function resizeCanvas() {
+            const container = document.getElementById('canvasContainer');
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+        }
+        
+        // WebSocket connection
+        function toggleConnection() {
+            if (isConnected) {
+                disconnect();
+            } else {
+                connect();
+            }
+        }
+        
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            
+            try {
+                ws = new WebSocket(url);
+                
+                ws.onopen = () => {
+                    isConnected = true;
+                    updateConnectionUI();
+                    showToast('Connected to server', 'success');
+                };
+                
+                ws.onclose = () => {
+                    isConnected = false;
+                    updateConnectionUI();
+                    showToast('Disconnected from server', 'error');
+                };
+                
+                ws.onerror = (error) => {
+                    showToast('Connection error', 'error');
+                };
+                
+                ws.onmessage = (event) => {
+                    handleMessage(JSON.parse(event.data));
+                };
+                
+            } catch (e) {
+                showToast('Failed to connect: ' + e.message, 'error');
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function updateConnectionUI() {
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const connectBtn = document.getElementById('connectBtn');
+            const executeBtn = document.getElementById('executeBtn');
+            
+            if (isConnected) {
+                statusDot.classList.add('connected');
+                statusText.textContent = 'Connected';
+                connectBtn.textContent = 'Disconnect';
+                executeBtn.disabled = controlPoints.length < 2;
+            } else {
+                statusDot.classList.remove('connected');
+                statusText.textContent = 'Disconnected';
+                connectBtn.textContent = 'Connect';
+                executeBtn.disabled = true;
+            }
+        }
+        
+        // Handle incoming messages
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'map':
+                    loadMap(data);
+                    break;
+                case 'pose':
+                    robotPose = data.pose;
+                    if (data.is_executing !== undefined) {
+                        isExecuting = data.is_executing;
+                    }
+                    updateExecutingUI();
+                    break;
+                case 'status':
+                    showToast(data.message, 'success');
+                    if (data.is_executing !== undefined) {
+                        isExecuting = data.is_executing;
+                    }
+                    updateExecutingUI();
+                    updateProgress(data);
+                    break;
+                case 'error':
+                    showToast(data.message, 'error');
+                    isExecuting = false;
+                    updateExecutingUI();
+                    hideProgress();
+                    break;
+                case 'recording':
+                    handleRecording(data);
+                    break;
+            }
+        }
+        
+        function loadMap(data) {
+            mapMetadata = data.metadata;
+            
+            // Decompress map data
+            const compressed = Uint8Array.from(atob(data.data), c => c.charCodeAt(0));
+            const decompressed = pako.inflate(compressed);
+            mapData = new Int8Array(decompressed.buffer);
+            
+            // Update UI
+            document.getElementById('mapStatus').textContent = 'Loaded';
+            document.getElementById('mapSize').textContent = 
+                `${mapMetadata.width} × ${mapMetadata.height}`;
+            document.getElementById('mapResolution').textContent = 
+                `${mapMetadata.resolution.toFixed(3)} m/px`;
+            
+            // Center view on map
+            resetView();
+            
+            showToast('Map loaded successfully', 'success');
+        }
+        
+        function updateExecutingUI() {
+            const indicator = document.getElementById('executingIndicator');
+            const stopBtn = document.getElementById('stopBtn');
+            const executeBtn = document.getElementById('executeBtn');
+            
+            if (isExecuting) {
+                indicator.classList.add('active');
+                stopBtn.disabled = false;
+                executeBtn.disabled = true;
+            } else {
+                indicator.classList.remove('active');
+                stopBtn.disabled = true;
+                executeBtn.disabled = !isConnected || controlPoints.length < 2;
+            }
+        }
+        
+        function updateProgress(data) {
+            const container = document.getElementById('progressContainer');
+            const label = document.getElementById('progressLabel');
+            const fill = document.getElementById('progressFill');
+            
+            if (data.phase) {
+                container.classList.add('active');
+                label.textContent = data.message;
+                
+                const phases = {
+                    'starting': 5,
+                    'recording_start': 15,
+                    'path_execution': 50,
+                    'recording_stop': 75,
+                    'transfer': 90,
+                    'complete': 100
+                };
+                
+                fill.style.width = (phases[data.phase] || 0) + '%';
+                
+                if (data.phase === 'complete') {
+                    setTimeout(hideProgress, 2000);
+                }
+            }
+        }
+        
+        function hideProgress() {
+            document.getElementById('progressContainer').classList.remove('active');
+        }
+        
+        async function handleRecording(data) {
+            showToast(`Recording received: ${data.session_name}`, 'success');
+            recordingCount++;
+            document.getElementById('recordingCount').textContent = recordingCount;
+            
+            // Decompress HDF5 data
+            const compressed = Uint8Array.from(atob(data.h5_data), c => c.charCodeAt(0));
+            const h5Data = pako.inflate(compressed);
+            
+            // Create download for HDF5
+            const h5Blob = new Blob([h5Data], { type: 'application/x-hdf5' });
+            
+            // Create metadata JSON
+            const metadataBlob = new Blob(
+                [JSON.stringify(data.metadata, null, 2)], 
+                { type: 'application/json' }
+            );
+            
+            // Generate filenames with task label
+            const taskLabel = data.metadata.task_label || 'unlabeled';
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const baseName = `${taskLabel}_${timestamp}`;
+            
+            // Download files
+            downloadFile(h5Blob, `${baseName}.h5`);
+            downloadFile(metadataBlob, `${baseName}_metadata.json`);
+            
+            showToast(`Saved: ${baseName}.h5 and metadata`, 'success');
+        }
+        
+        function downloadFile(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+        
+        // Coordinate conversions
+        function worldToCanvas(wx, wy) {
+            if (!mapMetadata) return { x: 0, y: 0 };
+            
+            const mx = (wx - mapMetadata.origin_x) / mapMetadata.resolution;
+            const my = mapMetadata.height - (wy - mapMetadata.origin_y) / mapMetadata.resolution;
+            
+            const cx = (mx * viewScale) + viewOffset.x;
+            const cy = (my * viewScale) + viewOffset.y;
+            
+            return { x: cx, y: cy };
+        }
+        
+        function canvasToWorld(cx, cy) {
+            if (!mapMetadata) return { x: 0, y: 0 };
+            
+            const mx = (cx - viewOffset.x) / viewScale;
+            const my = (cy - viewOffset.y) / viewScale;
+            
+            const wx = mx * mapMetadata.resolution + mapMetadata.origin_x;
+            const wy = (mapMetadata.height - my) * mapMetadata.resolution + mapMetadata.origin_y;
+            
+            return { x: wx, y: wy };
+        }
+        
+        // Mouse handlers
+        function onMouseDown(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            if (e.button === 0 && !e.shiftKey) {
+                const world = canvasToWorld(x, y);
+                addControlPoint(world.x, world.y);
+            } else if (e.button === 2 || (e.button === 0 && e.shiftKey)) {
+                isDragging = true;
+                lastMousePos = { x, y };
+                canvas.style.cursor = 'grabbing';
+            }
+        }
+        
+        function onMouseMove(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            const world = canvasToWorld(x, y);
+            document.getElementById('mouseCoords').textContent = 
+                `X: ${world.x.toFixed(2)}m  Y: ${world.y.toFixed(2)}m`;
+            
+            if (isDragging) {
+                viewOffset.x += x - lastMousePos.x;
+                viewOffset.y += y - lastMousePos.y;
+                lastMousePos = { x, y };
+            }
+        }
+        
+        function onMouseUp(e) {
+            isDragging = false;
+            canvas.style.cursor = 'crosshair';
+        }
+        
+        function onWheel(e) {
+            e.preventDefault();
+            
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+            const newScale = viewScale * zoomFactor;
+            
+            if (newScale < 0.1 || newScale > 10) return;
+            
+            viewOffset.x = mouseX - (mouseX - viewOffset.x) * zoomFactor;
+            viewOffset.y = mouseY - (mouseY - viewOffset.y) * zoomFactor;
+            viewScale = newScale;
+        }
+        
+        // View controls
+        function zoomIn() {
+            const center = { x: canvas.width / 2, y: canvas.height / 2 };
+            viewOffset.x = center.x - (center.x - viewOffset.x) * 1.2;
+            viewOffset.y = center.y - (center.y - viewOffset.y) * 1.2;
+            viewScale *= 1.2;
+        }
+        
+        function zoomOut() {
+            const center = { x: canvas.width / 2, y: canvas.height / 2 };
+            viewOffset.x = center.x - (center.x - viewOffset.x) * 0.8;
+            viewOffset.y = center.y - (center.y - viewOffset.y) * 0.8;
+            viewScale *= 0.8;
+        }
+        
+        function resetView() {
+            if (!mapMetadata) return;
+            
+            const padding = 50;
+            const scaleX = (canvas.width - 2 * padding) / mapMetadata.width;
+            const scaleY = (canvas.height - 2 * padding) / mapMetadata.height;
+            viewScale = Math.min(scaleX, scaleY);
+            
+            viewOffset.x = (canvas.width - mapMetadata.width * viewScale) / 2;
+            viewOffset.y = (canvas.height - mapMetadata.height * viewScale) / 2;
+        }
+        
+        // Control points
+        function addControlPoint(x, y) {
+            controlPoints.push({ x, y });
+            updatePointList();
+            updateConnectionUI();
+        }
+        
+        function removeControlPoint(index) {
+            controlPoints.splice(index, 1);
+            updatePointList();
+            updateConnectionUI();
+        }
+        
+        function clearPoints() {
+            controlPoints = [];
+            updatePointList();
+            updateConnectionUI();
+        }
+        
+        function undoPoint() {
+            if (controlPoints.length > 0) {
+                controlPoints.pop();
+                updatePointList();
+                updateConnectionUI();
+            }
+        }
+        
+        function updatePointList() {
+            const list = document.getElementById('pointList');
+            const count = document.getElementById('pointCount');
+            
+            count.textContent = controlPoints.length;
+            
+            if (controlPoints.length === 0) {
+                list.innerHTML = `
+                    <div style="color: var(--text-secondary); font-size: 13px; text-align: center; padding: 20px;">
+                        Click on map to add control points
+                    </div>
+                `;
+                return;
+            }
+            
+            list.innerHTML = controlPoints.map((p, i) => `
+                <div class="point-item">
+                    <span>
+                        <span class="index">#${i + 1}</span>
+                        <span class="coords">(${p.x.toFixed(2)}, ${p.y.toFixed(2)})</span>
+                    </span>
+                    <button class="delete-btn" onclick="removeControlPoint(${i})">×</button>
+                </div>
+            `).join('');
+        }
+        
+        // Spline interpolation (Catmull-Rom)
+        function catmullRom(p0, p1, p2, p3, t, tension = 0.5) {
+            const t2 = t * t;
+            const t3 = t2 * t;
+            
+            const s = (1 - tension) / 2;
+            
+            const b0 = s * (-t3 + 2*t2 - t);
+            const b1 = s * (-t3 + t2) + (2*t3 - 3*t2 + 1);
+            const b2 = s * (t3 - 2*t2 + t) + (-2*t3 + 3*t2);
+            const b3 = s * (t3 - t2);
+            
+            return {
+                x: b0*p0.x + b1*p1.x + b2*p2.x + b3*p3.x,
+                y: b0*p0.y + b1*p1.y + b2*p2.y + b3*p3.y
+            };
+        }
+        
+        function interpolateSpline(points, spacing) {
+            if (points.length < 2) return points;
+            
+            const tension = parseFloat(document.getElementById('splineTension').value);
+            const result = [];
+            
+            const extended = [
+                { x: 2*points[0].x - points[1].x, y: 2*points[0].y - points[1].y },
+                ...points,
+                { x: 2*points[points.length-1].x - points[points.length-2].x, 
+                  y: 2*points[points.length-1].y - points[points.length-2].y }
+            ];
+            
+            for (let i = 1; i < extended.length - 2; i++) {
+                const p0 = extended[i - 1];
+                const p1 = extended[i];
+                const p2 = extended[i + 1];
+                const p3 = extended[i + 2];
+                
+                const segmentLength = Math.sqrt(
+                    Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+                );
+                const numSteps = Math.max(2, Math.ceil(segmentLength / spacing));
+                
+                for (let j = 0; j < numSteps; j++) {
+                    const t = j / numSteps;
+                    result.push(catmullRom(p0, p1, p2, p3, t, tension));
+                }
+            }
+            
+            result.push(points[points.length - 1]);
+            
+            // Calculate headings
+            for (let i = 0; i < result.length; i++) {
+                if (i < result.length - 1) {
+                    result[i].theta = Math.atan2(
+                        result[i+1].y - result[i].y,
+                        result[i+1].x - result[i].x
+                    );
+                } else {
+                    result[i].theta = result[i-1].theta;
+                }
+            }
+            
+            return result;
+        }
+        
+        // Execute path
+        function executePath() {
+            if (!isConnected || controlPoints.length < 2) return;
+            
+            const taskLabel = document.getElementById('taskLabel').value.trim() || 'unlabeled';
+            const spacing = parseFloat(document.getElementById('pointSpacing').value);
+            const waypoints = interpolateSpline(controlPoints, spacing);
+            
+            ws.send(JSON.stringify({
+                type: 'execute_path',
+                waypoints: waypoints,
+                task_label: taskLabel
+            }));
+            
+            // Show progress
+            document.getElementById('progressContainer').classList.add('active');
+            document.getElementById('progressLabel').textContent = 'Starting...';
+            document.getElementById('progressFill').style.width = '0%';
+        }
+        
+        function stopExecution() {
+            if (isConnected) {
+                ws.send(JSON.stringify({ type: 'stop' }));
+            }
+        }
+        
+        // Rendering
+        function render() {
+            ctx.fillStyle = '#0a0a0f';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            if (mapData && mapMetadata) {
+                drawMap();
+            }
+            
+            if (controlPoints.length >= 2) {
+                drawSpline();
+            }
+            
+            drawControlPoints();
+            
+            if (robotPose) {
+                drawRobot();
+            }
+            
+            requestAnimationFrame(render);
+        }
+        
+        function drawMap() {
+            const imageData = ctx.createImageData(mapMetadata.width, mapMetadata.height);
+            
+            for (let i = 0; i < mapData.length; i++) {
+                const value = mapData[i];
+                let color;
+                
+                if (value === -1) {
+                    color = [40, 40, 50];
+                } else if (value === 0) {
+                    color = [18, 18, 26];
+                } else {
+                    const intensity = Math.min(255, value * 2.5);
+                    color = [intensity, intensity * 0.9, intensity * 0.95];
+                }
+                
+                const idx = i * 4;
+                imageData.data[idx] = color[0];
+                imageData.data[idx + 1] = color[1];
+                imageData.data[idx + 2] = color[2];
+                imageData.data[idx + 3] = 255;
+            }
+            
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = mapMetadata.width;
+            tempCanvas.height = mapMetadata.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.putImageData(imageData, 0, 0);
+            
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(
+                tempCanvas,
+                viewOffset.x, viewOffset.y,
+                mapMetadata.width * viewScale,
+                mapMetadata.height * viewScale
+            );
+        }
+        
+        function drawSpline() {
+            const showInterpolated = document.getElementById('showInterpolated').checked;
+            const spacing = parseFloat(document.getElementById('pointSpacing').value);
+            const interpolated = interpolateSpline(controlPoints, spacing);
+            
+            if (showInterpolated && interpolated.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(0, 255, 136, 0.6)';
+                ctx.lineWidth = 2;
+                
+                const first = worldToCanvas(interpolated[0].x, interpolated[0].y);
+                ctx.moveTo(first.x, first.y);
+                
+                for (let i = 1; i < interpolated.length; i++) {
+                    const p = worldToCanvas(interpolated[i].x, interpolated[i].y);
+                    ctx.lineTo(p.x, p.y);
+                }
+                
+                ctx.stroke();
+                
+                ctx.fillStyle = 'rgba(0, 255, 136, 0.8)';
+                const arrowInterval = Math.max(1, Math.floor(interpolated.length / 20));
+                
+                for (let i = 0; i < interpolated.length; i += arrowInterval) {
+                    const p = interpolated[i];
+                    const canvasPos = worldToCanvas(p.x, p.y);
+                    
+                    ctx.save();
+                    ctx.translate(canvasPos.x, canvasPos.y);
+                    ctx.rotate(-p.theta + Math.PI/2);
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(0, -6);
+                    ctx.lineTo(4, 4);
+                    ctx.lineTo(-4, 4);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    ctx.restore();
+                }
+            }
+            
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(0, 204, 255, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+            
+            const firstCtrl = worldToCanvas(controlPoints[0].x, controlPoints[0].y);
+            ctx.moveTo(firstCtrl.x, firstCtrl.y);
+            
+            for (let i = 1; i < controlPoints.length; i++) {
+                const p = worldToCanvas(controlPoints[i].x, controlPoints[i].y);
+                ctx.lineTo(p.x, p.y);
+            }
+            
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+        
+        function drawControlPoints() {
+            for (let i = 0; i < controlPoints.length; i++) {
+                const p = controlPoints[i];
+                const canvasPos = worldToCanvas(p.x, p.y);
+                
+                ctx.beginPath();
+                ctx.arc(canvasPos.x, canvasPos.y, 12, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(0, 204, 255, 0.2)';
+                ctx.fill();
+                
+                ctx.beginPath();
+                ctx.arc(canvasPos.x, canvasPos.y, 6, 0, Math.PI * 2);
+                ctx.fillStyle = i === 0 ? '#00ff88' : 
+                               i === controlPoints.length - 1 ? '#ff4466' : '#00ccff';
+                ctx.fill();
+                
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '11px JetBrains Mono';
+                ctx.textAlign = 'center';
+                ctx.fillText(i + 1, canvasPos.x, canvasPos.y - 16);
+            }
+        }
+        
+        function drawRobot() {
+            const pos = worldToCanvas(robotPose.x, robotPose.y);
+            const size = 15;
+            
+            ctx.save();
+            ctx.translate(pos.x, pos.y);
+            ctx.rotate(-robotPose.theta + Math.PI/2);
+            
+            ctx.beginPath();
+            ctx.moveTo(0, -size);
+            ctx.lineTo(size * 0.7, size * 0.7);
+            ctx.lineTo(-size * 0.7, size * 0.7);
+            ctx.closePath();
+            
+            ctx.fillStyle = isExecuting ? 'rgba(255, 170, 0, 0.8)' : 'rgba(255, 68, 102, 0.8)';
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+        
+        // Toast notifications
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.remove();
+            }, 4000);
+        }
+        
+        // Initialize on load
+        init();
+    </script>
+</body>
+</html>
