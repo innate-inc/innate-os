@@ -12,7 +12,6 @@ import json
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, ActionClient, GoalResponse, CancelResponse
-from rclpy.executors import MultiThreadedExecutor
 import cv2  # For image processing
 import base64  # For encoding
 import numpy as np  # For map data
@@ -759,11 +758,7 @@ class PrimitiveExecutionActionServer(Node):
 def main(args=None):
     rclpy.init(args=args)
     action_server = PrimitiveExecutionActionServer()
-    # Use a MultiThreadedExecutor so long-running action callbacks (e.g.,
-    # ones that wait on IK solutions) do not block subscriber callbacks.
-    executor = MultiThreadedExecutor()
-    executor.add_node(action_server)
-    executor.spin()
+    rclpy.spin(action_server)
     action_server.destroy()
     rclpy.shutdown()
 
