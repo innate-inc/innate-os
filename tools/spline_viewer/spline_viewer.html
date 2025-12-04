@@ -218,7 +218,8 @@
             margin-bottom: 6px;
         }
         
-        .task-input-group input {
+        .task-input-group input,
+        .task-input-group select {
             width: 100%;
             background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
@@ -229,9 +230,50 @@
             font-size: 13px;
         }
         
-        .task-input-group input:focus {
+        .task-input-group input:focus,
+        .task-input-group select:focus {
             outline: none;
             border-color: var(--accent-secondary);
+        }
+        
+        .task-input-group select {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888899' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 36px;
+        }
+        
+        .task-input-group select option {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            padding: 8px;
+        }
+        
+        /* Map selector with loading state */
+        .map-selector-wrapper {
+            position: relative;
+        }
+        
+        .map-selector-wrapper.loading select {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        
+        .map-selector-wrapper.loading::after {
+            content: '⟳';
+            position: absolute;
+            right: 36px;
+            top: 50%;
+            transform: translateY(-50%);
+            animation: spin 1s linear infinite;
+            color: var(--accent-secondary);
+        }
+        
+        @keyframes spin {
+            from { transform: translateY(-50%) rotate(0deg); }
+            to { transform: translateY(-50%) rotate(360deg); }
         }
         
         /* Control point list */
@@ -494,29 +536,6 @@
             transition: width 0.3s;
             border-radius: 3px;
         }
-        
-        /* Save directory input */
-        .save-dir-group {
-            margin-top: 12px;
-        }
-        
-        .save-dir-group label {
-            display: block;
-            font-size: 13px;
-            color: var(--text-secondary);
-            margin-bottom: 6px;
-        }
-        
-        .save-dir-group input {
-            width: 100%;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-        }
     </style>
 </head>
 <body>
@@ -557,6 +576,18 @@
         </div>
         
         <div class="sidebar">
+            <div class="panel">
+                <div class="panel-title">Map Selection</div>
+                <div class="task-input-group">
+                    <label for="mapSelector">Active Map</label>
+                    <div class="map-selector-wrapper" id="mapSelectorWrapper">
+                        <select id="mapSelector" onchange="changeMap()">
+                            <option value="">-- Connect to load maps --</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
             <div class="panel">
                 <div class="panel-title">Task Configuration</div>
                 <div class="task-input-group">
@@ -606,6 +637,10 @@
                         <span class="info-value" id="mapStatus">No map loaded</span>
                     </div>
                     <div class="info-row">
+                        <span class="info-label">Name</span>
+                        <span class="info-value" id="mapName">-</span>
+                    </div>
+                    <div class="info-row">
                         <span class="info-label">Size</span>
                         <span class="info-value" id="mapSize">-</span>
                     </div>
@@ -640,6 +675,11 @@
         let robotPose = null;
         let isExecuting = false;
         let recordingCount = 0;
+        
+        // Map selection state
+        let availableMaps = [];
+        let currentMapName = '';
+        let isChangingMap = false;
         
         // View state
         let viewOffset = { x: 0, y: 0 };
@@ -734,6 +774,11 @@
                 statusText.textContent = 'Disconnected';
                 connectBtn.textContent = 'Connect';
                 executeBtn.disabled = true;
+                
+                // Reset map selector
+                availableMaps = [];
+                currentMapName = '';
+                updateMapSelector();
             }
         }
         
@@ -743,8 +788,16 @@
                 case 'map':
                     loadMap(data);
                     break;
+                case 'map_list':
+                    handleMapList(data);
+                    break;
                 case 'pose':
                     robotPose = data.pose;
+                    // Debug: log first pose received
+                    if (!window._poseLogged) {
+                        console.log('First robot pose received:', robotPose);
+                        window._poseLogged = true;
+                    }
                     if (data.is_executing !== undefined) {
                         isExecuting = data.is_executing;
                     }
@@ -757,10 +810,18 @@
                     }
                     updateExecutingUI();
                     updateProgress(data);
+                    
+                    // Check if map change completed
+                    if (isChangingMap && !data.message.includes('Changing map')) {
+                        isChangingMap = false;
+                        document.getElementById('mapSelectorWrapper').classList.remove('loading');
+                    }
                     break;
                 case 'error':
                     showToast(data.message, 'error');
                     isExecuting = false;
+                    isChangingMap = false;
+                    document.getElementById('mapSelectorWrapper').classList.remove('loading');
                     updateExecutingUI();
                     hideProgress();
                     break;
@@ -768,6 +829,72 @@
                     handleRecording(data);
                     break;
             }
+        }
+        
+        function handleMapList(data) {
+            availableMaps = data.available_maps || [];
+            currentMapName = data.current_map || '';
+            updateMapSelector();
+        }
+        
+        function updateMapSelector() {
+            const selector = document.getElementById('mapSelector');
+            const wrapper = document.getElementById('mapSelectorWrapper');
+            
+            // Clear existing options
+            selector.innerHTML = '';
+            
+            if (!isConnected) {
+                selector.innerHTML = '<option value="">-- Connect to load maps --</option>';
+                return;
+            }
+            
+            if (availableMaps.length === 0) {
+                selector.innerHTML = '<option value="">-- No maps available --</option>';
+                return;
+            }
+            
+            // Add options for each map
+            availableMaps.forEach(mapName => {
+                const option = document.createElement('option');
+                option.value = mapName;
+                option.textContent = mapName.replace('.yaml', '');
+                if (mapName === currentMapName) {
+                    option.selected = true;
+                }
+                selector.appendChild(option);
+            });
+            
+            // Update map name in info panel
+            document.getElementById('mapName').textContent = currentMapName.replace('.yaml', '') || '-';
+        }
+        
+        function changeMap() {
+            const selector = document.getElementById('mapSelector');
+            const selectedMap = selector.value;
+            
+            if (!selectedMap || selectedMap === currentMapName) {
+                return;
+            }
+            
+            if (isExecuting) {
+                showToast('Cannot change map while executing', 'error');
+                selector.value = currentMapName;
+                return;
+            }
+            
+            // Show loading state
+            isChangingMap = true;
+            document.getElementById('mapSelectorWrapper').classList.add('loading');
+            
+            // Clear current points as they may not be valid on new map
+            clearPoints();
+            
+            // Send change map request
+            ws.send(JSON.stringify({
+                type: 'change_map',
+                map_name: selectedMap
+            }));
         }
         
         function loadMap(data) {
@@ -778,8 +905,16 @@
             const decompressed = pako.inflate(compressed);
             mapData = new Int8Array(decompressed.buffer);
             
+            // Update current map name if provided
+            if (mapMetadata.map_name) {
+                currentMapName = mapMetadata.map_name;
+                updateMapSelector();
+            }
+            
             // Update UI
             document.getElementById('mapStatus').textContent = 'Loaded';
+            document.getElementById('mapName').textContent = 
+                (mapMetadata.map_name || currentMapName || 'unknown').replace('.yaml', '');
             document.getElementById('mapSize').textContent = 
                 `${mapMetadata.width} × ${mapMetadata.height}`;
             document.getElementById('mapResolution').textContent = 
@@ -788,6 +923,10 @@
             // Center view on map
             resetView();
             
+            // Finish loading state
+            isChangingMap = false;
+            document.getElementById('mapSelectorWrapper').classList.remove('loading');
+            
             showToast('Map loaded successfully', 'success');
         }
         
@@ -795,15 +934,18 @@
             const indicator = document.getElementById('executingIndicator');
             const stopBtn = document.getElementById('stopBtn');
             const executeBtn = document.getElementById('executeBtn');
+            const mapSelector = document.getElementById('mapSelector');
             
             if (isExecuting) {
                 indicator.classList.add('active');
                 stopBtn.disabled = false;
                 executeBtn.disabled = true;
+                mapSelector.disabled = true;
             } else {
                 indicator.classList.remove('active');
                 stopBtn.disabled = true;
                 executeBtn.disabled = !isConnected || controlPoints.length < 2;
+                mapSelector.disabled = false;
             }
         }
         
@@ -1152,30 +1294,40 @@
         
         function drawMap() {
             const imageData = ctx.createImageData(mapMetadata.width, mapMetadata.height);
+            const width = mapMetadata.width;
+            const height = mapMetadata.height;
             
-            for (let i = 0; i < mapData.length; i++) {
-                const value = mapData[i];
-                let color;
-                
-                if (value === -1) {
-                    color = [40, 40, 50];
-                } else if (value === 0) {
-                    color = [18, 18, 26];
-                } else {
-                    const intensity = Math.min(255, value * 2.5);
-                    color = [intensity, intensity * 0.9, intensity * 0.95];
+            // ROS OccupancyGrid: row 0 is at origin_y (bottom in world coords)
+            // Canvas: row 0 is at top
+            // We need to flip vertically when drawing
+            for (let srcY = 0; srcY < height; srcY++) {
+                const dstY = height - 1 - srcY;  // Flip Y
+                for (let x = 0; x < width; x++) {
+                    const srcIdx = srcY * width + x;
+                    const dstIdx = (dstY * width + x) * 4;
+                    
+                    const value = mapData[srcIdx];
+                    let color;
+                    
+                    if (value === -1) {
+                        color = [40, 40, 50];
+                    } else if (value === 0) {
+                        color = [18, 18, 26];
+                    } else {
+                        const intensity = Math.min(255, value * 2.5);
+                        color = [intensity, intensity * 0.9, intensity * 0.95];
+                    }
+                    
+                    imageData.data[dstIdx] = color[0];
+                    imageData.data[dstIdx + 1] = color[1];
+                    imageData.data[dstIdx + 2] = color[2];
+                    imageData.data[dstIdx + 3] = 255;
                 }
-                
-                const idx = i * 4;
-                imageData.data[idx] = color[0];
-                imageData.data[idx + 1] = color[1];
-                imageData.data[idx + 2] = color[2];
-                imageData.data[idx + 3] = 255;
             }
             
             const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = mapMetadata.width;
-            tempCanvas.height = mapMetadata.height;
+            tempCanvas.width = width;
+            tempCanvas.height = height;
             const tempCtx = tempCanvas.getContext('2d');
             tempCtx.putImageData(imageData, 0, 0);
             
@@ -1183,8 +1335,8 @@
             ctx.drawImage(
                 tempCanvas,
                 viewOffset.x, viewOffset.y,
-                mapMetadata.width * viewScale,
-                mapMetadata.height * viewScale
+                width * viewScale,
+                height * viewScale
             );
         }
         

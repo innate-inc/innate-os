@@ -1,0 +1,14 @@
+{
+  "session_name": "spline_traj_20251203_161549",
+  "data_frequency": 10,
+  "start_time": "2025-12-03T16:15:49",
+  "duration_sec": 0.7103462219238281,
+  "num_frames": 8,
+  "camera_topics": [
+    "/mars/main_camera/image/compressed"
+  ],
+  "camera_info_topics": [],
+  "odom_topic": "/odom",
+  "head_position_topic": "/mars/head/current_position",
+  "streaming_mode": "disk"
+}
