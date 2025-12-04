@@ -19,6 +19,19 @@ import h5py
 import os
 import json
 
+# Import shared configuration
+from manipulation.camera_odom_config import (
+    DEFAULT_RECORDING_DIR,
+    DEFAULT_SESSION_PREFIX,
+    DEFAULT_DATA_FREQUENCY,
+    DEFAULT_CHUNK_SIZE,
+    H5_FILENAME,
+    METADATA_FILENAME,
+    get_recording_dir,
+    get_h5_path,
+    get_metadata_path,
+)
+
 
 class HDF5StreamWriter:
     """
@@ -251,17 +264,17 @@ class CameraOdomRecorderNode(Node):
     def __init__(self):
         super().__init__('camera_odom_recorder_node')
         
-        # Declare parameters
-        self.declare_parameter('data_directory', '~/innate-os/camera_odom_recordings')
-        self.declare_parameter('data_frequency', 10)
+        # Declare parameters (using shared defaults from camera_odom_config)
+        self.declare_parameter('data_directory', DEFAULT_RECORDING_DIR)
+        self.declare_parameter('data_frequency', DEFAULT_DATA_FREQUENCY)
         self.declare_parameter('camera_topics', ['/camera/image/compressed'])
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('head_position_topic', '')  # Optional head position topic
-        self.declare_parameter('session_name_prefix', 'session')
-        self.declare_parameter('chunk_size', 100)  # HDF5 chunk size
+        self.declare_parameter('session_name_prefix', DEFAULT_SESSION_PREFIX)
+        self.declare_parameter('chunk_size', DEFAULT_CHUNK_SIZE)
         
         # Get parameter values
-        self.data_directory = os.path.expanduser(
+        self.data_directory = get_recording_dir(
             self.get_parameter('data_directory').value
         )
         self.data_frequency = self.get_parameter('data_frequency').value
@@ -581,7 +594,7 @@ class CameraOdomRecorderNode(Node):
         camera_names = [topic.replace('/', '_').strip('_') for topic in self.camera_topics]
         
         # Initialize HDF5 stream writer
-        h5_path = os.path.join(self.session_dir, "recording.h5")
+        h5_path = get_h5_path(self.session_dir)
         self.stream_writer = HDF5StreamWriter(
             h5_path, camera_names, self.chunk_size,
             record_head_position=bool(self.head_position_topic)
@@ -638,7 +651,7 @@ class CameraOdomRecorderNode(Node):
             # Also save a JSON metadata file for easy inspection
             self._save_json_metadata(duration, frame_count)
             
-            h5_path = os.path.join(self.session_dir, "recording.h5")
+            h5_path = get_h5_path(self.session_dir)
             self.get_logger().info(f"=== RECORDING SAVED ===")
             self.get_logger().info(f"Session: {self.current_session_name}")
             self.get_logger().info(f"Duration: {duration:.1f}s, Frames: {frame_count}")
@@ -710,7 +723,7 @@ class CameraOdomRecorderNode(Node):
                     'frame_id': cam_info.header.frame_id
                 }
         
-        metadata_path = os.path.join(self.session_dir, 'metadata.json')
+        metadata_path = get_metadata_path(self.session_dir)
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
     
