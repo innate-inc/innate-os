@@ -22,8 +22,6 @@ import struct
 import subprocess
 import os
 import math
-import tempfile
-import wave
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -277,48 +275,27 @@ class WheelTester:
 class SpeakerTester:
     """Test speaker/audio output via aplay"""
     
-    def generate_test_tone(self, frequency=440, duration=0.5, sample_rate=44100):
-        """Generate a simple sine wave test tone"""
-        n_samples = int(sample_rate * duration)
-        samples = []
-        for i in range(n_samples):
-            t = i / sample_rate
-            value = int(32767 * 0.5 * math.sin(2 * math.pi * frequency * t))
-            samples.append(struct.pack('<h', value))
-        return b''.join(samples), sample_rate
+    # System sound file (pre-installed on Jetson/Ubuntu)
+    SYSTEM_SOUND = "/usr/share/sounds/sound-icons/electric-piano-3.wav"
     
-    def create_wav_file(self, filename, audio_data, sample_rate):
-        """Create a WAV file from audio data"""
-        with wave.open(filename, 'w') as wav_file:
-            wav_file.setnchannels(1)  # Mono
-            wav_file.setsampwidth(2)  # 16-bit
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(audio_data)
-    
-    def play_test_tone(self, frequency=440, duration=0.5):
-        """Play a test tone using aplay"""
-        print_test(f"Generating {frequency}Hz tone ({duration}s)...")
+    def play_system_sound(self):
+        """Play a pre-installed system sound file"""
+        if not os.path.exists(self.SYSTEM_SOUND):
+            print_error(f"System sound not found: {self.SYSTEM_SOUND}")
+            return False
         
-        # Generate tone
-        audio_data, sample_rate = self.generate_test_tone(frequency, duration)
-        
-        # Create temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-            tmp_filename = tmp.name
+        print_test(f"Playing system sound: {os.path.basename(self.SYSTEM_SOUND)}...")
         
         try:
-            self.create_wav_file(tmp_filename, audio_data, sample_rate)
-            
-            print_test("Playing via aplay...")
             result = subprocess.run(
-                ['aplay', tmp_filename],
+                ['aplay', self.SYSTEM_SOUND],
                 capture_output=True,
                 text=True,
-                timeout=duration + 2
+                timeout=10
             )
             
             if result.returncode == 0:
-                print_success(f"Played {frequency}Hz tone successfully")
+                print_success("System sound played successfully")
                 return True
             else:
                 print_error(f"aplay failed: {result.stderr}")
@@ -333,30 +310,6 @@ class SpeakerTester:
         except Exception as e:
             print_error(f"Audio playback error: {e}")
             return False
-        finally:
-            # Clean up temp file
-            if os.path.exists(tmp_filename):
-                os.unlink(tmp_filename)
-    
-    def play_melody(self):
-        """Play a simple test melody"""
-        print_test("Playing test melody...")
-        
-        # Simple melody: C E G C (ascending)
-        notes = [
-            (262, 0.3),  # C4
-            (330, 0.3),  # E4
-            (392, 0.3),  # G4
-            (523, 0.5),  # C5
-        ]
-        
-        for freq, dur in notes:
-            if not self.play_test_tone(freq, dur):
-                return False
-            time.sleep(0.1)
-        
-        print_success("Melody playback complete")
-        return True
     
     def check_audio_devices(self):
         """Check available audio devices"""
@@ -385,27 +338,15 @@ class SpeakerTester:
         # Check audio devices
         self.check_audio_devices()
         
-        print_info("Press Enter to play test sounds, or Ctrl+C to cancel...")
+        print_info("Press Enter to play test sound, or Ctrl+C to cancel...")
         try:
             input()
         except KeyboardInterrupt:
             print_warning("\nTest cancelled by user")
             return False
         
-        # Test 1: Single tone
-        if not self.play_test_tone(440, 0.5):
-            success = False
-        
-        time.sleep(0.3)
-        
-        # Test 2: Different frequency
-        if not self.play_test_tone(880, 0.5):
-            success = False
-        
-        time.sleep(0.3)
-        
-        # Test 3: Melody
-        if not self.play_melody():
+        # Play system sound
+        if not self.play_system_sound():
             success = False
         
         return success
