@@ -17,6 +17,8 @@ Run on robot, port forward to PC for remote viewer access.
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
 
 import asyncio
@@ -134,20 +136,28 @@ class SplinePathServer(Node):
         # FollowPath action client
         self.follow_path_client = ActionClient(self, FollowPath, '/follow_path')
         
+        # Create a reentrant callback group for service clients
+        # This allows service calls from any thread without blocking
+        self.service_callback_group = ReentrantCallbackGroup()
+        
         # Camera recorder service clients
         self.start_recording_client = self.create_client(
-            Trigger, 'brain/camera_odom_recorder/start_recording'
+            Trigger, 'brain/camera_odom_recorder/start_recording',
+            callback_group=self.service_callback_group
         )
         self.stop_recording_client = self.create_client(
-            Trigger, 'brain/camera_odom_recorder/stop_recording'
+            Trigger, 'brain/camera_odom_recorder/stop_recording',
+            callback_group=self.service_callback_group
         )
         self.get_status_client = self.create_client(
-            Trigger, 'brain/camera_odom_recorder/get_status'
+            Trigger, 'brain/camera_odom_recorder/get_status',
+            callback_group=self.service_callback_group
         )
         
         # Map change service client
         self.change_map_client = self.create_client(
-            ChangeMap, '/nav/change_navigation_map'
+            ChangeMap, '/nav/change_navigation_map',
+            callback_group=self.service_callback_group
         )
         
         # Timer to broadcast robot pose to clients
@@ -523,7 +533,7 @@ class SplinePathServer(Node):
             }))
 
     def _call_change_map_service(self, map_name, timeout=30.0):
-        """Call the change map service synchronously."""
+        """Call the change map service synchronously (thread-safe, no spin_once)."""
         if not self.change_map_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error('Change map service not available')
             return None
@@ -533,37 +543,35 @@ class SplinePathServer(Node):
         
         future = self.change_map_client.call_async(request)
         
+        # Wait for future without calling spin_once (main thread handles spinning)
         start_time = time.time()
         while not future.done():
             if time.time() - start_time > timeout:
                 self.get_logger().error('Change map service call timed out')
                 return None
-            time.sleep(0.1)
-            rclpy.spin_once(self, timeout_sec=0.01)
+            time.sleep(0.1)  # Just sleep - MultiThreadedExecutor processes callbacks
         
         return future.result()
 
     def _wait_for_new_map(self, expected_map_name, timeout=15.0):
-        """Wait for a new map to be received after a map change."""
+        """Wait for a new map to be received after a map change (thread-safe)."""
         start_time = time.time()
         
         while time.time() - start_time < timeout:
-            # Spin to process callbacks (including map_callback)
-            rclpy.spin_once(self, timeout_sec=0.1)
-            
             # Check if we received the new map
+            # (MultiThreadedExecutor processes map_callback in main thread)
             if self.last_map_compressed is not None:
                 # Verify it's the expected map (if current_map_name updated)
                 if self.current_map_name == expected_map_name:
                     self.get_logger().info(f'New map received: {self.current_map_name}')
                     return True
             
-            time.sleep(0.1)
+            time.sleep(0.2)  # Just sleep - callbacks processed by executor
         
         return False
 
     def call_service_sync(self, client, timeout=10.0):
-        """Call a Trigger service synchronously."""
+        """Call a Trigger service synchronously (thread-safe, no spin_once)."""
         if not client.wait_for_service(timeout_sec=2.0):
             self.get_logger().error(f'Service {client.srv_name} not available')
             return None
@@ -571,14 +579,13 @@ class SplinePathServer(Node):
         request = Trigger.Request()
         future = client.call_async(request)
         
-        # Wait for result
+        # Wait for future without calling spin_once (main thread handles spinning)
         start_time = time.time()
         while not future.done():
             if time.time() - start_time > timeout:
                 self.get_logger().error('Service call timed out')
                 return None
-            time.sleep(0.05)
-            rclpy.spin_once(self, timeout_sec=0.01)
+            time.sleep(0.1)  # Just sleep - MultiThreadedExecutor processes callbacks
         
         return future.result()
 
@@ -908,13 +915,22 @@ def main(args=None):
     rclpy.init(args=args)
     node = SplinePathServer()
     
+    # Use MultiThreadedExecutor to allow service callbacks to be processed
+    # while other threads are waiting for service responses
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass  # Ignore if already shutdown
 
 
 if __name__ == '__main__':
