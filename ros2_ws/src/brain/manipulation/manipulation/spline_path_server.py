@@ -681,6 +681,22 @@ class SplinePathServer(Node):
             goal.controller_id = 'FollowPath'
             goal.goal_checker_id = 'goal_checker'
             
+            # Debug: Log first waypoint vs robot position
+            first_wp = waypoints[0]
+            robot_pos = self.robot_pose if self.robot_pose else self.odom_pose
+            if robot_pos:
+                dist = ((first_wp['x'] - robot_pos['x'])**2 + (first_wp['y'] - robot_pos['y'])**2)**0.5
+                self.get_logger().info(
+                    f'First waypoint: ({first_wp["x"]:.2f}, {first_wp["y"]:.2f}), '
+                    f'Robot at: ({robot_pos["x"]:.2f}, {robot_pos["y"]:.2f}), '
+                    f'Distance: {dist:.2f}m'
+                )
+                if dist > 1.0:
+                    self.get_logger().warn(
+                        f'First waypoint is {dist:.2f}m from robot! '
+                        'MPPI may abort if path starts too far from robot.'
+                    )
+            
             self.get_logger().info(f'Executing path with {len(waypoints)} waypoints')
             
             # Reset completion event
