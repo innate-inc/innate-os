@@ -392,7 +392,7 @@ SERVO_CONFIG = {
         'current_limit': None,
         'pid': {'kp': 400, 'ki': 400, 'kd': 1000},
         'position_limits': {'min': -1.9199, 'max': 1.7453},
-        'test_range_pct': 0.8  # 80% of range
+        'test_range_pct': 0.3  # 30% of range - reduced movement
     },
     5: {
         'name': 'joint_5',
@@ -809,11 +809,11 @@ class ArmTester:
             
             time.sleep(0.3)
             
-            # Return to center/initial position
-            return_pos = center_pos  # Return to center of range
-            print_info(f"  Returning to center position {return_pos} ({self.position_to_degrees(return_pos):.1f}°)...")
-            if not self.set_position(servo_id, return_pos):
-                print_error(f"  Failed to return to center")
+            # Return to zero position
+            zero_pos = 2048  # 0 radians in Dynamixel units
+            print_info(f"  Returning to zero position (0°)...")
+            if not self.set_position(servo_id, zero_pos):
+                print_error(f"  Failed to return to zero")
                 return False
             time.sleep(1.0)
             
@@ -835,6 +835,36 @@ class ArmTester:
             self.disable_torque(servo_id)
         print_info("All servos torque disabled")
     
+    def move_all_to_zero(self):
+        """Move all servos to zero position (2048) simultaneously"""
+        print_test("Moving all servos to zero position...")
+        zero_pos = 2048  # 0 radians in Dynamixel units
+        
+        # Send zero position command to all servos
+        for servo_id in ARM_SERVO_IDS:
+            if not self.set_position(servo_id, zero_pos):
+                print_error(f"  Failed to set zero position for servo {servo_id}")
+                return False
+        
+        # Wait for all servos to reach position
+        time.sleep(2.0)
+        
+        # Verify positions
+        all_at_zero = True
+        for servo_id in ARM_SERVO_IDS:
+            pos = self.read_position(servo_id)
+            if pos is not None:
+                error = abs(pos - zero_pos)
+                if error > 100:  # ~8° tolerance
+                    print_warning(f"  Servo {servo_id} at {pos} ({self.position_to_degrees(pos):.1f}°), error: {error} units")
+                    all_at_zero = False
+                else:
+                    print_info(f"  Servo {servo_id} at zero ({self.position_to_degrees(pos):.1f}°)")
+        
+        if all_at_zero:
+            print_success("All servos at zero position")
+        return all_at_zero
+    
     def run_test(self):
         """Run arm servo tests with full initialization"""
         print_header("ARM SERVO TEST (Servos 1-6)")
@@ -844,7 +874,7 @@ class ArmTester:
         
         print_warning("⚠ SAFETY: Ensure arm is in a safe position with clearance!")
         print_info("")
-        print_info("This test will run in TWO PHASES:")
+        print_info("This test will run in THREE PHASES:")
         print_info("")
         print_info("PHASE 1 - Initialize all servos (one at a time):")
         print_info("  • Disable torque")
@@ -854,10 +884,14 @@ class ArmTester:
         print_info("  • Set PID gains")
         print_info("  • Enable torque")
         print_info("")
-        print_info("PHASE 2 - Movement test (one servo at a time):")
-        print_info("  • Move to high position (80% of range)")
-        print_info("  • Move to low position (80% of range)")
-        print_info("  • Return to center")
+        print_info("PHASE 2 - Move all servos to zero position")
+        print_info("")
+        print_info("PHASE 3 - Movement test (one servo at a time):")
+        print_info("  • Move to high position")
+        print_info("  • Move to low position")
+        print_info("  • Return to zero")
+        print_info("")
+        print_info("Torque will remain enabled after test completion.")
         print_info("")
         print_info(f"Testing servos: {ARM_SERVO_IDS}")
         print_info("Press Enter to start arm test, or Ctrl+C to cancel...")
@@ -896,9 +930,17 @@ class ArmTester:
             time.sleep(0.5)
             
             # ═══════════════════════════════════════════════════════════════════
-            # PHASE 2: Movement tests for each servo
+            # PHASE 2: Move all servos to zero position
             # ═══════════════════════════════════════════════════════════════════
-            print_header("PHASE 2: MOVEMENT TESTS")
+            print_header("PHASE 2: MOVE TO ZERO POSITION")
+            self.move_all_to_zero()
+            
+            time.sleep(0.5)
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # PHASE 3: Movement tests for each servo
+            # ═══════════════════════════════════════════════════════════════════
+            print_header("PHASE 3: MOVEMENT TESTS")
             print_info("Testing movement on each servo one at a time...\n")
             
             for servo_id in ARM_SERVO_IDS:
@@ -911,14 +953,13 @@ class ArmTester:
                 time.sleep(0.3)
             
             print_info("\n" + "─" * 50)
-            print_success("PHASE 2 COMPLETE: All movement tests finished")
+            print_success("PHASE 3 COMPLETE: All movement tests finished")
             print_info("─" * 50 + "\n")
             
         except KeyboardInterrupt:
             print_warning("\nTest interrupted by user")
         finally:
-            # Safety: disable all torque at end
-            self.disable_all_torque()
+            # Keep torque enabled, just disconnect
             self.disconnect()
         
         # ═══════════════════════════════════════════════════════════════════════
