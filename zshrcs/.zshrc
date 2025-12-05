@@ -113,3 +113,5 @@ if [ -f '/home/jetson1/google-cloud-sdk/path.zsh.inc' ]; then . '/home/jetson1/g
 
 # The next line enables shell command completion for gcloud.
 if [ -f '/home/jetson1/google-cloud-sdk/completion.zsh.inc' ]; then . '/home/jetson1/google-cloud-sdk/completion.zsh.inc'; fi
+
+(ros2 daemon start &) >/dev/null 2>&1
