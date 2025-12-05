@@ -95,6 +95,7 @@ class AppControl(Node):
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         self.declare_parameter('data_directory', os.path.join(maurice_root, 'data'))
         self.declare_parameter('robot_name', '')
+        self.declare_parameter('default_hardware_revision', 'R5')
         
         # Subscribe to joystick messages (Vector3)
         self.joystick_sub = self.create_subscription(
@@ -259,15 +260,18 @@ class AppControl(Node):
 
             # If robot_info.json does not exist, create it with default values
             if not os.path.exists(robot_info_file_path):
-                default_robot_info = {"robot_name": "MARS", "robot_id": None}
+                default_hw_rev = self.get_parameter('default_hardware_revision').get_parameter_value().string_value
+                default_robot_info = {"robot_name": "MARS", "robot_id": None, "hardware_revision": default_hw_rev}
                 with open(robot_info_file_path, 'w') as f:
                     json.dump(default_robot_info, f)
             
             # Read robot_name and robot_id from robot_info.json
             with open(robot_info_file_path, 'r') as f:
                 robot_info = json.load(f)
+                
             data_to_publish_dict['robot_name'] = robot_info.get('robot_name')
             data_to_publish_dict['robot_id'] = robot_info.get('robot_id')
+            data_to_publish_dict['hardware_revision'] = robot_info.get('hardware_revision')
             
             # Read minimum_app_version from os_config.json
             os_config = self.app_config
