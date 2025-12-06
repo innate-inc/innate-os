@@ -343,6 +343,11 @@ class BrainClientNode(Node):
         self.active_inputs_pub = self.create_publisher(String, "/input_manager/active_inputs", 10)
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
+        
+        # Subscriber for direct TTS requests
+        self.tts_sub = self.create_subscription(
+            String, "/brain/tts", self.tts_callback, 10
+        )
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/brain/get_chat_history", self.handle_get_chat_history
         )
@@ -560,6 +565,13 @@ class BrainClientNode(Node):
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": data['text']})
         self.ws_bridge.send_message(outgoing_msg)
         self.get_logger().info(f"\033[1;92mSent MessageIn: {outgoing_msg}\033[0m")
+
+    def tts_callback(self, msg: String):
+        """Handle direct TTS requests from /brain/tts topic."""
+        text = msg.data
+        if text and text.strip():
+            self.get_logger().info(f"TTS request received: {text[:50]}...")
+            self.tts_handler.speak_text_async(text)
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
