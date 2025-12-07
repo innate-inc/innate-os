@@ -258,16 +258,28 @@ class AppControl(Node):
             # Ensure data directory exists
             os.makedirs(data_dir, exist_ok=True)
 
+            # Define default robot info values
+            default_hw_rev = self.get_parameter('default_hardware_revision').get_parameter_value().string_value
+            default_robot_info = {"robot_name": "MARS", "robot_id": None, "hardware_revision": default_hw_rev}
+
             # If robot_info.json does not exist, create it with default values
             if not os.path.exists(robot_info_file_path):
-                default_hw_rev = self.get_parameter('default_hardware_revision').get_parameter_value().string_value
-                default_robot_info = {"robot_name": "MARS", "robot_id": None, "hardware_revision": default_hw_rev}
                 with open(robot_info_file_path, 'w') as f:
                     json.dump(default_robot_info, f)
             
-            # Read robot_name and robot_id from robot_info.json
+            # Read robot_info from file
             with open(robot_info_file_path, 'r') as f:
                 robot_info = json.load(f)
+            
+            # Ensure all default keys exist in the JSON, save if any were missing
+            updated = False
+            for key, default_value in default_robot_info.items():
+                if key not in robot_info:
+                    robot_info[key] = default_value
+                    updated = True
+            if updated:
+                with open(robot_info_file_path, 'w') as f:
+                    json.dump(robot_info, f)
                 
             data_to_publish_dict['robot_name'] = robot_info.get('robot_name')
             data_to_publish_dict['robot_id'] = robot_info.get('robot_id')
