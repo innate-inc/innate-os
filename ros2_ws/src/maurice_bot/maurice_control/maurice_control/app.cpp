@@ -1,8 +1,6 @@
 /**
- * @file app.cpp
- * @brief AppControl node - C++ port of app.py
- *
- * This is an exact port of app.py with identical logging and behavior.
+ * AppControl node for MARS robot.
+ * Handles joystick input, leader arm control, and robot info publishing.
  */
 
 #include <rclcpp/rclcpp.hpp>
