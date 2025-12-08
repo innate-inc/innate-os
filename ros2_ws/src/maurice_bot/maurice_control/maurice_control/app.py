@@ -95,6 +95,7 @@ class AppControl(Node):
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         self.declare_parameter('data_directory', os.path.join(maurice_root, 'data'))
         self.declare_parameter('robot_name', '')
+        self.declare_parameter('default_hardware_revision', 'R5')
         
         # Subscribe to joystick messages (Vector3)
         self.joystick_sub = self.create_subscription(
@@ -276,17 +277,32 @@ class AppControl(Node):
             # Ensure data directory exists
             os.makedirs(data_dir, exist_ok=True)
 
+            # Define default robot info values
+            default_hw_rev = self.get_parameter('default_hardware_revision').get_parameter_value().string_value
+            default_robot_info = {"robot_name": "MARS", "robot_id": None, "hardware_revision": default_hw_rev}
+
             # If robot_info.json does not exist, create it with default values
             if not os.path.exists(robot_info_file_path):
-                default_robot_info = {"robot_name": "MARS", "robot_id": None}
                 with open(robot_info_file_path, 'w') as f:
                     json.dump(default_robot_info, f)
             
-            # Read robot_name and robot_id from robot_info.json
+            # Read robot_info from file
             with open(robot_info_file_path, 'r') as f:
                 robot_info = json.load(f)
+            
+            # Ensure all default keys exist in the JSON, save if any were missing
+            updated = False
+            for key, default_value in default_robot_info.items():
+                if key not in robot_info:
+                    robot_info[key] = default_value
+                    updated = True
+            if updated:
+                with open(robot_info_file_path, 'w') as f:
+                    json.dump(robot_info, f)
+                
             data_to_publish_dict['robot_name'] = robot_info.get('robot_name')
             data_to_publish_dict['robot_id'] = robot_info.get('robot_id')
+            data_to_publish_dict['hardware_revision'] = robot_info.get('hardware_revision')
             
             # Read minimum_app_version from os_config.json
             os_config = self.app_config
