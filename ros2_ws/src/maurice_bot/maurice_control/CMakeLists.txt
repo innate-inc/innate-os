@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.8)
 project(maurice_control)
 
+# C++17 required for std::filesystem
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -8,9 +12,38 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclpy REQUIRED)
+find_package(rclcpp REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(maurice_msgs REQUIRED)
 find_package(rosbridge_server REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
+
+# ============================================================================
+# C++ Executable: app.cpp
+# ============================================================================
+add_executable(app.cpp maurice_control/app.cpp)
+
+target_link_libraries(app.cpp
+  nlohmann_json::nlohmann_json
+)
+
+ament_target_dependencies(app.cpp
+  rclcpp
+  geometry_msgs
+  std_msgs
+  maurice_msgs
+)
+
+install(TARGETS
+  app.cpp
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# ============================================================================
+# Python modules and executables
+# ============================================================================
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
 
@@ -19,7 +52,6 @@ install(PROGRAMS
   maurice_control/keyboard.py
   maurice_control/joystick.py
   maurice_control/leader.py
-  maurice_control/app.py
   maurice_control/udp_leader_receiver.py
   DESTINATION lib/${PROJECT_NAME}
 )

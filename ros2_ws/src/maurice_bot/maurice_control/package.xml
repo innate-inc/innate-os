@@ -8,8 +8,18 @@
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <!-- Python dependencies -->
   <depend>rclpy</depend>
+
+  <!-- C++ dependencies -->
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>nlohmann-json-dev</depend>
+
+  <!-- Shared dependencies -->
   <depend>maurice_msgs</depend>
   <depend>maurice_arm</depend>
 
