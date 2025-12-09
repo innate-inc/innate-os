@@ -63,14 +63,14 @@ std::tuple<dai::Pipeline, ImageDimensions> create_rgb_pipeline(
     colorCam->setResolution(dai_color_resolution);
     colorCam->setPreviewSize(preview_dimensions.width, preview_dimensions.height);  // Set output resolution
     colorCam->setInterleaved(true);
-    colorCam->setColorOrder(dai::ColorCameraProperties::ColorOrder::BGR);
+    colorCam->setColorOrder(dai::ColorCameraProperties::ColorOrder::RGB);
     colorCam->setFps(fps);
 
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Camera configured with:");
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Native Resolution: %s", color_resolution_str.c_str());
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Output Resolution: %dx%d", preview_dimensions.width, preview_dimensions.height);
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Interleaved: true");
-    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Color Order: BGR");
+    RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  Color Order: RGB");
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "  FPS: %.2f", fps);
 
     colorCam->preview.link(xlinkOutVideo->input);  // Use preview output instead of video
@@ -422,7 +422,7 @@ private:
                         rosImage.header.frame_id = tf_prefix_ + "_rgb_camera_optical_frame";
                         rosImage.height = frame->getHeight();
                         rosImage.width = frame->getWidth();
-                        rosImage.encoding = "bgr8";
+                        rosImage.encoding = "rgb8";
                         rosImage.is_bigendian = false;
                         rosImage.step = frame->getWidth() * 3;
                         rosImage.data = std::vector<uint8_t>(imgData.begin(), imgData.end());

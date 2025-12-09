@@ -92,15 +92,21 @@ CameraDriver::CameraDriver()
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
-  stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    "/mars/main_camera/stereo",
+  left_camera_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+    "/mars/left_camera/image",
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
+  // stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+  //   "/mars/main_camera/stereo",
+  //   rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+  // );
+
   RCLCPP_INFO(this->get_logger(), "Publishers created:");
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (left camera, rotated)");
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, rotated)");
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (full stereo, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (right camera, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (right camera, rotated)");
+  RCLCPP_INFO(this->get_logger(), "  - /mars/left_camera/image (left camera, rotated)");
+  // RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (full stereo, rotated)");
 
   // Initialize camera
   if (initializeCamera()) {
@@ -410,13 +416,16 @@ void CameraDriver::processAndPublishFrame(const cv::Mat& frame)
   // Rotate the left image 180 degrees
   cv::rotate(left_frame, left_frame, cv::ROTATE_180);
   
+  // Convert BGR to RGB
+  cv::cvtColor(left_frame, left_frame, cv::COLOR_BGR2RGB);
+  
   // Create and publish left camera raw image message
   sensor_msgs::msg::Image left_ros_image;
   left_ros_image.header.stamp = current_time;
   left_ros_image.header.frame_id = frame_id_;
   left_ros_image.height = left_frame.rows;
   left_ros_image.width = left_frame.cols;
-  left_ros_image.encoding = "bgr8";
+  left_ros_image.encoding = "rgb8";
   left_ros_image.is_bigendian = false;
   left_ros_image.step = left_frame.cols * left_frame.channels();
   
@@ -443,27 +452,54 @@ void CameraDriver::processAndPublishFrame(const cv::Mat& frame)
   // Publish left camera compressed image
   compressed_pub_->publish(left_compressed_msg);
   
-  // Create full stereo image (rotated 180 degrees)
-  cv::Mat stereo_frame = frame.clone();
-  cv::rotate(stereo_frame, stereo_frame, cv::ROTATE_180);
+  // Extract right half of the stereo image (left camera)
+  cv::Mat left_camera_frame = frame(cv::Rect(left_width_, 0, left_width_, left_height_)).clone();
   
-  // Create and publish stereo image message
-  sensor_msgs::msg::Image stereo_ros_image;
-  stereo_ros_image.header.stamp = current_time;
-  stereo_ros_image.header.frame_id = frame_id_;
-  stereo_ros_image.height = stereo_frame.rows;
-  stereo_ros_image.width = stereo_frame.cols;
-  stereo_ros_image.encoding = "bgr8";
-  stereo_ros_image.is_bigendian = false;
-  stereo_ros_image.step = stereo_frame.cols * stereo_frame.channels();
+  // Rotate the left camera image 180 degrees
+  cv::rotate(left_camera_frame, left_camera_frame, cv::ROTATE_180);
   
-  // Copy stereo image data
-  size_t stereo_data_size = stereo_frame.total() * stereo_frame.elemSize();
-  stereo_ros_image.data.resize(stereo_data_size);
-  std::memcpy(stereo_ros_image.data.data(), stereo_frame.data, stereo_data_size);
+  // Convert BGR to RGB
+  cv::cvtColor(left_camera_frame, left_camera_frame, cv::COLOR_BGR2RGB);
   
-  // Publish stereo image
-  stereo_pub_->publish(stereo_ros_image);
+  // Create and publish left camera raw image message
+  sensor_msgs::msg::Image left_camera_ros_image;
+  left_camera_ros_image.header.stamp = current_time;
+  left_camera_ros_image.header.frame_id = frame_id_;
+  left_camera_ros_image.height = left_camera_frame.rows;
+  left_camera_ros_image.width = left_camera_frame.cols;
+  left_camera_ros_image.encoding = "rgb8";
+  left_camera_ros_image.is_bigendian = false;
+  left_camera_ros_image.step = left_camera_frame.cols * left_camera_frame.channels();
+  
+  // Copy left camera image data
+  size_t left_camera_data_size = left_camera_frame.total() * left_camera_frame.elemSize();
+  left_camera_ros_image.data.resize(left_camera_data_size);
+  std::memcpy(left_camera_ros_image.data.data(), left_camera_frame.data, left_camera_data_size);
+  
+  // Publish left camera raw image
+  left_camera_pub_->publish(left_camera_ros_image);
+  
+  // // Create full stereo image (rotated 180 degrees)
+  // cv::Mat stereo_frame = frame.clone();
+  // cv::rotate(stereo_frame, stereo_frame, cv::ROTATE_180);
+  // 
+  // // Create and publish stereo image message
+  // sensor_msgs::msg::Image stereo_ros_image;
+  // stereo_ros_image.header.stamp = current_time;
+  // stereo_ros_image.header.frame_id = frame_id_;
+  // stereo_ros_image.height = stereo_frame.rows;
+  // stereo_ros_image.width = stereo_frame.cols;
+  // stereo_ros_image.encoding = "bgr8";
+  // stereo_ros_image.is_bigendian = false;
+  // stereo_ros_image.step = stereo_frame.cols * stereo_frame.channels();
+  // 
+  // // Copy stereo image data
+  // size_t stereo_data_size = stereo_frame.total() * stereo_frame.elemSize();
+  // stereo_ros_image.data.resize(stereo_data_size);
+  // std::memcpy(stereo_ros_image.data.data(), stereo_frame.data, stereo_data_size);
+  // 
+  // // Publish stereo image
+  // stereo_pub_->publish(stereo_ros_image);
 }
 
 void CameraDriver::applyAutoExposure(const cv::Mat& frame)

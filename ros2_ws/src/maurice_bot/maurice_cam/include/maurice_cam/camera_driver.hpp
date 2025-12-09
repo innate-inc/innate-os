@@ -162,6 +162,7 @@ private:
   // ROS 2 publishers
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_camera_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr stereo_pub_;
 
   // Frame processing thread
