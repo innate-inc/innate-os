@@ -51,7 +51,7 @@ from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
 from brain_messages.srv import ResetBrain
 from brain_messages.srv import SetDirectiveOnStartup
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
 from brain_client.initializers import initialize_primitives, initialize_directives
@@ -372,6 +372,14 @@ class BrainClientNode(Node):
         # --- Service for setting directive on startup ---
         self.set_directive_on_startup_srv = self.create_service(
             SetDirectiveOnStartup, "/brain/set_directive_on_startup", self.handle_set_directive_on_startup
+        )
+
+        # --- Service client for reloading primitives in PEAS ---
+        self._reload_primitives_client = self.create_client(Trigger, '/brain/reload_primitives')
+
+        # --- Service for reloading primitives and directives ---
+        self._reload_srv = self.create_service(
+            Trigger, "/brain/reload", self.handle_reload
         )
 
         # Initialize TTS handler (after tts_status_pub is created)
@@ -831,14 +839,14 @@ class BrainClientNode(Node):
         try:
             # Skip if no valid image is available
             if self.last_image is None:
-                self.get_logger().warn("Skipping pose_image: No image available.")
+                self.get_logger().debug("Skipping pose_image: No image available.")
                 return
 
             # In simulator mode, allow pose_image_callback even if nav_mode is None
             if (
                 self.cur_nav_mode is None or self.cur_nav_mode == "mapping"
             ) and not self.simulator_mode:
-                self.get_logger().warn(
+                self.get_logger().debug(
                     f"Skipping pose_image_callback as navigation mode is {self.cur_nav_mode}"
                 )
                 return
@@ -1834,6 +1842,61 @@ class BrainClientNode(Node):
         self._perform_brain_reset(request.memory_state)
         response.success = True
         return response
+
+    def handle_reload(self, request, response):
+        """
+        Service handler for reloading primitives and directives.
+        Triggers async reload to avoid blocking the executor.
+        """
+        self.get_logger().info(
+            "\033[1;92m[BrainClient] Received /brain/reload request\033[0m"
+        )
+        
+        # Trigger reload in a separate thread to avoid executor deadlock
+        reload_thread = threading.Thread(target=self._perform_reload, daemon=True)
+        reload_thread.start()
+        
+        response.success = True
+        response.message = "Reload initiated"
+        return response
+
+    def _perform_reload(self):
+        """Perform the actual reload in a background thread."""
+        try:
+            # First, call PEAS to reload primitives
+            if self._reload_primitives_client.wait_for_service(timeout_sec=5.0):
+                peas_request = Trigger.Request()
+                future = self._reload_primitives_client.call_async(peas_request)
+                
+                # Wait for future to complete (safe in separate thread)
+                while not future.done():
+                    time.sleep(0.1)
+                
+                peas_result = future.result()
+                if peas_result.success:
+                    self.get_logger().info(f"PEAS reload: {peas_result.message}")
+                else:
+                    self.get_logger().warn(f"PEAS reload failed: {peas_result.message}")
+            else:
+                self.get_logger().warn("PEAS reload service not available, using local primitive loading")
+            
+            # Re-query primitives from PEAS (or load locally if PEAS unavailable)
+            self.primitives_dict = self._query_available_primitives()
+            if not self.primitives_dict:
+                self.get_logger().warn("No primitives from PEAS, using fallback local loading")
+                self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
+            
+            # Reload directives locally
+            self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
+            
+            # Re-register with server
+            self.register_primitives_and_directive()
+            
+            self.get_logger().info(
+                f"\033[1;92m[BrainClient] Reloaded {len(self.primitives_dict)} primitives, {len(self.directives)} directives\033[0m"
+            )
+        except Exception as e:
+            self.get_logger().error(f"[BrainClient] Reload failed: {e}")
 
     def _deactivate_brain(self):
         """Deactivates the brain's main operational loops and interactions."""

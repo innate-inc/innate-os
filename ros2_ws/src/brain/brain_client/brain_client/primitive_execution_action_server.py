@@ -41,6 +41,7 @@ from brain_client.head_interface import HeadInterface
 from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
 from nav_msgs.msg import Odometry, OccupancyGrid
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 
 class PrimitiveExecutionActionServer(Node):
@@ -177,8 +178,61 @@ class PrimitiveExecutionActionServer(Node):
             self._handle_get_available_primitives
         )
         
+        # Create service for reloading primitives
+        self._reload_srv = self.create_service(
+            Trigger,
+            '/brain/reload_primitives',
+            self._handle_reload_primitives
+        )
+        
         self.get_logger().debug("Primitive Execution Action Server has started.")
         self.get_logger().info(f"Total primitives available: {len(self._code_primitives) + len(self._physical_primitives)}")
+
+    def _reload_primitives(self):
+        """Reload all primitives from disk."""
+        self.get_logger().info("Reloading primitives...")
+        
+        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        primitives_directory = os.path.join(maurice_root, 'primitives')
+        
+        # Reload code primitives
+        discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
+        
+        # Handle simulator mode nav swap
+        if self.simulator_mode and "navigate_to_position_sim" in discovered_primitives:
+            discovered_primitives["navigate_to_position"] = discovered_primitives["navigate_to_position_sim"]
+            del discovered_primitives["navigate_to_position_sim"]
+        elif "navigate_to_position_sim" in discovered_primitives:
+            del discovered_primitives["navigate_to_position_sim"]
+        
+        self._code_primitives = {}
+        for name, cls in discovered_primitives.items():
+            try:
+                instance = cls(self.get_logger())
+                instance.node = self
+                instance.manipulation = self.manipulation
+                instance.mobility = self.mobility
+                instance.head = self.head
+                self._code_primitives[name] = instance
+                self.get_logger().info(f"Reloaded code primitive: {name}")
+            except Exception as e:
+                self.get_logger().error(f"Error instantiating {name}: {e}")
+        
+        # Reload physical primitives
+        self._physical_primitives, self._in_training_primitives = self._load_physical_primitives(primitives_directory)
+        
+        self.get_logger().info(f"Reloaded {len(self._code_primitives)} code + {len(self._physical_primitives)} physical primitives")
+
+    def _handle_reload_primitives(self, request, response):
+        """Service handler for reloading primitives."""
+        try:
+            self._reload_primitives()
+            response.success = True
+            response.message = f"Reloaded {len(self._code_primitives)} code, {len(self._physical_primitives)} physical primitives"
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to reload primitives: {e}"
+        return response
 
     def _load_physical_primitives(self, primitives_directory):
         """Load physical primitives from metadata.json files.
