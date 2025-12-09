@@ -431,10 +431,6 @@ private:
         std_msgs::msg::String msg;
         msg.data = final_json_string_to_publish;
         robot_info_pub_->publish(msg);
-        // Optional: log what was published if it's not an empty dict or if debugging
-        // if (final_json_string_to_publish != "{}") {
-        //     RCLCPP_INFO(this->get_logger(), "Published robot data: %s", final_json_string_to_publish.c_str());
-        // }
     }
 
     /**
