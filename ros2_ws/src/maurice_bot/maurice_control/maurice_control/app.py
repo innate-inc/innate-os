@@ -95,7 +95,7 @@ class AppControl(Node):
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         self.declare_parameter('data_directory', os.path.join(maurice_root, 'data'))
         self.declare_parameter('robot_name', '')
-        self.declare_parameter('default_hardware_revision', 'R5')
+        self.declare_parameter('default_hardware_revision', 'R6')
         
         # Subscribe to joystick messages (Vector3)
         self.joystick_sub = self.create_subscription(

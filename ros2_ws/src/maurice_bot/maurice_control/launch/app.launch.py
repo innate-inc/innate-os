@@ -8,7 +8,7 @@ def generate_launch_description():
     data_directory = os.path.join(maurice_root, 'data')
     
     # Default hardware revision for new robots
-    default_hardware_revision = 'R5'
+    default_hardware_revision = 'R6'
     
     # Create rosbridge websocket node
     rosbridge_node = Node(
