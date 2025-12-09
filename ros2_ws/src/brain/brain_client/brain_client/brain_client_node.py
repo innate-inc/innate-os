@@ -269,6 +269,7 @@ class BrainClientNode(Node):
         self.last_depth_image = None
         self.last_map = None  # Store the latest map data
         self.last_arm_camera = None  # Store the latest arm camera image
+        self.memory_positions = []  # Store memory positions from cloud agent
 
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -343,6 +344,12 @@ class BrainClientNode(Node):
         self.active_inputs_pub = self.create_publisher(String, "/input_manager/active_inputs", 10)
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
+        # Publisher for memory positions from the cloud agent's posegraph
+        self.memory_positions_pub = self.create_publisher(String, "/brain/memory_positions", 10)
+        # Subscriber for direct TTS requests
+        self.tts_sub = self.create_subscription(
+            String, "/brain/tts", self.tts_callback, 10
+        )
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/brain/get_chat_history", self.handle_get_chat_history
         )
@@ -399,6 +406,12 @@ class BrainClientNode(Node):
             MessageOutType.PRIMITIVES_AND_DIRECTIVE_REGISTERED,
             self._handle_primitives_and_directive_registered,
         )
+        self.ws_bridge.register_handler(
+            MessageOutType.MEMORY_POSITIONS, self._handle_memory_positions
+        )
+
+        # Timer for regular memory positions publishing (1Hz)
+        self.memory_positions_timer = self.create_timer(1.0, self._publish_memory_positions)
 
         for _ in range(10):
             self.ws_bridge.send_message(
@@ -908,9 +921,6 @@ class BrainClientNode(Node):
 
             pose_image_msg = MessageIn(type=MessageInType.POSE_IMAGE, payload=payload)
             self.ws_bridge.send_message(pose_image_msg)
-            self.get_logger().debug(
-                f"Sent pose_image at position ({pos.x:.2f}, {pos.y:.2f}, {theta:.2f})"
-            )
         except Exception as e:
             self.get_logger().error(f"Error in pose_image_callback: {e}")
 
@@ -1595,6 +1605,32 @@ class BrainClientNode(Node):
             self.get_logger().error(
                 "Failed to register primitives and/or directive with server"
             )
+
+    def _handle_memory_positions(self, msg):
+        """
+        Handle memory_positions messages from the cloud agent.
+        Stores the positions and immediately publishes them.
+        """
+        try:
+            positions = msg.payload.get("positions", [])
+            self.memory_positions = positions
+            self.get_logger().debug(
+                f"Received {len(positions)} memory positions from cloud agent"
+            )
+            # Publish immediately when we receive an update
+            self._publish_memory_positions()
+        except Exception as e:
+            self.get_logger().error(f"Error handling memory_positions: {e}")
+
+    def _publish_memory_positions(self):
+        """
+        Publish the stored memory positions to the ROS topic.
+        Called regularly by timer and immediately on updates.
+        """
+        if self.memory_positions:
+            msg = String()
+            msg.data = json.dumps({"positions": self.memory_positions})
+            self.memory_positions_pub.publish(msg)
 
     def register_primitives_and_directive(self):
         """
