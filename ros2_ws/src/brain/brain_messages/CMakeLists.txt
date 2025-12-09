@@ -28,10 +28,12 @@ set(srv_files
   "srv/DeleteMap.srv"
   "srv/GetDatasetInfo.srv"
   "srv/SetDirectiveOnStartup.srv"
+  "srv/LoadEpisode.srv"
 )
 
 set(msg_files
   "msg/RecorderStatus.msg"
+  "msg/ReplayStatus.msg"
 )
 
 set(action_files

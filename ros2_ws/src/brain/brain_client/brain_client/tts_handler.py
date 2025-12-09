@@ -222,7 +222,7 @@ class TTSHandler:
         if not self.is_available():
             self.logger.debug("🔇 TTS not available, skipping async speech")
             return
-            
+
         def speak_thread():
             self.speak_text(text, voice_config)
             

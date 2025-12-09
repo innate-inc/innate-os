@@ -19,7 +19,7 @@ class SendPictureViaEmail(Primitive):
         self.smtp_server = "smtp.gmail.com"
         self.smtp_port = 587
         self.sender_email = "axel@innate.bot"
-        self.password = "ncbtviozpktktsdm"  # Use app password for Gmail
+        self.password = ""  # Use app password for Gmail
         self.last_main_camera_image_b64 = None
 
     @property

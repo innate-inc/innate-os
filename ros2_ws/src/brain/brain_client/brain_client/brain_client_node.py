@@ -390,6 +390,10 @@ class BrainClientNode(Node):
         self.pose_image_timer = None
         self.pose_image_started = False
 
+        # Flag to keep track of primitive registration status
+        self.primitives_registered = False
+        self._pending_next_task = None
+
         self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
 
         self.ws_bridge = WSBridge(
@@ -471,9 +475,7 @@ class BrainClientNode(Node):
             self, ExecutePrimitive, "execute_primitive"
         )
 
-        # Flag to keep track of primitive registration status
-        self.primitives_registered = False
-        self._pending_next_task = None
+        
 
         # After initializing the primitive_action_client
         # Register the primitives with the server
@@ -571,6 +573,13 @@ class BrainClientNode(Node):
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": data['text']})
         self.ws_bridge.send_message(outgoing_msg)
         self.get_logger().info(f"\033[1;92mSent MessageIn: {outgoing_msg}\033[0m")
+
+    def tts_callback(self, msg: String):
+        """Handle direct TTS requests from /brain/tts topic."""
+        text = msg.data
+        if text and text.strip():
+            self.get_logger().info(f"TTS request received: {text[:50]}...")
+            self.tts_handler.speak_text_async(text)
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
@@ -801,10 +810,8 @@ class BrainClientNode(Node):
         self.ready_for_image = True
 
         # Start the pose image timer after the first ready_for_image, if not already started
-        # and if the brain is active
         if (
-            self.is_brain_active
-            and not self.pose_image_started
+            not self.pose_image_started
             and self.primitives_registered
         ):
             self.get_logger().info("Starting regular pose image transmission")
@@ -814,21 +821,19 @@ class BrainClientNode(Node):
             )
 
     def pose_image_callback(self):
-        """Send pose images regularly with the robot's current position."""
+        """Send pose images regularly with the robot's current position.
+        
+        Uses TF lookup to compute robotPoseInMap by composing:
+          map → odom (from AMCL/localization) ⊕ odom → base_link (from odometry)
+        This matches how the web client computes the robot pose.
+        Covariance comes separately from /amcl_pose topic when available.
+        """
         try:
-            # Skip if brain is not active
-            if not self.is_brain_active:
-                self.get_logger().debug(
-                    "Brain not active, skipping pose_image_callback."
-                )
+            # Skip if no valid image is available
+            if self.last_image is None:
+                self.get_logger().warn("Skipping pose_image: No image available.")
                 return
 
-            # Skip if no valid image or odometry data is available
-            if self.last_image is None or self.last_odom is None:
-                self.get_logger().warn(
-                    "Skipping pose_image: No image or odom/amcl_pose."
-                )
-                return
             # In simulator mode, allow pose_image_callback even if nav_mode is None
             if (
                 self.cur_nav_mode is None or self.cur_nav_mode == "mapping"
@@ -838,40 +843,19 @@ class BrainClientNode(Node):
                 )
                 return
 
-            # Use self.last_amcl_pose if available, otherwise fallback to self.last_odom (or skip)
-            current_pose_source = None
-            # try:
-            #     transform = self.tf_buffer.lookup_transform(
-            #         target_frame='map',
-            #         source_frame='base_link',
-            #         time=rclpy.time.Time(),
-            #         timeout=rclpy.time.Duration(seconds=1.0),
-            #     )
-
-            # except Exception as err:
-            #     # self.get_logger().error(f"Error in pose_image_callback: {err}")
-            #     self.get_logger().info(f"Transform not ready {err}")
-            #     return
-
-            if self.cur_nav_mode == "navigation" and self.last_amcl_pose:
-                current_pose_source = self.last_amcl_pose.pose
-                # self.get_logger().debug("Using amcl_pose for pose_image_callback")
-            elif (
-                self.last_odom
-            ):  # Fallback, though ideally amcl_pose is what we want for covariance
-                if self.cur_nav_mode == "mapfree":
-                    self.last_odom.pose.covariance = [1e4] * 36
-                current_pose_source = self.last_odom.pose
-
-                # Only show warning in real robot mode, not in simulator where odom is expected
-                if not self.simulator_mode:
-                    self.get_logger().warn(
-                        "Falling back to last_odom for pose_image_callback (no covariance will be sent)."
-                    )
-            else:
-                self.get_logger().warn(
-                    f"Skipping pose_image: No amcl_pose or odom available at navigation mode {self.cur_nav_mode}"
+            # Use TF to get robot pose in map frame (composes map→odom and odom→base_link)
+            # This matches how the web client computes robotPoseInMap
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    target_frame='map',
+                    source_frame='base_link',
+                    time=rclpy.time.Time(),
+                    timeout=rclpy.time.Duration(seconds=0.5),
                 )
+                pos = transform.transform.translation
+                ori = transform.transform.rotation
+            except Exception as tf_err:
+                self.get_logger().debug(f"TF map→base_link not ready: {tf_err}")
                 return
 
             # Compress the image as JPEG
@@ -881,22 +865,13 @@ class BrainClientNode(Node):
                 self.get_logger().error("Failed to encode image for pose_image")
                 return
 
-            # # Extract position and orientation data
-            pos = current_pose_source.pose.position  # Use selected source
-            ori = current_pose_source.pose.orientation  # Use selected source
-
-            # pos = transform.transform.translation
-            # ori = transform.transform.rotation
-
             # Compute yaw from quaternion
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
             cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
             theta = math.atan2(siny_cosp, cosy_cosp)
             self.pos_data_xyt = (pos.x, pos.y, theta)
-            # self.get_logger().info(f"Are you working? {pos.x}  {pos.y} and theta {theta}")
 
             # Create and send the pose_image message
-            # No user_token is needed as the server will use the connection_id
             payload = {
                 "image": base64.b64encode(encoded_img.tobytes()).decode("utf-8"),
                 "x": pos.x,
@@ -911,13 +886,17 @@ class BrainClientNode(Node):
                 },
             }
 
-            # Add covariance if available (i.e., from amcl_pose)
-            if hasattr(current_pose_source, "covariance"):
-                payload["cov_x"] = current_pose_source.covariance[0]  # Variance of x
-                payload["cov_y"] = current_pose_source.covariance[7]  # Variance of y
-                payload["cov_yaw"] = current_pose_source.covariance[
-                    35
-                ]  # Variance of yaw (renamed from cov_angle_z)
+            # Add covariance from AMCL pose if available (TF doesn't provide covariance)
+            if self.cur_nav_mode == "navigation" and self.last_amcl_pose:
+                cov = self.last_amcl_pose.pose.covariance
+                payload["cov_x"] = cov[0]    # Variance of x
+                payload["cov_y"] = cov[7]    # Variance of y
+                payload["cov_yaw"] = cov[35] # Variance of yaw
+            elif self.cur_nav_mode == "mapfree":
+                # In mapfree mode, set high uncertainty covariance
+                payload["cov_x"] = 1e4
+                payload["cov_y"] = 1e4
+                payload["cov_yaw"] = 1e4
 
             pose_image_msg = MessageIn(type=MessageInType.POSE_IMAGE, payload=payload)
             self.ws_bridge.send_message(pose_image_msg)
@@ -1865,12 +1844,8 @@ class BrainClientNode(Node):
         if self.agent_timer and not self.agent_timer.is_canceled():
             self.agent_timer.cancel()
             self.get_logger().info("Agent timer cancelled.")
-        if self.pose_image_timer and not self.pose_image_timer.is_canceled():
-            self.pose_image_timer.cancel()
-            self.get_logger().info("Pose image timer cancelled.")
 
         self.ready_for_image = False
-        self.pose_image_started = False  # Reset this flag
         self.primitives_registered = (
             False  # Mark primitives as not registered during deactivation
         )

@@ -12,6 +12,7 @@ ROS_COMMAND_GROUPS=(
     "ros2 launch brain_client brain_client.launch.py|sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
     "ros2 launch manipulation behavior.launch.py|ros2 launch brain_client input_manager.launch.py"
     "ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py|ros2 launch maurice_control udp_leader_receiver.launch.py"
+    "ros2 run maurice_arm ik.py|ros2 launch maurice_log logger.launch.py"
 )
 
 WINDOW_NAMES=(
@@ -20,6 +21,7 @@ WINDOW_NAMES=(
     "brain-nav"
     "behaviors-inputs"
     "stream"
+    "ik-logger"
 )
 
 DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
