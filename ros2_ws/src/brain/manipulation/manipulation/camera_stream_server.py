@@ -11,7 +11,8 @@ Usage:
     
 Then connect from your PC using the calibration client.
 
-You will have to kill any processes using the camera (e.g. driver) before running this.
+You will have to kill any processes using the camera (e.g. driver) before running this. Use sudo fuser -k /dev/video4
+
 """
 
 import cv2
