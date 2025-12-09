@@ -1,0 +1,26 @@
+# ROS2 build artifacts (contain host-specific paths)
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Docker
+.dockerignore
+docker-compose*.yml
+Dockerfile*
+
