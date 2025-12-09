@@ -42,6 +42,7 @@ class MessageOutType(str, Enum):
     ERROR = "error"
     STOP_AND_GO_BACK = "stop_and_go_back"
     PRIMITIVES_AND_DIRECTIVE_REGISTERED = "primitives_and_directive_registered"
+    MEMORY_POSITIONS = "memory_positions"
 
 
 class MessageIn(BaseModel):
