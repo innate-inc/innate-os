@@ -18,15 +18,9 @@
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>depthai_examples</depend>
-  <depend>camera_info_manager</depend>
-  <depend>sensor_msgs</depend>
-  <depend>depthai</depend>
-  <depend>depthai_bridge</depend>
   <depend>ament_index_python</depend>
   <depend>launch</depend>
   <depend>launch_ros</depend>
-  <depend>libopencv-dev</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
