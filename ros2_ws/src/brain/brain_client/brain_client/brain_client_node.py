@@ -504,8 +504,6 @@ class BrainClientNode(Node):
         Query available primitives from primitive_execution_action_server.
         Returns a dict of primitive names mapped to their metadata (for directive validation and registration).
         """
-        from brain_messages.srv import GetAvailablePrimitives
-        
         # Reuse existing service client
         client = self._get_primitives_client
         
@@ -519,7 +517,7 @@ class BrainClientNode(Node):
         request = GetAvailablePrimitives.Request()
         future = client.call_async(request)
         
-        # Wait for response (use polling to avoid spin conflicts in reload thread)
+        # Wait for response with polling
         timeout = 5.0
         start = time.time()
         while not future.done() and (time.time() - start) < timeout:
@@ -601,7 +599,6 @@ class BrainClientNode(Node):
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
         try:
-            import json
             data = json.loads(msg.data)
             self.get_logger().info(f"\033[1;94mReceived custom input from {data.get('input_device', 'unknown')}\033[0m")
             outgoing_msg = MessageIn(type=MessageInType.CUSTOM_INPUT, payload=data)
@@ -618,7 +615,6 @@ class BrainClientNode(Node):
             return
         
         try:
-            import json
             required_inputs = self.current_directive.get_inputs()
             msg = String()
             msg.data = json.dumps({"inputs": required_inputs})
@@ -1786,13 +1782,10 @@ class BrainClientNode(Node):
         # Stop any running primitive
         if self.primitive_running:
             self.get_logger().info(
-                "\033[1;92m[BrainClient] Stopping running primitive due to reset\033[0m"
+                "\033[1;92m[BrainClient] Stopping running primitive\033[0m"
             )
             if self._goal_handle:  # Check if goal_handle exists before trying to cancel
                 cancel_future = self._goal_handle.cancel_goal_async()
-                # We don't necessarily need to wait for this in a reset context,
-                # but good to be aware it's async.
-                # cancel_future.add_done_callback(self.cancel_response_callback) # Optional: log cancel response
                 self._goal_handle = None  # Clear handle after requesting cancel
             self.primitive_running = None
 
@@ -1839,7 +1832,7 @@ class BrainClientNode(Node):
         Uses the internal _perform_brain_reset method.
         """
         self.get_logger().info(
-            "\033[1;92m[BrainClient] Received /reset_brain request\033[0m"
+            "\033[1;92m[BrainClient] Received /brain/reset_brain request\033[0m"
         )
         if not self.is_brain_active:
             self.get_logger().warn(
@@ -1872,7 +1865,10 @@ class BrainClientNode(Node):
     def _perform_reload(self):
         """Perform the actual reload in a background thread."""
         try:
-            # First, call PEAS to reload primitives
+            # Deactivate brain: stops agent loop, cancels running primitive
+            self._deactivate_brain()
+            
+            # Call PEAS to reload primitives
             if self._reload_primitives_client.wait_for_service(timeout_sec=5.0):
                 peas_request = Trigger.Request()
                 future = self._reload_primitives_client.call_async(peas_request)
@@ -1901,11 +1897,19 @@ class BrainClientNode(Node):
             # Re-register with server
             self.register_primitives_and_directive()
             
+            # Reactivate brain
+            self._reactivate_brain()
+            
             self.get_logger().info(
                 f"\033[1;92m[BrainClient] Reloaded {len(self.primitives_dict)} primitives, {len(self.directives)} directives\033[0m"
             )
         except Exception as e:
             self.get_logger().error(f"[BrainClient] Reload failed: {e}")
+            # Attempt to reactivate brain even on failure to avoid stuck state
+            try:
+                self._reactivate_brain()
+            except Exception:
+                pass
 
     def _deactivate_brain(self):
         """Deactivates the brain's main operational loops and interactions."""
