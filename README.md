@@ -1,16 +1,35 @@
+<div align="center">
+
+<!-- Add your banner image here -->
+<!-- ![Innate Simulator Banner](./assets/banner.png) -->
+
 # Innate Simulator
 
-This repository contains a simulation environment built with Genesis, featuring a web interface for visualization and interaction.
+*A Genesis-powered simulation environment for robotics development and testing*
+
+[![Discord](https://img.shields.io/badge/Discord-Join%20our%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/innate)
+[![Documentation](https://img.shields.io/badge/Docs-Read%20the%20docs-blue?style=for-the-badge&logo=readthedocs&logoColor=white)](https://docs.innate.bot)
+[![Website](https://img.shields.io/badge/Website-Visit%20us-orange?style=for-the-badge&logo=safari&logoColor=white)](https://innate.bot)
+[![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+
+</div>
+
+---
+
+> [!NOTE]
+> **This simulator is in active development.** APIs and features may change. Join our Discord for updates and support.
+
+---
 
 ## Overview
 
-This project integrates:
+This repository contains two main components:
 
-*   **Genesis:** For the core physics simulation and rendering.
-*   **FastAPI:** As the backend web server.
-*   **React:** For the frontend user interface.
-*   **WebSockets:** For real-time communication between the frontend, backend, and agent.
-*   **Auth0:** For secure user authentication.
+1. **Simulator** — A Genesis-based 3D simulation environment with a FastAPI backend and React frontend. The simulator communicates via WebSockets with the Innate operating system (running in a Docker container), allowing you to experiment with agents through a simple web interface.
+
+2. **Benchmark Controller** — A test harness for running automated experiments and measuring agent performance under specific conditions.
+
+Use this to develop and test agents for Innate robots — navigation, task execution, and embodied AI. The simulator currently focuses on mobility; manipulation capabilities are planned for future releases.
 
 ## Installation
 
@@ -21,7 +40,7 @@ This project integrates:
 *   Yarn package manager
 *   [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
-### Backend Setup
+### Simulator Setup
 
 1.  **Clone the repository:**
     ```bash
@@ -29,7 +48,7 @@ This project integrates:
     cd <repository-directory>
     ```
 
-2.  **Setup with uv (recommended):**
+2.  **Install dependencies with uv (recommended):**
     ```bash
     ./setup.sh
     source .venv/bin/activate
@@ -46,14 +65,12 @@ This project integrates:
     pip install -r requirements.ubuntu.txt
     ```
 
-### Data Setup
+4.  **Download scene data:**
+    The simulator requires ReplicaCAD scene data. See [`data/README.md`](data/README.md) for detailed download instructions.
 
-The simulator requires ReplicaCAD scene data. See [`data/README.md`](data/README.md) for detailed download instructions.
-
-**Required datasets:**
-
-*   `data/ReplicaCAD_baked_lighting/` - Pre-baked lighting stages
-*   `data/ReplicaCAD_dataset/` - Object meshes for collision
+    Required datasets:
+    - `data/ReplicaCAD_baked_lighting/` — Pre-baked lighting stages
+    - `data/ReplicaCAD_dataset/` — Object meshes for collision
 
 ### Frontend Setup
 
@@ -68,30 +85,31 @@ The simulator requires ReplicaCAD scene data. See [`data/README.md`](data/README
 
 ## Running the Application
 
-### 1. Start the Backend Server
+> [!IMPORTANT]
+> The simulator connects to the **[Innate OS](../innate-os)** running locally in Docker on `ws://localhost:9090`.
+>
+> **Before starting the simulator:**
+> 1. Start the **[Innate OS](../innate-os)** in Docker
+> 2. (Optional) Start the **[Innate Cloud Agent](../innate-cloud-agent)** locally — only needed if the Innate OS is configured to use a local agent instead of the cloud service
+>
+> See the linked repositories for setup instructions.
+
+### 1. Start the Simulator
 
 From the project root directory:
 
 ```bash
-python main_web.py [OPTIONS]
-source venv/bin/activate
-python main_web.py  -v --local --need-oauth false 
+# Recommended for development
+python main.py --vis --log-everything --need-oauth false
 ```
 
-**Common Options:**
+**Options:**
 
-*   `-v` or `--vis`: Enable the Genesis simulation visualization window.
-*   `--local`: Connect to a local agent server (e.g., ROS bridge running on `ws://localhost:9090`) instead of the cloud service.
-*   `--need-oauth <true|false>`: Require OAuth authentication (default: `true`). Set to `false` for development **only** if Auth0 is not configured.
-*   `--auth0-domain <your-domain>`: Your Auth0 domain (required if `--need-oauth true`).
-*   `--auth0-audience <your-audience>`: Your Auth0 API identifier/audience (required if `--need-oauth true`).
-*   `--log-everything`: Enable verbose logging for all agent model inputs/outputs.
-
-**Preferred starting options for dev on the agent**
-
-```bash
-python main_web.py --local --vis --log-everything --need-oauth false
-```
+- `--vis` — Enable the Genesis simulation visualization window
+- `--need-oauth false` — Disable authentication for local development
+- `--log-everything` — Verbose logging for agent inputs/outputs
+- `--no-web` — Run without the web server (headless mode)
+- `--auth0-domain` / `--auth0-audience` — Auth0 config (required if OAuth enabled)
 
 ### 2. Start the Frontend Development Server
 
@@ -248,7 +266,7 @@ The backend exposes several API endpoints for controlling the simulation and int
 ├── venv/                  # Virtual environment (ignored by git)
 ├── .gitignore
 ├── AUTH0_SETUP.md         # Auth0 setup guide
-├── main_web.py            # Main FastAPI application entry point
+├── main.py            # Main FastAPI application entry point
 ├── README.md              # This file
 ├── requirements.macos.txt # Python dependencies for macOS
 └── requirements.txt       # Python dependencies (if needed for other OS)
@@ -259,14 +277,14 @@ The backend exposes several API endpoints for controlling the simulation and int
 *   **Backend Serves Frontend:** In the standard setup, the FastAPI backend serves the built React frontend from `frontend/dist/`.
 *   **Frontend Dev Server:** For easier frontend development, run `yarn dev` in the `frontend` directory. This provides hot reloading but requires the backend to be running separately.
 *   **Communication:** Components (simulation, agent bridge, web API) communicate via thread-safe queues defined in `src/shared_queues.py`.
-*   **macOS Threading:** On macOS, the Genesis simulation runs in a separate thread managed by `gs.tools.run_in_another_thread` in `main_web.py`.
+*   **macOS Threading:** On macOS, the Genesis simulation runs in a separate thread managed by `gs.tools.run_in_another_thread` in `main.py`.
 
 ## Troubleshooting
 
-*   **Genesis Viewer Issues:** If the visualization window doesn't appear or behaves strangely, try running `main_web.py` with the `-v` flag.
+*   **Genesis Viewer Issues:** If the visualization window doesn't appear or behaves strangely, try running `main.py` with the `-v` flag.
 *   **WebSocket Connection:** If the frontend cannot connect to the agent: 
     *   Ensure the backend is running.
-    *   If using a local agent bridge, ensure it's running and start the backend with `--local`.
+    *   Ensure the Innate OS is running in Docker.
     *   Check browser console logs for errors.
 *   **Authentication Errors:** Verify Auth0 configuration in `.env` (frontend) and command-line arguments or environment variables (backend). Ensure the audience and domain match.
 
@@ -274,4 +292,14 @@ The backend exposes several API endpoints for controlling the simulation and int
 
 For specific instructions on deploying this application to the `sim.innate.bot` VM environment (including `nginx` configuration and process management with `tmux`), please refer to the dedicated guide:
 
-[**docs/DEPLOYMENT.md**](docs/DEPLOYMENT.md) 
+[**docs/DEPLOYMENT.md**](docs/DEPLOYMENT.md)
+
+---
+
+<div align="center">
+
+**Built with ❤️ by [Innate](https://innate.bot) in Palo Alto, California**
+
+[Discord](https://discord.gg/innate) • [Documentation](https://docs.innate.bot) • [Website](https://innate.bot)
+
+</div>
