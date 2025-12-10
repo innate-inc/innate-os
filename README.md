@@ -122,6 +122,22 @@ yarn dev
 
 The frontend will typically be available at `http://localhost:5173`.
 
+## Benchmarks
+
+The `benchmarks/` directory contains a framework for evaluating agent performance across various task categories (navigation, task completion, real-time interruption, etc.).
+
+See **[benchmarks/README.md](benchmarks/README.md)** for detailed instructions on running and analyzing benchmarks.
+
+**Quick start:**
+
+```bash
+# Run a single benchmark
+python benchmarks/benchmark_runner.py --config benchmarks/configs/navigation_test.yaml --trial 1
+
+# Run all benchmarks in a category
+python benchmarks/run_benchmarks.py --category navigation --trials 10
+```
+
 ## Configuration
 
 ### Environment Configuration Files
