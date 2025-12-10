@@ -1,0 +1,1 @@
+python kuka_dual_robot_with_metrics.py --shape circle

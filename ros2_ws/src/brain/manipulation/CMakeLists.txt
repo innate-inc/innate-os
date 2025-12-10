@@ -56,5 +56,8 @@ install(
     manipulation/camera_odom_recorder_cli.py
     manipulation/camera_odom_server.py
     manipulation/spline_path_server.py
+    manipulation/whiteboard_draw.py
+    manipulation/whiteboard_draw_cli.py
+    manipulation/pen_offset_debug.py
   DESTINATION lib/${PROJECT_NAME}
 )
