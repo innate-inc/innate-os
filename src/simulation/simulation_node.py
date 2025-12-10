@@ -130,7 +130,7 @@ class SimulationNode:
     def _init_environment(self):
         """Initialize the environment meshes and process occupancy grid"""
         # TODO: Make the base scene path configurable via env_config["environment_name"]
-        base_scene_path = "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc1_staging_00.glb"
+        base_scene_path = "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb"
         base_scene_collision_config = "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
 
         # Option 1: Load base scene without convexification
