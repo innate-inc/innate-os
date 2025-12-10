@@ -23,10 +23,7 @@ from src.routes.config_api import router as config_api_router
 load_dotenv()
 
 # Define constants
-LOCAL_ROSBRIDGE_URI = "ws://localhost:9090"
-CLOUD_ROSBRIDGE_URI = (
-    "wss://innate-agent-websocket-service-533276562345.us-central1.run.app"
-)
+ROSBRIDGE_URI = "ws://localhost:9090"  # Connects to Innate OS running locally in Docker
 
 app = FastAPI()
 
@@ -91,12 +88,6 @@ def main():
     parser.add_argument(
         "-v", "--vis", action="store_true", default=False, help="Enable visualization"
     )
-    parser.add_argument(
-        "--local",
-        action="store_true",
-        default=False,
-        help="Connect to local agent server instead of cloud",
-    )
     # Add Auth0 configuration arguments
     parser.add_argument(
         "--auth0-domain",
@@ -124,6 +115,13 @@ def main():
         choices=["true", "false"],
         default="true",
         help="Require OAuth authentication for chat API (default: true)",
+    )
+    # Add no-web flag to skip starting the web server
+    parser.add_argument(
+        "--no-web",
+        action="store_true",
+        default=False,
+        help="Run without the web server (headless mode)",
     )
     args = parser.parse_args()
 
@@ -153,20 +151,21 @@ def main():
     # 3) Start the agent (async) in a separate thread
     agent_thread = run_agent_async(
         SHARED_QUEUES,
-        rosbridge_uri=(LOCAL_ROSBRIDGE_URI if args.local else CLOUD_ROSBRIDGE_URI),
+        rosbridge_uri=ROSBRIDGE_URI,
     )
 
-    # 4) Start Uvicorn in another thread so the Genesis viewer and FastAPI
-    # server run concurrently
-    def run_uvicorn():
-        config = uvicorn.Config(
-            app=app, host="0.0.0.0", port=8000, log_level="info", reload=False
-        )
-        server = uvicorn.Server(config)
-        server.run()
+    # 4) Start Uvicorn in another thread (unless --no-web)
+    if not args.no_web:
 
-    uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
-    uvicorn_thread.start()
+        def run_uvicorn():
+            config = uvicorn.Config(
+                app=app, host="0.0.0.0", port=8000, log_level="info", reload=False
+            )
+            server = uvicorn.Server(config)
+            server.run()
+
+        uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
+        uvicorn_thread.start()
 
     # 5) Launch simulation run() in its own thread (macOS) or directly
     # (other platforms)
