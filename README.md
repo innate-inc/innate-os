@@ -46,6 +46,15 @@ This project integrates:
     pip install -r requirements.ubuntu.txt
     ```
 
+### Data Setup
+
+The simulator requires ReplicaCAD scene data. See [`data/README.md`](data/README.md) for detailed download instructions.
+
+**Required datasets:**
+
+*   `data/ReplicaCAD_baked_lighting/` - Pre-baked lighting stages
+*   `data/ReplicaCAD_dataset/` - Object meshes for collision
+
 ### Frontend Setup
 
 1.  **Navigate to the frontend directory:**
