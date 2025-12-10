@@ -375,8 +375,13 @@ class BrainClientNode(Node):
             SetDirectiveOnStartup, "/brain/set_directive_on_startup", self.handle_set_directive_on_startup
         )
 
-        # --- Service client for reloading primitives in PEAS ---
-        self._reload_primitives_client = self.create_client(Trigger, '/brain/reload_primitives')
+        # --- Helper node for making synchronous service calls from callbacks ---
+        # This node isn't registered with any executor, so spin_until_future_complete works on it
+        self._service_call_node = rclpy.create_node('brain_client_service_caller')
+        
+        # --- Service clients on helper node (for synchronous calls) ---
+        self._reload_primitives_client = self._service_call_node.create_client(Trigger, '/brain/reload_primitives')
+        self._get_primitives_client_sync = self._service_call_node.create_client(GetAvailablePrimitives, '/brain/get_available_primitives')
 
         # --- Service for reloading primitives and directives ---
         self._reload_srv = self.create_service(
@@ -432,11 +437,6 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
-        # Create primitives service client once (avoid wait set overflow on reload)
-        self._get_primitives_client = self.create_client(
-            GetAvailablePrimitives, '/brain/get_available_primitives'
-        )
-        
         # Initialize primitives - query from primitive_execution_action_server
         self.primitives_dict = self._query_available_primitives()
         if not self.primitives_dict:
@@ -504,8 +504,8 @@ class BrainClientNode(Node):
         Query available primitives from primitive_execution_action_server.
         Returns a dict of primitive names mapped to their metadata (for directive validation and registration).
         """
-        # Reuse existing service client
-        client = self._get_primitives_client
+        # Use helper node's client for synchronous calls (works from callbacks)
+        client = self._get_primitives_client_sync
         
         # Wait for service to be available
         self.get_logger().info("Waiting for /brain/get_available_primitives service...")
@@ -513,15 +513,10 @@ class BrainClientNode(Node):
             self.get_logger().error("Timeout waiting for /brain/get_available_primitives service")
             return {}
         
-        # Call service
+        # Call service via helper node (not registered with any executor)
         request = GetAvailablePrimitives.Request()
         future = client.call_async(request)
-        
-        # Wait for response with polling
-        timeout = 5.0
-        start = time.time()
-        while not future.done() and (time.time() - start) < timeout:
-            time.sleep(0.05)
+        rclpy.spin_until_future_complete(self._service_call_node, future, timeout_sec=10.0)
         
         if not future.done():
             self.get_logger().error("Service call timeout")
@@ -1848,40 +1843,46 @@ class BrainClientNode(Node):
     def handle_reload(self, request, response):
         """
         Service handler for reloading primitives and directives.
-        Triggers async reload to avoid blocking the executor.
+        Requires MultiThreadedExecutor so service responses can be processed while we wait.
         """
         self.get_logger().info(
             "\033[1;92m[BrainClient] Received /brain/reload request\033[0m"
         )
         
-        # Trigger reload in a separate thread to avoid executor deadlock
-        reload_thread = threading.Thread(target=self._perform_reload, daemon=True)
-        reload_thread.start()
-        
-        response.success = True
-        response.message = "Reload initiated"
+        try:
+            self._perform_reload()
+            response.success = True
+            response.message = f"Reloaded {len(self.primitives_dict)} primitives, {len(self.directives)} directives"
+        except Exception as e:
+            response.success = False
+            response.message = f"Reload failed: {e}"
         return response
 
     def _perform_reload(self):
-        """Perform the actual reload in a background thread."""
+        """Perform the actual reload synchronously."""
         try:
             # Deactivate brain: stops agent loop, cancels running primitive
             self._deactivate_brain()
             
-            # Call PEAS to reload primitives
-            if self._reload_primitives_client.wait_for_service(timeout_sec=5.0):
+            # Clear current state so queries during reload return empty
+            self.directives = {}
+            self.primitives_dict = {}
+            self.current_directive = None
+            
+            # Call PEAS to reload primitives (synchronous via helper node)
+            if self._reload_primitives_client.wait_for_service(timeout_sec=10.0):
                 peas_request = Trigger.Request()
                 future = self._reload_primitives_client.call_async(peas_request)
+                rclpy.spin_until_future_complete(self._service_call_node, future, timeout_sec=30.0)
                 
-                # Wait for future to complete (safe in separate thread)
-                while not future.done():
-                    time.sleep(0.1)
-                
-                peas_result = future.result()
-                if peas_result.success:
-                    self.get_logger().info(f"PEAS reload: {peas_result.message}")
+                if future.done():
+                    peas_result = future.result()
+                    if peas_result.success:
+                        self.get_logger().info(f"PEAS reload: {peas_result.message}")
+                    else:
+                        self.get_logger().warn(f"PEAS reload failed: {peas_result.message}")
                 else:
-                    self.get_logger().warn(f"PEAS reload failed: {peas_result.message}")
+                    self.get_logger().warn("PEAS reload timed out")
             else:
                 self.get_logger().warn("PEAS reload service not available, using local primitive loading")
             
@@ -2153,6 +2154,9 @@ class BrainClientNode(Node):
         # Clean up TTS handler
         if hasattr(self, 'tts_handler'):
             self.tts_handler.close()
+        # Clean up helper node for service calls
+        if hasattr(self, '_service_call_node'):
+            self._service_call_node.destroy_node()
         return super().destroy_node()
 
 
