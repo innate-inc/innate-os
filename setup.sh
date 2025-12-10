@@ -30,3 +30,6 @@ uv pip install -r "$REQUIREMENTS_FILE" --python .venv/bin/python
 echo ""
 echo "Setup complete! Activate the environment with:"
 echo "  source .venv/bin/activate"
+echo ""
+echo "NOTE: You also need to download the ReplicaCAD datasets."
+echo "See data/README.md for download instructions."
