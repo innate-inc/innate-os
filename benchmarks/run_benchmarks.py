@@ -577,7 +577,7 @@ def main():
                 )
 
             email_body = analysis_report
-            
+
             # Fallback to .env for email config
             to_email = args.to_email or os.getenv("TO_EMAIL")
             from_email = args.from_email or os.getenv("FROM_EMAIL")
