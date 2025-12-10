@@ -9,11 +9,7 @@ import yaml
 import os
 from datetime import datetime
 from pathlib import Path
-from src.check_validation import (
-    validate_checks,
-    evaluate_stop_criterion,
-    evaluate_final_success,
-)
+from src.check_validation import validate_checks
 from src.websocket_manager import WebSocketManager
 
 
@@ -603,72 +599,81 @@ class DirectiveBenchmark:
         Periodically validate checks during the benchmark run using the new 2-stage system:
         1. First run all deterministic checks (location, primitive, etc.)
         2. Then run VLM evaluation with both success and early stop criteria
-        
+
         Returns:
             str: VLM action result ("continue", "success", or "stop")
         """
         if not self.expectations.get("checks"):
             return "continue"
-            
+
         # Stage 1: Run all deterministic checks
         deterministic_check_status = {}
-        
+
         for check in self.expectations["checks"]:
             check_id = check.get("id")
             check_type = check.get("type")
-            
+
             if not check_id or not check_type:
                 continue
-                
+
             # Initialize check status
-            deterministic_check_status[check_id] = self.check_status.get(check_id, False)
-                
+            deterministic_check_status[check_id] = self.check_status.get(
+                check_id, False
+            )
+
             # Skip checks that have already passed
             if self.check_status.get(check_id, False):
                 continue
-                
+
             # Validate deterministic checks
             if check_type == "location":
                 # Validate location check with current position history
                 from src.check_validation import validate_location_check
-                
+
                 validation_kwargs = {
                     "position_history": self.position_history,
                     "base_url": self.base_url,
                 }
-                
+
                 passed = validate_location_check(check_id, check, **validation_kwargs)
-                
+
                 if passed:
-                    print(f"Periodic validation: Deterministic check '{check_id}' passed!")
+                    print(
+                        f"Periodic validation: Deterministic check '{check_id}' passed!"
+                    )
                     self._update_check_status(check_id, True)
                     deterministic_check_status[check_id] = True
-                    
+
             elif check_type == "primitive":
                 # Validate primitive check with current chat log
                 from src.check_validation import validate_primitive_check
-                
+
                 validation_kwargs = {
                     "chat_log": self.chat_log,
                 }
-                
+
                 passed = validate_primitive_check(check_id, check, **validation_kwargs)
-                
+
                 if passed:
-                    print(f"Periodic validation: Deterministic check '{check_id}' passed!")
+                    print(
+                        f"Periodic validation: Deterministic check '{check_id}' passed!"
+                    )
                     self._update_check_status(check_id, True)
                     deterministic_check_status[check_id] = True
-        
+
         # Stage 2: Run VLM evaluation with both success and early stop criteria
         success_criterion = self.expectations.get("success_criterion", "")
         early_stop_criterion = self.expectations.get("early_stop_criterion", "")
-        
+
         if success_criterion or early_stop_criterion:
             # Get frames for VLM evaluation
-            from src.vlm_utils import get_representative_frames, evaluate_periodic_with_vlm
-            
+            from src.vlm_utils import (
+                get_representative_frames,
+                evaluate_periodic_with_vlm,
+            )
+
             frames = get_representative_frames(self.first_person_dir, self.chase_dir)
-            
+
             if frames:
                 try:
                     # Use the new 3-state VLM evaluation
@@ -680,50 +685,52 @@ class DirectiveBenchmark:
                         deterministic_check_status=deterministic_check_status,
                         metrics=self.metrics,
                     )
-                    
+
                     action = result.get("action", "continue")
                     reason = result.get("reason", "No reason provided")
-                    
+
                     print(f"VLM periodic evaluation: {action} - {reason}")
-                    
+
                     # Save the evaluation result to metrics
                     if "periodic_evaluations" not in self.metrics:
                         self.metrics["periodic_evaluations"] = []
-                    
-                    self.metrics["periodic_evaluations"].append({
-                        "timestamp": time.time() - self.metrics["start_timestamp"],
-                        "action": action,
-                        "reason": reason,
-                        "deterministic_checks": deterministic_check_status.copy(),
-                    })
-                    
+
+                    self.metrics["periodic_evaluations"].append(
+                        {
+                            "timestamp": time.time() - self.metrics["start_timestamp"],
+                            "action": action,
+                            "reason": reason,
+                            "deterministic_checks": deterministic_check_status.copy(),
+                        }
+                    )
+
                     self._save_metrics()
-                    
+
                     return action
-                    
+
                 except Exception as e:
                     print(f"Error in periodic VLM evaluation: {e}")
                     return "continue"
-        
+
         return "continue"
 
     def _should_stop_early(self, vlm_action=None):
         """
         Check if the benchmark should stop early based on the VLM evaluation result.
         The new system always uses both deterministic checks and VLM evaluation.
-        
+
         Args:
             vlm_action (str): The action result from VLM evaluation ("continue", "success", or "stop")
-        
+
         Returns:
             tuple: (should_stop, is_success) - whether to stop and whether it's due to success
         """
         if not vlm_action:
             return False, False
-            
+
         if vlm_action == "stop":
             print("Early stop triggered by VLM evaluation")
-            
+
             # Save the early stop decision to metrics
             self.metrics["early_stop"] = {
                 "triggered": True,
@@ -732,10 +739,10 @@ class DirectiveBenchmark:
             }
             self._save_metrics()
             return True, False
-            
+
         elif vlm_action == "success":
             print("Early stop triggered by VLM evaluation - SUCCESS achieved")
-            
+
             # Save the success decision to metrics
             self.metrics["early_stop"] = {
                 "triggered": True,
@@ -744,7 +751,7 @@ class DirectiveBenchmark:
             }
             self._save_metrics()
             return True, True
-            
+
         # vlm_action == "continue"
         return False, False
 
@@ -769,19 +776,26 @@ class DirectiveBenchmark:
         for check in self.expectations.get("checks", []):
             check_id = check.get("id")
             if check_id:
-                deterministic_check_status[check_id] = self.check_status.get(check_id, False)
+                deterministic_check_status[check_id] = self.check_status.get(
+                    check_id, False
+                )
 
         # Run final VLM evaluation
         success_criterion = self.expectations.get("success_criterion", "")
         early_stop_criterion = self.expectations.get("early_stop_criterion", "")
-        
+
         if success_criterion:
             try:
-                from src.vlm_utils import get_representative_frames, evaluate_periodic_with_vlm
-                
+                from src.vlm_utils import (
+                    get_representative_frames,
+                    evaluate_periodic_with_vlm,
+                )
+
                 # Get frames for final evaluation
-                frames = get_representative_frames(self.first_person_dir, self.chase_dir)
-                
+                frames = get_representative_frames(
+                    self.first_person_dir, self.chase_dir
+                )
+
                 if frames:
                     result = evaluate_periodic_with_vlm(
                         success_criterion=success_criterion,
@@ -791,10 +805,10 @@ class DirectiveBenchmark:
                         deterministic_check_status=deterministic_check_status,
                         metrics=self.metrics,
                     )
-                    
+
                     action = result.get("action", "continue")
                     reason = result.get("reason", "No reason provided")
-                    
+
                     if action == "success":
                         return {
                             "success": True,
@@ -813,7 +827,7 @@ class DirectiveBenchmark:
                         "reason": "No frames available for final evaluation",
                         "deterministic_checks": deterministic_check_status,
                     }
-                    
+
             except Exception as e:
                 return {
                     "success": False,
@@ -833,42 +847,42 @@ class DirectiveBenchmark:
         This checks if all required conditions in the success_criterion are met.
         """
         success_criterion = self.expectations.get("success_criterion", {})
-        
+
         # If success_criterion is a string (legacy format), return error
         if isinstance(success_criterion, str):
             return {
-                "success": False, 
-                "reason": "Deterministic success requires structured success_criterion, not string"
+                "success": False,
+                "reason": "Deterministic success requires structured success_criterion, not string",
             }
-        
+
         # success_criterion should be a dict with required_checks
         required_checks = success_criterion.get("required_checks", [])
-        
+
         if not required_checks:
             return {
                 "success": False,
-                "reason": "No required_checks specified in success_criterion for deterministic evaluation"
+                "reason": "No required_checks specified in success_criterion for deterministic evaluation",
             }
-        
+
         # Check if all required checks have passed
         failed_checks = []
         passed_checks = []
-        
+
         for check_id in required_checks:
             if self.check_status.get(check_id, False):
                 passed_checks.append(check_id)
             else:
                 failed_checks.append(check_id)
-        
+
         if failed_checks:
             return {
                 "success": False,
-                "reason": f"Required checks failed: {failed_checks}. Passed checks: {passed_checks}"
+                "reason": f"Required checks failed: {failed_checks}. Passed checks: {passed_checks}",
             }
         else:
             return {
                 "success": True,
-                "reason": f"All required checks passed: {passed_checks}"
+                "reason": f"All required checks passed: {passed_checks}",
             }
 
     def run(self):
@@ -1012,15 +1026,15 @@ class DirectiveBenchmark:
         try:
             last_check_time = time.time()
             check_interval = 10.0  # Validate checks every 10 seconds
-            
+
             while time.time() < stop_time and self.running:
                 current_time = time.time()
-                
+
                 # Periodically validate checks for real-time early stopping
                 if current_time - last_check_time >= check_interval:
                     vlm_action = self._periodic_check_validation()
                     last_check_time = current_time
-                    
+
                     # Check if we should stop early based on VLM action
                     should_stop, is_success = self._should_stop_early(vlm_action)
                     if should_stop:
@@ -1035,7 +1049,7 @@ class DirectiveBenchmark:
                         else:
                             print("Stop criterion met. Ending benchmark early.")
                         break
-                
+
                 time.sleep(1.0)  # Check conditions every second
         except KeyboardInterrupt:
             print("Benchmark interrupted by user.")

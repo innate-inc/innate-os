@@ -9,6 +9,16 @@ from src.middleware.auth import get_current_user
 from src.middleware.authorized_users import is_authorized
 
 
+async def optional_auth():
+    """Skip authentication if NEED_OAUTH is false"""
+    need_oauth = os.environ.get("NEED_OAUTH", "True").lower() == "true"
+    if not need_oauth:
+        return {"user_id": "dev-user", "email": "dev@localhost", "token_payload": {}}
+    
+    # Use the regular auth flow
+    return await get_current_user()
+
+
 router = APIRouter()
 
 # Track connected clients by user ID
@@ -21,7 +31,7 @@ message_queues: Dict[str, asyncio.Queue] = {}
 broadcast_task = None
 
 
-@router.get("/", dependencies=[Depends(get_current_user)])
+@router.get("/", dependencies=[Depends(optional_auth)])
 def serve_react_app():
     """Serves the React frontend index.html from the pre-built dist folder."""
     frontend_build_path = os.path.join(
