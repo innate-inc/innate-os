@@ -17,8 +17,9 @@ This project integrates:
 ### Prerequisites
 
 *   Node.js v18.x
-*   Python 3.8+
+*   Python 3.11
 *   Yarn package manager
+*   [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
 ### Backend Setup
 
@@ -27,14 +28,23 @@ This project integrates:
     git clone <repository-url> # Replace with your repo URL
     cd <repository-directory>
     ```
-2.  **Create and activate a virtual environment:**
+
+2.  **Setup with uv (recommended):**
     ```bash
-    python -m venv venv
-    source venv/bin/activate # On Windows use `venv\Scripts\activate`
+    ./setup.sh
+    source .venv/bin/activate
     ```
-3.  **Install dependencies:**
-    *   **macOS:** `pip install -r requirements.macos.txt`
-    *   **Other OS:** (You might need to adjust dependencies) `pip install -r requirements.txt` *(Assuming a requirements.txt exists or needs creation)*
+    This automatically detects your OS (macOS or Linux) and installs the appropriate dependencies.
+
+3.  **Alternative: Manual setup with pip:**
+    ```bash
+    python3.11 -m venv .venv
+    source .venv/bin/activate
+    # macOS:
+    pip install -r requirements.macos.txt
+    # Linux/Ubuntu:
+    pip install -r requirements.ubuntu.txt
+    ```
 
 ### Frontend Setup
 
