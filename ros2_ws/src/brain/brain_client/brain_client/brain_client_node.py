@@ -51,6 +51,7 @@ from brain_messages.action import ExecutePrimitive
 from brain_messages.srv import GetAvailableDirectives
 from brain_messages.srv import ResetBrain
 from brain_messages.srv import SetDirectiveOnStartup
+from brain_messages.srv import GetAvailablePrimitives
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
@@ -431,6 +432,11 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
+        # Create primitives service client once (avoid wait set overflow on reload)
+        self._get_primitives_client = self.create_client(
+            GetAvailablePrimitives, '/brain/get_available_primitives'
+        )
+        
         # Initialize primitives - query from primitive_execution_action_server
         self.primitives_dict = self._query_available_primitives()
         if not self.primitives_dict:
@@ -500,8 +506,8 @@ class BrainClientNode(Node):
         """
         from brain_messages.srv import GetAvailablePrimitives
         
-        # Create service client
-        client = self.create_client(GetAvailablePrimitives, '/brain/get_available_primitives')
+        # Reuse existing service client
+        client = self._get_primitives_client
         
         # Wait for service to be available
         self.get_logger().info("Waiting for /brain/get_available_primitives service...")
@@ -513,8 +519,11 @@ class BrainClientNode(Node):
         request = GetAvailablePrimitives.Request()
         future = client.call_async(request)
         
-        # Wait for response
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        # Wait for response (use polling to avoid spin conflicts in reload thread)
+        timeout = 5.0
+        start = time.time()
+        while not future.done() and (time.time() - start) < timeout:
+            time.sleep(0.05)
         
         if not future.done():
             self.get_logger().error("Service call timeout")
