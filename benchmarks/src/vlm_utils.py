@@ -4,7 +4,7 @@ import time
 import json
 import base64
 from dotenv import load_dotenv
-import google.generativeai as genai
+import google.genai as genai
 
 
 def encode_image(image_path):
@@ -20,10 +20,7 @@ def encode_image(image_path):
     try:
         with open(image_path, "rb") as image_file:
             image_data = image_file.read()
-            return {
-                "mime_type": "image/jpeg",
-                "data": image_data
-            }
+            return {"mime_type": "image/jpeg", "data": image_data}
     except Exception as e:
         print(f"Error loading image {image_path}: {e}")
         return None
@@ -71,7 +68,7 @@ def evaluate_periodic_with_vlm(
 ):
     """
     Evaluate both success and early stop criteria using Gemini 2.5 Flash with 3-state response system.
-    
+
     Args:
         success_criterion (str): The success criterion to evaluate
         early_stop_criterion (str): The early stop criterion to evaluate
@@ -79,7 +76,7 @@ def evaluate_periodic_with_vlm(
         chat_log_with_coordinates (list): Chat log including robot coordinates
         deterministic_check_status (dict): Status of deterministic checks (passed/failed)
         metrics (dict): Benchmark metrics with timestamps
-        
+
     Returns:
         dict: Result with 'action' ("continue", "success", or "stop") and 'reason' fields
     """
@@ -93,23 +90,29 @@ def evaluate_periodic_with_vlm(
     try:
         # Configure Gemini
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel("gemini-2.5-pro")
 
         # Format the chat log with coordinates
         chat_log_text = ""
         if chat_log_with_coordinates:
-            chat_log_text = "Chat Log with Robot Coordinates (time_since_start in seconds):\n"
+            chat_log_text = (
+                "Chat Log with Robot Coordinates (time_since_start in seconds):\n"
+            )
             for msg in chat_log_with_coordinates:
                 sender = msg.get("sender", "unknown")
                 text = msg.get("text", "")
                 time_since_start = msg.get("time_since_start", "unknown")
                 coordinates = msg.get("coordinates", "unknown")
-                chat_log_text += f"[{time_since_start}s] {sender} @{coordinates}: {text}\n"
+                chat_log_text += (
+                    f"[{time_since_start}s] {sender} @{coordinates}: {text}\n"
+                )
 
         # Format deterministic check status
         deterministic_status_text = "Deterministic Check Status:\n"
         for check_id, status in deterministic_check_status.items():
-            deterministic_status_text += f"- {check_id}: {'PASSED' if status else 'NOT PASSED'}\n"
+            deterministic_status_text += (
+                f"- {check_id}: {'PASSED' if status else 'NOT PASSED'}\n"
+            )
 
         # Calculate current time since benchmark start
         current_time = time.time()
@@ -162,7 +165,7 @@ Please respond with a JSON object containing:
 
         # Prepare content with images
         content = [prompt]
-        
+
         # Add images
         for frame_path in frame_paths:
             image_data = encode_image(frame_path)
@@ -171,7 +174,7 @@ Please respond with a JSON object containing:
 
         # Generate response
         response = model.generate_content(content)
-        
+
         # Parse the JSON response
         try:
             # First try to parse as direct JSON
@@ -191,20 +194,22 @@ Please respond with a JSON object containing:
                         return result
                     except json.JSONDecodeError:
                         pass
-            
+
             # If JSON parsing fails, try to extract action from text
             text_lower = text.lower()
             if "success" in text_lower and "deterministic" in text_lower:
                 action = "success"
-            elif "stop" in text_lower and ("stuck" in text_lower or "impossible" in text_lower):
+            elif "stop" in text_lower and (
+                "stuck" in text_lower or "impossible" in text_lower
+            ):
                 action = "stop"
             else:
                 action = "continue"
-            
+
             return {
                 "action": action,
                 "reason": response.text,
-                "reflection": "Response parsing failed, extracted action from text"
+                "reflection": "Response parsing failed, extracted action from text",
             }
 
     except Exception as e:
@@ -244,7 +249,7 @@ def evaluate_with_vlm(
     try:
         # Configure Gemini
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
 
         # Format the chat log for inclusion in the prompt
         chat_log_text = ""
@@ -270,7 +275,7 @@ def evaluate_with_vlm(
         # Build the prompt
         prompt_type = "stop" if is_stop_check else "success"
         result_key = "should_stop" if is_stop_check else "success"
-        
+
         prompt = f"""You are an AI evaluator for robot benchmarks. You will receive frames showing a robot performing tasks, a chat log with timestamps, and information about benchmark running time. Evaluate whether the {prompt_type} criterion has been met based on all the information provided.
 
 Based on the provided frames and chat log, evaluate the following {prompt_type} criterion:
@@ -288,7 +293,7 @@ Please respond with a JSON object containing:
 
         # Prepare content with images
         content = [prompt]
-        
+
         # Add images
         for frame_path in frame_paths:
             image_data = encode_image(frame_path)
@@ -297,7 +302,7 @@ Please respond with a JSON object containing:
 
         # Generate response
         response = model.generate_content(content)
-        
+
         # Parse the JSON response
         try:
             # First try to parse as direct JSON
@@ -321,7 +326,7 @@ Please respond with a JSON object containing:
                         return result
                     except json.JSONDecodeError:
                         pass
-            
+
             # If JSON parsing fails, try to extract boolean result from text
             text_lower = text.lower()
             if is_stop_check:
@@ -329,16 +334,18 @@ Please respond with a JSON object containing:
                 result = {
                     "should_stop": should_stop,
                     "reason": response.text,
-                    "reflection": "Response parsing failed, extracted result from text"
+                    "reflection": "Response parsing failed, extracted result from text",
                 }
             else:
-                success = "success" in text_lower and ("achieved" in text_lower or "completed" in text_lower)
+                success = "success" in text_lower and (
+                    "achieved" in text_lower or "completed" in text_lower
+                )
                 result = {
                     "success": success,
                     "reason": response.text,
-                    "reflection": "Response parsing failed, extracted result from text"
+                    "reflection": "Response parsing failed, extracted result from text",
                 }
-            
+
             if print_evaluation:
                 print(f"VLM evaluation result: {result}\n\n")
             return result
