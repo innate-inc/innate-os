@@ -116,9 +116,11 @@ public:
             "/mars/head/set_position", 10,
             std::bind(&MauriceArmNode::headPositionCallback, this, std::placeholders::_1));
         
-        head_ai_position_sub_ = this->create_subscription<std_msgs::msg::Empty>(
-            "/mars/head/set_ai_position", 10,
-            std::bind(&MauriceArmNode::headAiPositionCallback, this, std::placeholders::_1));
+        head_ai_position_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/mars/head/set_ai_position",
+            std::bind(&MauriceArmNode::headAiPositionCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
         
         head_enable_service_ = this->create_service<std_srvs::srv::SetBool>(
             "/mars/head/enable_servo",
@@ -207,13 +209,23 @@ private:
                 RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d", config.kp, config.ki, config.kd);
                 
                 // Parse head-specific config for joint 7
+                // Head angle limits are derived from position_limits (not duplicated in config)
                 if (i == 7 && joint.contains("head_config")) {
                     auto head = joint["head_config"];
-                    config.head_min_angle_deg = head["min_angle_deg"];
-                    config.head_max_angle_deg = head["max_angle_deg"];
                     config.head_ai_position_deg = head["ai_position_deg"];
                     config.head_direction_reversed = head["direction_reversed"];
-                    RCLCPP_INFO(this->get_logger(), "  Head config: range=[%.1f, %.1f] deg, AI pos=%.1f deg, reversed=%s",
+                    
+                    // Compute head angle limits from position_limits (accounting for direction reversal)
+                    constexpr double RAD_TO_DEG = 180.0 / M_PI;
+                    if (config.head_direction_reversed) {
+                        config.head_min_angle_deg = -config.max_pos_rad * RAD_TO_DEG;
+                        config.head_max_angle_deg = -config.min_pos_rad * RAD_TO_DEG;
+                    } else {
+                        config.head_min_angle_deg = config.min_pos_rad * RAD_TO_DEG;
+                        config.head_max_angle_deg = config.max_pos_rad * RAD_TO_DEG;
+                    }
+                    
+                    RCLCPP_INFO(this->get_logger(), "  Head config: range=[%.1f, %.1f] deg (from position_limits), AI pos=%.1f deg, reversed=%s",
                         config.head_min_angle_deg, config.head_max_angle_deg, config.head_ai_position_deg,
                         config.head_direction_reversed ? "true" : "false");
                 }
@@ -557,7 +569,6 @@ private:
     void publishHeadPosition(int encoder_value) {
         double logical_angle = encoderToLogicalAngle(encoder_value);
         
-        // Get head config for limits
         const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
         
         json position_data;
@@ -575,7 +586,6 @@ private:
         try {
             double logical_position = static_cast<double>(msg->data);
             
-            // Get head config for limits
             const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
             
             if (logical_position < head_config.head_min_angle_deg || 
@@ -596,7 +606,9 @@ private:
         }
     }
     
-    void headAiPositionCallback(const std_msgs::msg::Empty::SharedPtr /*msg*/) {
+    void headAiPositionCallback(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         try {
             // Get head config for AI position
             const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
@@ -610,8 +622,13 @@ private:
             latest_head_command_ = head_goal_encoder;
             has_head_command_ = true;
             
+            response->success = true;
+            response->message = "Head moving to AI position";
+            
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in head AI position callback: %s", e.what());
+            response->success = false;
+            response->message = e.what();
         }
     }
     
@@ -944,8 +961,10 @@ private:
         int control_mode;
         int kp, ki, kd;
         // Head-specific fields (for joint 7)
-        double head_min_angle_deg = 0.0;
-        double head_max_angle_deg = 0.0;
+        // Note: head angle limits are derived from min_pos_rad/max_pos_rad at startup
+        // Head position is inverted: negative head angle = positive servo angle
+        double head_min_angle_deg = 0.0;  // Computed from position_limits
+        double head_max_angle_deg = 0.0;  // Computed from position_limits
         double head_ai_position_deg = 0.0;
         bool head_direction_reversed = false;
     };
@@ -980,7 +999,7 @@ private:
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr head_position_sub_;
-    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr head_ai_position_sub_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr head_ai_position_service_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr head_enable_service_;
     int latest_head_command_{0};
     std::mutex head_command_mutex_;
