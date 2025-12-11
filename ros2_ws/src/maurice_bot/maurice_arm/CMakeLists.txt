@@ -20,6 +20,7 @@ find_package(Eigen3 REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 # Maurice messages
@@ -61,6 +62,7 @@ ament_target_dependencies(arm
   moveit_msgs
   geometry_msgs
   trajectory_msgs
+  tf2_ros
 )
 
 target_include_directories(arm PUBLIC
