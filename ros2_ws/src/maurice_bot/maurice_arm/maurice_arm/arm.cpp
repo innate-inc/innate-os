@@ -207,13 +207,23 @@ private:
                 RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d", config.kp, config.ki, config.kd);
                 
                 // Parse head-specific config for joint 7
+                // Head angle limits are derived from position_limits (not duplicated in config)
                 if (i == 7 && joint.contains("head_config")) {
                     auto head = joint["head_config"];
-                    config.head_min_angle_deg = head["min_angle_deg"];
-                    config.head_max_angle_deg = head["max_angle_deg"];
                     config.head_ai_position_deg = head["ai_position_deg"];
                     config.head_direction_reversed = head["direction_reversed"];
-                    RCLCPP_INFO(this->get_logger(), "  Head config: range=[%.1f, %.1f] deg, AI pos=%.1f deg, reversed=%s",
+                    
+                    // Compute head angle limits from position_limits (accounting for direction reversal)
+                    constexpr double RAD_TO_DEG = 180.0 / M_PI;
+                    if (config.head_direction_reversed) {
+                        config.head_min_angle_deg = -config.max_pos_rad * RAD_TO_DEG;
+                        config.head_max_angle_deg = -config.min_pos_rad * RAD_TO_DEG;
+                    } else {
+                        config.head_min_angle_deg = config.min_pos_rad * RAD_TO_DEG;
+                        config.head_max_angle_deg = config.max_pos_rad * RAD_TO_DEG;
+                    }
+                    
+                    RCLCPP_INFO(this->get_logger(), "  Head config: range=[%.1f, %.1f] deg (from position_limits), AI pos=%.1f deg, reversed=%s",
                         config.head_min_angle_deg, config.head_max_angle_deg, config.head_ai_position_deg,
                         config.head_direction_reversed ? "true" : "false");
                 }
@@ -557,7 +567,6 @@ private:
     void publishHeadPosition(int encoder_value) {
         double logical_angle = encoderToLogicalAngle(encoder_value);
         
-        // Get head config for limits
         const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
         
         json position_data;
@@ -575,7 +584,6 @@ private:
         try {
             double logical_position = static_cast<double>(msg->data);
             
-            // Get head config for limits
             const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
             
             if (logical_position < head_config.head_min_angle_deg || 
@@ -944,8 +952,10 @@ private:
         int control_mode;
         int kp, ki, kd;
         // Head-specific fields (for joint 7)
-        double head_min_angle_deg = 0.0;
-        double head_max_angle_deg = 0.0;
+        // Note: head angle limits are derived from min_pos_rad/max_pos_rad at startup
+        // Head position is inverted: negative head angle = positive servo angle
+        double head_min_angle_deg = 0.0;  // Computed from position_limits
+        double head_max_angle_deg = 0.0;  // Computed from position_limits
         double head_ai_position_deg = 0.0;
         bool head_direction_reversed = false;
     };
