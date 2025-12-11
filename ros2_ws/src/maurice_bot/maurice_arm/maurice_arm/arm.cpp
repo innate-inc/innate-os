@@ -6,25 +6,42 @@
 #include <std_msgs/msg/empty.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
-#include "maurice_msgs/srv/goto_js.hpp"
-#include <moveit_msgs/srv/get_motion_plan.hpp>
-#include <moveit_msgs/msg/motion_plan_request.hpp>
-#include <moveit_msgs/msg/robot_state.hpp>
-#include <moveit_msgs/msg/constraints.hpp>
-#include <moveit_msgs/msg/joint_constraint.hpp>
-#include <moveit_msgs/msg/workspace_parameters.hpp>
-#include <geometry_msgs/msg/pose.hpp>
 #include <cmath>
 #include <chrono>
 #include <nlohmann/json.hpp>
 #include <thread>
-#include <future>
 
 using json = nlohmann::json;
 
 namespace maurice_arm {
+
+// ============================================================================
+// Camera Geometry Constants (from calibration)
+// ============================================================================
+// Camera horizontal FOV in degrees (from calibration_data/camera_calibration_results.json)
+constexpr double CAMERA_HFOV_DEG = 105.26455076752997;
+
+// Base offset from head rotation axis to camera (when head is level) in meters
+// Measured from CAD: [-40.75, 0, 258.082] mm
+constexpr double CAM_BASE_OFFSET_X = -40.75 / 1000.0;
+constexpr double CAM_BASE_OFFSET_Y = 0.0;
+constexpr double CAM_BASE_OFFSET_Z = 258.082 / 1000.0;
+
+// Focal offset component: 9.41 / (2 * tan(hfov/2)) in meters
+// This accounts for the lens offset from the sensor plane
+inline double computeFocalOffset() {
+    return 9.41 / (2.0 * std::tan(CAMERA_HFOV_DEG * M_PI / 360.0)) / 1000.0;
+}
+
+// Rotating offset (before applying cos(theta)) in meters
+// These components scale with cos(head_pitch)
+constexpr double CAM_ROTATING_BASE_X = 40.27 / 1000.0;  // Will add focal offset
+constexpr double CAM_ROTATING_OFFSET_Y = -30.0 / 1000.0;
+constexpr double CAM_ROTATING_OFFSET_Z = 0.0;
 
 class MauriceArmNode : public rclcpp::Node {
 public:
@@ -90,25 +107,6 @@ public:
             rmw_qos_profile_services_default,
             service_callback_group_);
         
-        arm_goto_js_service_ = this->create_service<maurice_msgs::srv::GotoJS>(
-            "/mars/arm/goto_js",
-            std::bind(&MauriceArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
-            rmw_qos_profile_services_default,
-            service_callback_group_);
-        
-        // MoveIt planning service client
-        moveit_plan_client_ = this->create_client<moveit_msgs::srv::GetMotionPlan>(
-            "/plan_kinematic_path");
-        
-        RCLCPP_INFO(this->get_logger(), "Waiting for MoveIt planning service...");
-        if (moveit_plan_client_->wait_for_service(std::chrono::seconds(5))) {
-            RCLCPP_INFO(this->get_logger(), "MoveIt planning service is available");
-            moveit_available_ = true;
-        } else {
-            RCLCPP_WARN(this->get_logger(), "MoveIt planning service not available - goto_js will fail");
-            moveit_available_ = false;
-        }
-        
         // Setup HEAD publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
         head_position_pub_ = this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", 10);
@@ -126,13 +124,15 @@ public:
             rmw_qos_profile_services_default,
             service_callback_group_);
         
+        // Setup TF broadcaster for head camera transform
+        RCLCPP_INFO(this->get_logger(), "Setting up TF broadcaster for head camera");
+        tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+        focal_offset_ = computeFocalOffset();
+        RCLCPP_INFO(this->get_logger(), "Camera focal offset: %.4f m", focal_offset_);
+        
         // Initialize joint state message
         RCLCPP_INFO(this->get_logger(), "Initializing joint state message with 6 joint names");
         joint_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
-        
-        // Define home position
-        home_position_ = {1.445009902188274, -1.3882526130365052, 1.517106999218899, 
-                          0.44638840927472156, -0.08897088569736719, 0.0015339807878856412};
         
         // Initialize command buffers with current positions
         RCLCPP_INFO(this->get_logger(), "Initializing command buffers with current positions");
@@ -141,7 +141,7 @@ public:
         latest_head_command_ = initial_positions[6];
         RCLCPP_INFO(this->get_logger(), "Command buffers initialized (arm: 6 joints, head: 1 joint)");
         
-        // Create timer for control loop (also handles trajectory execution)
+        // Create timer for control loop
         RCLCPP_INFO(this->get_logger(), "Creating control timer at %.1f Hz", control_frequency_);
         auto period = std::chrono::duration<double>(1.0 / control_frequency_);
         control_timer_ = this->create_wall_timer(
@@ -150,27 +150,12 @@ public:
             timer_callback_group_);
         
         RCLCPP_INFO(this->get_logger(), "Maurice Arm Node ready!");
-        
-        // Wait a bit for MoveIt to be ready, then go to home position
-        RCLCPP_INFO(this->get_logger(), "Waiting 3 seconds for MoveIt to initialize...");
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-        
-        if (moveit_available_) {
-            RCLCPP_INFO(this->get_logger(), "Moving to home position...");
-            if (planAndExecuteTrajectory(home_position_, 5.0)) {
-                RCLCPP_INFO(this->get_logger(), "Reached home position");
-            } else {
-                RCLCPP_WARN(this->get_logger(), "Failed to reach home position");
-            }
-        } else {
-            RCLCPP_WARN(this->get_logger(), "MoveIt not available, skipping home position");
-        }
     }
     
     ~MauriceArmNode() {
         // Timer automatically stops when destroyed
     }
-    
+
 private:
     void parseJointConfig(const std::string& json_str) {
         RCLCPP_INFO(this->get_logger(), "Parsing joint configuration...");
@@ -334,12 +319,6 @@ private:
             joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
             arm_state_pub_->publish(joint_state_msg_);
             
-            // Store latest joint positions for trajectory planning
-            {
-                std::lock_guard<std::mutex> js_lock(joint_state_mutex_);
-                latest_joint_positions_ = joint_state_msg_.position;
-            }
-            
             // ========== PUBLISH HEAD POSITION ==========
             int head_encoder = positions[6];  // Index 6 = servo 7
             publishHeadPosition(head_encoder);
@@ -372,10 +351,8 @@ private:
         }
     }
     
-    
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
         try {
-            // Commands come in EXTERNAL convention (same as published joint states)
             std::vector<double> command_data(msg->data.begin(), msg->data.end());
             
             // Validate that we have exactly 6 arm joints
@@ -384,51 +361,6 @@ private:
                 return;
             }
             
-            // ===== INTELLIGENT JOINT LIMITS =====
-            // Adjust joint2 limits based on joint1 position (collision avoidance)
-            if (command_data.size() >= 2) {
-                double joint1_pos = command_data[0];  // joint1 position in radians
-                double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
-                
-                // Get joint2 limits from config (index 1 = joint_2)
-                const auto& joint2_config = joint_configs_[1];
-                double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
-                double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
-                
-                // Since joint2 will be flipped, we need to invert the limits for pre-flip values
-                // After flip: joint2_flipped = -joint2_pos
-                // So if we want joint2_flipped to be within [config_min, config_max]
-                // We need joint2_pos to be within [-config_max, -config_min]
-                double joint2_min_limit = -config_max;  // Will become config_max after flip
-                double joint2_max_limit = -config_min;  // Will become config_min after flip
-                
-                // Determine joint2's minimum limit based on joint1's position with linear slope
-                const double original_min_limit = -config_max;
-                const double restricted_limit = -0.5;  // Restricted limit (pre-flip)
-                
-                if (joint1_pos < 1.0) {
-                    // Below 1.0 rad: fully restricted to -0.5
-                    joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
-                } else if (joint1_pos < 1.25) {
-                    // Between 1.0 and 1.25 rad: linear interpolation
-                    double t = (joint1_pos - 1.0) / (1.25 - 1.0);  // 0 at 1.0, 1 at 1.25
-                    double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
-                    joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
-                }
-                // Above 1.25 rad: use original config limits (no additional restriction)
-                
-                // Warn if clamping occurs
-                if (joint2_pos < joint2_min_limit) {
-                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", 
-                        joint1_pos, joint2_pos, joint2_min_limit);
-                }
-                
-                // Enforce the limits (before flipping)
-                command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
-            }
-            
-            // Now convert from EXTERNAL to HARDWARE convention for servos
             // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
             std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
             for (size_t idx : flip_indices) {
@@ -437,16 +369,16 @@ private:
                 }
             }
             
-            // Convert to encoder counts (only 6 arm joints)
-            std::vector<int> command_encoder;
-            for (double pos : command_data) {
-                command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-            }
-            
-            // Store only the 6 arm positions - timer will add head position
-            std::lock_guard<std::mutex> lock(arm_command_mutex_);
-            latest_arm_command_ = command_encoder;
-            has_arm_command_ = true;
+        // Convert to encoder counts (only 6 arm joints)
+        std::vector<int> command_encoder;
+        for (double pos : command_data) {
+            command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+        }
+        
+        // Store only the 6 arm positions - timer will add head position
+        std::lock_guard<std::mutex> lock(arm_command_mutex_);
+        latest_arm_command_ = command_encoder;
+        has_arm_command_ = true;
             
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in arm command callback: %s", e.what());
@@ -569,6 +501,120 @@ private:
         auto msg = std_msgs::msg::String();
         msg.data = position_data.dump();
         head_position_pub_->publish(msg);
+        
+        // Also publish the camera transform
+        publishHeadCameraTransform(logical_angle);
+    }
+    
+    /**
+     * @brief Publish TF transform from base_link to head camera optical frame
+     * 
+     * Camera geometry:
+     *   - Base offset: fixed offset from head rotation axis to camera (at pitch=0)
+     *   - Rotating offset: rotated about Y axis by pitch angle
+     *   - For rotation about Y: x' = x*cos(θ), y' = y, z' = -x*sin(θ)
+     * 
+     * Frame conventions:
+     *   - head_camera_link: camera mount frame (X forward, Y left, Z up)
+     *   - head_camera_optical_frame: optical frame (Z forward, X right, Y down)
+     * 
+     * @param pitch_deg Head pitch angle in degrees (negative = looking down)
+     */
+    void publishHeadCameraTransform(double pitch_deg) {
+        // Convert pitch to radians
+        // Note: pitch_deg convention is negative = looking down
+        // For rotation about Y axis, we use the angle directly
+        double pitch_rad = pitch_deg * M_PI / 180.0;
+        double cos_pitch = std::cos(pitch_rad);
+        double sin_pitch = std::sin(pitch_rad);
+        
+        // Compute rotating offset X component (includes focal offset)
+        double rotating_offset_x = CAM_ROTATING_BASE_X + focal_offset_;
+        
+        // Rotate the offset about Y axis (pitch axis)
+        // Convention: pitch_deg negative = looking down, positive = looking up
+        // Geometric rotation θ = -pitch_deg, so:
+        //   z' = -x*sin(θ) = -x*sin(-pitch_deg) = x*sin(pitch_deg)
+        double rotated_x = rotating_offset_x * cos_pitch;
+        double rotated_y = CAM_ROTATING_OFFSET_Y;  // Y is constant (rotation axis)
+        double rotated_z = rotating_offset_x * sin_pitch;  // Positive pitch → Z up
+        
+        // Total camera position = base_offset + rotated_offset
+        double cam_x = CAM_BASE_OFFSET_X + rotated_x;
+        double cam_y = CAM_BASE_OFFSET_Y + rotated_y;
+        double cam_z = CAM_BASE_OFFSET_Z + rotated_z;
+        
+        // Create and publish transform for head_camera_link (camera mount frame)
+        geometry_msgs::msg::TransformStamped transform_msg;
+        transform_msg.header.stamp = this->now();
+        transform_msg.header.frame_id = "base_link";
+        transform_msg.child_frame_id = "head_camera_link";
+        
+        // Translation
+        transform_msg.transform.translation.x = cam_x;
+        transform_msg.transform.translation.y = cam_y;
+        transform_msg.transform.translation.z = cam_z;
+        
+        // Rotation: camera tilts with head pitch (rotation about Y axis)
+        // Using quaternion for rotation about Y axis: q = [0, sin(θ/2), 0, cos(θ/2)]
+        // Note: pitch_deg is the logical angle, negative means looking down
+        // Camera optical axis tilts down when pitch is negative
+        double half_pitch = pitch_rad / 2.0;
+        transform_msg.transform.rotation.x = 0.0;
+        transform_msg.transform.rotation.y = std::sin(half_pitch);
+        transform_msg.transform.rotation.z = 0.0;
+        transform_msg.transform.rotation.w = std::cos(half_pitch);
+        
+        tf_broadcaster_->sendTransform(transform_msg);
+        
+        // Also publish the optical frame (camera_optical_frame convention: Z forward, X right, Y down)
+        // This is a rotation of -90° about X, then -90° about Z from camera_link
+        // Or equivalently: X_opt = Y_link, Y_opt = -Z_link, Z_opt = X_link
+        // Quaternion for this rotation: combine pitch rotation with optical frame rotation
+        geometry_msgs::msg::TransformStamped optical_transform_msg;
+        optical_transform_msg.header.stamp = this->now();
+        optical_transform_msg.header.frame_id = "base_link";
+        optical_transform_msg.child_frame_id = "head_camera_optical_frame";
+        
+        // Same translation as camera_link
+        optical_transform_msg.transform.translation.x = cam_x;
+        optical_transform_msg.transform.translation.y = cam_y;
+        optical_transform_msg.transform.translation.z = cam_z;
+        
+        // Combined rotation: pitch about Y, then optical frame transform
+        // Optical frame rotation (from ROS camera_link to optical): 
+        //   Rz(-90°) * Rx(-90°) or equivalently Ry(-90°) * Rx(-90°)
+        // q_optical = [-0.5, 0.5, -0.5, 0.5] (for standard optical frame transform)
+        // Combined: q_combined = q_pitch * q_optical
+        double q_opt_x = -0.5;
+        double q_opt_y = 0.5;
+        double q_opt_z = -0.5;
+        double q_opt_w = 0.5;
+        
+        // Quaternion multiplication: q_pitch * q_optical
+        double q_pitch_y = std::sin(half_pitch);
+        double q_pitch_w = std::cos(half_pitch);
+        
+        // q1 = [0, q_pitch_y, 0, q_pitch_w]
+        // q2 = [q_opt_x, q_opt_y, q_opt_z, q_opt_w]
+        // q1 * q2:
+        double qx = q_pitch_w * q_opt_x + q_pitch_y * q_opt_z;
+        double qy = q_pitch_w * q_opt_y + q_pitch_y * q_opt_w;
+        double qz = q_pitch_w * q_opt_z - q_pitch_y * q_opt_x;
+        double qw = q_pitch_w * q_opt_w - q_pitch_y * q_opt_y;
+        
+        optical_transform_msg.transform.rotation.x = qx;
+        optical_transform_msg.transform.rotation.y = qy;
+        optical_transform_msg.transform.rotation.z = qz;
+        optical_transform_msg.transform.rotation.w = qw;
+        
+        tf_broadcaster_->sendTransform(optical_transform_msg);
+        
+        // Also publish "camera" frame for compatibility with maurice_arm/camera.cpp
+        // which uses frame_id="camera" for published images
+        geometry_msgs::msg::TransformStamped camera_transform_msg = transform_msg;
+        camera_transform_msg.child_frame_id = "camera";
+        tf_broadcaster_->sendTransform(camera_transform_msg);
     }
     
     void headPositionCallback(const std_msgs::msg::Int32::SharedPtr msg) {
@@ -642,298 +688,6 @@ private:
         }
     }
     
-    // ========== TRAJECTORY PLANNING AND EXECUTION ==========
-    
-    /**
-     * Call MoveIt to plan a collision-free trajectory.
-     * Returns waypoints and time_from_start if successful.
-     * Note: Plans for 6 DOF arm (joint1-6) including gripper.
-     */
-    std::pair<std::vector<std::vector<double>>, std::vector<double>> 
-    planWithMoveIt(const std::vector<double>& start, const std::vector<double>& goal, double planning_time) {
-        
-        if (!moveit_available_) {
-            RCLCPP_ERROR(this->get_logger(), "MoveIt is not available");
-            return {};
-        }
-        
-        // Create motion plan request
-        auto request = std::make_shared<moveit_msgs::srv::GetMotionPlan::Request>();
-        
-        // Set planning group and parameters
-        request->motion_plan_request.group_name = "arm";
-        request->motion_plan_request.num_planning_attempts = 3;
-        request->motion_plan_request.allowed_planning_time = planning_time;
-        request->motion_plan_request.planner_id = "RRTConnect";  // or "chomp"
-        
-        // Set start state
-        request->motion_plan_request.start_state.joint_state.name = joint_names_;
-        request->motion_plan_request.start_state.joint_state.position = start;
-        request->motion_plan_request.start_state.is_diff = false;
-        
-        // Set goal constraints (joint space goal)
-        moveit_msgs::msg::Constraints goal_constraint;
-        for (size_t i = 0; i < goal.size(); ++i) {
-            moveit_msgs::msg::JointConstraint jc;
-            jc.joint_name = joint_names_[i];
-            jc.position = goal[i];
-            jc.tolerance_above = 0.01;
-            jc.tolerance_below = 0.01;
-            jc.weight = 1.0;
-            goal_constraint.joint_constraints.push_back(jc);
-        }
-        request->motion_plan_request.goal_constraints.push_back(goal_constraint);
-        
-        // Set workspace parameters
-        request->motion_plan_request.workspace_parameters.header.frame_id = "base_link";
-        request->motion_plan_request.workspace_parameters.min_corner.x = -1.0;
-        request->motion_plan_request.workspace_parameters.min_corner.y = -1.0;
-        request->motion_plan_request.workspace_parameters.min_corner.z = -0.5;
-        request->motion_plan_request.workspace_parameters.max_corner.x = 1.0;
-        request->motion_plan_request.workspace_parameters.max_corner.y = 1.0;
-        request->motion_plan_request.workspace_parameters.max_corner.z = 1.0;
-        
-        // Call service
-        RCLCPP_INFO(this->get_logger(), "Calling MoveIt planning service...");
-        auto future = moveit_plan_client_->async_send_request(request);
-        
-        // Wait for response
-        auto timeout = std::chrono::duration<double>(planning_time + 5.0);
-        if (future.wait_for(timeout) != std::future_status::ready) {
-            RCLCPP_ERROR(this->get_logger(), "MoveIt planning service call timed out");
-            return {};
-        }
-        
-        auto response = future.get();
-        
-        // Check if planning succeeded (error_code.val == 1 means SUCCESS)
-        if (response->motion_plan_response.error_code.val != 1) {
-            RCLCPP_ERROR(this->get_logger(), "MoveIt planning failed with error code %d", 
-                        response->motion_plan_response.error_code.val);
-            return {};
-        }
-        
-        // Extract trajectory waypoints and timing
-        auto& trajectory = response->motion_plan_response.trajectory.joint_trajectory;
-        std::vector<std::vector<double>> waypoints;
-        std::vector<double> time_from_start;
-        
-        for (const auto& point : trajectory.points) {
-            waypoints.push_back(std::vector<double>(point.positions.begin(), point.positions.end()));
-            double time_sec = point.time_from_start.sec + point.time_from_start.nanosec * 1e-9;
-            time_from_start.push_back(time_sec);
-        }
-        
-        RCLCPP_INFO(this->get_logger(), "MoveIt planning succeeded with %zu waypoints", waypoints.size());
-        return {waypoints, time_from_start};
-    }
-    
-    /**
-     * Interpolate MoveIt trajectory waypoints to 30 Hz.
-     * Note: Waypoints are 6 joints (including gripper).
-     */
-    std::vector<std::vector<double>> interpolateMoveItTrajectory(
-        const std::vector<std::vector<double>>& waypoints,
-        const std::vector<double>& time_from_start,
-        double dt) {
-        
-        if (waypoints.empty() || time_from_start.empty()) {
-            return {};
-        }
-        
-        std::vector<std::vector<double>> trajectory;
-        double total_duration = time_from_start.back();
-        double current_time = 0.0;
-        
-        RCLCPP_INFO(this->get_logger(), "Interpolating trajectory: %zu waypoints, %.2f sec duration, %.3f sec timestep",
-                    waypoints.size(), total_duration, dt);
-        
-        while (current_time <= total_duration) {
-            // Find the two waypoints to interpolate between
-            size_t wp_idx = 0;
-            for (size_t i = 0; i < time_from_start.size() - 1; ++i) {
-                if (current_time <= time_from_start[i + 1]) {
-                    wp_idx = i;
-                    break;
-                }
-                wp_idx = i + 1;
-            }
-            
-            if (wp_idx >= waypoints.size() - 1) {
-                // At or past last waypoint - add it and finish
-                trajectory.push_back(waypoints.back());
-                break;  // Don't keep adding the last point
-            }
-            
-            // Linear interpolation between waypoints
-            double t1 = time_from_start[wp_idx];
-            double t2 = time_from_start[wp_idx + 1];
-            
-            if (t2 > t1) {
-                double alpha = (current_time - t1) / (t2 - t1);
-                const auto& wp1 = waypoints[wp_idx];
-                const auto& wp2 = waypoints[wp_idx + 1];
-                
-                std::vector<double> interpolated(wp1.size());
-                for (size_t j = 0; j < wp1.size(); ++j) {
-                    interpolated[j] = wp1[j] + alpha * (wp2[j] - wp1[j]);
-                }
-                trajectory.push_back(interpolated);
-            } else {
-                trajectory.push_back(waypoints[wp_idx]);
-            }
-            
-            current_time += dt;
-        }
-        
-        RCLCPP_INFO(this->get_logger(), "Interpolation complete: %zu trajectory points", trajectory.size());
-        return trajectory;
-    }
-    
-    /**
-     * Internal function to plan and execute a trajectory to a target joint state.
-     * This can be called from the service callback or any other part of the code.
-     * 
-     * @param target_positions Target joint positions in radians (6 joints including gripper)
-     * @param trajectory_time Total time for trajectory execution in seconds (not used for MoveIt)
-     * @return true if planning succeeded, false otherwise
-     */
-    bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time) {
-        // Validate inputs - 6 joints (arm + gripper)
-        if (target_positions.size() != 6) {
-            RCLCPP_ERROR(this->get_logger(), "Target must have 6 joint positions, got %zu", target_positions.size());
-            return false;
-        }
-        
-        if (trajectory_time <= 0.0) {
-            RCLCPP_ERROR(this->get_logger(), "Trajectory time must be positive, got %.3f", trajectory_time);
-            return false;
-        }
-        
-        // Get current joint state (6 joints including gripper)
-        std::vector<double> current_positions;
-        {
-            std::lock_guard<std::mutex> lock(joint_state_mutex_);
-            if (latest_joint_positions_.empty()) {
-                RCLCPP_ERROR(this->get_logger(), "No current joint state available");
-                return false;
-            }
-            current_positions = latest_joint_positions_;
-        }
-        
-        if (current_positions.size() != 6) {
-            RCLCPP_ERROR(this->get_logger(), "Current state has %zu joints, expected 6", current_positions.size());
-            return false;
-        }
-        
-        // Plan with MoveIt (6 DOF arm including gripper)
-        RCLCPP_INFO(this->get_logger(), "Planning with MoveIt for 6-DOF arm (including gripper)...");
-        auto [waypoints, time_from_start] = planWithMoveIt(current_positions, target_positions, trajectory_time);
-        
-        if (waypoints.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "MoveIt planning failed");
-            return false;
-        }
-        
-        // Check if MoveIt provided timing info, if not, create our own
-        bool has_timing = !time_from_start.empty() && time_from_start.back() > 0.0;
-        
-        if (!has_timing) {
-            RCLCPP_WARN(this->get_logger(), "MoveIt didn't time-parameterize trajectory, doing it manually");
-            // Distribute waypoints evenly over the requested trajectory_time
-            time_from_start.clear();
-            for (size_t i = 0; i < waypoints.size(); ++i) {
-                double t = (static_cast<double>(i) / (waypoints.size() - 1)) * trajectory_time;
-                time_from_start.push_back(t);
-            }
-        }
-        
-        // Interpolate trajectory to 30 Hz
-        const double dt = 1.0 / 30.0;
-        auto interpolated_trajectory = interpolateMoveItTrajectory(waypoints, time_from_start, dt);
-        
-        if (interpolated_trajectory.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "Trajectory interpolation failed");
-            return false;
-        }
-        
-        RCLCPP_INFO(this->get_logger(), "Executing trajectory with %zu waypoints over %.2f seconds", 
-                    interpolated_trajectory.size(), trajectory_time);
-        
-        // Execute trajectory by sending each waypoint with a sleep
-        auto sleep_duration = std::chrono::duration<double>(dt);
-        for (size_t i = 0; i < interpolated_trajectory.size(); ++i) {
-            const auto& point = interpolated_trajectory[i];
-            
-            // Send command
-            {
-                std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-                
-                // Convert radians to encoder counts
-                std::vector<double> command_data = point;
-                
-                // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-                std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-                for (size_t idx : flip_indices) {
-                    if (idx < command_data.size()) {
-                        command_data[idx] = -command_data[idx];
-                    }
-                }
-                
-                // Convert to encoder counts
-                std::vector<int> command_encoder;
-                for (double pos : command_data) {
-                    command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-                }
-                
-                latest_arm_command_ = command_encoder;
-                has_arm_command_ = true;
-            }
-            
-            // Sleep until next waypoint (except for last point)
-            if (i < interpolated_trajectory.size() - 1) {
-                std::this_thread::sleep_for(sleep_duration);
-            }
-        }
-        
-        RCLCPP_INFO(this->get_logger(), "Trajectory execution complete");
-        return true;
-    }
-    
-    /**
-     * Service callback for goto_js service.
-     * Calls the internal planning function.
-     * Plans for 6 joints (joint1-6) including gripper.
-     */
-    void armGotoJSCallback(
-        const std::shared_ptr<maurice_msgs::srv::GotoJS::Request> request,
-        std::shared_ptr<maurice_msgs::srv::GotoJS::Response> response) {
-        
-        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js");
-        
-        // Extract target positions and time from request
-        std::vector<double> target_positions(request->data.data.begin(), request->data.data.end());
-        double trajectory_time = request->time;
-        
-        RCLCPP_INFO(this->get_logger(), "Target (6 DOF): [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f], Time: %.2fs",
-                    target_positions.size() > 0 ? target_positions[0] : 0.0,
-                    target_positions.size() > 1 ? target_positions[1] : 0.0,
-                    target_positions.size() > 2 ? target_positions[2] : 0.0,
-                    target_positions.size() > 3 ? target_positions[3] : 0.0,
-                    target_positions.size() > 4 ? target_positions[4] : 0.0,
-                    target_positions.size() > 5 ? target_positions[5] : 0.0,
-                    trajectory_time);
-        
-        // Call internal planning function (6 joints including gripper)
-        response->success = planAndExecuteTrajectory(target_positions, trajectory_time);
-        
-        if (response->success) {
-            RCLCPP_INFO(this->get_logger(), "Successfully planned trajectory");
-        } else {
-            RCLCPP_ERROR(this->get_logger(), "Failed to plan trajectory");
-        }
-    }
-    
     struct JointConfig {
         int servo_id;
         double min_pos_rad;
@@ -960,22 +714,10 @@ private:
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
-    rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_goto_js_service_;
     sensor_msgs::msg::JointState joint_state_msg_;
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
-    
-    
-    // Joint state tracking for planning
-    std::vector<double> latest_joint_positions_;
-    std::mutex joint_state_mutex_;
-    
-    // MoveIt planning (6 DOF arm including gripper joint6)
-    rclcpp::Client<moveit_msgs::srv::GetMotionPlan>::SharedPtr moveit_plan_client_;
-    bool moveit_available_{false};
-    std::vector<std::string> joint_names_{"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
-    std::vector<double> home_position_;  // Home position for startup
     
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
@@ -985,6 +727,10 @@ private:
     int latest_head_command_{0};
     std::mutex head_command_mutex_;
     std::atomic<bool> has_head_command_{false};
+    
+    // TF broadcaster for head camera transform
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    double focal_offset_;  // Computed once at startup
     
     // Control timer (replaces manual thread)
     rclcpp::TimerBase::SharedPtr control_timer_;
@@ -1003,8 +749,6 @@ private:
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<maurice_arm::MauriceArmNode>();
-    
-    // Motion planning via /mars/arm/goto_js is handled internally using MoveIt
     
     // Use multi-threaded executor with 4 threads to handle callbacks in parallel
     rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
