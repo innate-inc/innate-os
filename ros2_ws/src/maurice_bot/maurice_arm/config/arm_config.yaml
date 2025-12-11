@@ -3,6 +3,8 @@ maurice_arm:
     # Device detection automatic - looks for 7 servos at 1M baud
     baud_rate: 1000000
     control_frequency: 100.0
+    # joint_7 is the head servo. Its position_limits define the head angle range (radians).
+    # Head position is inverted: negative head angle = positive servo angle (direction_reversed: true)
     joints: |
       {
           "joint_1": {
@@ -94,7 +96,7 @@ maurice_arm:
               "servo_id": 7,
               "position_limits": {
                   "min": -0.4363,
-                  "max": 0.2618
+                  "max": 0.4363
               },
               "pwm_limits": 885,
               "current_limit": 500,
@@ -106,8 +108,6 @@ maurice_arm:
                   "kd": 0
               },
               "head_config": {
-                  "min_angle_deg": -25.0,
-                  "max_angle_deg": 15.0,
                   "ai_position_deg": -20.0,
                   "direction_reversed": true
               }
