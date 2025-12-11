@@ -16,6 +16,8 @@ find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -47,6 +49,8 @@ ament_target_dependencies(arm
   std_msgs
   std_srvs
   dynamixel_sdk
+  tf2_ros
+  geometry_msgs
 )
 
 # Install C++ targets
@@ -76,6 +80,7 @@ install(
 install(PROGRAMS
   maurice_arm/arm_utils.py
   maurice_arm/ik.py
+  maurice_arm/tf_plotter.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
