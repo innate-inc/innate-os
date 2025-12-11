@@ -4,7 +4,8 @@ import threading
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import Float64MultiArray, Empty
+from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import Trigger
 from maurice_msgs.srv import GotoJS
 from brain_messages.action import ExecuteBehavior
 from rclpy.action import ActionServer, CancelResponse
@@ -131,9 +132,8 @@ class BehaviorServer(Node):
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.arm_state_pub = self.create_publisher(Float64MultiArray, '/mars/arm/commands', 10)
-        self.head_ai_position_pub = self.create_publisher(Empty, '/mars/head/set_ai_position', 10)
-        
-        # Service client
+        # Service clients
+        self.head_ai_position_client = self.create_client(Trigger, '/mars/head/set_ai_position')
         self.arm_goto_client = self.create_client(GotoJS, '/mars/arm/goto_js')
         
         # Action server
@@ -669,9 +669,12 @@ class BehaviorServer(Node):
     def _set_head_ai_position(self):
         """Set the head to AI position for recording/policy execution."""
         try:
-            empty_msg = Empty()
-            self.head_ai_position_pub.publish(empty_msg)
-            self.get_logger().info("AI position command sent to head")
+            if not self.head_ai_position_client.service_is_ready():
+                self.get_logger().warn("Head AI position service not available")
+                return
+            
+            self.head_ai_position_client.call_async(Trigger.Request())
+            self.get_logger().info("Head AI position command sent")
             time.sleep(3.0)  # Wait for head to move to AI position
         except Exception as e:
             self.get_logger().error(f"Error setting AI position: {e}")
