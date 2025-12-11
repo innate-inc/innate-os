@@ -116,9 +116,11 @@ public:
             "/mars/head/set_position", 10,
             std::bind(&MauriceArmNode::headPositionCallback, this, std::placeholders::_1));
         
-        head_ai_position_sub_ = this->create_subscription<std_msgs::msg::Empty>(
-            "/mars/head/set_ai_position", 10,
-            std::bind(&MauriceArmNode::headAiPositionCallback, this, std::placeholders::_1));
+        head_ai_position_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/mars/head/set_ai_position",
+            std::bind(&MauriceArmNode::headAiPositionCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
         
         head_enable_service_ = this->create_service<std_srvs::srv::SetBool>(
             "/mars/head/enable_servo",
@@ -604,7 +606,9 @@ private:
         }
     }
     
-    void headAiPositionCallback(const std_msgs::msg::Empty::SharedPtr /*msg*/) {
+    void headAiPositionCallback(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
         try {
             // Get head config for AI position
             const auto& head_config = joint_configs_[6];  // Index 6 = joint 7
@@ -618,8 +622,13 @@ private:
             latest_head_command_ = head_goal_encoder;
             has_head_command_ = true;
             
+            response->success = true;
+            response->message = "Head moving to AI position";
+            
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in head AI position callback: %s", e.what());
+            response->success = false;
+            response->message = e.what();
         }
     }
     
@@ -990,7 +999,7 @@ private:
     // HEAD members
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr head_position_pub_;
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr head_position_sub_;
-    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr head_ai_position_sub_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr head_ai_position_service_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr head_enable_service_;
     int latest_head_command_{0};
     std::mutex head_command_mutex_;
