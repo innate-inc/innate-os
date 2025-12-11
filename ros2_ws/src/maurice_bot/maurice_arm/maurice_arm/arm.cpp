@@ -6,6 +6,8 @@
 #include <std_msgs/msg/empty.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
 #include <cmath>
@@ -16,6 +18,30 @@
 using json = nlohmann::json;
 
 namespace maurice_arm {
+
+// ============================================================================
+// Camera Geometry Constants (from calibration)
+// ============================================================================
+// Camera horizontal FOV in degrees (from calibration_data/camera_calibration_results.json)
+constexpr double CAMERA_HFOV_DEG = 105.26455076752997;
+
+// Base offset from head rotation axis to camera (when head is level) in meters
+// Measured from CAD: [-40.75, 0, 258.082] mm
+constexpr double CAM_BASE_OFFSET_X = -40.75 / 1000.0;
+constexpr double CAM_BASE_OFFSET_Y = 0.0;
+constexpr double CAM_BASE_OFFSET_Z = 258.082 / 1000.0;
+
+// Focal offset component: 9.41 / (2 * tan(hfov/2)) in meters
+// This accounts for the lens offset from the sensor plane
+inline double computeFocalOffset() {
+    return 9.41 / (2.0 * std::tan(CAMERA_HFOV_DEG * M_PI / 360.0)) / 1000.0;
+}
+
+// Rotating offset (before applying cos(theta)) in meters
+// These components scale with cos(head_pitch)
+constexpr double CAM_ROTATING_BASE_X = 40.27 / 1000.0;  // Will add focal offset
+constexpr double CAM_ROTATING_OFFSET_Y = -30.0 / 1000.0;
+constexpr double CAM_ROTATING_OFFSET_Z = 0.0;
 
 class MauriceArmNode : public rclcpp::Node {
 public:
@@ -97,6 +123,12 @@ public:
             std::bind(&MauriceArmNode::headEnableServoCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
+        
+        // Setup TF broadcaster for head camera transform
+        RCLCPP_INFO(this->get_logger(), "Setting up TF broadcaster for head camera");
+        tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+        focal_offset_ = computeFocalOffset();
+        RCLCPP_INFO(this->get_logger(), "Camera focal offset: %.4f m", focal_offset_);
         
         // Initialize joint state message
         RCLCPP_INFO(this->get_logger(), "Initializing joint state message with 6 joint names");
@@ -469,6 +501,120 @@ private:
         auto msg = std_msgs::msg::String();
         msg.data = position_data.dump();
         head_position_pub_->publish(msg);
+        
+        // Also publish the camera transform
+        publishHeadCameraTransform(logical_angle);
+    }
+    
+    /**
+     * @brief Publish TF transform from base_link to head camera optical frame
+     * 
+     * Camera geometry:
+     *   - Base offset: fixed offset from head rotation axis to camera (at pitch=0)
+     *   - Rotating offset: rotated about Y axis by pitch angle
+     *   - For rotation about Y: x' = x*cos(θ), y' = y, z' = -x*sin(θ)
+     * 
+     * Frame conventions:
+     *   - head_camera_link: camera mount frame (X forward, Y left, Z up)
+     *   - head_camera_optical_frame: optical frame (Z forward, X right, Y down)
+     * 
+     * @param pitch_deg Head pitch angle in degrees (negative = looking down)
+     */
+    void publishHeadCameraTransform(double pitch_deg) {
+        // Convert pitch to radians
+        // Note: pitch_deg convention is negative = looking down
+        // For rotation about Y axis, we use the angle directly
+        double pitch_rad = pitch_deg * M_PI / 180.0;
+        double cos_pitch = std::cos(pitch_rad);
+        double sin_pitch = std::sin(pitch_rad);
+        
+        // Compute rotating offset X component (includes focal offset)
+        double rotating_offset_x = CAM_ROTATING_BASE_X + focal_offset_;
+        
+        // Rotate the offset about Y axis (pitch axis)
+        // Convention: pitch_deg negative = looking down, positive = looking up
+        // Geometric rotation θ = -pitch_deg, so:
+        //   z' = -x*sin(θ) = -x*sin(-pitch_deg) = x*sin(pitch_deg)
+        double rotated_x = rotating_offset_x * cos_pitch;
+        double rotated_y = CAM_ROTATING_OFFSET_Y;  // Y is constant (rotation axis)
+        double rotated_z = rotating_offset_x * sin_pitch;  // Positive pitch → Z up
+        
+        // Total camera position = base_offset + rotated_offset
+        double cam_x = CAM_BASE_OFFSET_X + rotated_x;
+        double cam_y = CAM_BASE_OFFSET_Y + rotated_y;
+        double cam_z = CAM_BASE_OFFSET_Z + rotated_z;
+        
+        // Create and publish transform for head_camera_link (camera mount frame)
+        geometry_msgs::msg::TransformStamped transform_msg;
+        transform_msg.header.stamp = this->now();
+        transform_msg.header.frame_id = "base_link";
+        transform_msg.child_frame_id = "head_camera_link";
+        
+        // Translation
+        transform_msg.transform.translation.x = cam_x;
+        transform_msg.transform.translation.y = cam_y;
+        transform_msg.transform.translation.z = cam_z;
+        
+        // Rotation: camera tilts with head pitch (rotation about Y axis)
+        // Using quaternion for rotation about Y axis: q = [0, sin(θ/2), 0, cos(θ/2)]
+        // Note: pitch_deg is the logical angle, negative means looking down
+        // Camera optical axis tilts down when pitch is negative
+        double half_pitch = pitch_rad / 2.0;
+        transform_msg.transform.rotation.x = 0.0;
+        transform_msg.transform.rotation.y = std::sin(half_pitch);
+        transform_msg.transform.rotation.z = 0.0;
+        transform_msg.transform.rotation.w = std::cos(half_pitch);
+        
+        tf_broadcaster_->sendTransform(transform_msg);
+        
+        // Also publish the optical frame (camera_optical_frame convention: Z forward, X right, Y down)
+        // This is a rotation of -90° about X, then -90° about Z from camera_link
+        // Or equivalently: X_opt = Y_link, Y_opt = -Z_link, Z_opt = X_link
+        // Quaternion for this rotation: combine pitch rotation with optical frame rotation
+        geometry_msgs::msg::TransformStamped optical_transform_msg;
+        optical_transform_msg.header.stamp = this->now();
+        optical_transform_msg.header.frame_id = "base_link";
+        optical_transform_msg.child_frame_id = "head_camera_optical_frame";
+        
+        // Same translation as camera_link
+        optical_transform_msg.transform.translation.x = cam_x;
+        optical_transform_msg.transform.translation.y = cam_y;
+        optical_transform_msg.transform.translation.z = cam_z;
+        
+        // Combined rotation: pitch about Y, then optical frame transform
+        // Optical frame rotation (from ROS camera_link to optical): 
+        //   Rz(-90°) * Rx(-90°) or equivalently Ry(-90°) * Rx(-90°)
+        // q_optical = [-0.5, 0.5, -0.5, 0.5] (for standard optical frame transform)
+        // Combined: q_combined = q_pitch * q_optical
+        double q_opt_x = -0.5;
+        double q_opt_y = 0.5;
+        double q_opt_z = -0.5;
+        double q_opt_w = 0.5;
+        
+        // Quaternion multiplication: q_pitch * q_optical
+        double q_pitch_y = std::sin(half_pitch);
+        double q_pitch_w = std::cos(half_pitch);
+        
+        // q1 = [0, q_pitch_y, 0, q_pitch_w]
+        // q2 = [q_opt_x, q_opt_y, q_opt_z, q_opt_w]
+        // q1 * q2:
+        double qx = q_pitch_w * q_opt_x + q_pitch_y * q_opt_z;
+        double qy = q_pitch_w * q_opt_y + q_pitch_y * q_opt_w;
+        double qz = q_pitch_w * q_opt_z - q_pitch_y * q_opt_x;
+        double qw = q_pitch_w * q_opt_w - q_pitch_y * q_opt_y;
+        
+        optical_transform_msg.transform.rotation.x = qx;
+        optical_transform_msg.transform.rotation.y = qy;
+        optical_transform_msg.transform.rotation.z = qz;
+        optical_transform_msg.transform.rotation.w = qw;
+        
+        tf_broadcaster_->sendTransform(optical_transform_msg);
+        
+        // Also publish "camera" frame for compatibility with maurice_arm/camera.cpp
+        // which uses frame_id="camera" for published images
+        geometry_msgs::msg::TransformStamped camera_transform_msg = transform_msg;
+        camera_transform_msg.child_frame_id = "camera";
+        tf_broadcaster_->sendTransform(camera_transform_msg);
     }
     
     void headPositionCallback(const std_msgs::msg::Int32::SharedPtr msg) {
@@ -581,6 +727,10 @@ private:
     int latest_head_command_{0};
     std::mutex head_command_mutex_;
     std::atomic<bool> has_head_command_{false};
+    
+    // TF broadcaster for head camera transform
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    double focal_offset_;  // Computed once at startup
     
     // Control timer (replaces manual thread)
     rclcpp::TimerBase::SharedPtr control_timer_;
