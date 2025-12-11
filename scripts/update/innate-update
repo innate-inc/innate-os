@@ -1,8 +1,10 @@
 #!/bin/bash
 # Innate-OS Update Command
-# Usage: innate-update check   - Check if updates available
-#        innate-update apply   - Apply updates
-#        innate-update status  - Show current version
+# Usage: innate-update check        - Check if updates available (latest tag)
+#        innate-update check --dev  - Check if updates available (latest commit)
+#        innate-update apply        - Apply updates (to latest tag)
+#        innate-update apply --dev  - Apply updates (to latest commit)
+#        innate-update status       - Show current version
 
 set -e
 
@@ -10,6 +12,7 @@ REPO_DIR="/home/jetson1/innate-os"
 LOG_DIR="$REPO_DIR/logs"
 UPDATE_CACHE="/tmp/innate-update-cache"
 BRANCH="${INNATE_UPDATE_BRANCH:-main}"
+DEV_MODE=false
 
 # Ensure log directory exists
 mkdir -p "$LOG_DIR"
@@ -52,48 +55,119 @@ current_commit() {
     git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "unknown"
 }
 
+# Get latest tag on main branch
+get_latest_tag() {
+    # Get tags that are ancestors of origin/main, sorted by version, pick the latest
+    git -C "$REPO_DIR" tag --sort=-v:refname --merged origin/$BRANCH 2>/dev/null | head -1
+}
+
+# Get current tag if HEAD is at a tag
+get_current_tag() {
+    git -C "$REPO_DIR" describe --tags --exact-match HEAD 2>/dev/null || echo ""
+}
+
+# Check if commit A is an ancestor of commit B (A came before B)
+is_ancestor() {
+    git -C "$REPO_DIR" merge-base --is-ancestor "$1" "$2" 2>/dev/null
+}
+
 # Check for updates
 check_updates() {
     check_repo
     
     log "Checking for updates..."
     
-    # Fetch latest from remote
-    if ! git -C "$REPO_DIR" fetch origin "$BRANCH" 2>/dev/null; then
+    # Fetch latest from remote (including tags)
+    if ! git -C "$REPO_DIR" fetch origin "$BRANCH" --tags 2>/dev/null; then
         error "Failed to fetch from remote. Check network and git authentication."
         exit 1
     fi
     
     local current=$(current_commit)
-    local remote=$(git -C "$REPO_DIR" rev-parse "origin/$BRANCH" 2>/dev/null || echo "unknown")
-    local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
     
-    # Cache the result
-    mkdir -p "$(dirname "$UPDATE_CACHE")"
-    echo "$commits_behind" > "$UPDATE_CACHE"
-    
-    if [ "$commits_behind" -eq 0 ]; then
-        success "System is up to date"
-        echo "Current: ${current:0:7}"
-        return 0
-    else
-        warning "Updates available: $commits_behind new commit(s)"
-        echo "Current: ${current:0:7}"
-        echo "Latest:  ${remote:0:7}"
-        echo ""
-        echo "Recent changes:"
-        # Show changelog without pager, limit to reasonable number of commits
-        local commit_count=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
-        if [ "$commit_count" -gt 10 ]; then
-            echo "Showing first 10 of $commit_count commits:"
-            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -10
-            echo "... and $((commit_count - 10)) more commits"
+    if [ "$DEV_MODE" = true ]; then
+        # Dev mode: check against latest commit on main
+        local target=$(git -C "$REPO_DIR" rev-parse "origin/$BRANCH" 2>/dev/null || echo "unknown")
+        local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
+        
+        # Cache the result
+        mkdir -p "$(dirname "$UPDATE_CACHE")"
+        echo "$commits_behind" > "$UPDATE_CACHE"
+        
+        if [ "$commits_behind" -eq 0 ]; then
+            success "System is up to date (dev mode)"
+            echo "Current: ${current:0:7}"
+            return 0
         else
-            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
+            warning "Updates available (dev mode): $commits_behind new commit(s)"
+            echo "Current: ${current:0:7}"
+            echo "Latest:  ${target:0:7}"
+            echo ""
+            echo "Recent changes:"
+            local commit_count=$commits_behind
+            if [ "$commit_count" -gt 10 ]; then
+                echo "Showing first 10 of $commit_count commits:"
+                git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -10
+                echo "... and $((commit_count - 10)) more commits"
+            else
+                git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
+            fi
+            echo ""
+            echo "Run 'innate-update apply --dev' to install updates"
+            return 1
         fi
-        echo ""
-        echo "Run 'innate-update apply' to install updates"
-        return 1
+    else
+        # Normal mode: check against latest tag on main
+        local latest_tag=$(get_latest_tag)
+        local current_tag=$(get_current_tag)
+        
+        if [ -z "$latest_tag" ]; then
+            warning "No tags found on $BRANCH branch"
+            echo "Use 'innate-update check --dev' to check for latest commits instead"
+            return 0
+        fi
+        
+        local latest_tag_commit=$(git -C "$REPO_DIR" rev-parse "$latest_tag" 2>/dev/null || echo "unknown")
+        
+        # Cache: store 0 if up-to-date, 1 if update available
+        mkdir -p "$(dirname "$UPDATE_CACHE")"
+        
+        if [ "$current" = "$latest_tag_commit" ]; then
+            echo "0" > "$UPDATE_CACHE"
+            success "System is up to date"
+            echo "Current: $current_tag (${current:0:7})"
+            return 0
+        elif is_ancestor "$latest_tag_commit" "$current"; then
+            # Current commit is AHEAD of latest tag (on dev)
+            echo "0" > "$UPDATE_CACHE"
+            success "System is ahead of latest stable release"
+            echo "Current: ${current:0:7} (dev)"
+            echo "Latest tag: $latest_tag (${latest_tag_commit:0:7})"
+            echo ""
+            echo "You are on a development commit ahead of the latest release."
+            echo "Use 'innate-update check --dev' to check for newer dev commits."
+            return 0
+        else
+            echo "1" > "$UPDATE_CACHE"
+            local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..$latest_tag --count 2>/dev/null || echo "?")
+            warning "Update available: $latest_tag"
+            echo "Current: ${current_tag:-${current:0:7}}"
+            echo "Latest:  $latest_tag (${latest_tag_commit:0:7})"
+            echo ""
+            if [ "$commits_behind" != "?" ] && [ "$commits_behind" -gt 0 ]; then
+                echo "Changes in $latest_tag:"
+                if [ "$commits_behind" -gt 10 ]; then
+                    echo "Showing first 10 of $commits_behind commits:"
+                    git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag | head -10
+                    echo "... and $((commits_behind - 10)) more commits"
+                else
+                    git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag
+                fi
+            fi
+            echo ""
+            echo "Run 'innate-update apply' to install updates"
+            return 1
+        fi
     fi
 }
 
@@ -109,33 +183,81 @@ apply_updates() {
     echo "╚════════════════════════════════════════════════════════╝"
     echo ""
     
-    # Check if there are updates
-    git -C "$REPO_DIR" fetch origin "$BRANCH" 2>/dev/null
-    local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
+    # Fetch latest (including tags)
+    git -C "$REPO_DIR" fetch origin "$BRANCH" --tags 2>/dev/null
     
-    if [ "$commits_behind" -eq 0 ]; then
-        success "Already up to date"
-        exit 0
-    fi
+    local current=$(current_commit)
+    local target_ref
+    local target_display
     
-    log "Found $commits_behind commit(s) to apply"
-    
-    # Show what will be updated
-    echo ""
-    echo "Changes to be applied:"
-    # Show changelog without pager, limit to reasonable number of commits
-    local commit_count=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
-    if [ "$commit_count" -gt 20 ]; then
-        echo "Showing first 20 of $commit_count commits:"
-        git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -20
-        echo "... and $((commit_count - 20)) more commits"
+    if [ "$DEV_MODE" = true ]; then
+        # Dev mode: update to latest commit on main
+        target_ref="origin/$BRANCH"
+        target_display="latest commit on $BRANCH"
+        local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
+        
+        if [ "$commits_behind" -eq 0 ]; then
+            success "Already up to date (dev mode)"
+            exit 0
+        fi
+        
+        log "Found $commits_behind commit(s) to apply (dev mode)"
+        
+        echo ""
+        echo "Changes to be applied:"
+        if [ "$commits_behind" -gt 20 ]; then
+            echo "Showing first 20 of $commits_behind commits:"
+            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -20
+            echo "... and $((commits_behind - 20)) more commits"
+        else
+            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
+        fi
     else
-        git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
+        # Normal mode: update to latest tag
+        local latest_tag=$(get_latest_tag)
+        
+        if [ -z "$latest_tag" ]; then
+            error "No tags found on $BRANCH branch. Use --dev to update to latest commit."
+            exit 1
+        fi
+        
+        target_ref="$latest_tag"
+        target_display="$latest_tag"
+        local latest_tag_commit=$(git -C "$REPO_DIR" rev-parse "$latest_tag" 2>/dev/null)
+        
+        if [ "$current" = "$latest_tag_commit" ]; then
+            success "Already up to date at $latest_tag"
+            exit 0
+        fi
+        
+        # Check if we're ahead of the latest tag (on dev)
+        if is_ancestor "$latest_tag_commit" "$current"; then
+            warning "You are on a dev commit ahead of $latest_tag"
+            echo "Current: ${current:0:7}"
+            echo "Latest tag: $latest_tag (${latest_tag_commit:0:7})"
+            echo ""
+            echo "Cannot downgrade to an older release."
+            echo "Use 'innate-update apply --dev' to update to the latest dev commit."
+            exit 0
+        fi
+        
+        local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..$latest_tag --count 2>/dev/null || echo "?")
+        log "Updating to $latest_tag ($commits_behind commits)"
+        
+        echo ""
+        echo "Changes to be applied for $latest_tag:"
+        if [ "$commits_behind" != "?" ] && [ "$commits_behind" -gt 20 ]; then
+            echo "Showing first 20 of $commits_behind commits:"
+            git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag | head -20
+            echo "... and $((commits_behind - 20)) more commits"
+        else
+            git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag 2>/dev/null || echo "(could not show commits)"
+        fi
     fi
     echo ""
     
     # Confirm
-    read -p "Continue with update? [y/N] " -n 1 -r
+    read -p "Continue with update to $target_display? [y/N] " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         warning "Update cancelled"
@@ -150,15 +272,15 @@ apply_updates() {
         git -C "$REPO_DIR" stash push -m "Auto-stash before update $(date +%s)"
     fi
     
-    # Pull updates
-    log "Pulling latest code..."
+    # Checkout the target
+    log "Updating to $target_display..."
     local old_commit=$(current_commit)
     
-    if git -C "$REPO_DIR" pull --rebase origin "$BRANCH"; then
+    if git -C "$REPO_DIR" checkout "$target_ref" 2>/dev/null; then
         local new_commit=$(current_commit)
         success "Code updated: ${old_commit:0:7} → ${new_commit:0:7}"
     else
-        error "Git pull failed. Fix conflicts and try again."
+        error "Git checkout failed. Fix conflicts and try again."
         exit 1
     fi
     
@@ -230,20 +352,41 @@ quick_check() {
         fi
     fi
     
-    # Fetch and check (silently)
-    git -C "$REPO_DIR" fetch origin "$BRANCH" 2>/dev/null || return 0
-    local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
+    # Fetch and check (silently, against latest tag)
+    git -C "$REPO_DIR" fetch origin "$BRANCH" --tags 2>/dev/null || return 0
+    
+    local current=$(current_commit)
+    local latest_tag=$(get_latest_tag)
     
     # Update cache
     mkdir -p "$(dirname "$UPDATE_CACHE")"
-    echo "$commits_behind" > "$UPDATE_CACHE"
     
-    if [ "$commits_behind" -gt 0 ]; then
-        return 1  # Updates available
-    else
+    if [ -z "$latest_tag" ]; then
+        echo "0" > "$UPDATE_CACHE"
+        return 0  # No tags, consider up to date
+    fi
+    
+    local latest_tag_commit=$(git -C "$REPO_DIR" rev-parse "$latest_tag" 2>/dev/null || echo "unknown")
+    
+    if [ "$current" = "$latest_tag_commit" ]; then
+        echo "0" > "$UPDATE_CACHE"
         return 0  # Up to date
+    elif is_ancestor "$latest_tag_commit" "$current"; then
+        # Ahead of latest tag (on dev), consider up to date for quick check
+        echo "0" > "$UPDATE_CACHE"
+        return 0
+    else
+        echo "1" > "$UPDATE_CACHE"
+        return 1  # Updates available
     fi
 }
+
+# Parse --dev flag
+for arg in "$@"; do
+    if [ "$arg" = "--dev" ] || [ "$arg" = "-d" ]; then
+        DEV_MODE=true
+    fi
+done
 
 # Main command dispatch
 case "${1:-}" in
@@ -264,9 +407,14 @@ case "${1:-}" in
         echo "Innate-OS Update Manager"
         echo ""
         echo "Usage:"
-        echo "  innate-update check   - Check if updates are available"
-        echo "  innate-update apply   - Apply pending updates"
-        echo "  innate-update status  - Show current version info"
+        echo "  innate-update check         - Check if updates are available (latest tag)"
+        echo "  innate-update check --dev   - Check for updates (latest commit)"
+        echo "  innate-update apply         - Apply pending updates (to latest tag)"
+        echo "  innate-update apply --dev   - Apply updates (to latest commit)"
+        echo "  innate-update status        - Show current version info"
+        echo ""
+        echo "By default, updates are to the latest tagged release on main."
+        echo "Use --dev flag to update to the latest commit instead."
         echo ""
         exit 1
         ;;
