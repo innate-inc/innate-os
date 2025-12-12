@@ -35,7 +35,8 @@ MSG_TYPE_STATUS = "status"
 MSG_TYPE_ERROR = "error"
 MSG_TYPE_KILL = "kill"
 
-DEFAULT_INFERENCE_PORT = 8780
+DEFAULT_INFERENCE_PORT = 8780  # Only used for local servers
+DEFAULT_GKE_SERVER = "34.68.47.133"  # GKE H100 server - no auth needed
 
 
 @dataclass
@@ -294,6 +295,18 @@ class DirectWaypointExecutor:
                 twist.angular.z = max(-self.ANGULAR_SPEED, min(self.ANGULAR_SPEED, twist.angular.z))
 
             self.cmd_vel_pub.publish(twist)
+            
+            # Debug: log every 20 steps (~1 second)
+            if not hasattr(self, '_control_count'):
+                self._control_count = 0
+            self._control_count += 1
+            if self._control_count % 20 == 0:
+                self.logger.info(
+                    f"[WaypointExecutor] Moving: dist={distance:.2f}m, "
+                    f"angle_err={math.degrees(angle_error):.1f}°, "
+                    f"cmd=({twist.linear.x:.2f}, {twist.angular.z:.2f})"
+                )
+            
             return True
 
     def _stop_robot(self):
@@ -336,7 +349,6 @@ class MoondreamInferenceBeta(Primitive):
         self._ws_loop = None
         self._waypoint_executor: Optional[DirectWaypointExecutor] = None
         self._cmd_vel_pub = None
-        self._control_timer = None
         self._seq = 0
 
     @property
@@ -360,9 +372,9 @@ class MoondreamInferenceBeta(Primitive):
             "Use to run Moondream visual inference for navigation tasks. "
             "This connects to an inference server, streams camera and odometry data, "
             "and executes waypoint commands received from the server. "
-            "Provide the server_address (IP), task_label (description of what to do), "
-            "and optionally server_port (default 8780), stream_hz (default 10), "
-            "and timeout_seconds (default 300)."
+            "Provide task_label (description of what to do). "
+            "By default, connects to GKE H100 server (no auth needed). "
+            "Optional: server_address, stream_hz (default 10), timeout_seconds (default 300)."
         )
 
     def guidelines_when_running(self):
@@ -374,9 +386,8 @@ class MoondreamInferenceBeta(Primitive):
 
     def execute(
         self,
-        server_address: str,
         task_label: str,
-        server_port: int = DEFAULT_INFERENCE_PORT,
+        server_address: str = DEFAULT_GKE_SERVER,
         stream_hz: float = 10.0,
         timeout_seconds: float = 300.0
     ):
@@ -384,9 +395,8 @@ class MoondreamInferenceBeta(Primitive):
         Connect to inference server and execute waypoint commands.
 
         Args:
-            server_address: IP address of the inference server
             task_label: Description of the navigation task
-            server_port: Port of the inference server (default 8780)
+            server_address: Server IP address (default: GKE H100 server)
             stream_hz: Rate to stream sensor data (default 10 Hz)
             timeout_seconds: Maximum execution time (default 300s)
 
@@ -394,7 +404,7 @@ class MoondreamInferenceBeta(Primitive):
             tuple: (result_message, PrimitiveResult)
         """
         self.logger.info(
-            f"[MoondreamInferenceBeta] Starting: server={server_address}:{server_port}, "
+            f"[MoondreamInferenceBeta] Starting: server={server_address}, "
             f"task={task_label}, stream_hz={stream_hz}"
         )
 
@@ -412,8 +422,8 @@ class MoondreamInferenceBeta(Primitive):
         self._cmd_vel_pub = self.node.create_publisher(Twist, '/cmd_vel', 10)
         self._waypoint_executor = DirectWaypointExecutor(self.logger, self._cmd_vel_pub)
 
-        # Create control timer for waypoint execution (20 Hz)
-        self._control_timer = self.node.create_timer(0.05, self._control_loop_callback)
+        # Note: Control loop runs inside the async WebSocket loop, not as a timer
+        # (ROS2 timers don't fire while blocking on asyncio)
 
         try:
             # Import websockets here to avoid import errors if not installed
@@ -421,7 +431,7 @@ class MoondreamInferenceBeta(Primitive):
 
             # Run the WebSocket client
             result = self._run_websocket_session(
-                server_address, server_port, task_label, stream_hz, timeout_seconds
+                server_address, task_label, stream_hz, timeout_seconds
             )
 
             return result
@@ -436,15 +446,9 @@ class MoondreamInferenceBeta(Primitive):
             # Cleanup
             self._cleanup()
 
-    def _control_loop_callback(self):
-        """Timer callback for waypoint control loop."""
-        if self._waypoint_executor:
-            self._waypoint_executor.control_step()
-
     def _run_websocket_session(
         self,
         server_address: str,
-        server_port: int,
         task_label: str,
         stream_hz: float,
         timeout_seconds: float
@@ -461,7 +465,7 @@ class MoondreamInferenceBeta(Primitive):
         try:
             result = loop.run_until_complete(
                 self._websocket_session(
-                    server_address, server_port, task_label, stream_hz, timeout_seconds
+                    server_address, task_label, stream_hz, timeout_seconds
                 )
             )
             return result
@@ -471,7 +475,6 @@ class MoondreamInferenceBeta(Primitive):
     async def _websocket_session(
         self,
         server_address: str,
-        server_port: int,
         task_label: str,
         stream_hz: float,
         timeout_seconds: float
@@ -479,14 +482,19 @@ class MoondreamInferenceBeta(Primitive):
         """Async WebSocket session."""
         import websockets
 
-        server_url = f"ws://{server_address}:{server_port}"
+        # GKE server - simple ws:// connection, no auth needed
+        server_url = f"ws://{server_address}/ws"
+
         start_time = time.time()
         stream_interval = 1.0 / stream_hz
 
         self.logger.info(f"[MoondreamInferenceBeta] Connecting to {server_url}...")
 
         try:
-            async with websockets.connect(server_url, max_size=10 * 1024 * 1024) as ws:
+            async with websockets.connect(
+                server_url,
+                max_size=10 * 1024 * 1024
+            ) as ws:
                 self._ws = ws
                 self.logger.info("[MoondreamInferenceBeta] Connected!")
 
@@ -497,9 +505,22 @@ class MoondreamInferenceBeta(Primitive):
                     message=f"Robot connected, ready for task: {task_label}"
                 ).to_json())
 
-                self._send_feedback(f"Connected to inference server at {server_address}")
+                # Send task_start to begin inference
+                task_start_msg = json.dumps({
+                    "type": MSG_TYPE_TASK_START,
+                    "task_label": task_label,
+                    "num_waypoints": 6,
+                    "inference_interval_ms": 1000
+                })
+                await ws.send(task_start_msg)
+                self.logger.info(f"[MoondreamInferenceBeta] Sent task_start: {task_label}")
+                self._task_active = True
+
+                self._send_feedback(f"Connected to inference server at {server_address}, task started")
 
                 last_stream_time = 0.0
+                last_control_time = 0.0
+                control_interval = 0.05  # 20 Hz control loop
 
                 while True:
                     # Check cancellation
@@ -524,9 +545,15 @@ class MoondreamInferenceBeta(Primitive):
                         await self._stream_sensor_data()
                         last_stream_time = now
 
+                    # Run control loop at 20 Hz
+                    if now - last_control_time >= control_interval:
+                        if self._waypoint_executor:
+                            self._waypoint_executor.control_step()
+                        last_control_time = now
+
                     # Receive messages with short timeout
                     try:
-                        message = await asyncio.wait_for(ws.recv(), timeout=0.05)
+                        message = await asyncio.wait_for(ws.recv(), timeout=0.02)
                         result = await self._handle_server_message(message)
                         if result is not None:
                             return result
@@ -662,10 +689,6 @@ class MoondreamInferenceBeta(Primitive):
         if self._waypoint_executor:
             self._waypoint_executor.stop()
             self._waypoint_executor = None
-
-        if self._control_timer and self.node:
-            self.node.destroy_timer(self._control_timer)
-            self._control_timer = None
 
         if self._cmd_vel_pub and self.node:
             self.node.destroy_publisher(self._cmd_vel_pub)
