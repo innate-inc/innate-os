@@ -115,7 +115,10 @@ def generate_launch_description():
     cartesia_voice_id_arg = DeclareLaunchArgument(
         "cartesia_voice_id",
         # default_value="6de0e913-9534-47ad-96f0-e3f5fbfaf8a0",
-        default_value="f786b574-daa5-4673-aa0c-cbe3e8534c02",
+        # 6e68c1d9-a771-466e-bc9c-5c6b72134da2 wall-e
+        # default girl voice f786b574-daa5-4673-aa0c-cbe3e8534c02,
+        # alfred 9fdaae0b-f885-4813-b589-3c07cf9d5fea
+        default_value="9fdaae0b-f885-4813-b589-3c07cf9d5fea",
         description="Cartesia voice ID for text-to-speech (Katie - Friendly Fixer)",
     )
 
