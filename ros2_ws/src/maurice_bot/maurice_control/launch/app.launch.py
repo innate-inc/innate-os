@@ -19,10 +19,9 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Create your app node
     app_node = Node(
         package='maurice_control',
-        executable='app.py',
+        executable='app.cpp',
         name='maurice_app',
         output='screen',
         parameters=[{
