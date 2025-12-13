@@ -18,6 +18,7 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
+from lifecycle_msgs.msg import TransitionEvent
 import cv2
 
 import cupy as cp
@@ -79,6 +80,16 @@ class GridLocalizer(Node):
         self.srv = self.create_service(Trigger, 'localize', self._localize_cb)
         self.test_srv = self.create_service(Trigger, 'test', self._test_cb)
         
+        # AMCL lifecycle state tracking
+        self._amcl_active = False
+        self._pending_pose = None  # Store pose to publish when AMCL becomes active
+        self.create_subscription(
+            TransitionEvent,
+            '/amcl/transition_event',
+            self._amcl_transition_cb,
+            10
+        )
+        
         # Auto-localize timer (2 second intervals)
         if auto_localize:
             self._auto_timer = self.create_timer(2.0, self._auto_localize_tick)
@@ -127,6 +138,18 @@ class GridLocalizer(Node):
     def _scan_cb(self, msg: LaserScan):
         """Store latest scan."""
         self.latest_scan = msg
+
+    def _amcl_transition_cb(self, msg: TransitionEvent):
+        """Handle AMCL lifecycle transitions."""
+        # State 3 = active
+        if msg.goal_state.id == 3:
+            self._amcl_active = True
+            self.get_logger().info('AMCL is now active')
+            # Publish any pending pose
+            if self._pending_pose is not None:
+                self.get_logger().info('Publishing pending initial pose to AMCL')
+                self._do_publish_pose(self._pending_pose)
+                self._pending_pose = None
 
     def _auto_localize_tick(self):
         """Auto-localize on startup until success or timeout."""
@@ -199,7 +222,15 @@ class GridLocalizer(Node):
         self.get_logger().info(f'Published status: {status}')
 
     def _publish_pose(self, pose):
-        """Publish pose to /initialpose (triggers AMCL)."""
+        """Publish pose to /initialpose (triggers AMCL). Queues if AMCL not active."""
+        if self._amcl_active:
+            self._do_publish_pose(pose)
+        else:
+            self.get_logger().info('AMCL not active yet, queuing pose for when it becomes active')
+            self._pending_pose = pose
+
+    def _do_publish_pose(self, pose):
+        """Actually publish the pose message."""
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
@@ -211,6 +242,7 @@ class GridLocalizer(Node):
         msg.pose.covariance[7] = 0.1
         msg.pose.covariance[35] = 0.05
         self.pose_pub.publish(msg)
+        self.get_logger().info(f'Published initial pose: ({pose[0]:.2f}, {pose[1]:.2f})')
 
     def _test_cb(self, request, response):
         """Service callback to trigger test."""

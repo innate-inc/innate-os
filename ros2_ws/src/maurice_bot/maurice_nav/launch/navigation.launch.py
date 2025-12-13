@@ -67,7 +67,7 @@ def generate_launch_description():
         parameters=[{
             'map_yaml_path': LaunchConfiguration('map'),
             'auto_localize': True,
-            'auto_localize_timeout': 30.0,
+            'auto_localize_timeout': 10.0,
             'max_score_threshold': 0.3,
         }]
     )
@@ -159,7 +159,7 @@ def generate_launch_description():
         amcl_params_arg,
         map_server_node,
         amcl_node,
-        grid_localizer_node,  # Auto-localizes, publishes to /initialpose
+        grid_localizer_node,  # Waits for AMCL to be active before publishing
         planner_node,
         controller_node,
         velocity_smoother_node,
