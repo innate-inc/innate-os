@@ -57,6 +57,21 @@ def generate_launch_description():
         parameters=[LaunchConfiguration('amcl_params_file')]
     )
 
+    # Grid localizer for initial pose estimation
+    # Auto-localizes on startup, publishes to /initialpose for AMCL
+    grid_localizer_node = Node(
+        package='maurice_nav',
+        executable='grid_localizer.py',
+        name='grid_localizer',
+        output='screen',
+        parameters=[{
+            'map_yaml_path': LaunchConfiguration('map'),
+            'auto_localize': True,
+            'auto_localize_timeout': 30.0,
+            'max_score_threshold': 0.3,
+        }]
+    )
+
     # Create the planner node
     planner_node = Node(
         package='nav2_planner',
@@ -144,6 +159,7 @@ def generate_launch_description():
         amcl_params_arg,
         map_server_node,
         amcl_node,
+        grid_localizer_node,  # Auto-localizes, publishes to /initialpose
         planner_node,
         controller_node,
         velocity_smoother_node,

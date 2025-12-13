@@ -62,6 +62,9 @@ class ModeManager(Node):
         # Track current processes
         self.current_process = None
         
+        # Kill any orphaned navigation processes from previous runs
+        self._cleanup_orphaned_processes()
+        
         # Use environment variable if set, otherwise construct from HOME
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         
@@ -522,6 +525,17 @@ class ModeManager(Node):
             self.get_logger().error(response.message)
             
         return response
+
+    def _cleanup_orphaned_processes(self):
+        """Kill any orphaned navigation processes from previous mode_manager runs."""
+        try:
+            # Kill orphaned navigation launch processes
+            subprocess.run(['pkill', '-f', 'navigation.launch.py'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'mapfree_local_nav.launch.py'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'slam_toolbox'], capture_output=True)
+            self.get_logger().info('Cleaned up any orphaned navigation processes')
+        except Exception as e:
+            self.get_logger().warn(f'Cleanup warning: {e}')
 
     def kill_current_process(self):
         """Safely kill the current launch process"""
