@@ -221,20 +221,18 @@ class SimpleWebRTCStreamer(Node):
             
             'appsrc name=src_main is-live=true format=time '
             'caps=video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! '
-            'queue max-size-buffers=2 leaky=downstream ! '
-            'videoconvert ! video/x-raw,format=I420 ! '
-            'openh264enc name=enc_main bitrate=2000000 complexity=low ! '
-            'rtph264pay name=pay_main config-interval=-1 pt=96 ! '
-            'application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96 ! '
+            'videoconvert ! '
+            'vp8enc name=enc_main deadline=1 error-resilient=partitions keyframe-max-dist=30 ! '
+            'rtpvp8pay name=pay_main pt=96 ! '
+            'application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96 ! '
             'webrtc.sink_0 '
             
             'appsrc name=src_arm is-live=true format=time '
             'caps=video/x-raw,format=RGB,width=640,height=480,framerate=15/1 ! '
-            'queue max-size-buffers=2 leaky=downstream ! '
-            'videoconvert ! video/x-raw,format=I420 ! '
-            'openh264enc bitrate=1000000 complexity=low ! '
-            'rtph264pay config-interval=-1 pt=97 ! '
-            'application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=97 ! '
+            'videoconvert ! '
+            'vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! '
+            'rtpvp8pay pt=97 ! '
+            'application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=97 ! '
             'webrtc.sink_1'
         )
         
