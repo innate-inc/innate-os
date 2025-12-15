@@ -1,8 +1,8 @@
 /**
  * UDP Leader Receiver Node (C++)
  *
- * Receives leader arm positions via UDP and publishes them to /leader_positions topic.
- * High-performance C++ implementation for low-latency teleoperation.
+ * Receives leader arm positions via UDP, converts to radians, and publishes
+ * directly to /mars/arm/commands for low-latency teleoperation.
  *
  * Network Protocol:
  * - Port: 9999 (default, configurable)
@@ -23,8 +23,9 @@
  */
 
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/int32_multi_array.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <cmath>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -80,9 +81,10 @@ public:
         auto_start_ = this->get_parameter("auto_start").as_bool();
         log_rate_ = this->get_parameter("log_rate").as_double();
 
-        // Publisher for leader positions
-        positions_pub_ = this->create_publisher<std_msgs::msg::Int32MultiArray>(
-            "/leader_positions", 10);
+        // Publisher for arm commands (best effort QoS for low-latency teleoperation)
+        auto qos = rclcpp::QoS(10).best_effort();
+        commands_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/mars/arm/commands", qos);
 
         // Service for start/stop
         start_stop_service_ = this->create_service<std_srvs::srv::SetBool>(
@@ -99,7 +101,8 @@ public:
         last_sequence_ = -1;
         last_log_time_ = std::chrono::steady_clock::now();
 
-        RCLCPP_INFO(this->get_logger(), "UDP Leader Receiver initialized on port %d [C++]", port_);
+        RCLCPP_INFO(this->get_logger(), 
+            "UDP Leader Receiver initialized on port %d -> /mars/arm/commands [C++]", port_);
 
         // Auto-start if configured
         if (auto_start_) {
@@ -294,13 +297,16 @@ private:
         // Update last sequence number
         last_sequence_ = static_cast<int64_t>(packet->sequence);
 
-        // Publish the positions
-        auto msg = std_msgs::msg::Int32MultiArray();
+        // Convert to radians and publish to /mars/arm/commands
+        auto msg = std_msgs::msg::Float64MultiArray();
         msg.data.reserve(NUM_SERVOS);
         for (size_t i = 0; i < NUM_SERVOS; ++i) {
-            msg.data.push_back(packet->servo_positions[i]);
+            // Convert: radians = (position - 2048) * (2π / 4096)
+            double radians = (static_cast<double>(packet->servo_positions[i]) - 2048.0) 
+                             * (2.0 * M_PI / 4096.0);
+            msg.data.push_back(radians);
         }
-        positions_pub_->publish(msg);
+        commands_pub_->publish(msg);
 
         // Update statistics
         packet_count_++;
@@ -396,7 +402,7 @@ private:
     std::chrono::steady_clock::time_point last_log_time_;
 
     // ROS interfaces
-    rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr positions_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr commands_pub_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr start_stop_service_;
 };
 
@@ -413,5 +419,3 @@ int main(int argc, char** argv) {
     rclcpp::shutdown();
     return 0;
 }
-
-
