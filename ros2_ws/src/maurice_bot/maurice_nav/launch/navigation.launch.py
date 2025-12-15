@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""
+Navigation Launch File
+
+Architecture:
+┌─────────────────────┐     ┌─────────────────────┐
+│   Grid Localizer    │────▶│        AMCL         │
+│  (coarse estimate)  │     │  (fine refinement)  │
+└─────────────────────┘     └─────────────────────┘
+         │                           │
+         │ /initialpose              │ continuous
+         │ (transient_local QoS)     │ tracking
+         ▼                           ▼
+    Seeds AMCL's              Publishes map→odom
+    particle filter           transform
+
+Grid Localizer runs as a standalone node (not lifecycle-managed) and publishes
+initial pose estimates with transient_local durability so AMCL receives them
+even if it starts later.
+"""
 
 import os
 
@@ -57,8 +76,9 @@ def generate_launch_description():
         parameters=[LaunchConfiguration('amcl_params_file')]
     )
 
-    # Grid localizer for initial pose estimation
-    # Auto-localizes on startup, publishes to /initialpose for AMCL
+    # Grid localizer for initial pose estimation (runs OUTSIDE lifecycle manager)
+    # Provides coarse localization before AMCL for "kidnapped robot" / unknown initial pose
+    # Uses transient_local QoS so /initialpose persists for late-starting AMCL
     grid_localizer_node = Node(
         package='maurice_nav',
         executable='grid_localizer.py',
@@ -157,9 +177,12 @@ def generate_launch_description():
     return LaunchDescription([
         map_arg,
         amcl_params_arg,
+        # Grid localizer starts first - runs independently (not lifecycle-managed)
+        # Publishes to /initialpose with transient_local QoS for late subscribers
+        grid_localizer_node,
+        # Nav2 lifecycle-managed nodes
         map_server_node,
         amcl_node,
-        grid_localizer_node,  # Waits for AMCL to be active before publishing
         planner_node,
         controller_node,
         velocity_smoother_node,

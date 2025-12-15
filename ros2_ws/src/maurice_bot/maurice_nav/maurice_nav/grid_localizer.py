@@ -1,7 +1,27 @@
 #!/usr/bin/env python3
 """
-Minimal GPU-accelerated grid localization service.
+GPU-accelerated grid localization for initial pose estimation.
 Uses CuPy for parallel ray-casting to find robot pose in occupancy grid map.
+
+Architecture:
+┌─────────────────────┐     ┌─────────────────────┐
+│   Grid Localizer    │────▶│        AMCL         │
+│  (coarse estimate)  │     │  (fine refinement)  │
+└─────────────────────┘     └─────────────────────┘
+         │                           │
+         │ /initialpose              │ continuous
+         │ (transient_local QoS)     │ tracking
+         ▼                           ▼
+    Seeds AMCL's              Publishes map→odom
+    particle filter           transform
+
+Key features:
+- Subscribes to /map and /scan
+- Generates candidate poses on a grid (configurable spacing and angles)
+- Scores each pose by matching laser scan endpoints to map obstacles
+- Publishes best pose to /initialpose with transient_local QoS (latched)
+- Runs as a standalone node (not lifecycle-managed) to provide coarse
+  localization before AMCL starts
 
 On startup, automatically tries to localize for up to `auto_localize_timeout` seconds.
 Publishes status to /localization/status ('localized' or 'timeout').
@@ -13,7 +33,7 @@ import yaml
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_srvs.srv import Trigger
@@ -69,11 +89,18 @@ class GridLocalizer(Node):
         self._best_score = float('inf')
         
         # Subscribers
-        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.scan_sub = self.create_subscription(LaserScan, scan_topic, self._scan_cb, qos)
+        scan_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+        self.scan_sub = self.create_subscription(LaserScan, scan_topic, self._scan_cb, scan_qos)
         
         # Publishers
-        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
+        # Latched publisher - message persists for late subscribers (AMCL)
+        # This solves the race condition where grid_localizer publishes before AMCL starts
+        latched_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            depth=1,
+        )
+        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', latched_qos)
         self.status_pub = self.create_publisher(String, '/localization/status', 10)
         
         # Service (manual trigger, always available)
