@@ -7,9 +7,7 @@ endif()
 
 # Find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
@@ -21,7 +19,6 @@ pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-webrtc-1.0 gstreame
 # Find nlohmann_json
 find_package(nlohmann_json QUIET)
 if(NOT nlohmann_json_FOUND)
-  # Try pkg-config as fallback
   pkg_check_modules(NLOHMANN_JSON nlohmann_json)
 endif()
 
@@ -62,17 +59,6 @@ install(TARGETS webrtc_streamer_node
 # Install include directory
 install(DIRECTORY include/
   DESTINATION include
-)
-
-# Install Python modules
-ament_python_install_package(${PROJECT_NAME}
-  PACKAGE_DIR innate_webrtc_streamer
-)
-
-# Install Python executable
-install(PROGRAMS
-  innate_webrtc_streamer/webrtc_streamer.py
-  DESTINATION lib/${PROJECT_NAME}
 )
 
 # Install the launch folder

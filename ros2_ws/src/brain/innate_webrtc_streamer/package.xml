@@ -9,16 +9,11 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <!-- ROS2 C++ dependencies -->
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
-
-  <!-- ROS2 Python dependencies -->
-  <depend>rclpy</depend>
-  <depend>cv_bridge</depend>
 
   <!-- System dependencies -->
   <build_depend>libopencv-dev</build_depend>
