@@ -3,28 +3,39 @@
 <package format="3">
   <name>innate_webrtc_streamer</name>
   <version>0.1.0</version>
-  <description>WebRTC video streaming for low-latency H.264 video delivery to clients</description>
+  <description>WebRTC video streaming for low-latency VP8 video delivery to clients</description>
   
   <maintainer email="robot@innate.com">Innate Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
-  <!-- ROS2 dependencies -->
-  <depend>rclpy</depend>
+  <!-- ROS2 C++ dependencies -->
+  <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+
+  <!-- ROS2 Python dependencies -->
+  <depend>rclpy</depend>
   <depend>cv_bridge</depend>
 
-  <!-- Python dependencies (installed via pip, but declared for reference) -->
-  <!-- pygobject (for GStreamer Python bindings) -->
-  <!-- opencv-python (via cv_bridge) -->
-  <!-- numpy -->
+  <!-- System dependencies -->
+  <build_depend>libopencv-dev</build_depend>
+  <build_depend>libgstreamer1.0-dev</build_depend>
+  <build_depend>libgstreamer-plugins-base1.0-dev</build_depend>
+  <build_depend>gstreamer1.0-plugins-good</build_depend>
+  <build_depend>gstreamer1.0-plugins-bad</build_depend>
+  <build_depend>gstreamer1.0-nice</build_depend>
+  <build_depend>nlohmann-json3-dev</build_depend>
 
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
-  <test_depend>python3-pytest</test_depend>
+  <exec_depend>libopencv-dev</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-bad</exec_depend>
+  <exec_depend>gstreamer1.0-nice</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
