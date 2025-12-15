@@ -135,10 +135,18 @@ class SimpleWebRTCStreamer(Node):
         
         img = self._process_image(msg, 640, 480)
         if img is None:
+            self.get_logger().warn('Main camera: failed to decode image')
             return
         
+        # Ensure contiguous memory layout
+        img = np.ascontiguousarray(img)
         buf = Gst.Buffer.new_wrapped(img.tobytes())
-        self.appsrc_main.emit('push-buffer', buf)
+        ret = self.appsrc_main.emit('push-buffer', buf)
+        if not hasattr(self, '_main_frame_count'):
+            self._main_frame_count = 0
+        self._main_frame_count += 1
+        if self._main_frame_count % 30 == 1:
+            self.get_logger().info(f'Main camera: pushed frame {self._main_frame_count}, ret={ret}')
     
     def on_image_arm(self, msg):
         """Feed arm camera images to pipeline"""
@@ -147,13 +155,27 @@ class SimpleWebRTCStreamer(Node):
         
         img = self._process_image(msg, 640, 480)
         if img is None:
+            self.get_logger().warn('Arm camera: failed to decode image')
             return
         
+        # Ensure contiguous memory layout
+        img = np.ascontiguousarray(img)
         buf = Gst.Buffer.new_wrapped(img.tobytes())
-        self.appsrc_arm.emit('push-buffer', buf)
+        ret = self.appsrc_arm.emit('push-buffer', buf)
+        if not hasattr(self, '_arm_frame_count'):
+            self._arm_frame_count = 0
+        self._arm_frame_count += 1
+        if self._arm_frame_count % 15 == 1:
+            self.get_logger().info(f'Arm camera: pushed frame {self._arm_frame_count}, ret={ret}')
     
-    def cleanup_pipeline(self):
+    def cleanup_pipeline(self, reason='unknown'):
         """Clean up the pipeline and resources"""
+        self.get_logger().info(f'cleanup_pipeline called, reason={reason}')
+        
+        # Reset frame counters
+        self._main_frame_count = 0
+        self._arm_frame_count = 0
+        
         if self.pipe:
             self.get_logger().info('Cleaning up pipeline...')
             # Stop the pipeline
@@ -190,7 +212,7 @@ class SimpleWebRTCStreamer(Node):
             self._create_subscriptions(source)
         
         # Always cleanup existing pipeline to handle reconnection
-        self.cleanup_pipeline()
+        self.cleanup_pipeline(reason='on_start')
         
         # Create fresh pipeline with dual camera feeds via appsrc
         # Main camera on sink_0, arm camera on sink_1
@@ -199,18 +221,20 @@ class SimpleWebRTCStreamer(Node):
             
             'appsrc name=src_main is-live=true format=time '
             'caps=video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! '
-            'videoconvert ! '
-            'vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! '
-            'rtpvp8pay pt=96 ! '
-            'application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96 ! '
+            'queue max-size-buffers=2 leaky=downstream ! '
+            'videoconvert ! video/x-raw,format=I420 ! '
+            'openh264enc name=enc_main bitrate=2000000 complexity=low ! '
+            'rtph264pay name=pay_main config-interval=-1 pt=96 ! '
+            'application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96 ! '
             'webrtc.sink_0 '
             
             'appsrc name=src_arm is-live=true format=time '
             'caps=video/x-raw,format=RGB,width=640,height=480,framerate=15/1 ! '
-            'videoconvert ! '
-            'vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! '
-            'rtpvp8pay pt=97 ! '
-            'application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=97 ! '
+            'queue max-size-buffers=2 leaky=downstream ! '
+            'videoconvert ! video/x-raw,format=I420 ! '
+            'openh264enc bitrate=1000000 complexity=low ! '
+            'rtph264pay config-interval=-1 pt=97 ! '
+            'application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=97 ! '
             'webrtc.sink_1'
         )
         
@@ -228,9 +252,36 @@ class SimpleWebRTCStreamer(Node):
         
         self.webrtc = self.pipe.get_by_name('webrtc')
         
+        # Enable BUNDLE for single ICE connection
+        self.webrtc.set_property('bundle-policy', 3)  # max-bundle
+        
         # Connect signals
         self.webrtc.connect('on-ice-candidate', lambda _, mline, cand: self.on_ice(mline, cand))
         self.webrtc.connect('notify::connection-state', lambda _, __: self.on_conn_state())
+        self.webrtc.connect('notify::ice-connection-state', lambda obj, _: 
+            self.get_logger().info(f'ICE state: {obj.get_property("ice-connection-state")}'))
+        self.webrtc.connect('notify::ice-gathering-state', lambda obj, _: 
+            self.get_logger().info(f'ICE gathering: {obj.get_property("ice-gathering-state")}'))
+        
+        # Add probes to debug data flow
+        # Probe appsrc output
+        src_pad = self.appsrc_main.get_static_pad('src')
+        if src_pad:
+            src_pad.add_probe(Gst.PadProbeType.BUFFER, self._on_pad_data, 'appsrc_main_out')
+        
+        # Probe encoder output
+        enc_main = self.pipe.get_by_name('enc_main')
+        if enc_main:
+            enc_src = enc_main.get_static_pad('src')
+            if enc_src:
+                enc_src.add_probe(Gst.PadProbeType.BUFFER, self._on_pad_data, 'encoder_main_out')
+        
+        # Probe payloader output
+        pay_main = self.pipe.get_by_name('pay_main')
+        if pay_main:
+            pay_src = pay_main.get_static_pad('src')
+            if pay_src:
+                pay_src.add_probe(Gst.PadProbeType.BUFFER, self._on_pad_data, 'payloader_main_out')
         
         # Start pipeline
         self.pipe.set_state(Gst.State.PLAYING)
@@ -252,18 +303,49 @@ class SimpleWebRTCStreamer(Node):
         # Set local description (don't wait)
         self.webrtc.emit('set-local-description', offer, Gst.Promise.new())
         
-        # Send offer (raw SDP)
+        # Send offer (raw SDP) with fixes for mobile compatibility
         msg = String()
-        msg.data = offer.sdp.as_text()
+        sdp_text = offer.sdp.as_text()
+        
+        # Add packetization-mode=1 which mobile devices require
+        sdp_text = sdp_text.replace(
+            'profile-level-id=42e01f',
+            'profile-level-id=42e01f;packetization-mode=1;level-asymmetry-allowed=1'
+        )
+        
+        # Add BUNDLE if not present (needed for single ICE connection)
+        if 'a=group:BUNDLE' not in sdp_text:
+            # Insert BUNDLE after the session-level attributes (after first m= line reference)
+            lines = sdp_text.split('\r\n')
+            for i, line in enumerate(lines):
+                if line.startswith('t='):
+                    lines.insert(i + 1, 'a=group:BUNDLE video0 video1')
+                    break
+            sdp_text = '\r\n'.join(lines)
+        
+        msg.data = sdp_text
         self.offer_pub.publish(msg)
+        
+        # Log SDP for debugging (look for profile-level-id)
+        for line in msg.data.split('\n'):
+            if 'fmtp' in line or 'rtpmap' in line:
+                self.get_logger().info(f'SDP: {line.strip()}')
         
         self.get_logger().info(f'Sent offer ({len(msg.data)} bytes)')
     
     def on_answer(self, msg):
         self.get_logger().info(f'Answer received ({len(msg.data)} bytes)')
         
+        # Log answer SDP for debugging
+        for line in msg.data.split('\r\n')[:20]:  # First 20 lines
+            self.get_logger().info(f'Answer SDP: {line}')
+        
         # Parse and set remote description
         ret, sdp = GstSdp.SDPMessage.new_from_text(msg.data)
+        if ret != GstSdp.SDPResult.OK:
+            self.get_logger().error(f'Failed to parse SDP answer: {ret}')
+            return
+            
         answer = GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.ANSWER, sdp)
         
         self.webrtc.emit('set-remote-description', answer, Gst.Promise.new())
@@ -283,7 +365,45 @@ class SimpleWebRTCStreamer(Node):
     
     def on_conn_state(self):
         state = self.webrtc.get_property('connection-state')
-        self.get_logger().info(f'Connection state: {state.value_nick}')
+        self.get_logger().info(f'WebRTC connection state: {state.value_nick}')
+        
+        if state.value_nick == 'connected':
+            # Debug pads and add probes
+            for pad in self.webrtc.pads:
+                self.get_logger().info(f'WebRTC pad: {pad.get_name()}, direction={pad.get_direction()}')
+                # Add probe to see data flowing
+                pad.add_probe(Gst.PadProbeType.BUFFER, self._on_pad_data, pad.get_name())
+    
+    def _on_pad_data(self, pad, info, pad_name):
+        """Called when data flows through a pad"""
+        buf = info.get_buffer()
+        if not hasattr(self, '_probe_count'):
+            self._probe_count = {}
+        if pad_name not in self._probe_count:
+            self._probe_count[pad_name] = 0
+        self._probe_count[pad_name] += 1
+        # Log every 30 buffers
+        if self._probe_count[pad_name] % 30 == 1:
+            self.get_logger().info(f'Pad {pad_name}: buffer #{self._probe_count[pad_name]}, size={buf.get_size()}')
+        return Gst.PadProbeReturn.OK
+    
+    def on_ice_state(self):
+        state = self.webrtc.get_property('ice-connection-state')
+        self.get_logger().info(f'ICE connection state: {state.value_nick}')
+    
+    def on_bus_error(self, bus, msg):
+        err, debug = msg.parse_error()
+        self.get_logger().error(f'GStreamer error: {err.message}')
+        self.get_logger().error(f'Debug info: {debug}')
+    
+    def on_bus_warning(self, bus, msg):
+        warn, debug = msg.parse_warning()
+        self.get_logger().warn(f'GStreamer warning: {warn.message}')
+    
+    def on_bus_state_changed(self, bus, msg):
+        if msg.src == self.webrtc:
+            old, new, pending = msg.parse_state_changed()
+            self.get_logger().info(f'WebRTC element state: {old.value_nick} -> {new.value_nick}')
 
 
 def main(args=None):
@@ -295,7 +415,7 @@ def main(args=None):
         pass
     finally:
         # Clean up shared pipeline on shutdown
-        node.cleanup_pipeline()
+        node.cleanup_pipeline(reason='shutdown')
         node.destroy_node()
         rclpy.shutdown()
 
