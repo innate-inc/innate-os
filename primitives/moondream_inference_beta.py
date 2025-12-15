@@ -15,10 +15,14 @@ import time
 import base64
 import math
 import json
+import rclpy
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any
 
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import CompressedImage
+from nav_msgs.msg import Odometry
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from brain_client.primitive_types import Primitive, PrimitiveResult, RobotStateType
 
 
@@ -349,23 +353,25 @@ class MoondreamInferenceBeta(Primitive):
         self._ws_loop = None
         self._waypoint_executor: Optional[DirectWaypointExecutor] = None
         self._cmd_vel_pub = None
+        self._camera_sub = None
+        self._odom_sub = None
         self._seq = 0
+        self._last_waypoint_cmd_time: Optional[float] = None
+        self._last_sensor_send_time: Optional[float] = None
+        self._last_camera_time: Optional[float] = None
+        self._image_update_count = 0
 
     @property
     def name(self):
         return "moondream_inference_beta"
 
     def get_required_robot_states(self) -> list[RobotStateType]:
-        """Declare that this primitive needs camera image and odometry."""
-        return [RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64, RobotStateType.LAST_ODOM]
+        """No state injection needed - we subscribe directly to topics."""
+        return []
 
     def update_robot_state(self, **kwargs):
-        """Store the latest robot state."""
-        if RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value in kwargs:
-            self.last_image_b64 = kwargs[RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value]
-
-        if RobotStateType.LAST_ODOM.value in kwargs:
-            self.last_odom = kwargs[RobotStateType.LAST_ODOM.value]
+        """Not used - we subscribe directly to camera and odom topics."""
+        pass
 
     def guidelines(self):
         return (
@@ -388,7 +394,7 @@ class MoondreamInferenceBeta(Primitive):
         self,
         task_label: str,
         server_address: str = DEFAULT_GKE_SERVER,
-        stream_hz: float = 10.0,
+        stream_hz: float = 5.0,  # 200ms between frames - ensures fresh frame always ready
         timeout_seconds: float = 300.0
     ):
         """
@@ -422,8 +428,26 @@ class MoondreamInferenceBeta(Primitive):
         self._cmd_vel_pub = self.node.create_publisher(Twist, '/cmd_vel', 10)
         self._waypoint_executor = DirectWaypointExecutor(self.logger, self._cmd_vel_pub)
 
-        # Note: Control loop runs inside the async WebSocket loop, not as a timer
-        # (ROS2 timers don't fire while blocking on asyncio)
+        # Subscribe to camera and odom topics directly for live updates
+        # (update_robot_state is only called once at start, not during execution)
+        image_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self._camera_sub = self.node.create_subscription(
+            CompressedImage,
+            '/mars/main_camera/image/compressed',
+            self._camera_callback,
+            image_qos
+        )
+        self._odom_sub = self.node.create_subscription(
+            Odometry,
+            '/odom',
+            self._odom_callback,
+            10
+        )
+        self.logger.info("[MoondreamInferenceBeta] Subscribed to camera and odom topics")
 
         try:
             # Import websockets here to avoid import errors if not installed
@@ -445,6 +469,38 @@ class MoondreamInferenceBeta(Primitive):
         finally:
             # Cleanup
             self._cleanup()
+
+    def _camera_callback(self, msg: CompressedImage):
+        """Callback for camera subscription - updates image in real-time."""
+        self.last_image_b64 = base64.b64encode(msg.data).decode('utf-8')
+        self._last_camera_time = time.time()
+        self._image_update_count += 1
+
+    def _odom_callback(self, msg: Odometry):
+        """Callback for odom subscription - updates odometry in real-time."""
+        self.last_odom = {
+            "header": {
+                "stamp": {
+                    "sec": msg.header.stamp.sec,
+                    "nanosec": msg.header.stamp.nanosec
+                }
+            },
+            "pose": {
+                "pose": {
+                    "position": {
+                        "x": msg.pose.pose.position.x,
+                        "y": msg.pose.pose.position.y,
+                        "z": msg.pose.pose.position.z
+                    },
+                    "orientation": {
+                        "x": msg.pose.pose.orientation.x,
+                        "y": msg.pose.pose.orientation.y,
+                        "z": msg.pose.pose.orientation.z,
+                        "w": msg.pose.pose.orientation.w
+                    }
+                }
+            }
+        }
 
     def _run_websocket_session(
         self,
@@ -506,14 +562,17 @@ class MoondreamInferenceBeta(Primitive):
                 ).to_json())
 
                 # Send task_start to begin inference
+                # inference_interval_ms = pause AFTER inference completes
+                # With 430ms inference + 50ms pause = ~480ms per command
                 task_start_msg = json.dumps({
                     "type": MSG_TYPE_TASK_START,
                     "task_label": task_label,
-                    "num_waypoints": 6,
-                    "inference_interval_ms": 1000
+                    "num_waypoints": 4,  # Fewer waypoints = faster inference
+                    "inference_interval_ms": 50,  # 50ms pause after each inference
+                    "seed_probability": 0.0  # No seeding by default
                 })
                 await ws.send(task_start_msg)
-                self.logger.info(f"[MoondreamInferenceBeta] Sent task_start: {task_label}")
+                self.logger.info(f"[MoondreamInferenceBeta] Sent task_start: {task_label} (seed_prob=0.0, interval=700ms)")
                 self._task_active = True
 
                 self._send_feedback(f"Connected to inference server at {server_address}, task started")
@@ -550,6 +609,11 @@ class MoondreamInferenceBeta(Primitive):
                         if self._waypoint_executor:
                             self._waypoint_executor.control_step()
                         last_control_time = now
+
+                    # Process pending ROS2 callbacks (camera, odom subscriptions)
+                    # Only spin a few times to get latest data without blocking
+                    for _ in range(3):
+                        rclpy.spin_once(self.node, timeout_sec=0)
 
                     # Receive messages with short timeout
                     try:
@@ -616,13 +680,36 @@ class MoondreamInferenceBeta(Primitive):
         )
 
         try:
-            await self._ws.send(sensor_data.to_json())
+            t0 = time.time()
+            
+            # Calculate image age (time since camera callback)
+            image_age_ms = 0
+            if self._last_camera_time:
+                image_age_ms = (t0 - self._last_camera_time) * 1000
+            
+            # Measure JSON encoding time
+            json_data = sensor_data.to_json()
+            t1 = time.time()
+            encode_ms = (t1 - t0) * 1000
+            json_size_kb = len(json_data) / 1024
+            
+            # Measure WebSocket send time
+            await self._ws.send(json_data)
+            t2 = time.time()
+            send_ms = (t2 - t1) * 1000
+            total_ms = (t2 - t0) * 1000
+            
+            self._last_sensor_send_time = t2
 
+            # Log first frame and then every 20th
             if self._seq == 1:
-                self.logger.info("[MoondreamInferenceBeta] Streaming started!")
+                self.logger.info(f"[MoondreamInferenceBeta] Streaming started! Frame size: {json_size_kb:.1f}KB")
                 self._send_feedback("Streaming sensor data to server")
-            elif self._seq % 100 == 0:
-                self.logger.info(f"[MoondreamInferenceBeta] Streamed {self._seq} frames")
+            elif self._seq % 20 == 0:
+                self.logger.info(
+                    f"[MoondreamInferenceBeta] Frame #{self._seq}: "
+                    f"age={image_age_ms:.0f}ms, enc={encode_ms:.0f}ms, ws={send_ms:.0f}ms"
+                )
         except Exception as e:
             self.logger.warn(f"[MoondreamInferenceBeta] Failed to send: {e}")
 
@@ -635,9 +722,20 @@ class MoondreamInferenceBeta(Primitive):
             parsed = parse_message(message)
 
             if isinstance(parsed, WaypointCommand):
+                now = time.time()
+                latency_info = ""
+                if self._last_waypoint_cmd_time is not None:
+                    cmd_interval = (now - self._last_waypoint_cmd_time) * 1000  # ms
+                    latency_info = f", interval={cmd_interval:.0f}ms"
+                if self._last_sensor_send_time is not None:
+                    roundtrip = (now - self._last_sensor_send_time) * 1000  # ms
+                    latency_info += f", roundtrip≈{roundtrip:.0f}ms"
+                self._last_waypoint_cmd_time = now
+                
+                # Format waypoints for logging
+                wp_str = ", ".join([f"({w.x:.2f},{w.y:.2f})" for w in parsed.waypoints[:4]])
                 self.logger.info(
-                    f"[MoondreamInferenceBeta] Waypoint command #{parsed.seq} "
-                    f"with {len(parsed.waypoints)} waypoints"
+                    f"[MoondreamInferenceBeta] Cmd #{parsed.seq}{latency_info}: [{wp_str}]"
                 )
 
                 if not self._killed and self._task_active and self._waypoint_executor:
@@ -693,6 +791,14 @@ class MoondreamInferenceBeta(Primitive):
         if self._cmd_vel_pub and self.node:
             self.node.destroy_publisher(self._cmd_vel_pub)
             self._cmd_vel_pub = None
+
+        if self._camera_sub and self.node:
+            self.node.destroy_subscription(self._camera_sub)
+            self._camera_sub = None
+
+        if self._odom_sub and self.node:
+            self.node.destroy_subscription(self._odom_sub)
+            self._odom_sub = None
 
         self._ws = None
         self._ws_loop = None
