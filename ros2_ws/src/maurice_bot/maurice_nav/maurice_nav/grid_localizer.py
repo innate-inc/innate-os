@@ -50,9 +50,8 @@ class GridLocalizer(Node):
         
         # Parameters
         self.declare_parameter('map_yaml_path', '')
-        self.declare_parameter('sample_distance', 0.5)  # meters between samples
-        self.declare_parameter('angle_samples', 24)  # angles to try (360/24 = 15° increments)
-        self.declare_parameter('num_beams', 60)  # downsample scan to this many beams
+        self.declare_parameter('sample_distance', 0.15)  # meters between samples
+        self.declare_parameter('angle_samples', 36)  # angles to try (360/24 = 15° increments)
         self.declare_parameter('batch_size', 8000)  # poses per GPU batch
         self.declare_parameter('max_range', 12.0)  # max lidar range
         self.declare_parameter('scan_topic', '/scan_fast')
@@ -68,7 +67,6 @@ class GridLocalizer(Node):
         
         self.sample_dist = self.get_parameter('sample_distance').value
         self.angle_samples = self.get_parameter('angle_samples').value
-        self.num_beams = self.get_parameter('num_beams').value
         self.max_range = self.get_parameter('max_range').value
         self.batch_size = self.get_parameter('batch_size').value
         scan_topic = self.get_parameter('scan_topic').value
@@ -87,6 +85,12 @@ class GridLocalizer(Node):
         self._auto_done = not auto_localize  # Skip if disabled
         self._best_pose = None
         self._best_score = float('inf')
+        self._search_initialized = False
+        self._current_batch_idx = 0
+        self._total_candidates = 0
+        self._candidates_x = None
+        self._candidates_y = None
+        self._candidates_theta = None
         
         # Subscribers
         scan_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -117,9 +121,9 @@ class GridLocalizer(Node):
             10
         )
         
-        # Auto-localize timer (2 second intervals)
+        # Auto-localize timer (runs frequently to process batches)
         if auto_localize:
-            self._auto_timer = self.create_timer(2.0, self._auto_localize_tick)
+            self._auto_timer = self.create_timer(0.1, self._auto_localize_tick)
         
         self.get_logger().info(f'Grid localizer ready. Map: {map_yaml}')
         if auto_localize:
@@ -179,67 +183,144 @@ class GridLocalizer(Node):
                 self._pending_pose = None
 
     def _auto_localize_tick(self):
-        """Auto-localize on startup until success or timeout."""
+        """Auto-localize on startup, searching all positions until complete or timeout."""
         if self._auto_done:
             return
         
         now = self.get_clock().now()
         
-        # Need scan data before we start the timeout clock
+        # Need scan data before we start
         if self.latest_scan is None:
             self.get_logger().info('Waiting for scan data...')
             return
         
-        # Initialize start time on first tick WITH scan data
-        if self._auto_start_time is None:
+        # Initialize search on first tick WITH scan data
+        if not self._search_initialized:
             self._auto_start_time = now
-            self.get_logger().info('Scan data received, starting auto-localization...')
+            self._initialize_search()
             return
         
         elapsed = (now - self._auto_start_time).nanoseconds / 1e9
         
-        # Check timeout
-        if elapsed > self.auto_timeout:
+        # Check if search is complete (all positions searched) or timeout
+        search_complete = self._current_batch_idx >= self._total_candidates
+        timed_out = elapsed > self.auto_timeout
+        
+        if search_complete or timed_out:
             self._auto_done = True
+            
             if self._best_pose is not None:
-                # Use best attempt anyway - AMCL can refine it
+                # Publish best pose found
                 self._publish_pose(self._best_pose)
-                self._publish_status('localized_low_confidence')
-                self.get_logger().warn(
-                    f'Timeout after {self.auto_timeout}s - using best guess: '
-                    f'({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}) score={self._best_score:.3f}'
-                )
+                
+                # Use threshold to determine confidence level
+                if self._best_score < self.score_threshold:
+                    self._publish_status('localized')
+                    self.get_logger().info(
+                        f'Auto-localized with high confidence at '
+                        f'({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}, {np.degrees(self._best_pose[2]):.1f}°) '
+                        f'score={self._best_score:.3f} in {elapsed:.1f}s '
+                        f'(searched {self._current_batch_idx}/{self._total_candidates} candidates)'
+                    )
+                else:
+                    self._publish_status('localized_low_confidence')
+                    self.get_logger().warn(
+                        f'Auto-localized with low confidence at '
+                        f'({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}, {np.degrees(self._best_pose[2]):.1f}°) '
+                        f'score={self._best_score:.3f} (threshold: {self.score_threshold}) in {elapsed:.1f}s '
+                        f'(searched {self._current_batch_idx}/{self._total_candidates} candidates)'
+                    )
             else:
                 self._publish_status('timeout')
                 self.get_logger().error(f'Auto-localization timed out with no valid pose')
             return
         
-        # Try to localize
+        # Process next batch of candidates
         try:
-            pose, score = self._find_pose(self.latest_scan)
-            
-            # Track best pose seen so far
-            if score < self._best_score:
-                self._best_score = score
-                self._best_pose = pose
-            
-            if score < self.score_threshold:
-                # Success!
-                self._publish_pose(pose)
-                self._publish_status('localized')
-                self._auto_done = True
-                self.get_logger().info(
-                    f'Auto-localized at ({pose[0]:.2f}, {pose[1]:.2f}, {np.degrees(pose[2]):.1f}°) '
-                    f'score={score:.3f} in {elapsed:.1f}s'
-                )
-            else:
-                self.get_logger().info(
-                    f'Score {score:.3f} > {self.score_threshold}, retrying... '
-                    f'(best so far: {self._best_score:.3f}, {elapsed:.0f}s)'
-                )
-                
+            self._process_next_batch()
         except Exception as e:
-            self.get_logger().warn(f'Localization attempt failed: {e}')
+            self.get_logger().warn(f'Batch processing failed: {e}')
+    
+    def _initialize_search(self):
+        """Initialize the search by preparing all candidate poses."""
+        scan = self.latest_scan
+        
+        # Extract and downsample scan
+        ranges = np.array(scan.ranges, dtype=np.float32)
+        angles = np.linspace(scan.angle_min, scan.angle_max, len(ranges))
+        
+        # Filter valid ranges
+        valid = (ranges > scan.range_min) & (ranges < min(scan.range_max, self.max_range))
+        ranges = ranges[valid]
+        angles = angles[valid]
+        
+        if len(ranges) < 10:
+            self.get_logger().warn('Not enough valid scan points, waiting for better scan...')
+            return
+        
+        # Store processed scan for batch scoring
+        self._scan_ranges = ranges
+        self._scan_angles = angles
+        
+        # Generate candidate poses: (x, y, theta)
+        angle_offsets = np.linspace(0, 2 * np.pi, self.angle_samples, endpoint=False)
+        
+        # Convert pixel coords to world coords
+        candidates_x = self.free_pixels[:, 0] * self.resolution + self.origin[0]
+        candidates_y = (self.map_h - self.free_pixels[:, 1]) * self.resolution + self.origin[1]
+        
+        n_pos = len(candidates_x)
+        n_ang = len(angle_offsets)
+        self._total_candidates = n_pos * n_ang
+        
+        # Create full candidate arrays
+        self._candidates_x = np.repeat(candidates_x, n_ang)
+        self._candidates_y = np.repeat(candidates_y, n_ang)
+        self._candidates_theta = np.tile(angle_offsets, n_pos)
+        
+        self._current_batch_idx = 0
+        self._search_initialized = True
+        
+        self.get_logger().info(
+            f'Search initialized: {n_pos} positions x {n_ang} angles = {self._total_candidates} candidates'
+        )
+    
+    def _process_next_batch(self):
+        """Process the next batch of candidate poses."""
+        start = self._current_batch_idx
+        end = min(start + self.batch_size, self._total_candidates)
+        
+        batch_scores = self._score_batch_gpu(
+            self._candidates_x[start:end],
+            self._candidates_y[start:end],
+            self._candidates_theta[start:end],
+            self._scan_ranges,
+            self._scan_angles
+        )
+        
+        batch_best_idx = np.argmin(batch_scores)
+        batch_best_score = batch_scores[batch_best_idx]
+        
+        if batch_best_score < self._best_score:
+            global_idx = start + batch_best_idx
+            self._best_score = batch_best_score
+            self._best_pose = (
+                self._candidates_x[global_idx],
+                self._candidates_y[global_idx],
+                self._candidates_theta[global_idx]
+            )
+            self.get_logger().info(
+                f'New best pose: ({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}, '
+                f'{np.degrees(self._best_pose[2]):.1f}°) score={self._best_score:.3f} '
+                f'[batch {start//self.batch_size + 1}/{(self._total_candidates + self.batch_size - 1)//self.batch_size}]'
+            )
+        
+        self._current_batch_idx = end
+        
+        # Log progress periodically
+        progress = (end / self._total_candidates) * 100
+        if end % (self.batch_size * 10) == 0 or end >= self._total_candidates:
+            self.get_logger().info(f'Search progress: {progress:.1f}% ({end}/{self._total_candidates})')
 
     def _publish_status(self, status: str):
         """Publish status for app to consume."""
@@ -315,23 +396,11 @@ class GridLocalizer(Node):
 
     def _find_pose(self, scan: LaserScan) -> tuple:
         """Find best pose using GPU-accelerated scan matching."""
-        # Extract and downsample scan
         ranges = np.array(scan.ranges, dtype=np.float32)
         angles = np.linspace(scan.angle_min, scan.angle_max, len(ranges))
         
-        # Filter valid ranges
-        valid = (ranges > scan.range_min) & (ranges < min(scan.range_max, self.max_range))
-        ranges = ranges[valid]
-        angles = angles[valid]
-        
         if len(ranges) < 10:
             raise ValueError('Not enough valid scan points')
-        
-        # Downsample to num_beams
-        if len(ranges) > self.num_beams:
-            idx = np.linspace(0, len(ranges) - 1, self.num_beams, dtype=int)
-            ranges = ranges[idx]
-            angles = angles[idx]
         
         # Generate candidate poses: (x, y, theta)
         angle_offsets = np.linspace(0, 2 * np.pi, self.angle_samples, endpoint=False)
