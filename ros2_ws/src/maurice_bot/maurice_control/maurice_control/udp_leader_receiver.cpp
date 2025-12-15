@@ -82,7 +82,7 @@ public:
         log_rate_ = this->get_parameter("log_rate").as_double();
 
         // Publisher for arm commands (best effort QoS for low-latency teleoperation)
-        auto qos = rclcpp::QoS(10).best_effort();
+        auto qos = rclcpp::QoS(1).best_effort();
         commands_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
             "/mars/arm/commands", qos);
 
