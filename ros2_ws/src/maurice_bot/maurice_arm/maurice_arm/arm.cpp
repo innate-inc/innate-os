@@ -69,7 +69,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "Setting up ARM publishers/subscribers/services");
         arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/mars/arm/state", 10);
         // Use best_effort QoS to match UDP receiver publisher for low-latency teleoperation
-        auto cmd_qos = rclcpp::QoS(10).best_effort();
+        auto cmd_qos = rclcpp::QoS(1).best_effort();
         arm_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
             "/mars/arm/commands", cmd_qos,
             std::bind(&MauriceArmNode::armCommandCallback, this, std::placeholders::_1));
