@@ -389,13 +389,13 @@ class BrainClientNode(Node):
         )
 
         # Initialize TTS handler (after tts_status_pub is created)
-        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
+        # cartesia_api_key parameter is deprecated but kept for backward compatibility
         cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
-        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id, self.tts_status_pub)
+        self.tts_handler = TTSHandler(logger=self.get_logger(), voice_id=cartesia_voice_id, tts_status_pub=self.tts_status_pub)
         if self.tts_handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
+            self.get_logger().info(f"🗣️ Text-to-speech enabled via proxy (Voice ID: {cartesia_voice_id})")
         else:
-            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
+            self.get_logger().info("🔇 Text-to-speech disabled (check INNATE_PROXY_URL and INNATE_SERVICE_KEY)")
 
         self.exit_event = threading.Event()
         self.ready_for_image = False

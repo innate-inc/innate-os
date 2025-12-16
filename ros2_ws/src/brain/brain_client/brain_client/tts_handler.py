@@ -10,10 +10,19 @@ import tempfile
 import threading
 import time
 from typing import Optional, Dict, Any
+import sys
+from pathlib import Path
 
 import rclpy
-from cartesia import Cartesia
 import subprocess
+
+# Add client library to path
+innate_os_root = os.getenv('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+client_path = Path(innate_os_root) / 'client'
+if client_path.exists():
+    sys.path.insert(0, str(client_path))
+
+from client.adapters.cartesia_adapter import ProxyCartesiaClient
 
 
 class TTSHandler:
@@ -21,34 +30,31 @@ class TTSHandler:
     Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
     """
 
-    def __init__(self, api_key: str, logger, voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091", tts_status_pub=None):
+    def __init__(self, api_key: str = None, logger=None, voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091", tts_status_pub=None):
         """
         Initialize the TTS handler.
         
         Args:
-            api_key: Cartesia API key
+            api_key: Deprecated - kept for backward compatibility. Use INNATE_SERVICE_KEY env var instead.
             logger: ROS logger instance
             voice_id: Voice ID to use for speech synthesis
             tts_status_pub: Optional ROS publisher for /tts/is_playing status
         """
         self.logger = logger
-        self.api_key = api_key
         self.voice_id = voice_id
         self.client = None
         self.is_playing = False
         self.play_lock = threading.Lock()
         self.tts_status_pub = tts_status_pub
         
-        # Initialize client if API key is provided
-        if self.api_key and self.api_key.strip():
+        # Initialize proxy client (uses INNATE_PROXY_URL and INNATE_SERVICE_KEY from env)
             try:
-                self.client = Cartesia(api_key=self.api_key)
-                self.logger.info(f"✅ Cartesia TTS initialized with voice ID: {self.voice_id}")
+            self.client = ProxyCartesiaClient()
+            self.logger.info(f"✅ Cartesia TTS initialized via proxy with voice ID: {self.voice_id}")
             except Exception as e:
-                self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
+            self.logger.error(f"❌ Failed to initialize Cartesia proxy client: {e}")
+            self.logger.error("Make sure INNATE_PROXY_URL and INNATE_SERVICE_KEY are set in environment")
                 self.client = None
-        else:
-            self.logger.warn("⚠️ No Cartesia API key provided - TTS disabled")
 
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
@@ -103,8 +109,16 @@ class TTSHandler:
                 "id": self.voice_id,
             }
             
-            # Generate speech using Cartesia
-            response = self.client.tts.bytes(
+            # Generate speech using Cartesia via proxy (async)
+            # Create new event loop for this synchronous method
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            response = loop.run_until_complete(
+                self.client.tts.bytes(
                 model_id="sonic-3",  # Latest Cartesia model
                 transcript=text,
                 voice=voice,
@@ -113,6 +127,7 @@ class TTSHandler:
                     "encoding": "pcm_s16le",
                     "sample_rate": 44100
                 },
+                )
             )
             
             # If response is an iterator of chunks, stream directly into aplay.
@@ -233,18 +248,17 @@ class TTSHandler:
         """
         Get list of available voices from Cartesia.
         
+        Note: This method is not yet implemented in the proxy client.
+        Returns empty list for now.
+        
         Returns:
             List of available voice objects
         """
         if not self.is_available():
             return []
             
-        try:
-            voices = list(self.client.voices.list())
-            self.logger.debug(f"📋 Found {len(voices)} available voices")
-            return voices
-        except Exception as e:
-            self.logger.error(f"❌ Failed to fetch available voices: {e}")
+        # TODO: Implement voice listing in proxy client if needed
+        self.logger.warn("⚠️ Voice listing not yet implemented in proxy client")
             return []
 
     def set_voice(self, voice_id: str) -> bool:

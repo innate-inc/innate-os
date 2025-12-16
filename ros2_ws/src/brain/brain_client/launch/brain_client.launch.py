@@ -97,10 +97,12 @@ def generate_launch_description():
         default_value="/nav/current_mode",
         description="Topic for current navigation mode (mapfree, mapping, navigation)",
     )
+    # cartesia_api_key is deprecated - now uses INNATE_SERVICE_KEY from env
+    # Keeping for backward compatibility but not used
     cartesia_api_key_arg = DeclareLaunchArgument(
         "cartesia_api_key",
-        default_value=get_env("CARTESIA_API_KEY", ""),
-        description="Cartesia API key for text-to-speech functionality",
+        default_value="",  # No longer used - proxy client uses INNATE_SERVICE_KEY
+        description="Deprecated: Cartesia API key (now uses proxy with INNATE_SERVICE_KEY)",
     )
     cartesia_voice_id_arg = DeclareLaunchArgument(
         "cartesia_voice_id",
