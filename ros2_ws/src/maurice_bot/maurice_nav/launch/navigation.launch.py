@@ -85,7 +85,6 @@ def generate_launch_description():
         name='grid_localizer',
         output='screen',
         parameters=[{
-            'map_yaml_path': LaunchConfiguration('map'),
             'auto_localize': True,
             'auto_localize_timeout': 30.0,
             'max_score_threshold': 0.3,
@@ -130,7 +129,9 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'autostart': True,
-            'bond_timeout': 20.0,
+            'bond_timeout': 60.0,
+            'attempt_respawn_reconnection': True,
+            'bond_respawn_max_duration': 30.0,
             'node_names': [
                 'map_server', 
                 'amcl', 
@@ -189,7 +190,7 @@ def generate_launch_description():
         bt_navigator_node,
         behavior_server_node,
         TimerAction(
-            period=5.0,
+            period=1.0,
             actions=[lifecycle_manager_node]
         )
     ])
