@@ -87,7 +87,7 @@ def generate_launch_description():
         parameters=[{
             'map_yaml_path': LaunchConfiguration('map'),
             'auto_localize': True,
-            'auto_localize_timeout': 10.0,
+            'auto_localize_timeout': 30.0,
             'max_score_threshold': 0.3,
         }]
     )
