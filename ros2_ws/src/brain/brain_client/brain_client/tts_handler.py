@@ -16,11 +16,11 @@ from pathlib import Path
 import rclpy
 import subprocess
 
-# Add client library to path
+# Add client library to path (add parent dir so 'client' package is importable)
 innate_os_root = os.getenv('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
 client_path = Path(innate_os_root) / 'client'
-if client_path.exists():
-    sys.path.insert(0, str(client_path))
+if client_path.exists() and str(innate_os_root) not in sys.path:
+    sys.path.insert(0, str(innate_os_root))
 
 from client.adapters.cartesia_adapter import ProxyCartesiaClient
 
@@ -48,13 +48,13 @@ class TTSHandler:
         self.tts_status_pub = tts_status_pub
         
         # Initialize proxy client (uses INNATE_PROXY_URL and INNATE_SERVICE_KEY from env)
-            try:
+        try:
             self.client = ProxyCartesiaClient()
             self.logger.info(f"✅ Cartesia TTS initialized via proxy with voice ID: {self.voice_id}")
-            except Exception as e:
+        except Exception as e:
             self.logger.error(f"❌ Failed to initialize Cartesia proxy client: {e}")
             self.logger.error("Make sure INNATE_PROXY_URL and INNATE_SERVICE_KEY are set in environment")
-                self.client = None
+            self.client = None
 
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
@@ -259,7 +259,7 @@ class TTSHandler:
             
         # TODO: Implement voice listing in proxy client if needed
         self.logger.warn("⚠️ Voice listing not yet implemented in proxy client")
-            return []
+        return []
 
     def set_voice(self, voice_id: str) -> bool:
         """

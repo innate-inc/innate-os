@@ -23,11 +23,11 @@ from brain_client.input_types import InputDevice
 import subprocess
 import re
 
-# Add client library to path
+# Add client library to path (add parent dir so 'client' package is importable)
 innate_os_root = os.getenv('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
 client_path = Path(innate_os_root) / 'client'
-if client_path.exists():
-    sys.path.insert(0, str(client_path))
+if client_path.exists() and str(innate_os_root) not in sys.path:
+    sys.path.insert(0, str(innate_os_root))
 
 try:
     from client.adapters.openai_adapter import ProxyOpenAIClient
@@ -91,30 +91,32 @@ class MicroInput(InputDevice):
             detected_device = self._detect_audio_device()
             if not detected_device:
                 detected_device = 'default'
-            
+
             # Use ArecordStreamer for plughw devices (like voice_client does)
             self.mic = ArecordStreamer(self.logger if self.logger else type('obj', (object,), {'error': lambda self, x: print(x)})())
-            self.mic.start(device=detected_device if detected_device != 'default' else 'default', 
-                          sample_rate=DEFAULT_SAMPLE_RATE, 
-                          channels=DEFAULT_CHANNELS)
-            
+            self.mic.start(
+                device=detected_device if detected_device != 'default' else 'default',
+                sample_rate=DEFAULT_SAMPLE_RATE,
+                channels=DEFAULT_CHANNELS
+            )
+
             # Connect to OpenAI via proxy if available, otherwise direct
             proxy_url = self.config.get('INNATE_PROXY_URL', '')
             innate_service_key = self.config.get('INNATE_SERVICE_KEY', '')
-            
+
             if PROXY_AVAILABLE and proxy_url and innate_service_key:
                 # Use proxy client
                 if self.logger:
                     self.logger.info("🔗 Using OpenAI proxy client")
                 model = self.config.get('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview')
                 vad_threshold = 0.5
-                
+
                 # Use proxy client's sync interface
                 proxy_client = ProxyOpenAIClient(
                     proxy_url=proxy_url,
                     innate_service_key=innate_service_key
                 )
-                
+
                 # Wire up transcript callback
                 def on_message(ws, message: str):
                     try:
@@ -122,7 +124,7 @@ class MicroInput(InputDevice):
                     except Exception:
                         return
                     etype = event.get("type")
-                    
+
                     if etype == "input_audio_buffer.speech_started":
                         if self.logger:
                             self.logger.info("🎤 Speech detected")
@@ -134,10 +136,13 @@ class MicroInput(InputDevice):
                         if transcript and self.is_active():
                             self._on_transcript(transcript)
                     elif etype == "error":
-                        error_code = event.get("error", {}).get("code", "")
+                        error_obj = event.get("error", {})
+                        error_code = error_obj.get("code", "")
+                        error_msg = error_obj.get("message", "")
+                        error_param = error_obj.get("param", "")
                         if error_code != "input_audio_buffer_commit_empty" and self.logger:
-                            self.logger.error(f"❌ OpenAI error: {error_code}")
-                
+                            self.logger.error(f"❌ OpenAI error: {error_code} - {error_msg} (param: {error_param})")
+
                 def on_open():
                     transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
                     session_update = {
@@ -159,15 +164,15 @@ class MicroInput(InputDevice):
                         },
                     }
                     self.client.send_json(session_update)
-                
+
                 def on_error(error):
                     if self.logger:
                         self.logger.error(f"[ws error] {error}")
-                
+
                 def on_close():
                     if self.logger:
                         self.logger.warn("WebSocket closed")
-                
+
                 # Create sync connection using proxy client
                 self.client = proxy_client.realtime.connect_sync(
                     model=model,
@@ -180,62 +185,71 @@ class MicroInput(InputDevice):
                 self.client.start()
             else:
                 # Fallback to direct OpenAI connection
-            api_key = self.config.get('OPENAI_API_KEY', '')
-            if not api_key:
-                if self.logger:
+                api_key = self.config.get('OPENAI_API_KEY', '')
+                if not api_key:
+                    if self.logger:
                         self.logger.error("❌ Neither proxy config (INNATE_PROXY_URL/INNATE_SERVICE_KEY) nor OPENAI_API_KEY set")
-                return
-            
+                    return
+
                 if self.logger:
                     self.logger.info("🔗 Using direct OpenAI connection (proxy not configured)")
-                
-            model = self.config.get('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview')
-            base_url = self.config.get('OPENAI_REALTIME_URL', 'wss://api.openai.com/v1/realtime')
-            wss_url = f"{base_url}?model={model}"
-            
-            headers = [
-                f"Authorization: Bearer {api_key}",
-                "OpenAI-Beta: realtime=v1",
-            ]
-            
-            vad_threshold = 0.5
-            self.client = RealtimeClient(wss_url, headers, self.logger if self.logger else type('obj', (object,), {'info': lambda self, x: print(x), 'error': lambda self, x: print(x), 'warn': lambda self, x: print(x)})(), vad_threshold)
-            
-            # Wire up transcript callback
-            def on_message(ws, message: str):
-                try:
-                    event = json.loads(message)
-                except Exception:
-                    return
-                etype = event.get("type")
-                
-                if etype == "input_audio_buffer.speech_started":
-                    if self.logger:
-                        self.logger.info("🎤 Speech detected")
-                elif etype == "input_audio_buffer.speech_stopped":
-                    if self.logger:
-                        self.logger.info("🔇 Speech stopped")
-                elif etype == "conversation.item.input_audio_transcription.completed":
-                    transcript = event.get("transcript", "")
-                    if transcript and self.is_active():
-                        self._on_transcript(transcript)
-                elif etype == "error":
-                    error_code = event.get("error", {}).get("code", "")
-                    if error_code != "input_audio_buffer_commit_empty" and self.logger:
-                        self.logger.error(f"❌ OpenAI error: {error_code}")
-            
-            self.client._on_message = on_message
-            self.client.start()
-            
+
+                model = self.config.get('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview')
+                base_url = self.config.get('OPENAI_REALTIME_URL', 'wss://api.openai.com/v1/realtime')
+                wss_url = f"{base_url}?model={model}"
+
+                headers = [
+                    f"Authorization: Bearer {api_key}",
+                    "OpenAI-Beta: realtime=v1",
+                ]
+
+                vad_threshold = 0.5
+                self.client = RealtimeClient(
+                    wss_url,
+                    headers,
+                    self.logger if self.logger else type('obj', (object,), {
+                        'info': lambda self, x: print(x),
+                        'error': lambda self, x: print(x),
+                        'warn': lambda self, x: print(x)
+                    })(),
+                    vad_threshold
+                )
+
+                # Wire up transcript callback
+                def on_message(ws, message: str):
+                    try:
+                        event = json.loads(message)
+                    except Exception:
+                        return
+                    etype = event.get("type")
+
+                    if etype == "input_audio_buffer.speech_started":
+                        if self.logger:
+                            self.logger.info("🎤 Speech detected")
+                    elif etype == "input_audio_buffer.speech_stopped":
+                        if self.logger:
+                            self.logger.info("🔇 Speech stopped")
+                    elif etype == "conversation.item.input_audio_transcription.completed":
+                        transcript = event.get("transcript", "")
+                        if transcript and self.is_active():
+                            self._on_transcript(transcript)
+                    elif etype == "error":
+                        error_code = event.get("error", {}).get("code", "")
+                        if error_code != "input_audio_buffer_commit_empty" and self.logger:
+                            self.logger.error(f"❌ OpenAI error: {error_code}")
+
+                self.client._on_message = on_message
+                self.client.start()
+
             # Start audio thread (exact same as voice_client)
             self._stop_evt.clear()
-            
+
             def audio_loop():
                 if not self.client.wait_until_connected(timeout=10):
                     if self.logger:
                         self.logger.error("WebSocket didn't connect in time")
                     return
-                
+
                 while not self._stop_evt.is_set():
                     try:
                         chunk = self.mic.queue.get(timeout=0.1)
@@ -245,7 +259,7 @@ class MicroInput(InputDevice):
                         # Skip sending while ducking (robot is speaking)
                         if self._is_robot_talking:
                             continue
-                        
+
                         payload = {
                             "type": "input_audio_buffer.append",
                             "audio": base64.b64encode(chunk).decode("ascii"),
@@ -254,10 +268,10 @@ class MicroInput(InputDevice):
                     except Exception as e:
                         if self.logger:
                             self.logger.error(f"audio loop error: {e}")
-            
+
             self._audio_thread = threading.Thread(target=audio_loop, daemon=True)
             self._audio_thread.start()
-                
+
         except Exception as e:
             if self.logger:
                 self.logger.error(f"❌ Failed to open MicroInput: {e}")
@@ -267,14 +281,14 @@ class MicroInput(InputDevice):
         self._stop_evt.set()
         if self._audio_thread:
             self._audio_thread.join(timeout=1.0)
-        
+
         if self.mic:
             try:
                 self.mic.stop()
             except:
                 pass
             self.mic = None
-        
+
         if self.client:
             self.client.stop()
             self.client = None
@@ -340,6 +354,7 @@ class MicroInput(InputDevice):
 
 
 # ========== EXACT COPIES FROM voice_client_node.py ==========
+class SyncRealtimeConnection:
     """
     Wrapper that bridges async websockets (from proxy client) with sync websocket-client API.
     This allows the existing RealtimeClient interface to work with the proxy.
