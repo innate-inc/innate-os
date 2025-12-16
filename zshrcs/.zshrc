@@ -1,3 +1,7 @@
+# Fix corrupted zsh history BEFORE zsh tries to load it
+# This prevents terminal startup failures due to history corruption
+[[ -x "$HOME/innate-os/scripts/fix-zsh-history.sh" ]] && "$HOME/innate-os/scripts/fix-zsh-history.sh"
+
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
 
