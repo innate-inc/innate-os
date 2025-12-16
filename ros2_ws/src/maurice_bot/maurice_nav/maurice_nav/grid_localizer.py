@@ -28,17 +28,15 @@ Publishes status to /localization/status ('localized' or 'timeout').
 Service remains available for manual triggers after auto-localize completes.
 """
 
-import os
-import yaml
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
-import cv2
 
 import cupy as cp
 
@@ -48,7 +46,6 @@ class GridLocalizer(Node):
         super().__init__('grid_localizer')
         
         # Parameters
-        self.declare_parameter('map_yaml_path', '')
         self.declare_parameter('sample_distance', 0.15)  # meters between samples
         self.declare_parameter('angle_samples', 36)  # angles to try (360/24 = 15° increments)
         self.declare_parameter('batch_size', 4000)  # poses per GPU batch (reduced for memory)
@@ -57,11 +54,6 @@ class GridLocalizer(Node):
         self.declare_parameter('auto_localize_timeout', 30.0)  # seconds
         self.declare_parameter('max_score_threshold', 0.3)  # lower = stricter match
         self.declare_parameter('auto_localize', True)  # enable auto-localize on startup
-        map_yaml = self.get_parameter('map_yaml_path').value
-        if not map_yaml:
-            # Default path
-            root = os.environ.get('INNATE_OS_ROOT', os.path.expanduser('~/innate-os'))
-            map_yaml = os.path.join(root, 'maps', 'home.yaml')
         
         self.sample_dist = self.get_parameter('sample_distance').value
         self.angle_samples = self.get_parameter('angle_samples').value
@@ -72,26 +64,29 @@ class GridLocalizer(Node):
         self.score_threshold = self.get_parameter('max_score_threshold').value
         auto_localize = self.get_parameter('auto_localize').value
         
-        # Load map
-        self._load_map(map_yaml)
+        # Map state
+        self.map_received = False
+        self.map_free = None
+        self.map_free_gpu = None
+        self.resolution = None
+        self.origin = None
         
         # Latest scan storage
         self.latest_scan = None
         
         # Auto-localize state
-        self._auto_start_time = None
         self._auto_done = not auto_localize  # Skip if disabled
-        self._best_pose = None
-        self._best_score = float('inf')
-        self._search_initialized = False
-        self._current_batch_idx = 0
-        self._total_candidates = 0
-        # Store only the position indices, not full expanded candidates
-        self._n_positions = 0
         
         # Subscribers
         scan_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.scan_sub = self.create_subscription(LaserScan, scan_topic, self._scan_cb, scan_qos)
+        
+        map_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self._map_cb, map_qos)
         
         # Publishers
         # Latched publisher - message persists for late subscribers (AMCL)
@@ -108,36 +103,70 @@ class GridLocalizer(Node):
         self.srv = self.create_service(Trigger, 'localize', self._localize_cb)
         
         # Auto-localize timer (runs frequently to process batches)
+        self._auto_timer = None
         if auto_localize:
-            self._auto_timer = self.create_timer(0.1, self._auto_localize_tick)
+            self._auto_timer = self.create_timer(0.5, self._auto_localize_tick)
         
-        self.get_logger().info(f'Grid localizer ready. Map: {map_yaml}')
+        # Timer to check for /map publisher availability
+        self._map_check_timer = self.create_timer(1.0, self._check_map_publisher)
+        
+        self.get_logger().info('Grid localizer ready. Waiting for map...')
         if auto_localize:
             self.get_logger().info(f'Auto-localize enabled: {self.auto_timeout}s timeout, score threshold {self.score_threshold}')
 
-    def _load_map(self, yaml_path: str):
-        """Load occupancy grid map from yaml + image."""
-        with open(yaml_path, 'r') as f:
-            map_meta = yaml.safe_load(f)
+    def _check_map_publisher(self):
+        """Periodically check if /map topic has an active publisher."""
+        if self.map_received:
+            # Already got the map, stop checking
+            self._map_check_timer.cancel()
+            return
         
-        self.resolution = map_meta['resolution']
-        self.origin = map_meta['origin']  # [x, y, theta]
-        occupied_thresh = map_meta.get('occupied_thresh', 0.65)
+        # Check how many publishers are on /map
+        pub_count = self.count_publishers('/map')
+        if pub_count == 0:
+            self.get_logger().warn('Waiting for /map publisher - map_server may not be activated yet', throttle_duration_sec=5.0)
+        else:
+            # Publisher exists but no data - map_server is likely in configured (not active) state
+            self.get_logger().warn(
+                f'/map has {pub_count} publisher(s) but no data received. '
+                f'map_server may be stuck in "configured" state (not "active"). '
+                f'Check: ros2 lifecycle get /map_server',
+                throttle_duration_sec=5.0
+            )
+
+    def _map_cb(self, msg: OccupancyGrid):
+        """Handle incoming map updates."""
+        # Note: cupy imported at module level
         
-        # Load image
-        map_dir = os.path.dirname(yaml_path)
-        img_path = os.path.join(map_dir, map_meta['image'])
-        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            raise ValueError(f'Failed to load map image: {img_path}')
+        if self.map_received:
+            return  # Only process the first map for now
         
-        # Convert to binary: 1 = free, 0 = occupied/unknown
-        # In standard maps: white (255) = free, black (0) = occupied
-        if map_meta.get('negate', 0):
-            img = 255 - img
+        self.get_logger().info(f'Received map: {msg.info.width}x{msg.info.height}, res={msg.info.resolution}')
+        self._publish_status('processing_map')
         
-        threshold = int((1.0 - occupied_thresh) * 255)
-        self.map_free = (img > threshold).astype(np.float32)
+        self.resolution = msg.info.resolution
+        self.origin = [
+            msg.info.origin.position.x,
+            msg.info.origin.position.y,
+            0.0
+        ]
+        
+        # Convert data to numpy array
+        # OccupancyGrid data is row-major, 0=bottom-left
+        # -1: unknown, 0: free, 100: occupied
+        data = np.array(msg.data, dtype=np.int8).reshape((msg.info.height, msg.info.width))
+        
+        # grid_localizer expects self.map_free where 1.0=free, 0.0=occupied
+        # and row 0 = top of image (due to coordinate conversion logic)
+        
+        # 1. Create binary free map (0 is free in OccupancyGrid)
+        # Treat unknown (-1) as occupied for safety
+        map_free_binary = (data == 0).astype(np.float32)
+        
+        # 2. Flip vertically to match "image coordinates" expected by _generate_candidates_for_batch
+        # (which uses map_h - pix_y)
+        self.map_free = np.flipud(map_free_binary)
+        
         self.map_h, self.map_w = self.map_free.shape
         
         # Precompute free space coordinates for candidate generation
@@ -147,74 +176,68 @@ class GridLocalizer(Node):
         mask = ((free_x % step) == 0) & ((free_y % step) == 0)
         self.free_pixels = np.stack([free_x[mask], free_y[mask]], axis=1)
         
-        self.get_logger().info(f'Map loaded: {self.map_w}x{self.map_h}, {len(self.free_pixels)} candidate positions')
+        self.get_logger().info(f'Map processed: {len(self.free_pixels)} candidate positions')
         
         # Move map to GPU
         self.map_free_gpu = cp.asarray(self.map_free)
+        
+        # Record time map was received to allow for a startup delay
+        self.map_received_time = self.get_clock().now()
+        self.map_received = True
 
     def _scan_cb(self, msg: LaserScan):
         """Store latest scan."""
         self.latest_scan = msg
 
     def _auto_localize_tick(self):
-        """Auto-localize on startup, searching all positions until complete or timeout."""
+        """Auto-localize on startup.
+        
+        Runs the full search in one blocking call for maximum speed.
+        The search itself is GPU-bound and completes quickly (~1-2s).
+        """
         if self._auto_done:
             return
-        
-        now = self.get_clock().now()
-        
-        # Need scan data before we start
-        if self.latest_scan is None:
-            self.get_logger().info('Waiting for scan data...')
-            return
-        
-        # Initialize search on first tick WITH scan data
-        if not self._search_initialized:
-            self._auto_start_time = now
-            self._initialize_search()
-            return
-        
-        elapsed = (now - self._auto_start_time).nanoseconds / 1e9
-        
-        # Check if search is complete (all positions searched) or timeout
-        search_complete = self._current_batch_idx >= self._total_candidates
-        timed_out = elapsed > self.auto_timeout
-        
-        if search_complete or timed_out:
-            self._auto_done = True
             
-            if self._best_pose is not None:
-                # Publish best pose found
-                self._publish_pose(self._best_pose[0], self._best_pose[1], self._best_pose[2])
-                
-                # Use threshold to determine confidence level
-                if self._best_score < self.score_threshold:
-                    self._publish_status('localized')
-                    self.get_logger().info(
-                        f'Auto-localized with high confidence at '
-                        f'({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}, {np.degrees(self._best_pose[2]):.1f}°) '
-                        f'score={self._best_score:.3f} in {elapsed:.1f}s '
-                        f'(searched {self._current_batch_idx}/{self._total_candidates} candidates)'
-                    )
-                else:
-                    self._publish_status('localized_low_confidence')
-                    self.get_logger().warn(
-                        f'Auto-localized with low confidence at '
-                        f'({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}, {np.degrees(self._best_pose[2]):.1f}°) '
-                        f'score={self._best_score:.3f} (threshold: {self.score_threshold}) in {elapsed:.1f}s '
-                        f'(searched {self._current_batch_idx}/{self._total_candidates} candidates)'
-                    )
-            else:
-                self._publish_status('timeout')
-                self.get_logger().error(f'Auto-localization timed out with no valid pose')
+        # Need scan data and map before we start
+        if not self.map_received:
             return
+
+        if self.latest_scan is None:
+            self.get_logger().info('Waiting for scan data...', throttle_duration_sec=2.0)
+            return
+
+        # Run full search (blocking but fast)
+        self._auto_done = True
+        if self._auto_timer:
+            self._auto_timer.cancel()
         
-        # Process next batch of candidates
+        self.get_logger().info('Starting auto-localization search...')
+        start_time = self.get_clock().now()
+        
         try:
-            self._process_next_batch()
+            pose, score = self._find_pose(self.latest_scan)
+            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            
+            self._publish_pose(pose[0], pose[1], pose[2])
+            
+            if score < self.score_threshold:
+                self._publish_status('localized')
+                self.get_logger().info(
+                    f'Auto-localized with high confidence at '
+                    f'({pose[0]:.2f}, {pose[1]:.2f}, {np.degrees(pose[2]):.1f}°) '
+                    f'score={score:.3f} in {elapsed:.2f}s'
+                )
+            else:
+                self._publish_status('localized_low_confidence')
+                self.get_logger().warn(
+                    f'Auto-localized with LOW confidence at '
+                    f'({pose[0]:.2f}, {pose[1]:.2f}, {np.degrees(pose[2]):.1f}°) '
+                    f'score={score:.3f} (threshold: {self.score_threshold}) in {elapsed:.2f}s'
+                )
         except Exception as e:
-            self.get_logger().warn(f'Batch processing failed: {e}')
-    
+            self._publish_status('error')
+            self.get_logger().error(f'Auto-localization failed: {e}')
+
     def _process_scan(self, scan: LaserScan):
         """Extract and filter valid ranges from a laser scan.
         
@@ -293,73 +316,6 @@ class GridLocalizer(Node):
         
         return float(x), float(y), float(theta)
 
-    def _initialize_search(self):
-        """Initialize the search by preparing scan data (candidates generated on-the-fly)."""
-        ranges, angles = self._process_scan(self.latest_scan)
-        
-        if ranges is None:
-            self.get_logger().warn('Not enough valid scan points, waiting for better scan...')
-            return
-        
-        # Store processed scan for batch scoring
-        self._scan_ranges = ranges
-        self._scan_angles = angles
-        
-        # Calculate total candidates without generating them
-        self._n_positions = len(self.free_pixels)
-        self._total_candidates = self._n_positions * self.angle_samples
-        
-        self._current_batch_idx = 0
-        self._search_initialized = True
-        
-        self.get_logger().info(
-            f'Search initialized: {self._n_positions} positions x {self.angle_samples} angles = {self._total_candidates} candidates'
-        )
-        self.get_logger().info(f'Using {len(ranges)} scan rays')
-    
-    def _process_next_batch(self):
-        """Process the next batch of candidate poses (generated on-the-fly)."""
-        start = self._current_batch_idx
-        end = min(start + self.batch_size, self._total_candidates)
-        
-        # Generate candidates for this batch only (saves memory)
-        batch_x, batch_y, batch_theta = self._generate_candidates_for_batch(start, end)
-        
-        batch_scores = self._score_batch_gpu(
-            batch_x,
-            batch_y,
-            batch_theta,
-            self._scan_ranges,
-            self._scan_angles
-        )
-        
-        # Free batch arrays immediately
-        del batch_x, batch_y, batch_theta
-        
-        batch_best_idx = np.argmin(batch_scores)
-        batch_best_score = batch_scores[batch_best_idx]
-        
-        if batch_best_score < self._best_score:
-            global_idx = start + batch_best_idx
-            self._best_score = batch_best_score
-            # Reconstruct pose from index (instead of storing all candidates)
-            self._best_pose = self._idx_to_pose(global_idx)
-            self.get_logger().info(
-                f'New best pose: ({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}, '
-                f'{np.degrees(self._best_pose[2]):.1f}°) score={self._best_score:.3f} '
-                f'[batch {start//self.batch_size + 1}/{(self._total_candidates + self.batch_size - 1)//self.batch_size}]'
-            )
-        
-        # Free scores array
-        del batch_scores
-        
-        self._current_batch_idx = end
-        
-        # Log progress periodically
-        progress = (end / self._total_candidates) * 100
-        if end % (self.batch_size * 10) == 0 or end >= self._total_candidates:
-            self.get_logger().info(f'Search progress: {progress:.1f}% ({end}/{self._total_candidates})')
-
     def _publish_status(self, status: str):
         """Publish status for app to consume."""
         msg = String()
@@ -384,6 +340,11 @@ class GridLocalizer(Node):
 
     def _localize_cb(self, request, response):
         """Service callback to trigger localization."""
+        if not self.map_received:
+            response.success = False
+            response.message = 'No map received yet'
+            return response
+
         if self.latest_scan is None:
             response.success = False
             response.message = 'No scan received yet'
@@ -418,87 +379,105 @@ class GridLocalizer(Node):
         self.get_logger().info(f'Searching {n_positions} positions x {self.angle_samples} angles = {total} candidates')
         self.get_logger().info(f'Using {len(ranges)} scan rays')
         
-        # Process in batches to avoid OOM
-        best_score = float('inf')
-        best_idx = -1
-        
-        for start in range(0, total, self.batch_size):
-            end = min(start + self.batch_size, total)
-            
-            # Generate candidates for this batch only
-            batch_x, batch_y, batch_theta = self._generate_candidates_for_batch(start, end)
-            scores = self._score_batch_gpu(batch_x, batch_y, batch_theta, ranges, angles)
-            
-            # Free batch arrays
-            del batch_x, batch_y, batch_theta
-            
-            batch_best_idx = np.argmin(scores)
-            batch_best_score = scores[batch_best_idx]
-            
-            if batch_best_score < best_score:
-                best_score = batch_best_score
-                best_idx = start + batch_best_idx
-            
-            del scores
-        
-        best_pose = self._idx_to_pose(best_idx)
-        return best_pose, best_score
-
-    def _score_batch_gpu(self, pos_x, pos_y, pos_theta, ranges, angles):
-        """GPU-accelerated batch scoring with memory optimization."""
-        n_poses = len(pos_x)
-        n_beams = len(ranges)
-        
-        # Move to GPU with explicit dtype to avoid copies
-        pos_x_gpu = cp.asarray(pos_x, dtype=cp.float32)
-        pos_y_gpu = cp.asarray(pos_y, dtype=cp.float32)
-        pos_theta_gpu = cp.asarray(pos_theta, dtype=cp.float32)
+        # Pre-upload scan data to GPU once (not per-batch)
         ranges_gpu = cp.asarray(ranges, dtype=cp.float32)
         angles_gpu = cp.asarray(angles, dtype=cp.float32)
-        
-        # Pre-compute cos/sin of angles (shared across all poses)
         cos_angles = cp.cos(angles_gpu)
         sin_angles = cp.sin(angles_gpu)
         del angles_gpu
         
-        # Compute world angles and trig functions in-place
-        # world_angles[i,j] = pos_theta[i] + angles[j]
-        cos_world = cp.cos(pos_theta_gpu[:, None]) * cos_angles[None, :] - cp.sin(pos_theta_gpu[:, None]) * sin_angles[None, :]
-        sin_world = cp.sin(pos_theta_gpu[:, None]) * cos_angles[None, :] + cp.cos(pos_theta_gpu[:, None]) * sin_angles[None, :]
-        del pos_theta_gpu, cos_angles, sin_angles
+        # Process in batches to avoid OOM
+        best_score = float('inf')
+        best_idx = -1
+        n_batches = (total + self.batch_size - 1) // self.batch_size
         
-        # Compute end points and convert to pixels in-place
-        # pix_x = (pos_x + ranges * cos_world - origin_x) / resolution
-        pix_x = pos_x_gpu[:, None] + ranges_gpu[None, :] * cos_world
+        for batch_num, start in enumerate(range(0, total, self.batch_size)):
+            end = min(start + self.batch_size, total)
+            
+            # Generate candidates for this batch only (CPU side)
+            batch_x, batch_y, batch_theta = self._generate_candidates_for_batch(start, end)
+            
+            # Score on GPU (returns CuPy array)
+            scores_gpu = self._score_batch_gpu(batch_x, batch_y, batch_theta, ranges_gpu, cos_angles, sin_angles)
+            
+            # Find best in batch on GPU
+            batch_best_idx = int(cp.argmin(scores_gpu))
+            batch_best_score = float(scores_gpu[batch_best_idx])
+            
+            del scores_gpu
+            
+            if batch_best_score < best_score:
+                best_score = batch_best_score
+                best_idx = start + batch_best_idx
+                self.get_logger().debug(f'Batch {batch_num+1}/{n_batches}: new best score {best_score:.4f}')
+            
+            # Log progress every 10 batches
+            if (batch_num + 1) % 10 == 0 or (batch_num + 1) == n_batches:
+                self.get_logger().info(f'Progress: {batch_num+1}/{n_batches} batches ({100*(batch_num+1)/n_batches:.0f}%)')
+        
+        # Cleanup scan data from GPU
+        del ranges_gpu, cos_angles, sin_angles
+        
+        # Free GPU memory once at the end
+        cp.get_default_memory_pool().free_all_blocks()
+        
+        best_pose = self._idx_to_pose(best_idx)
+        return best_pose, best_score
+
+    def _score_batch_gpu(self, pos_x, pos_y, pos_theta, ranges_gpu, cos_angles, sin_angles):
+        """GPU-accelerated batch scoring with memory optimization.
+        
+        Args:
+            pos_x, pos_y, pos_theta: numpy arrays of candidate poses
+            ranges_gpu: CuPy array of scan ranges (pre-uploaded)
+            cos_angles, sin_angles: CuPy arrays of precomputed trig (pre-uploaded)
+        
+        Returns:
+            numpy array of scores (lower = better match)
+        """
+        # Move pose data to GPU
+        pos_x_gpu = cp.asarray(pos_x, dtype=cp.float32)
+        pos_y_gpu = cp.asarray(pos_y, dtype=cp.float32)
+        pos_theta_gpu = cp.asarray(pos_theta, dtype=cp.float32)
+        
+        # Precompute pose trig once (not twice as before)
+        cos_theta = cp.cos(pos_theta_gpu)
+        sin_theta = cp.sin(pos_theta_gpu)
+        del pos_theta_gpu
+        
+        # Compute world angles using angle addition formula
+        # cos(theta + angle) = cos(theta)*cos(angle) - sin(theta)*sin(angle)
+        # sin(theta + angle) = sin(theta)*cos(angle) + cos(theta)*sin(angle)
+        cos_world = cos_theta[:, None] * cos_angles[None, :] - sin_theta[:, None] * sin_angles[None, :]
+        sin_world = sin_theta[:, None] * cos_angles[None, :] + cos_theta[:, None] * sin_angles[None, :]
+        del cos_theta, sin_theta
+        
+        # Compute endpoint pixel coordinates
+        # pix_x = (pos_x + range * cos_world - origin_x) / resolution
+        inv_res = 1.0 / self.resolution
+        
+        pix_x = (pos_x_gpu[:, None] + ranges_gpu[None, :] * cos_world - self.origin[0]) * inv_res
         del cos_world
-        pix_x -= self.origin[0]
-        pix_x /= self.resolution
         cp.clip(pix_x, 0, self.map_w - 1, out=pix_x)
-        pix_x = pix_x.astype(cp.int32)
         
-        pix_y = pos_y_gpu[:, None] + ranges_gpu[None, :] * sin_world
-        del sin_world, pos_x_gpu, pos_y_gpu, ranges_gpu
-        pix_y -= self.origin[1]
-        pix_y /= self.resolution
-        pix_y = self.map_h - pix_y
+        pix_y = self.map_h - (pos_y_gpu[:, None] + ranges_gpu[None, :] * sin_world - self.origin[1]) * inv_res
+        del sin_world, pos_x_gpu, pos_y_gpu
         cp.clip(pix_y, 0, self.map_h - 1, out=pix_y)
-        pix_y = pix_y.astype(cp.int32)
         
-        # Score: lower = better (endpoints hitting obstacles)
-        hit_free = self.map_free_gpu[pix_y, pix_x]
+        # Convert to int for indexing
+        pix_x_int = pix_x.astype(cp.int32)
+        pix_y_int = pix_y.astype(cp.int32)
         del pix_x, pix_y
         
+        # Score: lower = better (endpoints hitting obstacles = 0 in map_free)
+        hit_free = self.map_free_gpu[pix_y_int, pix_x_int]
+        del pix_x_int, pix_y_int
+        
+        # Mean across beams, keep on GPU
         scores = cp.mean(hit_free, axis=1)
         del hit_free
         
-        result = cp.asnumpy(scores)
-        del scores
-        
-        # Aggressively free GPU memory
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.get_default_pinned_memory_pool().free_all_blocks()
-        
-        return result
+        return scores  # Return CuPy array, caller handles transfer
 
 def main(args=None):
     rclpy.init(args=args)
