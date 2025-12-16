@@ -38,7 +38,6 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
-from lifecycle_msgs.msg import TransitionEvent
 import cv2
 
 import cupy as cp
@@ -109,17 +108,6 @@ class GridLocalizer(Node):
         
         # Service (manual trigger, always available)
         self.srv = self.create_service(Trigger, 'localize', self._localize_cb)
-        self.test_srv = self.create_service(Trigger, 'test', self._test_cb)
-        
-        # AMCL lifecycle state tracking
-        self._amcl_active = False
-        self._pending_pose = None  # Store pose to publish when AMCL becomes active
-        self.create_subscription(
-            TransitionEvent,
-            '/amcl/transition_event',
-            self._amcl_transition_cb,
-            10
-        )
         
         # Auto-localize timer (runs frequently to process batches)
         if auto_localize:
@@ -170,18 +158,6 @@ class GridLocalizer(Node):
         """Store latest scan."""
         self.latest_scan = msg
 
-    def _amcl_transition_cb(self, msg: TransitionEvent):
-        """Handle AMCL lifecycle transitions."""
-        # State 3 = active
-        if msg.goal_state.id == 3:
-            self._amcl_active = True
-            self.get_logger().info('AMCL is now active')
-            # Publish any pending pose
-            if self._pending_pose is not None:
-                self.get_logger().info('Publishing pending initial pose to AMCL')
-                self._do_publish_pose(self._pending_pose)
-                self._pending_pose = None
-
     def _auto_localize_tick(self):
         """Auto-localize on startup, searching all positions until complete or timeout."""
         if self._auto_done:
@@ -211,7 +187,7 @@ class GridLocalizer(Node):
             
             if self._best_pose is not None:
                 # Publish best pose found
-                self._publish_pose(self._best_pose)
+                self._publish_pose(self._best_pose[0], self._best_pose[1], self._best_pose[2])
                 
                 # Use threshold to determine confidence level
                 if self._best_score < self.score_threshold:
@@ -241,11 +217,12 @@ class GridLocalizer(Node):
         except Exception as e:
             self.get_logger().warn(f'Batch processing failed: {e}')
     
-    def _initialize_search(self):
-        """Initialize the search by preparing all candidate poses."""
-        scan = self.latest_scan
+    def _process_scan(self, scan: LaserScan):
+        """Extract and filter valid ranges from a laser scan.
         
-        # Extract and downsample scan
+        Returns:
+            tuple: (ranges, angles) arrays of valid scan points, or (None, None) if insufficient data
+        """
         ranges = np.array(scan.ranges, dtype=np.float32)
         angles = np.linspace(scan.angle_min, scan.angle_max, len(ranges))
         
@@ -255,14 +232,16 @@ class GridLocalizer(Node):
         angles = angles[valid]
         
         if len(ranges) < 10:
-            self.get_logger().warn('Not enough valid scan points, waiting for better scan...')
-            return
+            return None, None
         
-        # Store processed scan for batch scoring
-        self._scan_ranges = ranges
-        self._scan_angles = angles
+        return ranges, angles
+    
+    def _generate_candidates(self):
+        """Generate all candidate poses (x, y, theta) from free space pixels.
         
-        # Generate candidate poses: (x, y, theta)
+        Returns:
+            tuple: (pos_x, pos_y, pos_theta) arrays of candidate poses
+        """
         angle_offsets = np.linspace(0, 2 * np.pi, self.angle_samples, endpoint=False)
         
         # Convert pixel coords to world coords
@@ -271,18 +250,36 @@ class GridLocalizer(Node):
         
         n_pos = len(candidates_x)
         n_ang = len(angle_offsets)
-        self._total_candidates = n_pos * n_ang
         
         # Create full candidate arrays
-        self._candidates_x = np.repeat(candidates_x, n_ang)
-        self._candidates_y = np.repeat(candidates_y, n_ang)
-        self._candidates_theta = np.tile(angle_offsets, n_pos)
+        pos_x = np.repeat(candidates_x, n_ang)
+        pos_y = np.repeat(candidates_y, n_ang)
+        pos_theta = np.tile(angle_offsets, n_pos)
+        
+        return pos_x, pos_y, pos_theta
+
+    def _initialize_search(self):
+        """Initialize the search by preparing all candidate poses."""
+        ranges, angles = self._process_scan(self.latest_scan)
+        
+        if ranges is None:
+            self.get_logger().warn('Not enough valid scan points, waiting for better scan...')
+            return
+        
+        # Store processed scan for batch scoring
+        self._scan_ranges = ranges
+        self._scan_angles = angles
+        
+        # Generate candidates
+        self._candidates_x, self._candidates_y, self._candidates_theta = self._generate_candidates()
+        self._total_candidates = len(self._candidates_x)
         
         self._current_batch_idx = 0
         self._search_initialized = True
         
+        n_pos = len(self.free_pixels)
         self.get_logger().info(
-            f'Search initialized: {n_pos} positions x {n_ang} angles = {self._total_candidates} candidates'
+            f'Search initialized: {n_pos} positions x {self.angle_samples} angles = {self._total_candidates} candidates'
         )
     
     def _process_next_batch(self):
@@ -329,34 +326,20 @@ class GridLocalizer(Node):
         self.status_pub.publish(msg)
         self.get_logger().info(f'Published status: {status}')
 
-    def _publish_pose(self, pose):
-        """Publish pose to /initialpose (triggers AMCL). Queues if AMCL not active."""
-        if self._amcl_active:
-            self._do_publish_pose(pose)
-        else:
-            self.get_logger().info('AMCL not active yet, queuing pose for when it becomes active')
-            self._pending_pose = pose
-
-    def _do_publish_pose(self, pose):
-        """Actually publish the pose message."""
+    def _publish_pose(self, x: float, y: float, theta: float):
+        """Publish pose to /initialpose (latched for AMCL)."""
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
-        msg.pose.pose.position.x = pose[0]
-        msg.pose.pose.position.y = pose[1]
-        msg.pose.pose.orientation.z = np.sin(pose[2] / 2)
-        msg.pose.pose.orientation.w = np.cos(pose[2] / 2)
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.orientation.z = np.sin(theta / 2)
+        msg.pose.pose.orientation.w = np.cos(theta / 2)
         msg.pose.covariance[0] = 0.1
         msg.pose.covariance[7] = 0.1
         msg.pose.covariance[35] = 0.05
         self.pose_pub.publish(msg)
-        self.get_logger().info(f'Published initial pose: ({pose[0]:.2f}, {pose[1]:.2f})')
-
-    def _test_cb(self, request, response):
-        """Service callback to trigger test."""
-        response.success = True
-        response.message = 'Test successful'
-        return response
+        self.get_logger().info(f'Published initial pose: ({x:.2f}, {y:.2f})')
 
     def _localize_cb(self, request, response):
         """Service callback to trigger localization."""
@@ -368,20 +351,7 @@ class GridLocalizer(Node):
         try:
             pose, score = self._find_pose(self.latest_scan)
             
-            # Publish to /initialpose
-            pose_msg = PoseWithCovarianceStamped()
-            pose_msg.header.stamp = self.get_clock().now().to_msg()
-            pose_msg.header.frame_id = 'map'
-            pose_msg.pose.pose.position.x = pose[0]
-            pose_msg.pose.pose.position.y = pose[1]
-            pose_msg.pose.pose.orientation.z = np.sin(pose[2] / 2)
-            pose_msg.pose.pose.orientation.w = np.cos(pose[2] / 2)
-            # Covariance (diagonal)
-            pose_msg.pose.covariance[0] = 0.1  # x
-            pose_msg.pose.covariance[7] = 0.1  # y
-            pose_msg.pose.covariance[35] = 0.05  # yaw
-            
-            self.pose_pub.publish(pose_msg)
+            self._publish_pose(pose[0], pose[1], pose[2])
             
             response.success = True
             response.message = f'Localized at ({pose[0]:.2f}, {pose[1]:.2f}, {np.degrees(pose[2]):.1f}°) score={score:.3f}'
@@ -396,46 +366,21 @@ class GridLocalizer(Node):
 
     def _find_pose(self, scan: LaserScan) -> tuple:
         """Find best pose using GPU-accelerated scan matching."""
-        ranges = np.array(scan.ranges, dtype=np.float32)
-        angles = np.linspace(scan.angle_min, scan.angle_max, len(ranges))
+        ranges, angles = self._process_scan(scan)
         
-        if len(ranges) < 10:
+        if ranges is None:
             raise ValueError('Not enough valid scan points')
         
-        # Generate candidate poses: (x, y, theta)
-        angle_offsets = np.linspace(0, 2 * np.pi, self.angle_samples, endpoint=False)
+        # Generate candidates
+        pos_x, pos_y, pos_theta = self._generate_candidates()
+        total = len(pos_x)
         
-        # Convert pixel coords to world coords
-        candidates_x = self.free_pixels[:, 0] * self.resolution + self.origin[0]
-        candidates_y = (self.map_h - self.free_pixels[:, 1]) * self.resolution + self.origin[1]
+        self.get_logger().info(f'Searching {len(self.free_pixels)} positions x {self.angle_samples} angles = {total} candidates')
         
-        n_pos = len(candidates_x)
-        n_ang = len(angle_offsets)
-        total = n_pos * n_ang
-        
-        self.get_logger().info(f'Searching {n_pos} positions x {n_ang} angles = {total} candidates')
-        
-        # Create full candidate array
-        pos_x = np.repeat(candidates_x, n_ang)
-        pos_y = np.repeat(candidates_y, n_ang)
-        pos_theta = np.tile(angle_offsets, n_pos)
-        
-        # Process in batches to avoid OOM
-        best_score = float('inf')
-        best_idx = 0
-        
-        for start in range(0, total, self.batch_size):
-            end = min(start + self.batch_size, total)
-            
-            batch_scores = self._score_batch_gpu(
-                pos_x[start:end], pos_y[start:end], pos_theta[start:end],
-                ranges, angles
-            )
-            
-            batch_best_idx = np.argmin(batch_scores)
-            if batch_scores[batch_best_idx] < best_score:
-                best_score = batch_scores[batch_best_idx]
-                best_idx = start + batch_best_idx
+        # Process all at once on GPU
+        scores = self._score_batch_gpu(pos_x, pos_y, pos_theta, ranges, angles)
+        best_idx = np.argmin(scores)
+        best_score = scores[best_idx]
         
         best_pose = (pos_x[best_idx], pos_y[best_idx], pos_theta[best_idx])
         return best_pose, best_score
