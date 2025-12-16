@@ -51,13 +51,12 @@ class GridLocalizer(Node):
         self.declare_parameter('map_yaml_path', '')
         self.declare_parameter('sample_distance', 0.15)  # meters between samples
         self.declare_parameter('angle_samples', 36)  # angles to try (360/24 = 15° increments)
-        self.declare_parameter('batch_size', 8000)  # poses per GPU batch
+        self.declare_parameter('batch_size', 4000)  # poses per GPU batch (reduced for memory)
         self.declare_parameter('max_range', 12.0)  # max lidar range
         self.declare_parameter('scan_topic', '/scan_fast')
         self.declare_parameter('auto_localize_timeout', 30.0)  # seconds
         self.declare_parameter('max_score_threshold', 0.3)  # lower = stricter match
         self.declare_parameter('auto_localize', True)  # enable auto-localize on startup
-        
         map_yaml = self.get_parameter('map_yaml_path').value
         if not map_yaml:
             # Default path
@@ -87,9 +86,8 @@ class GridLocalizer(Node):
         self._search_initialized = False
         self._current_batch_idx = 0
         self._total_candidates = 0
-        self._candidates_x = None
-        self._candidates_y = None
-        self._candidates_theta = None
+        # Store only the position indices, not full expanded candidates
+        self._n_positions = 0
         
         # Subscribers
         scan_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -224,7 +222,7 @@ class GridLocalizer(Node):
             tuple: (ranges, angles) arrays of valid scan points, or (None, None) if insufficient data
         """
         ranges = np.array(scan.ranges, dtype=np.float32)
-        angles = np.linspace(scan.angle_min, scan.angle_max, len(ranges))
+        angles = np.linspace(scan.angle_min, scan.angle_max, len(ranges), dtype=np.float32)
         
         # Filter valid ranges
         valid = (ranges > scan.range_min) & (ranges < min(scan.range_max, self.max_range))
@@ -236,30 +234,67 @@ class GridLocalizer(Node):
         
         return ranges, angles
     
-    def _generate_candidates(self):
-        """Generate all candidate poses (x, y, theta) from free space pixels.
+    def _generate_candidates_for_batch(self, start_idx, end_idx):
+        """Generate candidate poses for a specific batch range on-the-fly.
         
+        This avoids storing all candidates in memory by computing them per-batch.
+        Candidates are indexed as: idx = position_idx * n_angles + angle_idx
+        
+        Args:
+            start_idx: Start index in the flattened candidate space
+            end_idx: End index (exclusive) in the flattened candidate space
+            
         Returns:
-            tuple: (pos_x, pos_y, pos_theta) arrays of candidate poses
+            tuple: (pos_x, pos_y, pos_theta) arrays for this batch only
         """
-        angle_offsets = np.linspace(0, 2 * np.pi, self.angle_samples, endpoint=False)
+        n_ang = self.angle_samples
+        angle_offsets = np.linspace(0, 2 * np.pi, n_ang, endpoint=False, dtype=np.float32)
         
-        # Convert pixel coords to world coords
-        candidates_x = self.free_pixels[:, 0] * self.resolution + self.origin[0]
-        candidates_y = (self.map_h - self.free_pixels[:, 1]) * self.resolution + self.origin[1]
+        # Compute which positions and angles this batch covers
+        batch_size = end_idx - start_idx
+        batch_indices = np.arange(start_idx, end_idx, dtype=np.int32)
         
-        n_pos = len(candidates_x)
-        n_ang = len(angle_offsets)
+        # Decode position and angle indices
+        pos_indices = batch_indices // n_ang
+        ang_indices = batch_indices % n_ang
         
-        # Create full candidate arrays
-        pos_x = np.repeat(candidates_x, n_ang)
-        pos_y = np.repeat(candidates_y, n_ang)
-        pos_theta = np.tile(angle_offsets, n_pos)
+        # Get pixel coordinates for these positions
+        pix_x = self.free_pixels[pos_indices, 0]
+        pix_y = self.free_pixels[pos_indices, 1]
+        
+        # Convert to world coordinates
+        pos_x = (pix_x * self.resolution + self.origin[0]).astype(np.float32)
+        pos_y = ((self.map_h - pix_y) * self.resolution + self.origin[1]).astype(np.float32)
+        pos_theta = angle_offsets[ang_indices]
         
         return pos_x, pos_y, pos_theta
+    
+    def _idx_to_pose(self, global_idx):
+        """Convert a global candidate index back to (x, y, theta) pose.
+        
+        Args:
+            global_idx: Index in the flattened candidate space
+            
+        Returns:
+            tuple: (x, y, theta) world coordinates
+        """
+        n_ang = self.angle_samples
+        angle_offsets = np.linspace(0, 2 * np.pi, n_ang, endpoint=False, dtype=np.float32)
+        
+        pos_idx = global_idx // n_ang
+        ang_idx = global_idx % n_ang
+        
+        pix_x = self.free_pixels[pos_idx, 0]
+        pix_y = self.free_pixels[pos_idx, 1]
+        
+        x = pix_x * self.resolution + self.origin[0]
+        y = (self.map_h - pix_y) * self.resolution + self.origin[1]
+        theta = angle_offsets[ang_idx]
+        
+        return float(x), float(y), float(theta)
 
     def _initialize_search(self):
-        """Initialize the search by preparing all candidate poses."""
+        """Initialize the search by preparing scan data (candidates generated on-the-fly)."""
         ranges, angles = self._process_scan(self.latest_scan)
         
         if ranges is None:
@@ -270,30 +305,36 @@ class GridLocalizer(Node):
         self._scan_ranges = ranges
         self._scan_angles = angles
         
-        # Generate candidates
-        self._candidates_x, self._candidates_y, self._candidates_theta = self._generate_candidates()
-        self._total_candidates = len(self._candidates_x)
+        # Calculate total candidates without generating them
+        self._n_positions = len(self.free_pixels)
+        self._total_candidates = self._n_positions * self.angle_samples
         
         self._current_batch_idx = 0
         self._search_initialized = True
         
-        n_pos = len(self.free_pixels)
         self.get_logger().info(
-            f'Search initialized: {n_pos} positions x {self.angle_samples} angles = {self._total_candidates} candidates'
+            f'Search initialized: {self._n_positions} positions x {self.angle_samples} angles = {self._total_candidates} candidates'
         )
+        self.get_logger().info(f'Using {len(ranges)} scan rays')
     
     def _process_next_batch(self):
-        """Process the next batch of candidate poses."""
+        """Process the next batch of candidate poses (generated on-the-fly)."""
         start = self._current_batch_idx
         end = min(start + self.batch_size, self._total_candidates)
         
+        # Generate candidates for this batch only (saves memory)
+        batch_x, batch_y, batch_theta = self._generate_candidates_for_batch(start, end)
+        
         batch_scores = self._score_batch_gpu(
-            self._candidates_x[start:end],
-            self._candidates_y[start:end],
-            self._candidates_theta[start:end],
+            batch_x,
+            batch_y,
+            batch_theta,
             self._scan_ranges,
             self._scan_angles
         )
+        
+        # Free batch arrays immediately
+        del batch_x, batch_y, batch_theta
         
         batch_best_idx = np.argmin(batch_scores)
         batch_best_score = batch_scores[batch_best_idx]
@@ -301,16 +342,16 @@ class GridLocalizer(Node):
         if batch_best_score < self._best_score:
             global_idx = start + batch_best_idx
             self._best_score = batch_best_score
-            self._best_pose = (
-                self._candidates_x[global_idx],
-                self._candidates_y[global_idx],
-                self._candidates_theta[global_idx]
-            )
+            # Reconstruct pose from index (instead of storing all candidates)
+            self._best_pose = self._idx_to_pose(global_idx)
             self.get_logger().info(
                 f'New best pose: ({self._best_pose[0]:.2f}, {self._best_pose[1]:.2f}, '
                 f'{np.degrees(self._best_pose[2]):.1f}°) score={self._best_score:.3f} '
                 f'[batch {start//self.batch_size + 1}/{(self._total_candidates + self.batch_size - 1)//self.batch_size}]'
             )
+        
+        # Free scores array
+        del batch_scores
         
         self._current_batch_idx = end
         
@@ -365,60 +406,97 @@ class GridLocalizer(Node):
         return response
 
     def _find_pose(self, scan: LaserScan) -> tuple:
-        """Find best pose using GPU-accelerated scan matching."""
+        """Find best pose using GPU-accelerated scan matching with batched processing."""
         ranges, angles = self._process_scan(scan)
         
         if ranges is None:
             raise ValueError('Not enough valid scan points')
         
-        # Generate candidates
-        pos_x, pos_y, pos_theta = self._generate_candidates()
-        total = len(pos_x)
+        n_positions = len(self.free_pixels)
+        total = n_positions * self.angle_samples
         
-        self.get_logger().info(f'Searching {len(self.free_pixels)} positions x {self.angle_samples} angles = {total} candidates')
+        self.get_logger().info(f'Searching {n_positions} positions x {self.angle_samples} angles = {total} candidates')
+        self.get_logger().info(f'Using {len(ranges)} scan rays')
         
-        # Process all at once on GPU
-        scores = self._score_batch_gpu(pos_x, pos_y, pos_theta, ranges, angles)
-        best_idx = np.argmin(scores)
-        best_score = scores[best_idx]
+        # Process in batches to avoid OOM
+        best_score = float('inf')
+        best_idx = -1
         
-        best_pose = (pos_x[best_idx], pos_y[best_idx], pos_theta[best_idx])
+        for start in range(0, total, self.batch_size):
+            end = min(start + self.batch_size, total)
+            
+            # Generate candidates for this batch only
+            batch_x, batch_y, batch_theta = self._generate_candidates_for_batch(start, end)
+            scores = self._score_batch_gpu(batch_x, batch_y, batch_theta, ranges, angles)
+            
+            # Free batch arrays
+            del batch_x, batch_y, batch_theta
+            
+            batch_best_idx = np.argmin(scores)
+            batch_best_score = scores[batch_best_idx]
+            
+            if batch_best_score < best_score:
+                best_score = batch_best_score
+                best_idx = start + batch_best_idx
+            
+            del scores
+        
+        best_pose = self._idx_to_pose(best_idx)
         return best_pose, best_score
 
     def _score_batch_gpu(self, pos_x, pos_y, pos_theta, ranges, angles):
-        """GPU-accelerated batch scoring."""
-        # Move to GPU
+        """GPU-accelerated batch scoring with memory optimization."""
+        n_poses = len(pos_x)
+        n_beams = len(ranges)
+        
+        # Move to GPU with explicit dtype to avoid copies
         pos_x_gpu = cp.asarray(pos_x, dtype=cp.float32)
         pos_y_gpu = cp.asarray(pos_y, dtype=cp.float32)
         pos_theta_gpu = cp.asarray(pos_theta, dtype=cp.float32)
         ranges_gpu = cp.asarray(ranges, dtype=cp.float32)
         angles_gpu = cp.asarray(angles, dtype=cp.float32)
         
-        # World angles: (n_poses, n_beams)
-        world_angles = pos_theta_gpu[:, None] + angles_gpu[None, :]
+        # Pre-compute cos/sin of angles (shared across all poses)
+        cos_angles = cp.cos(angles_gpu)
+        sin_angles = cp.sin(angles_gpu)
+        del angles_gpu
         
-        # Ray end points
-        end_x = pos_x_gpu[:, None] + ranges_gpu[None, :] * cp.cos(world_angles)
-        end_y = pos_y_gpu[:, None] + ranges_gpu[None, :] * cp.sin(world_angles)
-        del world_angles  # Free intermediate
+        # Compute world angles and trig functions in-place
+        # world_angles[i,j] = pos_theta[i] + angles[j]
+        cos_world = cp.cos(pos_theta_gpu[:, None]) * cos_angles[None, :] - cp.sin(pos_theta_gpu[:, None]) * sin_angles[None, :]
+        sin_world = cp.sin(pos_theta_gpu[:, None]) * cos_angles[None, :] + cp.cos(pos_theta_gpu[:, None]) * sin_angles[None, :]
+        del pos_theta_gpu, cos_angles, sin_angles
         
-        # Convert to pixel coordinates
-        pix_x = ((end_x - self.origin[0]) / self.resolution).astype(cp.int32)
-        pix_y = (self.map_h - (end_y - self.origin[1]) / self.resolution).astype(cp.int32)
-        del end_x, end_y
+        # Compute end points and convert to pixels in-place
+        # pix_x = (pos_x + ranges * cos_world - origin_x) / resolution
+        pix_x = pos_x_gpu[:, None] + ranges_gpu[None, :] * cos_world
+        del cos_world
+        pix_x -= self.origin[0]
+        pix_x /= self.resolution
+        cp.clip(pix_x, 0, self.map_w - 1, out=pix_x)
+        pix_x = pix_x.astype(cp.int32)
         
-        # Clamp to map bounds
-        pix_x = cp.clip(pix_x, 0, self.map_w - 1)
-        pix_y = cp.clip(pix_y, 0, self.map_h - 1)
+        pix_y = pos_y_gpu[:, None] + ranges_gpu[None, :] * sin_world
+        del sin_world, pos_x_gpu, pos_y_gpu, ranges_gpu
+        pix_y -= self.origin[1]
+        pix_y /= self.resolution
+        pix_y = self.map_h - pix_y
+        cp.clip(pix_y, 0, self.map_h - 1, out=pix_y)
+        pix_y = pix_y.astype(cp.int32)
         
         # Score: lower = better (endpoints hitting obstacles)
         hit_free = self.map_free_gpu[pix_y, pix_x]
-        scores = cp.mean(hit_free, axis=1)
-        result = cp.asnumpy(scores)
+        del pix_x, pix_y
         
-        # Free GPU memory
-        del pix_x, pix_y, hit_free, scores
+        scores = cp.mean(hit_free, axis=1)
+        del hit_free
+        
+        result = cp.asnumpy(scores)
+        del scores
+        
+        # Aggressively free GPU memory
         cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
         
         return result
 
