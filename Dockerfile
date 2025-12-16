@@ -51,7 +51,9 @@ RUN apt-get install -y \
 RUN pip install --upgrade \
     websockets \
     pydantic \
-    opencv-python
+    opencv-python \
+    h5py \
+    cartesia
 
 # 2. Install oh-my-zsh (for root, since containers typically run as root unless changed)
 #    The official install script tries to prompt, so we run it in a way that doesn't hang.
