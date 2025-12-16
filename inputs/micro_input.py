@@ -16,10 +16,24 @@ import time
 from typing import Optional
 import sounddevice as sd
 import websocket
+import sys
+from pathlib import Path
 
 from brain_client.input_types import InputDevice
 import subprocess
 import re
+
+# Add client library to path
+innate_os_root = os.getenv('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+client_path = Path(innate_os_root) / 'client'
+if client_path.exists():
+    sys.path.insert(0, str(client_path))
+
+try:
+    from client.adapters.openai_adapter import ProxyOpenAIClient
+    PROXY_AVAILABLE = True
+except ImportError:
+    PROXY_AVAILABLE = False
 
 
 DEFAULT_SAMPLE_RATE = 24_000
@@ -66,7 +80,7 @@ class MicroInput(InputDevice):
         
         # Env vars override .env file
         for key in ['OPENAI_API_KEY', 'OPENAI_REALTIME_MODEL', 'OPENAI_REALTIME_URL', 
-                    'OPENAI_TRANSCRIBE_MODEL']:
+                    'OPENAI_TRANSCRIBE_MODEL', 'INNATE_PROXY_URL', 'INNATE_SERVICE_KEY']:
             if key in os.environ:
                 self.config[key] = os.environ[key]
 
@@ -84,13 +98,97 @@ class MicroInput(InputDevice):
                           sample_rate=DEFAULT_SAMPLE_RATE, 
                           channels=DEFAULT_CHANNELS)
             
-            # Connect to OpenAI (exact same as voice_client)
+            # Connect to OpenAI via proxy if available, otherwise direct
+            proxy_url = self.config.get('INNATE_PROXY_URL', '')
+            innate_service_key = self.config.get('INNATE_SERVICE_KEY', '')
+            
+            if PROXY_AVAILABLE and proxy_url and innate_service_key:
+                # Use proxy client
+                if self.logger:
+                    self.logger.info("🔗 Using OpenAI proxy client")
+                model = self.config.get('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview')
+                vad_threshold = 0.5
+                
+                # Use proxy client's sync interface
+                proxy_client = ProxyOpenAIClient(
+                    proxy_url=proxy_url,
+                    innate_service_key=innate_service_key
+                )
+                
+                # Wire up transcript callback
+                def on_message(ws, message: str):
+                    try:
+                        event = json.loads(message)
+                    except Exception:
+                        return
+                    etype = event.get("type")
+                    
+                    if etype == "input_audio_buffer.speech_started":
+                        if self.logger:
+                            self.logger.info("🎤 Speech detected")
+                    elif etype == "input_audio_buffer.speech_stopped":
+                        if self.logger:
+                            self.logger.info("🔇 Speech stopped")
+                    elif etype == "conversation.item.input_audio_transcription.completed":
+                        transcript = event.get("transcript", "")
+                        if transcript and self.is_active():
+                            self._on_transcript(transcript)
+                    elif etype == "error":
+                        error_code = event.get("error", {}).get("code", "")
+                        if error_code != "input_audio_buffer_commit_empty" and self.logger:
+                            self.logger.error(f"❌ OpenAI error: {error_code}")
+                
+                def on_open():
+                    transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+                    session_update = {
+                        "type": "session.update",
+                        "session": {
+                            "input_audio_format": "pcm16",
+                            "input_audio_transcription": {
+                                "model": transcribe_model,
+                                "language": "en"
+                            },
+                            "turn_detection": {
+                                "type": "server_vad",
+                                "threshold": float(vad_threshold),
+                                "prefix_padding_ms": 300,
+                                "silence_duration_ms": 700,
+                                "create_response": False,
+                            },
+                            "instructions": "Transcribe user audio only in English; do not reply.",
+                        },
+                    }
+                    self.client.send_json(session_update)
+                
+                def on_error(error):
+                    if self.logger:
+                        self.logger.error(f"[ws error] {error}")
+                
+                def on_close():
+                    if self.logger:
+                        self.logger.warn("WebSocket closed")
+                
+                # Create sync connection using proxy client
+                self.client = proxy_client.realtime.connect_sync(
+                    model=model,
+                    on_message=on_message,
+                    on_open=on_open,
+                    on_error=on_error,
+                    on_close=on_close,
+                )
+                # Start the connection
+                self.client.start()
+            else:
+                # Fallback to direct OpenAI connection
             api_key = self.config.get('OPENAI_API_KEY', '')
             if not api_key:
                 if self.logger:
-                    self.logger.error("❌ OPENAI_API_KEY not set")
+                        self.logger.error("❌ Neither proxy config (INNATE_PROXY_URL/INNATE_SERVICE_KEY) nor OPENAI_API_KEY set")
                 return
             
+                if self.logger:
+                    self.logger.info("🔗 Using direct OpenAI connection (proxy not configured)")
+                
             model = self.config.get('OPENAI_REALTIME_MODEL', 'gpt-4o-realtime-preview')
             base_url = self.config.get('OPENAI_REALTIME_URL', 'wss://api.openai.com/v1/realtime')
             wss_url = f"{base_url}?model={model}"
@@ -239,6 +337,131 @@ class MicroInput(InputDevice):
                 self.logger.info(f"🎤 Transcript: {text}")
             
             self.send_data(text, data_type="chat_in")
+
+
+# ========== EXACT COPIES FROM voice_client_node.py ==========
+    """
+    Wrapper that bridges async websockets (from proxy client) with sync websocket-client API.
+    This allows the existing RealtimeClient interface to work with the proxy.
+    """
+    def __init__(self, proxy_url: str, innate_service_key: str, model: str, logger, vad_threshold: float = 0.5):
+        self.proxy_url = proxy_url
+        self.innate_service_key = innate_service_key
+        self.model = model
+        self.logger = logger
+        self.vad_threshold = vad_threshold
+        self.ws = None
+        self._send_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._connected = threading.Event()
+        self._proxy_client = None
+        self._ws_connection = None
+        self._message_thread = None
+        self._on_message = None  # Will be set by caller
+        
+    def start(self):
+        """Start the WebSocket connection via proxy."""
+        import asyncio
+        
+        def run_async():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                self._proxy_client = ProxyOpenAIClient(
+                    proxy_url=self.proxy_url,
+                    innate_service_key=self.innate_service_key
+                )
+                
+                # Set up message handler callback
+                async def on_message_handler(ws, message: str):
+                    """Async message handler that calls sync callback."""
+                    if self._on_message:
+                        self._on_message(None, message)
+                
+                # Connect via proxy
+                self._ws_connection = loop.run_until_complete(
+                    self._proxy_client.realtime.connect(
+                        model=self.model,
+                        on_message=on_message_handler
+                    )
+                )
+                self._connected.set()
+                self._on_open_wrapper()
+                
+                # Keep event loop running to handle messages
+                # The on_message_handler will be called by the proxy client's message handler
+                while not self._stop.is_set() and self._connected.is_set():
+                    loop.run_until_complete(asyncio.sleep(0.1))
+                    
+            except Exception as e:
+                self.logger.error(f"[proxy ws error] {e}")
+                self._connected.clear()
+            finally:
+                try:
+                    if self._ws_connection:
+                        loop.run_until_complete(self._ws_connection.close())
+                except Exception:
+                    pass
+                loop.close()
+        
+        self._message_thread = threading.Thread(target=run_async, daemon=True)
+        self._message_thread.start()
+    
+    def stop(self):
+        """Stop the WebSocket connection."""
+        self._stop.set()
+        if self._ws_connection:
+            import asyncio
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self._ws_connection.close())
+                loop.close()
+            except Exception:
+                pass
+        self._connected.clear()
+    
+    def wait_until_connected(self, timeout: float = 10.0) -> bool:
+        """Wait for connection to be established."""
+        return self._connected.wait(timeout=timeout)
+    
+    def send_json(self, payload: dict):
+        """Send JSON payload via WebSocket."""
+        import asyncio
+        data = json.dumps(payload)
+        with self._send_lock:
+            if self._ws_connection and self._connected.is_set():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self._ws_connection.send(data))
+                    loop.close()
+                except Exception as e:
+                    self.logger.error(f"[send_json] {e}")
+    
+    def _on_open_wrapper(self):
+        """Called when WebSocket opens."""
+        transcribe_model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+        session_update = {
+            "type": "session.update",
+            "session": {
+                "input_audio_format": "pcm16",
+                "input_audio_transcription": {
+                    "model": transcribe_model,
+                    "language": "en"
+                },
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": float(self.vad_threshold),
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 700,
+                    "create_response": False,
+                },
+                "instructions": "Transcribe user audio only in English; do not reply.",
+            },
+        }
+        self.send_json(session_update)
+    
 
 
 # ========== EXACT COPIES FROM voice_client_node.py ==========
