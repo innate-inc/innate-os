@@ -1,14 +1,32 @@
-# Maurice Production OS
+<div align="center">
 
-## WARNING
+# Innate OS
 
-IF YOU EVER MAKE THIS PUBLIC, DELETE THE KEY FOR AXEL'S EMAILS sending in the primitive for send_email
+## A lightweight, agentic, ROS2-based operating system for Innate robots
 
-## Simulation
+[![Discord](https://img.shields.io/badge/Discord-Join%20our%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/innate)
+[![Documentation](https://img.shields.io/badge/Docs-Read%20the%20docs-blue?style=for-the-badge&logo=readthedocs&logoColor=white)](https://docs.innate.bot)
+[![Website](https://img.shields.io/badge/Website-Visit%20us-orange?style=for-the-badge&logo=safari&logoColor=white)](https://innate.bot)
+[![ROS2](https://img.shields.io/badge/ROS2-Humble-22314E?style=for-the-badge&logo=ros&logoColor=white)](https://docs.ros.org/en/humble/)
 
-The below is for running in dev mode, which is the only one that works right now.
+</div>
 
-Prod would be if we want to run the simulation in a container completely in an elastically scalable cloud environment. Right now we use a VM so dev is better.
+> [!NOTE]
+> **This OS is in active development.** APIs and features may change. Join our Discord for updates and support.
+
+## Overview
+
+The Innate OS provides the runtime environment for Innate robots. Developers can create powerful spatial applications using mobility, manipulation, interaction, and planning.
+
+It is designed on a few **core principles**:
+
+- Lightweight: The Innate OS can run on resource-constrained hardware like the Jetson Orin Nano 8GB. It starts in an under a minute.
+- Intuitive: Creating a program should be easy and not need to touch ROS at all. And the OS can be controlled via the Innate phone app.
+- Powerful: The Innate OS can be quickly extended to perform long-range tasks with robots. It natively supports VLAs and agentic workflows.
+
+## Quick Start (Simulation)
+
+If you don't have a robot, you can simply start the Innate OS in simulation mode, then use [our simulator](https://github.com/innate-inc/genesis-sim) to try out the robot with a web interface.
 
 First build the container:
 
@@ -25,7 +43,7 @@ docker compose -f docker-compose.dev.yml up -d
 And then drop into the container:
 
 ```bash
-docker compose -f docker-compose.dev.yml exec maurice zsh -l
+docker compose -f docker-compose.dev.yml exec innate zsh -l
 ```
 
 See the nodes running with tmux
@@ -72,38 +90,12 @@ ros2 launch brain_client brain_client.launch.py
 ```
 
 
-## System setup
+## Quick start (Physical Robot)
 
-On the robot, make sure to execute the following to setup the system properly:
+Simply SSH into the robot. 
 
-#### To allow the normal user to scan for wifis:
+- If it's the first time and you're installing it, clone the repository and execute the post_update.sh script to complete the setup.
 
-zsh
-```
-sudo mkdir -p /etc/polkit-1/localauthority/50-local.d/
-sudo nano /etc/polkit-1/localauthority/50-local.d/10-networkmanager-wifi-scan.pkla
-sudo systemctl restart polkit
-```
+- Execute the launch_ros_in_tmux.sh script to start the ROS nodes.
 
-And in the .pkla file:
-
-```
-[Allow WiFi Scanning]
-Identity=unix-user:*
-Action=org.freedesktop.NetworkManager.wifi.scan;org.freedesktop.NetworkManager.enable-disable-wifi;org.freedesktop.NetworkManager.settings.modify.system;org.freedesktop.NetworkManager.network-control
-ResultAny=yes
-ResultInactive=yes
-ResultActive=yes
-```
-
-## Caveats
-
-### On Ros2 version
-
-For the action server to run properly you might need to update ros. This version below was shown to work well
-
-```
-dpkg -s ros-humble-ros-core | grep Version
-
-Version: 0.10.0-1jammy.20250430.084858
-```
+Connect via the app like explained in the [documentation](https://docs.innate.bot).
