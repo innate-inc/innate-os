@@ -209,22 +209,23 @@ load_github_token() {
 get_latest_release_info() {
     # Fetch latest release info from GitHub API
     RELEASE_API="https://api.github.com/repos/$GITHUB_REPO/releases/latest"
-    info "Checking releases at: $RELEASE_API"
+    # Note: info/warn go to stderr so they don't pollute the return value
+    echo "[INFO] Checking releases at: $RELEASE_API" >&2
     RELEASE_INFO=$(github_curl "$RELEASE_API" 2>/dev/null)
 
     if [ -z "$RELEASE_INFO" ]; then
-        warn "Empty response from GitHub API"
+        echo "[WARN] Empty response from GitHub API" >&2
         return 1
     fi
 
     if echo "$RELEASE_INFO" | grep -q '"message".*"Not Found"'; then
-        warn "No releases found for $GITHUB_REPO"
+        echo "[WARN] No releases found for $GITHUB_REPO" >&2
         return 1
     fi
 
     # Check for auth error
     if echo "$RELEASE_INFO" | grep -q "Bad credentials\|Requires authentication"; then
-        warn "GitHub authentication failed. Please check your GITHUB_TOKEN."
+        echo "[WARN] GitHub authentication failed. Please check your GITHUB_TOKEN." >&2
         return 1
     fi
 
@@ -240,9 +241,11 @@ get_latest_release_info() {
     fi
 
     if [ -z "$LATEST_TAG" ] || [ -z "$ASSET_URL" ]; then
+        echo "[WARN] Could not extract release info (tag=$LATEST_TAG, url=$ASSET_URL)" >&2
         return 1
     fi
 
+    # Only output the actual data to stdout
     echo "$LATEST_TAG|$ASSET_URL"
     return 0
 }
