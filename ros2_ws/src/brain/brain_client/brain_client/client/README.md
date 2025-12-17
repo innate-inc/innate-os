@@ -6,6 +6,97 @@ Client library for connecting to the Innate Service Proxy from innate-os robots.
 
 This library provides drop-in replacements for direct API calls to external services (Cartesia, OpenAI, etc.). Instead of storing API keys on robots, robots authenticate with a single `innate_service_key` and the proxy handles API key management centrally.
 
+## Architecture in brain_client
+
+The client library is integrated into the `brain_client` ROS2 package with a clear separation:
+
+```
+ros2_ws/src/brain/brain_client/brain_client/
+├── client/                       # Proxy client library
+│   ├── proxy_client.py          # Unified ProxyClient class
+│   ├── adapters/
+│   │   ├── cartesia_adapter.py  # Cartesia TTS adapter
+│   │   └── openai_adapter.py    # OpenAI (Chat + Realtime) adapter
+│   └── README.md                # This file
+├── brain_client_node.py         # Uses proxy for TTS
+├── input_manager_node.py        # Uses proxy for STT/inputs
+├── input_loader.py              # Injects proxy into input devices
+└── input_types.py               # InputDevice base class with proxy access
+```
+
+### Credential vs Configuration Separation
+
+- **Credentials** (environment variables): `INNATE_PROXY_URL`, `INNATE_SERVICE_KEY`
+- **Configuration** (ROS2 launch parameters): `openai_realtime_model`, `cartesia_voice_id`, etc.
+
+This separation allows:
+- Secrets to be managed securely in `.env` files
+- Configuration to be changed per-launch without touching credentials
+
+## Usage in Input Devices
+
+Input devices (like `micro_input.py`) access proxy services via the injected `self.proxy`:
+
+```python
+from brain_client.input_types import InputDevice
+
+class MicroInput(InputDevice):
+    def __init__(self, logger=None, proxy=None):
+        super().__init__(logger, proxy)
+    
+    def on_open(self):
+        # Check proxy is available
+        if not self.proxy or not self.proxy.is_available():
+            self.logger.error("Proxy not configured")
+            return
+        
+        # Access config (set by InputManagerNode)
+        model = self.proxy.config.get('openai_realtime_model', 'gpt-4o-realtime-preview')
+        
+        # Use OpenAI Realtime API via proxy
+        self.client = self.proxy.openai.realtime.connect_sync(
+            model=model,
+            on_message=self.handle_message,
+            on_open=self.on_ws_open,
+            on_error=self.on_ws_error,
+            on_close=self.on_ws_close,
+        )
+        self.client.start()
+    
+    def handle_message(self, ws, message):
+        # Handle OpenAI messages
+        data = json.loads(message)
+        if data.get("type") == "conversation.item.input_audio_transcription.completed":
+            transcript = data.get("transcript", "")
+            self.send_data(transcript, data_type="chat_in")
+```
+
+### How the Proxy is Wired
+
+1. **InputManagerNode** (ROS2 node):
+   - Reads ROS2 parameters (`openai_realtime_model`, etc.)
+   - Creates `ProxyClient(config=proxy_config)` with env credentials
+   - Passes proxy to `InputLoader`
+
+2. **InputLoader**:
+   - Loads input device classes from `inputs/` directory
+   - Injects `proxy` into each `InputDevice` constructor
+
+3. **InputDevice** (your code):
+   - Accesses `self.proxy.openai`, `self.proxy.cartesia`
+   - Accesses config via `self.proxy.config.get(...)`
+
+```python
+# In InputManagerNode.__init__():
+proxy_config = {
+    "openai_realtime_model": self.get_parameter("openai_realtime_model").value,
+    "openai_transcribe_model": self.get_parameter("openai_transcribe_model").value,
+    "cartesia_voice_id": self.get_parameter("cartesia_voice_id").value,
+}
+self.proxy = ProxyClient(config=proxy_config)
+self.input_loader = InputLoader(self.get_logger(), proxy=self.proxy)
+```
+
 ## Installation
 
 Copy the `client/` directory to your robot's codebase:
@@ -142,21 +233,73 @@ async for chunk in response:
 
 ### OpenAI Realtime (WebSocket)
 
-**Before (Direct API):**
-```python
-from openai import RealtimeClient
+The Realtime API supports two connection modes:
 
-wss_url = f"wss://api.openai.com/v1/realtime?model={model}"
-headers = [
-    f"Authorization: Bearer {os.getenv('OPENAI_API_KEY')}",
-    "OpenAI-Beta: realtime=v1",
-]
-client = RealtimeClient(wss_url, headers, ...)
+#### Synchronous Connection (recommended for audio streaming)
+
+Best for microphone input where you need low-latency audio streaming from a thread:
+
+```python
+from brain_client.client.adapters.openai_adapter import ProxyOpenAIClient
+
+client = ProxyOpenAIClient()
+
+def on_message(ws, message):
+    data = json.loads(message)
+    if data.get("type") == "conversation.item.input_audio_transcription.completed":
+        transcript = data.get("transcript", "")
+        print(f"Transcript: {transcript}")
+
+def on_open():
+    # Configure session when WebSocket opens
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "input_audio_format": "pcm16",
+            "input_audio_transcription": {"model": "gpt-4o-mini-transcribe", "language": "en"},
+            "turn_detection": {
+                "type": "server_vad",
+                "threshold": 0.3,
+                "prefix_padding_ms": 300,
+                "silence_duration_ms": 700,
+                "create_response": False,
+            },
+            "instructions": "Transcribe user audio only in English; do not reply.",
+        },
+    }
+    conn.send_json(session_update)
+
+conn = client.realtime.connect_sync(
+    model="gpt-4o-realtime-preview",
+    on_message=on_message,
+    on_open=on_open,
+    on_error=lambda e: print(f"Error: {e}"),
+    on_close=lambda: print("Closed"),
+)
+conn.start()
+
+# Wait for connection
+if conn.wait_until_connected(timeout=10):
+    # Send audio chunks (from another thread)
+    payload = {
+        "type": "input_audio_buffer.append",
+        "audio": base64.b64encode(audio_bytes).decode("ascii"),
+    }
+    conn.send_json(payload)
 ```
 
-**After (Proxy):**
+**Key features of sync connection:**
+- Uses `websocket-client` library for low-latency
+- Non-blocking `send_json()` for audio streaming
+- Thread-safe - send audio from any thread
+- Callbacks run in WebSocket thread
+
+#### Async Connection
+
+For async/await code:
+
 ```python
-from client.adapters.openai_adapter import ProxyOpenAIClient
+from brain_client.client.adapters.openai_adapter import ProxyOpenAIClient
 
 client = ProxyOpenAIClient()
 
@@ -360,60 +503,93 @@ class TTSHandler:
 - Same return type (`bytes`) and same interface
 - No changes needed to audio playback logic
 
-### Example 2: OpenAI Realtime WebSocket
+### Example 2: OpenAI Realtime WebSocket (Microphone Input)
 
-**Before:**
+**Before (Direct API):**
 ```python
 # micro_input.py
-import websockets
+import websocket
 import os
 
 api_key = os.getenv("OPENAI_API_KEY")
 model = "gpt-4o-realtime-preview"
 wss_url = f"wss://api.openai.com/v1/realtime?model={model}"
-
 headers = [
     f"Authorization: Bearer {api_key}",
     "OpenAI-Beta: realtime=v1",
 ]
 
-ws = websockets.connect(wss_url, extra_headers=headers)
-
-async def on_message(ws, message):
-    data = json.loads(message)
-    # Handle message
-    pass
-
-async for message in ws:
-    await on_message(ws, message)
+ws = websocket.WebSocketApp(wss_url, header=headers, ...)
 ```
 
-**After:**
+**After (Proxy via InputDevice):**
 ```python
-# micro_input.py
-from client.adapters.openai_adapter import ProxyOpenAIClient
+# inputs/micro_input.py
+from brain_client.input_types import InputDevice
+import json
+import base64
 
-client = ProxyOpenAIClient()  # No API key needed!
-
-async def on_message(ws, message):
-    data = json.loads(message)
-    # Handle message (same as before)
-    pass
-
-# Connect via proxy WebSocket
-ws = await client.realtime.connect(
-    model="gpt-4o-realtime-preview",
-    on_message=on_message
-)
-
-async for message in ws:
-    await on_message(ws, message)
+class MicroInput(InputDevice):
+    def __init__(self, logger=None, proxy=None):
+        super().__init__(logger, proxy)
+        self.client = None
+    
+    @property
+    def name(self) -> str:
+        return "micro"
+    
+    def on_open(self):
+        if not self.proxy or not self.proxy.is_available():
+            self.logger.error("Proxy not configured")
+            return
+        
+        # Get config from proxy (set by InputManagerNode)
+        model = self.proxy.config.get('openai_realtime_model', 'gpt-4o-realtime-preview')
+        transcribe_model = self.proxy.config.get('openai_transcribe_model', 'gpt-4o-mini-transcribe')
+        
+        def on_message(ws, message):
+            data = json.loads(message)
+            if data.get("type") == "conversation.item.input_audio_transcription.completed":
+                transcript = data.get("transcript", "")
+                if transcript:
+                    self.send_data(transcript, data_type="chat_in")
+        
+        def on_ws_open():
+            session_update = {
+                "type": "session.update",
+                "session": {
+                    "input_audio_format": "pcm16",
+                    "input_audio_transcription": {"model": transcribe_model, "language": "en"},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.3,
+                        "create_response": False,
+                    },
+                },
+            }
+            self.client.send_json(session_update)
+        
+        # Connect via proxy - uses INNATE_PROXY_URL and INNATE_SERVICE_KEY from env
+        self.client = self.proxy.openai.realtime.connect_sync(
+            model=model,
+            on_message=on_message,
+            on_open=on_ws_open,
+        )
+        self.client.start()
+        
+        # Start audio thread...
+    
+    def on_close(self):
+        if self.client:
+            self.client.stop()
 ```
 
 **Key Changes:**
-- No API key needed (uses `INNATE_SERVICE_KEY` env var)
-- WebSocket URL automatically points to proxy
-- Same message handling logic
+- Extends `InputDevice` base class
+- Proxy injected by `InputManagerNode` (no manual setup)
+- Config accessed via `self.proxy.config` (no env var lookups)
+- Uses `connect_sync()` for low-latency audio streaming
+- Transcripts sent via `self.send_data()` callback
 
 ## Environment Variables
 
@@ -567,13 +743,37 @@ class ProxyOpenAIClient:
             """
     
     class Realtime:
+        def connect_sync(
+            self,
+            model: str = "gpt-4o-realtime-preview",
+            on_message: Optional[Callable] = None,
+            on_open: Optional[Callable] = None,
+            on_error: Optional[Callable] = None,
+            on_close: Optional[Callable] = None,
+        ) -> SyncRealtimeConnection:
+            """
+            Create synchronous WebSocket connection (best for audio streaming).
+            
+            Uses websocket-client for low-latency, thread-safe audio streaming.
+            
+            Args:
+                model: Model name (e.g., 'gpt-4o-realtime-preview')
+                on_message: Callback for messages: (ws, message: str) -> None
+                on_open: Callback when connected: () -> None
+                on_error: Callback on error: (error: str) -> None
+                on_close: Callback on close: () -> None
+            
+            Returns:
+                SyncRealtimeConnection with start(), stop(), send_json() methods
+            """
+        
         async def connect(
             self,
             model: str,
             on_message: Optional[Callable] = None,
         ) -> WebSocket:
             """
-            Connect to Realtime API via WebSocket.
+            Connect to Realtime API via async WebSocket.
             
             Args:
                 model: Model name (e.g., 'gpt-4o-realtime-preview')
@@ -582,7 +782,91 @@ class ProxyOpenAIClient:
             Returns:
                 WebSocket connection object
             """
+
+class SyncRealtimeConnection:
+    """Synchronous WebSocket connection for audio streaming."""
+    
+    def start(self):
+        """Start the WebSocket connection in background thread."""
+    
+    def stop(self):
+        """Stop the WebSocket connection."""
+    
+    def wait_until_connected(self, timeout: float = 10.0) -> bool:
+        """Wait for connection. Returns True if connected."""
+    
+    def send_json(self, data: Dict[str, Any]):
+        """Send JSON message (thread-safe, non-blocking)."""
 ```
+
+## InputDevice Base Class
+
+All input devices extend `InputDevice` from `brain_client.input_types`:
+
+```python
+class InputDevice(ABC):
+    """Base class for all input devices."""
+    
+    def __init__(self, logger=None, proxy: "ProxyClient" = None):
+        """
+        Args:
+            logger: ROS2 logger (injected by InputManagerNode)
+            proxy: ProxyClient instance (injected by InputLoader)
+        """
+    
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Unique name for this input device."""
+    
+    @abstractmethod
+    def on_open(self):
+        """Called when device is activated. Start data collection here."""
+    
+    @abstractmethod
+    def on_close(self):
+        """Called when device is deactivated. Clean up resources."""
+    
+    @property
+    def proxy(self) -> Optional[ProxyClient]:
+        """Access to proxy services and config."""
+    
+    def send_data(self, data: Any, data_type: str = "custom"):
+        """Send data to the brain agent."""
+    
+    def is_active(self) -> bool:
+        """Check if device is currently active."""
+```
+
+### Creating a Custom Input Device
+
+1. Create a file in `~/innate-os/inputs/` (e.g., `my_input.py`)
+2. Define a class extending `InputDevice`:
+
+```python
+from brain_client.input_types import InputDevice
+
+class MyInput(InputDevice):
+    @property
+    def name(self) -> str:
+        return "my_input"
+    
+    def on_open(self):
+        # Use proxy services
+        if self.proxy and self.proxy.is_available():
+            config_value = self.proxy.config.get('my_config_key', 'default')
+            # Start your input logic...
+    
+    def on_close(self):
+        # Clean up
+        pass
+```
+
+3. The `InputManagerNode` will automatically:
+   - Discover your input device class
+   - Inject the `proxy` with credentials and config
+   - Call `on_open()` when activated
+   - Call `on_close()` when deactivated
 
 ## Support
 
