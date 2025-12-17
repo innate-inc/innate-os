@@ -1,7 +1,5 @@
 # Zenoh Middleware Setup for ROS2
 
-
-
 ## Overview
 
 Zenoh is an alternative RMW (ROS Middleware) implementation that can replace FastDDS. It's lightweight, peer-to-peer, and often provides better performance.
