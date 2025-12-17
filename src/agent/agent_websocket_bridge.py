@@ -100,7 +100,7 @@ async def inbound_loop(ws, shared_queues):
                         pass
 
             # 2) /chat_out
-            elif topic == "/chat_out":
+            elif topic == "/brain/chat_out":
                 payload = json.loads(msg_data.get("data", ""))
                 sender = payload.get("sender", "")
                 text = payload.get("text", "")
@@ -200,7 +200,7 @@ async def inbound_loop(ws, shared_queues):
         # Process service responses (responses to service calls that we initiated)
         elif op_type == "service_response":
             service_name = inbound_data.get("service", "")
-            if service_name == "/get_chat_history":
+            if service_name == "/brain/get_chat_history":
                 # Check if inbound_data result field is True, otherwise the brain is not ready yet
                 if not inbound_data.get("result", False):
                     continue
@@ -259,8 +259,10 @@ async def outbound_loop(ws, shared_queues):
     )
     adv_odom = rosbridge_advertise("/odom", "nav_msgs/msg/Odometry")
     adv_map = rosbridge_advertise("/map", "nav_msgs/msg/OccupancyGrid")
-    adv_chat_in = rosbridge_advertise("/chat_in", "std_msgs/msg/String")
-    adv_set_directive = rosbridge_advertise("/set_directive", "std_msgs/msg/String")
+    adv_chat_in = rosbridge_advertise("/brain/chat_in", "std_msgs/msg/String")
+    adv_set_directive = rosbridge_advertise(
+        "/brain/set_directive", "std_msgs/msg/String"
+    )
     # Add a new topic for logging configuration
     adv_logging_config = rosbridge_advertise("/logging_config", "std_msgs/msg/Bool")
     adv_clock = rosbridge_advertise("/clock", "rosgraph_msgs/Clock")
@@ -290,7 +292,7 @@ async def outbound_loop(ws, shared_queues):
 
     # Also subscribe to /cmd_vel, /chat_out, and navigation topics
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
-    sub_chat_out = rosbridge_subscribe("/chat_out", "std_msgs/msg/String")
+    sub_chat_out = rosbridge_subscribe("/brain/chat_out", "std_msgs/msg/String")
     sub_nav_path = rosbridge_subscribe(
         "/sim_navigation/global_plan", "nav_msgs/msg/Path"
     )
@@ -299,7 +301,7 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(sub_chat_out))
     await ws.send(json.dumps(sub_nav_path))
     await ws.send(json.dumps(sub_nav_cancel))
-    print("[ROSBridge] Subscribed to /cmd_vel, /chat_out, and navigation topics")
+    print("[ROSBridge] Subscribed to /cmd_vel, /brain/chat_out, and navigation topics")
 
     # Initialize navigation controller
     nav_controller = NavigationController(shared_queues)
@@ -315,7 +317,7 @@ async def outbound_loop(ws, shared_queues):
 
         # Method 2: Call a service (more reliable for initialization)
         srv_set_logging = rosbridge_call_service(
-            "/set_logging_config", "std_srvs/srv/SetBool"
+            "/brain/set_logging_config", "std_srvs/srv/SetBool"
         )
         # Add the data parameter for the service call
         srv_set_logging["args"] = {"data": shared_queues.log_everything}
@@ -337,12 +339,12 @@ async def outbound_loop(ws, shared_queues):
                 await publish_occupancy_grid(ws, msg, shared_queues)
             elif isinstance(msg, DirectiveCmd):
                 directive_msg = {"data": msg.directive}
-                outbound = rosbridge_publish("/set_directive", directive_msg)
+                outbound = rosbridge_publish("/brain/set_directive", directive_msg)
                 await ws.send(json.dumps(outbound))
                 print(f"[ROSBridge] Published directive: {msg.directive}")
             elif isinstance(msg, ResetRobotCmd):
                 reset_srv = rosbridge_call_service(
-                    "/reset_brain", "brain_messages/srv/ResetBrain"
+                    "/brain/reset_brain", "brain_messages/srv/ResetBrain"
                 )
 
                 # Set the memory_state parameter directly (empty string if none provided)
@@ -363,7 +365,7 @@ async def outbound_loop(ws, shared_queues):
 
             elif isinstance(msg, BrainActiveCmd):
                 brain_active_srv = rosbridge_call_service(
-                    "/set_brain_active", "std_srvs/srv/SetBool"
+                    "/brain/set_brain_active", "std_srvs/srv/SetBool"
                 )
                 brain_active_srv["args"] = {"data": msg.active}
 
@@ -398,7 +400,7 @@ async def outbound_loop(ws, shared_queues):
             if isinstance(msg, ChatMessage):
                 print(f"[ROSBridge] Publishing chat message: {msg.text}")
                 outbound_text = {"data": msg.text}
-                outbound = rosbridge_publish("/chat_in", outbound_text)
+                outbound = rosbridge_publish("/brain/chat_in", outbound_text)
                 await ws.send(json.dumps(outbound))
 
                 # Also, add the chat message to the simulation queue as confirmation
@@ -413,7 +415,7 @@ async def outbound_loop(ws, shared_queues):
                 if msg.signal == "ready":
                     # Use the service to get the chat history
                     srv_chat_history = rosbridge_call_service(
-                        "/get_chat_history", "brain_messages/srv/GetChatHistory"
+                        "/brain/get_chat_history", "brain_messages/srv/GetChatHistory"
                     )
                     await ws.send(json.dumps(srv_chat_history))
         except queue.Empty:
