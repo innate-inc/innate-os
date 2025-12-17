@@ -8,12 +8,6 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
-    inputs:
-      create_release:
-        description: 'Create a release'
-        required: false
-        default: 'true'
-        type: boolean
 
 env:
   ROS_DISTRO: humble
@@ -33,11 +27,18 @@ jobs:
       run: |
         if [[ "${{ github.ref }}" == refs/tags/* ]]; then
           VERSION="${{ github.ref_name }}"
+          IS_TAG="true"
         else
-          VERSION="dev-$(git rev-parse --short HEAD)"
+          # For main branch, use latest tag + commit
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="${LATEST_TAG}-${SHORT_SHA}"
+          IS_TAG="false"
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "is_tag=$IS_TAG" >> $GITHUB_OUTPUT
         echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        echo "commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
     - name: Build ROS2 workspace in Docker
       run: |
@@ -112,7 +113,7 @@ jobs:
         retention-days: 30
 
     - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+      if: github.event_name != 'pull_request'
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.version.outputs.version }}
@@ -121,15 +122,29 @@ jobs:
           ## Innate OS Release ${{ steps.version.outputs.version }}
 
           **Build Date:** ${{ steps.version.outputs.date }}
-          **Commit:** ${{ github.sha }}
+          **Commit:** ${{ steps.version.outputs.commit }}
           **ROS Distribution:** Humble
-
-          ### Downloads
-
-          - `innate-os-${{ steps.version.outputs.version }}.tar.gz` - Full release with built artifacts
-          - `innate-os-${{ steps.version.outputs.version }}-source.tar.gz` - Source code only
+          **Release Type:** ${{ steps.version.outputs.is_tag == 'true' && 'Stable' || 'Development' }}
 
           ### Installation
+
+          **Fresh install:**
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
+          ```
+
+          **Update existing installation:**
+          ```bash
+          innate-update check
+          innate-update apply
+          ```
+
+          ### Manual Download
+
+          - `innate-os-${{ steps.version.outputs.version }}.tar.gz` - Full release with pre-built ROS2 artifacts
+          - `innate-os-${{ steps.version.outputs.version }}-source.tar.gz` - Source code only (requires build)
+
+          ### Manual Installation
 
           1. Extract the archive:
              ```bash
@@ -148,15 +163,8 @@ jobs:
              ```bash
              source ros2_ws/install/setup.bash
              ```
-
-          ### Docker
-
-          ```bash
-          docker build -t innate-os -f Dockerfile.build .
-          docker run -it innate-os bash
-          ```
         draft: false
-        prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        prerelease: ${{ steps.version.outputs.is_tag != 'true' }}
         files: |
           innate-os-${{ steps.version.outputs.version }}.tar.gz
           innate-os-${{ steps.version.outputs.version }}-source.tar.gz
