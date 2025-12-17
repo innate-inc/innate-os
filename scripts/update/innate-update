@@ -5,17 +5,23 @@
 #        innate-update apply        - Apply updates (to latest tag)
 #        innate-update apply --dev  - Apply updates (to latest commit)
 #        innate-update status       - Show current version
+#        innate-update daemon       - Run as background daemon (for systemd)
 
 set -e
 
-REPO_DIR="/home/jetson1/innate-os"
+# Configuration - can be overridden via environment variables
+REPO_DIR="${INNATE_OS_DIR:-/home/$USER/innate-os}"
+STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
 LOG_DIR="$REPO_DIR/logs"
-UPDATE_CACHE="/tmp/innate-update-cache"
+UPDATE_CACHE="$STATE_DIR/update-cache"
 BRANCH="${INNATE_UPDATE_BRANCH:-main}"
+GITHUB_REPO="${GITHUB_REPO:-innate-inc/innate-os}"
 DEV_MODE=false
+DAEMON_INTERVAL="${INNATE_UPDATE_INTERVAL:-3600}"  # Default: check every hour
 
-# Ensure log directory exists
+# Ensure directories exist
 mkdir -p "$LOG_DIR"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 # Colors
 RED='\033[0;31m'
@@ -388,6 +394,25 @@ for arg in "$@"; do
     fi
 done
 
+# Daemon mode - run periodic update checks in the background
+run_daemon() {
+    log "Starting innate-update daemon (interval: ${DAEMON_INTERVAL}s)"
+
+    while true; do
+        log "Daemon: checking for updates..."
+
+        # Perform a silent check
+        if ! quick_check 2>/dev/null; then
+            log "Daemon: updates available"
+            # Could notify user here via desktop notification or webhook
+        else
+            log "Daemon: system up to date"
+        fi
+
+        sleep "$DAEMON_INTERVAL"
+    done
+}
+
 # Main command dispatch
 case "${1:-}" in
     check)
@@ -398,6 +423,9 @@ case "${1:-}" in
         ;;
     status)
         show_status
+        ;;
+    daemon)
+        run_daemon
         ;;
     --quick-check)
         # Silent check for .zshrc integration
@@ -412,6 +440,14 @@ case "${1:-}" in
         echo "  innate-update apply         - Apply pending updates (to latest tag)"
         echo "  innate-update apply --dev   - Apply updates (to latest commit)"
         echo "  innate-update status        - Show current version info"
+        echo "  innate-update daemon        - Run as background daemon (for systemd)"
+        echo ""
+        echo "Configuration (environment variables):"
+        echo "  INNATE_OS_DIR              - Installation directory (default: /home/\$USER/innate-os)"
+        echo "  INNATE_STATE_DIR           - State directory (default: /var/lib/innate-update)"
+        echo "  INNATE_UPDATE_BRANCH       - Git branch to track (default: main)"
+        echo "  INNATE_UPDATE_INTERVAL     - Daemon check interval in seconds (default: 3600)"
+        echo "  GITHUB_REPO                - GitHub repository (default: innate-inc/innate-os)"
         echo ""
         echo "By default, updates are to the latest tagged release on main."
         echo "Use --dev flag to update to the latest commit instead."
