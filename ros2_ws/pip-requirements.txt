@@ -1,0 +1,11 @@
+# Python dependencies for innate-os ROS2 workspace
+# Install with: pip3 install -r pip-requirements.txt
+
+numpy
+opencv-python
+pydantic
+websockets
+h5py
+urdf-parser-py
+dynamixel-sdk
+pyserial
