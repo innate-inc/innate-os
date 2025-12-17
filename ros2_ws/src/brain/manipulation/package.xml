@@ -32,11 +32,7 @@
   <depend>brain_messages</depend>
   <depend>maurice_msgs</depend>
 
-  <!-- Python dependencies -->
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-h5py</exec_depend>
-  <exec_depend>python3-torch</exec_depend>
+  <!-- Python dependencies (installed via pip-requirements.txt) -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -40,11 +40,7 @@
   <!-- Internal package dependencies -->
   <exec_depend>maurice_msgs</exec_depend>
 
-  <!-- Python dependencies -->
-  <exec_depend>python3-dynamixel-sdk</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-serial</exec_depend>
+  <!-- Python dependencies (installed via pip-requirements.txt and apt-dependencies.txt) -->
   <exec_depend>rosbag2_py</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>

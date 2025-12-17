@@ -22,14 +22,7 @@
   <!-- Image/CV dependencies -->
   <depend>cv_bridge</depend>
 
-  <!-- Python/GStreamer dependencies -->
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-gi</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-base</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-bad</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-ugly</exec_depend>
-  <exec_depend>gstreamer1.0-nice</exec_depend>
+  <!-- Python/GStreamer dependencies (installed via apt-dependencies.txt) -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
