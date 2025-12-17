@@ -3,7 +3,12 @@
 # Innate OS Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
 #
+# For private repositories:
+#   GITHUB_TOKEN=ghp_xxx curl -fsSL -H "Authorization: token ghp_xxx" \
+#     https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
+#
 # Options (environment variables):
+#   GITHUB_TOKEN            - GitHub Personal Access Token (required for private repos)
 #   BUILD_FROM_SOURCE=true  - Build from source instead of downloading pre-built release
 #   INNATE_OS_DIR           - Installation directory (default: /home/$USER/innate-os)
 #   GITHUB_REPO             - GitHub repository (default: innate-inc/innate-os)
@@ -34,9 +39,28 @@ NC='\033[0m' # No Color
 INNATE_OS_DIR="${INNATE_OS_DIR:-/home/$USER/innate-os}"
 INNATE_STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
 GITHUB_REPO="${GITHUB_REPO:-innate-inc/innate-os}"
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 ROS_DISTRO="humble"
 # Set to "true" to build from source, "false" to download pre-built artifacts
 BUILD_FROM_SOURCE="${BUILD_FROM_SOURCE:-false}"
+
+# Helper for authenticated GitHub API/download requests
+github_curl() {
+    if [ -n "$GITHUB_TOKEN" ]; then
+        curl -sSL -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$@"
+    else
+        curl -sSL -H "Accept: application/vnd.github+json" "$@"
+    fi
+}
+
+# Helper for downloading release assets (needs different Accept header)
+github_download() {
+    if [ -n "$GITHUB_TOKEN" ]; then
+        curl -sSL -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/octet-stream" "$@"
+    else
+        curl -sSL "$@"
+    fi
+}
 
 # -----------------------------------------------------------------------------
 # Helper functions
@@ -162,19 +186,58 @@ install_ros2() {
 # Clone/Download repository
 # -----------------------------------------------------------------------------
 
+save_github_token() {
+    # Save token securely for future updates
+    TOKEN_FILE="$INNATE_STATE_DIR/.github_token"
+    mkdir -p "$INNATE_STATE_DIR"
+    echo "$GITHUB_TOKEN" > "$TOKEN_FILE"
+    chmod 600 "$TOKEN_FILE"
+    info "GitHub token saved for future updates"
+}
+
+load_github_token() {
+    # Load saved token if not already set
+    if [ -z "$GITHUB_TOKEN" ]; then
+        TOKEN_FILE="$INNATE_STATE_DIR/.github_token"
+        if [ -f "$TOKEN_FILE" ]; then
+            GITHUB_TOKEN=$(cat "$TOKEN_FILE")
+            export GITHUB_TOKEN
+        fi
+    fi
+}
+
 get_latest_release_info() {
     # Fetch latest release info from GitHub API
     RELEASE_API="https://api.github.com/repos/$GITHUB_REPO/releases/latest"
-    RELEASE_INFO=$(curl -sSL "$RELEASE_API" 2>/dev/null)
+    info "Checking releases at: $RELEASE_API"
+    RELEASE_INFO=$(github_curl "$RELEASE_API" 2>/dev/null)
 
-    if [ -z "$RELEASE_INFO" ] || echo "$RELEASE_INFO" | grep -q "Not Found"; then
+    if [ -z "$RELEASE_INFO" ]; then
+        warn "Empty response from GitHub API"
         return 1
     fi
 
-    # Extract tag name and asset URL
+    if echo "$RELEASE_INFO" | grep -q '"message".*"Not Found"'; then
+        warn "No releases found for $GITHUB_REPO"
+        return 1
+    fi
+
+    # Check for auth error
+    if echo "$RELEASE_INFO" | grep -q "Bad credentials\|Requires authentication"; then
+        warn "GitHub authentication failed. Please check your GITHUB_TOKEN."
+        return 1
+    fi
+
+    # Extract tag name and asset URL (use API URL for private repos)
     LATEST_TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | head -1 | sed 's/.*: "\([^"]*\)".*/\1/')
-    # Look for the full release tarball (not source)
-    ASSET_URL=$(echo "$RELEASE_INFO" | grep '"browser_download_url"' | grep -v '\-source\.tar\.gz' | grep '\.tar\.gz' | head -1 | sed 's/.*: "\([^"]*\)".*/\1/')
+
+    # For private repos, use the API URL (url field) instead of browser_download_url
+    # The API URL works with token auth, browser URL doesn't
+    if [ -n "$GITHUB_TOKEN" ]; then
+        ASSET_URL=$(echo "$RELEASE_INFO" | grep -A5 '"name":' | grep -B5 '\.tar\.gz"' | grep -v '\-source\.tar\.gz' | grep '"url"' | head -1 | sed 's/.*: "\([^"]*\)".*/\1/')
+    else
+        ASSET_URL=$(echo "$RELEASE_INFO" | grep '"browser_download_url"' | grep -v '\-source\.tar\.gz' | grep '\.tar\.gz' | head -1 | sed 's/.*: "\([^"]*\)".*/\1/')
+    fi
 
     if [ -z "$LATEST_TAG" ] || [ -z "$ASSET_URL" ]; then
         return 1
@@ -187,11 +250,12 @@ get_latest_release_info() {
 download_release() {
     info "Fetching latest release info..."
 
-    RELEASE_DATA=$(get_latest_release_info)
-    if [ $? -ne 0 ] || [ -z "$RELEASE_DATA" ]; then
-        warn "Could not fetch release info, falling back to git clone"
+    # Use || true to prevent set -e from exiting on failure
+    RELEASE_DATA=$(get_latest_release_info) || true
+    if [ -z "$RELEASE_DATA" ]; then
+        warn "No releases found, falling back to git clone and build from source"
         clone_repository
-        return 0
+        return 1  # Signal that we need to build
     fi
 
     LATEST_TAG=$(echo "$RELEASE_DATA" | cut -d'|' -f1)
@@ -205,7 +269,15 @@ download_release() {
 
     # Download and extract
     TEMP_ARCHIVE="/tmp/innate-os-release.tar.gz"
-    if curl -sSL -o "$TEMP_ARCHIVE" "$ASSET_URL"; then
+    if github_download -o "$TEMP_ARCHIVE" "$ASSET_URL"; then
+        # Verify we got a valid archive (not an error page)
+        if ! tar -tzf "$TEMP_ARCHIVE" >/dev/null 2>&1; then
+            warn "Downloaded file is not a valid archive, falling back to git clone"
+            rm -f "$TEMP_ARCHIVE"
+            clone_repository
+            return 0
+        fi
+
         # Remove existing directory if present
         if [ -d "$INNATE_OS_DIR" ]; then
             warn "Removing existing installation at $INNATE_OS_DIR"
@@ -219,23 +291,50 @@ download_release() {
         # Initialize git repo for future updates
         cd "$INNATE_OS_DIR"
         if [ ! -d ".git" ]; then
-            git init
-            git remote add origin "https://github.com/$GITHUB_REPO.git"
-            git fetch --tags
-            git checkout -b main
+            info "Initializing git repository for future updates..."
+            git init -q
+            # Configure git remote with token if available
+            if [ -n "$GITHUB_TOKEN" ]; then
+                git remote add origin "https://${GITHUB_TOKEN}@github.com/$GITHUB_REPO.git"
+            else
+                git remote add origin "https://github.com/$GITHUB_REPO.git"
+            fi
+            git fetch --tags -q 2>/dev/null || true
+            git checkout -b main -q 2>/dev/null || true
             git reset --soft "$LATEST_TAG" 2>/dev/null || true
+        fi
+
+        # Save the token for future updates (if provided)
+        if [ -n "$GITHUB_TOKEN" ]; then
+            save_github_token
         fi
 
         success "Release $LATEST_TAG downloaded and extracted"
     else
-        error "Failed to download release"
+        warn "Failed to download release, falling back to git clone"
+        clone_repository
+        return 1  # Signal that we need to build
     fi
+    return 0  # Signal that we have pre-built artifacts
 }
 
 clone_repository() {
+    # Build git URL (with token for private repos)
+    if [ -n "$GITHUB_TOKEN" ]; then
+        GIT_URL="https://${GITHUB_TOKEN}@github.com/$GITHUB_REPO.git"
+    else
+        GIT_URL="https://github.com/$GITHUB_REPO.git"
+    fi
+
     if [ -d "$INNATE_OS_DIR/.git" ]; then
         info "Repository already exists, updating..."
         cd "$INNATE_OS_DIR"
+
+        # Update remote URL if token changed
+        if [ -n "$GITHUB_TOKEN" ]; then
+            git remote set-url origin "$GIT_URL" 2>/dev/null || true
+        fi
+
         git fetch --all --tags
         # Checkout latest tag
         LATEST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "")
@@ -248,7 +347,7 @@ clone_repository() {
         success "Repository updated"
     else
         info "Cloning Innate OS repository..."
-        git clone "https://github.com/$GITHUB_REPO.git" "$INNATE_OS_DIR"
+        git clone "$GIT_URL" "$INNATE_OS_DIR"
         cd "$INNATE_OS_DIR"
         # Checkout latest tag if available
         LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -257,6 +356,11 @@ clone_repository() {
             git checkout "$LATEST_TAG"
         fi
         success "Repository cloned to $INNATE_OS_DIR"
+    fi
+
+    # Save the token for future updates (if provided)
+    if [ -n "$GITHUB_TOKEN" ]; then
+        save_github_token
     fi
 }
 
@@ -498,31 +602,36 @@ main() {
     install_ros2
 
     # Download pre-built release or clone and build from source
+    NEED_BUILD=false
+
     if [ "$BUILD_FROM_SOURCE" = "true" ]; then
         info "Build from source mode enabled"
         clone_repository
-        install_apt_dependencies
-        install_pip_dependencies
+        NEED_BUILD=true
+    else
+        # Try to download pre-built release (|| true to handle set -e)
+        if download_release; then
+            # Check if we actually got pre-built artifacts
+            if [ -d "$INNATE_OS_DIR/ros2_ws/install" ]; then
+                info "Pre-built artifacts found, skipping build"
+            else
+                NEED_BUILD=true
+            fi
+        else
+            # download_release failed and fell back to git clone
+            NEED_BUILD=true
+        fi
+    fi
+
+    # Install dependencies (always needed)
+    install_apt_dependencies
+    install_pip_dependencies
+
+    # Build if needed
+    if [ "$NEED_BUILD" = "true" ]; then
+        info "Building ROS2 workspace from source..."
         init_rosdep
         build_workspace
-    else
-        # Try to download pre-built release
-        download_release
-
-        # Check if we got pre-built artifacts
-        if [ -d "$INNATE_OS_DIR/ros2_ws/install" ]; then
-            info "Pre-built artifacts found, skipping build"
-            # Still need to install dependencies for runtime
-            install_apt_dependencies
-            install_pip_dependencies
-        else
-            # No pre-built artifacts, need to build
-            info "No pre-built artifacts, building from source..."
-            install_apt_dependencies
-            install_pip_dependencies
-            init_rosdep
-            build_workspace
-        fi
     fi
 
     install_updater
