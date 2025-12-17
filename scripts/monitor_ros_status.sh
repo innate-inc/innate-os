@@ -3,6 +3,17 @@
 # Logs output to /tmp/ros_monitor.log
 
 LOG_FILE="/tmp/ros_monitor.log"
+ROS_WS_PATH="${INNATE_OS_ROOT:-$HOME/innate-os}/ros2_ws"
+DDS_SETUP_SCRIPT="${INNATE_OS_ROOT:-$HOME/innate-os}/dds/setup_dds.zsh"
+
+# Source environment
+source "$DDS_SETUP_SCRIPT" || { echo "ERROR: Failed to source DDS setup." >&2; exit 1; }
+if [ -f "$ROS_WS_PATH/install/setup.bash" ]; then
+    source "$ROS_WS_PATH/install/setup.bash" || { echo "ERROR: Failed to source ROS workspace." >&2; exit 1; }
+else
+    echo "ERROR: ROS workspace setup not found at $ROS_WS_PATH/install/setup.bash" >&2
+    exit 1
+fi
 
 # Clear previous log
 > "$LOG_FILE"
