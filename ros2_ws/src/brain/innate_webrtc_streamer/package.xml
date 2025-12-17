@@ -4,22 +4,32 @@
   <name>innate_webrtc_streamer</name>
   <version>0.1.0</version>
   <description>WebRTC video streaming for low-latency H.264 video delivery to clients</description>
-  
+
   <maintainer email="robot@innate.com">Innate Team</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- ROS2 dependencies -->
+  <!-- Core ROS dependencies -->
   <depend>rclpy</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Message dependencies -->
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+
+  <!-- Image/CV dependencies -->
   <depend>cv_bridge</depend>
 
-  <!-- Python dependencies (installed via pip, but declared for reference) -->
-  <!-- pygobject (for GStreamer Python bindings) -->
-  <!-- opencv-python (via cv_bridge) -->
-  <!-- numpy -->
+  <!-- Python/GStreamer dependencies -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-gi</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-base</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-bad</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-ugly</exec_depend>
+  <exec_depend>gstreamer1.0-nice</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

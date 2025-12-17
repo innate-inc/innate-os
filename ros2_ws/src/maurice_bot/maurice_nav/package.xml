@@ -9,11 +9,24 @@
   <!-- Build tool dependency -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- Execution dependencies -->
+  <!-- Core ROS dependencies -->
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Message dependencies -->
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
+
+  <!-- Navigation dependencies -->
   <exec_depend>nav2_simple_commander</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <!-- Internal package dependencies -->
   <exec_depend>brain_messages</exec_depend>
 
   <!-- Lint and testing dependencies -->

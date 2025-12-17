@@ -3,22 +3,28 @@
 <package format="3">
   <name>maurice_head</name>
   <version>0.0.1</version>
-  <description>Motion‐planning, IK and hardware interface for the Maurice arm.</description>
+  <description>Motion-planning, IK and hardware interface for the Maurice head.</description>
   <maintainer email="vignesh@innate.bot">Vignesh Anand</maintainer>
   <license>Apache-2.0</license>
 
-  <!-- Runtime dependencies -->
-  <exec_depend>rclcpp</exec_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <!-- add more as needed -->
+  <!-- Build-time dependencies -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
-  <!-- Build‐time dependencies -->
-  <build_depend>ament_cmake</build_depend>
-  <build_depend>ament_cmake_python</build_depend>
-  <build_depend>rclcpp</build_depend>
-  <build_depend>rclpy</build_depend>
+  <!-- Core ROS dependencies -->
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Message dependencies -->
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>rcl_interfaces</depend>
+
+  <!-- Internal package dependencies -->
+  <exec_depend>maurice_arm</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
