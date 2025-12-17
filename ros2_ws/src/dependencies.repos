@@ -1,0 +1,5 @@
+repositories:
+  depthai-ros:
+    type: git
+    url: https://github.com/luxonis/depthai-ros.git
+    version: humble

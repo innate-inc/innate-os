@@ -1,0 +1,25 @@
+# System dependencies for innate-os ROS2 workspace
+# Install with: xargs -a apt-dependencies.txt sudo apt-get install -y
+
+# Build tools
+python3-pip
+python3-colcon-common-extensions
+python3-rosdep
+python3-vcstool
+git
+
+# System libraries
+libudev-dev
+libusb-1.0-0-dev
+
+# ROS2 Humble packages
+ros-humble-fastrtps
+ros-humble-rosbridge-suite
+ros-humble-launch-xml
+ros-humble-cv-bridge
+ros-humble-navigation2
+ros-humble-nav2-bringup
+ros-humble-tf2-ros
+ros-humble-tf2-geometry-msgs
+ros-humble-camera-info-manager
+ros-humble-diagnostic-msgs

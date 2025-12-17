@@ -36,72 +36,27 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
-    - name: Create build Dockerfile
-      run: |
-        cat > Dockerfile.build << 'DOCKERFILE'
-        FROM ros:humble-ros-base
-
-        # Install system dependencies
-        RUN apt-get update && apt-get install -y \
-            python3-pip \
-            python3-colcon-common-extensions \
-            python3-rosdep \
-            libudev-dev \
-            && rm -rf /var/lib/apt/lists/*
-
-        # Install ROS2 packages
-        RUN apt-get update && apt-get install -y \
-            ros-humble-fastrtps \
-            ros-humble-rosbridge-suite \
-            ros-humble-launch-xml \
-            ros-humble-cv-bridge \
-            ros-humble-navigation2 \
-            ros-humble-nav2-bringup \
-            ros-humble-tf2-ros \
-            ros-humble-tf2-geometry-msgs \
-            ros-humble-camera-info-manager \
-            ros-humble-diagnostic-msgs \
-            && rm -rf /var/lib/apt/lists/*
-
-        # Install Python dependencies
-        RUN pip3 install --no-cache-dir \
-            numpy \
-            opencv-python \
-            pydantic \
-            websockets \
-            h5py \
-            urdf-parser-py \
-            dynamixel-sdk \
-            pyserial
-
-        # Initialize rosdep
-        RUN rosdep init || true && rosdep update
-
-        WORKDIR /workspace
-        DOCKERFILE
-
     - name: Build ROS2 workspace in Docker
       run: |
-        # Build the Docker image for building
+        # Build using the existing Dockerfile.build
         docker build -t ros2-builder -f Dockerfile.build .
 
-        # Run the build inside Docker
-        docker run --rm \
-          -v "${{ github.workspace }}:/workspace" \
-          -w /workspace/ros2_ws \
-          ros2-builder \
-          bash -c "
-            source /opt/ros/humble/setup.bash && \
-            rosdep install --from-paths src --ignore-src -r -y || true && \
-            colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
-          "
+    - name: Extract built artifacts from Docker
+      run: |
+        # Create a container and copy the built workspace out
+        docker create --name build-container ros2-builder
+        docker cp build-container:/root/innate-os/ros2_ws/install ./ros2_ws/install
+        docker cp build-container:/root/innate-os/ros2_ws/build ./ros2_ws/build
+        # Also copy the vcs-imported dependencies (depthai-ros, etc.)
+        docker cp build-container:/root/innate-os/ros2_ws/src/depthai-ros ./ros2_ws/src/depthai-ros || true
+        docker rm build-container
 
     - name: Create release archive
       run: |
         # Create a clean directory for the release
         mkdir -p release-package/innate-os
 
-        # Copy source files
+        # Copy source files with built artifacts
         cp -r ros2_ws release-package/innate-os/
         cp -r dds release-package/innate-os/
         cp -r config release-package/innate-os/ || true
@@ -119,6 +74,7 @@ jobs:
         cp SYSTEM_SETUP.md release-package/innate-os/ || true
         cp SYSTEM_OVERVIEW.md release-package/innate-os/ || true
         cp Dockerfile release-package/innate-os/ || true
+        cp Dockerfile.build release-package/innate-os/ || true
         cp docker-compose*.yml release-package/innate-os/ || true
         cp .env.template release-package/innate-os/ || true
         cp os_config.json release-package/innate-os/ || true
