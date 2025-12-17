@@ -57,7 +57,7 @@ process_command_group() {
     if [ $group_index -eq 1 ]; then
         tmux new-session -d -s $SESSION_NAME -n "$window_name" -c ~ || return 1
     else
-        tmux new-window -t $SESSION_NAME -n "$window_name" -c ~ || return 1
+        tmux set-option history-limit 50000 \; new-window -t $SESSION_NAME -n "$window_name" -c ~ || return 1
     fi
     
     sleep 0.1
