@@ -1,7 +1,16 @@
-#!/bin/zsh
+#!/bin/bash
 # Launch ROS nodes in tmux windows with 2 panes each
+# Note: Uses bash for compatibility, but sources zsh configs in tmux panes
 
 SESSION_NAME="ros_nodes"
+
+# Auto-detect INNATE_OS_ROOT if not set
+if [ -z "$INNATE_OS_ROOT" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    INNATE_OS_ROOT="$(dirname "$SCRIPT_DIR")"
+    export INNATE_OS_ROOT
+fi
+
 ROS_WS_PATH="$INNATE_OS_ROOT/ros2_ws"
 DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh"
 
@@ -24,19 +33,36 @@ WINDOW_NAMES=(
     "ik-logger"
 )
 
-DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
-ROS_SOURCE_CMD="source $ROS_WS_PATH/install/setup.zsh"
+# Build source commands - DDS is optional, ROS workspace is required
+if [ -f "$DDS_SETUP_SCRIPT" ]; then
+    DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
+else
+    DDS_SOURCE_CMD="true"  # No-op if DDS not present
+fi
+
+# Support both bash and zsh setups
+if [ -f "$ROS_WS_PATH/install/setup.bash" ]; then
+    ROS_SOURCE_CMD="source $ROS_WS_PATH/install/setup.bash"
+elif [ -f "$ROS_WS_PATH/install/setup.zsh" ]; then
+    ROS_SOURCE_CMD="source $ROS_WS_PATH/install/setup.zsh"
+else
+    echo "ERROR: ROS workspace setup not found at $ROS_WS_PATH/install/" >&2
+    exit 1
+fi
 
 echo "Launching ROS nodes in tmux session '$SESSION_NAME'..."
+echo "  INNATE_OS_ROOT: $INNATE_OS_ROOT"
+echo "  ROS Workspace: $ROS_WS_PATH"
 
-# Source environment
-source "$DDS_SETUP_SCRIPT" || { echo "ERROR: Failed to source DDS setup." >&2; exit 1; }
+# Source ROS environment for this script
+source /opt/ros/humble/setup.bash
+if [ -f "$ROS_WS_PATH/install/setup.bash" ]; then
+    source "$ROS_WS_PATH/install/setup.bash"
+fi
 
-if [ -f "$ROS_WS_PATH/install/setup.zsh" ]; then
-    source "$ROS_WS_PATH/install/setup.zsh" || { echo "ERROR: Failed to source ROS workspace." >&2; exit 1; }
-else
-    echo "ERROR: ROS workspace setup not found at $ROS_WS_PATH/install/setup.zsh" >&2
-    exit 1
+# Source DDS if available
+if [ -f "$DDS_SETUP_SCRIPT" ]; then
+    source "$DDS_SETUP_SCRIPT" || echo "WARN: DDS setup failed, continuing anyway..."
 fi
 
 if tmux has-session -t $SESSION_NAME 2>/dev/null; then
@@ -48,45 +74,48 @@ process_command_group() {
     local group_index=$1
     local command_group="${ROS_COMMAND_GROUPS[$group_index]}"
     local window_name="${WINDOW_NAMES[$group_index]}"
-    local commands=(${(s:|:)command_group})
-    
+
+    # Split by pipe delimiter (bash compatible)
+    IFS='|' read -ra commands <<< "$command_group"
+
     echo "  Creating window: $window_name"
-    
-    if [ $group_index -eq 1 ]; then
+
+    if [ $group_index -eq 0 ]; then
         tmux new-session -d -s $SESSION_NAME -n "$window_name" -c ~ || return 1
     else
         tmux new-window -t $SESSION_NAME -n "$window_name" -c ~ || return 1
     fi
-    
+
     sleep 0.1
-    
-    local first_cmd="${commands[1]}"
-    local first_cmd_full="$DDS_SOURCE_CMD && $ROS_SOURCE_CMD && $first_cmd"
+
+    local first_cmd="${commands[0]}"
+    local first_cmd_full="source /opt/ros/humble/setup.bash && $DDS_SOURCE_CMD && $ROS_SOURCE_CMD && $first_cmd"
     tmux send-keys -t $SESSION_NAME:"$window_name".0 "$first_cmd_full" C-m || return 1
-    
+
     if [ ${#commands[@]} -gt 1 ]; then
-        local second_cmd="${commands[2]}"
-        local second_cmd_full="$DDS_SOURCE_CMD && $ROS_SOURCE_CMD && $second_cmd"
-        
+        local second_cmd="${commands[1]}"
+        local second_cmd_full="source /opt/ros/humble/setup.bash && $DDS_SOURCE_CMD && $ROS_SOURCE_CMD && $second_cmd"
+
         tmux split-window -h -c ~ -t $SESSION_NAME:"$window_name" || return 1
         sleep 0.1
         tmux send-keys -t $SESSION_NAME:"$window_name".1 "$second_cmd_full" C-m || return 1
         tmux select-layout -t $SESSION_NAME:"$window_name" even-horizontal
     fi
-    
+
     sleep 0.1
     return 0
 }
 
-for i in $(seq 1 ${#ROS_COMMAND_GROUPS[@]}); do
-    process_command_group $i || { 
+# Bash arrays are 0-indexed
+for i in $(seq 0 $((${#ROS_COMMAND_GROUPS[@]} - 1))); do
+    process_command_group $i || {
         echo "ERROR: Failed to create window $i" >&2
         tmux kill-session -t $SESSION_NAME 2>/dev/null
         exit 1
     }
 done
 
-tmux select-window -t $SESSION_NAME:"${WINDOW_NAMES[1]}"
+tmux select-window -t $SESSION_NAME:"${WINDOW_NAMES[0]}"
 
 echo "✓ ROS nodes launched in tmux session '$SESSION_NAME'"
 echo "  Attach: tmux attach -t $SESSION_NAME"
