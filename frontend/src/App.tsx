@@ -160,6 +160,7 @@ function SimulatorApp() {
           viewMode={viewMode}
           setViewMode={setViewMode}
           onResetRobot={handleResetRobot}
+          onSetDirective={handleSetDirective}
         />
       </TopSection>
 

@@ -1,6 +1,6 @@
 import styled from "styled-components";
 import { isMobile } from "react-device-detect";
-import { MdRefresh } from "react-icons/md";
+import { MdRefresh, MdSend } from "react-icons/md";
 import { useState, useEffect } from "react";
 import {
   PreviewContainer,
@@ -14,6 +14,7 @@ type ImageDisplayProps = {
   viewMode: ViewMode;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
   onResetRobot: () => void;
+  onSetDirective: (directive: string) => void;
 };
 
 // Styled components for the slider, adapted from ToggleViewMode
@@ -32,10 +33,7 @@ const ToggleWrapper = styled.div`
   -webkit-backdrop-filter: blur(5px);
 `;
 
-const ResetButton = styled.button`
-  position: absolute;
-  top: 10px;
-  left: 10px;
+const ControlButton = styled.button`
   z-index: 100;
   background: rgba(0, 0, 0, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -56,6 +54,95 @@ const ResetButton = styled.button`
   &:focus {
     outline: none;
   }
+`;
+
+const ButtonGroup = styled.div`
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 8px;
+`;
+
+const ModalOverlay = styled.div`
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+`;
+
+const ModalContent = styled.div`
+  background: #1e293b;
+  border-radius: 8px;
+  padding: 24px;
+  width: 400px;
+  max-width: 90%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+`;
+
+const ModalTitle = styled.h3`
+  color: white;
+  margin: 0 0 16px 0;
+  font-size: 18px;
+`;
+
+const ModalInput = styled.input`
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  color: white;
+  font-size: 14px;
+  box-sizing: border-box;
+
+  &:focus {
+    outline: none;
+    border-color: #4f46e5;
+  }
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+  }
+`;
+
+const ModalButtons = styled.div`
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+`;
+
+const ModalButton = styled.button<{ $primary?: boolean }>`
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border: none;
+
+  ${({ $primary }) =>
+    $primary
+      ? `
+    background: #4f46e5;
+    color: white;
+    &:hover {
+      background: #4338ca;
+    }
+  `
+      : `
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    &:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  `}
 `;
 
 const Indicator = styled.div<{ index: number; $maxIndex: number }>`
@@ -174,6 +261,7 @@ export function ImageDisplay({
   viewMode,
   setViewMode,
   onResetRobot,
+  onSetDirective,
 }: ImageDisplayProps) {
   // State to track if we should show the loading screen
   const [showLoading, setShowLoading] = useState(true);
@@ -183,6 +271,8 @@ export function ImageDisplay({
   const [errorMessage, setErrorMessage] = useState("Simulation not running");
   // State to track if we're checking the simulation
   const [isChecking, setIsChecking] = useState(false);
+  const [showDirectiveModal, setShowDirectiveModal] = useState(false);
+  const [directiveText, setDirectiveText] = useState("");
 
   // Grab IP from environment, use a fallback if missing
   const baseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
@@ -317,9 +407,53 @@ export function ImageDisplay({
       {/* Only show controls when not in loading state */}
       {!showLoading && (
         <>
-          <ResetButton onClick={() => onResetRobot()}>
-            <MdRefresh size={16} /> Reset Robot
-          </ResetButton>
+          <ButtonGroup>
+            <ControlButton onClick={() => onResetRobot()}>
+              <MdRefresh size={16} /> Reset Robot
+            </ControlButton>
+            <ControlButton onClick={() => setShowDirectiveModal(true)}>
+              <MdSend size={16} /> Set Directive
+            </ControlButton>
+          </ButtonGroup>
+
+          {showDirectiveModal && (
+            <ModalOverlay onClick={() => setShowDirectiveModal(false)}>
+              <ModalContent onClick={(e) => e.stopPropagation()}>
+                <ModalTitle>Set Directive</ModalTitle>
+                <ModalInput
+                  type="text"
+                  placeholder="Enter directive..."
+                  value={directiveText}
+                  onChange={(e) => setDirectiveText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && directiveText.trim()) {
+                      onSetDirective(directiveText.trim());
+                      setDirectiveText("");
+                      setShowDirectiveModal(false);
+                    }
+                  }}
+                  autoFocus
+                />
+                <ModalButtons>
+                  <ModalButton onClick={() => setShowDirectiveModal(false)}>
+                    Cancel
+                  </ModalButton>
+                  <ModalButton
+                    $primary
+                    onClick={() => {
+                      if (directiveText.trim()) {
+                        onSetDirective(directiveText.trim());
+                        setDirectiveText("");
+                        setShowDirectiveModal(false);
+                      }
+                    }}
+                  >
+                    Send
+                  </ModalButton>
+                </ModalButtons>
+              </ModalContent>
+            </ModalOverlay>
+          )}
 
           <ToggleWrapper>
             <Indicator index={currentIndex} $maxIndex={modes.length} />
