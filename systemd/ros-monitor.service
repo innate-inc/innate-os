@@ -12,7 +12,7 @@ Description=ROS Application Launcher in Tmux
 # Ensure this script is executable (chmod +x)
 # Preserve common/ROS environment variables including INNATE_OS_ROOT
 Environment="INNATE_OS_ROOT=/home/jetson1/innate-os"
-ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/launch_ros_in_tmux.sh'
+ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/monitor_ros_status.sh'
 
 # Type=simple should work if the script exits after starting tmux detached.
 # If the script waits for tmux, Type=forking might be needed, but usually not.
