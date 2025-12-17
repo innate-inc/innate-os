@@ -13,6 +13,7 @@ ROS_COMMAND_GROUPS=(
     "ros2 launch manipulation behavior.launch.py|ros2 launch brain_client input_manager.launch.py"
     "ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py|ros2 launch maurice_control udp_leader_receiver.launch.py"
     "ros2 run maurice_arm ik.py|ros2 launch maurice_log logger.launch.py"
+    "for i in {1..100}; do echo '['\$(date '+%Y-%m-%d %H:%M:%S')'] === Iteration' \$i '===' && ros2 node list && echo '' && ros2 topic list && echo '' && ros2 service list && sleep 3; done|"
 )
 
 WINDOW_NAMES=(
@@ -22,6 +23,7 @@ WINDOW_NAMES=(
     "behaviors-inputs"
     "stream"
     "ik-logger"
+    "monitor"
 )
 
 DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
