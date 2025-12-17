@@ -56,7 +56,7 @@ for i in {1..100}; do
         
         rm -f /tmp/ros_nodes /tmp/ros_topics /tmp/ros_services
         #sleep 1
-    } | tee -a "$LOG_FILE"
+    } >> "$LOG_FILE"
 done
 
 echo "Monitor complete. Full log saved to: $LOG_FILE"
