@@ -123,9 +123,34 @@ class BrainClientNode(Node):
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
 
-        # --- TTS parameters ---
-        self.declare_parameter("cartesia_api_key", "")
+        # --- Proxy service configuration ---
+        # Credentials (INNATE_PROXY_URL, INNATE_SERVICE_KEY) come from env vars
+        # These are service configs that can be overridden at launch
         self.declare_parameter("cartesia_voice_id", "f786b574-daa5-4673-aa0c-cbe3e8534c02")
+        self.declare_parameter("openai_realtime_model", "gpt-4o-realtime-preview")
+        self.declare_parameter("openai_realtime_url", "wss://api.openai.com/v1/realtime")
+        self.declare_parameter("openai_transcribe_model", "gpt-4o-mini-transcribe")
+        
+        # Build proxy config from params
+        proxy_config = {
+            "cartesia_voice_id": self.get_parameter("cartesia_voice_id").get_parameter_value().string_value,
+            "openai_realtime_model": self.get_parameter("openai_realtime_model").get_parameter_value().string_value,
+            "openai_realtime_url": self.get_parameter("openai_realtime_url").get_parameter_value().string_value,
+            "openai_transcribe_model": self.get_parameter("openai_transcribe_model").get_parameter_value().string_value,
+        }
+        
+        # Initialize unified proxy client (credentials from env, config from params)
+        from brain_client.client.proxy_client import ProxyClient
+        try:
+            self.proxy = ProxyClient(config=proxy_config)
+            if self.proxy.is_available():
+                self.get_logger().info(f"✅ Proxy client initialized")
+            else:
+                self.get_logger().warning("⚠️ Proxy not configured (check INNATE_PROXY_URL, INNATE_SERVICE_KEY)")
+                self.proxy = None
+        except Exception as e:
+            self.get_logger().warning(f"⚠️ Could not initialize proxy: {e}")
+            self.proxy = None
 
         self.get_logger().info(
             f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode"
@@ -388,12 +413,16 @@ class BrainClientNode(Node):
             Trigger, "/brain/reload", self.handle_reload
         )
 
-        # Initialize TTS handler (after tts_status_pub is created)
-        # cartesia_api_key parameter is deprecated but kept for backward compatibility
+        # Initialize TTS handler with proxy and voice_id from parameter
         cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
-        self.tts_handler = TTSHandler(logger=self.get_logger(), voice_id=cartesia_voice_id, tts_status_pub=self.tts_status_pub)
+        self.tts_handler = TTSHandler(
+            logger=self.get_logger(),
+            voice_id=cartesia_voice_id,
+            tts_status_pub=self.tts_status_pub,
+            proxy=self.proxy,
+        )
         if self.tts_handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled via proxy (Voice ID: {cartesia_voice_id})")
+            self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {cartesia_voice_id})")
         else:
             self.get_logger().info("🔇 Text-to-speech disabled (check INNATE_PROXY_URL and INNATE_SERVICE_KEY)")
 

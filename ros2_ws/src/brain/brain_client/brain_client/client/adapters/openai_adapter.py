@@ -1,21 +1,25 @@
 """OpenAI adapter for proxy client."""
 
+import asyncio
 import logging
 import json
 import threading
 from typing import Optional, Dict, Any, AsyncIterator, Callable
-from client.proxy_client import ProxyClient
-import websockets
-import asyncio
+from brain_client.client.proxy_client import ProxyClient
+import websocket  # websocket-client library (sync, fast)
+import websockets  # For async connect() method
 
+# Configure logging to output to console
+logging.basicConfig(level=logging.INFO, format='[openai_adapter] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class SyncRealtimeConnection:
     """
-    Synchronous WebSocket connection wrapper for OpenAI Realtime API via proxy.
+    Synchronous WebSocket connection for OpenAI Realtime API via proxy.
     
-    Bridges async websockets library with sync interface expected by micro_input.py.
+    Uses websocket-client (sync library) for low-latency audio streaming.
     """
     
     def __init__(
@@ -31,122 +35,128 @@ class SyncRealtimeConnection:
         self._proxy_url = proxy_url.rstrip("/")
         self._innate_service_key = innate_service_key
         self._model = model
-        self._on_message = on_message
-        self._on_open = on_open
-        self._on_error = on_error
-        self._on_close = on_close
+        self._on_message_callback = on_message
+        self._on_open_callback = on_open
+        self._on_error_callback = on_error
+        self._on_close_callback = on_close
         
-        self._ws = None
-        self._loop = None
-        self._thread = None
+        self._ws: Optional[websocket.WebSocketApp] = None
         self._stop_event = threading.Event()
         self._connected_event = threading.Event()
         self._send_lock = threading.Lock()
+        self._audio_chunk_count = 0
     
     def start(self):
         """Start the WebSocket connection in a background thread."""
         self._stop_event.clear()
         self._connected_event.clear()
-        self._thread = threading.Thread(target=self._run_async_loop, daemon=True)
-        self._thread.start()
+        
+        # Build WebSocket URL for proxy
+        ws_url = self._proxy_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}&token={self._innate_service_key}"
+        
+        logger.info(f"Connecting to WebSocket: {ws_url[:80]}...")
+        
+        headers = {
+            "X-Innate-Token": self._innate_service_key,
+            "OpenAI-Beta": "realtime=v1",
+        }
+        
+        self._ws = websocket.WebSocketApp(
+            ws_url,
+            header=[f"{k}: {v}" for k, v in headers.items()],
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close,
+        )
+        
+        thread = threading.Thread(
+            target=self._ws.run_forever,
+            kwargs={"ping_interval": 30, "ping_timeout": 10},
+            daemon=True,
+        )
+        thread.start()
     
     def stop(self):
         """Stop the WebSocket connection."""
         self._stop_event.set()
-        if self._loop and self._ws:
-            # Schedule close on the event loop
-            asyncio.run_coroutine_threadsafe(self._close_ws(), self._loop)
-        if self._thread:
-            self._thread.join(timeout=5.0)
+        if self._ws:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+        self._connected_event.clear()
     
     def wait_until_connected(self, timeout: float = 10.0) -> bool:
         """Wait until the connection is established."""
         return self._connected_event.wait(timeout=timeout)
     
     def send_json(self, data: Dict[str, Any]):
-        """Send JSON data over the WebSocket."""
-        if not self._ws:
-            logger.error("Cannot send: WebSocket not connected")
-            return
-        if not self._loop:
-            logger.error("Cannot send: Event loop not running")
-            return
+        """Send JSON data over the WebSocket (non-blocking)."""
+        msg_type = data.get("type", "unknown")
+        
+        # Minimal logging for audio chunks
+        if msg_type == "input_audio_buffer.append":
+            self._audio_chunk_count += 1
+            if self._audio_chunk_count == 1:
+                logger.info("📤 First audio chunk sent")
+            elif self._audio_chunk_count == 100:
+                logger.info("📤 100 audio chunks sent")
+            # Skip logging for other audio chunks
+        else:
+            logger.info(f"📤 send_json: {msg_type}")
+        
+        msg = json.dumps(data)
         with self._send_lock:
+            if self._ws and self._connected_event.is_set():
+                try:
+                    self._ws.send(msg)
+                except Exception as e:
+                    logger.error(f"Send error: {e}")
+    
+    # --- WebSocket callbacks ---
+    def _on_open(self, ws):
+        """Called when WebSocket connects."""
+        logger.info("WebSocket connected successfully")
+        self._connected_event.set()
+        if self._on_open_callback:
+            self._on_open_callback()
+    
+    def _on_message(self, ws, message: str):
+        """Called when message received."""
+        # Log important events only
+        try:
+            msg_data = json.loads(message)
+            msg_type = msg_data.get("type", "unknown")
+            if msg_type in ("session.created", "session.updated"):
+                logger.info(f"📨 {msg_type}")
+            elif msg_type in ("input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped",
+                              "conversation.item.input_audio_transcription.completed"):
+                logger.info(f"📨 {msg_type}")
+            elif msg_type == "error":
+                logger.error(f"📨 OpenAI error: {msg_data}")
+        except Exception:
+            pass
+        
+        if self._on_message_callback:
             try:
-                msg = json.dumps(data)
-                logger.debug(f"Sending WebSocket message: {msg[:200]}...")
-                future = asyncio.run_coroutine_threadsafe(
-                    self._ws.send(msg),
-                    self._loop
-                )
-                future.result(timeout=5.0)
-                logger.debug("WebSocket message sent successfully")
+                self._on_message_callback(ws, message)
             except Exception as e:
-                logger.error(f"Error sending WebSocket message: {type(e).__name__}: {e}")
+                logger.error(f"Message handler error: {e}")
     
-    async def _close_ws(self):
-        """Close the WebSocket connection."""
-        if self._ws:
-            try:
-                await self._ws.close()
-            except Exception:
-                pass
+    def _on_error(self, ws, error):
+        """Called on WebSocket error."""
+        logger.error(f"WebSocket error: {error}")
+        if self._on_error_callback:
+            self._on_error_callback(str(error))
     
-    def _run_async_loop(self):
-        """Run the async event loop in a thread."""
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        
-        try:
-            self._loop.run_until_complete(self._connect_and_listen())
-        except Exception as e:
-            logger.error(f"Async loop error: {e}")
-            if self._on_error:
-                self._on_error(str(e))
-        finally:
-            self._loop.close()
-            if self._on_close:
-                self._on_close()
-    
-    async def _connect_and_listen(self):
-        """Connect to WebSocket and listen for messages."""
-        # Build WebSocket URL
-        ws_url = self._proxy_url.replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}&token={self._innate_service_key}"
-        
-        try:
-            # Headers for proxy authentication and OpenAI API
-            headers = {
-                "X-Innate-Token": self._innate_service_key,
-                "OpenAI-Beta": "realtime=v1",
-            }
-            logger.info(f"Connecting to WebSocket: {ws_url[:80]}...")
-            try:
-                self._ws = await websockets.connect(ws_url, additional_headers=headers)
-            except TypeError:
-                # Fallback for different websockets versions
-                self._ws = await websockets.connect(ws_url, extra_headers=headers)
-            logger.info("WebSocket connected successfully")
-            
-            self._connected_event.set()
-            
-            if self._on_open:
-                self._on_open()
-            
-            # Listen for messages
-            async for message in self._ws:
-                if self._stop_event.is_set():
-                    break
-                if self._on_message:
-                    try:
-                        self._on_message(self._ws, message)
-                    except Exception as e:
-                        logger.error(f"Error in message handler: {e}")
-                        
-        except Exception as e:
-            logger.error(f"WebSocket connection error: {e}")
-            if self._on_error:
-                self._on_error(str(e))
+    def _on_close(self, ws, status_code, msg):
+        """Called when WebSocket closes."""
+        logger.info("WebSocket closed")
+        self._connected_event.clear()
+        if self._on_close_callback:
+            self._on_close_callback()
 
 
 class ProxyOpenAIClient:

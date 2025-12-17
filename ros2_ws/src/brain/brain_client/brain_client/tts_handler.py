@@ -9,52 +9,81 @@ import os
 import tempfile
 import threading
 import time
-from typing import Optional, Dict, Any
-import sys
-from pathlib import Path
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 import rclpy
 import subprocess
 
-# Add client library to path (add parent dir so 'client' package is importable)
-innate_os_root = os.getenv('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
-client_path = Path(innate_os_root) / 'client'
-if client_path.exists() and str(innate_os_root) not in sys.path:
-    sys.path.insert(0, str(innate_os_root))
-
-from client.adapters.cartesia_adapter import ProxyCartesiaClient
+if TYPE_CHECKING:
+    from brain_client.client.proxy_client import ProxyClient
 
 
 class TTSHandler:
     """
     Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
+    
+    Can be initialized with a ProxyClient (preferred) or will create its own.
     """
+    
+    # Default voice ID (Katie - Friendly Fixer)
+    DEFAULT_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 
-    def __init__(self, api_key: str = None, logger=None, voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091", tts_status_pub=None):
+    def __init__(
+        self,
+        logger=None,
+        voice_id: str = None,
+        tts_status_pub=None,
+        proxy: "ProxyClient" = None,
+    ):
         """
         Initialize the TTS handler.
         
         Args:
-            api_key: Deprecated - kept for backward compatibility. Use INNATE_SERVICE_KEY env var instead.
             logger: ROS logger instance
             voice_id: Voice ID to use for speech synthesis
             tts_status_pub: Optional ROS publisher for /tts/is_playing status
+            proxy: Optional ProxyClient instance (if not provided, creates its own)
         """
         self.logger = logger
-        self.voice_id = voice_id
-        self.client = None
+        self.voice_id = voice_id or self.DEFAULT_VOICE_ID
+        self._proxy = proxy
+        self._cartesia_client = None
         self.is_playing = False
         self.play_lock = threading.Lock()
         self.tts_status_pub = tts_status_pub
         
-        # Initialize proxy client (uses INNATE_PROXY_URL and INNATE_SERVICE_KEY from env)
+        # Initialize Cartesia client
+        self._init_client()
+    
+    def _init_client(self):
+        """Initialize the Cartesia client (via proxy or directly)."""
         try:
-            self.client = ProxyCartesiaClient()
-            self.logger.info(f"✅ Cartesia TTS initialized via proxy with voice ID: {self.voice_id}")
+            if self._proxy and self._proxy.is_available():
+                # Use injected proxy
+                self._cartesia_client = self._proxy.cartesia
+                if self.logger:
+                    self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
+            else:
+                # Create standalone ProxyCartesiaClient (reads from env)
+                from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
+                self._cartesia_client = ProxyCartesiaClient()
+                if self.logger:
+                    self.logger.info(f"✅ Cartesia TTS initialized (voice: {self.voice_id})")
         except Exception as e:
-            self.logger.error(f"❌ Failed to initialize Cartesia proxy client: {e}")
-            self.logger.error("Make sure INNATE_PROXY_URL and INNATE_SERVICE_KEY are set in environment")
-            self.client = None
+            if self.logger:
+                self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
+                self.logger.error("Make sure INNATE_PROXY_URL and INNATE_SERVICE_KEY are set")
+            self._cartesia_client = None
+    
+    @property
+    def client(self):
+        """Backward-compatible access to Cartesia client."""
+        return self._cartesia_client
+    
+    @client.setter
+    def client(self, value):
+        """Backward-compatible setter."""
+        self._cartesia_client = value
 
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
