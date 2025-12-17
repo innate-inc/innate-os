@@ -10,30 +10,44 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
+  <!-- Python runtime dependencies -->
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-dynamixel-sdk</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>moveit_py</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>kdl_parser_py</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <depend>rclcpp</depend>
   <depend>moveit_ros_planning_interface</depend>
   <depend>moveit_ros_planning</depend>
   <depend>moveit_core</depend>
+  
+  <!-- Message dependencies -->
   <depend>moveit_msgs</depend>
-  <depend>maurice_msgs</depend>
-  <depend>sensor_msgs</depend>
+  <depend>trajectory_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>trajectory_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>maurice_msgs</depend>
+
+  <!-- C++ dependencies -->
   <depend>cv_bridge</depend>
   <depend>libopencv-dev</depend>
   <depend>dynamixel_sdk</depend>
   <depend>libfcl-dev</depend>
   <depend>eigen</depend>
   <depend>visualization_msgs</depend>
+
+  <!-- Python package dependencies (pip) -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-urdf-parser-py</exec_depend>
+  <exec_depend>python3-pykdl</exec_depend>
+  <exec_depend>python3-trimesh</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

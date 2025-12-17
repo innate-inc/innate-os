@@ -1,0 +1,228 @@
+name: Build ROS2 Workspace and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      create_release:
+        description: 'Create a release'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  ROS_DISTRO: humble
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for proper versioning
+
+    - name: Setup ROS2 Humble
+      uses: ros-tooling/setup-ros@v0.7
+      with:
+        required-ros-distributions: humble
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          python3-pip \
+          python3-colcon-common-extensions \
+          python3-rosdep \
+          python3-vcstool \
+          libudev-dev
+
+    - name: Install ROS2 packages
+      run: |
+        sudo apt-get install -y \
+          ros-humble-fastrtps \
+          ros-humble-rosbridge-suite \
+          ros-humble-launch-xml \
+          ros-humble-cv-bridge \
+          ros-humble-navigation2 \
+          ros-humble-nav2-bringup \
+          ros-humble-tf2-ros \
+          ros-humble-tf2-geometry-msgs \
+          ros-humble-camera-info-manager \
+          ros-humble-diagnostic-msgs \
+          ros-humble-rclpy \
+          ros-humble-rclcpp \
+          ros-humble-std-msgs \
+          ros-humble-sensor-msgs \
+          ros-humble-geometry-msgs \
+          ros-humble-nav-msgs \
+          ros-humble-action-msgs \
+          ros-humble-lifecycle-msgs
+
+    - name: Install Python dependencies
+      run: |
+        pip3 install --upgrade pip
+        pip3 install \
+          numpy \
+          opencv-python \
+          pydantic \
+          websockets \
+          h5py \
+          PyKDL \
+          urdf-parser-py \
+          trimesh \
+          dynamixel-sdk \
+          pyserial \
+          pygame
+
+    - name: Initialize rosdep
+      run: |
+        sudo rosdep init || true
+        rosdep update
+
+    - name: Install ROS dependencies via rosdep
+      working-directory: ros2_ws
+      run: |
+        source /opt/ros/humble/setup.bash
+        rosdep install --from-paths src --ignore-src -r -y || true
+
+    - name: Build ROS2 workspace
+      working-directory: ros2_ws
+      run: |
+        source /opt/ros/humble/setup.bash
+        colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+      env:
+        PYTHONDONTWRITEBYTECODE: 1
+
+    - name: Run tests (optional)
+      working-directory: ros2_ws
+      continue-on-error: true
+      run: |
+        source /opt/ros/humble/setup.bash
+        source install/setup.bash
+        colcon test --return-code-on-test-failure || true
+        colcon test-result --verbose || true
+
+    - name: Get version info
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          VERSION="${{ github.ref_name }}"
+        else
+          VERSION="dev-$(git rev-parse --short HEAD)"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+    - name: Create release archive
+      run: |
+        # Create a clean directory for the release
+        mkdir -p release-package/innate-os
+
+        # Copy source files
+        cp -r ros2_ws release-package/innate-os/
+        cp -r dds release-package/innate-os/
+        cp -r config release-package/innate-os/ || true
+        cp -r maps release-package/innate-os/ || true
+        cp -r primitives release-package/innate-os/ || true
+        cp -r directives release-package/innate-os/ || true
+        cp -r inputs release-package/innate-os/ || true
+        cp -r scripts release-package/innate-os/ || true
+        cp -r systemd release-package/innate-os/ || true
+        cp -r udev release-package/innate-os/ || true
+        cp -r zshrcs release-package/innate-os/ || true
+
+        # Copy documentation and config files
+        cp README.md release-package/innate-os/ || true
+        cp SYSTEM_SETUP.md release-package/innate-os/ || true
+        cp SYSTEM_OVERVIEW.md release-package/innate-os/ || true
+        cp Dockerfile release-package/innate-os/ || true
+        cp docker-compose*.yml release-package/innate-os/ || true
+        cp .env.template release-package/innate-os/ || true
+        cp os_config.json release-package/innate-os/ || true
+
+        # Create version file
+        echo "Version: ${{ steps.version.outputs.version }}" > release-package/innate-os/VERSION
+        echo "Build Date: ${{ steps.version.outputs.date }}" >> release-package/innate-os/VERSION
+        echo "Commit: ${{ github.sha }}" >> release-package/innate-os/VERSION
+        echo "ROS Distro: humble" >> release-package/innate-os/VERSION
+
+        # Create the archive
+        cd release-package
+        tar -czvf ../innate-os-${{ steps.version.outputs.version }}.tar.gz innate-os
+
+        # Also create a smaller source-only archive (without build artifacts)
+        cd innate-os/ros2_ws
+        rm -rf build install log
+        cd ../..
+        tar -czvf ../innate-os-${{ steps.version.outputs.version }}-source.tar.gz innate-os
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: innate-os-${{ steps.version.outputs.version }}
+        path: innate-os-${{ steps.version.outputs.version }}.tar.gz
+        retention-days: 30
+
+    - name: Upload source artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: innate-os-${{ steps.version.outputs.version }}-source
+        path: innate-os-${{ steps.version.outputs.version }}-source.tar.gz
+        retention-days: 30
+
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        body: |
+          ## Innate OS Release ${{ steps.version.outputs.version }}
+
+          **Build Date:** ${{ steps.version.outputs.date }}
+          **Commit:** ${{ github.sha }}
+          **ROS Distribution:** Humble
+
+          ### Downloads
+
+          - `innate-os-${{ steps.version.outputs.version }}.tar.gz` - Full release with built artifacts
+          - `innate-os-${{ steps.version.outputs.version }}-source.tar.gz` - Source code only
+
+          ### Installation
+
+          1. Extract the archive:
+             ```bash
+             tar -xzvf innate-os-${{ steps.version.outputs.version }}.tar.gz
+             cd innate-os
+             ```
+
+          2. If using the source archive, build the workspace:
+             ```bash
+             cd ros2_ws
+             source /opt/ros/humble/setup.bash
+             colcon build
+             ```
+
+          3. Source the workspace:
+             ```bash
+             source ros2_ws/install/setup.bash
+             ```
+
+          ### Docker
+
+          You can also build and run using Docker:
+          ```bash
+          docker build -t innate-os .
+          docker run -it innate-os
+          ```
+        draft: false
+        prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        files: |
+          innate-os-${{ steps.version.outputs.version }}.tar.gz
+          innate-os-${{ steps.version.outputs.version }}-source.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
