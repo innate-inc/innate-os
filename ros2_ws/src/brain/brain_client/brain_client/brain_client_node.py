@@ -1743,11 +1743,28 @@ class BrainClientNode(Node):
         """
         self.get_logger().info("Received request for available directives")
         
+        # Get the root path for resolving icon paths
+        innate_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+        
         # Build detailed directive information as JSON
         directive_details = []
         for directive_name, directive in self.directives.items():
+            # Load display_icon as base64 if path is provided
+            display_icon_data = None
+            if directive.display_icon:
+                icon_path = os.path.join(innate_root, directive.display_icon)
+                if os.path.exists(icon_path):
+                    try:
+                        with open(icon_path, 'rb') as f:
+                            icon_bytes = f.read()
+                            display_icon_data = base64.b64encode(icon_bytes).decode('utf-8')
+                    except Exception as e:
+                        self.get_logger().warning(f"Failed to load icon for {directive_name}: {e}")
+            
             directive_info = {
-                "name": directive.name,
+                "id_name": directive.name,
+                "display_name": directive.display_name,
+                "display_icon": display_icon_data,
                 "prompt": directive.get_prompt(),
                 "primitives": directive.get_primitives()
             }
