@@ -23,6 +23,24 @@ DAEMON_INTERVAL="${INNATE_UPDATE_INTERVAL:-3600}"  # Default: check every hour
 mkdir -p "$LOG_DIR"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
+# Load saved GitHub token for private repos
+load_github_token() {
+    if [ -z "$GITHUB_TOKEN" ]; then
+        TOKEN_FILE="$STATE_DIR/.github_token"
+        if [ -f "$TOKEN_FILE" ]; then
+            GITHUB_TOKEN=$(cat "$TOKEN_FILE")
+            export GITHUB_TOKEN
+            # Update git remote to use token
+            if [ -d "$REPO_DIR/.git" ]; then
+                git -C "$REPO_DIR" remote set-url origin "https://${GITHUB_TOKEN}@github.com/$GITHUB_REPO.git" 2>/dev/null || true
+            fi
+        fi
+    fi
+}
+
+# Load token on startup
+load_github_token
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
