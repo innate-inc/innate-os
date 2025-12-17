@@ -12,7 +12,28 @@ git
 libudev-dev
 libusb-1.0-0-dev
 
-# ROS2 Humble packages
+# GStreamer (for WebRTC streaming)
+gstreamer1.0-tools
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-good
+gstreamer1.0-plugins-bad
+gstreamer1.0-plugins-ugly
+gstreamer1.0-libav
+gstreamer1.0-nice
+libgstreamer1.0-dev
+libgstreamer-plugins-base1.0-dev
+gir1.2-gstreamer-1.0
+gir1.2-gst-plugins-base-1.0
+python3-gi
+python3-gst-1.0
+
+# Python system packages
+python3-pygame
+python3-serial
+python3-numpy
+python3-opencv
+
+# ROS2 Humble packages - Core
 ros-humble-fastrtps
 ros-humble-rosbridge-suite
 ros-humble-launch-xml
@@ -23,3 +44,14 @@ ros-humble-tf2-ros
 ros-humble-tf2-geometry-msgs
 ros-humble-camera-info-manager
 ros-humble-diagnostic-msgs
+
+# ROS2 Humble packages - Additional
+ros-humble-depthai-ros
+ros-humble-vision-msgs
+ros-humble-xacro
+ros-humble-image-transport
+ros-humble-image-transport-plugins
+ros-humble-image-pipeline
+ros-humble-depth-image-proc
+ros-humble-camera-calibration
+ros-humble-compressed-image-transport

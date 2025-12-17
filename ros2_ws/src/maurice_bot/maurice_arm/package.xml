@@ -43,11 +43,7 @@
   <depend>eigen</depend>
   <depend>visualization_msgs</depend>
 
-  <!-- Python package dependencies (pip) -->
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-urdf-parser-py</exec_depend>
-  <exec_depend>python3-pykdl</exec_depend>
-  <exec_depend>python3-trimesh</exec_depend>
+  <!-- Python package dependencies (installed via pip-requirements.txt) -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

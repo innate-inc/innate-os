@@ -2,9 +2,12 @@ name: Build ROS2 Workspace and Release
 
 on:
   push:
+    branches: [ main ]
     tags:
-      - 'v*'  # Trigger on version tags like v1.0.0
-  workflow_dispatch:  # Allow manual triggering
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
     inputs:
       create_release:
         description: 'Create a release'
@@ -23,7 +26,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Full history for proper versioning
+        fetch-depth: 0
 
     - name: Get version info
       id: version
@@ -38,25 +41,20 @@ jobs:
 
     - name: Build ROS2 workspace in Docker
       run: |
-        # Build using the existing Dockerfile.build
         docker build -t ros2-builder -f Dockerfile.build .
 
     - name: Extract built artifacts from Docker
       run: |
-        # Create a container and copy the built workspace out
         docker create --name build-container ros2-builder
         docker cp build-container:/root/innate-os/ros2_ws/install ./ros2_ws/install
         docker cp build-container:/root/innate-os/ros2_ws/build ./ros2_ws/build
-        # Also copy the vcs-imported dependencies (depthai-ros, etc.)
-        docker cp build-container:/root/innate-os/ros2_ws/src/depthai-ros ./ros2_ws/src/depthai-ros || true
         docker rm build-container
 
     - name: Create release archive
       run: |
-        # Create a clean directory for the release
         mkdir -p release-package/innate-os
 
-        # Copy source files with built artifacts
+        # Copy all files
         cp -r ros2_ws release-package/innate-os/
         cp -r dds release-package/innate-os/
         cp -r config release-package/innate-os/ || true
@@ -69,7 +67,6 @@ jobs:
         cp -r udev release-package/innate-os/ || true
         cp -r zshrcs release-package/innate-os/ || true
 
-        # Copy documentation and config files
         cp README.md release-package/innate-os/ || true
         cp SYSTEM_SETUP.md release-package/innate-os/ || true
         cp SYSTEM_OVERVIEW.md release-package/innate-os/ || true
@@ -79,17 +76,17 @@ jobs:
         cp .env.template release-package/innate-os/ || true
         cp os_config.json release-package/innate-os/ || true
 
-        # Create version file
+        # Version file
         echo "Version: ${{ steps.version.outputs.version }}" > release-package/innate-os/VERSION
         echo "Build Date: ${{ steps.version.outputs.date }}" >> release-package/innate-os/VERSION
         echo "Commit: ${{ github.sha }}" >> release-package/innate-os/VERSION
         echo "ROS Distro: humble" >> release-package/innate-os/VERSION
 
-        # Create the archive with built artifacts
+        # Full archive with built artifacts
         cd release-package
         tar -czvf ../innate-os-${{ steps.version.outputs.version }}.tar.gz innate-os
 
-        # Also create a smaller source-only archive (without build artifacts)
+        # Source-only archive
         cd innate-os/ros2_ws
         rm -rf build install log
         cd ../..
@@ -99,7 +96,6 @@ jobs:
       if: always()
       run: |
         docker rmi ros2-builder || true
-        rm -f Dockerfile.build
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
@@ -155,10 +151,9 @@ jobs:
 
           ### Docker
 
-          You can also build and run using Docker:
           ```bash
-          docker build -t innate-os .
-          docker run -it innate-os
+          docker build -t innate-os -f Dockerfile.build .
+          docker run -it innate-os bash
           ```
         draft: false
         prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}

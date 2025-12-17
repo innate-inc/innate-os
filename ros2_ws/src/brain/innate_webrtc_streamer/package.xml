@@ -24,14 +24,7 @@
   <build_depend>gstreamer1.0-nice</build_depend>
   <build_depend>nlohmann-json3-dev</build_depend>
 
-  <!-- Launch dependencies -->
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
-
-  <exec_depend>libopencv-dev</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
-  <exec_depend>gstreamer1.0-plugins-bad</exec_depend>
-  <exec_depend>gstreamer1.0-nice</exec_depend>
+  <!-- Python/GStreamer dependencies (installed via apt-dependencies.txt) -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>

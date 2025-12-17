@@ -31,9 +31,7 @@
   <depend>maurice_msgs</depend>
   <depend>maurice_arm</depend>
 
-  <!-- Python dependencies -->
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-pygame</exec_depend>
+  <!-- Python dependencies (installed via pip-requirements.txt) -->
 
   <exec_depend>rosbridge_server</exec_depend>
 
