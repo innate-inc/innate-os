@@ -6,8 +6,11 @@ Base class for robot input devices. Input devices are pure Python classes
 with no ROS dependencies - they process data and send results via callbacks.
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, TYPE_CHECKING
 from enum import Enum
+
+if TYPE_CHECKING:
+    from brain_client.client.proxy_client import ProxyClient
 
 
 class InputDeviceType(Enum):
@@ -27,20 +30,29 @@ class InputDevice(ABC):
     They process incoming data and send results via the data callback.
     
     The InputManagerNode handles all ROS communication (topics, services, etc.)
-    and calls the input device's process_data() method when new data arrives.
+    and injects a ProxyClient for accessing external services (TTS, STT, etc.)
+    
+    Usage in your input device:
+        # Access proxy services
+        self.proxy.openai.realtime.connect_sync(...)
+        self.proxy.cartesia.tts.sse(...)
+        
+        # Access config (models, voice IDs, etc.)
+        model = self.proxy.config.get("openai_realtime_model", "default")
     """
 
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, proxy: "ProxyClient" = None):
         """
         Initialize the input device.
         
         Args:
             logger: Optional logger instance (can be None)
+            proxy: ProxyClient instance for accessing external services
         """
         self.logger = logger
+        self._proxy = proxy
         self._data_callback: Optional[Callable] = None
         self._active = False  # Start inactive
-        self._is_robot_talking = False  # Ducking state
         self._config = {}
 
     @property
@@ -130,7 +142,7 @@ class InputDevice(ABC):
         Args:
             data: Dictionary containing the processed data
             data_type: Type of data - one of:
-                      - "brain/chat_in": Text input from user (voice, keyboard, etc.)
+                      - "chat_in": Text input from user (voice, keyboard, etc.)
                       - "custom": Any other data type
         
         Example:
@@ -138,7 +150,7 @@ class InputDevice(ABC):
                 "text": "Hello robot",
                 "confidence": 0.95,
                 "source": "microphone"
-            }, data_type="brain/chat_in")
+            }, data_type="chat_in")
         """
         if self._data_callback:
             try:
@@ -176,6 +188,33 @@ class InputDevice(ABC):
         """
         return self._active
 
+    @property
+    def proxy(self) -> Optional["ProxyClient"]:
+        """
+        Access to proxy services (Cartesia, OpenAI, etc.)
+        
+        Usage:
+            # Access services
+            self.proxy.openai.realtime.connect_sync(...)
+            self.proxy.cartesia.tts.sse(...)
+            
+            # Access config
+            model = self.proxy.config.get("openai_realtime_model", "default")
+        
+        Returns:
+            ProxyClient instance or None if not configured
+        """
+        return self._proxy
+    
+    def set_proxy(self, proxy: "ProxyClient"):
+        """
+        Set the proxy client (called by InputLoader).
+        
+        Args:
+            proxy: ProxyClient instance
+        """
+        self._proxy = proxy
+
     def set_config(self, config: Dict[str, Any]):
         """
         Set configuration parameters for this input device.
@@ -210,19 +249,3 @@ class InputDevice(ABC):
             Description string
         """
         return self.name
-
-    def set_tts_playing(self, is_playing: bool):
-        """
-        Called when TTS (text-to-speech) status changes.
-        
-        Sets the internal _is_robot_talking flag that devices can check
-        to implement "ducking" - suppressing input while robot speaks.
-        
-        Devices can check self._is_robot_talking in their logic.
-        
-        Args:
-            is_playing: True if robot is speaking, False otherwise
-        """
-        self._is_robot_talking = is_playing
-
-

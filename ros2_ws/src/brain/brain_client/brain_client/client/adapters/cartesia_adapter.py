@@ -2,7 +2,7 @@
 
 import logging
 from typing import Optional, Dict, Any, Iterator
-from client.proxy_client import ProxyClient
+from brain_client.client.proxy_client import ProxyClient
 
 logger = logging.getLogger(__name__)
 
