@@ -21,7 +21,7 @@ for i in {1..100}; do
         echo "discovery-server: $(systemctl is-active discovery-server.service)"
         echo "ros-app: $(systemctl is-active ros-app.service)"
         echo "ble-provisioner: $(systemctl is-active ble-provisioner.service)"
-        WIFI_IP=$(ip addr show wlan0 2>/dev/null | grep "inet " | awk '{print $2}')
+        WIFI_IP=$(ip addr show wlP1p1s0 2>/dev/null | grep "inet " | awk '{print $2}')
         if [ -n "$WIFI_IP" ]; then
             echo "WiFi IP: $WIFI_IP"
         else
