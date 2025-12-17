@@ -226,7 +226,7 @@ class InputManagerNode(Node):
             # Update devices that support ducking (have set_tts_playing method)
             for device in self.input_devices.values():
                 if hasattr(device, 'set_tts_playing'):
-                device.set_tts_playing(is_playing)
+                    device.set_tts_playing(is_playing)
         except Exception as e:
             self.get_logger().error(f"Error handling TTS status: {e}")
     
