@@ -1,94 +1,163 @@
 # Innate-OS Updates
 
-## Usage
+## Quick Start
 
 ```bash
-innate-update check   # Check for updates
-innate-update apply   # Apply updates (asks confirmation)
-innate-update status  # Show current version
+# Check for updates
+innate-update check
+
+# Apply updates (asks confirmation)
+innate-update apply
+
+# Show current version
+innate-update status
 ```
 
-## First Time Setup (Per Robot)
+## Installation
 
-### 1. Install Command
+The easiest way to install is using the installer script:
+
 ```bash
-sudo ln -s /home/jetson1/innate-os/scripts/update/innate-update /usr/local/bin/innate-update
+curl -fsSL https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
 ```
 
-### 2. Configure Sudo
+This will:
+1. Install ROS2 Humble
+2. Clone the repository
+3. Install all dependencies
+4. Build the ROS2 workspace
+5. Install the updater daemon
+
+### Manual Installation
+
 ```bash
-sudo visudo
-# Add: jetson1 ALL=(ALL) NOPASSWD: /home/jetson1/innate-os/scripts/update/post_update.sh
+# Install the command
+sudo cp /path/to/innate-os/scripts/update/innate-update /usr/local/bin/innate-update
+sudo chmod +x /usr/local/bin/innate-update
+
+# Configure sudo for post-update script
+echo "$USER ALL=(ALL) NOPASSWD: /path/to/innate-os/scripts/update/post_update.sh" | sudo tee /etc/sudoers.d/innate-update
+sudo chmod 440 /etc/sudoers.d/innate-update
 ```
 
-### 3. Setup GitHub App Authentication
+## Configuration
 
-**Get from GitHub App settings:**
-- App ID (e.g., 123456)
-- Installation ID (from install URL)
-- Download private key (.pem file)
+Environment variables:
 
-**Run setup:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `INNATE_OS_DIR` | `/home/$USER/innate-os` | Installation directory |
+| `INNATE_UPDATE_BRANCH` | `main` | Git branch to track |
+| `INNATE_UPDATE_INTERVAL` | `3600` | Daemon check interval (seconds) |
+
+## Commands
+
 ```bash
-cd /home/jetson1/innate-os
-./scripts/update/setup-github-app.sh <APP_ID> <INSTALLATION_ID> ~/path/to/key.pem
+innate-update check         # Check if updates are available (latest tag)
+innate-update check --dev   # Check for updates (latest commit)
+innate-update apply         # Apply pending updates (to latest tag)
+innate-update apply --dev   # Apply updates (to latest commit)
+innate-update status        # Show current version info
+innate-update daemon        # Run as background daemon (for systemd)
 ```
 
-### 4. Optional: SSH Login Notification
-```bash
-echo "source /home/jetson1/innate-os/scripts/update/update_check.zsh" >> ~/.zshrc
-```
+By default, updates are to the latest tagged release on main.
+Use `--dev` flag to update to the latest commit instead.
 
-## What Happens During Update
+## Update Process
 
 ```
 innate-update apply
-  ↓
+  |
+  v
 1. Shows changes, asks confirmation
-  ↓
+  |
+  v
 2. Stops tmux (ros_nodes) + systemd services
-  ↓
+  |
+  v
 3. Stashes local changes
-  ↓
-4. git pull --rebase
-  ↓
+  |
+  v
+4. git checkout <target>
+  |
+  v
 5. Runs post_update.sh (as root):
+   - Installs apt dependencies (from ros2_ws/apt-dependencies.txt)
+   - Installs pip dependencies (from ros2_ws/pip-requirements.txt)
    - Copies systemd files to /etc/systemd/system/
    - Updates scripts in /usr/local/bin/
    - Updates udev rules
    - Rebuilds ROS2 workspace (colcon build)
-   - Installs pip requirements
    - Restarts services
-  ↓
+  |
+  v
 6. Done! System running new code
+```
+
+## Dependency Management
+
+Dependencies are managed via config files in `ros2_ws/`:
+
+- **`apt-dependencies.txt`** - System packages (installed via apt)
+- **`pip-requirements.txt`** - Python packages (installed via pip3)
+
+These files are used by:
+- The installer script
+- The post-update script
+- The Docker build process
+
+## Daemon Mode
+
+The updater can run as a systemd service to periodically check for updates:
+
+```bash
+# Start the daemon
+sudo systemctl start innate-update.service
+
+# Enable on boot
+sudo systemctl enable innate-update.service
+
+# View logs
+journalctl -u innate-update.service -f
 ```
 
 ## Logs
 
 ```bash
-tail -f logs/update.log
-tail -f logs/post_update.log
+tail -f ~/innate-os/logs/update.log
+tail -f ~/innate-os/logs/post_update.log
 ```
 
 ## Rollback
 
 ```bash
-cd /home/jetson1/innate-os
-git log
-git reset --hard <commit-hash>
-sudo ./scripts/update/post_update.sh
+cd ~/innate-os
+git log                           # Find the commit/tag to rollback to
+git checkout <commit-or-tag>      # Checkout the version
+sudo ./scripts/update/post_update.sh  # Rebuild and restart
 ```
 
-## GitHub App Setup (Org Admin)
+## Shell Integration
 
-**Create App:** `github.com/organizations/innate-inc/settings/apps/new`
+Add update notifications to your shell:
 
-**Configure:**
-- Name: "Innate OS Update"
-- Permissions: Repository → Contents → **Read-only**
-- Uncheck: Webhooks, User authorization
-- Install on: innate-inc org
-- Select: Only `maurice-prod` repo
-- Generate private key
+```bash
+echo "source ~/innate-os/scripts/update/update_check.zsh" >> ~/.zshrc
+```
 
-**Use:** Give App ID, Installation ID, and .pem file to robots.
+This will show a notification on login if updates are available.
+
+## GitHub App Authentication (Optional)
+
+For private repositories, set up GitHub App authentication:
+
+1. Get from GitHub App settings:
+   - App ID
+   - Installation ID
+   - Private key (.pem file)
+
+2. Run setup:
+   ```bash
+   ./scripts/update/setup-github-app.sh <APP_ID> <INSTALLATION_ID> ~/path/to/key.pem
+   ```
