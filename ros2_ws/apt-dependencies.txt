@@ -8,6 +8,10 @@ python3-rosdep
 python3-vcstool
 git
 
+# Shell and terminal tools
+zsh
+tmux
+
 # System libraries
 libudev-dev
 libusb-1.0-0-dev
