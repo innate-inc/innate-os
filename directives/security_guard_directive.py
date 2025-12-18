@@ -9,7 +9,7 @@ class SecurityGuardDirective(Directive):
     """
 
     @property
-    def name(self) -> str:
+    def id(self) -> str:
         return "security_guard_directive"
 
     @property
@@ -18,7 +18,7 @@ class SecurityGuardDirective(Directive):
 
     @property
     def display_icon(self) -> str:
-        return "directives/assets/security_guard.png"
+        return "assets/security_guard.png"
 
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""

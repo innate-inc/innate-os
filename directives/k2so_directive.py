@@ -9,7 +9,7 @@ class K2SODirective(Directive):
     """
 
     @property
-    def name(self) -> str:
+    def id(self) -> str:
         return "k2so_directive"
 
     @property
@@ -18,7 +18,7 @@ class K2SODirective(Directive):
 
     @property
     def display_icon(self) -> str:
-        return "directives/assets/k2so.png"
+        return "assets/k2so.png"
 
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
