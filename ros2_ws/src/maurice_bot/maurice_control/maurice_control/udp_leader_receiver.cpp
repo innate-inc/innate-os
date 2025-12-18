@@ -68,6 +68,15 @@ struct ResetPacket {
 static_assert(sizeof(DataPacket) == PACKET_SIZE, "DataPacket size mismatch");
 static_assert(sizeof(ResetPacket) == RESET_PACKET_SIZE, "ResetPacket size mismatch");
 
+// Compile-time endianness check - packet format assumes little-endian architecture
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
+static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+              "This code requires a little-endian architecture. "
+              "Big-endian systems need byte-order conversion for multi-byte fields.");
+#else
+#warning "Cannot detect system endianness at compile-time. Assuming little-endian architecture."
+#endif
+
 class UdpLeaderReceiver : public rclcpp::Node {
 public:
     UdpLeaderReceiver() : Node("udp_leader_receiver") {
@@ -319,7 +328,7 @@ private:
                         "Stats - Packets: %lu, Errors: %lu, Out-of-order: %lu, "
                         "Last seq: %ld, Timestamp: %.2fms, Positions: [%d, %d, %d, %d, %d, %d]",
                         packet_count_.load(), error_count_.load(), out_of_order_count_.load(),
-                        last_sequence_, packet->timestamp,
+                        last_sequence_.load(), packet->timestamp,
                         packet->servo_positions[0], packet->servo_positions[1],
                         packet->servo_positions[2], packet->servo_positions[3],
                         packet->servo_positions[4], packet->servo_positions[5]);
