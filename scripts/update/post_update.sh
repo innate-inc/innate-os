@@ -2,8 +2,22 @@
 # Post-Update Script for Innate-OS
 # This script runs after git pull to update system components
 # Requires root privileges via sudo
+#
+# Usage: sudo ./post_update.sh [--first-install]
+#   --first-install  Skip ROS2 rebuild and dependency installation (used on fresh install)
 
 set -e  # Exit on error
+
+# Parse arguments
+FIRST_INSTALL=false
+for arg in "$@"; do
+    case $arg in
+        --first-install)
+            FIRST_INSTALL=true
+            shift
+            ;;
+    esac
+done
 
 # Check for root privileges
 if [ "$(id -u)" -ne 0 ]; then
@@ -33,7 +47,11 @@ ensure_log_ownership() {
 }
 
 log "========================================"
-log "Starting post-update script"
+if [ "$FIRST_INSTALL" = true ]; then
+    log "Starting post-install script (first install mode)"
+else
+    log "Starting post-update script"
+fi
 log "Repository: $REPO_DIR"
 log "========================================"
 
@@ -146,55 +164,75 @@ if [ -d "$REPO_DIR/udev" ]; then
     log "Udev rules reloaded"
 fi
 
-# 4. Update Bluetooth configurations
+# 4. Update Bluetooth configurations (optional - only on systems with bluetooth)
 log "Checking Bluetooth configurations..."
 if [ -f "$REPO_DIR/config/bluetooth/main.conf" ]; then
-    log "Updating /etc/bluetooth/main.conf"
-    ln -sf "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
+    if [ -d "/etc/bluetooth" ]; then
+        log "Updating /etc/bluetooth/main.conf"
+        ln -sf "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
+    else
+        log "Skipping bluetooth config - /etc/bluetooth not found (VM or no bluetooth)"
+    fi
 fi
 
 if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
-    log "Updating bluetooth service override..."
-    mkdir -p /lib/systemd/system/bluetooth.service.d/
-    ln -sf "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
-    systemctl daemon-reload
-    log "Systemd daemon reloaded after bluetooth override"
-fi
-
-# 5. Install/update apt dependencies from config file
-log "Checking apt dependencies..."
-APT_DEPS_FILE="$REPO_DIR/ros2_ws/apt-dependencies.txt"
-if [ -f "$APT_DEPS_FILE" ]; then
-    log "Installing apt dependencies from $APT_DEPS_FILE..."
-    apt-get update
-    grep -v '^#' "$APT_DEPS_FILE" | grep -v '^$' | xargs apt-get install -y
-    log "Apt dependencies installed"
-fi
-
-# 6. Install/update Python dependencies from config file
-log "Checking Python dependencies..."
-PIP_DEPS_FILE="$REPO_DIR/ros2_ws/pip-requirements.txt"
-if [ -f "$PIP_DEPS_FILE" ]; then
-    log "Installing pip dependencies from $PIP_DEPS_FILE..."
-    pip3 install -r "$PIP_DEPS_FILE" --upgrade
-    log "Pip dependencies installed"
-fi
-
-# 7. Rebuild ROS2 workspace if needed
-log "Checking ROS2 workspace..."
-if [ -d "$REPO_DIR/ros2_ws/src" ]; then
-    log "Rebuilding ROS2 workspace..."
-    cd "$REPO_DIR/ros2_ws"
-
-    # Run as the actual user, not root
-    ACTUAL_USER=${SUDO_USER:-$USER}
-    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
-
-    if [ $? -eq 0 ]; then
-        log "ROS2 workspace rebuilt successfully"
+    if [ -d "/lib/systemd/system" ]; then
+        log "Updating bluetooth service override..."
+        mkdir -p /lib/systemd/system/bluetooth.service.d/
+        ln -sf "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
+        systemctl daemon-reload
+        log "Systemd daemon reloaded after bluetooth override"
     else
-        log "ERROR: Failed to rebuild ROS2 workspace"
-        exit 1
+        log "Skipping bluetooth service override - systemd not found"
+    fi
+fi
+
+# 5. Install/update apt dependencies from config file (skip on first install)
+if [ "$FIRST_INSTALL" = true ]; then
+    log "Skipping apt dependencies (already installed during first install)"
+else
+    log "Checking apt dependencies..."
+    APT_DEPS_FILE="$REPO_DIR/ros2_ws/apt-dependencies.txt"
+    if [ -f "$APT_DEPS_FILE" ]; then
+        log "Installing apt dependencies from $APT_DEPS_FILE..."
+        apt-get update
+        grep -v '^#' "$APT_DEPS_FILE" | grep -v '^$' | xargs apt-get install -y
+        log "Apt dependencies installed"
+    fi
+fi
+
+# 6. Install/update Python dependencies from config file (skip on first install)
+if [ "$FIRST_INSTALL" = true ]; then
+    log "Skipping pip dependencies (already installed during first install)"
+else
+    log "Checking Python dependencies..."
+    PIP_DEPS_FILE="$REPO_DIR/ros2_ws/pip-requirements.txt"
+    if [ -f "$PIP_DEPS_FILE" ]; then
+        log "Installing pip dependencies from $PIP_DEPS_FILE..."
+        pip3 install -r "$PIP_DEPS_FILE" --upgrade
+        log "Pip dependencies installed"
+    fi
+fi
+
+# 7. Rebuild ROS2 workspace if needed (skip on first install)
+if [ "$FIRST_INSTALL" = true ]; then
+    log "Skipping ROS2 workspace rebuild (already built during first install)"
+else
+    log "Checking ROS2 workspace..."
+    if [ -d "$REPO_DIR/ros2_ws/src" ]; then
+        log "Rebuilding ROS2 workspace..."
+        cd "$REPO_DIR/ros2_ws"
+
+        # Run as the actual user, not root
+        ACTUAL_USER=${SUDO_USER:-$USER}
+        sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
+
+        if [ $? -eq 0 ]; then
+            log "ROS2 workspace rebuilt successfully"
+        else
+            log "ERROR: Failed to rebuild ROS2 workspace"
+            exit 1
+        fi
     fi
 fi
 
@@ -212,7 +250,7 @@ done
 log "Launching ROS nodes in tmux..."
 ACTUAL_USER=${SUDO_USER:-$USER}
 # Run as the actual user in the background
-sudo -u "$ACTUAL_USER" INNATE_OS_ROOT="$REPO_DIR" zsh "$REPO_DIR/scripts/launch_ros_in_tmux.sh" &
+sudo -u "$ACTUAL_USER" INNATE_OS_ROOT="$REPO_DIR" bash "$REPO_DIR/scripts/launch_ros_in_tmux.sh" &
 
 # 10. Optional: Restart Docker containers if using them
 # if command -v docker-compose &> /dev/null; then

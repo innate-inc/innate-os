@@ -47,8 +47,12 @@ jobs:
     - name: Extract built artifacts from Docker
       run: |
         docker create --name build-container ros2-builder
+        # Copy built artifacts
         docker cp build-container:/root/innate-os/ros2_ws/install ./ros2_ws/install
         docker cp build-container:/root/innate-os/ros2_ws/build ./ros2_ws/build
+        # Copy src with vcs-imported dependencies (rplidar_ros, etc.)
+        rm -rf ./ros2_ws/src
+        docker cp build-container:/root/innate-os/ros2_ws/src ./ros2_ws/src
         docker rm build-container
 
     - name: Create release archive
