@@ -87,10 +87,11 @@ def initialize_directives(logger, primitives_dict: Optional[Dict[str, Any]] = No
     # Load all directives dynamically
     discovered_directive_classes = directive_loader.discover_directives_in_directory(directives_directory)
     
-    # Create directive instances with primitive validation
+    # Create directive instances with primitive validation and icon loading
     directives = directive_loader.create_directive_instances(
         discovered_directive_classes, 
-        available_primitives=primitives_dict
+        available_primitives=primitives_dict,
+        directives_directory=directives_directory
     )
     
     logger.info(f"Successfully loaded {len(directives)} directives")
