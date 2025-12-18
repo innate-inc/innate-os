@@ -251,7 +251,7 @@ async def outbound_loop(ws, shared_queues):
 
     # First, advertise standard topics once
     adv_color = rosbridge_advertise(
-        "/camera/color/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
+        "/mars/main_camera/image/compressed", "sensor_msgs/msg/CompressedImage"
     )
     adv_depth = rosbridge_advertise("/camera/depth/image_raw", "sensor_msgs/msg/Image")
     adv_cinfo = rosbridge_advertise(
@@ -274,6 +274,7 @@ async def outbound_loop(ws, shared_queues):
     adv_nav_feedback = rosbridge_advertise(
         "/sim_navigation/feedback", "geometry_msgs/msg/Point"
     )
+    adv_nav_mode = rosbridge_advertise("/nav/current_mode", "std_msgs/msg/String")
 
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
@@ -286,9 +287,16 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_clock))
     await ws.send(json.dumps(adv_nav_status))
     await ws.send(json.dumps(adv_nav_feedback))
+    await ws.send(json.dumps(adv_nav_mode))
     print(
         "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, and navigation topics"
     )
+
+    # Publish initial navigation mode (simulator always uses mapfree)
+    nav_mode_msg = {"data": "mapfree"}
+    outbound = rosbridge_publish("/nav/current_mode", nav_mode_msg)
+    await ws.send(json.dumps(outbound))
+    print("[ROSBridge] Published initial navigation mode: mapfree")
 
     # Also subscribe to /cmd_vel, /chat_out, and navigation topics
     sub_cmd_vel = rosbridge_subscribe("/cmd_vel", "geometry_msgs/msg/Twist")
@@ -399,7 +407,11 @@ async def outbound_loop(ws, shared_queues):
 
             if isinstance(msg, ChatMessage):
                 print(f"[ROSBridge] Publishing chat message: {msg.text}")
-                outbound_text = {"data": msg.text}
+                # Brain expects JSON object with text, sender, timestamp fields
+                chat_payload = json.dumps(
+                    {"text": msg.text, "sender": msg.sender, "timestamp": msg.timestamp}
+                )
+                outbound_text = {"data": chat_payload}
                 outbound = rosbridge_publish("/brain/chat_in", outbound_text)
                 await ws.send(json.dumps(outbound))
 
@@ -489,7 +501,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
                 "data": base64_jpg,  # base64-encoded JPEG data
             }
             outbound = rosbridge_publish(
-                "/camera/color/image_raw/compressed", compressed_msg
+                "/mars/main_camera/image/compressed", compressed_msg
             )
             await ws.send(json.dumps(outbound))
 
