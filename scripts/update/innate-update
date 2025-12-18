@@ -10,7 +10,7 @@
 set -e
 
 # Configuration - can be overridden via environment variables
-REPO_DIR="${INNATE_OS_DIR:-/home/$USER/innate-os}"
+REPO_DIR="${INNATE_OS_DIR:-/opt/innate}"
 STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
 LOG_DIR="$REPO_DIR/logs"
 UPDATE_CACHE="$STATE_DIR/update-cache"

@@ -10,7 +10,7 @@
 # Options (environment variables):
 #   GITHUB_TOKEN            - GitHub Personal Access Token (required for private repos)
 #   BUILD_FROM_SOURCE=true  - Build from source instead of downloading pre-built release
-#   INNATE_OS_DIR           - Installation directory (default: /home/$USER/innate-os)
+#   INNATE_OS_DIR           - Installation directory (default: /opt/innate)
 #   GITHUB_REPO             - GitHub repository (default: innate-inc/innate-os)
 #
 # This script:
@@ -36,7 +36,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-INNATE_OS_DIR="${INNATE_OS_DIR:-/home/$USER/innate-os}"
+INNATE_OS_DIR="${INNATE_OS_DIR:-/opt/innate}"
 INNATE_STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
 GITHUB_REPO="${GITHUB_REPO:-innate-inc/innate-os}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
@@ -327,8 +327,25 @@ download_release() {
             rm -rf "$INNATE_OS_DIR"
         fi
 
-        # Extract to parent directory (archive contains innate-os folder)
-        tar -xzf "$TEMP_ARCHIVE" -C "$(dirname "$INNATE_OS_DIR")"
+        # Create target directory
+        mkdir -p "$INNATE_OS_DIR"
+
+        # Extract archive - handle both flat and nested structures
+        # First, check what's in the archive
+        ARCHIVE_ROOT=$(tar -tzf "$TEMP_ARCHIVE" | head -1 | cut -d'/' -f1)
+        info "Archive root folder: $ARCHIVE_ROOT"
+
+        if [ "$ARCHIVE_ROOT" = "innate-os" ] || [ "$ARCHIVE_ROOT" = "." ]; then
+            # Archive has innate-os/ folder - extract and move contents
+            tar -xzf "$TEMP_ARCHIVE" -C "/tmp"
+            mv /tmp/innate-os/* "$INNATE_OS_DIR/" 2>/dev/null || mv /tmp/"$ARCHIVE_ROOT"/* "$INNATE_OS_DIR/"
+            rm -rf /tmp/innate-os /tmp/"$ARCHIVE_ROOT"
+        else
+            # Archive extracts to a different folder name
+            tar -xzf "$TEMP_ARCHIVE" -C "/tmp"
+            mv /tmp/"$ARCHIVE_ROOT"/* "$INNATE_OS_DIR/"
+            rm -rf /tmp/"$ARCHIVE_ROOT"
+        fi
         rm -f "$TEMP_ARCHIVE"
 
         # Initialize git repo for future updates

@@ -20,7 +20,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-INNATE_OS_DIR="${INNATE_OS_DIR:-/home/$USER/innate-os}"
+INNATE_OS_DIR="${INNATE_OS_DIR:-/opt/innate}"
 INNATE_STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
 
 # Parse arguments
