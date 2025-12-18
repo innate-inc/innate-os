@@ -1,9 +1,9 @@
 [Unit]
 Description=ROS Application Launcher in Tmux
 # Requires the discovery server to be running first
-Requires=discovery-server.service
+Requires=zenoh-router.service
 # Start after the network is fully online and the discovery server is up
-After=discovery-server.service network-online.target
+After=zenoh-router.service network-online.target
 
 [Service]
 # Run service manager as root, but execute script as jetson1 via sudo
