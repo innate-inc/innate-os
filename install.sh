@@ -301,9 +301,7 @@ download_release() {
     # Use || true to prevent set -e from exiting on failure
     RELEASE_DATA=$(get_latest_release_info) || true
     if [ -z "$RELEASE_DATA" ]; then
-        warn "No releases found, falling back to git clone and build from source"
-        clone_repository
-        return 1  # Signal that we need to build
+        error "No releases found for $GITHUB_REPO. Make sure a release exists with .tar.gz assets."
     fi
 
     LATEST_TAG=$(echo "$RELEASE_DATA" | cut -d'|' -f1)
@@ -320,10 +318,7 @@ download_release() {
     if github_download -o "$TEMP_ARCHIVE" "$ASSET_URL"; then
         # Verify we got a valid archive (not an error page)
         if ! tar -tzf "$TEMP_ARCHIVE" >/dev/null 2>&1; then
-            warn "Downloaded file is not a valid archive, falling back to git clone"
-            rm -f "$TEMP_ARCHIVE"
-            clone_repository
-            return 0
+            error "Downloaded file is not a valid archive. Check your GITHUB_TOKEN permissions."
         fi
 
         # Remove existing directory if present
@@ -359,9 +354,7 @@ download_release() {
 
         success "Release $LATEST_TAG downloaded and extracted"
     else
-        warn "Failed to download release, falling back to git clone"
-        clone_repository
-        return 1  # Signal that we need to build
+        error "Failed to download release from $ASSET_URL"
     fi
     return 0  # Signal that we have pre-built artifacts
 }
