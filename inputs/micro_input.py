@@ -12,15 +12,12 @@ import json
 import queue
 import threading
 import time
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 import sounddevice as sd
 import subprocess
 import re
 
 from brain_client.input_types import InputDevice
-
-if TYPE_CHECKING:
-    from brain_client.client.proxy_client import ProxyClient
 
 
 DEFAULT_SAMPLE_RATE = 24_000
@@ -39,8 +36,8 @@ class MicroInput(InputDevice):
     Supports "ducking" - suppresses audio while robot is speaking.
     """
 
-    def __init__(self, logger=None, proxy: "ProxyClient" = None):
-        super().__init__(logger, proxy)
+    def __init__(self):
+        super().__init__()
         self.mic = None
         self.client = None
         self._stop_evt = threading.Event()

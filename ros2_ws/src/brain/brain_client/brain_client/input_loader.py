@@ -10,30 +10,27 @@ import os
 import sys
 import importlib.util
 import inspect
-from typing import Dict, List, Type, Optional, TYPE_CHECKING
+from typing import Dict, List, Type, Optional
 from pathlib import Path
 
 from brain_client.input_types import InputDevice
-
-if TYPE_CHECKING:
-    from brain_client.client.proxy_client import ProxyClient
 
 
 class InputLoader:
     """
     Dynamically loads input device classes from specified directories.
     
-    Injects a ProxyClient into each loaded input device for accessing
+    Sets logger and proxy on each loaded input device for accessing
     external services (TTS, STT, etc.)
     """
     
-    def __init__(self, logger, proxy: "ProxyClient" = None):
+    def __init__(self, logger, proxy=None):
         """
         Initialize the input loader.
         
         Args:
             logger: Logger instance
-            proxy: ProxyClient instance to inject into input devices
+            proxy: ProxyClient instance to set on input devices
         """
         self.logger = logger
         self._proxy = proxy
@@ -168,8 +165,8 @@ class InputLoader:
             The input device's name
         """
         try:
-            # Create temp instance without proxy (just to get name)
-            temp_instance = input_class(logger=None, proxy=None)
+            # Create temp instance (just to get name)
+            temp_instance = input_class()
             return temp_instance.name
         except Exception as e:
             self.logger.debug(f"Could not get name from input device {input_class.__name__}: {e}")
@@ -223,11 +220,11 @@ class InputLoader:
     def create_input_instances(self, input_classes: Dict[str, Type[InputDevice]], 
                                logger) -> Dict[str, InputDevice]:
         """
-        Create instances of input device classes with proxy injection.
+        Create instances of input device classes and set logger/proxy.
         
         Args:
             input_classes: Dictionary of input device name to class mappings
-            logger: Logger instance to pass to input devices
+            logger: Logger instance to set on input devices
             
         Returns:
             Dictionary mapping input device names to their instances
@@ -236,8 +233,10 @@ class InputLoader:
         
         for input_name, input_class in input_classes.items():
             try:
-                # Inject proxy client into each input device
-                input_instance = input_class(logger=logger, proxy=self._proxy)
+                # Create instance and set logger/proxy
+                input_instance = input_class()
+                input_instance.set_logger(logger)
+                input_instance.set_proxy(self._proxy)
                 input_instances[input_name] = input_instance
                 self.logger.debug(f"Created input device instance: {input_name} (proxy: {'yes' if self._proxy else 'no'})")
             except Exception as e:

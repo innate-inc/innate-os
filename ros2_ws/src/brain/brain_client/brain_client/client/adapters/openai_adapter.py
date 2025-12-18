@@ -5,7 +5,6 @@ import logging
 import json
 import threading
 from typing import Optional, Dict, Any, AsyncIterator, Callable
-from brain_client.client.proxy_client import ProxyClient
 import websocket  # websocket-client library (sync, fast)
 import websockets  # For async connect() method
 
@@ -166,29 +165,21 @@ class ProxyOpenAIClient:
     Supports both HTTP (Chat Completions) and WebSocket (Realtime) APIs.
     """
     
-    def __init__(
-        self,
-        proxy_url: Optional[str] = None,
-        innate_service_key: Optional[str] = None,
-    ):
+    def __init__(self, parent):
         """
         Initialize OpenAI proxy client.
         
         Args:
-            proxy_url: Proxy service URL
-            innate_service_key: Authentication token
+            parent: Parent ProxyClient instance
         """
-        import os
-        self._proxy_url = proxy_url or os.getenv("INNATE_PROXY_URL", "")
-        self._innate_service_key = innate_service_key or os.getenv("INNATE_SERVICE_KEY", "")
-        self._proxy_client = ProxyClient(proxy_url=proxy_url, innate_service_key=innate_service_key)
+        self._parent = parent
     
     class Chat:
         """Chat Completions API."""
         
-        def __init__(self, proxy_client: ProxyClient):
-            """Initialize Chat API."""
-            self._proxy_client = proxy_client
+        def __init__(self, parent):
+            """Initialize Chat API with reference to parent ProxyClient."""
+            self._parent = parent
         
         async def completions(
             self,
@@ -218,7 +209,7 @@ class ProxyOpenAIClient:
             if stream:
                 body["stream"] = True
             
-            response = await self._proxy_client.request(
+            response = await self._parent.request(
                 service_name="openai",
                 endpoint="/v1/chat/completions",
                 method="POST",
@@ -245,10 +236,9 @@ class ProxyOpenAIClient:
     class Realtime:
         """Realtime API (WebSocket)."""
         
-        def __init__(self, proxy_url: str, innate_service_key: str):
-            """Initialize Realtime API."""
-            self._proxy_url = proxy_url.rstrip("/")
-            self._innate_service_key = innate_service_key
+        def __init__(self, parent):
+            """Initialize Realtime API with reference to parent ProxyClient."""
+            self._parent = parent
         
         def connect_sync(
             self,
@@ -264,8 +254,8 @@ class ProxyOpenAIClient:
             Returns a SyncRealtimeConnection object with start(), stop(), send_json() methods.
             """
             return SyncRealtimeConnection(
-                proxy_url=self._proxy_url,
-                innate_service_key=self._innate_service_key,
+                proxy_url=self._parent.proxy_url,
+                innate_service_key=self._parent.innate_service_key,
                 model=model,
                 on_message=on_message,
                 on_open=on_open,
@@ -289,11 +279,13 @@ class ProxyOpenAIClient:
                 WebSocket connection
             """
             # Build WebSocket URL
-            ws_url = self._proxy_url.replace("https://", "wss://").replace("http://", "ws://")
-            ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={model}&token={self._innate_service_key}"
+            proxy_url = self._parent.proxy_url
+            innate_service_key = self._parent.innate_service_key
+            ws_url = proxy_url.replace("https://", "wss://").replace("http://", "ws://")
+            ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={model}&token={innate_service_key}"
             
             # Connect to proxy WebSocket
-            headers = {"Authorization": f"Bearer {self._innate_service_key}"}
+            headers = {"Authorization": f"Bearer {innate_service_key}"}
             try:
                 ws = await websockets.connect(ws_url, additional_headers=headers)
             except TypeError:
@@ -312,16 +304,16 @@ class ProxyOpenAIClient:
     @property
     def chat(self) -> Chat:
         """Get Chat API."""
-        return self.Chat(self._proxy_client)
+        return self.Chat(self._parent)
     
     @property
     def realtime(self) -> Realtime:
         """Get Realtime API."""
-        return self.Realtime(self._proxy_url, self._innate_service_key)
+        return self.Realtime(self._parent)
     
     async def close(self):
         """Close the client."""
-        await self._proxy_client.close()
+        await self._parent.close()
     
     async def __aenter__(self):
         """Async context manager entry."""

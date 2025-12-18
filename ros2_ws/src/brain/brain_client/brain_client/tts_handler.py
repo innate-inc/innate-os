@@ -9,20 +9,21 @@ import os
 import tempfile
 import threading
 import time
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Optional, Dict, Any
 
 import rclpy
 import subprocess
 
-if TYPE_CHECKING:
-    from brain_client.client.proxy_client import ProxyClient
+from brain_client.client.proxy_client import ProxyClient
+from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
 
 
 class TTSHandler:
     """
     Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
     
-    Can be initialized with a ProxyClient (preferred) or will create its own.
+    Requires a ProxyClient instance for accessing Cartesia services.
+    Voice ID is read from proxy.config["cartesia_voice_id"].
     """
     
     # Default voice ID (Katie - Friendly Fixer)
@@ -30,25 +31,24 @@ class TTSHandler:
 
     def __init__(
         self,
-        logger=None,
-        voice_id: str = None,
+        logger,
+        proxy: ProxyClient,
         tts_status_pub=None,
-        proxy: "ProxyClient" = None,
     ):
         """
         Initialize the TTS handler.
         
         Args:
             logger: ROS logger instance
-            voice_id: Voice ID to use for speech synthesis
+            proxy: ProxyClient instance (required)
             tts_status_pub: Optional ROS publisher for /tts/is_playing status
-            proxy: Optional ProxyClient instance (if not provided, creates its own)
         """
         self.logger = logger
-        self.voice_id = voice_id or self.DEFAULT_VOICE_ID
-        self._proxy = proxy
-        self._cartesia_client = None
-        self.is_playing = False
+        self._proxy: ProxyClient = proxy
+        # Get voice ID from proxy config, fall back to default
+        self.voice_id: str = proxy.config.get("cartesia_voice_id", self.DEFAULT_VOICE_ID)
+        self._cartesia_client: Optional[ProxyCartesiaClient] = None
+        self.is_playing: bool = False
         self.play_lock = threading.Lock()
         self.tts_status_pub = tts_status_pub
         
@@ -56,23 +56,15 @@ class TTSHandler:
         self._init_client()
     
     def _init_client(self):
-        """Initialize the Cartesia client (via proxy or directly)."""
+        """Initialize the Cartesia client via proxy."""
         try:
-            if self._proxy and self._proxy.is_available():
-                # Use injected proxy
-                self._cartesia_client = self._proxy.cartesia
-                if self.logger:
-                    self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
-            else:
-                # Create standalone ProxyCartesiaClient (reads from env)
-                from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
-                self._cartesia_client = ProxyCartesiaClient()
-                if self.logger:
-                    self.logger.info(f"✅ Cartesia TTS initialized (voice: {self.voice_id})")
+            self._cartesia_client = self._proxy.cartesia
+            if self.logger:
+                self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
         except Exception as e:
             if self.logger:
                 self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
-                self.logger.error("Make sure INNATE_PROXY_URL and INNATE_SERVICE_KEY are set")
+                self.logger.error("TTS proxy not properly initialized in BrainClientNode")
             self._cartesia_client = None
     
     @property

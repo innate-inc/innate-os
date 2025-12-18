@@ -1,8 +1,7 @@
 """Cartesia TTS adapter for proxy client."""
 
 import logging
-from typing import Optional, Dict, Any, Iterator
-from brain_client.client.proxy_client import ProxyClient
+from typing import Dict, Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -14,26 +13,21 @@ class ProxyCartesiaClient:
     This maintains the same interface as the Cartesia SDK for drop-in replacement.
     """
     
-    def __init__(
-        self,
-        proxy_url: Optional[str] = None,
-        innate_service_key: Optional[str] = None,
-    ):
+    def __init__(self, parent):
         """
         Initialize Cartesia proxy client.
         
         Args:
-            proxy_url: Proxy service URL
-            innate_service_key: Authentication token
+            parent: Parent ProxyClient instance
         """
-        self._proxy_client = ProxyClient(proxy_url=proxy_url, innate_service_key=innate_service_key)
+        self._parent = parent
     
     class TTS:
         """Text-to-speech API."""
         
-        def __init__(self, proxy_client: ProxyClient):
-            """Initialize TTS API."""
-            self._proxy_client = proxy_client
+        def __init__(self, parent):
+            """Initialize TTS API with reference to parent ProxyClient."""
+            self._parent = parent
         
         async def bytes(
             self,
@@ -54,8 +48,6 @@ class ProxyCartesiaClient:
             Returns:
                 bytes or Iterator[bytes] for streaming
             """
-            import asyncio
-            
             body = {
                 "model_id": model_id,
                 "transcript": transcript,
@@ -63,8 +55,8 @@ class ProxyCartesiaClient:
                 "output_format": output_format,
             }
             
-            # Make request through proxy
-            response = await self._proxy_client.request(
+            # Make request through parent proxy
+            response = await self._parent.request(
                 service_name="cartesia",
                 endpoint="/tts/bytes",
                 method="POST",
@@ -77,11 +69,11 @@ class ProxyCartesiaClient:
     @property
     def tts(self) -> TTS:
         """Get TTS API."""
-        return self.TTS(self._proxy_client)
+        return self.TTS(self._parent)
     
     async def close(self):
         """Close the client."""
-        await self._proxy_client.close()
+        await self._parent.close()
     
     async def __aenter__(self):
         """Async context manager entry."""

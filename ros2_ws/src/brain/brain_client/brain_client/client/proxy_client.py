@@ -7,13 +7,9 @@ Used by both brain_client_node (TTS) and input_manager_node (STT/inputs).
 
 import os
 import logging
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Optional, Dict, Any
 
 import httpx
-
-if TYPE_CHECKING:
-    from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
-    from brain_client.client.adapters.openai_adapter import ProxyOpenAIClient
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +54,8 @@ class ProxyClient:
         self._config = config or {}
         
         # Lazy-initialized service adapters
-        self._cartesia: Optional["ProxyCartesiaClient"] = None
-        self._openai: Optional["ProxyOpenAIClient"] = None
+        self._cartesia = None
+        self._openai = None
         
         # HTTP client (shared, lazy-initialized)
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -89,7 +85,7 @@ class ProxyClient:
         return bool(self._proxy_url and self._innate_service_key)
     
     @property
-    def cartesia(self) -> "ProxyCartesiaClient":
+    def cartesia(self):
         """
         Cartesia TTS service adapter.
         
@@ -98,14 +94,11 @@ class ProxyClient:
         """
         if self._cartesia is None:
             from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
-            self._cartesia = ProxyCartesiaClient(
-                proxy_url=self._proxy_url,
-                innate_service_key=self._innate_service_key,
-            )
+            self._cartesia = ProxyCartesiaClient(self)
         return self._cartesia
     
     @property
-    def openai(self) -> "ProxyOpenAIClient":
+    def openai(self):
         """
         OpenAI service adapter (realtime, completions, etc.)
         
@@ -114,10 +107,7 @@ class ProxyClient:
         """
         if self._openai is None:
             from brain_client.client.adapters.openai_adapter import ProxyOpenAIClient
-            self._openai = ProxyOpenAIClient(
-                proxy_url=self._proxy_url,
-                innate_service_key=self._innate_service_key,
-            )
+            self._openai = ProxyOpenAIClient(self)
         return self._openai
     
     def _get_headers(self) -> Dict[str, str]:

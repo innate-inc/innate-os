@@ -35,17 +35,18 @@ This separation allows:
 
 ## Usage in Input Devices
 
-Input devices (like `micro_input.py`) access proxy services via the injected `self.proxy`:
+Input devices (like `micro_input.py`) access proxy services via `self.proxy`. The `InputLoader` sets the logger and proxy via setter methods after instantiation:
 
 ```python
 from brain_client.input_types import InputDevice
 
 class MicroInput(InputDevice):
-    def __init__(self, logger=None, proxy=None):
-        super().__init__(logger, proxy)
+    def __init__(self):
+        super().__init__()  # No parameters needed
+        self.client = None
     
     def on_open(self):
-        # Check proxy is available
+        # Check proxy is available (set by InputLoader)
         if not self.proxy or not self.proxy.is_available():
             self.logger.error("Proxy not configured")
             return
@@ -80,7 +81,8 @@ class MicroInput(InputDevice):
 
 2. **InputLoader**:
    - Loads input device classes from `inputs/` directory
-   - Injects `proxy` into each `InputDevice` constructor
+   - Creates instances with no constructor arguments
+   - Sets `logger` and `proxy` via setter methods: `set_logger()`, `set_proxy()`
 
 3. **InputDevice** (your code):
    - Accesses `self.proxy.openai`, `self.proxy.cartesia`
@@ -95,6 +97,11 @@ proxy_config = {
 }
 self.proxy = ProxyClient(config=proxy_config)
 self.input_loader = InputLoader(self.get_logger(), proxy=self.proxy)
+
+# InputLoader creates instances like this:
+# instance = MicroInput()
+# instance.set_logger(logger)
+# instance.set_proxy(proxy)
 ```
 
 ## Installation
@@ -160,10 +167,13 @@ response = client.tts.bytes(
 
 **After (Proxy):**
 ```python
-from client.adapters.cartesia_adapter import ProxyCartesiaClient
+from brain_client.client.proxy_client import ProxyClient
 
-client = ProxyCartesiaClient()  # Uses INNATE_PROXY_URL and INNATE_SERVICE_KEY from env
-response = await client.tts.bytes(
+# Create ProxyClient (credentials from env vars)
+proxy = ProxyClient()
+
+# Access Cartesia via proxy.cartesia property
+response = await proxy.cartesia.tts.bytes(
     model_id="sonic-3",
     transcript="Hello, world!",
     voice={"mode": "id", "id": "voice-id"},
@@ -177,7 +187,7 @@ response = await client.tts.bytes(
 ```
 
 **Key Changes:**
-- Import `ProxyCartesiaClient` instead of `Cartesia`
+- Use `ProxyClient` and access adapters via properties (`proxy.cartesia`, `proxy.openai`)
 - Use `await` (async function)
 - No API key needed (handled by proxy)
 - Same return type and interface
@@ -199,10 +209,10 @@ response = client.chat.completions.create(
 
 **After (Proxy):**
 ```python
-from client.adapters.openai_adapter import ProxyOpenAIClient
+from brain_client.client.proxy_client import ProxyClient
 
-client = ProxyOpenAIClient()  # Uses env vars automatically
-response = await client.chat.completions(
+proxy = ProxyClient()  # Uses env vars automatically
+response = await proxy.openai.chat.completions(
     model="gpt-4",
     messages=[{"role": "user", "content": "Hello!"}],
     stream=False
@@ -222,7 +232,8 @@ for chunk in response:
     print(chunk.choices[0].delta.content)
 
 # After
-response = await client.chat.completions(
+proxy = ProxyClient()
+response = await proxy.openai.chat.completions(
     model="gpt-4",
     messages=[{"role": "user", "content": "Hello!"}],
     stream=True
@@ -240,9 +251,9 @@ The Realtime API supports two connection modes:
 Best for microphone input where you need low-latency audio streaming from a thread:
 
 ```python
-from brain_client.client.adapters.openai_adapter import ProxyOpenAIClient
+from brain_client.client.proxy_client import ProxyClient
 
-client = ProxyOpenAIClient()
+proxy = ProxyClient()
 
 def on_message(ws, message):
     data = json.loads(message)
@@ -269,7 +280,7 @@ def on_open():
     }
     conn.send_json(session_update)
 
-conn = client.realtime.connect_sync(
+conn = proxy.openai.realtime.connect_sync(
     model="gpt-4o-realtime-preview",
     on_message=on_message,
     on_open=on_open,
@@ -299,15 +310,15 @@ if conn.wait_until_connected(timeout=10):
 For async/await code:
 
 ```python
-from brain_client.client.adapters.openai_adapter import ProxyOpenAIClient
+from brain_client.client.proxy_client import ProxyClient
 
-client = ProxyOpenAIClient()
+proxy = ProxyClient()
 
 async def on_message(ws, message):
     # Handle message
     pass
 
-ws = await client.realtime.connect(
+ws = await proxy.openai.realtime.connect(
     model="gpt-4o-realtime-preview",
     on_message=on_message
 )
@@ -315,30 +326,35 @@ ws = await client.realtime.connect(
 
 ## Adapter Structure
 
-Each service has its own adapter class that mirrors the original SDK interface:
+Each service has its own adapter class that takes a reference to the parent `ProxyClient`. Adapters are created lazily by the `ProxyClient` properties:
 
 ### Cartesia Adapter
 
 ```python
 class ProxyCartesiaClient:
-    def __init__(self, proxy_url=None, innate_service_key=None):
-        # Uses env vars if not provided
+    def __init__(self, parent: ProxyClient):
+        # Takes parent ProxyClient reference
+        self._parent = parent
     
     @property
     def tts(self) -> TTS:
         """Text-to-speech API"""
     
     class TTS:
+        def __init__(self, parent: ProxyClient):
+            self._parent = parent
+        
         async def bytes(self, model_id, transcript, voice, output_format) -> bytes:
-            """Generate speech audio bytes"""
+            """Generate speech audio bytes via parent.request()"""
 ```
 
 ### OpenAI Adapter
 
 ```python
 class ProxyOpenAIClient:
-    def __init__(self, proxy_url=None, innate_service_key=None):
-        # Uses env vars if not provided
+    def __init__(self, parent: ProxyClient):
+        # Takes parent ProxyClient reference
+        self._parent = parent
     
     @property
     def chat(self) -> Chat:
@@ -349,12 +365,18 @@ class ProxyOpenAIClient:
         """Realtime WebSocket API"""
     
     class Chat:
+        def __init__(self, parent: ProxyClient):
+            self._parent = parent
+        
         async def completions(self, model, messages, stream=False, **kwargs):
-            """Create chat completion"""
+            """Create chat completion via parent.request()"""
     
     class Realtime:
-        async def connect(self, model, on_message=None):
-            """Connect to Realtime API via WebSocket"""
+        def __init__(self, parent: ProxyClient):
+            self._parent = parent
+        
+        def connect_sync(self, model, on_message=None, ...):
+            """Connect via parent.proxy_url and parent.innate_service_key"""
 ```
 
 ## Base Client
@@ -530,8 +552,8 @@ import json
 import base64
 
 class MicroInput(InputDevice):
-    def __init__(self, logger=None, proxy=None):
-        super().__init__(logger, proxy)
+    def __init__(self):
+        super().__init__()  # No parameters - logger/proxy set via setters
         self.client = None
     
     @property
@@ -539,6 +561,7 @@ class MicroInput(InputDevice):
         return "micro"
     
     def on_open(self):
+        # self.proxy and self.logger are set by InputLoader before on_open() is called
         if not self.proxy or not self.proxy.is_available():
             self.logger.error("Proxy not configured")
             return
@@ -671,12 +694,17 @@ class ProxyClient:
 
 ### ProxyCartesiaClient
 
-Cartesia TTS client adapter.
+Cartesia TTS client adapter. Created by `ProxyClient.cartesia` property.
 
 ```python
 class ProxyCartesiaClient:
-    def __init__(self, proxy_url=None, innate_service_key=None):
-        """Initialize Cartesia proxy client."""
+    def __init__(self, parent: ProxyClient):
+        """
+        Initialize Cartesia proxy client.
+        
+        Args:
+            parent: Parent ProxyClient instance (provides request(), close(), etc.)
+        """
     
     @property
     def tts(self) -> TTS:
@@ -706,12 +734,17 @@ class ProxyCartesiaClient:
 
 ### ProxyOpenAIClient
 
-OpenAI client adapter (Chat and Realtime).
+OpenAI client adapter (Chat and Realtime). Created by `ProxyClient.openai` property.
 
 ```python
 class ProxyOpenAIClient:
-    def __init__(self, proxy_url=None, innate_service_key=None):
-        """Initialize OpenAI proxy client."""
+    def __init__(self, parent: ProxyClient):
+        """
+        Initialize OpenAI proxy client.
+        
+        Args:
+            parent: Parent ProxyClient instance (provides proxy_url, innate_service_key, request(), etc.)
+        """
     
     @property
     def chat(self) -> Chat:
@@ -754,7 +787,7 @@ class ProxyOpenAIClient:
             """
             Create synchronous WebSocket connection (best for audio streaming).
             
-            Uses websocket-client for low-latency, thread-safe audio streaming.
+            Uses parent.proxy_url and parent.innate_service_key for connection.
             
             Args:
                 model: Model name (e.g., 'gpt-4o-realtime-preview')
@@ -804,15 +837,18 @@ class SyncRealtimeConnection:
 All input devices extend `InputDevice` from `brain_client.input_types`:
 
 ```python
+from brain_client.client.proxy_client import ProxyClient
+
 class InputDevice(ABC):
     """Base class for all input devices."""
     
-    def __init__(self, logger=None, proxy: "ProxyClient" = None):
-        """
-        Args:
-            logger: ROS2 logger (injected by InputManagerNode)
-            proxy: ProxyClient instance (injected by InputLoader)
-        """
+    def __init__(self):
+        """Initialize with default attributes. No parameters needed."""
+        self.logger = None
+        self._proxy: Optional[ProxyClient] = None
+        self._data_callback: Optional[Callable] = None
+        self._active: bool = False
+        self._config: Dict[str, Any] = {}
     
     @property
     @abstractmethod
@@ -831,6 +867,12 @@ class InputDevice(ABC):
     def proxy(self) -> Optional[ProxyClient]:
         """Access to proxy services and config."""
     
+    def set_proxy(self, proxy: ProxyClient):
+        """Set proxy client (called by InputLoader)."""
+    
+    def set_logger(self, logger):
+        """Set logger instance (called by InputLoader)."""
+    
     def send_data(self, data: Any, data_type: str = "custom"):
         """Send data to the brain agent."""
     
@@ -840,19 +882,23 @@ class InputDevice(ABC):
 
 ### Creating a Custom Input Device
 
-1. Create a file in `~/innate-os/inputs/` (e.g., `my_input.py`)
+1. Create a file in `~/innate-os/inputs/` ending in `_input.py` (e.g., `my_sensor_input.py`)
 2. Define a class extending `InputDevice`:
 
 ```python
 from brain_client.input_types import InputDevice
 
-class MyInput(InputDevice):
+class MySensorInput(InputDevice):
+    def __init__(self):
+        super().__init__()  # No parameters needed
+        self.sensor = None
+    
     @property
     def name(self) -> str:
-        return "my_input"
+        return "my_sensor"
     
     def on_open(self):
-        # Use proxy services
+        # self.logger and self.proxy are set by InputLoader before on_open()
         if self.proxy and self.proxy.is_available():
             config_value = self.proxy.config.get('my_config_key', 'default')
             # Start your input logic...
@@ -863,8 +909,9 @@ class MyInput(InputDevice):
 ```
 
 3. The `InputManagerNode` will automatically:
-   - Discover your input device class
-   - Inject the `proxy` with credentials and config
+   - Discover your input device class (files matching `*_input.py`)
+   - Create an instance with no constructor arguments
+   - Set `logger` and `proxy` via setter methods
    - Call `on_open()` when activated
    - Call `on_close()` when deactivated
 

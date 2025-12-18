@@ -413,16 +413,14 @@ class BrainClientNode(Node):
             Trigger, "/brain/reload", self.handle_reload
         )
 
-        # Initialize TTS handler with proxy and voice_id from parameter
-        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
+        # Initialize TTS handler with proxy (voice_id comes from proxy.config)
         self.tts_handler = TTSHandler(
             logger=self.get_logger(),
-            voice_id=cartesia_voice_id,
-            tts_status_pub=self.tts_status_pub,
             proxy=self.proxy,
+            tts_status_pub=self.tts_status_pub,
         )
         if self.tts_handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {cartesia_voice_id})")
+            self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})")
         else:
             self.get_logger().info("🔇 Text-to-speech disabled (check INNATE_PROXY_URL and INNATE_SERVICE_KEY)")
 

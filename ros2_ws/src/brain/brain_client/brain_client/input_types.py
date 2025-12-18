@@ -6,11 +6,10 @@ Base class for robot input devices. Input devices are pure Python classes
 with no ROS dependencies - they process data and send results via callbacks.
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Callable, TYPE_CHECKING
+from typing import Dict, Any, Optional, Callable
 from enum import Enum
 
-if TYPE_CHECKING:
-    from brain_client.client.proxy_client import ProxyClient
+from brain_client.client.proxy_client import ProxyClient
 
 
 class InputDeviceType(Enum):
@@ -30,7 +29,7 @@ class InputDevice(ABC):
     They process incoming data and send results via the data callback.
     
     The InputManagerNode handles all ROS communication (topics, services, etc.)
-    and injects a ProxyClient for accessing external services (TTS, STT, etc.)
+    and sets the logger and proxy attributes after instantiation.
     
     Usage in your input device:
         # Access proxy services
@@ -41,19 +40,13 @@ class InputDevice(ABC):
         model = self.proxy.config.get("openai_realtime_model", "default")
     """
 
-    def __init__(self, logger=None, proxy: "ProxyClient" = None):
-        """
-        Initialize the input device.
-        
-        Args:
-            logger: Optional logger instance (can be None)
-            proxy: ProxyClient instance for accessing external services
-        """
-        self.logger = logger
-        self._proxy = proxy
+    def __init__(self):
+        """Initialize the input device with default attributes."""
+        self.logger = None
+        self._proxy: Optional[ProxyClient] = None
         self._data_callback: Optional[Callable] = None
         self._active = False  # Start inactive
-        self._config = {}
+        self._config: Dict[str, Any] = {}
 
     @property
     @abstractmethod
@@ -189,7 +182,7 @@ class InputDevice(ABC):
         return self._active
 
     @property
-    def proxy(self) -> Optional["ProxyClient"]:
+    def proxy(self) -> Optional[ProxyClient]:
         """
         Access to proxy services (Cartesia, OpenAI, etc.)
         
@@ -206,7 +199,7 @@ class InputDevice(ABC):
         """
         return self._proxy
     
-    def set_proxy(self, proxy: "ProxyClient"):
+    def set_proxy(self, proxy: ProxyClient):
         """
         Set the proxy client (called by InputLoader).
         
@@ -214,6 +207,15 @@ class InputDevice(ABC):
             proxy: ProxyClient instance
         """
         self._proxy = proxy
+    
+    def set_logger(self, logger):
+        """
+        Set the logger instance (called by InputLoader).
+        
+        Args:
+            logger: Logger instance
+        """
+        self.logger = logger
 
     def set_config(self, config: Dict[str, Any]):
         """
