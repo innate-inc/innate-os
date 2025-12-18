@@ -6,6 +6,8 @@ alias discovery-and-launch-sim="$INNATE_OS_ROOT/dds/discovery-and-launch-sim.zsh
 export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 export ROS_DOMAIN_ID=0
 
+return
+
 # Dynamically determine the primary IP address
 # Uses 'hostname -I' which lists all IPs, takes the first one. Adjust if needed.
 # Fallback to localhost if no IP found (e.g., no network connection yet)

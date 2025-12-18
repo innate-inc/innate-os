@@ -1,4 +1,5 @@
 #!/bin/zsh
+return
 alias discovery="$INNATE_OS_ROOT/dds/discovery.zsh"
 alias discovery-and-launch-sim="$INNATE_OS_ROOT/dds/discovery-and-launch-sim.zsh"
 

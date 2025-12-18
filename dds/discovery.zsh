@@ -1,5 +1,6 @@
 #!/bin/zsh
 
+return
 # Check if the session exists
 tmux has-session -t discovery 2>/dev/null
 
