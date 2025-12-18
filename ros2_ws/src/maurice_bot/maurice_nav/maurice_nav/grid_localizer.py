@@ -194,6 +194,7 @@ class GridLocalizer(Node):
         
         Runs the full search in one blocking call for maximum speed.
         The search itself is GPU-bound and completes quickly (~1-2s).
+        Retries on insufficient scan data, but gives up on other errors.
         """
         if self._auto_done:
             return
@@ -206,17 +207,17 @@ class GridLocalizer(Node):
             self.get_logger().info('Waiting for scan data...', throttle_duration_sec=2.0)
             return
 
-        # Run full search (blocking but fast)
-        self._auto_done = True
-        if self._auto_timer:
-            self._auto_timer.cancel()
-        
         self.get_logger().info('Starting auto-localization search...')
         start_time = self.get_clock().now()
         
         try:
             pose, score = self._find_pose(self.latest_scan)
             elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            
+            # Success - stop retrying
+            self._auto_done = True
+            if self._auto_timer:
+                self._auto_timer.cancel()
             
             self._publish_pose(pose[0], pose[1], pose[2])
             
@@ -234,7 +235,14 @@ class GridLocalizer(Node):
                     f'({pose[0]:.2f}, {pose[1]:.2f}, {np.degrees(pose[2]):.1f}°) '
                     f'score={score:.3f} (threshold: {self.score_threshold}) in {elapsed:.2f}s'
                 )
+        except ValueError as e:
+            # Insufficient scan data - retry on next tick
+            self.get_logger().warn(f'Scan insufficient, will retry: {e}', throttle_duration_sec=2.0)
         except Exception as e:
+            # Other errors - give up
+            self._auto_done = True
+            if self._auto_timer:
+                self._auto_timer.cancel()
             self._publish_status('error')
             self.get_logger().error(f'Auto-localization failed: {e}')
 
@@ -440,7 +448,6 @@ class GridLocalizer(Node):
         pos_y_gpu = cp.asarray(pos_y, dtype=cp.float32)
         pos_theta_gpu = cp.asarray(pos_theta, dtype=cp.float32)
         
-        # Precompute pose trig once (not twice as before)
         cos_theta = cp.cos(pos_theta_gpu)
         sin_theta = cp.sin(pos_theta_gpu)
         del pos_theta_gpu
