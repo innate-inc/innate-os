@@ -616,9 +616,9 @@ class BrainClientNode(Node):
             self.active_inputs_pub.publish(msg)
             
             if required_inputs:
-                self.get_logger().info(f"🔌 Activated inputs for directive '{self.current_directive.id}': {required_inputs}")
+                self.get_logger().info(f"🔌 Activated inputs for directive '{self.current_directive.name}': {required_inputs}")
             else:
-                self.get_logger().debug(f"No inputs required for directive '{self.current_directive.id}'")
+                self.get_logger().debug(f"No inputs required for directive '{self.current_directive.name}'")
         except Exception as e:
             self.get_logger().error(f"Error activating directive inputs: {e}")
 
@@ -1694,7 +1694,7 @@ class BrainClientNode(Node):
             },
         )
         self.get_logger().info(
-            f"Registering {len(primitives)} primitives and directive '{self.current_directive.id}' with server"
+            f"Registering {len(primitives)} primitives and directive '{self.current_directive.name}' with server"
         )
         self.ws_bridge.send_message(reg_msg)
 
@@ -1747,9 +1747,7 @@ class BrainClientNode(Node):
         directive_details = []
         for directive_name, directive in self.directives.items():
             directive_info = {
-                "id": directive.id,
-                "display_name": directive.display_name,
-                "display_icon": directive.display_icon_data,
+                "name": directive.name,
                 "prompt": directive.get_prompt(),
                 "primitives": directive.get_primitives()
             }
@@ -1757,7 +1755,7 @@ class BrainClientNode(Node):
         
         # Convert the detailed info to JSON string for the directives field
         response.directives = [json.dumps(directive_details)]
-        response.current_directive = self.current_directive.id
+        response.current_directive = self.current_directive.name
         
         # Get startup directive from file
         startup_directive = self.load_startup_directive()
@@ -1978,7 +1976,7 @@ class BrainClientNode(Node):
         # NOTE: We do NOT apply directive_on_startup here - that's only for initial startup
         # On reactivation, we keep whatever directive was active before
         self.get_logger().info(
-            f"\033[1;92m[BrainClient] Continuing with current directive: {self.current_directive.id}\033[0m"
+            f"\033[1;92m[BrainClient] Continuing with current directive: {self.current_directive.name}\033[0m"
         )
 
         # Restart the agent timer (which sends images based on ready_for_image)
