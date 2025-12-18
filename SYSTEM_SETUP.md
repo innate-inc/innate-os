@@ -167,3 +167,6 @@ When the BLE service connects the robot to a new network and detects an IP addre
     3. Save and reboot
     4. This configures the I2S pins (BCLK, LRCLK, DIN) that the MAX98357A requires
     5. Verify audio devices appear: `aplay -l` should show additional output devices after reboot
+
+
+    Adding a fake line here. 
