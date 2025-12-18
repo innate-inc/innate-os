@@ -66,21 +66,6 @@ def generate_launch_description():
         parameters=[config_file],
     )
     
-    grid_localizer_node = Node(
-        package="maurice_nav",
-        executable="grid_localizer.py",
-        name="grid_localizer",
-        output="screen",
-        parameters=[
-            config_file,
-            {
-                'auto_localize': True,
-                'auto_localize_timeout': 30.0,
-                'max_score_threshold': 0.3,
-            }
-        ],
-    )
-    
     # Create the lifecycle manager node to manage all nodes
     # Note: grid_localizer is NOT a lifecycle node, it runs independently
     lifecycle_manager_node = Node(
