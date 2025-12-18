@@ -37,7 +37,7 @@ def parse_log_file(filepath):
                     'timestamp': timestamp_match.group(1) if timestamp_match else 'N/A',
                     'iteration': int(iteration_match.group(1)) if iteration_match else 0,
                     'SSHD': '',
-                    'discovery-server': '',
+                    'zenoh-router': '',
                     'ros-app': '',
                     'ble-provisioner': '',
                     'WiFi IP': '',
