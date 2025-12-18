@@ -1,10 +1,21 @@
 #!/bin/bash
 # Post-Update Script for Innate-OS
-# This script runs after git pull to update system components
+# This script runs after update/install to configure system components
 # Requires root privileges via sudo
 #
 # Usage: sudo ./post_update.sh [--first-install]
-#   --first-install  Skip ROS2 rebuild and dependency installation (used on fresh install)
+#   --first-install  Skip dependency installation (used on fresh install, already done by install.sh)
+#
+# This script handles:
+#   1. Systemd service files
+#   2. Helper scripts in /usr/local/bin
+#   3. Udev rules
+#   4. Bluetooth configuration
+#   5. Apt/pip dependencies (skipped on first-install)
+#   6. Zsh configuration
+#   7. DDS setup
+#   8. Sudoers configuration
+#   9. Service restart
 
 set -e  # Exit on error
 
@@ -29,6 +40,10 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 LOG_FILE="$REPO_DIR/logs/post_update.log"
 
+# Get the actual user (not root)
+ACTUAL_USER=${SUDO_USER:-$USER}
+ACTUAL_HOME=$(eval echo ~$ACTUAL_USER)
+
 # Create logs directory if it doesn't exist
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -40,8 +55,6 @@ log() {
 # Ensure log file has correct ownership
 ensure_log_ownership() {
     if [ -f "$LOG_FILE" ]; then
-        # Get the actual user who started the script (not the sudo user)
-        ACTUAL_USER=${SUDO_USER:-$USER}
         chown "$ACTUAL_USER:$ACTUAL_USER" "$LOG_FILE" 2>/dev/null || true
     fi
 }
@@ -53,6 +66,7 @@ else
     log "Starting post-update script"
 fi
 log "Repository: $REPO_DIR"
+log "User: $ACTUAL_USER"
 log "========================================"
 
 # Check hardware revision - R5 is no longer supported for updates beyond 0.1.0
@@ -97,18 +111,13 @@ check_hardware_revision
 log "Stopping services to begin update..."
 
 # Kill tmux sessions if running
-ACTUAL_USER=${SUDO_USER:-$USER}
 if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
     log "Stopping tmux session: ros_nodes"
     sudo -u "$ACTUAL_USER" tmux kill-session -t ros_nodes
 fi
 
-# disable discovery-server if installed in historical image 
-systemctl disable --now discovery-server.service || true
-rm /etc/systemd/system/discovery-server.service || true
-
-# Stop systemd services
-for service in zenoh-router.service ros-app.service; do
+# Stop systemd services (if they exist)
+for service in zenoh-router.service ros-app.service ble-provisioner.service; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         log "Stopping $service"
         systemctl stop "$service"
@@ -117,45 +126,62 @@ done
 
 log "All services stopped."
 
-# 1. Update systemd service files if changed
-log "Checking systemd service files..."
+# -----------------------------------------------------------------------------
+# 1. Update systemd service files
+# -----------------------------------------------------------------------------
+log "Installing systemd service files..."
 if [ -d "$REPO_DIR/systemd" ]; then
     for service_file in "$REPO_DIR/systemd"/*.service; do
         if [ -f "$service_file" ]; then
             service_name=$(basename "$service_file")
-            log "Copying $service_name to /etc/systemd/system/"
-            ln -sf "$service_file" /etc/systemd/system/
+            log "  Installing $service_name"
+
+            # Update User= directive in service files to match actual user
+            sed -e "s/User=jetson1/User=$ACTUAL_USER/g" \
+                -e "s|/home/jetson1|$ACTUAL_HOME|g" \
+                "$service_file" > /etc/systemd/system/"$service_name"
         fi
     done
     systemctl daemon-reload
     log "Systemd daemon reloaded"
 fi
 
-# 2. Update scripts in /usr/local/bin if they changed
-log "Checking helper scripts..."
+# -----------------------------------------------------------------------------
+# 2. Update helper scripts in /usr/local/bin
+# -----------------------------------------------------------------------------
+log "Installing helper scripts..."
 if [ -d "$REPO_DIR/scripts" ]; then
     # Copy restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
-        log "Updating restart_robot_networking.sh"
+        log "  Installing restart_robot_networking.sh"
         ln -sf "$REPO_DIR/scripts/restart_robot_networking.sh" /usr/local/bin/
         chmod +x /usr/local/bin/restart_robot_networking.sh
     fi
-    
+
     # Copy tmux launcher if it exists
     if [ -f "$REPO_DIR/scripts/launch_ros_in_tmux.sh" ]; then
-        log "Updating launch_ros_in_tmux.sh"
+        log "  Installing launch_ros_in_tmux.sh"
         ln -sf "$REPO_DIR/scripts/launch_ros_in_tmux.sh" /usr/local/bin/
         chmod +x /usr/local/bin/launch_ros_in_tmux.sh
     fi
+
+    # Copy zsh history fixer if it exists
+    if [ -f "$REPO_DIR/scripts/fix-zsh-history.sh" ]; then
+        log "  Installing fix-zsh-history.sh"
+        cp "$REPO_DIR/scripts/fix-zsh-history.sh" /usr/local/bin/
+        chmod +x /usr/local/bin/fix-zsh-history.sh
+    fi
 fi
 
-# 3. Update udev rules if present
-log "Checking udev rules..."
+# -----------------------------------------------------------------------------
+# 3. Update udev rules
+# -----------------------------------------------------------------------------
+log "Installing udev rules..."
 if [ -d "$REPO_DIR/udev" ]; then
     for rule_file in "$REPO_DIR/udev"/*.rules; do
         if [ -f "$rule_file" ]; then
             rule_name=$(basename "$rule_file")
-            log "Copying $rule_name to /etc/udev/rules.d/"
+            log "  Installing $rule_name"
             ln -sf "$rule_file" /etc/udev/rules.d/
         fi
     done
@@ -164,117 +190,193 @@ if [ -d "$REPO_DIR/udev" ]; then
     log "Udev rules reloaded"
 fi
 
+# -----------------------------------------------------------------------------
 # 4. Update Bluetooth configurations (optional - only on systems with bluetooth)
+# -----------------------------------------------------------------------------
 log "Checking Bluetooth configurations..."
 if [ -f "$REPO_DIR/config/bluetooth/main.conf" ]; then
     if [ -d "/etc/bluetooth" ]; then
-        log "Updating /etc/bluetooth/main.conf"
+        log "  Updating /etc/bluetooth/main.conf"
         ln -sf "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
     else
-        log "Skipping bluetooth config - /etc/bluetooth not found (VM or no bluetooth)"
+        log "  Skipping bluetooth config - /etc/bluetooth not found (VM or no bluetooth)"
     fi
 fi
 
 if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
     if [ -d "/lib/systemd/system" ]; then
-        log "Updating bluetooth service override..."
+        log "  Updating bluetooth service override"
         mkdir -p /lib/systemd/system/bluetooth.service.d/
         ln -sf "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
         systemctl daemon-reload
-        log "Systemd daemon reloaded after bluetooth override"
     else
-        log "Skipping bluetooth service override - systemd not found"
+        log "  Skipping bluetooth service override - systemd not found"
     fi
 fi
 
-# 5. Install/update apt dependencies from config file (skip on first install)
+# -----------------------------------------------------------------------------
+# 5. Install/update dependencies (skip on first install)
+# -----------------------------------------------------------------------------
 if [ "$FIRST_INSTALL" = true ]; then
-    log "Skipping apt dependencies (already installed during first install)"
+    log "Skipping dependencies (already installed during first install)"
 else
+    # Apt dependencies
     log "Checking apt dependencies..."
     APT_DEPS_FILE="$REPO_DIR/ros2_ws/apt-dependencies.txt"
     if [ -f "$APT_DEPS_FILE" ]; then
-        log "Installing apt dependencies from $APT_DEPS_FILE..."
+        log "  Installing apt dependencies..."
         apt-get update
         grep -v '^#' "$APT_DEPS_FILE" | grep -v '^$' | xargs apt-get install -y
-        log "Apt dependencies installed"
+        log "  Apt dependencies installed"
     fi
-fi
 
-# 6. Install/update Python dependencies from config file (skip on first install)
-if [ "$FIRST_INSTALL" = true ]; then
-    log "Skipping pip dependencies (already installed during first install)"
-else
+    # Pip dependencies
     log "Checking Python dependencies..."
     PIP_DEPS_FILE="$REPO_DIR/ros2_ws/pip-requirements.txt"
     if [ -f "$PIP_DEPS_FILE" ]; then
-        log "Installing pip dependencies from $PIP_DEPS_FILE..."
+        log "  Installing pip dependencies..."
         pip3 install -r "$PIP_DEPS_FILE" --upgrade
-        log "Pip dependencies installed"
+        log "  Pip dependencies installed"
     fi
 fi
 
-# 7. Import vcs dependencies and rebuild ROS2 workspace (skip on first install)
-if [ "$FIRST_INSTALL" = true ]; then
-    log "Skipping ROS2 workspace rebuild (already built during first install)"
-else
-    log "Checking ROS2 workspace..."
-    if [ -d "$REPO_DIR/ros2_ws/src" ]; then
-        ACTUAL_USER=${SUDO_USER:-$USER}
+# -----------------------------------------------------------------------------
+# 6. Setup Zsh configuration
+# -----------------------------------------------------------------------------
+log "Setting up Zsh configuration..."
 
-        # Import external dependencies using vcs (if dependencies.repos exists)
-        if [ -f "$REPO_DIR/ros2_ws/src/dependencies.repos" ]; then
-            log "Importing external dependencies via vcs..."
-            cd "$REPO_DIR/ros2_ws/src"
-            sudo -u "$ACTUAL_USER" vcs import --input dependencies.repos || true
-            cd "$REPO_DIR/ros2_ws"
-        fi
+# Install oh-my-zsh if not present
+if [ ! -d "$ACTUAL_HOME/.oh-my-zsh" ]; then
+    log "  Installing Oh My Zsh..."
+    sudo -u "$ACTUAL_USER" sh -c 'RUNZSH=no CHSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"' || true
+fi
 
-        log "Rebuilding ROS2 workspace..."
-        cd "$REPO_DIR/ros2_ws"
-
-        # Run as the actual user, not root
-        sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
-
-        if [ $? -eq 0 ]; then
-            log "ROS2 workspace rebuilt successfully"
-        else
-            log "ERROR: Failed to rebuild ROS2 workspace"
-            exit 1
-        fi
+# Backup existing .zshrc if it exists and isn't ours
+if [ -f "$ACTUAL_HOME/.zshrc" ]; then
+    if ! grep -q "INNATE_OS_ROOT" "$ACTUAL_HOME/.zshrc"; then
+        log "  Backing up existing .zshrc"
+        cp "$ACTUAL_HOME/.zshrc" "$ACTUAL_HOME/.zshrc.backup.$(date +%s)"
     fi
 fi
 
-# 8. Restart relevant services
-log "Restarting services..."
-SERVICES_TO_RESTART=("bluetooth.service" "zenoh-router.service" "ros-app.service")
+# Copy our zsh configuration files
+if [ -d "$REPO_DIR/zshrcs" ]; then
+    log "  Installing Innate zsh configuration"
 
-for service in "${SERVICES_TO_RESTART[@]}"; do
-    log "Enabling and restarting $service"
-    systemctl enable "$service"
-    systemctl restart "$service"
+    # Copy .zshrc.pre-oh-my-zsh (contains ROS2/DDS setup)
+    if [ -f "$REPO_DIR/zshrcs/.zshrc.pre-oh-my-zsh" ]; then
+        # Update paths in the file
+        sed -e "s|/home/jetson1|$ACTUAL_HOME|g" \
+            "$REPO_DIR/zshrcs/.zshrc.pre-oh-my-zsh" > "$ACTUAL_HOME/.zshrc.pre-oh-my-zsh"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.zshrc.pre-oh-my-zsh"
+    fi
+
+    # Copy main .zshrc
+    if [ -f "$REPO_DIR/zshrcs/.zshrc" ]; then
+        # Update paths in the file
+        sed -e "s|/home/jetson1|$ACTUAL_HOME|g" \
+            "$REPO_DIR/zshrcs/.zshrc" > "$ACTUAL_HOME/.zshrc"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.zshrc"
+    fi
+fi
+
+# Ensure INNATE_OS_ROOT is set correctly in .zshrc
+if [ -f "$ACTUAL_HOME/.zshrc" ]; then
+    if ! grep -q "export INNATE_OS_ROOT=" "$ACTUAL_HOME/.zshrc"; then
+        log "  Adding INNATE_OS_ROOT to .zshrc"
+        echo "" >> "$ACTUAL_HOME/.zshrc"
+        echo "export INNATE_OS_ROOT=\"$REPO_DIR\"" >> "$ACTUAL_HOME/.zshrc"
+    else
+        # Update existing INNATE_OS_ROOT
+        sed -i "s|export INNATE_OS_ROOT=.*|export INNATE_OS_ROOT=\"$REPO_DIR\"|g" "$ACTUAL_HOME/.zshrc"
+    fi
+fi
+
+# Set zsh as default shell if not already
+if [ "$(getent passwd $ACTUAL_USER | cut -d: -f7)" != "/bin/zsh" ] && [ -x /bin/zsh ]; then
+    log "  Setting zsh as default shell for $ACTUAL_USER"
+    chsh -s /bin/zsh "$ACTUAL_USER" || true
+fi
+
+# -----------------------------------------------------------------------------
+# 7. Setup DDS configuration
+# -----------------------------------------------------------------------------
+log "Setting up DDS configuration..."
+if [ -d "$REPO_DIR/dds" ]; then
+    # Ensure DDS scripts are executable
+    chmod +x "$REPO_DIR/dds"/*.zsh 2>/dev/null || true
+
+    # Generate initial DDS config (will be regenerated on shell login)
+    if [ -f "$REPO_DIR/dds/setup_dds.zsh" ]; then
+        log "  DDS setup script ready at $REPO_DIR/dds/setup_dds.zsh"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+# 8. Configure sudoers for passwordless restart script
+# -----------------------------------------------------------------------------
+log "Configuring sudoers..."
+
+# Allow user to run restart_robot_networking.sh without password
+SUDOERS_FILE="/etc/sudoers.d/innate-os"
+cat > "$SUDOERS_FILE" << EOF
+# Innate-OS sudoers configuration
+# Allow $ACTUAL_USER to run specific scripts without password
+
+# Restart robot networking (called by BLE provisioner)
+$ACTUAL_USER ALL=(ALL) NOPASSWD: /usr/local/bin/restart_robot_networking.sh
+
+# Post-update script (called by innate-update)
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $REPO_DIR/scripts/update/post_update.sh
+EOF
+chmod 440 "$SUDOERS_FILE"
+log "  Sudoers configured for $ACTUAL_USER"
+
+# -----------------------------------------------------------------------------
+# 9. Enable and restart services
+# -----------------------------------------------------------------------------
+log "Enabling and starting services..."
+
+# List of services to enable/start
+SERVICES=("zenoh-router.service" "ros-app.service")
+
+# Add ble-provisioner if the service file exists
+if [ -f "/etc/systemd/system/ble-provisioner.service" ]; then
+    SERVICES+=("ble-provisioner.service")
+fi
+
+# Add bluetooth if available
+if systemctl list-unit-files bluetooth.service &>/dev/null; then
+    SERVICES+=("bluetooth.service")
+fi
+
+for service in "${SERVICES[@]}"; do
+    if [ -f "/etc/systemd/system/$service" ] || systemctl list-unit-files "$service" &>/dev/null; then
+        log "  Enabling $service"
+        systemctl enable "$service" 2>/dev/null || true
+        log "  Starting $service"
+        systemctl start "$service" 2>/dev/null || true
+    fi
 done
 
-# 9. Launch ROS nodes in Tmux
-log "Launching ROS nodes in tmux..."
-ACTUAL_USER=${SUDO_USER:-$USER}
-# Run as the actual user in the background
-sudo -u "$ACTUAL_USER" INNATE_OS_ROOT="$REPO_DIR" bash "$REPO_DIR/scripts/launch_ros_in_tmux.sh" &
-
-# 10. Optional: Restart Docker containers if using them
-# if command -v docker-compose &> /dev/null; then
-#     log "Restarting Docker containers..."
-#     cd "$REPO_DIR"
-#     docker-compose -f docker-compose.prod.yml down
-#     docker-compose -f docker-compose.prod.yml up -d
-# fi
+# -----------------------------------------------------------------------------
+# 10. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
+# -----------------------------------------------------------------------------
+# Note: If ros-app.service is configured correctly, it will launch the tmux session
+# If not using systemd, you can manually launch:
+# sudo -u "$ACTUAL_USER" INNATE_OS_ROOT="$REPO_DIR" bash "$REPO_DIR/scripts/launch_ros_in_tmux.sh" &
 
 log "========================================"
 log "Post-update script completed successfully"
 log "========================================"
+log ""
+log "To start ROS manually:"
+log "  tmux attach -t ros_nodes  (if already running)"
+log "  OR"
+log "  launch_ros_in_tmux.sh     (to start fresh)"
+log ""
 
 # Fix log file ownership
 ensure_log_ownership
 
 exit 0
-

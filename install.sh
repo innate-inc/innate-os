@@ -598,23 +598,15 @@ install_services() {
 setup_shell() {
     info "Setting up shell environment..."
 
-    # Detect shell config file
-    if [ -f "$HOME/.zshrc" ]; then
-        SHELL_RC="$HOME/.zshrc"
-    elif [ -f "$HOME/.bashrc" ]; then
-        SHELL_RC="$HOME/.bashrc"
-    else
-        SHELL_RC="$HOME/.bashrc"
-    fi
+    # Note: Full zsh configuration is handled by post_update.sh
+    # This function just ensures basic bash fallback works
 
-    # Check if already configured
-    if grep -q "INNATE_OS" "$SHELL_RC" 2>/dev/null; then
-        success "Shell already configured"
-        return 0
-    fi
-
-    # Add environment setup
-    cat >> "$SHELL_RC" << EOF
+    # Add basic bash configuration if using bash
+    BASH_RC="$HOME/.bashrc"
+    if [ -f "$BASH_RC" ]; then
+        if ! grep -q "INNATE_OS_ROOT" "$BASH_RC" 2>/dev/null; then
+            info "Adding Innate OS to .bashrc (zsh config handled by post_update.sh)"
+            cat >> "$BASH_RC" << EOF
 
 # ----- Innate OS Environment -----
 export INNATE_OS_ROOT="$INNATE_OS_DIR"
@@ -622,9 +614,12 @@ source /opt/ros/$ROS_DISTRO/setup.bash
 if [ -f "\$INNATE_OS_ROOT/ros2_ws/install/setup.bash" ]; then
     source "\$INNATE_OS_ROOT/ros2_ws/install/setup.bash"
 fi
+# For full DDS/ROS2 setup, use zsh (configured by post_update.sh)
 EOF
+        fi
+    fi
 
-    success "Shell environment configured in $SHELL_RC"
+    success "Shell environment configured"
 }
 
 # -----------------------------------------------------------------------------

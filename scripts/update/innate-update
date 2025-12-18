@@ -1,476 +1,739 @@
-#!/bin/bash
-# Innate-OS Update Command
-# Usage: innate-update check        - Check if updates available (latest tag)
-#        innate-update check --dev  - Check if updates available (latest commit)
-#        innate-update apply        - Apply updates (to latest tag)
-#        innate-update apply --dev  - Apply updates (to latest commit)
-#        innate-update status       - Show current version
-#        innate-update daemon       - Run as background daemon (for systemd)
+#!/usr/bin/env python3
+"""
+Innate-OS Update Manager
 
-set -e
+Usage:
+    innate-update check         - Check if updates are available (latest tag)
+    innate-update check --dev   - Check for updates (latest commit)
+    innate-update apply         - Apply pending updates (to latest tag)
+    innate-update apply --dev   - Apply updates (to latest commit)
+    innate-update status        - Show current version info
+    innate-update daemon        - Run as background daemon (for systemd)
+"""
 
-# Configuration - can be overridden via environment variables
-REPO_DIR="${INNATE_OS_DIR:-$HOME/innate-os}"
-STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
-LOG_DIR="$REPO_DIR/logs"
-UPDATE_CACHE="$STATE_DIR/update-cache"
-BRANCH="${INNATE_UPDATE_BRANCH:-main}"
-GITHUB_REPO="${GITHUB_REPO:-innate-inc/innate-os}"
-DEV_MODE=false
-DAEMON_INTERVAL="${INNATE_UPDATE_INTERVAL:-3600}"  # Default: check every hour
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.request
+import urllib.error
+from datetime import datetime
+from pathlib import Path
 
-# Ensure directories exist
-mkdir -p "$LOG_DIR"
-mkdir -p "$STATE_DIR" 2>/dev/null || true
 
-# Load saved GitHub token for private repos
-load_github_token() {
-    if [ -z "$GITHUB_TOKEN" ]; then
-        TOKEN_FILE="$STATE_DIR/.github_token"
-        if [ -f "$TOKEN_FILE" ]; then
-            GITHUB_TOKEN=$(cat "$TOKEN_FILE")
-            export GITHUB_TOKEN
-            # Update git remote to use token
-            if [ -d "$REPO_DIR/.git" ]; then
-                git -C "$REPO_DIR" remote set-url origin "https://${GITHUB_TOKEN}@github.com/$GITHUB_REPO.git" 2>/dev/null || true
-            fi
-        fi
-    fi
-}
+# ANSI color codes
+class Colors:
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    BOLD = '\033[1m'
+    NC = '\033[0m'  # No Color
 
-# Load token on startup
-load_github_token
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+class Config:
+    """Configuration loaded from environment variables."""
 
-log() {
-    echo -e "${BLUE}[$(date +'%H:%M:%S')]${NC} $*"
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_DIR/update.log"
-}
+    def __init__(self):
+        self.repo_dir = Path(os.environ.get('INNATE_OS_DIR', Path.home() / 'innate-os'))
+        self.state_dir = Path(os.environ.get('INNATE_STATE_DIR', '/var/lib/innate-update'))
+        self.log_dir = self.repo_dir / 'logs'
+        self.update_cache = self.state_dir / 'update-cache'
+        self.branch = os.environ.get('INNATE_UPDATE_BRANCH', 'main')
+        self.github_repo = os.environ.get('GITHUB_REPO', 'innate-inc/innate-os')
+        self.daemon_interval = int(os.environ.get('INNATE_UPDATE_INTERVAL', '3600'))
+        self.github_token = os.environ.get('GITHUB_TOKEN', '')
 
-error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] ERROR: $*" >> "$LOG_DIR/update.log"
-}
+        # Ensure directories exist
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            pass
 
-success() {
-    echo -e "${GREEN}✓${NC} $*"
-}
+    def load_github_token(self):
+        """Load saved GitHub token for private repos."""
+        if self.github_token:
+            return
 
-warning() {
-    echo -e "${YELLOW}⚠${NC} $*"
-}
+        token_file = self.state_dir / '.github_token'
+        if token_file.exists():
+            self.github_token = token_file.read_text().strip()
+            os.environ['GITHUB_TOKEN'] = self.github_token
 
-# Check if we're in the right directory
-check_repo() {
-    if [ ! -d "$REPO_DIR/.git" ]; then
-        error "Not a git repository: $REPO_DIR"
-        exit 1
-    fi
-}
 
-# Get current commit hash
-current_commit() {
-    git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "unknown"
-}
+class Logger:
+    """Simple logger with colors and file output."""
 
-# Get latest tag on main branch
-get_latest_tag() {
-    # Get tags that are ancestors of origin/main, sorted by version, pick the latest
-    git -C "$REPO_DIR" tag --sort=-v:refname --merged origin/$BRANCH 2>/dev/null | head -1
-}
+    def __init__(self, log_file: Path):
+        self.log_file = log_file
 
-# Get current tag if HEAD is at a tag
-get_current_tag() {
-    git -C "$REPO_DIR" describe --tags --exact-match HEAD 2>/dev/null || echo ""
-}
+    def _write_to_file(self, message: str):
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            with open(self.log_file, 'a') as f:
+                f.write(f'[{timestamp}] {message}\n')
+        except (PermissionError, OSError):
+            pass
 
-# Check if commit A is an ancestor of commit B (A came before B)
-is_ancestor() {
-    git -C "$REPO_DIR" merge-base --is-ancestor "$1" "$2" 2>/dev/null
-}
+    def info(self, message: str):
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        print(f"{Colors.BLUE}[{timestamp}]{Colors.NC} {message}")
+        self._write_to_file(message)
 
-# Check for updates
-check_updates() {
-    check_repo
-    
-    log "Checking for updates..."
-    
-    # Fetch latest from remote (including tags)
-    if ! git -C "$REPO_DIR" fetch origin "$BRANCH" --tags 2>/dev/null; then
-        error "Failed to fetch from remote. Check network and git authentication."
-        exit 1
-    fi
-    
-    local current=$(current_commit)
-    
-    if [ "$DEV_MODE" = true ]; then
-        # Dev mode: check against latest commit on main
-        local target=$(git -C "$REPO_DIR" rev-parse "origin/$BRANCH" 2>/dev/null || echo "unknown")
-        local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
-        
-        # Cache the result
-        mkdir -p "$(dirname "$UPDATE_CACHE")"
-        echo "$commits_behind" > "$UPDATE_CACHE"
-        
-        if [ "$commits_behind" -eq 0 ]; then
-            success "System is up to date (dev mode)"
-            echo "Current: ${current:0:7}"
+    def success(self, message: str):
+        print(f"{Colors.GREEN}✓{Colors.NC} {message}")
+
+    def warning(self, message: str):
+        print(f"{Colors.YELLOW}⚠{Colors.NC} {message}")
+
+    def error(self, message: str):
+        print(f"{Colors.RED}[ERROR]{Colors.NC} {message}", file=sys.stderr)
+        self._write_to_file(f'ERROR: {message}')
+
+
+class GitHubAPI:
+    """GitHub API client for fetching release information."""
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.base_url = f"https://api.github.com/repos/{config.github_repo}"
+
+    def _request(self, url: str, accept: str = "application/vnd.github+json") -> bytes:
+        """Make authenticated request to GitHub API."""
+        headers = {"Accept": accept}
+        if self.config.github_token:
+            headers["Authorization"] = f"token {self.config.github_token}"
+
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return response.read()
+        except urllib.error.HTTPError as e:
+            raise Exception(f"GitHub API error: {e.code} {e.reason}")
+        except urllib.error.URLError as e:
+            raise Exception(f"Network error: {e.reason}")
+
+    def get_latest_release(self) -> dict:
+        """Get latest release info from GitHub."""
+        url = f"{self.base_url}/releases/latest"
+        data = self._request(url)
+        return json.loads(data)
+
+    def get_release_by_tag(self, tag: str) -> dict:
+        """Get release info by tag name."""
+        url = f"{self.base_url}/releases/tags/{tag}"
+        data = self._request(url)
+        return json.loads(data)
+
+    def download_asset(self, asset_url: str, dest_path: Path) -> bool:
+        """Download a release asset."""
+        # For private repos, need to use API URL with octet-stream accept header
+        headers = {"Accept": "application/octet-stream"}
+        if self.config.github_token:
+            headers["Authorization"] = f"token {self.config.github_token}"
+
+        req = urllib.request.Request(asset_url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=300) as response:
+                with open(dest_path, 'wb') as f:
+                    shutil.copyfileobj(response, f)
+            return True
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            return False
+
+    def find_asset_url(self, release: dict, pattern: str = ".tar.gz") -> tuple[str, str]:
+        """Find asset URL matching pattern (excluding -source.tar.gz).
+
+        Returns (api_url, asset_name) tuple.
+        """
+        for asset in release.get("assets", []):
+            name = asset.get("name", "")
+            if name.endswith(pattern) and "-source" not in name:
+                # Use API URL for downloading (works with private repos)
+                return asset.get("url", ""), name
+        return "", ""
+
+
+class GitRepo:
+    """Git repository operations."""
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.repo_dir = config.repo_dir
+        self.branch = config.branch
+
+    def _run(self, args, check=True) -> subprocess.CompletedProcess:
+        """Run a git command."""
+        result = subprocess.run(
+            ['git', '-C', str(self.repo_dir)] + args,
+            capture_output=True, text=True, check=False
+        )
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, args, result.stdout, result.stderr)
+        return result
+
+    def check_is_repo(self) -> bool:
+        return (self.repo_dir / '.git').is_dir()
+
+    def fetch(self, tags=True) -> bool:
+        args = ['fetch', 'origin', self.branch]
+        if tags:
+            args.append('--tags')
+        result = self._run(args, check=False)
+        return result.returncode == 0
+
+    def current_commit(self) -> str:
+        result = self._run(['rev-parse', 'HEAD'], check=False)
+        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+
+    def current_branch(self) -> str:
+        result = self._run(['rev-parse', '--abbrev-ref', 'HEAD'], check=False)
+        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+
+    def remote_url(self) -> str:
+        result = self._run(['config', '--get', 'remote.origin.url'], check=False)
+        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+
+    def get_latest_tag(self) -> str:
+        result = self._run(['tag', '--sort=-v:refname', '--merged', f'origin/{self.branch}'], check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split('\n')[0]
+        return ''
+
+    def get_current_tag(self) -> str:
+        result = self._run(['describe', '--tags', '--exact-match', 'HEAD'], check=False)
+        return result.stdout.strip() if result.returncode == 0 else ''
+
+    def resolve_ref(self, ref: str) -> str:
+        result = self._run(['rev-parse', ref], check=False)
+        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+
+    def is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        result = self._run(['merge-base', '--is-ancestor', ancestor, descendant], check=False)
+        return result.returncode == 0
+
+    def commits_between(self, ref1: str, ref2: str) -> int:
+        result = self._run(['rev-list', f'{ref1}..{ref2}', '--count'], check=False)
+        try:
+            return int(result.stdout.strip()) if result.returncode == 0 else 0
+        except ValueError:
             return 0
-        else
-            warning "Updates available (dev mode): $commits_behind new commit(s)"
-            echo "Current: ${current:0:7}"
-            echo "Latest:  ${target:0:7}"
-            echo ""
-            echo "Recent changes:"
-            local commit_count=$commits_behind
-            if [ "$commit_count" -gt 10 ]; then
-                echo "Showing first 10 of $commit_count commits:"
-                git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -10
-                echo "... and $((commit_count - 10)) more commits"
-            else
-                git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
-            fi
-            echo ""
-            echo "Run 'innate-update apply --dev' to install updates"
+
+    def log_oneline(self, ref1: str, ref2: str, limit: int = None) -> list[str]:
+        args = ['--no-pager', 'log', '--oneline', f'{ref1}..{ref2}']
+        result = self._run(args, check=False)
+        if result.returncode != 0:
+            return []
+        lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
+        if limit and len(lines) > limit:
+            return lines[:limit]
+        return lines
+
+    def has_local_changes(self) -> bool:
+        result = self._run(['diff-index', '--quiet', 'HEAD', '--'], check=False)
+        return result.returncode != 0
+
+    def stash(self, message: str) -> bool:
+        result = self._run(['stash', 'push', '-m', message], check=False)
+        return result.returncode == 0
+
+    def checkout(self, ref: str) -> bool:
+        result = self._run(['checkout', ref], check=False)
+        return result.returncode == 0
+
+
+class UpdateManager:
+    """Main update manager."""
+
+    def __init__(self, config: Config, logger: Logger, dev_mode: bool = False):
+        self.config = config
+        self.logger = logger
+        self.dev_mode = dev_mode
+        self.git = GitRepo(config)
+        self.github = GitHubAPI(config)
+
+    def _check_repo(self):
+        if not self.git.check_is_repo():
+            self.logger.error(f"Not a git repository: {self.config.repo_dir}")
+            sys.exit(1)
+
+    def _write_cache(self, value: str):
+        try:
+            self.config.update_cache.parent.mkdir(parents=True, exist_ok=True)
+            self.config.update_cache.write_text(value)
+        except PermissionError:
+            pass
+
+    def _read_cache(self) -> str:
+        try:
+            if self.config.update_cache.exists():
+                return self.config.update_cache.read_text().strip()
+        except PermissionError:
+            pass
+        return ''
+
+    def _clear_cache(self):
+        try:
+            self.config.update_cache.unlink(missing_ok=True)
+        except PermissionError:
+            pass
+
+    def _show_commits(self, ref1: str, ref2: str, count: int, max_show: int = 10):
+        commits = self.git.log_oneline(ref1, ref2, limit=max_show)
+        if count > max_show:
+            print(f"Showing first {max_show} of {count} commits:")
+        for commit in commits:
+            print(f"  {commit}")
+        if count > max_show:
+            print(f"  ... and {count - max_show} more commits")
+
+    def check(self) -> int:
+        """Check for updates. Returns 0 if up-to-date, 1 if updates available."""
+        self._check_repo()
+        self.logger.info("Checking for updates...")
+
+        if not self.git.fetch():
+            self.logger.error("Failed to fetch from remote. Check network and git authentication.")
             return 1
-        fi
-    else
-        # Normal mode: check against latest tag on main
-        local latest_tag=$(get_latest_tag)
-        local current_tag=$(get_current_tag)
-        
-        if [ -z "$latest_tag" ]; then
-            warning "No tags found on $BRANCH branch"
-            echo "Use 'innate-update check --dev' to check for latest commits instead"
+
+        current = self.git.current_commit()
+
+        if self.dev_mode:
+            return self._check_dev_mode(current)
+        else:
+            return self._check_tag_mode(current)
+
+    def _check_dev_mode(self, current: str) -> int:
+        target = self.git.resolve_ref(f'origin/{self.config.branch}')
+        commits_behind = self.git.commits_between('HEAD', f'origin/{self.config.branch}')
+
+        self._write_cache(str(commits_behind))
+
+        if commits_behind == 0:
+            self.logger.success("System is up to date (dev mode)")
+            print(f"Current: {current[:7]}")
             return 0
-        fi
-        
-        local latest_tag_commit=$(git -C "$REPO_DIR" rev-parse "$latest_tag" 2>/dev/null || echo "unknown")
-        
-        # Cache: store 0 if up-to-date, 1 if update available
-        mkdir -p "$(dirname "$UPDATE_CACHE")"
-        
-        if [ "$current" = "$latest_tag_commit" ]; then
-            echo "0" > "$UPDATE_CACHE"
-            success "System is up to date"
-            echo "Current: $current_tag (${current:0:7})"
+
+        self.logger.warning(f"Updates available (dev mode): {commits_behind} new commit(s)")
+        print(f"Current: {current[:7]}")
+        print(f"Latest:  {target[:7]}")
+        print()
+        print("Recent changes:")
+        self._show_commits('HEAD', f'origin/{self.config.branch}', commits_behind)
+        print()
+        print("Run 'innate-update apply --dev' to install updates")
+        return 1
+
+    def _check_tag_mode(self, current: str) -> int:
+        latest_tag = self.git.get_latest_tag()
+        current_tag = self.git.get_current_tag()
+
+        if not latest_tag:
+            self.logger.warning(f"No tags found on {self.config.branch} branch")
+            print("Use 'innate-update check --dev' to check for latest commits instead")
             return 0
-        elif is_ancestor "$latest_tag_commit" "$current"; then
-            # Current commit is AHEAD of latest tag (on dev)
-            echo "0" > "$UPDATE_CACHE"
-            success "System is ahead of latest stable release"
-            echo "Current: ${current:0:7} (dev)"
-            echo "Latest tag: $latest_tag (${latest_tag_commit:0:7})"
-            echo ""
-            echo "You are on a development commit ahead of the latest release."
-            echo "Use 'innate-update check --dev' to check for newer dev commits."
+
+        latest_tag_commit = self.git.resolve_ref(latest_tag)
+
+        if current == latest_tag_commit:
+            self._write_cache('0')
+            self.logger.success("System is up to date")
+            print(f"Current: {current_tag} ({current[:7]})")
             return 0
-        else
-            echo "1" > "$UPDATE_CACHE"
-            local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..$latest_tag --count 2>/dev/null || echo "?")
-            warning "Update available: $latest_tag"
-            echo "Current: ${current_tag:-${current:0:7}}"
-            echo "Latest:  $latest_tag (${latest_tag_commit:0:7})"
-            echo ""
-            if [ "$commits_behind" != "?" ] && [ "$commits_behind" -gt 0 ]; then
-                echo "Changes in $latest_tag:"
-                if [ "$commits_behind" -gt 10 ]; then
-                    echo "Showing first 10 of $commits_behind commits:"
-                    git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag | head -10
-                    echo "... and $((commits_behind - 10)) more commits"
-                else
-                    git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag
-                fi
-            fi
-            echo ""
-            echo "Run 'innate-update apply' to install updates"
+
+        if self.git.is_ancestor(latest_tag_commit, current):
+            self._write_cache('0')
+            self.logger.success("System is ahead of latest stable release")
+            print(f"Current: {current[:7]} (dev)")
+            print(f"Latest tag: {latest_tag} ({latest_tag_commit[:7]})")
+            print()
+            print("You are on a development commit ahead of the latest release.")
+            print("Use 'innate-update check --dev' to check for newer dev commits.")
+            return 0
+
+        self._write_cache('1')
+        commits_behind = self.git.commits_between('HEAD', latest_tag)
+
+        self.logger.warning(f"Update available: {latest_tag}")
+        print(f"Current: {current_tag or current[:7]}")
+        print(f"Latest:  {latest_tag} ({latest_tag_commit[:7]})")
+        print()
+
+        if commits_behind > 0:
+            print(f"Changes in {latest_tag}:")
+            self._show_commits('HEAD', latest_tag, commits_behind)
+
+        print()
+        print("Run 'innate-update apply' to install updates")
+        return 1
+
+    def apply(self) -> int:
+        """Apply available updates by downloading release artifacts."""
+        self._check_repo()
+
+        print()
+        print("╔════════════════════════════════════════════════════════╗")
+        print("║          INNATE-OS UPDATE PROCESS                      ║")
+        print("╚════════════════════════════════════════════════════════╝")
+        print()
+
+        self.git.fetch()
+        current = self.git.current_commit()
+
+        if self.dev_mode:
+            return self._apply_dev_mode(current)
+        else:
+            return self._apply_tag_mode(current)
+
+    def _apply_dev_mode(self, current: str) -> int:
+        """Apply updates to latest commit (git-based, no artifacts)."""
+        target_ref = f'origin/{self.config.branch}'
+        target_display = f'latest commit on {self.config.branch}'
+        commits_behind = self.git.commits_between('HEAD', target_ref)
+
+        if commits_behind == 0:
+            self.logger.success("Already up to date (dev mode)")
+            return 0
+
+        self.logger.info(f"Found {commits_behind} commit(s) to apply (dev mode)")
+        print()
+        print("Changes to be applied:")
+        self._show_commits('HEAD', target_ref, commits_behind, max_show=20)
+
+        return self._do_git_update(target_ref, target_display, current)
+
+    def _apply_tag_mode(self, current: str) -> int:
+        """Apply updates to latest tag by downloading release artifacts."""
+        latest_tag = self.git.get_latest_tag()
+
+        if not latest_tag:
+            self.logger.error(f"No tags found. Use --dev to update to latest commit.")
             return 1
-        fi
-    fi
-}
 
+        latest_tag_commit = self.git.resolve_ref(latest_tag)
 
+        if current == latest_tag_commit:
+            self.logger.success(f"Already up to date at {latest_tag}")
+            return 0
 
-# Apply updates
-apply_updates() {
-    check_repo
-    
-    echo ""
-    echo "╔════════════════════════════════════════════════════════╗"
-    echo "║          INNATE-OS UPDATE PROCESS                      ║"
-    echo "╚════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    # Fetch latest (including tags)
-    git -C "$REPO_DIR" fetch origin "$BRANCH" --tags 2>/dev/null
-    
-    local current=$(current_commit)
-    local target_ref
-    local target_display
-    
-    if [ "$DEV_MODE" = true ]; then
-        # Dev mode: update to latest commit on main
-        target_ref="origin/$BRANCH"
-        target_display="latest commit on $BRANCH"
-        local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..origin/$BRANCH --count 2>/dev/null || echo "0")
-        
-        if [ "$commits_behind" -eq 0 ]; then
-            success "Already up to date (dev mode)"
-            exit 0
-        fi
-        
-        log "Found $commits_behind commit(s) to apply (dev mode)"
-        
-        echo ""
-        echo "Changes to be applied:"
-        if [ "$commits_behind" -gt 20 ]; then
-            echo "Showing first 20 of $commits_behind commits:"
-            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH | head -20
-            echo "... and $((commits_behind - 20)) more commits"
-        else
-            git -C "$REPO_DIR" --no-pager log --oneline HEAD..origin/$BRANCH
-        fi
-    else
-        # Normal mode: update to latest tag
-        local latest_tag=$(get_latest_tag)
-        
-        if [ -z "$latest_tag" ]; then
-            error "No tags found on $BRANCH branch. Use --dev to update to latest commit."
-            exit 1
-        fi
-        
-        target_ref="$latest_tag"
-        target_display="$latest_tag"
-        local latest_tag_commit=$(git -C "$REPO_DIR" rev-parse "$latest_tag" 2>/dev/null)
-        
-        if [ "$current" = "$latest_tag_commit" ]; then
-            success "Already up to date at $latest_tag"
-            exit 0
-        fi
-        
-        # Check if we're ahead of the latest tag (on dev)
-        if is_ancestor "$latest_tag_commit" "$current"; then
-            warning "You are on a dev commit ahead of $latest_tag"
-            echo "Current: ${current:0:7}"
-            echo "Latest tag: $latest_tag (${latest_tag_commit:0:7})"
-            echo ""
-            echo "Cannot downgrade to an older release."
-            echo "Use 'innate-update apply --dev' to update to the latest dev commit."
-            exit 0
-        fi
-        
-        local commits_behind=$(git -C "$REPO_DIR" rev-list HEAD..$latest_tag --count 2>/dev/null || echo "?")
-        log "Updating to $latest_tag ($commits_behind commits)"
-        
-        echo ""
-        echo "Changes to be applied for $latest_tag:"
-        if [ "$commits_behind" != "?" ] && [ "$commits_behind" -gt 20 ]; then
-            echo "Showing first 20 of $commits_behind commits:"
-            git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag | head -20
-            echo "... and $((commits_behind - 20)) more commits"
-        else
-            git -C "$REPO_DIR" --no-pager log --oneline HEAD..$latest_tag 2>/dev/null || echo "(could not show commits)"
-        fi
-    fi
-    echo ""
-    
-    # Confirm
-    read -p "Continue with update to $target_display? [y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        warning "Update cancelled"
-        exit 0
-    fi
-    
-    
-    # Stash any local changes
-    log "Checking for local changes..."
-    if ! git -C "$REPO_DIR" diff-index --quiet HEAD --; then
-        warning "Stashing local changes"
-        git -C "$REPO_DIR" stash push -m "Auto-stash before update $(date +%s)"
-    fi
-    
-    # Checkout the target
-    log "Updating to $target_display..."
-    local old_commit=$(current_commit)
-    
-    if git -C "$REPO_DIR" checkout "$target_ref" 2>/dev/null; then
-        local new_commit=$(current_commit)
-        success "Code updated: ${old_commit:0:7} → ${new_commit:0:7}"
-    else
-        error "Git checkout failed. Fix conflicts and try again."
-        exit 1
-    fi
-    
-    # Run post-update script
-    if [ -f "$REPO_DIR/scripts/update/post_update.sh" ]; then
-        log "Running post-update script..."
-        if sudo "$REPO_DIR/scripts/update/post_update.sh"; then
-            success "Post-update script completed"
-        else
-            error "Post-update script failed. Check logs: $LOG_DIR/post_update.log"
-            exit 1
-        fi
-    else
-        warning "No post-update script found, skipping"
-    fi
-    
-    echo ""
-    echo "╔════════════════════════════════════════════════════════╗"
-    echo "║          UPDATE COMPLETED SUCCESSFULLY                 ║"
-    echo "╚════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    
-    # Clear cache
-    rm -f "$UPDATE_CACHE"
-}
+        if self.git.is_ancestor(latest_tag_commit, current):
+            self.logger.warning(f"You are on a dev commit ahead of {latest_tag}")
+            print("Use 'innate-update apply --dev' to update to the latest dev commit.")
+            return 0
 
-# Show status
-show_status() {
-    check_repo
-    
-    local current=$(current_commit)
-    local branch=$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-    local remote=$(git -C "$REPO_DIR" config --get remote.origin.url 2>/dev/null || echo "unknown")
-    
-    echo "Innate-OS Status:"
-    echo "  Branch:  $branch"
-    echo "  Commit:  ${current:0:7}"
-    echo "  Remote:  $remote"
-    
-    # Check if cache exists
-    if [ -f "$UPDATE_CACHE" ]; then
-        local cached_updates=$(cat "$UPDATE_CACHE")
-        if [ "$cached_updates" -gt 0 ]; then
-            warning "Updates available: $cached_updates commit(s)"
-            echo "  Run 'innate-update apply' to install"
-        else
-            success "System up to date"
-        fi
-    else
-        echo "  Run 'innate-update check' to check for updates"
-    fi
-}
+        commits_behind = self.git.commits_between('HEAD', latest_tag)
+        self.logger.info(f"Updating to {latest_tag} ({commits_behind} commits)")
+        print()
+        print(f"Changes to be applied for {latest_tag}:")
+        self._show_commits('HEAD', latest_tag, commits_behind, max_show=20)
 
-# Quick check for SSH login (silent, just exit code)
-quick_check() {
-    check_repo
-    
-    # Use cache if recent (less than 1 hour old)
-    if [ -f "$UPDATE_CACHE" ]; then
-        local cache_age=$(($(date +%s) - $(stat -c %Y "$UPDATE_CACHE" 2>/dev/null || echo 0)))
-        if [ $cache_age -lt 3600 ]; then
-            local cached_updates=$(cat "$UPDATE_CACHE" 2>/dev/null || echo "0")
-            if [ "$cached_updates" -gt 0 ]; then
-                return 1  # Updates available
-            else
-                return 0  # Up to date
-            fi
-        fi
-    fi
-    
-    # Fetch and check (silently, against latest tag)
-    git -C "$REPO_DIR" fetch origin "$BRANCH" --tags 2>/dev/null || return 0
-    
-    local current=$(current_commit)
-    local latest_tag=$(get_latest_tag)
-    
-    # Update cache
-    mkdir -p "$(dirname "$UPDATE_CACHE")"
-    
-    if [ -z "$latest_tag" ]; then
-        echo "0" > "$UPDATE_CACHE"
-        return 0  # No tags, consider up to date
-    fi
-    
-    local latest_tag_commit=$(git -C "$REPO_DIR" rev-parse "$latest_tag" 2>/dev/null || echo "unknown")
-    
-    if [ "$current" = "$latest_tag_commit" ]; then
-        echo "0" > "$UPDATE_CACHE"
-        return 0  # Up to date
-    elif is_ancestor "$latest_tag_commit" "$current"; then
-        # Ahead of latest tag (on dev), consider up to date for quick check
-        echo "0" > "$UPDATE_CACHE"
+        # Try to download release artifacts
+        return self._do_artifact_update(latest_tag, current)
+
+    def _do_artifact_update(self, tag: str, old_commit: str) -> int:
+        """Download and extract release artifacts."""
+        print()
+
+        # Confirm
+        try:
+            response = input(f"Continue with update to {tag}? [y/N] ")
+        except EOFError:
+            response = 'n'
+
+        if response.lower() != 'y':
+            self.logger.warning("Update cancelled")
+            return 0
+
+        # Try to fetch release artifacts from GitHub
+        self.logger.info(f"Fetching release {tag} from GitHub...")
+
+        try:
+            release = self.github.get_release_by_tag(tag)
+            asset_url, asset_name = self.github.find_asset_url(release)
+
+            if not asset_url:
+                self.logger.warning("No release artifacts found, falling back to git update")
+                return self._do_git_update(tag, tag, old_commit, skip_confirm=True)
+
+            self.logger.info(f"Downloading {asset_name}...")
+
+            # Download to temp file
+            with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+
+            if not self.github.download_asset(asset_url, tmp_path):
+                self.logger.error("Failed to download release artifact")
+                tmp_path.unlink(missing_ok=True)
+                return 1
+
+            # Verify it's a valid archive
+            if not tarfile.is_tarfile(tmp_path):
+                self.logger.error("Downloaded file is not a valid archive")
+                tmp_path.unlink(missing_ok=True)
+                return 1
+
+            self.logger.info("Extracting artifacts...")
+
+            # Extract to temp directory
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with tarfile.open(tmp_path) as tar:
+                    tar.extractall(tmp_dir)
+
+                tmp_path.unlink(missing_ok=True)
+
+                # Find the extracted directory (usually innate-os/)
+                extracted_dirs = list(Path(tmp_dir).iterdir())
+                if len(extracted_dirs) == 1 and extracted_dirs[0].is_dir():
+                    src_dir = extracted_dirs[0]
+                else:
+                    src_dir = Path(tmp_dir)
+
+                # Backup current ros2_ws build artifacts (just in case)
+                backup_dir = self.config.repo_dir / '.update-backup'
+                ros2_ws = self.config.repo_dir / 'ros2_ws'
+
+                # Update files from the archive
+                self.logger.info("Updating installation...")
+
+                # Copy new files, preserving .git directory
+                for item in src_dir.iterdir():
+                    dest = self.config.repo_dir / item.name
+                    if item.name == '.git':
+                        continue  # Preserve existing .git
+
+                    if dest.exists():
+                        if dest.is_dir():
+                            shutil.rmtree(dest)
+                        else:
+                            dest.unlink()
+
+                    if item.is_dir():
+                        shutil.copytree(item, dest)
+                    else:
+                        shutil.copy2(item, dest)
+
+            # Update git to point to the new tag
+            self.git.fetch(tags=True)
+            self.git.checkout(tag)
+
+            new_commit = self.git.current_commit()
+            self.logger.success(f"Code updated: {old_commit[:7]} → {new_commit[:7]}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to download release: {e}")
+            self.logger.warning("Falling back to git update")
+            return self._do_git_update(tag, tag, old_commit, skip_confirm=True)
+
+        # Run post-update script
+        return self._run_post_update()
+
+    def _do_git_update(self, target_ref: str, target_display: str, old_commit: str, skip_confirm: bool = False) -> int:
+        """Perform git-based update (for dev mode or fallback)."""
+        if not skip_confirm:
+            print()
+            try:
+                response = input(f"Continue with update to {target_display}? [y/N] ")
+            except EOFError:
+                response = 'n'
+
+            if response.lower() != 'y':
+                self.logger.warning("Update cancelled")
+                return 0
+
+        # Stash local changes
+        self.logger.info("Checking for local changes...")
+        if self.git.has_local_changes():
+            self.logger.warning("Stashing local changes")
+            self.git.stash(f"Auto-stash before update {int(time.time())}")
+
+        # Checkout target
+        self.logger.info(f"Updating to {target_display}...")
+
+        if self.git.checkout(target_ref):
+            new_commit = self.git.current_commit()
+            self.logger.success(f"Code updated: {old_commit[:7]} → {new_commit[:7]}")
+        else:
+            self.logger.error("Git checkout failed. Fix conflicts and try again.")
+            return 1
+
+        return self._run_post_update()
+
+    def _run_post_update(self) -> int:
+        """Run post-update script."""
+        post_update_script = self.config.repo_dir / 'scripts' / 'update' / 'post_update.sh'
+
+        if post_update_script.exists():
+            self.logger.info("Running post-update script...")
+            result = subprocess.run(['sudo', str(post_update_script)], check=False)
+            if result.returncode == 0:
+                self.logger.success("Post-update script completed")
+            else:
+                self.logger.error(f"Post-update script failed. Check logs: {self.config.log_dir}/post_update.log")
+                return 1
+        else:
+            self.logger.warning("No post-update script found, skipping")
+
+        print()
+        print("╔════════════════════════════════════════════════════════╗")
+        print("║          UPDATE COMPLETED SUCCESSFULLY                 ║")
+        print("╚════════════════════════════════════════════════════════╝")
+        print()
+
+        self._clear_cache()
         return 0
-    else
-        echo "1" > "$UPDATE_CACHE"
-        return 1  # Updates available
-    fi
-}
 
-# Parse --dev flag
-for arg in "$@"; do
-    if [ "$arg" = "--dev" ] || [ "$arg" = "-d" ]; then
-        DEV_MODE=true
-    fi
-done
+    def status(self) -> int:
+        """Show current status."""
+        self._check_repo()
 
-# Daemon mode - run periodic update checks in the background
-run_daemon() {
-    log "Starting innate-update daemon (interval: ${DAEMON_INTERVAL}s)"
+        current = self.git.current_commit()
+        branch = self.git.current_branch()
+        remote = self.git.remote_url()
+        current_tag = self.git.get_current_tag()
 
-    while true; do
-        log "Daemon: checking for updates..."
+        print("Innate-OS Status:")
+        print(f"  Directory: {self.config.repo_dir}")
+        print(f"  Branch:    {branch}")
+        print(f"  Commit:    {current[:7]}")
+        if current_tag:
+            print(f"  Tag:       {current_tag}")
+        print(f"  Remote:    {remote}")
 
-        # Perform a silent check
-        if ! quick_check 2>/dev/null; then
-            log "Daemon: updates available"
-            # Could notify user here via desktop notification or webhook
-        else
-            log "Daemon: system up to date"
-        fi
+        cached = self._read_cache()
+        if cached:
+            try:
+                updates = int(cached)
+                if updates > 0:
+                    self.logger.warning(f"Updates available: {updates} commit(s)")
+                    print("  Run 'innate-update apply' to install")
+                else:
+                    self.logger.success("System up to date")
+            except ValueError:
+                pass
+        else:
+            print("  Run 'innate-update check' to check for updates")
 
-        sleep "$DAEMON_INTERVAL"
-    done
-}
+        return 0
 
-# Main command dispatch
-case "${1:-}" in
-    check)
-        check_updates
-        ;;
-    apply)
-        apply_updates
-        ;;
-    status)
-        show_status
-        ;;
-    daemon)
-        run_daemon
-        ;;
-    --quick-check)
-        # Silent check for .zshrc integration
-        quick_check
-        ;;
-    *)
-        echo "Innate-OS Update Manager"
-        echo ""
-        echo "Usage:"
-        echo "  innate-update check         - Check if updates are available (latest tag)"
-        echo "  innate-update check --dev   - Check for updates (latest commit)"
-        echo "  innate-update apply         - Apply pending updates (to latest tag)"
-        echo "  innate-update apply --dev   - Apply updates (to latest commit)"
-        echo "  innate-update status        - Show current version info"
-        echo "  innate-update daemon        - Run as background daemon (for systemd)"
-        echo ""
-        echo "Configuration (environment variables):"
-        echo "  INNATE_OS_DIR              - Installation directory (default: /home/\$USER/innate-os)"
-        echo "  INNATE_STATE_DIR           - State directory (default: /var/lib/innate-update)"
-        echo "  INNATE_UPDATE_BRANCH       - Git branch to track (default: main)"
-        echo "  INNATE_UPDATE_INTERVAL     - Daemon check interval in seconds (default: 3600)"
-        echo "  GITHUB_REPO                - GitHub repository (default: innate-inc/innate-os)"
-        echo ""
-        echo "By default, updates are to the latest tagged release on main."
-        echo "Use --dev flag to update to the latest commit instead."
-        echo ""
-        exit 1
-        ;;
-esac
+    def quick_check(self) -> int:
+        """Quick silent check for .zshrc integration."""
+        self._check_repo()
 
+        # Use cache if recent (less than 1 hour)
+        if self.config.update_cache.exists():
+            try:
+                cache_mtime = self.config.update_cache.stat().st_mtime
+                cache_age = time.time() - cache_mtime
+                if cache_age < 3600:
+                    cached = self._read_cache()
+                    try:
+                        return 1 if int(cached) > 0 else 0
+                    except ValueError:
+                        pass
+            except OSError:
+                pass
+
+        # Fetch silently
+        if not self.git.fetch():
+            return 0
+
+        current = self.git.current_commit()
+        latest_tag = self.git.get_latest_tag()
+
+        if not latest_tag:
+            self._write_cache('0')
+            return 0
+
+        latest_tag_commit = self.git.resolve_ref(latest_tag)
+
+        if current == latest_tag_commit:
+            self._write_cache('0')
+            return 0
+
+        if self.git.is_ancestor(latest_tag_commit, current):
+            self._write_cache('0')
+            return 0
+
+        self._write_cache('1')
+        return 1
+
+    def daemon(self) -> int:
+        """Run as background daemon."""
+        self.logger.info(f"Starting innate-update daemon (interval: {self.config.daemon_interval}s)")
+
+        while True:
+            self.logger.info("Daemon: checking for updates...")
+
+            try:
+                if self.quick_check() != 0:
+                    self.logger.info("Daemon: updates available")
+                else:
+                    self.logger.info("Daemon: system up to date")
+            except Exception as e:
+                self.logger.error(f"Daemon: check failed: {e}")
+
+            time.sleep(self.config.daemon_interval)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Innate-OS Update Manager',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Commands:
+  check         Check if updates are available (latest tag)
+  apply         Apply pending updates (downloads release artifacts)
+  status        Show current version info
+  daemon        Run as background daemon (for systemd)
+
+Options:
+  --dev         Use latest commit instead of latest tag (git-based update)
+
+Configuration (environment variables):
+  INNATE_OS_DIR          Installation directory (default: ~/innate-os)
+  INNATE_STATE_DIR       State directory (default: /var/lib/innate-update)
+  INNATE_UPDATE_BRANCH   Git branch to track (default: main)
+  INNATE_UPDATE_INTERVAL Daemon check interval in seconds (default: 3600)
+  GITHUB_REPO            GitHub repository (default: innate-inc/innate-os)
+
+By default, updates download pre-built release artifacts.
+Use --dev flag to update via git to the latest commit.
+"""
+    )
+
+    parser.add_argument('command', nargs='?',
+                        choices=['check', 'apply', 'status', 'daemon', '--quick-check'],
+                        help='Command to run')
+    parser.add_argument('--dev', '-d', action='store_true',
+                        help='Use development mode (git-based update to latest commit)')
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    config = Config()
+    config.load_github_token()
+    logger = Logger(config.log_dir / 'update.log')
+    manager = UpdateManager(config, logger, dev_mode=args.dev)
+
+    commands = {
+        'check': manager.check,
+        'apply': manager.apply,
+        'status': manager.status,
+        'daemon': manager.daemon,
+        '--quick-check': manager.quick_check,
+    }
+
+    sys.exit(commands[args.command]())
+
+
+if __name__ == '__main__':
+    main()
