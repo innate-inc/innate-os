@@ -1,0 +1,16 @@
+[Unit]
+Description=Zenoh Router for ROS2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jetson1
+Group=jetson1
+ExecStart=/bin/zsh -c "source /opt/ros/humble/setup.zsh && ros2 run rmw_zenoh_cpp rmw_zenohd"
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

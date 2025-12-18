@@ -3,7 +3,7 @@ alias discovery="$INNATE_OS_ROOT/dds/discovery.zsh"
 alias discovery-and-launch-sim="$INNATE_OS_ROOT/dds/discovery-and-launch-sim.zsh"
 
 
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 export ROS_DOMAIN_ID=0
 
 # Dynamically determine the primary IP address
