@@ -172,17 +172,26 @@ else
     fi
 fi
 
-# 7. Rebuild ROS2 workspace if needed (skip on first install)
+# 7. Import vcs dependencies and rebuild ROS2 workspace (skip on first install)
 if [ "$FIRST_INSTALL" = true ]; then
     log "Skipping ROS2 workspace rebuild (already built during first install)"
 else
     log "Checking ROS2 workspace..."
     if [ -d "$REPO_DIR/ros2_ws/src" ]; then
+        ACTUAL_USER=${SUDO_USER:-$USER}
+
+        # Import external dependencies using vcs (if dependencies.repos exists)
+        if [ -f "$REPO_DIR/ros2_ws/src/dependencies.repos" ]; then
+            log "Importing external dependencies via vcs..."
+            cd "$REPO_DIR/ros2_ws/src"
+            sudo -u "$ACTUAL_USER" vcs import --input dependencies.repos || true
+            cd "$REPO_DIR/ros2_ws"
+        fi
+
         log "Rebuilding ROS2 workspace..."
         cd "$REPO_DIR/ros2_ws"
 
         # Run as the actual user, not root
-        ACTUAL_USER=${SUDO_USER:-$USER}
         sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
 
         if [ $? -eq 0 ]; then
