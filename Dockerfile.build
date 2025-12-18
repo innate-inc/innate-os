@@ -49,9 +49,17 @@ WORKDIR /root/innate-os
 COPY ros2_ws /root/innate-os/ros2_ws
 
 # Import external dependencies using vcs
-RUN if [ -f /root/innate-os/ros2_ws/src/dependencies.repos ]; then \
+RUN echo "=== Checking for dependencies.repos ===" && \
+    ls -la /root/innate-os/ros2_ws/src/ && \
+    if [ -f /root/innate-os/ros2_ws/src/dependencies.repos ]; then \
+        echo "=== Found dependencies.repos, running vcs import ===" && \
+        cat /root/innate-os/ros2_ws/src/dependencies.repos && \
         cd /root/innate-os/ros2_ws/src && \
-        vcs import < dependencies.repos; \
+        vcs import --input dependencies.repos && \
+        echo "=== vcs import completed, listing src directory ===" && \
+        ls -la /root/innate-os/ros2_ws/src/; \
+    else \
+        echo "=== dependencies.repos not found ==="; \
     fi
 
 # Install ROS dependencies and build
