@@ -14,16 +14,30 @@ Based on this analysis, ensure these are in `apt-dependencies.txt`:
 ros-humble-rclcpp
 ros-humble-rclpy
 
-# Navigation
+# Navigation (full nav2 stack)
+ros-humble-navigation2
+ros-humble-nav2-bringup
 ros-humble-nav2-simple-commander
 ros-humble-nav2-map-server
-ros-humble-nav2-bringup
-ros-humble-navigation2
+ros-humble-nav2-amcl
+ros-humble-nav2-controller
+ros-humble-nav2-velocity-smoother
+ros-humble-nav2-bt-navigator
+ros-humble-nav2-behaviors
+ros-humble-nav2-lifecycle-manager
+
+# SLAM
+ros-humble-slam-toolbox
 
 # Transforms
 ros-humble-tf2
 ros-humble-tf2-ros
 ros-humble-tf2-geometry-msgs
+
+# State Publishers
+ros-humble-robot-state-publisher
+ros-humble-joint-state-publisher
+ros-humble-joint-state-publisher-gui
 
 # Vision/Perception
 ros-humble-cv-bridge
@@ -34,6 +48,10 @@ ros-humble-image-transport
 ros-humble-moveit
 ros-humble-moveit-py
 ros-humble-moveit-ros-move-group
+
+# KDL (Kinematics)
+ros-humble-kdl-parser-py
+python3-pykdl
 
 # Rosbridge
 ros-humble-rosbridge-suite
@@ -48,12 +66,10 @@ ros-humble-lifecycle-msgs
 
 # DepthAI (OAK cameras)
 ros-humble-depthai-ros
+ros-humble-depthai-descriptions
 
 # Topic tools (commonly missing!)
 ros-humble-topic-tools
-
-# KDL Parser
-ros-humble-kdl-parser-py
 
 # GStreamer (for WebRTC)
 gstreamer1.0-tools

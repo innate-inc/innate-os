@@ -73,6 +73,15 @@ ros-humble-navigation2
 ros-humble-nav2-bringup
 ros-humble-nav2-simple-commander
 ros-humble-nav2-map-server
+ros-humble-nav2-amcl
+ros-humble-nav2-controller
+ros-humble-nav2-velocity-smoother
+ros-humble-nav2-bt-navigator
+ros-humble-nav2-behaviors
+ros-humble-nav2-lifecycle-manager
+
+# ROS2 Humble packages - SLAM
+ros-humble-slam-toolbox
 
 # ROS2 Humble packages - Vision/Perception
 ros-humble-cv-bridge
@@ -87,9 +96,10 @@ ros-humble-vision-msgs
 
 # ROS2 Humble packages - Hardware/Manipulation
 ros-humble-moveit
-ros-humble-moveit-py
+# ros-humble-moveit-py
 ros-humble-moveit-ros-move-group
-ros-humble-kdl-parser-py
+# ros-humble-kdl-parser-py
+# python3-pykdl
 
 # ROS2 Humble packages - Middleware/Bridge
 ros-humble-rosbridge-suite
@@ -98,12 +108,18 @@ ros-humble-rosbag2
 ros-humble-rosidl-default-generators
 ros-humble-rosidl-default-runtime
 
+# ROS2 Humble packages - State Publishers
+ros-humble-robot-state-publisher
+ros-humble-joint-state-publisher
+ros-humble-joint-state-publisher-gui
+
 # ROS2 Humble packages - Utilities (commonly missing!)
 ros-humble-topic-tools
 ros-humble-xacro
 
 # ROS2 Humble packages - DepthAI (OAK cameras)
 ros-humble-depthai-ros
+ros-humble-depthai-descriptions
 
 # ROS2 Humble packages - Simulation (optional)
 # ros-humble-stage-ros
