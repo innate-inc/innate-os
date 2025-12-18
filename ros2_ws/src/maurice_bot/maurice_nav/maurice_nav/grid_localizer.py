@@ -47,7 +47,7 @@ class GridLocalizer(Node):
         
         # Parameters
         self.declare_parameter('sample_distance', 0.15)  # meters between samples
-        self.declare_parameter('angle_samples', 36)  # angles to try (360/24 = 15° increments)
+        self.declare_parameter('angle_samples', 36)  # angles to try (360/36 = 10° increments)
         self.declare_parameter('batch_size', 4000)  # poses per GPU batch (reduced for memory)
         self.declare_parameter('max_range', 12.0)  # max lidar range
         self.declare_parameter('scan_topic', '/scan_fast')
