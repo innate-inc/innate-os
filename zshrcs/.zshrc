@@ -10,6 +10,10 @@
 export ZSH="$HOME/.oh-my-zsh"
 export INNATE_OS_ROOT="$HOME/innate-os"
 
+# Make sure cuda is in the path
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
 source ~/.zshrc.pre-oh-my-zsh
 
 

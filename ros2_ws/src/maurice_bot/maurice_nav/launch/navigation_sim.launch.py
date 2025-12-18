@@ -65,8 +65,9 @@ def generate_launch_description():
         output="screen",
         parameters=[config_file],
     )
-
+    
     # Create the lifecycle manager node to manage all nodes
+    # Note: grid_localizer is NOT a lifecycle node, it runs independently
     lifecycle_manager_node = Node(
         package="nav2_lifecycle_manager",
         executable="lifecycle_manager",
