@@ -49,7 +49,10 @@ WORKDIR /root/innate-os
 COPY ros2_ws /root/innate-os/ros2_ws
 
 # Import external dependencies using vcs
-
+RUN if [ -f /root/innate-os/ros2_ws/src/dependencies.repos ]; then \
+        cd /root/innate-os/ros2_ws/src && \
+        vcs import < dependencies.repos; \
+    fi
 
 # Install ROS dependencies and build
 WORKDIR /root/innate-os/ros2_ws

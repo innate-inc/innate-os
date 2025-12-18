@@ -10,7 +10,7 @@
 # Options (environment variables):
 #   GITHUB_TOKEN            - GitHub Personal Access Token (required for private repos)
 #   BUILD_FROM_SOURCE=true  - Build from source instead of downloading pre-built release
-#   INNATE_OS_DIR           - Installation directory (default: /opt/innate)
+#   INNATE_OS_DIR           - Installation directory (default: ~/innate-os)
 #   GITHUB_REPO             - GitHub repository (default: innate-inc/innate-os)
 #
 # This script:
@@ -36,7 +36,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-INNATE_OS_DIR="${INNATE_OS_DIR:-/opt/innate}"
+INNATE_OS_DIR="${INNATE_OS_DIR:-$HOME/innate-os}"
 INNATE_STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
 GITHUB_REPO="${GITHUB_REPO:-innate-inc/innate-os}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
@@ -483,6 +483,14 @@ build_workspace() {
     # Source ROS2
     source /opt/ros/$ROS_DISTRO/setup.bash
 
+    # Import external dependencies using vcs
+    if [ -f "$INNATE_OS_DIR/ros2_ws/src/dependencies.repos" ]; then
+        info "Importing external dependencies via vcs..."
+        cd "$INNATE_OS_DIR/ros2_ws/src"
+        vcs import < dependencies.repos
+        cd "$INNATE_OS_DIR/ros2_ws"
+    fi
+
     # Install any remaining rosdep dependencies
     rosdep install --from-paths src --ignore-src -r -y || true
 
@@ -620,6 +628,34 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# Run post-install configuration
+# -----------------------------------------------------------------------------
+
+run_post_install() {
+    info "Running post-install configuration..."
+
+    POST_UPDATE_SCRIPT="$INNATE_OS_DIR/scripts/update/post_update.sh"
+
+    if [ ! -f "$POST_UPDATE_SCRIPT" ]; then
+        warn "post_update.sh not found at $POST_UPDATE_SCRIPT, skipping post-install"
+        return 0
+    fi
+
+    # Make sure the script is executable
+    chmod +x "$POST_UPDATE_SCRIPT"
+
+    # Run post_update.sh with sudo (it requires root privileges)
+    # This will configure systemd services, udev rules, bluetooth, etc.
+    # Use --first-install flag to skip rebuilding (already done in install.sh)
+    info "Running post_update.sh (this may take a moment)..."
+    if sudo "$POST_UPDATE_SCRIPT" --first-install; then
+        success "Post-install configuration completed"
+    else
+        warn "Post-install configuration had some issues (check logs at $INNATE_OS_DIR/logs/post_update.log)"
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Print summary
 # -----------------------------------------------------------------------------
 
@@ -696,6 +732,7 @@ main() {
     install_updater
     install_services
     setup_shell
+    run_post_install
     print_summary
 }
 
