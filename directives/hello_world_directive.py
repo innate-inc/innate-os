@@ -8,16 +8,8 @@ class HelloWorld(Directive):
     """
 
     @property
-    def id(self) -> str:
+    def name(self) -> str:
         return "hello_world"
-
-    @property
-    def display_name(self) -> str:
-        return "Hello World"
-
-    @property
-    def display_icon(self) -> str:
-        return "assets/hello_world.png"
 
     def get_primitives(self) -> List[str]:
         return [
