@@ -8,6 +8,10 @@ Usage:
     innate-update apply         - Apply pending updates (to latest tag)
     innate-update apply --dev   - Apply updates (to latest commit)
     innate-update status        - Show current version info
+    innate-update start         - Start ROS services (tmux session)
+    innate-update stop          - Stop ROS services
+    innate-update restart       - Restart ROS services
+    innate-update view          - Attach to tmux session to view ROS nodes
     innate-update daemon        - Run as background daemon (for systemd)
 """
 
@@ -160,6 +164,144 @@ class GitHubAPI:
         return "", ""
 
 
+class ServiceManager:
+    """Manage ROS services (tmux-based)."""
+
+    TMUX_SESSION = "ros_nodes"
+    DISCOVERY_SESSION = "discovery"
+
+    def __init__(self, config: Config, logger: Logger):
+        self.config = config
+        self.logger = logger
+        self.launch_script = config.repo_dir / 'scripts' / 'launch_ros_in_tmux.sh'
+
+    def _run(self, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
+        """Run a command."""
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+        return result
+
+    def _tmux_session_exists(self, session: str) -> bool:
+        """Check if a tmux session exists."""
+        result = self._run(['tmux', 'has-session', '-t', session], check=False)
+        return result.returncode == 0
+
+    def _systemd_service_active(self, service: str) -> bool:
+        """Check if a systemd service is active."""
+        result = self._run(['systemctl', 'is-active', '--quiet', service], check=False)
+        return result.returncode == 0
+
+    def is_running(self) -> bool:
+        """Check if ROS services are running."""
+        return self._tmux_session_exists(self.TMUX_SESSION)
+
+    def is_discovery_running(self) -> bool:
+        """Check if discovery server is running."""
+        if self._systemd_service_active('discovery-server.service'):
+            return True
+        return self._tmux_session_exists(self.DISCOVERY_SESSION)
+
+    def start(self) -> int:
+        """Start ROS services."""
+        if self.is_running():
+            self.logger.warning(f"ROS services already running (tmux session '{self.TMUX_SESSION}')")
+            print("Use 'innate-update view' to attach to the session")
+            print("Use 'innate-update restart' to restart services")
+            return 0
+
+        if not self.launch_script.exists():
+            self.logger.error(f"Launch script not found: {self.launch_script}")
+            return 1
+
+        self.logger.info("Starting ROS services...")
+
+        # Run the launch script in background
+        # The script itself handles discovery server and creates tmux session
+        try:
+            # Start in background using nohup
+            subprocess.Popen(
+                ['nohup', 'bash', str(self.launch_script)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                cwd=str(self.config.repo_dir)
+            )
+
+            # Wait a moment for session to start
+            import time
+            time.sleep(2)
+
+            if self.is_running():
+                self.logger.success("ROS services started")
+                print(f"  Session: {self.TMUX_SESSION}")
+                print("  Use 'innate-update view' to attach")
+                return 0
+            else:
+                self.logger.error("Failed to start ROS services")
+                return 1
+
+        except Exception as e:
+            self.logger.error(f"Failed to start services: {e}")
+            return 1
+
+    def stop(self) -> int:
+        """Stop ROS services."""
+        stopped_something = False
+
+        # Stop ROS tmux session
+        if self._tmux_session_exists(self.TMUX_SESSION):
+            self.logger.info(f"Stopping tmux session '{self.TMUX_SESSION}'...")
+            self._run(['tmux', 'kill-session', '-t', self.TMUX_SESSION], check=False)
+            stopped_something = True
+
+        # Stop discovery tmux session (if not managed by systemd)
+        if not self._systemd_service_active('discovery-server.service'):
+            if self._tmux_session_exists(self.DISCOVERY_SESSION):
+                self.logger.info(f"Stopping tmux session '{self.DISCOVERY_SESSION}'...")
+                self._run(['tmux', 'kill-session', '-t', self.DISCOVERY_SESSION], check=False)
+                stopped_something = True
+
+        if stopped_something:
+            self.logger.success("ROS services stopped")
+        else:
+            self.logger.info("No ROS services were running")
+
+        return 0
+
+    def restart(self) -> int:
+        """Restart ROS services."""
+        self.logger.info("Restarting ROS services...")
+        self.stop()
+        import time
+        time.sleep(1)
+        return self.start()
+
+    def view(self) -> int:
+        """Attach to tmux session."""
+        if not self.is_running():
+            self.logger.error(f"ROS services not running (no tmux session '{self.TMUX_SESSION}')")
+            print("Use 'innate-update start' to start services first")
+            return 1
+
+        print(f"Attaching to tmux session '{self.TMUX_SESSION}'...")
+        print("  Navigation: Ctrl+b then arrow keys to switch panes")
+        print("  Detach: Ctrl+b then d")
+        print()
+
+        # Replace current process with tmux attach
+        os.execvp('tmux', ['tmux', 'attach', '-t', self.TMUX_SESSION])
+        return 0  # Never reached
+
+    def status(self) -> dict:
+        """Get service status."""
+        return {
+            'ros_running': self.is_running(),
+            'discovery_running': self.is_discovery_running(),
+            'discovery_systemd': self._systemd_service_active('discovery-server.service'),
+        }
+
+
 class GitRepo:
     """Git repository operations."""
 
@@ -257,6 +399,7 @@ class UpdateManager:
         self.dev_mode = dev_mode
         self.git = GitRepo(config)
         self.github = GitHubAPI(config)
+        self.services = ServiceManager(config, logger)
 
     def _check_repo(self):
         if not self.git.check_is_repo():
@@ -565,7 +708,7 @@ class UpdateManager:
         return self._run_post_update()
 
     def _run_post_update(self) -> int:
-        """Run post-update script."""
+        """Run post-update script and restart services."""
         post_update_script = self.config.repo_dir / 'scripts' / 'update' / 'post_update.sh'
 
         if post_update_script.exists():
@@ -578,6 +721,10 @@ class UpdateManager:
                 return 1
         else:
             self.logger.warning("No post-update script found, skipping")
+
+        # Auto-start ROS services after update
+        self.logger.info("Starting ROS services...")
+        self.services.start()
 
         print()
         print("╔════════════════════════════════════════════════════════╗")
@@ -604,6 +751,24 @@ class UpdateManager:
         if current_tag:
             print(f"  Tag:       {current_tag}")
         print(f"  Remote:    {remote}")
+        print()
+
+        # Service status
+        svc_status = self.services.status()
+        print("Services:")
+        if svc_status['ros_running']:
+            print(f"  {Colors.GREEN}●{Colors.NC} ROS nodes: running (tmux session 'ros_nodes')")
+        else:
+            print(f"  {Colors.RED}○{Colors.NC} ROS nodes: stopped")
+
+        if svc_status['discovery_running']:
+            if svc_status['discovery_systemd']:
+                print(f"  {Colors.GREEN}●{Colors.NC} Discovery: running (systemd)")
+            else:
+                print(f"  {Colors.GREEN}●{Colors.NC} Discovery: running (tmux session 'discovery')")
+        else:
+            print(f"  {Colors.RED}○{Colors.NC} Discovery: stopped")
+        print()
 
         cached = self._read_cache()
         if cached:
@@ -620,6 +785,22 @@ class UpdateManager:
             print("  Run 'innate-update check' to check for updates")
 
         return 0
+
+    def start_services(self) -> int:
+        """Start ROS services."""
+        return self.services.start()
+
+    def stop_services(self) -> int:
+        """Stop ROS services."""
+        return self.services.stop()
+
+    def restart_services(self) -> int:
+        """Restart ROS services."""
+        return self.services.restart()
+
+    def view_services(self) -> int:
+        """View ROS services in tmux."""
+        return self.services.view()
 
     def quick_check(self) -> int:
         """Quick silent check for .zshrc integration."""
@@ -689,7 +870,11 @@ def main():
 Commands:
   check         Check if updates are available (latest tag)
   apply         Apply pending updates (downloads release artifacts)
-  status        Show current version info
+  status        Show current version and service status
+  start         Start ROS services (tmux session)
+  stop          Stop ROS services
+  restart       Restart ROS services
+  view          Attach to tmux session to view ROS nodes
   daemon        Run as background daemon (for systemd)
 
 Options:
@@ -708,7 +893,7 @@ Use --dev flag to update via git to the latest commit.
     )
 
     parser.add_argument('command', nargs='?',
-                        choices=['check', 'apply', 'status', 'daemon', '--quick-check'],
+                        choices=['check', 'apply', 'status', 'start', 'stop', 'restart', 'view', 'daemon', '--quick-check'],
                         help='Command to run')
     parser.add_argument('--dev', '-d', action='store_true',
                         help='Use development mode (git-based update to latest commit)')
@@ -728,6 +913,10 @@ Use --dev flag to update via git to the latest commit.
         'check': manager.check,
         'apply': manager.apply,
         'status': manager.status,
+        'start': manager.start_services,
+        'stop': manager.stop_services,
+        'restart': manager.restart_services,
+        'view': manager.view_services,
         'daemon': manager.daemon,
         '--quick-check': manager.quick_check,
     }
