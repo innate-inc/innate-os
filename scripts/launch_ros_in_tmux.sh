@@ -7,6 +7,7 @@ DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh"
 
 # ROS launch commands grouped into windows (pipe-delimited for 2 panes)
 ROS_COMMAND_GROUPS=(
+    "timeout 60 ros2 topic echo /rosout > /tmp/rosout"
     "ros2 launch maurice_control app.launch.py|ros2 launch maurice_bringup maurice_bringup.launch.py"
     "ros2 launch maurice_arm arm.launch.py|ros2 launch manipulation recorder.launch.py"
     "ros2 launch brain_client brain_client.launch.py|sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
