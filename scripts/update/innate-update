@@ -802,6 +802,14 @@ class UpdateManager:
         """View ROS services in tmux."""
         return self.services.view()
 
+    def hello(self) -> int:
+        """Test command to verify updater is working."""
+        print()
+        print("  Hello from innate-update v2!")
+        print("  If you see this, the updater updated itself successfully.")
+        print()
+        return 0
+
     def quick_check(self) -> int:
         """Quick silent check for .zshrc integration."""
         self._check_repo()
@@ -876,6 +884,7 @@ Commands:
   restart       Restart ROS services
   view          Attach to tmux session to view ROS nodes
   daemon        Run as background daemon (for systemd)
+  hello         Test command to verify updater version
 
 Options:
   --dev         Use latest commit instead of latest tag (git-based update)
@@ -893,7 +902,7 @@ Use --dev flag to update via git to the latest commit.
     )
 
     parser.add_argument('command', nargs='?',
-                        choices=['check', 'apply', 'status', 'start', 'stop', 'restart', 'view', 'daemon', '--quick-check'],
+                        choices=['check', 'apply', 'status', 'start', 'stop', 'restart', 'view', 'daemon', 'hello', '--quick-check'],
                         help='Command to run')
     parser.add_argument('--dev', '-d', action='store_true',
                         help='Use development mode (git-based update to latest commit)')
