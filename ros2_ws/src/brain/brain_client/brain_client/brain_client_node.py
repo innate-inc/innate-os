@@ -1762,7 +1762,7 @@ class BrainClientNode(Node):
                         self.get_logger().warning(f"Failed to load icon for {directive_name}: {e}")
             
             directive_info = {
-                "id_name": directive.name,
+                "id": directive.name,
                 "display_name": directive.display_name,
                 "display_icon": display_icon_data,
                 "prompt": directive.get_prompt(),
