@@ -124,5 +124,4 @@ ros-humble-depthai-descriptions
 # ROS2 Humble packages - Simulation (optional)
 # ros-humble-stage-ros
 
-# Dynamixel SDK
-python3-dynamixel-sdk
+
