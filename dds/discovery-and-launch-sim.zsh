@@ -3,6 +3,8 @@
 # discovery-and-launch-sim.zsh
 # Place this file in the dds directory next to discovery.zsh
 
+return
+
 # First, ensure we have a clean tmux environment
 tmux kill-session -t mars 2>/dev/null
 
