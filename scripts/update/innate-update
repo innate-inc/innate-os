@@ -927,6 +927,7 @@ Use --dev flag to update via git to the latest commit.
         'restart': manager.restart_services,
         'view': manager.view_services,
         'daemon': manager.daemon,
+        'hello': manager.hello,
         '--quick-check': manager.quick_check,
     }
 
