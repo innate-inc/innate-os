@@ -24,6 +24,7 @@ from typing import Dict, Any
 from brain_client.input_loader import InputLoader
 from brain_client.input_types import InputDevice
 from brain_client.client.proxy_client import ProxyClient
+from brain_client.logging_config import UniversalLogger
 
 
 class InputManagerNode(Node):
@@ -38,7 +39,11 @@ class InputManagerNode(Node):
     def __init__(self):
         super().__init__('input_manager_node')
         
-        self.get_logger().info("🔌 Starting Input Manager Node...")
+        # Wrap ROS logger with UniversalLogger
+        ros_logger = self.get_logger()
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=ros_logger)
+        
+        self.logger.info("🔌 Starting Input Manager Node...")
         
         # --- Declare proxy config parameters ---
         # Credentials come from environment (INNATE_PROXY_URL, INNATE_SERVICE_KEY)
@@ -60,12 +65,12 @@ class InputManagerNode(Node):
         try:
             self.proxy = ProxyClient(config=proxy_config)
             if self.proxy.is_available():
-                self.get_logger().info(f"✅ Proxy client initialized (URL: {self.proxy.proxy_url[:30]}...)")
+                self.logger.info(f"✅ Proxy client initialized (URL: {self.proxy.proxy_url[:30]}...)")
             else:
-                self.get_logger().warning("⚠️ Proxy not configured - input devices won't have proxy access")
+                self.logger.warning("⚠️ Proxy not configured - input devices won't have proxy access")
                 self.proxy = None
         except Exception as e:
-            self.get_logger().warning(f"⚠️ Could not initialize proxy client: {e}")
+            self.logger.warning(f"⚠️ Could not initialize proxy client: {e}")
             self.proxy = None
         
         # Load input devices from user workspace
@@ -77,16 +82,16 @@ class InputManagerNode(Node):
         ]
         
         # Pass proxy to loader - it will inject into each input device
-        self.input_loader = InputLoader(self.get_logger(), proxy=self.proxy)
+        self.input_loader = InputLoader(ros_logger, proxy=self.proxy)
         input_classes = self.input_loader.load_inputs_from_directories(input_directories)
         self.input_devices: Dict[str, InputDevice] = self.input_loader.create_input_instances(
-            input_classes, self.get_logger()
+            input_classes, ros_logger
         )
         
         if not self.input_devices:
-            self.get_logger().warning("⚠️ No input devices found!")
+            self.logger.warning("⚠️ No input devices found!")
         else:
-            self.get_logger().info(f"✅ Loaded {len(self.input_devices)} input devices: {list(self.input_devices.keys())}")
+            self.logger.info(f"✅ Loaded {len(self.input_devices)} input devices: {list(self.input_devices.keys())}")
         
         # Set data callback for all input devices
         for input_device in self.input_devices.values():
@@ -96,11 +101,11 @@ class InputManagerNode(Node):
         for name, input_device in self.input_devices.items():
             try:
                 if input_device.initialize():
-                    self.get_logger().info(f"✅ Input device '{name}' initialized")
+                    self.logger.info(f"✅ Input device '{name}' initialized")
                 else:
-                    self.get_logger().error(f"❌ Input device '{name}' failed to initialize")
+                    self.logger.error(f"❌ Input device '{name}' failed to initialize")
             except Exception as e:
-                self.get_logger().error(f"❌ Error initializing input device '{name}': {e}")
+                self.logger.error(f"❌ Error initializing input device '{name}': {e}")
         
         # Publishers for sending data to brain_client
         self.chat_in_pub = self.create_publisher(String, '/brain/chat_in', 10)
@@ -132,7 +137,7 @@ class InputManagerNode(Node):
         # Note: In future, add a custom service to set multiple inputs at once
         # based on directive requirements
         
-        self.get_logger().info("✅ Input Manager Node started successfully")
+        self.logger.info("✅ Input Manager Node started successfully")
     
     def _handle_device_data(self, device_name: str, data: Dict[str, Any], data_type: str):
         """
@@ -174,15 +179,15 @@ class InputManagerNode(Node):
             # Publish to appropriate topic
             if data_type == "chat_in":
                 self.chat_in_pub.publish(msg)
-                self.get_logger().debug(f"📤 Published brain/chat_in from '{device_name}': {text[:50]}")
+                self.logger.debug(f"📤 Published brain/chat_in from '{device_name}': {text[:50]}")
             elif data_type == "custom":
                 self.custom_pub.publish(msg)
-                self.get_logger().debug(f"📤 Published custom data from '{device_name}'")
+                self.logger.debug(f"📤 Published custom data from '{device_name}'")
             else:
-                self.get_logger().warning(f"Unknown data type '{data_type}' from device '{device_name}'. Use 'chat_in' or 'custom'.")
+                self.logger.warning(f"Unknown data type '{data_type}' from device '{device_name}'. Use 'chat_in' or 'custom'.")
                 
         except Exception as e:
-            self.get_logger().error(f"Error handling data from device '{device_name}': {e}")
+            self.logger.error(f"Error handling data from device '{device_name}': {e}")
     
     def handle_active_inputs(self, msg: String):
         """
@@ -190,12 +195,12 @@ class InputManagerNode(Node):
         
         Message format: {"inputs": ["micro", "camera"]}
         """
-        self.get_logger().info(f"📥 Received active_inputs message: {msg.data}")
+        self.logger.info(f"📥 Received active_inputs message: {msg.data}")
         try:
             import json
             data = json.loads(msg.data)
             required_inputs = data.get('inputs', [])
-            self.get_logger().info(f"🎯 Processing inputs: {required_inputs}")
+            self.logger.info(f"🎯 Processing inputs: {required_inputs}")
             
             # Activate/deactivate devices based on requirements
             for name, device in self.input_devices.items():
@@ -206,15 +211,15 @@ class InputManagerNode(Node):
                     # Activate device
                     device.set_active(True)
                     device.on_open()
-                    self.get_logger().info(f"🔌 Opened input device: {name}")
+                    self.logger.info(f"🔌 Opened input device: {name}")
                 elif not should_be_active and was_active:
                     # Deactivate device
                     device.on_close()
                     device.set_active(False)
-                    self.get_logger().info(f"💤 Closed input device: {name}")
+                    self.logger.info(f"💤 Closed input device: {name}")
                     
         except Exception as e:
-            self.get_logger().error(f"Error handling active inputs: {e}")
+            self.logger.error(f"Error handling active inputs: {e}")
     
     def handle_tts_status(self, msg: String):
         """
@@ -228,7 +233,7 @@ class InputManagerNode(Node):
                 if hasattr(device, 'set_tts_playing'):
                     device.set_tts_playing(is_playing)
         except Exception as e:
-            self.get_logger().error(f"Error handling TTS status: {e}")
+            self.logger.error(f"Error handling TTS status: {e}")
     
     def handle_set_input_active(self, request, response):
         """
@@ -246,25 +251,25 @@ class InputManagerNode(Node):
                     # Activate device
                     device.set_active(True)
                     device.on_open()
-                    self.get_logger().info(f"🔌 Opened input device: {name}")
+                    self.logger.info(f"🔌 Opened input device: {name}")
                 elif not should_be_active and was_active:
                     # Deactivate device
                     device.on_close()
                     device.set_active(False)
-                    self.get_logger().info(f"💤 Closed input device: {name}")
+                    self.logger.info(f"💤 Closed input device: {name}")
             
             response.success = True
             response.message = f"All inputs {'activated' if request.data else 'deactivated'}"
         except Exception as e:
             response.success = False
             response.message = str(e)
-            self.get_logger().error(f"Error in set_input_active: {e}")
+            self.logger.error(f"Error in set_input_active: {e}")
         
         return response
     
     def destroy_node(self):
         """Clean up all input devices."""
-        self.get_logger().info("Shutting down input devices...")
+        self.logger.info("Shutting down input devices...")
         for name, device in self.input_devices.items():
             try:
                 # Close if active
@@ -272,9 +277,9 @@ class InputManagerNode(Node):
                     device.on_close()
                 # Final shutdown
                 device.shutdown()
-                self.get_logger().info(f"✅ Shut down input device '{name}'")
+                self.logger.info(f"✅ Shut down input device '{name}'")
             except Exception as e:
-                self.get_logger().error(f"Error shutting down input device '{name}': {e}")
+                self.logger.error(f"Error shutting down input device '{name}': {e}")
         
         return super().destroy_node()
 

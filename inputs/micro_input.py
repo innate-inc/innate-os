@@ -18,12 +18,14 @@ import subprocess
 import re
 
 from brain_client.input_types import InputDevice
+from brain_client.logging_config import UniversalLogger
 
 
 DEFAULT_SAMPLE_RATE = 24_000
 DEFAULT_CHANNELS = 1
 DTYPE = 'int16'
 CHUNK_DURATION_SEC = 0.02
+
 
 
 class MicroInput(InputDevice):
@@ -43,6 +45,14 @@ class MicroInput(InputDevice):
         self._stop_evt = threading.Event()
         self._audio_thread = None
         self._is_robot_talking = False  # For ducking (mic-specific)
+        # Initialize logger wrapper (will be updated when set_logger is called)
+        self.logger = UniversalLogger(enabled=False)
+    
+    def set_logger(self, logger):
+        """Wrap the provided logger with UniversalLogger."""
+        super().set_logger(logger)
+        # Wrap the logger so we can call methods unconditionally
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
 
     @property
     def name(self) -> str:
@@ -63,8 +73,7 @@ class MicroInput(InputDevice):
         """Start microphone and connect to OpenAI via proxy."""
         # Check proxy is available
         if not self.proxy or not self.proxy.is_available():
-            if self.logger:
-                self.logger.error("❌ Proxy not configured - cannot start microphone input")
+            self.logger.error("❌ Proxy not configured - cannot start microphone input")
             return
         
         try:
@@ -73,130 +82,124 @@ class MicroInput(InputDevice):
             if not detected_device:
                 detected_device = 'default'
             
-            if self.logger:
-                self.logger.info(f"🎙️ Using audio device: {detected_device}")
+            self.logger.info(f"🎙️ Using audio device: {detected_device}")
             
-            # Create dummy logger if needed
-            mic_logger = self.logger if self.logger else type('obj', (object,), {'error': lambda self, x: print(x)})()
-            self.mic = ArecordStreamer(mic_logger)
+            # Pass logger to ArecordStreamer
+            self.mic = ArecordStreamer(self.logger)
             self.mic.start(
                 device=detected_device if detected_device != 'default' else 'default',
                           sample_rate=DEFAULT_SAMPLE_RATE, 
                 channels=DEFAULT_CHANNELS
             )
             
-            if self.logger:
-                self.logger.info(f"🎙️ Microphone started (rate: {DEFAULT_SAMPLE_RATE}, channels: {DEFAULT_CHANNELS})")
+            self.logger.info(f"🎙️ Microphone started (rate: {DEFAULT_SAMPLE_RATE}, channels: {DEFAULT_CHANNELS})")
             
             # Connect via proxy
             self._connect_via_proxy()
                 
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"❌ Failed to start microphone: {e}")
+            self.logger.error(f"❌ Failed to start microphone: {e}")
             import traceback
             traceback.print_exc()
 
-    def _connect_via_proxy(self):
-        """Connect to OpenAI Realtime API via proxy."""
-        if self.logger:
-            self.logger.info("🔗 Connecting to OpenAI via proxy...")
+    def _on_openai_message(self, ws, message: str):
+        """Handle incoming messages from OpenAI Realtime API."""
+        try:
+            event = json.loads(message)
+        except Exception:
+            self.logger.error(f"Failed to parse message: {message[:200]}")
+            return
         
-        # Get config from proxy (injected by InputManager)
-        model = self.proxy.config.get('openai_realtime_model', 'gpt-4o-realtime-preview')
+        etype = event.get("type")
+        
+        # Event type to handler mapping
+        event_handlers = {
+            "session.updated": lambda e: self.logger.info(
+                f"📋 Session updated - transcription: {e.get('session', {}).get('input_audio_transcription', {})}, "
+                f"turn_detection: {e.get('session', {}).get('turn_detection', {})}"
+            ),
+            "input_audio_buffer.speech_started": lambda e: self.logger.info("🎤 Speech detected"),
+            "input_audio_buffer.speech_stopped": lambda e: self.logger.info("🔇 Speech stopped"),
+            "conversation.item.input_audio_transcription.completed": lambda e: (
+                self._on_transcript(e.get("transcript", "")) 
+                if e.get("transcript") and self.is_active() 
+                else None
+            ),
+            "error": lambda e: (
+                self.logger.error(
+                    f"❌ OpenAI error: {e.get('error', {}).get('code', '')} - "
+                    f"{e.get('error', {}).get('message', '')} "
+                    f"(param: {e.get('error', {}).get('param', '')})"
+                )
+                if e.get("error", {}).get("code") != "input_audio_buffer_commit_empty"
+                else None
+            ),
+        }
+        
+        # Execute handler if exists, otherwise log unknown event type
+        handler = event_handlers.get(etype)
+        if handler:
+            handler(event)
+        else:
+            self.logger.info(f"📨 OpenAI event: {etype}")
+    
+    def _on_openai_open(self):
+        """Handle WebSocket open event - send session configuration."""
         transcribe_model = self.proxy.config.get('openai_transcribe_model', 'gpt-4o-mini-transcribe')
         vad_threshold = 0.3  # Lower = more sensitive to speech
         
-        # Wire up transcript callback
-        def on_message(ws, message: str):
-            try:
-                event = json.loads(message)
-            except Exception:
-                if self.logger:
-                    self.logger.error(f"Failed to parse message: {message[:200]}")
-                return
-            
-            etype = event.get("type")
-            
-            # Log full session.updated to verify config was accepted
-            if etype == "session.updated" and self.logger:
-                session = event.get("session", {})
-                transcription = session.get("input_audio_transcription", {})
-                turn_detection = session.get("turn_detection", {})
-                self.logger.info(f"📋 Session updated - transcription: {transcription}, turn_detection: {turn_detection}")
-            
-            if etype == "input_audio_buffer.speech_started":
-                if self.logger:
-                    self.logger.info("🎤 Speech detected")
-            elif etype == "input_audio_buffer.speech_stopped":
-                if self.logger:
-                    self.logger.info("🔇 Speech stopped")
-            elif etype == "conversation.item.input_audio_transcription.completed":
-                transcript = event.get("transcript", "")
-                if transcript and self.is_active():
-                    self._on_transcript(transcript)
-            elif etype == "error":
-                error_obj = event.get("error", {})
-                error_code = error_obj.get("code", "")
-                error_msg = error_obj.get("message", "")
-                error_param = error_obj.get("param", "")
-                if error_code != "input_audio_buffer_commit_empty" and self.logger:
-                    self.logger.error(f"❌ OpenAI error: {error_code} - {error_msg} (param: {error_param})")
-            else:
-                # Log other message types for debugging
-                if self.logger:
-                    self.logger.info(f"📨 OpenAI event: {etype}")
-        
-        def on_open_callback():
-            if self.logger:
-                self.logger.info("📤 WebSocket opened, sending session.update...")
-            session_update = {
-                "type": "session.update",
-                "session": {
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": {
-                        "model": transcribe_model,
-                        "language": "en"
-                    },
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": float(vad_threshold),
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 700,
-                        "create_response": False,
-                    },
-                    "instructions": "Transcribe user audio only in English; do not reply.",
+        self.logger.info("📤 WebSocket opened, sending session.update...")
+        session_update = {
+            "type": "session.update",
+            "session": {
+                "input_audio_format": "pcm16",
+                "input_audio_transcription": {
+                    "model": transcribe_model,
+                    "language": "en"
                 },
-            }
-            if self.logger:
-                self.logger.info(f"📤 Session config: model={transcribe_model}, vad_threshold={vad_threshold}")
-            self.client.send_json(session_update)
-            if self.logger:
-                self.logger.info("📤 session.update sent")
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": float(vad_threshold),
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 700,
+                    "create_response": False,
+                },
+                "instructions": "Transcribe user audio only in English; do not reply.",
+            },
+        }
+        self.logger.info(f"📤 Session config: model={transcribe_model}, vad_threshold={vad_threshold}")
+        self.client.send_json(session_update)
+        self.logger.info("📤 session.update sent")
+    
+    def _on_openai_error(self, error):
+        """Handle WebSocket error event."""
+        self.logger.error(f"[ws error] {error}")
+    
+    def _on_openai_close(self):
+        """Handle WebSocket close event."""
+        self.logger.warning("WebSocket closed")
+
+    def _connect_via_proxy(self):
+        """Connect to OpenAI Realtime API via proxy."""
+        self.logger.info("🔗 Connecting to OpenAI via proxy...")
         
-        def on_error(error):
-            if self.logger:
-                self.logger.error(f"[ws error] {error}")
-        
-        def on_close():
-            if self.logger:
-                self.logger.warning("WebSocket closed")
+        # Get config from proxy (injected by InputManager)
+        model = self.proxy.config.get('openai_realtime_model', 'gpt-4o-realtime-preview')
         
         # Use proxy's OpenAI adapter
         self.client = self.proxy.openai.realtime.connect_sync(
             model=model,
-            on_message=on_message,
-            on_open=on_open_callback,
-            on_error=on_error,
-            on_close=on_close,
+            on_message=self._on_openai_message,
+            on_open=self._on_openai_open,
+            on_error=self._on_openai_error,
+            on_close=self._on_openai_close,
         )
         self.client.start()
         
         # Start audio streaming thread
         self._start_audio_thread()
         
-        if self.logger:
-            self.logger.info(f"✅ Connected to OpenAI Realtime (model: {model})")
+        self.logger.info(f"✅ Connected to OpenAI Realtime (model: {model})")
 
     def _start_audio_thread(self):
         """Start the audio streaming thread."""
@@ -204,12 +207,10 @@ class MicroInput(InputDevice):
         
         def audio_loop():
             if not self.client.wait_until_connected(timeout=10):
-                if self.logger:
-                    self.logger.error("WebSocket didn't connect in time")
+                self.logger.error("WebSocket didn't connect in time")
                 return
             
-            if self.logger:
-                self.logger.info("🎧 Audio streaming thread started")
+            self.logger.info("🎧 Audio streaming thread started")
 
             chunks_sent = 0
             empty_count = 0
@@ -220,14 +221,14 @@ class MicroInput(InputDevice):
                     empty_count = 0  # Reset on successful get
                 except queue.Empty:
                     empty_count += 1
-                    if empty_count == 50 and self.logger:
+                    if empty_count == 50:
                         self.logger.warning("⚠️ No audio chunks received (queue empty for 5s)")
                     continue
                 
                 try:
                     # Skip sending while ducking (robot is speaking)
                     if self._is_robot_talking:
-                        if not ducking_logged and self.logger:
+                        if not ducking_logged:
                             self.logger.info("🔇 Ducking active - not sending audio")
                         ducking_logged = True
                         continue
@@ -241,13 +242,12 @@ class MicroInput(InputDevice):
                     chunks_sent += 1
 
                     # Log periodically (much less frequently)
-                    if chunks_sent == 100 and self.logger:
+                    if chunks_sent == 100:
                         self.logger.info(f"🎧 Streaming audio ({chunks_sent} chunks)")
-                    elif chunks_sent % 2500 == 0 and self.logger:
+                    elif chunks_sent % 2500 == 0:
                         self.logger.info(f"🎧 Audio chunks sent: {chunks_sent}")
                 except Exception as e:
-                    if self.logger:
-                        self.logger.error(f"audio loop error: {e}")
+                    self.logger.error(f"audio loop error: {e}")
                     import traceback
                     self.logger.error(traceback.format_exc())
         
@@ -295,8 +295,7 @@ class MicroInput(InputDevice):
         # Try to find a suitable microphone device
         preferred_device = None
         
-        if self.logger:
-            self.logger.info(f"🔍 Found {len(devices)} audio devices: {[d['name'] for d in devices]}")
+        self.logger.info(f"🔍 Found {len(devices)} audio devices: {[d['name'] for d in devices]}")
         
         # Look for USB microphones (usually better quality)
         for dev in devices:
@@ -339,7 +338,7 @@ class MicroInput(InputDevice):
         if not preferred_device and devices:
             preferred_device = devices[0]
         
-        if self.logger and preferred_device:
+        if preferred_device:
             self.logger.info(f"🎙️ Selected audio device: {preferred_device['name']} ({preferred_device['id']})")
         
         return preferred_device['id'] if preferred_device else None
@@ -347,8 +346,7 @@ class MicroInput(InputDevice):
     def _on_transcript(self, text: str):
         """Called when transcript is ready."""
         if text:
-            if self.logger:
-                self.logger.info(f"🎤 Transcript: {text}")
+            self.logger.info(f"🎤 Transcript: {text}")
             
             self.send_data(text, data_type="chat_in")
 

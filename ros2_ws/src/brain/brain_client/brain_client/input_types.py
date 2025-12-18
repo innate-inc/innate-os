@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, Callable
 from enum import Enum
 
 from brain_client.client.proxy_client import ProxyClient
+from brain_client.logging_config import UniversalLogger
 
 
 class InputDeviceType(Enum):
@@ -42,7 +43,7 @@ class InputDevice(ABC):
 
     def __init__(self):
         """Initialize the input device with default attributes."""
-        self.logger = None
+        self.logger = UniversalLogger(enabled=False)
         self._proxy: Optional[ProxyClient] = None
         self._data_callback: Optional[Callable] = None
         self._active = False  # Start inactive
@@ -121,8 +122,7 @@ class InputDevice(ABC):
             callback: Function with signature (device_name, data, data_type) -> None
         """
         self._data_callback = callback
-        if self.logger:
-            self.logger.debug(f"Data callback set for input device '{self.name}'")
+        self.logger.debug(f"Data callback set for input device '{self.name}'")
 
     def send_data(self, data: Dict[str, Any], data_type: str = "custom"):
         """
@@ -149,13 +149,9 @@ class InputDevice(ABC):
             try:
                 self._data_callback(self.name, data, data_type)
             except Exception as e:
-                if self.logger:
-                    self.logger.error(f"Error sending data for input device '{self.name}': {e}")
-                else:
-                    print(f"ERROR: Error sending data for input device '{self.name}': {e}")
+                self.logger.error(f"Error sending data for input device '{self.name}': {e}")
         else:
-            if self.logger:
-                self.logger.warning(f"No data callback set for input device '{self.name}'")
+            self.logger.warning(f"No data callback set for input device '{self.name}'")
 
     def set_active(self, active: bool):
         """
@@ -168,9 +164,8 @@ class InputDevice(ABC):
             active: True to activate, False to deactivate
         """
         self._active = active
-        if self.logger:
-            status = "activated" if active else "deactivated"
-            self.logger.info(f"Input device '{self.name}' {status}")
+        status = "activated" if active else "deactivated"
+        self.logger.info(f"Input device '{self.name}' {status}")
 
     def is_active(self) -> bool:
         """
@@ -185,14 +180,6 @@ class InputDevice(ABC):
     def proxy(self) -> Optional[ProxyClient]:
         """
         Access to proxy services (Cartesia, OpenAI, etc.)
-        
-        Usage:
-            # Access services
-            self.proxy.openai.realtime.connect_sync(...)
-            self.proxy.cartesia.tts.sse(...)
-            
-            # Access config
-            model = self.proxy.config.get("openai_realtime_model", "default")
         
         Returns:
             ProxyClient instance or None if not configured
@@ -213,9 +200,9 @@ class InputDevice(ABC):
         Set the logger instance (called by InputLoader).
         
         Args:
-            logger: Logger instance
+            logger: Logger instance (ROS logger or any logger)
         """
-        self.logger = logger
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
 
     def set_config(self, config: Dict[str, Any]):
         """
