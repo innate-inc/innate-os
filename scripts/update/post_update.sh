@@ -151,6 +151,13 @@ fi
 # -----------------------------------------------------------------------------
 log "Installing helper scripts..."
 if [ -d "$REPO_DIR/scripts" ]; then
+    # Update the innate-update command itself
+    if [ -f "$REPO_DIR/scripts/update/innate-update" ]; then
+        log "  Updating innate-update"
+        cp "$REPO_DIR/scripts/update/innate-update" /usr/local/bin/innate-update
+        chmod +x /usr/local/bin/innate-update
+    fi
+
     # Copy restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
         log "  Installing restart_robot_networking.sh"
