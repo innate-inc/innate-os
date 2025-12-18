@@ -266,8 +266,24 @@ get_latest_release_info() {
     LATEST_TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\([^"]*\)".*/\1/')
 
     # Extract asset URL - find the .tar.gz that's not the source archive
-    # Get all browser_download_url lines, filter for .tar.gz but not -source.tar.gz
-    ASSET_URL=$(echo "$RELEASE_INFO" | grep '"browser_download_url"' | grep -v '\-source\.tar\.gz' | head -1 | sed 's/.*"browser_download_url": "\([^"]*\)".*/\1/')
+    # For private repos, we need to use the API URL (not browser_download_url)
+
+    # Find the asset name we want (not -source.tar.gz)
+    ASSET_NAME=$(echo "$RELEASE_INFO" | grep '"browser_download_url"' | grep -v '\-source\.tar\.gz' | head -1 | sed 's/.*\/\([^"]*\.tar\.gz\)".*/\1/')
+
+    if [ -n "$GITHUB_TOKEN" ] && [ -n "$ASSET_NAME" ]; then
+        # For private repos: find the asset ID and use API URL
+        # Look for the "url" field that's near our asset name (it's the API URL for the asset)
+        ASSET_URL=$(echo "$RELEASE_INFO" | grep -B5 "\"name\": \"$ASSET_NAME\"" | grep '"url":' | grep '/assets/' | head -1 | sed 's/.*"url": "\([^"]*\)".*/\1/')
+    fi
+
+    # Fallback to browser URL for public repos
+    if [ -z "$ASSET_URL" ]; then
+        ASSET_URL=$(echo "$RELEASE_INFO" | grep '"browser_download_url"' | grep -v '\-source\.tar\.gz' | head -1 | sed 's/.*"browser_download_url": "\([^"]*\)".*/\1/')
+    fi
+
+    echo "[DEBUG] ASSET_NAME=$ASSET_NAME" >&2
+    echo "[DEBUG] ASSET_URL=$ASSET_URL" >&2
 
     if [ -z "$LATEST_TAG" ] || [ -z "$ASSET_URL" ]; then
         echo "[WARN] Could not extract release info (tag=$LATEST_TAG, url=$ASSET_URL)" >&2
