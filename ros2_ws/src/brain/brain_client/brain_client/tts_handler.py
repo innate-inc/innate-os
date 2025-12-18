@@ -66,19 +66,9 @@ class TTSHandler:
             self.logger.error("TTS proxy not properly initialized in BrainClientNode")
             self._cartesia_client = None
     
-    @property
-    def client(self):
-        """Backward-compatible access to Cartesia client."""
-        return self._cartesia_client
-    
-    @client.setter
-    def client(self, value):
-        """Backward-compatible setter."""
-        self._cartesia_client = value
-
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
-        return self.client is not None
+        return self._cartesia_client is not None
     
     def _publish_tts_status(self, status: str):
         """Publish TTS playback status to /tts/is_playing topic."""
@@ -138,7 +128,7 @@ class TTSHandler:
                 asyncio.set_event_loop(loop)
             
             response = loop.run_until_complete(
-                self.client.tts.bytes(
+                self._cartesia_client.tts.bytes(
                 model_id="sonic-3",  # Latest Cartesia model
                 transcript=text,
                 voice=voice,
@@ -312,7 +302,7 @@ class TTSHandler:
 
     def close(self):
         """Clean up resources."""
-        if self.client:
+        if self._cartesia_client:
             self.logger.info("🔇 TTS handler closed")
             # Cartesia client doesn't need explicit cleanup in sync mode
-            self.client = None
+            self._cartesia_client = None
