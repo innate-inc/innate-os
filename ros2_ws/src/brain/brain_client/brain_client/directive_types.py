@@ -19,9 +19,18 @@ class Directive(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str:
+    def id(self) -> str:
         """
-        The name of the directive.
+        The name of the directive (used as identifier).
+        Must be defined by every subclass.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def display_name(self) -> str:
+        """
+        The human-readable display name of the directive.
         Must be defined by every subclass.
         """
         pass
@@ -45,6 +54,19 @@ class Directive(ABC):
         Subclasses must implement this method.
         """
         pass
+
+    @property
+    def display_icon(self) -> Optional[str]:
+        """
+        Optional path to a 32x32 pixel icon asset for this directive.
+        
+        Subclasses can override this property to specify an icon.
+        Default: return None (no icon).
+        
+        Example:
+            return "assets/my_directive_icon.png"
+        """
+        return None
 
     def get_inputs(self) -> List[str]:
         """

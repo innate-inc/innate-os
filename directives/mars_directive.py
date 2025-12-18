@@ -10,8 +10,16 @@ class MarsDirective(Directive):
     """
 
     @property
-    def name(self) -> str:
+    def id(self) -> str:
         return "mars_directive"
+
+    @property
+    def display_name(self) -> str:
+        return "MARS"
+
+    @property
+    def display_icon(self) -> str:
+        return "assets/mars.png"
 
     def get_primitives(self) -> List[str]:
         """Return the list of primitives this directive can use"""
