@@ -30,6 +30,7 @@ libgstreamer1.0-dev
 libgstreamer-plugins-base1.0-dev
 gir1.2-gstreamer-1.0
 gir1.2-gst-plugins-base-1.0
+gir1.2-gst-plugins-bad-1.0
 python3-gi
 python3-gst-1.0
 
