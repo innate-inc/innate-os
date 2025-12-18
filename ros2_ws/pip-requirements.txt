@@ -1,5 +1,6 @@
 # Python dependencies for innate-os ROS2 workspace
 # Install with: pip3 install -r pip-requirements.txt
+# See DEPENDENCIES.md for full analysis of where each package is used
 
 # Core
 numpy
@@ -20,6 +21,9 @@ dynamixel-sdk
 pyserial
 trimesh
 
-# Other
+# Text-to-Speech
+cartesia
+
+# Input handling
 pygame
 pynput
