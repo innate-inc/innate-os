@@ -128,7 +128,7 @@ class DirectiveLoader:
         """
         try:
             # Check that required abstract methods are implemented
-            required_methods = ['id', 'get_primitives', 'get_prompt']
+            required_methods = ['id', 'display_name', 'get_primitives', 'get_prompt']
             for method_name in required_methods:
                 if not hasattr(directive_class, method_name):
                     self.logger.error(f"Directive {directive_class.__name__} missing required method: {method_name}")
@@ -137,6 +137,11 @@ class DirectiveLoader:
             # Check that id is a property
             if not hasattr(directive_class, 'id') or not isinstance(directive_class.id, property):
                 self.logger.error(f"Directive {directive_class.__name__} id must be a property")
+                return False
+            
+            # Check that display_name is a property
+            if not hasattr(directive_class, 'display_name') or not isinstance(directive_class.display_name, property):
+                self.logger.error(f"Directive {directive_class.__name__} display_name must be a property")
                 return False
                 
             return True
