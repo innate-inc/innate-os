@@ -120,7 +120,7 @@ class ProxyClient:
         """Get shared async HTTP client."""
         if self._http_client is None:
             self._http_client = httpx.AsyncClient(
-            timeout=60.0,
+                timeout=60.0,
                 headers=self._get_headers(),
         )
         return self._http_client

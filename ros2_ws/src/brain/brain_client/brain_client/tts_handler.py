@@ -16,6 +16,7 @@ import subprocess
 
 from brain_client.client.proxy_client import ProxyClient
 from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
+from brain_client.logging_config import UniversalLogger
 
 
 class TTSHandler:
@@ -39,11 +40,11 @@ class TTSHandler:
         Initialize the TTS handler.
         
         Args:
-            logger: ROS logger instance
+            logger: ROS logger instance or any logger
             proxy: ProxyClient instance (required)
             tts_status_pub: Optional ROS publisher for /tts/is_playing status
         """
-        self.logger = logger
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self._proxy: ProxyClient = proxy
         # Get voice ID from proxy config, fall back to default
         self.voice_id: str = proxy.config.get("cartesia_voice_id", self.DEFAULT_VOICE_ID)
@@ -59,12 +60,10 @@ class TTSHandler:
         """Initialize the Cartesia client via proxy."""
         try:
             self._cartesia_client = self._proxy.cartesia
-            if self.logger:
-                self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
+            self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
         except Exception as e:
-            if self.logger:
-                self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
-                self.logger.error("TTS proxy not properly initialized in BrainClientNode")
+            self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
+            self.logger.error("TTS proxy not properly initialized in BrainClientNode")
             self._cartesia_client = None
     
     @property
