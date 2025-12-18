@@ -45,7 +45,7 @@ class Config:
         self.log_dir = self.repo_dir / 'logs'
         self.update_cache = self.state_dir / 'update-cache'
         self.branch = os.environ.get('INNATE_UPDATE_BRANCH', 'main')
-        self.github_repo = os.environ.get('GITHUB_REPO', 'innate-inc/innate-os')
+        self.github_repo = os.environ.get('GITHUB_REPO', 'cristidragomir97/innate-os')
         self.daemon_interval = int(os.environ.get('INNATE_UPDATE_INTERVAL', '3600'))
         self.github_token = os.environ.get('GITHUB_TOKEN', '')
 
