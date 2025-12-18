@@ -62,6 +62,9 @@ class ModeManager(Node):
         # Track current processes
         self.current_process = None
         
+        # Kill any orphaned navigation processes from previous runs
+        self._cleanup_orphaned_processes()
+        
         # Use environment variable if set, otherwise construct from HOME
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         
@@ -522,6 +525,43 @@ class ModeManager(Node):
             self.get_logger().error(response.message)
             
         return response
+
+    def _cleanup_orphaned_processes(self):
+        """Kill any orphaned navigation processes from previous mode_manager runs."""
+        try:
+            # Kill orphaned navigation launch processes
+            subprocess.run(['pkill', '-f', 'navigation.launch.py'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'mapfree_local_nav.launch.py'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'mapping.launch.py'], capture_output=True)
+            subprocess.run(['pkill', '-f', 'slam_toolbox'], capture_output=True)
+            
+            # Kill orphaned lifecycle managers (critical to prevent conflicts)
+            # Wait a moment for nav2 nodes to die first
+            import time
+            time.sleep(1)
+            subprocess.run(['pkill', '-9', '-f', 'nav2_lifecycle_manager'], capture_output=True)
+            
+            # Kill orphaned nav2 nodes with parent PID 1 (adopted by init)
+            try:
+                # Get all nav2 processes with PPID=1 (orphaned)
+                result = subprocess.run(
+                    ['ps', '-o', 'pid,ppid,cmd', '-e'],
+                    capture_output=True,
+                    text=True
+                )
+                for line in result.stdout.split('\n'):
+                    if 'nav2_' in line or 'lifecycle_manager' in line:
+                        parts = line.split()
+                        if len(parts) >= 2 and parts[1] == '1':  # PPID == 1 (orphaned)
+                            pid = parts[0]
+                            self.get_logger().info(f'Killing orphaned nav2 process: {pid}')
+                            subprocess.run(['kill', '-9', pid], capture_output=True)
+            except Exception as e:
+                self.get_logger().warn(f'Could not clean orphaned processes: {e}')
+            
+            self.get_logger().info('Cleaned up any orphaned navigation processes')
+        except Exception as e:
+            self.get_logger().warn(f'Cleanup warning: {e}')
 
     def kill_current_process(self):
         """Safely kill the current launch process"""

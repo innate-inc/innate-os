@@ -34,6 +34,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/LightCommand.srv"
   "srv/GotoJS.srv"
   "srv/SetRobotName.srv"
+  "srv/GridLocalize.srv"
   DEPENDENCIES
     std_msgs
     std_srvs

@@ -33,7 +33,7 @@ install(
 install(PROGRAMS
   maurice_nav/__init__.py
   maurice_nav/mode_manager.py
-  # Add more scripts as needed
+  maurice_nav/grid_localizer.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

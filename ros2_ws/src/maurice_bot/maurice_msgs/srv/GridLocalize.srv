@@ -1,0 +1,14 @@
+# Grid Localization Service
+# Estimates robot pose on the map using laser scan matching
+
+# Request
+# If scan is empty, the service will use the latest scan from the subscribed topic
+sensor_msgs/LaserScan scan
+
+---
+
+# Response
+bool success
+string message
+geometry_msgs/PoseWithCovarianceStamped pose
+float64 confidence  # 0.0 to 1.0, higher is better
