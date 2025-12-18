@@ -19,7 +19,7 @@ class Directive(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str:
+    def id(self) -> str:
         """
         The name of the directive (used as identifier).
         Must be defined by every subclass.
@@ -64,7 +64,7 @@ class Directive(ABC):
         Default: return None (no icon).
         
         Example:
-            return "directives/assets/my_directive_icon.png"
+            return "assets/my_directive_icon.png"
         """
         return None
 

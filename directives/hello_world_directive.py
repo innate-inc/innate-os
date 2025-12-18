@@ -8,7 +8,7 @@ class HelloWorld(Directive):
     """
 
     @property
-    def name(self) -> str:
+    def id(self) -> str:
         return "hello_world"
 
     @property
@@ -17,7 +17,7 @@ class HelloWorld(Directive):
 
     @property
     def display_icon(self) -> str:
-        return "directives/assets/hello_world.png"
+        return "assets/hello_world.png"
 
     def get_primitives(self) -> List[str]:
         return [

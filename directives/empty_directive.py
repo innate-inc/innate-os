@@ -9,7 +9,7 @@ class EmptyDirective(Directive):
     """
 
     @property
-    def name(self) -> str:
+    def id(self) -> str:
         return "empty_directive"
 
     @property
