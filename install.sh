@@ -40,6 +40,11 @@ INNATE_OS_DIR="${INNATE_OS_DIR:-/home/$USER/innate-os}"
 INNATE_STATE_DIR="${INNATE_STATE_DIR:-/var/lib/innate-update}"
 GITHUB_REPO="${GITHUB_REPO:-innate-inc/innate-os}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+
+# Debug: show configuration
+echo "[DEBUG] GITHUB_REPO=$GITHUB_REPO"
+echo "[DEBUG] GITHUB_TOKEN=${GITHUB_TOKEN:+set (hidden)}"
+echo "[DEBUG] INNATE_OS_DIR=$INNATE_OS_DIR"
 ROS_DISTRO="humble"
 # Set to "true" to build from source, "false" to download pre-built artifacts
 BUILD_FROM_SOURCE="${BUILD_FROM_SOURCE:-false}"
@@ -257,16 +262,12 @@ get_latest_release_info() {
         return 1
     fi
 
-    # Extract tag name and asset URL (use API URL for private repos)
-    LATEST_TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | head -1 | sed 's/.*: "\([^"]*\)".*/\1/')
+    # Extract tag name
+    LATEST_TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "\([^"]*\)".*/\1/')
 
-    # For private repos, use the API URL (url field) instead of browser_download_url
-    # The API URL works with token auth, browser URL doesn't
-    if [ -n "$GITHUB_TOKEN" ]; then
-        ASSET_URL=$(echo "$RELEASE_INFO" | grep -A5 '"name":' | grep -B5 '\.tar\.gz"' | grep -v '\-source\.tar\.gz' | grep '"url"' | head -1 | sed 's/.*: "\([^"]*\)".*/\1/')
-    else
-        ASSET_URL=$(echo "$RELEASE_INFO" | grep '"browser_download_url"' | grep -v '\-source\.tar\.gz' | grep '\.tar\.gz' | head -1 | sed 's/.*: "\([^"]*\)".*/\1/')
-    fi
+    # Extract asset URL - find the .tar.gz that's not the source archive
+    # Get all browser_download_url lines, filter for .tar.gz but not -source.tar.gz
+    ASSET_URL=$(echo "$RELEASE_INFO" | grep '"browser_download_url"' | grep -v '\-source\.tar\.gz' | head -1 | sed 's/.*"browser_download_url": "\([^"]*\)".*/\1/')
 
     if [ -z "$LATEST_TAG" ] || [ -z "$ASSET_URL" ]; then
         echo "[WARN] Could not extract release info (tag=$LATEST_TAG, url=$ASSET_URL)" >&2
