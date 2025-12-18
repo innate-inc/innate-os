@@ -118,6 +118,34 @@ check_system() {
     success "System check passed (Ubuntu $VERSION_ID, $ARCH)"
 }
 
+configure_needrestart() {
+    info "Configuring needrestart for non-interactive mode..."
+
+    # Configure needrestart to automatically restart services without prompting
+    NEEDRESTART_CONF="/etc/needrestart/needrestart.conf"
+    if [ -f "$NEEDRESTART_CONF" ]; then
+        # Check if already configured
+        if grep -q "^\$nrconf{restart} = 'a';" "$NEEDRESTART_CONF"; then
+            success "needrestart already configured"
+            return 0
+        fi
+
+        # Backup and update
+        sudo cp "$NEEDRESTART_CONF" "${NEEDRESTART_CONF}.backup"
+
+        # Update the restart config to automatic
+        if grep -q '^\$nrconf{restart}' "$NEEDRESTART_CONF"; then
+            sudo sed -i "s/^\$nrconf{restart}.*$/\$nrconf{restart} = 'a';/" "$NEEDRESTART_CONF"
+        else
+            echo "\$nrconf{restart} = 'a';" | sudo tee -a "$NEEDRESTART_CONF" > /dev/null
+        fi
+
+        success "needrestart configured for automatic restarts"
+    else
+        info "needrestart not installed, skipping configuration"
+    fi
+}
+
 # -----------------------------------------------------------------------------
 # ROS2 Installation
 # -----------------------------------------------------------------------------
@@ -600,6 +628,7 @@ main() {
     echo
 
     check_system
+    configure_needrestart
     setup_locale
     install_prerequisites
     install_ros2
