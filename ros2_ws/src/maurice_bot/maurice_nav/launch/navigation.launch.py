@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""
+Navigation Launch File
+
+Architecture:
+┌─────────────────────┐     ┌─────────────────────┐
+│   Grid Localizer    │────▶│        AMCL         │
+│  (coarse estimate)  │     │  (fine refinement)  │
+└─────────────────────┘     └─────────────────────┘
+         │                           │
+         │ /initialpose              │ continuous
+         │ (transient_local QoS)     │ tracking
+         ▼                           ▼
+    Seeds AMCL's              Publishes map→odom
+    particle filter           transform
+
+Grid Localizer runs as a standalone node (not lifecycle-managed) and publishes
+initial pose estimates with transient_local durability so AMCL receives them
+even if it starts later.
+"""
 
 import os
 
@@ -57,6 +76,21 @@ def generate_launch_description():
         parameters=[LaunchConfiguration('amcl_params_file')]
     )
 
+    # Grid localizer for initial pose estimation (runs OUTSIDE lifecycle manager)
+    # Provides coarse localization before AMCL for "kidnapped robot" / unknown initial pose
+    # Uses transient_local QoS so /initialpose persists for late-starting AMCL
+    grid_localizer_node = Node(
+        package='maurice_nav',
+        executable='grid_localizer.py',
+        name='grid_localizer',
+        output='screen',
+        parameters=[{
+            'auto_localize': True,
+            'auto_localize_timeout': 30.0,
+            'max_score_threshold': 0.3,
+        }]
+    )
+
     # Create the planner node
     planner_node = Node(
         package='nav2_planner',
@@ -95,7 +129,9 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'autostart': True,
-            'bond_timeout': 20.0,
+            'bond_timeout': 60.0,
+            'attempt_respawn_reconnection': True,
+            'bond_respawn_max_duration': 30.0,
             'node_names': [
                 'map_server', 
                 'amcl', 
@@ -142,6 +178,10 @@ def generate_launch_description():
     return LaunchDescription([
         map_arg,
         amcl_params_arg,
+        # Grid localizer starts first - runs independently (not lifecycle-managed)
+        # Publishes to /initialpose with transient_local QoS for late subscribers
+        grid_localizer_node,
+        # Nav2 lifecycle-managed nodes
         map_server_node,
         amcl_node,
         planner_node,
@@ -150,7 +190,7 @@ def generate_launch_description():
         bt_navigator_node,
         behavior_server_node,
         TimerAction(
-            period=5.0,
+            period=1.0,
             actions=[lifecycle_manager_node]
         )
     ])
