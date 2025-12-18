@@ -398,7 +398,7 @@ private:
     std::atomic<uint64_t> packet_count_;
     std::atomic<uint64_t> error_count_;
     std::atomic<uint64_t> out_of_order_count_;
-    int64_t last_sequence_;
+    std::atomic<int64_t> last_sequence_;
     std::chrono::steady_clock::time_point last_log_time_;
 
     // ROS interfaces
