@@ -4,7 +4,6 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
 from launch_ros.actions import Node
 
 
@@ -27,35 +26,27 @@ def generate_launch_description():
         arguments=["0", "0", "0", "0", "0", "0", "map", "odom"],
     )
 
-    # Robot state publisher: publish the URDF.
-    # (Ensure that 'turtlebot3_burger.urdf' is in your package path
-    # or provide its full path.)
-    robot_state_pub = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        name="robot_state_publisher",
+    # Static transform publisher: odom -> base_link
+    # This connects the map->odom tree with the base_link tree.
+    # Note: When running with full MuJoCo sim, the sim publishes this dynamically.
+    # For standalone nav testing, this static transform is needed.
+    static_tf_odom_to_base = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="static_odom_to_base_link",
         output="screen",
-        arguments=["turtlebot3_burger.urdf"],
+        arguments=["0", "0", "0", "0", "0", "0", "odom", "base_link"],
     )
 
-    # Odom TF broadcaster: run your custom odom broadcaster node.
-    odom_broadcaster_script = (
-        "/root/innate-os/ros2_ws/install/maurice_sim_bringup/lib/"
-        "maurice_sim_bringup/odom_tf_broadcaster.py"
-    )
-    odom_tf_broadcaster = ExecuteProcess(
-        cmd=["python3", odom_broadcaster_script],
+    # Static transform publisher: base_link -> base_footprint
+    # This matches what the real robot has in bringup_core.launch.py
+    static_tf_base_to_footprint = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="base_to_footprint_publisher",
         output="screen",
+        arguments=["0", "0", "0", "0", "0", "0", "base_link", "base_footprint"],
     )
-
-    # Static transform publisher: odom -> base_footprint
-    # static_tf_odom_to_base_footprint = Node(
-    #     package="tf2_ros",
-    #     executable="static_transform_publisher",
-    #     name="static_odom_to_base_footprint",
-    #     output="screen",
-    #     arguments=["0", "0", "0", "0", "0", "0", "odom", "base_link"],
-    # )
 
     # Create the planner node
     planner_node = Node(
@@ -115,9 +106,8 @@ def generate_launch_description():
     return LaunchDescription(
         [
             static_tf_map_to_odom,
-            robot_state_pub,
-            odom_tf_broadcaster,
-            # static_tf_odom_to_base_footprint,
+            static_tf_odom_to_base,
+            static_tf_base_to_footprint,
             planner_node,
             controller_node,
             bt_navigator_node,

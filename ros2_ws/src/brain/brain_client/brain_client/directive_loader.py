@@ -7,6 +7,7 @@ from specified directories. It validates that directives inherit from the Direct
 and can automatically register them with the brain client.
 """
 
+import base64
 import os
 import sys
 import importlib.util
@@ -127,15 +128,20 @@ class DirectiveLoader:
         """
         try:
             # Check that required abstract methods are implemented
-            required_methods = ['name', 'get_primitives', 'get_prompt']
+            required_methods = ['id', 'display_name', 'get_primitives', 'get_prompt']
             for method_name in required_methods:
                 if not hasattr(directive_class, method_name):
                     self.logger.error(f"Directive {directive_class.__name__} missing required method: {method_name}")
                     return False
                     
-            # Check that name is a property
-            if not hasattr(directive_class, 'name') or not isinstance(directive_class.name, property):
-                self.logger.error(f"Directive {directive_class.__name__} name must be a property")
+            # Check that id is a property
+            if not hasattr(directive_class, 'id') or not isinstance(directive_class.id, property):
+                self.logger.error(f"Directive {directive_class.__name__} id must be a property")
+                return False
+            
+            # Check that display_name is a property
+            if not hasattr(directive_class, 'display_name') or not isinstance(directive_class.display_name, property):
+                self.logger.error(f"Directive {directive_class.__name__} display_name must be a property")
                 return False
                 
             return True
@@ -157,7 +163,7 @@ class DirectiveLoader:
         """
         try:
             temp_instance = directive_class()
-            return temp_instance.name
+            return temp_instance.id
         except Exception as e:
             self.logger.debug(f"Could not get name from directive {directive_class.__name__}: {e}")
             # Fallback to class name converted to snake_case
@@ -208,13 +214,15 @@ class DirectiveLoader:
         return all_directives
     
     def create_directive_instances(self, directive_classes: Dict[str, Type[Directive]], 
-                                   available_primitives: Optional[Dict[str, any]] = None) -> Dict[str, Directive]:
+                                   available_primitives: Optional[Dict[str, any]] = None,
+                                   directives_directory: Optional[str] = None) -> Dict[str, Directive]:
         """
         Create instances of directive classes.
         
         Args:
             directive_classes: Dictionary of directive name to class mappings
             available_primitives: Optional dictionary of available primitive names to validate against
+            directives_directory: Optional path to directives directory for loading icons
             
         Returns:
             Dictionary mapping directive names to their instances
@@ -224,6 +232,9 @@ class DirectiveLoader:
         for directive_name, directive_class in directive_classes.items():
             try:
                 directive_instance = directive_class()
+                
+                # Load and encode the display icon as base64
+                self._load_display_icon(directive_instance, directives_directory)
                 
                 # Validate primitives if available_primitives dict is provided
                 if available_primitives is not None:
@@ -235,6 +246,30 @@ class DirectiveLoader:
                 self.logger.error(f"Error creating directive instance {directive_name}: {e}")
                 
         return directive_instances
+    
+    def _load_display_icon(self, directive_instance: Directive, directives_directory: Optional[str]) -> None:
+        """
+        Load and encode the directive's display icon as base64.
+        
+        Args:
+            directive_instance: The directive instance
+            directives_directory: Path to the directives directory
+        """
+        # Initialize the attribute for storing base64 icon data
+        directive_instance.display_icon_data = None
+        
+        if not directive_instance.display_icon or not directives_directory:
+            return
+        
+        icon_path = os.path.join(directives_directory, directive_instance.display_icon)
+        if os.path.exists(icon_path):
+            try:
+                with open(icon_path, 'rb') as f:
+                    icon_bytes = f.read()
+                    directive_instance.display_icon_data = base64.b64encode(icon_bytes).decode('utf-8')
+                    self.logger.debug(f"Loaded icon for directive '{directive_instance.id}'")
+            except Exception as e:
+                self.logger.warning(f"Failed to load icon for directive '{directive_instance.id}': {e}")
     
     def _validate_directive_primitives(self, directive_instance: Directive, 
                                        available_primitives: Dict[str, any]) -> None:
@@ -259,15 +294,15 @@ class DirectiveLoader:
             
             if missing_primitives:
                 self.logger.warning(
-                    f"Directive '{directive_instance.name}' references primitives that are not available: "
+                    f"Directive '{directive_instance.id}' references primitives that are not available: "
                     f"{missing_primitives}. Available primitives: {list(available_primitives.keys())}"
                 )
             else:
                 self.logger.debug(
-                    f"Directive '{directive_instance.name}' primitives validated successfully: "
+                    f"Directive '{directive_instance.id}' primitives validated successfully: "
                     f"{directive_primitives}"
                 )
         except Exception as e:
             self.logger.error(
-                f"Error validating primitives for directive '{directive_instance.name}': {e}"
+                f"Error validating primitives for directive '{directive_instance.id}': {e}"
             )
