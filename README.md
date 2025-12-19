@@ -86,11 +86,11 @@ Use this to develop and test agents for Innate robots — navigation, task execu
 ## Running the Application
 
 > [!IMPORTANT]
-> The simulator connects to the **[Innate OS](../innate-os)** running locally in Docker on `ws://localhost:9090`.
+> The simulator connects to the **[Innate OS](https://github.com/innate-inc/innate-os)** running locally in Docker on `ws://localhost:9090`.
 >
 > **Before starting the simulator:**
-> 1. Start the **[Innate OS](../innate-os)** in Docker
-> 2. (Optional) Start the **[Innate Cloud Agent](../innate-cloud-agent)** locally — only needed if the Innate OS is configured to use a local agent instead of the cloud service
+> 1. Start the **[Innate OS](https://github.com/innate-inc/innate-os)** in Docker
+> 2. (Optional) Start the **[Innate Cloud Agent](https://github.com/innate-inc/innate-cloud-agent)** locally — only needed if the Innate OS is configured to use a local agent instead of the cloud service
 >
 > See the linked repositories for setup instructions.
 
