@@ -48,7 +48,7 @@ if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
 fi
 
 # Stop systemd services
-for service in discovery-server.service ros-app.service; do
+for service in zenoh-router.service ros-app.service; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         log "Stopping $service"
         systemctl stop "$service"
@@ -146,7 +146,7 @@ fi
 
 # 7. Restart relevant services
 log "Restarting services..."
-SERVICES_TO_RESTART=("bluetooth.service" "discovery-server.service" "ros-app.service")
+SERVICES_TO_RESTART=("bluetooth.service" "zenoh-router.service" "ros-app.service")
 
 for service in "${SERVICES_TO_RESTART[@]}"; do
     log "Enabling and restarting $service"
