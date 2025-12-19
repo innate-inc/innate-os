@@ -3,9 +3,9 @@
 # when a network change requires restarting ROS/DDS components.
 
 echo "Restarting DDS Discovery Server due to network change..." >&2
-systemctl restart discovery-server.service
+systemctl restart zenoh-router.service
 if [ $? -ne 0 ]; then
-  echo "ERROR: Failed to restart discovery-server.service" >&2
+  echo "ERROR: Failed to restart zenoh-router.service" >&2
   # Optionally exit here if discovery server restart is critical
   # exit 1
 fi
