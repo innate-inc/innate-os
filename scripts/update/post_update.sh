@@ -85,8 +85,12 @@ if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
     sudo -u "$ACTUAL_USER" tmux kill-session -t ros_nodes
 fi
 
+# disable discovery-server if installed in historical image 
+systemctl disable --now discovery-server.service || true
+rm /etc/systemd/system/discovery-server.service || true
+
 # Stop systemd services
-for service in discovery-server.service ros-app.service; do
+for service in zenoh-router.service ros-app.service; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         log "Stopping $service"
         systemctl stop "$service"
@@ -102,7 +106,7 @@ if [ -d "$REPO_DIR/systemd" ]; then
         if [ -f "$service_file" ]; then
             service_name=$(basename "$service_file")
             log "Copying $service_name to /etc/systemd/system/"
-            cp "$service_file" /etc/systemd/system/
+            ln -sf "$service_file" /etc/systemd/system/
         fi
     done
     systemctl daemon-reload
@@ -115,14 +119,14 @@ if [ -d "$REPO_DIR/scripts" ]; then
     # Copy restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
         log "Updating restart_robot_networking.sh"
-        cp "$REPO_DIR/scripts/restart_robot_networking.sh" /usr/local/bin/
+        ln -sf "$REPO_DIR/scripts/restart_robot_networking.sh" /usr/local/bin/
         chmod +x /usr/local/bin/restart_robot_networking.sh
     fi
     
     # Copy tmux launcher if it exists
     if [ -f "$REPO_DIR/scripts/launch_ros_in_tmux.sh" ]; then
         log "Updating launch_ros_in_tmux.sh"
-        cp "$REPO_DIR/scripts/launch_ros_in_tmux.sh" /usr/local/bin/
+        ln -sf "$REPO_DIR/scripts/launch_ros_in_tmux.sh" /usr/local/bin/
         chmod +x /usr/local/bin/launch_ros_in_tmux.sh
     fi
 fi
@@ -134,7 +138,7 @@ if [ -d "$REPO_DIR/udev" ]; then
         if [ -f "$rule_file" ]; then
             rule_name=$(basename "$rule_file")
             log "Copying $rule_name to /etc/udev/rules.d/"
-            cp "$rule_file" /etc/udev/rules.d/
+            ln -sf "$rule_file" /etc/udev/rules.d/
         fi
     done
     udevadm control --reload-rules
@@ -146,13 +150,13 @@ fi
 log "Checking Bluetooth configurations..."
 if [ -f "$REPO_DIR/config/bluetooth/main.conf" ]; then
     log "Updating /etc/bluetooth/main.conf"
-    cp "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
+    ln -sf "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
 fi
 
 if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
     log "Updating bluetooth service override..."
     mkdir -p /lib/systemd/system/bluetooth.service.d/
-    cp "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
+    ln -sf "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
     systemctl daemon-reload
     log "Systemd daemon reloaded after bluetooth override"
 fi
@@ -184,7 +188,7 @@ fi
 
 # 7. Restart relevant services
 log "Restarting services..."
-SERVICES_TO_RESTART=("bluetooth.service" "discovery-server.service" "ros-app.service")
+SERVICES_TO_RESTART=("bluetooth.service" "zenoh-router.service" "ros-app.service")
 
 for service in "${SERVICES_TO_RESTART[@]}"; do
     log "Enabling and restarting $service"
