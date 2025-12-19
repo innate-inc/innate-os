@@ -19,6 +19,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>nlohmann-json-dev</depend>
+  <depend>yaml-cpp</depend>
 
   <!-- Shared dependencies -->
   <depend>maurice_msgs</depend>
