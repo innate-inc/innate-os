@@ -12,16 +12,26 @@ from maurice_arm.dynamixel import Dynamixel, OperatingMode
 import json
 import math
 import time
+import os
 
 DEFAULT_ANGLE = 0  # Logical angle
 # Remove hardcoded limits - will be parameters now
 # MIN_ANGLE = -40
 # MAX_ANGLE = 70
 
+with open("/tmp/head_servo_node.flag2", "w") as f:
+    f.write(f"started at {time.time()}\n")
+
+
+
 
 class HeadServoNode(Node):
     def __init__(self):
         super().__init__("head_servo_node")
+        
+        # Write flag file to indicate node is starting
+        with open("/tmp/head_servo_node.flag", "w") as f:
+            f.write(f"started at {time.time()}\n")
 
         # Declare parameters
         self.declare_parameter("servo_id", 7)
