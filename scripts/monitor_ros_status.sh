@@ -57,7 +57,7 @@ for i in {1..100}; do
         echo ''
         
         rm -f /tmp/ros_nodes /tmp/ros_topics /tmp/ros_services
-        #sleep 1
+        sleep 1
     } >> "$LOG_FILE"
 done
 
