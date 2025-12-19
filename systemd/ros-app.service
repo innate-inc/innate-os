@@ -34,6 +34,11 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
+# Set CPU and IO priority
+Nice=-10
+IOSchedulingClass=realtime
+IOSchedulingPriority=2
+
 [Install]
 # Enable this service to start on boot
-WantedBy=multi-user.target 
+WantedBy=multi-user.target
