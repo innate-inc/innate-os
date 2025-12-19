@@ -8,6 +8,7 @@ Wants=network-online.target
 User=jetson1
 Group=jetson1
 
+Environment="ZENOH_CONFIG_OVERRIDE='listen/endpoints=["tcp/0.0.0.0:0"]'"
 # Source the ROS environment first, then execute the zenoh-router wrapper script using sh
 # Binds to all interfaces on port 11811, using domain ID 0
 ExecStart=/bin/zsh -c ". ~/.zshrc && . /opt/ros/humble/setup.sh && ros2 run rmw_zenoh_cpp rmw_zenohd"
