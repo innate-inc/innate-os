@@ -220,18 +220,17 @@ install_ros2() {
 # -----------------------------------------------------------------------------
 
 save_github_token() {
-    # Save token securely for future updates
-    TOKEN_FILE="$INNATE_STATE_DIR/.github_token"
-    mkdir -p "$INNATE_STATE_DIR"
+    # Save token for future updates
+    TOKEN_FILE="$HOME/.github_token"
     echo "$GITHUB_TOKEN" > "$TOKEN_FILE"
-    chmod 600 "$TOKEN_FILE"
-    info "GitHub token saved for future updates"
+    chmod 666 "$TOKEN_FILE"
+    info "GitHub token saved to ~/.github_token"
 }
 
 load_github_token() {
     # Load saved token if not already set
     if [ -z "$GITHUB_TOKEN" ]; then
-        TOKEN_FILE="$INNATE_STATE_DIR/.github_token"
+        TOKEN_FILE="$HOME/.github_token"
         if [ -f "$TOKEN_FILE" ]; then
             GITHUB_TOKEN=$(cat "$TOKEN_FILE")
             export GITHUB_TOKEN

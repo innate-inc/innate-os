@@ -65,7 +65,7 @@ class Config:
         if self.github_token:
             return
 
-        token_file = self.state_dir / '.github_token'
+        token_file = Path.home() / '.github_token'
         if token_file.exists():
             self.github_token = token_file.read_text().strip()
             os.environ['GITHUB_TOKEN'] = self.github_token
