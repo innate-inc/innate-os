@@ -32,7 +32,12 @@ def load_env_file(env_path: Optional[Path] = None) -> None:
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 key, value = line.split('=', 1)
-                os.environ[key.strip()] = value.strip()
+                value = value.strip()
+                # Handle quoted values (single or double quotes)
+                if (value.startswith('"') and value.endswith('"')) or \
+                   (value.startswith("'") and value.endswith("'")):
+                    value = value[1:-1]
+                os.environ[key.strip()] = value
 
 
 def get_env(key: str, default: str = "") -> str:
