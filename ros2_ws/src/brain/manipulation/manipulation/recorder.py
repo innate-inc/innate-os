@@ -1,28 +1,42 @@
 #!/usr/bin/env python3
+
+# Standard library
+import json
+import os
 import time
+
+# Third-party
+import cv2
+import h5py
+import numpy as np
+
+# ROS2 core
 import rclpy
 from rclpy.node import Node
-from std_srvs.srv import Trigger
-from brain_messages.srv import ManipulationTask
-from manipulation.DataUtils import EpisodeData, TaskManager
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-# Import message types for sensor data
-from sensor_msgs.msg import Image, JointState
-from std_msgs.msg import Float64MultiArray
+# ROS2 messages
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from cv_bridge import CvBridge  # For image conversion
-import cv2
-import numpy as np
-import h5py
-# Import RecorderStatus message
-from brain_messages.msg import RecorderStatus, ReplayStatus
-import os
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-import json # Added for JSON manipulation
+from sensor_msgs.msg import Image, JointState, CompressedImage
+from std_msgs.msg import Float64MultiArray
 
-# Service imports
-from brain_messages.srv import GetTaskMetadataList, UpdateTaskMetadata, GetTaskMetadata, LoadEpisode
+# ROS2 services
+from std_srvs.srv import Trigger
+
+# CV bridge
+from cv_bridge import CvBridge
+
+# Local packages
+from brain_messages.msg import RecorderStatus, ReplayStatus
+from brain_messages.srv import (
+    GetTaskMetadata,
+    GetTaskMetadataList,
+    LoadEpisode,
+    ManipulationTask,
+    UpdateTaskMetadata,
+)
+from manipulation.DataUtils import EpisodeData, TaskManager
 
 class RecorderNode(Node):
     def __init__(self):
