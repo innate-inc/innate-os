@@ -255,6 +255,7 @@ class BrainClientNode(Node):
         self.image_buffer = deque(maxlen=self.image_buffer_max_size)
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
+        self.get_logger().info("testing update")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
         # Directive on startup persistence file
