@@ -12,6 +12,7 @@
 #include <maurice_msgs/srv/set_robot_name.hpp>
 
 #include <nlohmann/json.hpp>
+#include <yaml-cpp/yaml.h>
 #include <filesystem>
 #include <fstream>
 #include <cmath>
@@ -186,21 +187,21 @@ private:
     }
 
     /**
-     * Load app configuration from config file.
+     * Load app configuration from YAML config file.
      */
     void _load_app_config() {
         std::string maurice_root = get_maurice_root();
-        std::string config_file_path = maurice_root + "/os_config.json";
+        std::string config_file_path = maurice_root + "/os_config.yaml";
 
-        std::ifstream f(config_file_path);
-        if (f.is_open()) {
-            try {
-                f >> app_config_;
-            } catch (const json::parse_error& e) {
-                app_config_ = json::object();
+        try {
+            if (std::filesystem::exists(config_file_path)) {
+                YAML::Node config = YAML::LoadFile(config_file_path);
+                if (config["minimum_app_version"]) {
+                    app_config_["minimum_app_version"] = config["minimum_app_version"].as<std::string>();
+                }
             }
-            f.close();
-        } else {
+        } catch (const YAML::Exception& e) {
+            RCLCPP_WARN(rclcpp::get_logger("app_control"), "Failed to load os_config.yaml: %s", e.what());
             app_config_ = json::object();
         }
     }
