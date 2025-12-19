@@ -10,6 +10,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <maurice_msgs/srv/set_robot_name.hpp>
+#include <maurice_msgs/srv/system_update.hpp>
 
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -119,11 +120,57 @@ std::string get_robot_version(const std::string& maurice_root) {
 }
 
 /**
+ * Get the tag subject (first line of tag message) for the latest git tag.
+ * Returns empty string if unavailable.
+ */
+std::string get_tag_subject(const std::string& maurice_root) {
+    // Get latest tag
+    std::string tags_cmd = "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
+    std::string latest_tag = exec_command(tags_cmd);
+
+    if (latest_tag.empty()) {
+        return "";
+    }
+
+    // Get the tag's subject line
+    std::string subject_cmd = "cd \"" + maurice_root + "\" && git for-each-ref --format='%(contents:subject)' refs/tags/" + latest_tag + " 2>/dev/null";
+    return exec_command(subject_cmd);
+}
+
+/**
+ * Get the tag body (message after first line) for the latest git tag.
+ * Returns empty string if unavailable or no body.
+ */
+std::string get_tag_body(const std::string& maurice_root) {
+    // Get latest tag
+    std::string tags_cmd = "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
+    std::string latest_tag = exec_command(tags_cmd);
+
+    if (latest_tag.empty()) {
+        return "";
+    }
+
+    // Get the tag's body
+    std::string body_cmd = "cd \"" + maurice_root + "\" && git for-each-ref --format='%(contents:body)' refs/tags/" + latest_tag + " 2>/dev/null";
+    return exec_command(body_cmd);
+}
+
+/**
  * Get active WiFi SSID using nmcli.
  */
 std::string nmcli_get_active_wifi_ssid() {
     std::string result = exec_command("nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes:' | cut -d: -f2");
     return result;
+}
+
+/**
+ * Check if system updates are available using innate-update --quick-check.
+ * Returns true if updates are available, false otherwise.
+ */
+bool check_update_available() {
+    // innate-update --quick-check returns 0 if up-to-date, 1 if updates available
+    int result = std::system("/usr/local/bin/innate-update --quick-check >/dev/null 2>&1");
+    return (WEXITSTATUS(result) != 0);
 }
 
 class AppControl : public rclcpp::Node {
@@ -136,6 +183,11 @@ public:
         _cached_wifi_ssid = "";
         _last_wifi_check_time = 0.0;
         _wifi_check_interval = 10.0;  // Check WiFi every 10 seconds instead of every 1 second
+
+        // Cache for update check to avoid frequent subprocess calls
+        _cached_update_available = false;
+        _last_update_check_time = 0.0;
+        _update_check_interval = 300.0;  // Check for updates every 5 minutes
 
         // Declare parameters
         std::string maurice_root = get_maurice_root();
@@ -170,6 +222,12 @@ public:
         set_robot_name_srv_ = this->create_service<maurice_msgs::srv::SetRobotName>(
             "/set_robot_name",
             std::bind(&AppControl::set_robot_name_callback, this,
+                      std::placeholders::_1, std::placeholders::_2));
+
+        // Service for triggering system update
+        system_update_srv_ = this->create_service<maurice_msgs::srv::SystemUpdate>(
+            "/system_update",
+            std::bind(&AppControl::system_update_callback, this,
                       std::placeholders::_1, std::placeholders::_2));
 
         RCLCPP_INFO(this->get_logger(), "AppControl node started. [C++]");
@@ -234,6 +292,37 @@ private:
         }
 
         return _cached_wifi_ssid;
+    }
+
+    /**
+     * Check for system updates with caching to avoid frequent subprocess calls.
+     * Only checks if the configured interval has passed.
+     * Uses innate-update --quick-check which itself uses a 1-hour cache.
+     */
+    bool get_cached_update_available() {
+        double current_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+
+        // Check if we need to refresh the cache
+        if (_last_update_check_time == 0.0 ||
+            (current_time - _last_update_check_time) > _update_check_interval) {
+
+            bool new_update_available = check_update_available();
+
+            // Only log if the status changed
+            if (new_update_available != _cached_update_available) {
+                if (new_update_available) {
+                    RCLCPP_INFO(this->get_logger(), "System updates are available");
+                } else {
+                    RCLCPP_INFO(this->get_logger(), "System is up to date");
+                }
+            }
+
+            _cached_update_available = new_update_available;
+            _last_update_check_time = current_time;
+        }
+
+        return _cached_update_available;
     }
 
     /**
@@ -325,7 +414,10 @@ private:
      * - minimum_app_version: from os_config.json
      * - wifi_ssid: gets the current WiFi SSID from NetworkManager
      * - version: from git
+     * - tag_subject: first line of the latest git tag message
+     * - tag_body: body of the latest git tag message (if any)
      * - device_id: Bluetooth MAC address from system
+     * - update_available: true if system updates are available (from innate-update)
      * Logs errors if file/JSON processing fails or keys are missing.
      * Publishes "{}" if no keys are found or an error occurs.
      */
@@ -406,10 +498,21 @@ private:
                 data_to_publish_dict["wifi_ssid"] = wifi_ssid;
             }
 
-            // Include robot version
+            // Include robot version and release info
             try {
-                std::string robot_version = get_robot_version(get_maurice_root());
+                std::string maurice_root = get_maurice_root();
+                std::string robot_version = get_robot_version(maurice_root);
                 data_to_publish_dict["version"] = robot_version;
+
+                // Include tag subject and body from latest tag
+                std::string tag_subject = get_tag_subject(maurice_root);
+                if (!tag_subject.empty()) {
+                    data_to_publish_dict["tag_subject"] = tag_subject;
+                }
+                std::string tag_body = get_tag_body(maurice_root);
+                if (!tag_body.empty()) {
+                    data_to_publish_dict["tag_body"] = tag_body;
+                }
             } catch (const std::exception& e) {
             }
 
@@ -418,6 +521,9 @@ private:
             if (!device_id.empty()) {
                 data_to_publish_dict["device_id"] = device_id;
             }
+
+            // Include update availability status
+            data_to_publish_dict["update_available"] = get_cached_update_available();
 
             if (!data_to_publish_dict.empty()) {
                 final_json_string_to_publish = data_to_publish_dict.dump();
@@ -484,6 +590,38 @@ private:
         }
     }
 
+    /**
+     * Service callback to trigger a system update.
+     * Runs innate-update in the background and returns immediately.
+     */
+    void system_update_callback(
+        const std::shared_ptr<maurice_msgs::srv::SystemUpdate::Request> /*request*/,
+        std::shared_ptr<maurice_msgs::srv::SystemUpdate::Response> response) {
+
+        try {
+            RCLCPP_INFO(this->get_logger(), "System update triggered via service");
+
+            // Run the update script in the background using nohup
+            // This ensures the update continues even if the ROS node is restarted
+            int result = std::system("nohup /usr/local/bin/innate-update --force > /tmp/innate-update.log 2>&1 &");
+
+            if (result == 0) {
+                response->success = true;
+                response->message = "System update started. Check /tmp/innate-update.log for progress.";
+                RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+            } else {
+                response->success = false;
+                response->message = "Failed to start system update process";
+                RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+            }
+
+        } catch (const std::exception& e) {
+            response->success = false;
+            response->message = std::string("Failed to trigger system update: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+        }
+    }
+
     // Member variables
     json app_config_;
 
@@ -491,6 +629,11 @@ private:
     std::string _cached_wifi_ssid;
     double _last_wifi_check_time;
     double _wifi_check_interval;
+
+    // Cache for update check to avoid frequent subprocess calls
+    bool _cached_update_available;
+    double _last_update_check_time;
+    double _update_check_interval;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr joystick_sub_;
@@ -504,8 +647,9 @@ private:
     // Timer
     rclcpp::TimerBase::SharedPtr robot_info_timer_;
 
-    // Service
+    // Services
     rclcpp::Service<maurice_msgs::srv::SetRobotName>::SharedPtr set_robot_name_srv_;
+    rclcpp::Service<maurice_msgs::srv::SystemUpdate>::SharedPtr system_update_srv_;
 };
 
 } // namespace maurice_control
