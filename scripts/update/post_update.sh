@@ -86,7 +86,7 @@ if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
 fi
 
 # disable discovery-server if installed in historical image 
-systemctl stop disable --now discovery-server.service || true
+systemctl disable --now discovery-server.service || true
 rm /etc/systemd/system/discovery-server.service || true
 
 # Stop systemd services
