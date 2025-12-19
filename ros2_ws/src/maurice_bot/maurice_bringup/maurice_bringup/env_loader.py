@@ -55,4 +55,5 @@ def get_env(key: str, default: str = "") -> str:
 
 
 # Load env file on module import
-load_env_file()
+if __name__ == "__main__":
+    load_env_file()
