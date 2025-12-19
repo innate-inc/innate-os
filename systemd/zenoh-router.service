@@ -12,5 +12,10 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
+# Set CPU and IO priority
+Nice=-10
+IOSchedulingClass=realtime
+IOSchedulingPriority=2
+
 [Install]
 WantedBy=multi-user.target

@@ -103,6 +103,7 @@ def create_table(iterations):
     
     # Prepare table data
     table_data = []
+    found_steady = False
     for it in iterations:
         row = [
             it['iteration'],
@@ -116,6 +117,10 @@ def create_table(iterations):
             it['Topics'],
             it['Services']
         ]
+        if (iterations[-1]['Nodes'], iterations[-1]['Topics'], iterations[-1]['Services']) == (it['Nodes'], it['Topics'], it['Services']):
+            if found_steady:
+                break
+            found_steady = True
         table_data.append(row)
     
     headers = [
