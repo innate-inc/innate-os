@@ -1,31 +1,47 @@
 #!/bin/zsh
-# Launch ROS nodes in tmux windows with 2 panes each
+# Launch ROS nodes as background processes
 
-SESSION_NAME="ros_nodes"
 ROS_WS_PATH="$INNATE_OS_ROOT/ros2_ws"
 DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh"
+LOG_DIR="/tmp/ros_launch_logs"
 
-# ROS launch commands grouped into windows (pipe-delimited for 2 panes)
-ROS_COMMAND_GROUPS=(
+# ROS launch commands (one per window)
+ROS_COMMANDS=(
     "timeout 60 ros2 topic echo /rosout > /tmp/rosout"
-    "ros2 launch maurice_control app.launch.py|ros2 launch maurice_bringup maurice_bringup.launch.py"
-    "ros2 launch maurice_arm arm.launch.py|ros2 launch manipulation recorder.launch.py"
-    "ros2 launch brain_client brain_client.launch.py|sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
-    "ros2 launch manipulation behavior.launch.py|ros2 launch brain_client input_manager.launch.py"
-    "ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py|ros2 launch maurice_control udp_leader_receiver.launch.py"
-    "ros2 run maurice_arm ik.py|ros2 launch maurice_log logger.launch.py"
+    "ros2 launch maurice_control app.launch.py"
+    "ros2 launch maurice_bringup maurice_bringup.launch.py"
+    "ros2 launch maurice_arm arm.launch.py"
+    "ros2 launch manipulation recorder.launch.py"
+    "ros2 launch brain_client brain_client.launch.py"
+    "sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
+    "ros2 launch manipulation behavior.launch.py"
+    "ros2 launch brain_client input_manager.launch.py"
+    "ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py"
+    "ros2 launch maurice_control udp_leader_receiver.launch.py"
+    "ros2 run maurice_arm ik.py"
+    "ros2 launch maurice_log logger.launch.py"
 )
 
 WINDOW_NAMES=(
-    "app-bringup"
-    "arm-recorder"
-    "brain-nav"
-    "behaviors-inputs"
-    "stream"
-    "ik-logger"
+    "rosout"
+    "maurice-control"
+    "maurice-bringup"
+    "maurice-arm"
+    "manipulation-recorder"
+    "brain-client"
+    "calibrate-nav"
+    "manipulation-behavior"
+    "input-manager"
+    "webrtc-streamer"
+    "udp-leader"
+    "ik"
+    "logger"
 )
 
-echo "Launching ROS nodes in tmux session '$SESSION_NAME'..."
+echo "Launching ROS nodes as background processes..."
+
+# Create log directory
+mkdir -p "$LOG_DIR"
 
 # Source environment once (will be inherited by all child processes)
 source "$DDS_SETUP_SCRIPT" || { echo "ERROR: Failed to source DDS setup." >&2; exit 1; }
@@ -37,58 +53,36 @@ else
     exit 1
 fi
 
-if tmux has-session -t $SESSION_NAME 2>/dev/null; then
-    tmux kill-session -t $SESSION_NAME
-    sleep 1
-fi
+# Track all child process PIDs
+declare -a PIDS
 
-process_command_group() {
-    local group_index=$1
-    local command_group="${ROS_COMMAND_GROUPS[$group_index]}"
-    local window_name="${WINDOW_NAMES[$group_index]}"
-    local commands=(${(s:|:)command_group})
+process_command() {
+    local cmd_index=$1
+    local command="${ROS_COMMANDS[$cmd_index]}"
+    local window_name="${WINDOW_NAMES[$cmd_index]}"
+    local log_file="$LOG_DIR/${window_name}.log"
     
-    echo "  Creating window: $window_name"
+    echo "  Starting: $window_name"
     
-    if [ $group_index -eq 1 ]; then
-        tmux new-session -d -s $SESSION_NAME -n "$window_name" -c ~ || return 1
-    else
-        tmux set-option history-limit 50000 \; new-window -t $SESSION_NAME -n "$window_name" -c ~ || return 1
-    fi
+    # Run command in background, redirecting output to log file
+    eval "$command" > "$log_file" 2>&1 &
     
-    sleep 0.1
-    
-    local first_cmd="${commands[1]}"
-    tmux send-keys -t $SESSION_NAME:"$window_name".0 "$first_cmd" C-m || return 1
-    
-    if [ ${#commands[@]} -gt 1 ]; then
-        local second_cmd="${commands[2]}"
-        
-        tmux split-window -h -c ~ -t $SESSION_NAME:"$window_name" || return 1
-        sleep 0.1
-        tmux send-keys -t $SESSION_NAME:"$window_name".1 "$second_cmd" C-m || return 1
-        tmux select-layout -t $SESSION_NAME:"$window_name" even-horizontal
-    fi
-    
-    sleep 0.1
-    return 0
+    local pid=$!
+    PIDS[$cmd_index]=$pid
+    echo "    PID: $pid -> $log_file"
 }
 
-for i in $(seq 1 ${#ROS_COMMAND_GROUPS[@]}); do
-    process_command_group $i || { 
-        echo "ERROR: Failed to create window $i" >&2
-        tmux kill-session -t $SESSION_NAME 2>/dev/null
-        exit 1
-    }
+echo "Starting all ROS nodes..."
+for i in $(seq 1 ${#ROS_COMMANDS[@]}); do
+    process_command $i
 done
 
-tmux select-window -t $SESSION_NAME:"${WINDOW_NAMES[1]}"
-
-echo "✓ ROS nodes launched in tmux session '$SESSION_NAME'"
-echo "  Attach: tmux attach -t $SESSION_NAME"
 echo ""
-while tmux has-session -t $SESSION_NAME 2>/dev/null; do
-    sleep 5
-done
+echo "✓ All ROS nodes launched (${#ROS_COMMANDS[@]} processes)"
+echo "  Log directory: $LOG_DIR"
+echo "  View logs: tail -f $LOG_DIR/*.log"
+echo "  Kill all: pkill -P $$ 2>/dev/null"
+echo ""
 
-echo "Tmux session ended." 
+# Wait for all child processes
+wait 
