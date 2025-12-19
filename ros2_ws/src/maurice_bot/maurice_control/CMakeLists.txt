@@ -19,6 +19,7 @@ find_package(rosbridge_server REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # ============================================================================
 # C++ Executable: app.cpp
@@ -27,6 +28,7 @@ add_executable(app.cpp maurice_control/app.cpp)
 
 target_link_libraries(app.cpp
   nlohmann_json::nlohmann_json
+  yaml-cpp
 )
 
 ament_target_dependencies(app.cpp

@@ -1,24 +1,14 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from brain_client.logging_config import get_logging_env_vars
+from maurice_bringup.env_loader import load_env_file, get_env
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-import os
-from pathlib import Path
 
 
 def generate_launch_description():
-    # Load environment variables from .env file if it exists
-    # Use environment variable if set, otherwise construct from HOME
-    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
-    env_file_path = Path(maurice_root) / ".env"
-    if env_file_path.exists():
-        with open(env_file_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip()
+    # Load environment variables from .env file
+    load_env_file()
     
     # Get logging environment variables
     env_vars = get_logging_env_vars()
@@ -26,12 +16,12 @@ def generate_launch_description():
     # Declare new launch arguments
     websocket_uri_arg = DeclareLaunchArgument(
         "websocket_uri",
-        default_value="wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
+        default_value=get_env("BRAIN_WEBSOCKET_URI", ""),
         description="Websocket URI",
     )
     token_arg = DeclareLaunchArgument(
         "token",
-        default_value="MY_HARDCODED_TOKEN",
+        default_value=get_env("BRAIN_AUTH_TOKEN", ""),
         description="Token for authentication",
     )
     image_topic_arg = DeclareLaunchArgument(
@@ -109,14 +99,13 @@ def generate_launch_description():
     )
     cartesia_api_key_arg = DeclareLaunchArgument(
         "cartesia_api_key",
-        default_value=os.getenv("CARTESIA_API_KEY", ""),
+        default_value=get_env("CARTESIA_API_KEY", ""),
         description="Cartesia API key for text-to-speech functionality",
     )
     cartesia_voice_id_arg = DeclareLaunchArgument(
         "cartesia_voice_id",
-        # default_value="6de0e913-9534-47ad-96f0-e3f5fbfaf8a0",
-        default_value="f786b574-daa5-4673-aa0c-cbe3e8534c02",
-        description="Cartesia voice ID for text-to-speech (Katie - Friendly Fixer)",
+        default_value=get_env("CARTESIA_VOICE_ID", "f786b574-daa5-4673-aa0c-cbe3e8534c02"),
+        description="Cartesia voice ID for text-to-speech",
     )
 
     # Launch the BrainClientNode
