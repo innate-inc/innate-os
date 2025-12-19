@@ -25,12 +25,9 @@ WINDOW_NAMES=(
     "ik-logger"
 )
 
-DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
-ROS_SOURCE_CMD="source $ROS_WS_PATH/install/setup.zsh"
-
 echo "Launching ROS nodes in tmux session '$SESSION_NAME'..."
 
-# Source environment
+# Source environment once (will be inherited by all child processes)
 source "$DDS_SETUP_SCRIPT" || { echo "ERROR: Failed to source DDS setup." >&2; exit 1; }
 
 if [ -f "$ROS_WS_PATH/install/setup.zsh" ]; then
@@ -62,16 +59,14 @@ process_command_group() {
     sleep 0.1
     
     local first_cmd="${commands[1]}"
-    local first_cmd_full="$DDS_SOURCE_CMD && $ROS_SOURCE_CMD && $first_cmd"
-    tmux send-keys -t $SESSION_NAME:"$window_name".0 "$first_cmd_full" C-m || return 1
+    tmux send-keys -t $SESSION_NAME:"$window_name".0 "$first_cmd" C-m || return 1
     
     if [ ${#commands[@]} -gt 1 ]; then
         local second_cmd="${commands[2]}"
-        local second_cmd_full="$DDS_SOURCE_CMD && $ROS_SOURCE_CMD && $second_cmd"
         
         tmux split-window -h -c ~ -t $SESSION_NAME:"$window_name" || return 1
         sleep 0.1
-        tmux send-keys -t $SESSION_NAME:"$window_name".1 "$second_cmd_full" C-m || return 1
+        tmux send-keys -t $SESSION_NAME:"$window_name".1 "$second_cmd" C-m || return 1
         tmux select-layout -t $SESSION_NAME:"$window_name" even-horizontal
     fi
     
