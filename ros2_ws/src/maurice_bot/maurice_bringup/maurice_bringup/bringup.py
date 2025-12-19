@@ -111,11 +111,17 @@ class Bringup(Node):
         )
 
         # Add the calibrate service
+        if self.debug:
+            self.get_logger().debug('set up calibrate service')
+ 
         self.calibrate_srv = self.create_service(
             Trigger,
             '/calibrate',
             self._handle_calibrate_request
         )
+        if self.debug:
+            self.get_logger().debug('done setting up calibrate service')
+ 
 
         # Create odometry publisher
         self.odom_pub = self.create_publisher(
@@ -285,7 +291,7 @@ class Bringup(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = Bringup(debug=False)
+    node = Bringup(debug=True)
     rclpy.spin(node)
     rclpy.shutdown()
 
