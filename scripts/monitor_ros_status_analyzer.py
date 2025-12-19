@@ -117,7 +117,7 @@ def create_table(iterations):
             it['Topics'],
             it['Services']
         ]
-        if (iterations[-1]['Nodes'], iterations[-1]['Topics'], iterations[-1]['Services']) == (it['Nodes'], it['Topics'], it['Services']):
+        if '1969' not in it['timestamp'] and (iterations[-1]['Nodes'], iterations[-1]['Topics'], iterations[-1]['Services']) == (it['Nodes'], it['Topics'], it['Services']):
             if found_steady:
                 break
             found_steady = True
