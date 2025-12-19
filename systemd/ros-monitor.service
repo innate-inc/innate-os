@@ -15,7 +15,7 @@ Environment="INNATE_OS_ROOT=/home/jetson1/innate-os"
 ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/monitor_ros_status.sh'
 
 # Ensure the service runs only once and does not restart
-Type=oneshot
+Type=simple
 RemainAfterExit=true
 
 # Disable automatic restarts
