@@ -1,23 +1,27 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from brain_client.logging_config import get_logging_env_vars
+from brain_client.env_loader import load_env_file, get_env
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    # Load environment variables from .env file
+    load_env_file()
+    
     # Get logging environment variables
     env_vars = get_logging_env_vars()
 
     # Declare new launch arguments
     websocket_uri_arg = DeclareLaunchArgument(
         "websocket_uri",
-        default_value="ws://host.docker.internal:8765",
+        default_value=get_env("BRAIN_WEBSOCKET_URI_SIM", "ws://host.docker.internal:8765"),
         description="Websocket URI",
     )
     token_arg = DeclareLaunchArgument(
         "token",
-        default_value="MY_HARDCODED_TOKEN",
+        default_value=get_env("BRAIN_AUTH_TOKEN", ""),
         description="Token for authentication",
     )
     image_topic_arg = DeclareLaunchArgument(
