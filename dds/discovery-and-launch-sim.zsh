@@ -9,10 +9,10 @@ tmux kill-session -t mars 2>/dev/null
 # Create a new tmux session named 'mars'
 tmux new-session -d -s mars
 
-# Run the discovery service in the first pane
-tmux send-keys -t mars:0.0 "fastdds discovery -i 0 -p 11811" C-m
-echo "Started discovery service..."
-sleep 2  # Give discovery time to start up
+# # Run the discovery service in the first pane
+# tmux send-keys -t mars:0.0 "fastdds discovery -i 0 -p 11811" C-m
+# echo "Started discovery service..."
+# sleep 2  # Give discovery time to start up
 
 # Create a new pane and run the simulation
 tmux split-window -t mars:0.0 -v
