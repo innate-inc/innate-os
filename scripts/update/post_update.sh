@@ -263,7 +263,7 @@ else
     PIP_DEPS_FILE="$REPO_DIR/ros2_ws/pip-requirements.txt"
     if [ -f "$PIP_DEPS_FILE" ]; then
         log "  Installing pip dependencies..."
-        pip3 install -r "$PIP_DEPS_FILE" --upgrade
+        sudo -u "$ACTUAL_USER" pip3 install -r "$PIP_DEPS_FILE" --upgrade
         log "  Pip dependencies installed"
     fi
 fi
