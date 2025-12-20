@@ -10,6 +10,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <maurice_msgs/srv/set_robot_name.hpp>
+#include <maurice_msgs/srv/trigger_update.hpp>
 
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
@@ -127,6 +128,16 @@ std::string nmcli_get_active_wifi_ssid() {
     return result;
 }
 
+/**
+ * Check if system updates are available using innate-update --quick-check.
+ * Returns true if updates are available, false otherwise.
+ */
+bool check_update_available() {
+    // innate-update --quick-check returns 0 if up-to-date, 1 if updates available
+    int result = std::system("/usr/local/bin/innate-update --quick-check >/dev/null 2>&1");
+    return (WEXITSTATUS(result) != 0);
+}
+
 class AppControl : public rclcpp::Node {
 public:
     AppControl() : Node("app_control_node") {
@@ -137,6 +148,11 @@ public:
         _cached_wifi_ssid = "";
         _last_wifi_check_time = 0.0;
         _wifi_check_interval = 10.0;  // Check WiFi every 10 seconds instead of every 1 second
+
+        // Cache for update check to avoid frequent subprocess calls
+        _cached_update_available = false;
+        _last_update_check_time = 0.0;
+        _update_check_interval = 300.0;  // Check for updates every 5 minutes
 
         // Declare parameters
         std::string maurice_root = get_maurice_root();
@@ -171,6 +187,12 @@ public:
         set_robot_name_srv_ = this->create_service<maurice_msgs::srv::SetRobotName>(
             "/set_robot_name",
             std::bind(&AppControl::set_robot_name_callback, this,
+                      std::placeholders::_1, std::placeholders::_2));
+
+        // Service for triggering system update
+        trigger_update_srv_ = this->create_service<maurice_msgs::srv::TriggerUpdate>(
+            "/trigger_update",
+            std::bind(&AppControl::trigger_update_callback, this,
                       std::placeholders::_1, std::placeholders::_2));
 
         RCLCPP_INFO(this->get_logger(), "AppControl node started. [C++]");
@@ -235,6 +257,37 @@ private:
         }
 
         return _cached_wifi_ssid;
+    }
+
+    /**
+     * Check for system updates with caching to avoid frequent subprocess calls.
+     * Only checks if the configured interval has passed.
+     * Uses innate-update --quick-check which itself uses a 1-hour cache.
+     */
+    bool get_cached_update_available() {
+        double current_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+
+        // Check if we need to refresh the cache
+        if (_last_update_check_time == 0.0 ||
+            (current_time - _last_update_check_time) > _update_check_interval) {
+
+            bool new_update_available = check_update_available();
+
+            // Only log if the status changed
+            if (new_update_available != _cached_update_available) {
+                if (new_update_available) {
+                    RCLCPP_INFO(this->get_logger(), "System updates are available");
+                } else {
+                    RCLCPP_INFO(this->get_logger(), "System is up to date");
+                }
+            }
+
+            _cached_update_available = new_update_available;
+            _last_update_check_time = current_time;
+        }
+
+        return _cached_update_available;
     }
 
     /**
@@ -327,6 +380,7 @@ private:
      * - wifi_ssid: gets the current WiFi SSID from NetworkManager
      * - version: from git
      * - device_id: Bluetooth MAC address from system
+     * - update_available: true if system updates are available (from innate-update)
      * Logs errors if file/JSON processing fails or keys are missing.
      * Publishes "{}" if no keys are found or an error occurs.
      */
@@ -420,6 +474,9 @@ private:
                 data_to_publish_dict["device_id"] = device_id;
             }
 
+            // Include update availability status
+            data_to_publish_dict["update_available"] = get_cached_update_available();
+
             if (!data_to_publish_dict.empty()) {
                 final_json_string_to_publish = data_to_publish_dict.dump();
             }
@@ -485,6 +542,49 @@ private:
         }
     }
 
+    /**
+     * Service callback to trigger a system update using innate-update.
+     * Runs the update in the background and returns immediately.
+     */
+    void trigger_update_callback(
+        const std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Request> request,
+        std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Response> response) {
+
+        try {
+            RCLCPP_INFO(this->get_logger(), "System update triggered via service (dev_mode=%s)",
+                        request->dev_mode ? "true" : "false");
+
+            // Build the update command
+            std::string update_cmd = "/usr/local/bin/innate-update apply";
+            if (request->dev_mode) {
+                update_cmd += " --dev";
+            }
+            // Run in background with auto-confirm (yes | ...)
+            update_cmd = "yes | " + update_cmd + " >> /home/jetson1/innate-os/logs/update.log 2>&1 &";
+
+            int result = std::system(update_cmd.c_str());
+
+            if (result == 0) {
+                response->success = true;
+                response->message = "Update process started. Check /home/jetson1/innate-os/logs/update.log for progress.";
+                RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+
+                // Clear the update cache so next check will re-fetch
+                _cached_update_available = false;
+                _last_update_check_time = 0.0;
+            } else {
+                response->success = false;
+                response->message = "Failed to start update process";
+                RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+            }
+
+        } catch (const std::exception& e) {
+            response->success = false;
+            response->message = std::string("Failed to trigger update: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+        }
+    }
+
     // Member variables
     json app_config_;
 
@@ -492,6 +592,11 @@ private:
     std::string _cached_wifi_ssid;
     double _last_wifi_check_time;
     double _wifi_check_interval;
+
+    // Cache for update check to avoid frequent subprocess calls
+    bool _cached_update_available;
+    double _last_update_check_time;
+    double _update_check_interval;
 
     // Subscribers
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr joystick_sub_;
@@ -505,8 +610,9 @@ private:
     // Timer
     rclcpp::TimerBase::SharedPtr robot_info_timer_;
 
-    // Service
+    // Services
     rclcpp::Service<maurice_msgs::srv::SetRobotName>::SharedPtr set_robot_name_srv_;
+    rclcpp::Service<maurice_msgs::srv::TriggerUpdate>::SharedPtr trigger_update_srv_;
 };
 
 } // namespace maurice_control
