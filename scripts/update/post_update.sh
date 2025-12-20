@@ -137,6 +137,8 @@ if [ -d "$REPO_DIR/systemd" ]; then
             log "  Installing $service_name"
 
             # Update User= directive in service files to match actual user
+            # Remove any existing symlink to avoid truncating source file
+            rm -f /etc/systemd/system/"$service_name"
             sed -e "s/User=jetson1/User=$ACTUAL_USER/g" \
                 -e "s|/home/jetson1|$ACTUAL_HOME|g" \
                 "$service_file" > /etc/systemd/system/"$service_name"
@@ -161,14 +163,16 @@ if [ -d "$REPO_DIR/scripts" ]; then
     # Copy restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
         log "  Installing restart_robot_networking.sh"
-        ln -sf "$REPO_DIR/scripts/restart_robot_networking.sh" /usr/local/bin/
+        rm -f /usr/local/bin/restart_robot_networking.sh
+        cp "$REPO_DIR/scripts/restart_robot_networking.sh" /usr/local/bin/
         chmod +x /usr/local/bin/restart_robot_networking.sh
     fi
 
     # Copy tmux launcher if it exists
     if [ -f "$REPO_DIR/scripts/launch_ros_in_tmux.sh" ]; then
         log "  Installing launch_ros_in_tmux.sh"
-        ln -sf "$REPO_DIR/scripts/launch_ros_in_tmux.sh" /usr/local/bin/
+        rm -f /usr/local/bin/launch_ros_in_tmux.sh
+        cp "$REPO_DIR/scripts/launch_ros_in_tmux.sh" /usr/local/bin/
         chmod +x /usr/local/bin/launch_ros_in_tmux.sh
     fi
 
@@ -189,7 +193,8 @@ if [ -d "$REPO_DIR/udev" ]; then
         if [ -f "$rule_file" ]; then
             rule_name=$(basename "$rule_file")
             log "  Installing $rule_name"
-            ln -sf "$rule_file" /etc/udev/rules.d/
+            rm -f /etc/udev/rules.d/"$rule_name"
+            cp "$rule_file" /etc/udev/rules.d/
         fi
     done
     udevadm control --reload-rules
@@ -204,7 +209,8 @@ log "Checking Bluetooth configurations..."
 if [ -f "$REPO_DIR/config/bluetooth/main.conf" ]; then
     if [ -d "/etc/bluetooth" ]; then
         log "  Updating /etc/bluetooth/main.conf"
-        ln -sf "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
+        rm -f /etc/bluetooth/main.conf
+        cp "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
     else
         log "  Skipping bluetooth config - /etc/bluetooth not found (VM or no bluetooth)"
     fi
@@ -214,7 +220,8 @@ if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
     if [ -d "/lib/systemd/system" ]; then
         log "  Updating bluetooth service override"
         mkdir -p /lib/systemd/system/bluetooth.service.d/
-        ln -sf "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
+        rm -f /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
+        cp "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
         systemctl daemon-reload
     else
         log "  Skipping bluetooth service override - systemd not found"
