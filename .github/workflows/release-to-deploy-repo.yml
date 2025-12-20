@@ -56,12 +56,11 @@ jobs:
           # Add release repo as remote
           git remote add release git@github.com:${{ env.RELEASE_REPO }}.git
           
-          # Push main branch
+          # Push main branch (full history)
           echo "Pushing main branch to release repo..."
           git push release HEAD:main --force
           
-          # Tag this commit and push
-          git tag -f "$TAG"
+          # Push the tag
           echo "Pushing tag $TAG to release repo..."
           git push release "$TAG" --force
           
