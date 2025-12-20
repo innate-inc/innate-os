@@ -55,5 +55,11 @@ def generate_launch_description():
             ],
         ),
 
-        # …your ik.py node if you need it…
+        # KDL-based IK node
+        Node(
+            package='maurice_arm',
+            executable='ik.py',
+            name='kdl_ik_from_file',
+            output='screen',
+        ),
     ])
