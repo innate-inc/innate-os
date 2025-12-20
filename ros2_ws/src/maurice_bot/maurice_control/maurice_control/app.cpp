@@ -70,6 +70,42 @@ std::string get_bluetooth_device_id() {
 }
 
 /**
+ * Get the subject (first line) of the latest tag's annotation message.
+ * Returns empty string if no tags or tag has no message.
+ */
+std::string get_tag_subject(const std::string& maurice_root) {
+    // Get latest tag
+    std::string tags_cmd = "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
+    std::string latest_tag = exec_command(tags_cmd);
+    
+    if (latest_tag.empty()) {
+        return "";
+    }
+    
+    // Get the tag message subject (first line only)
+    std::string subject_cmd = "cd \"" + maurice_root + "\" && git tag -l --format='%(contents:subject)' \"" + latest_tag + "\" 2>/dev/null";
+    return exec_command(subject_cmd);
+}
+
+/**
+ * Get the body (everything after first line) of the latest tag's annotation message.
+ * Returns empty string if no tags or tag has no body.
+ */
+std::string get_tag_body(const std::string& maurice_root) {
+    // Get latest tag
+    std::string tags_cmd = "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
+    std::string latest_tag = exec_command(tags_cmd);
+    
+    if (latest_tag.empty()) {
+        return "";
+    }
+    
+    // Get the tag message body (everything after subject line)
+    std::string body_cmd = "cd \"" + maurice_root + "\" && git tag -l --format='%(contents:body)' \"" + latest_tag + "\" 2>/dev/null";
+    return exec_command(body_cmd);
+}
+
+/**
  * Get the current robot version.
  * - If on main branch and there are tags, returns the latest tag
  * - If in development (not on main), returns dev version using latest tag
@@ -380,6 +416,8 @@ private:
      * - minimum_app_version: from os_config.json
      * - wifi_ssid: gets the current WiFi SSID from NetworkManager
      * - version: from git
+     * - tag_subject: the subject (first line) of the latest git tag's annotation
+     * - tag_body: the body (rest of message) of the latest git tag's annotation
      * - device_id: Bluetooth MAC address from system
      * - update_available: true if system updates are available (from innate-update)
      * Logs errors if file/JSON processing fails or keys are missing.
@@ -462,10 +500,22 @@ private:
                 data_to_publish_dict["wifi_ssid"] = wifi_ssid;
             }
 
-            // Include robot version
+            // Include robot version and tag info
             try {
-                std::string robot_version = get_robot_version(get_maurice_root());
+                std::string maurice_root = get_maurice_root();
+                std::string robot_version = get_robot_version(maurice_root);
                 data_to_publish_dict["version"] = robot_version;
+                
+                // Include tag subject and body for the latest version
+                std::string tag_subject = get_tag_subject(maurice_root);
+                if (!tag_subject.empty()) {
+                    data_to_publish_dict["tag_subject"] = tag_subject;
+                }
+                
+                std::string tag_body = get_tag_body(maurice_root);
+                if (!tag_body.empty()) {
+                    data_to_publish_dict["tag_body"] = tag_body;
+                }
             } catch (const std::exception& e) {
             }
 
