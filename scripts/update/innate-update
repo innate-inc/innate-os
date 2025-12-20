@@ -168,6 +168,7 @@ class ServiceManager:
 
     TMUX_SESSION = "ros_nodes"
     DISCOVERY_SESSION = "discovery"
+    UPDATE_SESSION = "innate_update"
 
     def __init__(self, config: Config, logger: Logger):
         self.config = config
@@ -200,6 +201,10 @@ class ServiceManager:
         if self._systemd_service_active('discovery-server.service'):
             return True
         return self._tmux_session_exists(self.DISCOVERY_SESSION)
+
+    def is_update_running(self) -> bool:
+        """Check if an update is currently in progress."""
+        return self._tmux_session_exists(self.UPDATE_SESSION)
 
     def start(self) -> int:
         """Start ROS services."""
@@ -298,6 +303,7 @@ class ServiceManager:
             'ros_running': self.is_running(),
             'discovery_running': self.is_discovery_running(),
             'discovery_systemd': self._systemd_service_active('discovery-server.service'),
+            'update_running': self.is_update_running(),
         }
 
 
@@ -774,6 +780,9 @@ class UpdateManager:
                 print(f"  {Colors.GREEN}●{Colors.NC} Discovery: running (tmux session 'discovery')")
         else:
             print(f"  {Colors.RED}○{Colors.NC} Discovery: stopped")
+
+        if svc_status['update_running']:
+            print(f"  {Colors.YELLOW}●{Colors.NC} Update: in progress (tmux session 'innate_update')")
         print()
 
         cached = self._read_cache()

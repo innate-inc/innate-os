@@ -116,16 +116,10 @@ sudo -u "$ACTUAL_USER" git config --global core.fsync added,reference
 sudo -u "$ACTUAL_USER" git config --global core.fsyncMethod fsync
 log "Git fsync settings configured"
 
-# Stop running services before updating
+# Stop running services before updating (keep app.cpp alive during build)
 log "Stopping services to begin update..."
 
-# Kill tmux sessions if running
-if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
-    log "Stopping tmux session: ros_nodes"
-    sudo -u "$ACTUAL_USER" tmux kill-session -t ros_nodes
-fi
-
-# Stop systemd services (if they exist)
+# Stop systemd services first (if they exist)
 for service in zenoh-router.service ros-app.service ble-provisioner.service; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         log "Stopping $service"
@@ -133,7 +127,24 @@ for service in zenoh-router.service ros-app.service ble-provisioner.service; do
     fi
 done
 
-log "All services stopped."
+# Gracefully stop tmux panes - keep app.cpp alive during build
+if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
+    log "Stopping ROS nodes (keeping app.cpp alive during build)..."
+    
+    # Kill all windows except app-bringup
+    for window in "arm-recorder" "brain-nav" "behaviors-inputs" "stream" "ik-logger"; do
+        if sudo -u "$ACTUAL_USER" tmux list-windows -t ros_nodes 2>/dev/null | grep -q "$window"; then
+            log "  Stopping window: $window"
+            sudo -u "$ACTUAL_USER" tmux kill-window -t "ros_nodes:$window" 2>/dev/null || true
+        fi
+    done
+    
+    log "Other nodes stopped. App and bringup still running for status updates."
+else
+    log "No ros_nodes tmux session found"
+fi
+
+log "Services stopped (app.cpp still running)."
 
 # -----------------------------------------------------------------------------
 # 1. Update systemd service files
@@ -285,6 +296,12 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
         log "ERROR: Failed to rebuild ROS2 workspace"
         exit 1
     fi
+fi
+
+# Now kill the remaining app.cpp pane (build is done, safe to stop it)
+if sudo -u "$ACTUAL_USER" tmux has-session -t ros_nodes 2>/dev/null; then
+    log "Build complete. Stopping app.cpp..."
+    sudo -u "$ACTUAL_USER" tmux kill-session -t ros_nodes 2>/dev/null || true
 fi
 
 # -----------------------------------------------------------------------------
