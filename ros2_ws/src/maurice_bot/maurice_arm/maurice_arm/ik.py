@@ -79,7 +79,7 @@ class KDLIKNode(Node):
         else:
             self.get_logger().warn(f"Initial FK calculation failed with code: {fk_result}")
             # Handle error appropriately, maybe raise exception or set a flag
-            self.initial_frame = None # Indicate failure
+            self.initial_frame = None
 
         # 6) publisher and subscription
         self.joint_pub = self.create_publisher(JointState, 'ik_solution', 10)
