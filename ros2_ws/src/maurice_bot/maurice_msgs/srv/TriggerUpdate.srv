@@ -1,0 +1,4 @@
+bool dev_mode
+---
+bool success
+string message
