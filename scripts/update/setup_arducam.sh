@@ -98,6 +98,18 @@ else
     echo "  ⚠️  Failed to save ALSA settings - run: sudo alsactl store"
 fi
 
+# Ensure ALSA restore service is enabled (for boot persistence)
+echo "🔧 Ensuring ALSA restore service is enabled..."
+if systemctl is-enabled alsa-restore.service >/dev/null 2>&1; then
+    echo "  ✓ alsa-restore.service already enabled"
+elif systemctl enable alsa-restore.service 2>/dev/null; then
+    echo "  ✓ Enabled alsa-restore.service"
+elif sudo systemctl enable alsa-restore.service 2>/dev/null; then
+    echo "  ✓ Enabled alsa-restore.service (via sudo)"
+else
+    echo "  ⚠️  Could not enable alsa-restore.service (ALSA settings may not persist)"
+fi
+
 # -----------------------------------------------------------------------------
 # Step 4: Find PulseAudio source
 # -----------------------------------------------------------------------------
@@ -159,7 +171,7 @@ fi
 echo "✅ Found source: $ARDUCAM_SOURCE"
 
 # -----------------------------------------------------------------------------
-# Step 5: Configure PulseAudio
+# Step 5: Configure PulseAudio (session and persistent)
 # -----------------------------------------------------------------------------
 echo ""
 echo "🔧 Configuring PulseAudio source: $ARDUCAM_SOURCE"
@@ -172,7 +184,7 @@ run_pactl() {
     fi
 }
 
-# Set as default source
+# Set as default source (current session)
 if run_pactl set-default-source "$ARDUCAM_SOURCE" 2>/dev/null; then
     echo "  ✓ Set as default source"
 else
@@ -194,6 +206,51 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Step 5b: Create persistent PulseAudio configuration
+# -----------------------------------------------------------------------------
+echo ""
+echo "💾 Creating persistent PulseAudio configuration..."
+
+PULSE_CONFIG_DIR="$ACTUAL_HOME/.config/pulse"
+
+# Create pulse config directory if needed
+if [ -n "$SUDO_USER" ]; then
+    sudo -u "$ACTUAL_USER" mkdir -p "$PULSE_CONFIG_DIR"
+else
+    mkdir -p "$PULSE_CONFIG_DIR"
+fi
+
+# Create/update default.pa to set default source on startup
+PULSE_DEFAULT_PA="$PULSE_CONFIG_DIR/default.pa"
+
+# Check if we already have our config
+if [ -f "$PULSE_DEFAULT_PA" ] && grep -q "# Arducam mic setup" "$PULSE_DEFAULT_PA" 2>/dev/null; then
+    # Update existing config
+    if [ -n "$SUDO_USER" ]; then
+        sudo -u "$ACTUAL_USER" sed -i "s|set-default-source .*|set-default-source $ARDUCAM_SOURCE|" "$PULSE_DEFAULT_PA"
+    else
+        sed -i "s|set-default-source .*|set-default-source $ARDUCAM_SOURCE|" "$PULSE_DEFAULT_PA"
+    fi
+    echo "  ✓ Updated existing PulseAudio config"
+else
+    # Create new config that includes system defaults and adds our settings
+    PA_CONFIG="# Include the default PulseAudio configuration
+.include /etc/pulse/default.pa
+
+# Arducam mic setup - auto-configured by setup_arducam.sh
+# This sets the default recording source to the Arducam microphone
+set-default-source $ARDUCAM_SOURCE
+"
+    if [ -n "$SUDO_USER" ]; then
+        echo "$PA_CONFIG" | sudo -u "$ACTUAL_USER" tee "$PULSE_DEFAULT_PA" > /dev/null
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$PULSE_DEFAULT_PA"
+    else
+        echo "$PA_CONFIG" > "$PULSE_DEFAULT_PA"
+    fi
+    echo "  ✓ Created persistent PulseAudio config at $PULSE_DEFAULT_PA"
+fi
+
+# -----------------------------------------------------------------------------
 # Step 6: Verify setup
 # -----------------------------------------------------------------------------
 echo ""
@@ -210,6 +267,10 @@ done
 echo ""
 echo "=================================================="
 echo "✅ Setup complete!"
+echo ""
+echo "Settings will persist after reboot:"
+echo "  - ALSA: saved to /var/lib/alsa/asound.state"
+echo "  - PulseAudio: $PULSE_CONFIG_DIR/default.pa"
 echo ""
 echo "To test the microphone, run:"
 echo "  python3 test_mic.py"
