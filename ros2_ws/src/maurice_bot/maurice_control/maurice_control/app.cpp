@@ -607,15 +607,12 @@ private:
             RCLCPP_INFO(this->get_logger(), "System update triggered via service (dev_mode=%s)",
                         request->dev_mode ? "true" : "false");
 
-            // Build the update command - run in separate tmux session so it survives
-            // when post_update.sh eventually kills the ros_nodes session
+            // Build the update command - innate-update handles its own tmux session with --background
             std::string maurice_root = get_maurice_root();
-            std::string innate_update = maurice_root + "/scripts/update/innate-update apply -y";
+            std::string update_cmd = maurice_root + "/scripts/update/innate-update apply -y --background";
             if (request->dev_mode) {
-                innate_update += " --dev";
+                update_cmd += " --dev";
             }
-            // Spawn in a detached tmux session named 'innate_update'
-            std::string update_cmd = "tmux new-session -d -s innate_update '" + innate_update + "'";
 
             int result = std::system(update_cmd.c_str());
 

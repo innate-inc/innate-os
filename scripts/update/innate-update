@@ -967,12 +967,35 @@ Use --dev flag to update via git to the latest commit.
                         help='Use development mode (git-based update to latest commit)')
     parser.add_argument('--yes', '-y', action='store_true',
                         help='Skip confirmation prompts (auto-confirm updates)')
+    parser.add_argument('--background', '-b', action='store_true',
+                        help='Run in background tmux session (for apply command)')
+    parser.add_argument('--in-tmux', action='store_true',
+                        help=argparse.SUPPRESS)  # Internal flag, set when already in tmux
 
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    # Handle --background: re-exec in a detached tmux session
+    if args.background and args.command == 'apply' and not args.in_tmux:
+        # Build command to run in tmux
+        cmd_parts = [sys.executable, sys.argv[0], 'apply', '--in-tmux']
+        if args.dev:
+            cmd_parts.append('--dev')
+        if args.yes:
+            cmd_parts.append('--yes')
+        
+        tmux_cmd = ['tmux', 'new-session', '-d', '-s', 'innate_update'] + cmd_parts
+        result = subprocess.run(tmux_cmd)
+        if result.returncode == 0:
+            print(f"Update started in background (tmux session 'innate_update')")
+            print(f"  View progress: tmux attach -t innate_update")
+            sys.exit(0)
+        else:
+            print("Failed to start background update session", file=sys.stderr)
+            sys.exit(1)
 
     config = Config()
     config.load_github_token()
