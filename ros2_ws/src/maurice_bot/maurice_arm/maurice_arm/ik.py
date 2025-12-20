@@ -29,6 +29,7 @@ class KDLIKNode(Node):
         if not os.path.exists(urdf_path):
             self.get_logger().fatal(f"URDF file not found: {urdf_path}")
             raise FileNotFoundError(urdf_path)
+            
         # parse model
         robot_model = URDF.from_xml_file(urdf_path)
 
