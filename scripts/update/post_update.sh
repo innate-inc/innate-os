@@ -108,9 +108,10 @@ check_hardware_revision() {
 
 check_hardware_revision
 
-# Configure git for data integrity on unexpected shutdowns
+# Configure git for data integrity on unexpected shutdowns (e.g., power loss).
+# core.fsync ensures git flushes writes to disk, preventing repository corruption.
+# See: https://git-scm.com/docs/git-config#Documentation/git-config.txt-corefsync
 log "Configuring git fsync settings..."
-ACTUAL_USER=${SUDO_USER:-$USER}
 sudo -u "$ACTUAL_USER" git config --global core.fsync added,reference
 sudo -u "$ACTUAL_USER" git config --global core.fsyncMethod fsync
 log "Git fsync settings configured"
