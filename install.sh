@@ -183,8 +183,10 @@ install_prerequisites() {
         curl \
         gnupg \
         lsb-release \
-        git \
         ca-certificates
+
+    # Add git-core PPA for latest git version
+    sudo add-apt-repository -y ppa:git-core/ppa
 
     # Add universe repository (for gstreamer, pygame, etc.)
     sudo add-apt-repository universe -y

@@ -239,6 +239,11 @@ else
     log "Checking apt dependencies..."
     APT_DEPS_FILE="$REPO_DIR/ros2_ws/apt-dependencies.txt"
     if [ -f "$APT_DEPS_FILE" ]; then
+        # Add git-core PPA for latest git version (if not already added)
+        if ! grep -q "git-core/ppa" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+            log "  Adding git-core PPA..."
+            add-apt-repository -y ppa:git-core/ppa
+        fi
         log "  Installing apt dependencies..."
         apt-get update
         grep -v '^#' "$APT_DEPS_FILE" | grep -v '^$' | xargs apt-get install -y
