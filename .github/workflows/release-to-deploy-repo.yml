@@ -42,16 +42,26 @@ jobs:
               StrictHostKeyChecking no
           EOF
           
+          TAG="${{ steps.tag.outputs.tag }}"
+          
+          # Remove workflow files (deploy keys can't push workflows)
+          rm -rf .github/workflows
+          
+          # Commit the removal
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -m "Release $TAG" --allow-empty
+          
           # Add release repo as remote
           git remote add release git@github.com:${{ env.RELEASE_REPO }}.git
-          
-          TAG="${{ steps.tag.outputs.tag }}"
           
           # Push main branch
           echo "Pushing main branch to release repo..."
           git push release HEAD:main --force
           
-          # Push the tag
+          # Tag this commit and push
+          git tag -f "$TAG"
           echo "Pushing tag $TAG to release repo..."
           git push release "$TAG" --force
           
