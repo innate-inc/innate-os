@@ -29,7 +29,7 @@ class ProxyCartesiaClient:
             """Initialize TTS API with reference to parent ProxyClient."""
             self._parent = parent
         
-        async def bytes(
+        def bytes(
             self,
             model_id: str,
             transcript: str,
@@ -56,7 +56,7 @@ class ProxyCartesiaClient:
             }
             
             # Make request through parent proxy
-            response = await self._parent.request(
+            response = self._parent.request(
                 service_name="cartesia",
                 endpoint="/tts/bytes",
                 method="POST",
@@ -71,15 +71,15 @@ class ProxyCartesiaClient:
         """Get TTS API."""
         return self.TTS(self._parent)
     
-    async def close(self):
+    def close(self):
         """Close the client."""
-        await self._parent.close()
+        self._parent.close()
     
-    async def __aenter__(self):
-        """Async context manager entry."""
+    def __enter__(self):
+        """Context manager entry."""
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        await self.close()
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
 

@@ -4,7 +4,6 @@ Text-to-Speech handler using Cartesia API.
 Generates speech audio and plays it through the robot's audio system.
 """
 
-import asyncio
 import os
 import tempfile
 import threading
@@ -119,16 +118,8 @@ class TTSHandler:
                 "id": self.voice_id,
             }
             
-            # Generate speech using Cartesia via proxy (async)
-            # Create new event loop for this synchronous method
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            response = loop.run_until_complete(
-                self._cartesia_client.tts.bytes(
+            # Generate speech using Cartesia via proxy (sync)
+            response = self._cartesia_client.tts.bytes(
                 model_id="sonic-3",  # Latest Cartesia model
                 transcript=text,
                 voice=voice,
@@ -137,7 +128,6 @@ class TTSHandler:
                     "encoding": "pcm_s16le",
                     "sample_rate": 44100
                 },
-                )
             )
             
             # If response is an iterator of chunks, stream directly into aplay.

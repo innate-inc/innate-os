@@ -58,7 +58,7 @@ class ProxyClient:
         self._openai = None
         
         # HTTP client (shared, lazy-initialized)
-        self._http_client: Optional[httpx.AsyncClient] = None
+        self._http_client: Optional[httpx.Client] = None
     
     @property
     def proxy_url(self) -> str:
@@ -116,16 +116,16 @@ class ProxyClient:
             "X-Innate-Token": self._innate_service_key,
         }
     
-    async def get_http_client(self) -> httpx.AsyncClient:
-        """Get shared async HTTP client."""
+    def get_http_client(self) -> httpx.Client:
+        """Get shared sync HTTP client."""
         if self._http_client is None:
-            self._http_client = httpx.AsyncClient(
+            self._http_client = httpx.Client(
                 timeout=60.0,
                 headers=self._get_headers(),
         )
         return self._http_client
     
-    async def request(
+    def request(
         self,
         service_name: str,
         endpoint: str,
@@ -150,19 +150,19 @@ class ProxyClient:
         Returns:
             httpx.Response
         """
-        client = await self.get_http_client()
+        client = self.get_http_client()
         url = f"{self._proxy_url}/v1/services/{service_name}/{endpoint.lstrip('/')}"
         
         try:
             if json is not None:
-                response = await client.request(
+                response = client.request(
                     method=method,
                     url=url,
                     json=json,
                     params=params,
                 )
             else:
-                response = await client.request(
+                response = client.request(
                     method=method,
                     url=url,
                     content=data,
@@ -177,16 +177,16 @@ class ProxyClient:
             logger.error(f"Proxy request error: {e}")
             raise
     
-    async def close(self):
+    def close(self):
         """Close HTTP client and clean up resources."""
         if self._http_client is not None:
-            await self._http_client.aclose()
+            self._http_client.close()
             self._http_client = None
     
-    async def __aenter__(self):
-        """Async context manager entry."""
+    def __enter__(self):
+        """Context manager entry."""
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        await self.close()
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
