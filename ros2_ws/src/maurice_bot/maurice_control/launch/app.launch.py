@@ -15,7 +15,11 @@ def generate_launch_description():
         package='rosbridge_server',
         executable='rosbridge_websocket',
         name='rosbridge_websocket',
-        parameters=[{'address': '0.0.0.0'}],
+        parameters=[{
+            'address': '0.0.0.0',
+            'fragment_size': 10000000,  # 10MB - prevents fragmentation for large payloads
+            'max_message_size': 10000000,  # 10MB max message size
+        }],
         output='screen'
     )
 

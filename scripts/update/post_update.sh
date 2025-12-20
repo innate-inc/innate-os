@@ -11,6 +11,7 @@
 #   2. Helper scripts in /usr/local/bin
 #   3. Udev rules
 #   4. Bluetooth configuration
+#   4b. Arducam microphone setup (ALSA + PulseAudio)
 #   5. Apt/pip dependencies (skipped on first-install)
 #   6. Rebuild ROS2 workspace
 #   7. Zsh configuration
@@ -247,6 +248,23 @@ if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
 fi
 
 # -----------------------------------------------------------------------------
+# 4b. Configure Arducam Microphone (ALSA + PulseAudio)
+# -----------------------------------------------------------------------------
+log "Configuring Arducam microphone..."
+
+ARDUCAM_SCRIPT="$REPO_DIR/scripts/update/setup_arducam.sh"
+if [ -f "$ARDUCAM_SCRIPT" ]; then
+    chmod +x "$ARDUCAM_SCRIPT"
+    if "$ARDUCAM_SCRIPT" 2>&1 | tee -a "$LOG_FILE"; then
+        log "  Arducam setup completed successfully"
+    else
+        log "  WARNING: Arducam setup script failed (microphone may not work)"
+    fi
+else
+    log "  WARNING: setup_arducam.sh not found at $ARDUCAM_SCRIPT"
+fi
+
+# -----------------------------------------------------------------------------
 # 5. Install/update dependencies (skip on first install)
 # -----------------------------------------------------------------------------
 if [ "$FIRST_INSTALL" = true ]; then
@@ -407,6 +425,11 @@ if [ -f "/etc/systemd/system/ble-provisioner.service" ]; then
     SERVICES+=("ble-provisioner.service")
 fi
 
+# Add arducam-audio if the service file exists
+if [ -f "/etc/systemd/system/arducam-audio.service" ]; then
+    SERVICES+=("arducam-audio.service")
+fi
+
 # Add bluetooth if available
 if systemctl list-unit-files bluetooth.service &>/dev/null; then
     SERVICES+=("bluetooth.service")
@@ -442,3 +465,5 @@ log ""
 ensure_log_ownership
 
 exit 0
+
+
