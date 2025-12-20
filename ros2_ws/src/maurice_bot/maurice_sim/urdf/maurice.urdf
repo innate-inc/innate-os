@@ -7,6 +7,9 @@
   <material name="bright_orange">
     <color rgba="1.0 0.5 0.0 1.0"/>
   </material>
+  <material name="collision_material">
+    <color rgba="0.0 1.0 0.0 0.3"/>  <!-- Semi-transparent green -->
+  </material>
 
   <!-- base_root link (inertial tag removed) -->
   <link name="base_root">
@@ -73,11 +76,13 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 187.8mm x 182mm x 167.6mm, front face 35.2mm forward -->
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 -1.5708"/>
+      <origin xyz="-0.0587 0 0.0838" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/base.STL" scale="1 1 1"/>
+        <box size="0.1878 0.182 0.1676"/>
       </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 
@@ -88,7 +93,7 @@
     <origin xyz="0.086 -0.05285 0.04025" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.5708" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link1">
     <inertial>
@@ -118,7 +123,7 @@
     <origin xyz="0 0 0.04225" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.22" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link2">
     <inertial>
@@ -133,11 +138,13 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 20mm x 54mm x 138.5mm (length along link direction) -->
     <collision>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0.06925" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link2.STL" scale="1 1 1"/>
+        <box size="0.020 0.054 0.1385"/>
       </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 
@@ -148,7 +155,7 @@
     <origin xyz="0.02825 0 0.12125" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.7453" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link3">
     <inertial>
@@ -163,11 +170,13 @@
       </geometry>
       <material name="bright_orange"/>
     </visual>
+    <!-- Simplified collision: Cylinder length 118mm, diameter 46mm -->
     <collision>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0.059 0 0" rpy="0 1.5708 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link3.STL" scale="1 1 1"/>
+        <cylinder radius="0.023" length="0.118"/>
       </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 
@@ -178,7 +187,7 @@
     <origin xyz="0.1375 0 -0.0045" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.9199" upper="1.7453" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link4">
     <inertial>
@@ -208,7 +217,7 @@
     <origin xyz="0.019 0 0" rpy="0 0 0"/>
     <axis  xyz="1 0 0"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-1.5708" upper="1.5708" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link5">
     <inertial>
@@ -219,28 +228,28 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="bright_orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
 
-  <!-- joint6 → link6 -->
+  <!-- joint6 → link61 (main gripper finger) -->
   <joint name="joint6" type="revolute">
     <parent link="link5"/>
-    <child  link="link6"/>
-    <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
+    <child  link="link61"/>
+    <origin xyz="0.044 -0.0091 0" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
-    <limit lower="-3.1416" upper="3.1416" effort="0.0" velocity="0.0"/>
+    <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
   </joint>
-  <link name="link6">
+  <link name="link61">
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0.012"/>
@@ -249,15 +258,50 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link6.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link61.STL" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 48mm x 16mm x 38.9mm -->
     <collision>
+      <origin xyz="0.024 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.048 0.016 0.0389"/>
+      </geometry>
+      <material name="collision_material"/>
+    </collision>
+  </link>
+
+  <!-- joint6M → link62 (mirrored gripper finger, geared with joint6) -->
+  <joint name="joint6M" type="revolute">
+    <parent link="link5"/>
+    <child  link="link62"/>
+    <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
+    <axis  xyz="0 0 1"/>
+    <dynamics damping="5"/>
+    <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
+    <mimic joint="joint6" multiplier="-1" offset="0"/>
+  </joint>
+  <link name="link62">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.012"/>
+      <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
+    </inertial>
+    <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link6.STL" scale="1 1 1"/>
+        <mesh filename="package://maurice_sim/meshes/link62.STL" scale="0.001 0.001 0.001"/>
       </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <!-- Simplified collision: Box 48mm x 16mm x 38.9mm -->
+    <collision>
+      <origin xyz="0.024 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.048 0.016 0.0389"/>
+      </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 

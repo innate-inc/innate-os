@@ -10,7 +10,7 @@ import os
 import sys
 import importlib.util
 import inspect
-from typing import Dict, List, Type
+from typing import Dict, List, Type, Optional
 from pathlib import Path
 
 from brain_client.input_types import InputDevice
@@ -19,10 +19,21 @@ from brain_client.input_types import InputDevice
 class InputLoader:
     """
     Dynamically loads input device classes from specified directories.
+    
+    Sets logger and proxy on each loaded input device for accessing
+    external services (TTS, STT, etc.)
     """
     
-    def __init__(self, logger):
+    def __init__(self, logger, proxy=None):
+        """
+        Initialize the input loader.
+        
+        Args:
+            logger: Logger instance
+            proxy: ProxyClient instance to set on input devices
+        """
         self.logger = logger
+        self._proxy = proxy
         self._loaded_inputs: Dict[str, Type[InputDevice]] = {}
         
     def discover_inputs_in_directory(self, directory_path: str) -> Dict[str, Type[InputDevice]]:
@@ -154,7 +165,8 @@ class InputLoader:
             The input device's name
         """
         try:
-            temp_instance = input_class(logger=None)
+            # Create temp instance (just to get name)
+            temp_instance = input_class()
             return temp_instance.name
         except Exception as e:
             self.logger.debug(f"Could not get name from input device {input_class.__name__}: {e}")
@@ -208,11 +220,11 @@ class InputLoader:
     def create_input_instances(self, input_classes: Dict[str, Type[InputDevice]], 
                                logger) -> Dict[str, InputDevice]:
         """
-        Create instances of input device classes.
+        Create instances of input device classes and set logger/proxy.
         
         Args:
             input_classes: Dictionary of input device name to class mappings
-            logger: Logger instance to pass to input devices
+            logger: Logger instance to set on input devices
             
         Returns:
             Dictionary mapping input device names to their instances
@@ -221,9 +233,12 @@ class InputLoader:
         
         for input_name, input_class in input_classes.items():
             try:
-                input_instance = input_class(logger)
+                # Create instance and set logger/proxy
+                input_instance = input_class()
+                input_instance.set_logger(logger)
+                input_instance.set_proxy(self._proxy)
                 input_instances[input_name] = input_instance
-                self.logger.debug(f"Created input device instance: {input_name}")
+                self.logger.debug(f"Created input device instance: {input_name} (proxy: {'yes' if self._proxy else 'no'})")
             except Exception as e:
                 self.logger.error(f"Error creating input device instance {input_name}: {e}")
                 

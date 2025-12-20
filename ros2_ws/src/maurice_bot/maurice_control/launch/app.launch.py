@@ -6,7 +6,9 @@ def generate_launch_description():
     # Use environment variable if set, otherwise construct from HOME
     maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
     data_directory = os.path.join(maurice_root, 'data')
-    default_hardware_revision = 'R5'
+    
+    # Default hardware revision for new robots
+    default_hardware_revision = 'R6'
     
     # Create rosbridge websocket node
     rosbridge_node = Node(

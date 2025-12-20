@@ -4,7 +4,6 @@ Text-to-Speech handler using Cartesia API.
 Generates speech audio and plays it through the robot's audio system.
 """
 
-import asyncio
 import os
 import tempfile
 import threading
@@ -12,47 +11,63 @@ import time
 from typing import Optional, Dict, Any
 
 import rclpy
-from cartesia import Cartesia
 import subprocess
+
+from brain_client.client.proxy_client import ProxyClient
+from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
+from brain_client.logging_config import UniversalLogger
 
 
 class TTSHandler:
     """
     Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
+    
+    Requires a ProxyClient instance for accessing Cartesia services.
+    Voice ID is read from proxy.config["cartesia_voice_id"].
     """
+    
+    # Default voice ID (Katie - Friendly Fixer)
+    DEFAULT_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 
-    def __init__(self, api_key: str, logger, voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091", tts_status_pub=None):
+    def __init__(
+        self,
+        logger,
+        proxy: ProxyClient,
+        tts_status_pub=None,
+    ):
         """
         Initialize the TTS handler.
         
         Args:
-            api_key: Cartesia API key
-            logger: ROS logger instance
-            voice_id: Voice ID to use for speech synthesis
+            logger: ROS logger instance or any logger
+            proxy: ProxyClient instance (required)
             tts_status_pub: Optional ROS publisher for /tts/is_playing status
         """
-        self.logger = logger
-        self.api_key = api_key
-        self.voice_id = voice_id
-        self.client = None
-        self.is_playing = False
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
+        self._proxy: ProxyClient = proxy
+        # Get voice ID from proxy config, fall back to default
+        self.voice_id: str = proxy.config.get("cartesia_voice_id", self.DEFAULT_VOICE_ID)
+        self._cartesia_client: Optional[ProxyCartesiaClient] = None
+        self.is_playing: bool = False
         self.play_lock = threading.Lock()
         self.tts_status_pub = tts_status_pub
         
-        # Initialize client if API key is provided
-        if self.api_key and self.api_key.strip():
-            try:
-                self.client = Cartesia(api_key=self.api_key)
-                self.logger.info(f"✅ Cartesia TTS initialized with voice ID: {self.voice_id}")
-            except Exception as e:
-                self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
-                self.client = None
-        else:
-            self.logger.warn("⚠️ No Cartesia API key provided - TTS disabled")
-
+        # Initialize Cartesia client
+        self._init_client()
+    
+    def _init_client(self):
+        """Initialize the Cartesia client via proxy."""
+        try:
+            self._cartesia_client = self._proxy.cartesia
+            self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
+        except Exception as e:
+            self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
+            self.logger.error("TTS proxy not properly initialized in BrainClientNode")
+            self._cartesia_client = None
+    
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
-        return self.client is not None
+        return self._cartesia_client is not None
     
     def _publish_tts_status(self, status: str):
         """Publish TTS playback status to /tts/is_playing topic."""
@@ -103,8 +118,8 @@ class TTSHandler:
                 "id": self.voice_id,
             }
             
-            # Generate speech using Cartesia
-            response = self.client.tts.bytes(
+            # Generate speech using Cartesia via proxy (sync)
+            response = self._cartesia_client.tts.bytes(
                 model_id="sonic-3",  # Latest Cartesia model
                 transcript=text,
                 voice=voice,
@@ -233,19 +248,18 @@ class TTSHandler:
         """
         Get list of available voices from Cartesia.
         
+        Note: This method is not yet implemented in the proxy client.
+        Returns empty list for now.
+        
         Returns:
             List of available voice objects
         """
         if not self.is_available():
             return []
             
-        try:
-            voices = list(self.client.voices.list())
-            self.logger.debug(f"📋 Found {len(voices)} available voices")
-            return voices
-        except Exception as e:
-            self.logger.error(f"❌ Failed to fetch available voices: {e}")
-            return []
+        # TODO: Implement voice listing in proxy client if needed
+        self.logger.warn("⚠️ Voice listing not yet implemented in proxy client")
+        return []
 
     def set_voice(self, voice_id: str) -> bool:
         """
@@ -278,7 +292,7 @@ class TTSHandler:
 
     def close(self):
         """Clean up resources."""
-        if self.client:
+        if self._cartesia_client:
             self.logger.info("🔇 TTS handler closed")
             # Cartesia client doesn't need explicit cleanup in sync mode
-            self.client = None
+            self._cartesia_client = None

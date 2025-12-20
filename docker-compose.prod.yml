@@ -1,17 +1,155 @@
 version: "3.8"
 
+# Common configuration for all ROS services
+x-ros-service: &ros-service
+  image: ghcr.io/innate-inc/innate-os:${INNATE_VERSION:-latest}
+  restart: unless-stopped
+  network_mode: host
+  privileged: true
+  environment:
+    - INNATE_OS_ROOT=/root/innate-os
+    - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    - ROS_DOMAIN_ID=0
+    - ROS_DISCOVERY_SERVER=127.0.0.1:11811
+    - FASTRTPS_DEFAULT_PROFILES_FILE=/root/innate-os/dds/super_client_configuration.xml
+  env_file:
+    - .env
+  volumes:
+    - innate-logs:/root/innate-os/logs
+    - innate-maps:/root/innate-os/maps
+    - innate-recordings:/root/innate-os/recordings
+
 services:
-  innate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: innate-prod
-    environment:
-      - INNATE_OS_ROOT=/root/innate-os
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Discovery Server - Must start first, all other services depend on it
+  # ─────────────────────────────────────────────────────────────────────────────
+  discovery-server:
+    <<: *ros-service
+    container_name: innate-discovery
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        echo 'Starting FastDDS Discovery Server on port 11811...' &&
+        fastdds discovery -i 0 -p 11811
+      "
+    healthcheck:
+      test: ["CMD", "bash", "-c", "ss -uln | grep -q ':11811' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
-    # 2) Or just do a "do-nothing" command so the container doesn't exit
-    command: zsh -l
+  # ─────────────────────────────────────────────────────────────────────────────
+  # App + Bringup - Core robot control and hardware bringup
+  # ─────────────────────────────────────────────────────────────────────────────
+  app-bringup:
+    <<: *ros-service
+    container_name: innate-app-bringup
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    command: >
+      bash -c "
+        echo 'Starting App and Bringup nodes...' &&
+        ros2 launch maurice_control app.launch.py &
+        ros2 launch maurice_bringup maurice_bringup.launch.py &
+        wait
+      "
 
-    # 3) Keep container open for interactive usage
-    tty: true
-    stdin_open: true
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Arm + Recorder - Arm control and manipulation recording
+  # ─────────────────────────────────────────────────────────────────────────────
+  arm-recorder:
+    <<: *ros-service
+    container_name: innate-arm-recorder
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    command: >
+      bash -c "
+        echo 'Starting Arm and Recorder nodes...' &&
+        ros2 launch maurice_arm arm.launch.py &
+        ros2 launch manipulation recorder.launch.py &
+        wait
+      "
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Brain + Nav - Brain client, calibration, and navigation mode manager
+  # ─────────────────────────────────────────────────────────────────────────────
+  brain-nav:
+    <<: *ros-service
+    container_name: innate-brain-nav
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+      app-bringup:
+        condition: service_started
+    command: >
+      bash -c "
+        echo 'Starting Brain and Nav nodes...' &&
+        ros2 launch brain_client brain_client.launch.py &
+        sleep 5 &&
+        ros2 service call /calibrate std_srvs/srv/Trigger &&
+        sleep 5 &&
+        ros2 launch maurice_nav mode_manager.launch.py &
+        wait
+      "
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Behaviors + Inputs - Behavior server and input manager
+  # ─────────────────────────────────────────────────────────────────────────────
+  behaviors-inputs:
+    <<: *ros-service
+    container_name: innate-behaviors-inputs
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    command: >
+      bash -c "
+        echo 'Starting Behavior and Input nodes...' &&
+        ros2 launch manipulation behavior.launch.py &
+        ros2 launch brain_client input_manager.launch.py &
+        wait
+      "
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Stream - WebRTC streaming and UDP leader receiver
+  # ─────────────────────────────────────────────────────────────────────────────
+  stream:
+    <<: *ros-service
+    container_name: innate-stream
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    command: >
+      bash -c "
+        echo 'Starting Streaming nodes...' &&
+        ros2 launch innate_webrtc_streamer webrtc_streamer.launch.py &
+        ros2 launch maurice_control udp_leader_receiver.launch.py &
+        wait
+      "
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # IK + Logger - Inverse kinematics and telemetry logging
+  # ─────────────────────────────────────────────────────────────────────────────
+  ik-logger:
+    <<: *ros-service
+    container_name: innate-ik-logger
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    command: >
+      bash -c "
+        echo 'Starting IK and Logger nodes...' &&
+        ros2 run maurice_arm ik.py &
+        ros2 launch maurice_log logger.launch.py &
+        wait
+      "
+
+volumes:
+  innate-logs:
+    name: innate-logs
+  innate-maps:
+    name: innate-maps
+  innate-recordings:
+    name: innate-recordings

@@ -1,0 +1,153 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: selfhosted
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version info
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+            IS_TAG="true"
+          else
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            VERSION="${LATEST_TAG}-${SHORT_SHA}"
+            IS_TAG="false"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_tag=$IS_TAG" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+          echo "commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') || startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.prod
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ steps.version.outputs.date }}
+            GIT_COMMIT=${{ steps.version.outputs.commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create manifest.json
+        if: github.event_name != 'pull_request'
+        run: |
+          cat > manifest.json << EOF
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "commit": "${{ steps.version.outputs.commit }}",
+            "build_date": "${{ steps.version.outputs.date }}",
+            "is_release": ${{ steps.version.outputs.is_tag }},
+            "docker": {
+              "registry": "${{ env.REGISTRY }}",
+              "image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}",
+              "tag": "${{ steps.version.outputs.version }}"
+            }
+          }
+          EOF
+          cat manifest.json
+
+      - name: Upload manifest artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-${{ steps.version.outputs.version }}
+          path: manifest.json
+          retention-days: 90
+
+      - name: Create GitHub Release with Docker info
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: manifest.json
+          body: |
+            ## Innate OS Release ${{ github.ref_name }}
+
+            **Build Date:** ${{ steps.version.outputs.date }}
+            **Commit:** ${{ steps.version.outputs.commit }}
+            **ROS Distribution:** Humble
+
+            ### Docker Installation (Recommended)
+
+            **Pull the image:**
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ```
+
+            **Run with docker-compose:**
+            ```bash
+            # Set the version in .env
+            echo "INNATE_VERSION=${{ github.ref_name }}" >> .env
+
+            # Start all services
+            docker compose -f docker-compose.prod.yml up -d
+
+            # View logs
+            docker compose -f docker-compose.prod.yml logs -f
+            ```
+
+            **Update existing installation:**
+            ```bash
+            innate-update check
+            innate-update apply
+            ```
+
+            ### Available Tags
+
+            - `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}` - This release
+            - `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest` - Latest stable
+            - `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main` - Latest from main branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

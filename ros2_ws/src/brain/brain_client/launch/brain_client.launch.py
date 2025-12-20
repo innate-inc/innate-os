@@ -1,24 +1,14 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from brain_client.logging_config import get_logging_env_vars
+from maurice_bringup.env_loader import load_env_file, get_env
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-import os
-from pathlib import Path
 
 
 def generate_launch_description():
-    # Load environment variables from .env file if it exists
-    # Use environment variable if set, otherwise construct from HOME
-    maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
-    env_file_path = Path(maurice_root) / ".env"
-    if env_file_path.exists():
-        with open(env_file_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip()
+    # Load environment variables from .env file
+    load_env_file()
     
     # Get logging environment variables
     env_vars = get_logging_env_vars()
@@ -26,12 +16,12 @@ def generate_launch_description():
     # Declare new launch arguments
     websocket_uri_arg = DeclareLaunchArgument(
         "websocket_uri",
-        default_value="wss://innate-agent-websocket-service-533276562345.us-central1.run.app",
+        default_value=get_env("BRAIN_WEBSOCKET_URI", ""),
         description="Websocket URI",
     )
     token_arg = DeclareLaunchArgument(
         "token",
-        default_value="MY_HARDCODED_TOKEN",
+        default_value=get_env("BRAIN_AUTH_TOKEN", ""),
         description="Token for authentication",
     )
     image_topic_arg = DeclareLaunchArgument(
@@ -107,16 +97,28 @@ def generate_launch_description():
         default_value="/nav/current_mode",
         description="Topic for current navigation mode (mapfree, mapping, navigation)",
     )
-    cartesia_api_key_arg = DeclareLaunchArgument(
-        "cartesia_api_key",
-        default_value=os.getenv("CARTESIA_API_KEY", ""),
-        description="Cartesia API key for text-to-speech functionality",
-    )
+
+    # --- Proxy service configuration ---
+    # These are service configs (not credentials) - credentials come from env vars
     cartesia_voice_id_arg = DeclareLaunchArgument(
         "cartesia_voice_id",
-        # default_value="6de0e913-9534-47ad-96f0-e3f5fbfaf8a0",
         default_value="f786b574-daa5-4673-aa0c-cbe3e8534c02",
-        description="Cartesia voice ID for text-to-speech (Katie - Friendly Fixer)",
+        description="Cartesia voice ID for TTS (Katie - Friendly Fixer)",
+    )
+    openai_realtime_model_arg = DeclareLaunchArgument(
+        "openai_realtime_model",
+        default_value="gpt-4o-realtime-preview",
+        description="OpenAI Realtime model for STT",
+    )
+    openai_realtime_url_arg = DeclareLaunchArgument(
+        "openai_realtime_url",
+        default_value="wss://api.openai.com/v1/realtime",
+        description="OpenAI Realtime WebSocket URL",
+    )
+    openai_transcribe_model_arg = DeclareLaunchArgument(
+        "openai_transcribe_model",
+        default_value="gpt-4o-mini-transcribe",
+        description="OpenAI transcription model",
     )
 
     # Launch the BrainClientNode
@@ -145,8 +147,11 @@ def generate_launch_description():
                 "x_cam": LaunchConfiguration("x_cam"),
                 "height_cam": LaunchConfiguration("height_cam"),
                 "current_nav_mode_topic": LaunchConfiguration("current_nav_mode_topic"),
-                "cartesia_api_key": LaunchConfiguration("cartesia_api_key"),
+                # Proxy service config
                 "cartesia_voice_id": LaunchConfiguration("cartesia_voice_id"),
+                "openai_realtime_model": LaunchConfiguration("openai_realtime_model"),
+                "openai_realtime_url": LaunchConfiguration("openai_realtime_url"),
+                "openai_transcribe_model": LaunchConfiguration("openai_transcribe_model"),
             }
         ],
         output="screen",
@@ -174,8 +179,11 @@ def generate_launch_description():
             x_cam_arg,
             height_cam_arg,
             current_nav_mode_topic_arg,
-            cartesia_api_key_arg,
+            # Proxy service config args
             cartesia_voice_id_arg,
+            openai_realtime_model_arg,
+            openai_realtime_url_arg,
+            openai_transcribe_model_arg,
             brain_client_node,
             # Launch the WSClientNode (handles actual WebSocket connection)
             Node(
@@ -203,5 +211,6 @@ def generate_launch_description():
                     }
                 ],
             ),
+            # NOTE: InputManagerNode is launched separately via input_manager.launch.py
         ]
     )

@@ -19,6 +19,7 @@ find_package(rosbridge_server REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # ============================================================================
 # C++ Executable: app.cpp
@@ -27,6 +28,7 @@ add_executable(app.cpp maurice_control/app.cpp)
 
 target_link_libraries(app.cpp
   nlohmann_json::nlohmann_json
+  yaml-cpp
 )
 
 ament_target_dependencies(app.cpp
@@ -36,8 +38,22 @@ ament_target_dependencies(app.cpp
   maurice_msgs
 )
 
+# ============================================================================
+# C++ Executable: udp_leader_receiver.cpp
+# ============================================================================
+find_package(std_srvs REQUIRED)
+
+add_executable(udp_leader_receiver maurice_control/udp_leader_receiver.cpp)
+
+ament_target_dependencies(udp_leader_receiver
+  rclcpp
+  std_msgs
+  std_srvs
+)
+
 install(TARGETS
   app.cpp
+  udp_leader_receiver
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -52,7 +68,6 @@ install(PROGRAMS
   maurice_control/keyboard.py
   maurice_control/joystick.py
   maurice_control/leader.py
-  maurice_control/udp_leader_receiver.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -1,8 +1,10 @@
-arm:
+maurice_arm:
   ros__parameters:
-    # Remove device_name - will be read from servo_manager parameters
+    # Device detection automatic - looks for 7 servos at 1M baud
     baud_rate: 1000000
-    control_frequency: 100
+    control_frequency: 100.0
+    # joint_7 is the head servo. Its position_limits define the head angle range (radians).
+    # Head position is inverted: negative head angle = positive servo angle (direction_reversed: true)
     joints: |
       {
           "joint_1": {
@@ -88,6 +90,26 @@ arm:
                   "kp": 400,
                   "ki": 0,
                   "kd": 0
+              }
+          },
+          "joint_7": {
+              "servo_id": 7,
+              "position_limits": {
+                  "min": -0.4363,
+                  "max": 0.4363
+              },
+              "pwm_limits": 885,
+              "current_limit": 500,
+              "control_mode": 3,
+              "homing_offset": 341,
+              "pid_gains": {
+                  "kp": 400,
+                  "ki": 1011,
+                  "kd": 0
+              },
+              "head_config": {
+                  "ai_position_deg": -20.0,
+                  "direction_reversed": true
               }
           }
       }
