@@ -29,6 +29,12 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
+# Ensure log directory exists and log file is writable
+mkdir -p "$LOG_DIR"
+# Fix ownership if log file exists and is owned by root
+if [ -f "$LOG_DIR/update.log" ] && [ ! -w "$LOG_DIR/update.log" ]; then
+    sudo chown "$(whoami):$(whoami)" "$LOG_DIR/update.log" 2>/dev/null || true
+fi
 
 # ANSI color codes
 class Colors:
