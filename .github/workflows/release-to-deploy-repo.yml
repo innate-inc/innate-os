@@ -60,7 +60,8 @@ jobs:
           echo "Pushing main branch to release repo..."
           git push release HEAD:main --force
           
-          # Push the tag
+          # Create new tag on the cleaned commit and push
+          git tag -f "$TAG"
           echo "Pushing tag $TAG to release repo..."
           git push release "$TAG" --force
           
