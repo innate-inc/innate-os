@@ -630,45 +630,19 @@ private:
     }
 
     /**
-     * Service callback to trigger a system update using innate-update.
-     * Runs the update in the background and returns immediately.
+     * Service callback to trigger a system update.
+     * Currently disabled - users should SSH into the robot and run innate-update manually.
      */
     void trigger_update_callback(
         const std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Request> request,
         std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Response> response) {
 
-        try {
-            RCLCPP_INFO(this->get_logger(), "System update triggered via service (dev_mode=%s)",
-                        request->dev_mode ? "true" : "false");
-
-            // Build the update command - innate-update handles its own tmux session with --background
-            std::string maurice_root = get_maurice_root();
-            std::string update_cmd = maurice_root + "/scripts/update/innate-update apply -y --background";
-            if (request->dev_mode) {
-                update_cmd += " --dev";
-            }
-
-            int result = std::system(update_cmd.c_str());
-
-            if (result == 0) {
-                response->success = true;
-                response->message = "Update process started. Check " + maurice_root + "/logs/update.log for progress.";
-                RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
-
-                // Clear the update cache so next check will re-fetch
-                _cached_update_available = false;
-                _last_update_check_time = 0.0;
-            } else {
-                response->success = false;
-                response->message = "Failed to start update process";
-                RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
-            }
-
-        } catch (const std::exception& e) {
-            response->success = false;
-            response->message = std::string("Failed to trigger update: ") + e.what();
-            RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
-        }
+        (void)request;  // Unused for now
+        
+        RCLCPP_WARN(this->get_logger(), "Update trigger via service not implemented");
+        
+        response->success = false;
+        response->message = "Not implemented. SSH into the robot and run: innate-update apply";
     }
 
     // Member variables
