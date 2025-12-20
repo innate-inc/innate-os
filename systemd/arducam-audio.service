@@ -1,0 +1,25 @@
+[Unit]
+Description=Arducam Microphone Audio Setup
+Documentation=https://github.com/innate-inc/innate-os
+# Run after sound hardware is available
+After=sound.target alsa-restore.service
+# Also after PulseAudio if it's running as a system service
+After=pulseaudio.service
+# Wait for user session (needed for pactl commands)
+After=graphical.target
+# Don't fail if these don't exist
+Wants=sound.target
+
+[Service]
+Type=oneshot
+# Small delay to ensure audio hardware is fully initialized
+ExecStartPre=/bin/sleep 3
+ExecStart=/home/jetson1/innate-os/scripts/update/setup_arducam.sh
+RemainAfterExit=yes
+# Run as the actual user for PulseAudio access  
+# NOTE: User and paths are updated by post_update.sh during install
+User=jetson1
+
+[Install]
+WantedBy=multi-user.target
+
