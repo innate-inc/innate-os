@@ -425,6 +425,11 @@ if [ -f "/etc/systemd/system/ble-provisioner.service" ]; then
     SERVICES+=("ble-provisioner.service")
 fi
 
+# Add arducam-audio if the service file exists
+if [ -f "/etc/systemd/system/arducam-audio.service" ]; then
+    SERVICES+=("arducam-audio.service")
+fi
+
 # Add bluetooth if available
 if systemctl list-unit-files bluetooth.service &>/dev/null; then
     SERVICES+=("bluetooth.service")
