@@ -11,10 +11,8 @@ from std_msgs.msg import Float64MultiArray
 from urdf_parser_py.urdf import URDF
 from maurice_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
 import PyKDL as kdl
-from PyKDL import SolverI
 from ament_index_python.packages import get_package_share_directory
-import time # Import the time module
-import copy # Import the copy module
+import time
 
 class KDLIKNode(Node):
     def __init__(self):
