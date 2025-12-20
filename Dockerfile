@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y \
     python3-colcon-common-extensions
 
 RUN apt-get update && apt-get install -y \
-    ros-humble-fastrtps \
+    ros-humble-rmw-zenoh-cpp \
     ros-humble-rosbridge-suite \
     ros-humble-launch-xml \
     ros-humble-cv-bridge \
