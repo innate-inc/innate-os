@@ -1,0 +1,30 @@
+# Python dependencies for innate-os ROS2 workspace
+# Install with: pip3 install -r pip-requirements.txt
+# See DEPENDENCIES.md for full analysis of where each package is used
+
+# Core
+numpy
+opencv-python
+
+# Networking/API
+pydantic
+websockets
+
+# Data/ML
+h5py
+torch
+torchvision
+
+# ROS/Robot utilities
+urdf-parser-py
+dynamixel-sdk
+pyserial
+trimesh
+
+# Text-to-Speech
+cartesia
+
+# Input handling
+pygame
+pynput
+

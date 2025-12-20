@@ -92,10 +92,78 @@ ros2 launch brain_client brain_client.launch.py
 
 ## Quick start (Physical Robot)
 
-Simply SSH into the robot. 
+Simply SSH into the robot.
 
 - If it's the first time and you're installing it, clone the repository and execute the post_update.sh script to complete the setup.
 
 - Execute the launch_ros_in_tmux.sh script to start the ROS nodes.
 
 Connect via the app like explained in the [documentation](https://docs.innate.bot).
+
+## Building from Source
+
+### Dependencies
+
+All dependencies are managed through config files in `ros2_ws/`:
+
+| File | Description | Usage |
+|------|-------------|-------|
+| `apt-dependencies.txt` | System & ROS2 apt packages | `xargs sudo apt-get install -y < apt-dependencies.txt` |
+| `pip-requirements.txt` | Python packages | `pip3 install -r pip-requirements.txt` |
+| `src/dependencies.repos` | External ROS2 repositories | `vcs import src < src/dependencies.repos` |
+
+### Build with Docker (Recommended)
+
+The easiest way to build is using Docker, which works on any platform:
+
+```bash
+# Build the Docker image (includes full ROS2 workspace build)
+docker build -t innate-os -f Dockerfile.build .
+
+# Run interactively
+docker run -it innate-os bash
+```
+
+### Build Locally (Ubuntu 22.04 + ROS2 Humble)
+
+```bash
+# Install apt dependencies
+cd ros2_ws
+xargs sudo apt-get install -y < apt-dependencies.txt
+
+# Install Python dependencies
+pip3 install -r pip-requirements.txt
+
+# Import external ROS2 dependencies
+cd src
+vcs import < dependencies.repos
+cd ..
+
+# Install any remaining ROS dependencies via rosdep
+rosdep install --from-paths src --ignore-src -r -y
+
+# Build
+source /opt/ros/humble/setup.bash
+colcon build
+```
+
+### Adding Dependencies
+
+- **APT packages**: Add to `ros2_ws/apt-dependencies.txt`
+- **Python packages**: Add to `ros2_ws/pip-requirements.txt`
+- **External ROS2 repos**: Add to `ros2_ws/src/dependencies.repos`
+
+These files are used by both the local build and CI/CD pipeline.
+
+## Releases
+
+Releases are automatically built via GitHub Actions when a version tag is pushed:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Each release includes:
+- `innate-os-{version}.tar.gz` - Full release with pre-built artifacts
+- `innate-os-{version}-source.tar.gz` - Source code only
