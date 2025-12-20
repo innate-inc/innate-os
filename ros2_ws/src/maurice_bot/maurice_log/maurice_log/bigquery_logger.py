@@ -54,23 +54,9 @@ class RobotTelemetryLogger:
             self.logger.error(f"Telemetry error: {e}")
         return False
 
-    def log_battery(self, voltage: float, percentage: float,
-                    status: int = 0, health: int = 0):
-        """Log battery state."""
-        self._post("/log/battery", {
-            "voltage": voltage,
-            "percentage": percentage,
-            "power_supply_status": status,
-            "power_supply_health": health,
-        })
-
-    def log_diagnostics(self, status: int, message: str, hardware_id: str = ""):
-        """Log diagnostics event."""
-        self._post("/log/diagnostics", {
-            "status": status,
-            "message": message,
-            "hardware_id": hardware_id,
-        })
+    def log_vitals(self, vitals: Dict[str, Any]):
+        """Log all vitals (battery, diagnostics, CPU, commit) in a single call."""
+        self._post("/log/vitals", vitals)
 
     def log_directive(self, directive: str):
         """Log directive change event."""

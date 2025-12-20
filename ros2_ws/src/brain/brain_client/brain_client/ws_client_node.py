@@ -98,6 +98,11 @@ class WSClientNode(Node):
         )
         self.token = self.get_parameter("token").get_parameter_value().string_value
 
+        # Validate websocket URI early
+        self._ws_configured = self._validate_ws_uri(self.ws_uri)
+        if not self._ws_configured:
+            self.get_logger().error("❌ WebSocket URI not configured or invalid. Set 'websocket_uri' parameter (must start with ws:// or wss://).")
+
         # Publisher for incoming WS messages.
         self.ws_pub = self.create_publisher(String, "ws_messages", 10)
 
@@ -108,12 +113,21 @@ class WSClientNode(Node):
 
         self.exit_event = threading.Event()
 
-        # Set up the WSClient.
-        self.ws_client = WSClient(self.ws_uri, self.token, self)
+        # Set up the WSClient (only if configured).
+        if self._ws_configured:
+            self.ws_client = WSClient(self.ws_uri, self.token, self)
+        else:
+            self.ws_client = None
 
         # Start the websocket event loop in a separate thread.
         self.ws_thread = None
         self.get_logger().info("WSClientNode initialized.")
+
+    def _validate_ws_uri(self, uri: str) -> bool:
+        """Check if the websocket URI is valid."""
+        if not uri or not uri.strip():
+            return False
+        return uri.startswith("ws://") or uri.startswith("wss://")
 
     def ws_outgoing_callback(self, msg: String):
         """
@@ -134,6 +148,9 @@ class WSClientNode(Node):
                 internal_message = InternalMessage.model_validate(data)
                 self.get_logger().info(f"Internal message: {internal_message}")
                 if internal_message.type == InternalMessageType.READY_FOR_CONNECTION:
+                    if not self._ws_configured:
+                        self.get_logger().error("WebSocket not configured, ignoring connection request.")
+                        return
                     self.get_logger().debug("Received ready for connection message.")
                     if self.ws_thread is None or not self.ws_thread.is_alive():
                         self.ws_thread = threading.Thread(target=self.run_ws_loop)

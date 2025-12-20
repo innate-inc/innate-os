@@ -3,16 +3,26 @@
 <package format="3">
   <name>maurice_sim</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Simulation package for Maurice robot using MuJoCo</description>
   <maintainer email="vignesh.anand.1503@gmail.com">vignesh</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- Core ROS dependencies -->
   <depend>rclpy</depend>
   <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>moveit_py</exec_depend>      <!-- in maurice_arm -->
-  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Message dependencies -->
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <!-- Python package dependencies (installed via pip-requirements.txt) -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

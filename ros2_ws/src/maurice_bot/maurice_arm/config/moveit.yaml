@@ -1,0 +1,136 @@
+# ============================================================================
+# MoveIt Configuration for Maurice Arm - CHOMP
+# Optimized for Jetson platform with gradient-based planning
+# ============================================================================
+
+# Which planning plugin to use
+planning_plugin: chomp_interface/CHOMPPlanner
+
+# Request adapters - pre-process plans before planning
+request_adapters: >-
+  default_planner_request_adapters/AddTimeOptimalParameterization
+  default_planner_request_adapters/ResolveConstraintFrames
+  default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds
+  default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/FixStartStatePathConstraints
+
+# Response adapters - post-process plans after planning
+response_adapters: >-
+  default_planner_response_adapters/AddTimeOptimalParameterization
+  default_planner_response_adapters/ValidateSolution
+  default_planner_response_adapters/DisplayMotionPath
+
+# How much error to tolerate in start state (radians)
+start_state_max_bounds_error: 0.1
+
+# ============================================================================
+# Planner Configuration - CHOMP (Gradient-based Optimization)
+# ============================================================================
+planning_plugin: chomp_interface/CHOMPPlanner
+
+# CHOMP-specific parameters
+chomp:
+  planning_time_limit: 5.0                    # Max planning time (seconds)
+  max_iterations: 100                         # Max optimization iterations
+  max_iterations_after_collision_free: 5      # Iterations after collision-free
+  smoothness_cost_weight: 0.1                 # Smoothness vs obstacle avoidance
+  obstacle_cost_weight: 1.0                   # Obstacle avoidance weight
+  learning_rate: 0.01                         # Gradient descent step size
+  smoothness_cost_velocity: 0.0               # Velocity smoothness weight
+  smoothness_cost_acceleration: 1.0           # Acceleration smoothness weight
+  smoothness_cost_jerk: 0.0                   # Jerk smoothness weight
+  ridge_factor: 0.001                         # Numerical stability factor
+  use_pseudo_inverse: false                   # Use pseudo-inverse for updates
+  pseudo_inverse_ridge_factor: 1e-4           # Pseudo-inverse regularization
+  joint_update_limit: 0.1                     # Max joint change per iteration
+  min_clearance: 0.2                          # Minimum obstacle clearance (m)
+  collision_threshold: 0.07                   # Collision distance threshold (m)
+  use_stochastic_descent: true                # Use stochastic gradient descent
+  enable_failure_recovery: true               # Retry on failure
+  max_recovery_attempts: 5                    # Max retry attempts
+
+# ============================================================================
+# Planning Group: arm (5-DOF manipulator)
+# ============================================================================
+arm:
+  planner_configs:
+    - chomp
+  
+  default_planner_config: chomp
+  
+  # Collision checking resolution
+  longest_valid_segment_fraction: 0.01
+  
+  # Strictly enforce joint limits
+  enforce_constrained_state_space: true
+
+# ============================================================================
+# Joint Limits - 2 rad/s for all joints
+# ============================================================================
+joint_limits:
+  joint1:
+    has_velocity_limits: true
+    max_velocity: 2.0              # rad/s
+    has_acceleration_limits: true
+    max_acceleration: 3.0          # rad/s²
+    has_jerk_limits: false
+  
+  joint2:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+  
+  joint3:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+  
+  joint4:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+  
+  joint5:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 3.0
+    has_jerk_limits: false
+
+# ============================================================================
+# Kinematics Solver - KDL Plugin
+# ============================================================================
+robot_description_kinematics:
+  arm:
+    kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+    kinematics_solver_search_resolution: 0.005
+    kinematics_solver_timeout: 0.05
+    kinematics_solver_attempts: 3
+
+# ============================================================================
+# Trajectory Execution
+# ============================================================================
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.2
+  allowed_goal_duration_margin: 0.5
+  allowed_start_tolerance: 0.01
+
+# Move group capabilities
+move_group:
+  capabilities: >-
+    move_group/MoveGroupCartesianPathService
+    move_group/MoveGroupExecuteTrajectoryAction
+    move_group/MoveGroupKinematicsService
+    move_group/MoveGroupMoveAction
+    move_group/MoveGroupPlanService
+    move_group/MoveGroupQueryPlannersService
+    move_group/MoveGroupStateValidationService
+    move_group/MoveGroupGetPlanningSceneService
+    move_group/ApplyPlanningSceneService

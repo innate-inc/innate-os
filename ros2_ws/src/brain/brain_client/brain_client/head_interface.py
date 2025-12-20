@@ -9,6 +9,7 @@ This interface allows primitives to:
 
 from rclpy.node import Node
 from std_msgs.msg import Int32
+from brain_client.logging_config import UniversalLogger
 
 
 class HeadInterface:
@@ -19,7 +20,7 @@ class HeadInterface:
 
     def __init__(self, node: Node, logger, head_position_topic: str = "/mars/head/set_position"):
         self.node = node
-        self.logger = logger
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.head_position_topic = head_position_topic
 
         # Publisher for head position commands
@@ -48,7 +49,6 @@ class HeadInterface:
 
         self._head_position_pub.publish(msg)
 
-        if self.logger:
-            self.logger.debug(
-                f"HeadInterface: set head position to {angle_degrees} degrees"
-            )
+        self.logger.debug(
+            f"HeadInterface: set head position to {angle_degrees} degrees"
+        )

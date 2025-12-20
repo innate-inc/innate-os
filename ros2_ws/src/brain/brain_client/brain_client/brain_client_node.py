@@ -123,9 +123,34 @@ class BrainClientNode(Node):
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
 
-        # --- TTS parameters ---
-        self.declare_parameter("cartesia_api_key", "")
+        # --- Proxy service configuration ---
+        # Credentials (INNATE_PROXY_URL, INNATE_SERVICE_KEY) come from env vars
+        # These are service configs that can be overridden at launch
         self.declare_parameter("cartesia_voice_id", "f786b574-daa5-4673-aa0c-cbe3e8534c02")
+        self.declare_parameter("openai_realtime_model", "gpt-4o-realtime-preview")
+        self.declare_parameter("openai_realtime_url", "wss://api.openai.com/v1/realtime")
+        self.declare_parameter("openai_transcribe_model", "gpt-4o-mini-transcribe")
+        
+        # Build proxy config from params
+        proxy_config = {
+            "cartesia_voice_id": self.get_parameter("cartesia_voice_id").get_parameter_value().string_value,
+            "openai_realtime_model": self.get_parameter("openai_realtime_model").get_parameter_value().string_value,
+            "openai_realtime_url": self.get_parameter("openai_realtime_url").get_parameter_value().string_value,
+            "openai_transcribe_model": self.get_parameter("openai_transcribe_model").get_parameter_value().string_value,
+        }
+        
+        # Initialize unified proxy client (credentials from env, config from params)
+        from brain_client.client.proxy_client import ProxyClient
+        try:
+            self.proxy = ProxyClient(config=proxy_config)
+            if self.proxy.is_available():
+                self.get_logger().info(f"✅ Proxy client initialized")
+            else:
+                self.get_logger().warning("⚠️ Proxy not configured (check INNATE_PROXY_URL, INNATE_SERVICE_KEY)")
+                self.proxy = None
+        except Exception as e:
+            self.get_logger().warning(f"⚠️ Could not initialize proxy: {e}")
+            self.proxy = None
 
         self.get_logger().info(
             f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode"
@@ -255,6 +280,7 @@ class BrainClientNode(Node):
         self.image_buffer = deque(maxlen=self.image_buffer_max_size)
 
         self.get_logger().info(f"Starting BrainClientNode with ws_uri={self.ws_uri}")
+        self.get_logger().info("testing update")
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
         # Directive on startup persistence file
@@ -388,14 +414,20 @@ class BrainClientNode(Node):
             Trigger, "/brain/reload", self.handle_reload
         )
 
-        # Initialize TTS handler (after tts_status_pub is created)
-        cartesia_api_key = self.get_parameter("cartesia_api_key").get_parameter_value().string_value
-        cartesia_voice_id = self.get_parameter("cartesia_voice_id").get_parameter_value().string_value
-        self.tts_handler = TTSHandler(cartesia_api_key, self.get_logger(), cartesia_voice_id, self.tts_status_pub)
-        if self.tts_handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled with Cartesia (Voice ID: {cartesia_voice_id})")
+        # Initialize TTS handler with proxy (voice_id comes from proxy.config)
+        if self.proxy is not None:
+            self.tts_handler = TTSHandler(
+                logger=self.get_logger(),
+                proxy=self.proxy,
+                tts_status_pub=self.tts_status_pub,
+            )
+            if self.tts_handler.is_available():
+                self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})")
+            else:
+                self.get_logger().warning("⚠️ TTS handler created but Cartesia client unavailable")
         else:
-            self.get_logger().info("🔇 Text-to-speech disabled (no API key provided)")
+            self.tts_handler = None
+            self.get_logger().info("🔇 Text-to-speech disabled (proxy not available)")
 
         self.exit_event = threading.Event()
         self.ready_for_image = False
@@ -589,7 +621,7 @@ class BrainClientNode(Node):
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.tts_handler.speak_text_async(text)
+            self._speak(text)
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
@@ -964,7 +996,7 @@ class BrainClientNode(Node):
         
         # Generate speech for robot messages (but not thoughts or anticipation)
         if sender == "robot" and text and text.strip():
-            self.tts_handler.speak_text_async(text)
+            self._speak(text)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         execute_next_task_immediately = True
@@ -2145,6 +2177,11 @@ class BrainClientNode(Node):
         except Exception as e:
             self.get_logger().error(f"Error saving startup directive: {e}")
 
+    def _speak(self, text: str):
+        """Speak text if TTS is available."""
+        if self.tts_handler is not None:
+            self.tts_handler.speak_text_async(text)
+
     def destroy_node(self):
         self.exit_event.set()
         # Cancel the pose image timer if it exists
@@ -2154,7 +2191,7 @@ class BrainClientNode(Node):
         if self.agent_timer and not self.agent_timer.is_canceled():
             self.agent_timer.cancel()
         # Clean up TTS handler
-        if hasattr(self, 'tts_handler'):
+        if hasattr(self, 'tts_handler') and self.tts_handler is not None:
             self.tts_handler.close()
         # Clean up helper node for service calls
         if hasattr(self, '_service_call_node'):

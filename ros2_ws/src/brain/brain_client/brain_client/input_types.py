@@ -9,6 +9,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
 from enum import Enum
 
+from brain_client.client.proxy_client import ProxyClient
+from brain_client.logging_config import UniversalLogger
+
 
 class InputDeviceType(Enum):
     """Types of input devices"""
@@ -27,21 +30,24 @@ class InputDevice(ABC):
     They process incoming data and send results via the data callback.
     
     The InputManagerNode handles all ROS communication (topics, services, etc.)
-    and calls the input device's process_data() method when new data arrives.
+    and sets the logger and proxy attributes after instantiation.
+    
+    Usage in your input device:
+        # Access proxy services
+        self.proxy.openai.realtime.connect_sync(...)
+        self.proxy.cartesia.tts.sse(...)
+        
+        # Access config (models, voice IDs, etc.)
+        model = self.proxy.config.get("openai_realtime_model", "default")
     """
 
-    def __init__(self, logger=None):
-        """
-        Initialize the input device.
-        
-        Args:
-            logger: Optional logger instance (can be None)
-        """
-        self.logger = logger
+    def __init__(self):
+        """Initialize the input device with default attributes."""
+        self.logger = UniversalLogger(enabled=False)
+        self._proxy: Optional[ProxyClient] = None
         self._data_callback: Optional[Callable] = None
         self._active = False  # Start inactive
-        self._is_robot_talking = False  # Ducking state
-        self._config = {}
+        self._config: Dict[str, Any] = {}
 
     @property
     @abstractmethod
@@ -116,8 +122,7 @@ class InputDevice(ABC):
             callback: Function with signature (device_name, data, data_type) -> None
         """
         self._data_callback = callback
-        if self.logger:
-            self.logger.debug(f"Data callback set for input device '{self.name}'")
+        self.logger.debug(f"Data callback set for input device '{self.name}'")
 
     def send_data(self, data: Dict[str, Any], data_type: str = "custom"):
         """
@@ -130,7 +135,7 @@ class InputDevice(ABC):
         Args:
             data: Dictionary containing the processed data
             data_type: Type of data - one of:
-                      - "brain/chat_in": Text input from user (voice, keyboard, etc.)
+                      - "chat_in": Text input from user (voice, keyboard, etc.)
                       - "custom": Any other data type
         
         Example:
@@ -138,19 +143,15 @@ class InputDevice(ABC):
                 "text": "Hello robot",
                 "confidence": 0.95,
                 "source": "microphone"
-            }, data_type="brain/chat_in")
+            }, data_type="chat_in")
         """
         if self._data_callback:
             try:
                 self._data_callback(self.name, data, data_type)
             except Exception as e:
-                if self.logger:
-                    self.logger.error(f"Error sending data for input device '{self.name}': {e}")
-                else:
-                    print(f"ERROR: Error sending data for input device '{self.name}': {e}")
+                self.logger.error(f"Error sending data for input device '{self.name}': {e}")
         else:
-            if self.logger:
-                self.logger.warning(f"No data callback set for input device '{self.name}'")
+            self.logger.warning(f"No data callback set for input device '{self.name}'")
 
     def set_active(self, active: bool):
         """
@@ -163,9 +164,8 @@ class InputDevice(ABC):
             active: True to activate, False to deactivate
         """
         self._active = active
-        if self.logger:
-            status = "activated" if active else "deactivated"
-            self.logger.info(f"Input device '{self.name}' {status}")
+        status = "activated" if active else "deactivated"
+        self.logger.info(f"Input device '{self.name}' {status}")
 
     def is_active(self) -> bool:
         """
@@ -175,6 +175,34 @@ class InputDevice(ABC):
             True if active, False otherwise
         """
         return self._active
+
+    @property
+    def proxy(self) -> Optional[ProxyClient]:
+        """
+        Access to proxy services (Cartesia, OpenAI, etc.)
+        
+        Returns:
+            ProxyClient instance or None if not configured
+        """
+        return self._proxy
+    
+    def set_proxy(self, proxy: ProxyClient):
+        """
+        Set the proxy client (called by InputLoader).
+        
+        Args:
+            proxy: ProxyClient instance
+        """
+        self._proxy = proxy
+    
+    def set_logger(self, logger):
+        """
+        Set the logger instance (called by InputLoader).
+        
+        Args:
+            logger: Logger instance (ROS logger or any logger)
+        """
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
 
     def set_config(self, config: Dict[str, Any]):
         """
@@ -210,19 +238,3 @@ class InputDevice(ABC):
             Description string
         """
         return self.name
-
-    def set_tts_playing(self, is_playing: bool):
-        """
-        Called when TTS (text-to-speech) status changes.
-        
-        Sets the internal _is_robot_talking flag that devices can check
-        to implement "ducking" - suppressing input while robot speaks.
-        
-        Devices can check self._is_robot_talking in their logic.
-        
-        Args:
-            is_playing: True if robot is speaking, False otherwise
-        """
-        self._is_robot_talking = is_playing
-
-

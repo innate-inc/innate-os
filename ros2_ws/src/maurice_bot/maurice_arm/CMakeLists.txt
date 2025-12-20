@@ -11,13 +11,27 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(dynamixel_sdk REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(moveit_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
-# Add C++ executable
+# Maurice messages
+find_package(maurice_msgs REQUIRED)
+
+# Include directories
+include_directories(include)
+
+# Add C++ executables
 add_executable(camera_node maurice_arm/camera.cpp)
 
-# Link C++ dependencies
+# Link camera_node dependencies
 ament_target_dependencies(camera_node
   rclcpp
   sensor_msgs
@@ -28,18 +42,47 @@ target_link_libraries(camera_node
   ${OpenCV_LIBS}
 )
 
-# Install C++ targets
+# Add arm node (dynamixel + robot + arm with head)
+add_executable(arm
+  maurice_arm/dynamixel.cpp
+  maurice_arm/robot.cpp
+  maurice_arm/arm.cpp
+)
+
+ament_target_dependencies(arm
+  rclcpp
+  sensor_msgs
+  std_msgs
+  std_srvs
+  visualization_msgs
+  dynamixel_sdk
+  Eigen3
+  maurice_msgs
+  moveit_msgs
+  geometry_msgs
+  trajectory_msgs
+)
+
+target_include_directories(arm PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+# Install C++ executables
 install(TARGETS
   camera_node
+  arm
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install headers
+install(DIRECTORY include/
+  DESTINATION include
 )
 
 # Install Python files
 install(FILES
   maurice_arm/__init__.py
-  maurice_arm/dynamixel.py
-  maurice_arm/robot.py
-  maurice_arm/arm.py
   maurice_arm/arm_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -55,7 +98,6 @@ install(
 
 # Make Python files executable
 install(PROGRAMS
-  maurice_arm/arm.py
   maurice_arm/arm_utils.py
   maurice_arm/ik.py
   DESTINATION lib/${PROJECT_NAME}

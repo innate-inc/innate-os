@@ -11,4 +11,3 @@
     velocity_topic: "/cmd_vel"             # Topic for velocity data
     odom_topic: "/odom"                    # Topic for odometry data (used to verify robot is alive)
     image_size: [640, 480]
-    head_ai_position_topic: "/mars/head/set_ai_position"     # Topic to set head to AI position for recording

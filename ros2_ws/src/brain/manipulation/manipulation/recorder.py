@@ -8,7 +8,7 @@ from manipulation.DataUtils import EpisodeData, TaskManager
 
 # Import message types for sensor data
 from sensor_msgs.msg import Image, JointState, CompressedImage
-from std_msgs.msg import Float64MultiArray, Empty
+from std_msgs.msg import Float64MultiArray
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge  # For image conversion
@@ -37,7 +37,6 @@ class RecorderNode(Node):
         self.declare_parameter('velocity_topic', '/cmd_vel')
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('image_size', [640, 480])
-        self.declare_parameter('head_ai_position_topic', '/mars/head/set_ai_position')
         
         # Get parameter values
         data_directory = os.path.expanduser(self.get_parameter('data_directory').value)
@@ -48,7 +47,6 @@ class RecorderNode(Node):
         self.velocity_topic = self.get_parameter('velocity_topic').value
         self.odom_topic = self.get_parameter('odom_topic').value
         self.image_size = self.get_parameter('image_size').value
-        self.head_ai_position_topic = self.get_parameter('head_ai_position_topic').value
         # Initialize TaskManager and internal state
         self.task_manager = TaskManager(data_directory)
         self.current_episode = None  # Holds an EpisodeData instance when an episode is active
@@ -109,8 +107,8 @@ class RecorderNode(Node):
         self.get_logger().info(f"Subscribing to velocity topic: {self.velocity_topic}")
         self.get_logger().info(f"Subscribing to odom topic: {self.odom_topic}")
         
-        # Create publishers
-        self.head_ai_position_pub = self.create_publisher(Empty, self.head_ai_position_topic, 10)
+        # Create service clients
+        self.head_ai_position_client = self.create_client(Trigger, '/mars/head/set_ai_position')
         
         # Create service servers with updated names prefixed with "recorder/"
         self.new_physical_primitive_srv = self.create_service(ManipulationTask, 'brain/recorder/new_physical_primitive', self.handle_new_physical_primitive)
@@ -312,9 +310,12 @@ class RecorderNode(Node):
     def _set_head_ai_position(self):
         """Set the head to AI position for recording."""
         try:
-            empty_msg = Empty()
-            self.head_ai_position_pub.publish(empty_msg)
-            self.get_logger().info("AI position command sent to head for recording setup")
+            if not self.head_ai_position_client.service_is_ready():
+                self.get_logger().warn("Head AI position service not available")
+                return
+            
+            self.head_ai_position_client.call_async(Trigger.Request())
+            self.get_logger().info("Head AI position command sent")
             time.sleep(3.0)  # Wait for head to move to AI position
         except Exception as e:
             self.get_logger().error(f"Error setting AI position: {e}")

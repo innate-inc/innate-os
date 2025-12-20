@@ -5,6 +5,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from action_msgs.msg import GoalStatus
 from brain_messages.action import ExecuteBehavior
+from brain_client.logging_config import UniversalLogger
 
 
 class PrimitiveResult(Enum):
@@ -29,7 +30,7 @@ class RobotStateType(Enum):
 
 class Primitive(ABC):
     def __init__(self, logger):
-        self.logger = logger
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.node: Node | None = None
         self.manipulation = None  # Will be injected by primitive_execution_action_server
         self.mobility = None  # Will be injected by primitive_execution_action_server
@@ -102,13 +103,7 @@ class Primitive(ABC):
     def set_feedback_callback(self, callback):
         """Sets the feedback callback function."""
         self._feedback_callback = callback
-        if self.logger:  # Check if logger is available
-            self.logger.debug(f"Feedback callback set for primitive {self.name}.")
-        else:
-            # Consider a simple print or no log if logger isn't guaranteed
-            print(
-                f"DEBUG: Feedback callback set for primitive {self.name} (logger not available)."
-            )
+        self.logger.debug(f"Feedback callback set for primitive {self.name}.")
 
     def _send_feedback(self, message: str):
         """Sends feedback if the callback is set."""
@@ -116,20 +111,9 @@ class Primitive(ABC):
             try:
                 self._feedback_callback(message)
             except Exception as e:
-                if self.logger:
-                    self.logger.error(
-                        f"Error sending feedback for primitive {self.name}: {e}"
-                    )
-                else:
-                                print(
-                f"ERROR: Error sending feedback for primitive {self.name}: {e} (logger not available)."
-            )
-        # else:
-        # Optionally log if feedback is not sent because callback is not set
-        # if self.logger:
-        #     self.logger.debug(f"Feedback callback not set for {self.name}. Message not sent: {message}")
-        # else:
-        #     print(f"DEBUG: Feedback callback not set for {self.name}. Message not sent: {message} (logger not available).")
+                self.logger.error(
+                    f"Error sending feedback for primitive {self.name}: {e}"
+                )
 
 
 class PhysicalPrimitive(Primitive):

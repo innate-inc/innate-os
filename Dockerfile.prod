@@ -1,0 +1,114 @@
+#
+# Dockerfile.prod - Production image for Innate OS Robot
+# Built by CI and pushed to ghcr.io/innate-inc/innate-os
+#
+
+FROM ros:humble-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ROS_DISTRO=humble
+ENV INNATE_OS_ROOT=/root/innate-os
+
+# Install prerequisites
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    curl \
+    gnupg \
+    lsb-release \
+    locales \
+    iproute2 \
+    iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
+# Setup locale
+RUN locale-gen en_US en_US.UTF-8 && \
+    update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+
+# Add universe repository (for gstreamer, pygame, etc.)
+RUN add-apt-repository universe
+
+# Copy apt dependencies file first (for better layer caching)
+COPY ros2_ws/apt-dependencies.txt /tmp/apt-dependencies.txt
+
+# Install apt dependencies from file
+RUN apt-get update && \
+    grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | xargs apt-get install -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy and install Python dependencies
+COPY ros2_ws/pip-requirements.txt /tmp/pip-requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/pip-requirements.txt
+
+# Initialize rosdep
+RUN rosdep init || true && rosdep update
+
+# Set up workspace directory
+WORKDIR /root/innate-os
+
+# Copy workspace source
+COPY ros2_ws /root/innate-os/ros2_ws
+
+# Copy DDS configuration
+COPY dds /root/innate-os/dds
+
+# Copy additional directories needed at runtime
+COPY config /root/innate-os/config
+COPY primitives /root/innate-os/primitives
+COPY directives /root/innate-os/directives
+
+# Import external dependencies using vcs
+RUN cd /root/innate-os/ros2_ws/src && \
+    if [ -f dependencies.repos ]; then \
+        echo "Importing external dependencies via vcs..." && \
+        vcs import --input dependencies.repos; \
+    fi
+
+# Install ROS dependencies and build workspace
+WORKDIR /root/innate-os/ros2_ws
+RUN . /opt/ros/humble/setup.sh && \
+    rosdep install --from-paths src --ignore-src -r -y || true && \
+    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+# Generate static DDS configuration for host networking (127.0.0.1)
+RUN sed -e "s/DDS_SERVER_IP/127.0.0.1/g" \
+        -e "s/DDS_SERVER_PORT/11811/g" \
+        /root/innate-os/dds/super_client_template.xml \
+        > /root/innate-os/dds/super_client_configuration.xml
+
+# Create entrypoint script that sources ROS environment
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Source ROS2 base\n\
+source /opt/ros/humble/setup.bash\n\
+\n\
+# Source workspace\n\
+if [ -f /root/innate-os/ros2_ws/install/setup.bash ]; then\n\
+    source /root/innate-os/ros2_ws/install/setup.bash\n\
+fi\n\
+\n\
+# Set DDS environment variables\n\
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n\
+export ROS_DOMAIN_ID=0\n\
+export ROS_DISCOVERY_SERVER=127.0.0.1:11811\n\
+export FASTRTPS_DEFAULT_PROFILES_FILE=/root/innate-os/dds/super_client_configuration.xml\n\
+export INNATE_OS_ROOT=/root/innate-os\n\
+\n\
+exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+WORKDIR /root/innate-os
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]
+
+# Labels for image metadata
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG GIT_COMMIT
+LABEL org.opencontainers.image.title="Innate OS" \
+      org.opencontainers.image.description="ROS2-based robot operating system" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.source="https://github.com/innate-inc/innate-os"

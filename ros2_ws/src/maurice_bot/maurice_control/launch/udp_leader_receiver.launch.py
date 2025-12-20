@@ -35,10 +35,10 @@ def generate_launch_description():
         description='Rate (in seconds) at which to log statistics'
     )
     
-    # Create the node
+    # Create the node (C++ implementation for low-latency)
     udp_leader_receiver_node = Node(
         package='maurice_control',
-        executable='udp_leader_receiver.py',
+        executable='udp_leader_receiver',
         name='udp_leader_receiver',
         output='screen',
         parameters=[{
