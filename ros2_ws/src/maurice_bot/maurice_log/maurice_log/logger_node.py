@@ -29,6 +29,9 @@ class LoggerNode(Node):
         # Get git commit hash at startup
         self._git_commit = self._get_git_commit()
 
+        # Initialize CPU measurement baseline (first call always returns 0.0%)
+        psutil.cpu_percent()
+
         # Subscribe to robot info to get robot_id
         self.robot_info_sub = self.create_subscription(
             String,
