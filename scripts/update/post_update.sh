@@ -252,86 +252,16 @@ fi
 # -----------------------------------------------------------------------------
 log "Configuring Arducam microphone..."
 
-# Find Arducam ALSA card number
-ARDUCAM_CARD=$(arecord -l 2>/dev/null | grep -i -E 'arducam|usb audio' | head -1 | sed -n 's/card \([0-9]*\):.*/\1/p')
-
-if [ -n "$ARDUCAM_CARD" ]; then
-    log "  Found Arducam on ALSA card $ARDUCAM_CARD"
-    
-    # Configure ALSA mixer - unmute and set gain to 100%
-    # Using amixer (non-interactive version of alsamixer)
-    amixer -c "$ARDUCAM_CARD" sset Mic 100% cap unmute 2>/dev/null && \
-        log "  ALSA: Mic enabled and set to 100%" || \
-        log "  ALSA: Could not set Mic control (may have different name)"
-    
-    amixer -c "$ARDUCAM_CARD" sset Capture 100% cap unmute 2>/dev/null && \
-        log "  ALSA: Capture enabled and set to 100%" || true
-    
-    # Save ALSA settings permanently
-    alsactl store && log "  ALSA settings saved to /var/lib/alsa/asound.state"
-    
-    # Find PulseAudio source name for Arducam
-    ARDUCAM_SOURCE=$(sudo -u "$ACTUAL_USER" pactl list short sources 2>/dev/null | \
-        grep -i arducam | grep -v monitor | head -1 | cut -f2)
-    
-    if [ -n "$ARDUCAM_SOURCE" ]; then
-        log "  Found PulseAudio source: $ARDUCAM_SOURCE"
-        
-        # Create PulseAudio user config directory
-        PA_CONFIG_DIR="$ACTUAL_HOME/.config/pulse"
-        mkdir -p "$PA_CONFIG_DIR"
-        chown "$ACTUAL_USER:$ACTUAL_USER" "$PA_CONFIG_DIR"
-        
-        # Create default.pa to set Arducam as default source on startup
-        cat > "$PA_CONFIG_DIR/default.pa" << EOF
-# Include the default PulseAudio config
-.include /etc/pulse/default.pa
-
-# Arducam microphone - set as default source
-set-default-source $ARDUCAM_SOURCE
-EOF
-        chown "$ACTUAL_USER:$ACTUAL_USER" "$PA_CONFIG_DIR/default.pa"
-        log "  Created PulseAudio config: $PA_CONFIG_DIR/default.pa"
-        
-        # Create systemd user service to configure mic after login
-        USER_SYSTEMD_DIR="$ACTUAL_HOME/.config/systemd/user"
-        mkdir -p "$USER_SYSTEMD_DIR"
-        chown -R "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.config/systemd"
-        
-        cat > "$USER_SYSTEMD_DIR/arducam-mic.service" << EOF
-[Unit]
-Description=Configure Arducam Microphone
-After=pulseaudio.service
-Requires=pulseaudio.service
-
-[Service]
-Type=oneshot
-ExecStartPre=/bin/sleep 2
-ExecStart=/bin/bash -c 'pactl set-default-source $ARDUCAM_SOURCE 2>/dev/null; pactl set-source-mute @DEFAULT_SOURCE@ 0; pactl set-source-volume @DEFAULT_SOURCE@ 100%%'
-RemainAfterExit=yes
-
-[Install]
-WantedBy=default.target
-EOF
-        chown "$ACTUAL_USER:$ACTUAL_USER" "$USER_SYSTEMD_DIR/arducam-mic.service"
-        
-        # Enable the user service
-        sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $ACTUAL_USER)" \
-            systemctl --user daemon-reload 2>/dev/null || true
-        sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $ACTUAL_USER)" \
-            systemctl --user enable arducam-mic.service 2>/dev/null || true
-        log "  Created and enabled arducam-mic.service (user service)"
-        
-        # Configure now (if PulseAudio is running)
-        sudo -u "$ACTUAL_USER" pactl set-default-source "$ARDUCAM_SOURCE" 2>/dev/null || true
-        sudo -u "$ACTUAL_USER" pactl set-source-mute @DEFAULT_SOURCE@ 0 2>/dev/null || true
-        sudo -u "$ACTUAL_USER" pactl set-source-volume @DEFAULT_SOURCE@ 100% 2>/dev/null || true
-        log "  PulseAudio: Arducam set as default, unmuted, 100% volume"
+ARDUCAM_SCRIPT="$REPO_DIR/scripts/update/setup_arducam.sh"
+if [ -f "$ARDUCAM_SCRIPT" ]; then
+    chmod +x "$ARDUCAM_SCRIPT"
+    if "$ARDUCAM_SCRIPT" 2>&1 | tee -a "$LOG_FILE"; then
+        log "  Arducam setup completed successfully"
     else
-        log "  PulseAudio source not found (mic should still work via ALSA)"
+        log "  WARNING: Arducam setup script failed (microphone may not work)"
     fi
 else
-    log "  No Arducam microphone detected - skipping"
+    log "  WARNING: setup_arducam.sh not found at $ARDUCAM_SCRIPT"
 fi
 
 # -----------------------------------------------------------------------------
@@ -530,3 +460,5 @@ log ""
 ensure_log_ownership
 
 exit 0
+
+
