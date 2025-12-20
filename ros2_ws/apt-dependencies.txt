@@ -46,6 +46,7 @@ ros-humble-rclcpp
 ros-humble-rclpy
 ros-humble-rclcpp-components
 ros-humble-fastrtps
+ros-humble-rmw-zenoh-cpp
 ros-humble-launch-xml
 ros-humble-ament-cmake
 ros-humble-ament-cmake-python
