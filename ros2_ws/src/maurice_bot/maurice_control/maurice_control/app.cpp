@@ -517,6 +517,7 @@ private:
                     data_to_publish_dict["tag_body"] = tag_body;
                 }
             } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to get robot version: %s", e.what());
             }
 
             // Include Bluetooth device ID
