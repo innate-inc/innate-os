@@ -47,7 +47,7 @@ class Config:
         self.state_dir = Path(os.environ.get('INNATE_STATE_DIR', '/var/lib/innate-update'))
         self.log_dir = self.repo_dir / 'logs'
         self.update_cache = self.state_dir / 'update-cache'
-        self.update_lock = self.state_dir / 'update.lock'
+        self.update_lock = Path('/tmp/innate-update.lock')  # Use /tmp (always user-writable)
         self.branch = os.environ.get('INNATE_UPDATE_BRANCH', 'main')
         self.github_repo = os.environ.get('GITHUB_REPO', 'cristidragomir97/innate-os')
         self.daemon_interval = int(os.environ.get('INNATE_UPDATE_INTERVAL', '3600'))
@@ -596,6 +596,7 @@ class UpdateManager:
 
         if commits_behind == 0:
             self.logger.success("Already up to date (dev mode)")
+            self._remove_update_lock()
             return 0
 
         self.logger.info(f"Found {commits_behind} commit(s) to apply (dev mode)")
@@ -611,17 +612,20 @@ class UpdateManager:
 
         if not latest_tag:
             self.logger.error(f"No tags found. Use --dev to update to latest commit.")
+            self._remove_update_lock()
             return 1
 
         latest_tag_commit = self.git.resolve_ref(latest_tag)
 
         if current == latest_tag_commit:
             self.logger.success(f"Already up to date at {latest_tag}")
+            self._remove_update_lock()
             return 0
 
         if self.git.is_ancestor(latest_tag_commit, current):
             self.logger.warning(f"You are on a dev commit ahead of {latest_tag}")
             print("Use 'innate-update apply --dev' to update to the latest dev commit.")
+            self._remove_update_lock()
             return 0
 
         commits_behind = self.git.commits_between('HEAD', latest_tag)
@@ -668,12 +672,14 @@ class UpdateManager:
             if not self.github.download_asset(asset_url, tmp_path):
                 self.logger.error("Failed to download release artifact")
                 tmp_path.unlink(missing_ok=True)
+                self._remove_update_lock()
                 return 1
 
             # Verify it's a valid archive
             if not tarfile.is_tarfile(tmp_path):
                 self.logger.error("Downloaded file is not a valid archive")
                 tmp_path.unlink(missing_ok=True)
+                self._remove_update_lock()
                 return 1
 
             self.logger.info("Extracting artifacts...")
@@ -758,6 +764,7 @@ class UpdateManager:
             self.logger.success(f"Code updated: {old_commit[:7]} → {new_commit[:7]}")
         else:
             self.logger.error("Git checkout failed. Fix conflicts and try again.")
+            self._remove_update_lock()
             return 1
 
         return self._run_post_update()
