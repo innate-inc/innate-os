@@ -415,15 +415,19 @@ class BrainClientNode(Node):
         )
 
         # Initialize TTS handler with proxy (voice_id comes from proxy.config)
-        self.tts_handler = TTSHandler(
-            logger=self.get_logger(),
-            proxy=self.proxy,
-            tts_status_pub=self.tts_status_pub,
-        )
-        if self.tts_handler.is_available():
-            self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})")
+        if self.proxy is not None:
+            self.tts_handler = TTSHandler(
+                logger=self.get_logger(),
+                proxy=self.proxy,
+                tts_status_pub=self.tts_status_pub,
+            )
+            if self.tts_handler.is_available():
+                self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})")
+            else:
+                self.get_logger().warning("⚠️ TTS handler created but Cartesia client unavailable")
         else:
-            self.get_logger().info("🔇 Text-to-speech disabled (check INNATE_PROXY_URL and INNATE_SERVICE_KEY)")
+            self.tts_handler = None
+            self.get_logger().info("🔇 Text-to-speech disabled (proxy not available)")
 
         self.exit_event = threading.Event()
         self.ready_for_image = False
@@ -617,7 +621,7 @@ class BrainClientNode(Node):
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
-            self.tts_handler.speak_text_async(text)
+            self._speak(text)
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
@@ -992,7 +996,7 @@ class BrainClientNode(Node):
         
         # Generate speech for robot messages (but not thoughts or anticipation)
         if sender == "robot" and text and text.strip():
-            self.tts_handler.speak_text_async(text)
+            self._speak(text)
 
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         execute_next_task_immediately = True
@@ -2173,6 +2177,11 @@ class BrainClientNode(Node):
         except Exception as e:
             self.get_logger().error(f"Error saving startup directive: {e}")
 
+    def _speak(self, text: str):
+        """Speak text if TTS is available."""
+        if self.tts_handler is not None:
+            self.tts_handler.speak_text_async(text)
+
     def destroy_node(self):
         self.exit_event.set()
         # Cancel the pose image timer if it exists
@@ -2182,7 +2191,7 @@ class BrainClientNode(Node):
         if self.agent_timer and not self.agent_timer.is_canceled():
             self.agent_timer.cancel()
         # Clean up TTS handler
-        if hasattr(self, 'tts_handler'):
+        if hasattr(self, 'tts_handler') and self.tts_handler is not None:
             self.tts_handler.close()
         # Clean up helper node for service calls
         if hasattr(self, '_service_call_node'):
