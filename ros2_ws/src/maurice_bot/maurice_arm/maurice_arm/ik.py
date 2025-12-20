@@ -7,7 +7,6 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
 from urdf_parser_py.urdf import URDF
 from maurice_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
 import PyKDL as kdl
