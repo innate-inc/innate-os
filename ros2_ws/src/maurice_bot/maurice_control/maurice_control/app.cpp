@@ -626,7 +626,7 @@ private:
                 _last_update_check_time = 0.0;
             } else {
                 response->success = false;
-                response->message = "Failed to start updat/home/jetson1/innate-os/scripts/update/innate-update applye process";
+                response->message = "Failed to start update process";
                 RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
             }
 
