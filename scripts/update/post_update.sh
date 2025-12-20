@@ -12,10 +12,11 @@
 #   3. Udev rules
 #   4. Bluetooth configuration
 #   5. Apt/pip dependencies (skipped on first-install)
-#   6. Zsh configuration
-#   7. DDS setup
-#   8. Sudoers configuration
-#   9. Service restart
+#   6. Rebuild ROS2 workspace
+#   7. Zsh configuration
+#   8. DDS setup
+#   9. Sudoers configuration
+#   10. Service restart
 
 set -e  # Exit on error
 
@@ -255,7 +256,26 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 6. Setup Zsh configuration
+# 6. Rebuild ROS2 workspace if needed
+# -----------------------------------------------------------------------------
+log "Checking ROS2 workspace..."
+if [ -d "$REPO_DIR/ros2_ws/src" ]; then
+    log "Rebuilding ROS2 workspace..."
+    cd "$REPO_DIR/ros2_ws"
+
+    # Run as the actual user, not root
+    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
+
+    if [ $? -eq 0 ]; then
+        log "ROS2 workspace rebuilt successfully"
+    else
+        log "ERROR: Failed to rebuild ROS2 workspace"
+        exit 1
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+# 7. Setup Zsh configuration
 # -----------------------------------------------------------------------------
 log "Setting up Zsh configuration..."
 
@@ -313,7 +333,7 @@ if [ "$(getent passwd $ACTUAL_USER | cut -d: -f7)" != "/bin/zsh" ] && [ -x /bin/
 fi
 
 # -----------------------------------------------------------------------------
-# 7. Setup DDS configuration
+# 8. Setup DDS configuration
 # -----------------------------------------------------------------------------
 log "Setting up DDS configuration..."
 if [ -d "$REPO_DIR/dds" ]; then
@@ -327,7 +347,7 @@ if [ -d "$REPO_DIR/dds" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 8. Configure sudoers for passwordless restart script
+# 9. Configure sudoers for passwordless restart script
 # -----------------------------------------------------------------------------
 log "Configuring sudoers..."
 
@@ -347,7 +367,7 @@ chmod 440 "$SUDOERS_FILE"
 log "  Sudoers configured for $ACTUAL_USER"
 
 # -----------------------------------------------------------------------------
-# 9. Enable and restart services
+# 10. Enable and restart services
 # -----------------------------------------------------------------------------
 log "Enabling and starting services..."
 
@@ -374,7 +394,7 @@ for service in "${SERVICES[@]}"; do
 done
 
 # -----------------------------------------------------------------------------
-# 10. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
+# 11. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
 # -----------------------------------------------------------------------------
 # Note: If ros-app.service is configured correctly, it will launch the tmux session
 # If not using systemd, you can manually launch:
