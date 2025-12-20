@@ -132,9 +132,10 @@ std::string nmcli_get_active_wifi_ssid() {
  * Check if system updates are available using innate-update --quick-check.
  * Returns true if updates are available, false otherwise.
  */
-bool check_update_available() {
+bool check_update_available(const std::string& maurice_root) {
     // innate-update --quick-check returns 0 if up-to-date, 1 if updates available
-    int result = std::system("/usr/local/bin/innate-update --quick-check >/dev/null 2>&1");
+    std::string cmd = maurice_root + "/scripts/update/innate-update --quick-check >/dev/null 2>&1";
+    int result = std::system(cmd.c_str());
     return (WEXITSTATUS(result) != 0);
 }
 
@@ -272,7 +273,7 @@ private:
         if (_last_update_check_time == 0.0 ||
             (current_time - _last_update_check_time) > _update_check_interval) {
 
-            bool new_update_available = check_update_available();
+            bool new_update_available = check_update_available(get_maurice_root());
 
             // Only log if the status changed
             if (new_update_available != _cached_update_available) {
@@ -555,18 +556,19 @@ private:
                         request->dev_mode ? "true" : "false");
 
             // Build the update command
-            std::string update_cmd = "/usr/local/bin/innate-update apply";
+            std::string maurice_root = get_maurice_root();
+            std::string update_cmd = maurice_root + "/scripts/update/innate-update apply";
             if (request->dev_mode) {
                 update_cmd += " --dev";
             }
             // Run in background with auto-confirm (yes | ...)
-            update_cmd = "yes | " + update_cmd + " >> /home/jetson1/innate-os/logs/update.log 2>&1 &";
+            update_cmd = "yes | " + update_cmd + " >> " + maurice_root + "/logs/update.log 2>&1 &";
 
             int result = std::system(update_cmd.c_str());
 
             if (result == 0) {
                 response->success = true;
-                response->message = "Update process started. Check /home/jetson1/innate-os/logs/update.log for progress.";
+                response->message = "Update process started. Check " + maurice_root + "/logs/update.log for progress.";
                 RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
 
                 // Clear the update cache so next check will re-fetch
@@ -574,7 +576,7 @@ private:
                 _last_update_check_time = 0.0;
             } else {
                 response->success = false;
-                response->message = "Failed to start update process";
+                response->message = "Failed to start updat/home/jetson1/innate-os/scripts/update/innate-update applye process";
                 RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
             }
 
