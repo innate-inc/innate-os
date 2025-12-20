@@ -611,8 +611,8 @@ private:
             if (request->dev_mode) {
                 update_cmd += " --dev";
             }
-            // Run in background with auto-confirm (yes | ...)
-            update_cmd = "yes | " + update_cmd + " >> " + maurice_root + "/logs/update.log 2>&1 &";
+            // Run innate-update apply in the background (it calls post_update.sh internally)
+            update_cmd = update_cmd + " &";
 
             int result = std::system(update_cmd.c_str());
 
