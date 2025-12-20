@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import json
+import subprocess
+import psutil
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
@@ -23,6 +25,12 @@ class LoggerNode(Node):
 
         # Telemetry logger (initialized without robot_id, set when /robot/info received)
         self.bq_logger = RobotTelemetryLogger(url=telemetry_url, robot_id=None)
+
+        # Get git commit hash at startup
+        self._git_commit = self._get_git_commit()
+
+        # Initialize CPU measurement baseline (first call always returns 0.0%)
+        psutil.cpu_percent()
 
         # Subscribe to robot info to get robot_id
         self.robot_info_sub = self.create_subscription(
@@ -56,6 +64,17 @@ class LoggerNode(Node):
         # Timer for throttled logging at 0.2Hz
         self.log_timer = self.create_timer(self.LOG_INTERVAL, self._log_vitals)
 
+    def _get_git_commit(self) -> str:
+        """Get current git commit hash."""
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', '--short', 'HEAD'],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.stdout.strip() if result.returncode == 0 else 'unknown'
+        except Exception:
+            return 'unknown'
+
     def _on_robot_info(self, msg):
         """Handle robot info updates from /robot/info topic."""
         try:
@@ -76,33 +95,38 @@ class LoggerNode(Node):
 
     def _log_vitals(self):
         """Log cached vitals at throttled rate to console and BigQuery."""
+        cpu_usage = psutil.cpu_percent(interval=None)
+
+        # Build vitals payload
+        vitals = {
+            'commit': self._git_commit,
+            'cpu_usage': cpu_usage,
+        }
+
         if self._latest_battery is not None:
             bat = self._latest_battery
+            vitals['battery_voltage'] = bat.voltage
+            vitals['battery_percentage'] = bat.percentage
+            vitals['battery_status'] = bat.power_supply_status
+            vitals['battery_health'] = bat.power_supply_health
             self.get_logger().info(
                 f'battery: {bat.voltage:.2f}V ({bat.percentage:.1%})'
-            )
-            self.bq_logger.log_battery(
-                voltage=bat.voltage,
-                percentage=bat.percentage,
-                status=bat.power_supply_status,
-                health=bat.power_supply_health,
             )
 
         if self._latest_diagnostics is not None:
             diag = self._latest_diagnostics
-            # Log first status entry if available
             if diag.status:
                 entry = diag.status[0]
-                # entry.level is bytes, convert to int
                 level = entry.level[0] if isinstance(entry.level, bytes) else entry.level
+                vitals['diagnostics_status'] = level
+                vitals['diagnostics_message'] = entry.message
+                vitals['diagnostics_hardware_id'] = entry.hardware_id
                 self.get_logger().info(
                     f'diagnostics: [{level}] {entry.name}: {entry.message}'
                 )
-                self.bq_logger.log_diagnostics(
-                    status=level,
-                    message=entry.message,
-                    hardware_id=entry.hardware_id,
-                )
+
+        self.get_logger().info(f'cpu: {cpu_usage:.1f}%')
+        self.bq_logger.log_vitals(vitals)
 
     def directive_callback(self, msg):
         self.get_logger().info(f'Received directive: {msg.data}')
