@@ -119,10 +119,6 @@ ros-humble-joint-state-publisher-gui
 ros-humble-topic-tools
 ros-humble-xacro
 
-# ROS2 Humble packages - DepthAI (OAK cameras)
-ros-humble-depthai-ros
-ros-humble-depthai-descriptions
-
 # ROS2 Humble packages - Simulation (optional)
 # ros-humble-stage-ros
 
