@@ -56,6 +56,7 @@ class KDLIKNode(Node):
         for i in range(self.chain.getNrOfSegments()):
             segment = self.chain.getSegment(i)
             joint = segment.getJoint()
+            
             # Only include non-fixed joints
             if joint.getType() != kdl.Joint.Fixed:
                 self.joint_names.append(joint.getName())
