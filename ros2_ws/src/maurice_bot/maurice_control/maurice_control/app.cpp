@@ -23,6 +23,7 @@
 #include <memory>
 #include <regex>
 #include <sstream>
+#include <signal.h>
 
 using json = nlohmann::json;
 using namespace std::chrono_literals;
@@ -174,6 +175,36 @@ bool check_update_available(const std::string& maurice_root) {
     std::string cmd = maurice_root + "/scripts/update/innate-update --quick-check >/dev/null 2>&1";
     int result = std::system(cmd.c_str());
     return (WEXITSTATUS(result) != 0);
+}
+
+/**
+ * Check if a system update is currently running by checking the lock file.
+ * Returns true if update is in progress (lock exists and PID is alive).
+ */
+bool check_update_running() {
+    const std::string lock_path = "/tmp/innate-update.lock";
+    std::ifstream lock_file(lock_path);
+    if (!lock_file.is_open()) {
+        return false;
+    }
+    
+    std::string pid_str;
+    if (!std::getline(lock_file, pid_str)) {
+        return true;  // Malformed lock, assume running to be safe
+    }
+    
+    try {
+        pid_t pid = std::stoi(pid_str);
+        // Check if process is alive (kill with signal 0 just checks existence)
+        if (kill(pid, 0) == 0) {
+            return true;  // Process exists
+        }
+        // Process doesn't exist - stale lock
+        std::remove(lock_path.c_str());
+        return false;
+    } catch (...) {
+        return true;  // Malformed, assume running
+    }
 }
 
 class AppControl : public rclcpp::Node {
@@ -529,6 +560,9 @@ private:
 
             // Include update availability status
             data_to_publish_dict["update_available"] = get_cached_update_available();
+            
+            // Include update running status
+            data_to_publish_dict["update_running"] = check_update_running();
 
             if (!data_to_publish_dict.empty()) {
                 final_json_string_to_publish = data_to_publish_dict.dump();

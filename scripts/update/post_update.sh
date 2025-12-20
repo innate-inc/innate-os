@@ -173,27 +173,25 @@ fi
 # -----------------------------------------------------------------------------
 log "Installing helper scripts..."
 if [ -d "$REPO_DIR/scripts" ]; then
-    # Update the innate-update command itself
+    # Symlink innate-update (so git pull automatically updates the command)
     if [ -f "$REPO_DIR/scripts/update/innate-update" ]; then
-        log "  Updating innate-update"
-        cp "$REPO_DIR/scripts/update/innate-update" /usr/local/bin/innate-update
-        chmod +x /usr/local/bin/innate-update
+        log "  Symlinking innate-update"
+        rm -f /usr/local/bin/innate-update
+        ln -s "$REPO_DIR/scripts/update/innate-update" /usr/local/bin/innate-update
     fi
 
-    # Copy restart script if it exists
+    # Symlink restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
-        log "  Installing restart_robot_networking.sh"
+        log "  Symlinking restart_robot_networking.sh"
         rm -f /usr/local/bin/restart_robot_networking.sh
-        cp "$REPO_DIR/scripts/restart_robot_networking.sh" /usr/local/bin/
-        chmod +x /usr/local/bin/restart_robot_networking.sh
+        ln -s "$REPO_DIR/scripts/restart_robot_networking.sh" /usr/local/bin/restart_robot_networking.sh
     fi
 
-    # Copy tmux launcher if it exists
+    # Symlink tmux launcher if it exists
     if [ -f "$REPO_DIR/scripts/launch_ros_in_tmux.sh" ]; then
-        log "  Installing launch_ros_in_tmux.sh"
+        log "  Symlinking launch_ros_in_tmux.sh"
         rm -f /usr/local/bin/launch_ros_in_tmux.sh
-        cp "$REPO_DIR/scripts/launch_ros_in_tmux.sh" /usr/local/bin/
-        chmod +x /usr/local/bin/launch_ros_in_tmux.sh
+        ln -s "$REPO_DIR/scripts/launch_ros_in_tmux.sh" /usr/local/bin/launch_ros_in_tmux.sh
     fi
 
     # Copy zsh history fixer if it exists
