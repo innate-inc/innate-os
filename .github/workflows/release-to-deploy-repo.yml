@@ -1,0 +1,65 @@
+name: Release to Deploy Repo
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0, v2.1.3, etc.
+
+env:
+  RELEASE_REPO: innate-inc/innate-os-release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for proper sync
+
+      - name: Get tag info
+        id: tag
+        run: |
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "Releasing tag: ${GITHUB_REF#refs/tags/}"
+
+      - name: Push to release repo
+        env:
+          DEPLOY_KEY: ${{ secrets.RELEASE_REPO_DEPLOY_KEY }}
+        run: |
+          # Setup SSH for deploy key
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          cat >> ~/.ssh/config << EOF
+          Host github.com
+              HostName github.com
+              User git
+              IdentityFile ~/.ssh/deploy_key
+              IdentitiesOnly yes
+              StrictHostKeyChecking no
+          EOF
+          
+          # Add release repo as remote
+          git remote add release git@github.com:${{ env.RELEASE_REPO }}.git
+          
+          TAG="${{ steps.tag.outputs.tag }}"
+          
+          # Push main branch
+          echo "Pushing main branch to release repo..."
+          git push release HEAD:main --force
+          
+          # Push the tag
+          echo "Pushing tag $TAG to release repo..."
+          git push release "$TAG" --force
+          
+          echo "✓ Released $TAG to ${{ env.RELEASE_REPO }}"
+
+      - name: Create GitHub Release (optional)
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
