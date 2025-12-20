@@ -607,7 +607,7 @@ private:
 
             // Build the update command
             std::string maurice_root = get_maurice_root();
-            std::string update_cmd = maurice_root + "/scripts/update/innate-update apply";
+            std::string update_cmd = maurice_root + "/scripts/update/innate-update apply -y";
             if (request->dev_mode) {
                 update_cmd += " --dev";
             }
