@@ -108,6 +108,13 @@ check_hardware_revision() {
 
 check_hardware_revision
 
+# Configure git for data integrity on unexpected shutdowns
+log "Configuring git fsync settings..."
+ACTUAL_USER=${SUDO_USER:-$USER}
+sudo -u "$ACTUAL_USER" git config --global core.fsync added,reference
+sudo -u "$ACTUAL_USER" git config --global core.fsyncMethod fsync
+log "Git fsync settings configured"
+
 # Stop running services before updating
 log "Stopping services to begin update..."
 
