@@ -28,3 +28,6 @@ cartesia
 pygame
 pynput
 
+# Cupy
+cupy-cuda12x
+
