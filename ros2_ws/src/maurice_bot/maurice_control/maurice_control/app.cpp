@@ -112,12 +112,22 @@ std::string get_tag_body(const std::string& maurice_root) {
  * - Throws runtime_error if no tags exist (this should not happen)
  */
 std::string get_robot_version(const std::string& maurice_root) {
-    // Get current branch
+    // Get current branch (empty if detached HEAD, e.g. tag checkout)
     std::string branch_cmd = "cd \"" + maurice_root + "\" && git branch --show-current 2>/dev/null";
     std::string current_branch = exec_command(branch_cmd);
 
+    // Check if we're exactly on a tag (works for both branch and detached HEAD)
+    std::string exact_cmd = "cd \"" + maurice_root + "\" && git describe --exact-match --tags HEAD 2>/dev/null";
+    std::string exact_tag = exec_command(exact_cmd);
+
+    // If on a tag (detached HEAD from tag checkout), return that tag
+    if (!exact_tag.empty()) {
+        return exact_tag;
+    }
+
+    // If not on a branch and not on a tag, we're in an unknown state
     if (current_branch.empty()) {
-        throw std::runtime_error("Failed to get current git branch");
+        throw std::runtime_error("Detached HEAD but not on a tag - checkout a branch or tag");
     }
 
     // Get all tags sorted by version
@@ -135,15 +145,6 @@ std::string get_robot_version(const std::string& maurice_root) {
 
     if (latest_tag.empty()) {
         throw std::runtime_error("No git tags found - repository must have at least one tag");
-    }
-
-    // If on main branch and we have tags, check if we're exactly on this tag
-    if (current_branch == "main") {
-        std::string exact_cmd = "cd \"" + maurice_root + "\" && git describe --exact-match --tags HEAD 2>/dev/null";
-        std::string exact_tag = exec_command(exact_cmd);
-        if (!exact_tag.empty()) {
-            return latest_tag;
-        }
     }
 
     // Validate tag format (x.y.z) and return dev version
