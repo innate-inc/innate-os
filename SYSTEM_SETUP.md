@@ -1,5 +1,7 @@
 # System Setup for Dynamic Networking and ROS/DDS Management
 
+Note: Discovery between hosts is currently untested after the Zenoh migration
+
 This document outlines the setup required to manage the Fast DDS discovery server and ROS 2 application using `systemd`, allowing for automatic restarts when the robot's IP address changes (e.g., due to Wi-Fi network changes triggered via the BLE provisioner service).
 
 ## Todo
