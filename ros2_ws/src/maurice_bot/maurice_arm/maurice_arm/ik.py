@@ -38,9 +38,9 @@ class KDLIKNode(Node):
         if not ok or tree is None:
             self.get_logger().fatal('Failed to build KDL tree from URDF')
             raise RuntimeError('URDF→KDL parse error')
-            
+
         base_link = 'base_link'
-        tip_link  = 'ee_link'  # Changed from 'link5' to 'ee_link'
+        tip_link  = 'ee_link'
         self.chain = tree.getChain(base_link, tip_link)
 
         # 4) FK and IK solver setup
