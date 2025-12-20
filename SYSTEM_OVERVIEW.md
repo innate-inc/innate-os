@@ -16,7 +16,7 @@ Below is an overview of each major component, the communication protocols, and r
   - [Maurice Robot / Simulation](#maurice-robot--simulation)
   - [ROS 2 Nodes & Packages](#ros-2-nodes--packages)
   - [Cloud Agent](#cloud-agent)
-  - [DDS Discovery & Networking](#dds-discovery--networking)
+  - [Zenoh Discovery & Networking](#zenoh-networking)
   - [rosbridge](#rosbridge)
 - [Protocols and Message Types](#protocols-and-message-types)
   - [ROS 2 Topics & Services](#ros-2-topics--services)
@@ -66,9 +66,12 @@ A remote server or application that:
 - Requests images (`ready_for_image`) and receives them as base64-encoded JPEG.
 - Issues commands (`action_to_do`) that become `/cmd_vel` in ROS 2.
 
-### DDS Discovery & Networking
+### Zenoh Networking
 
-- We can run a **Fast DDS discovery server** (`fastdds discovery`), so that distributed ROS 2 nodes find each other on the network without heavy multicast.
+- We can run a **Zenoh Router** (`rmw_zenohd`), so that distributed ROS 2 nodes find each other on the network without heavy multicast.
+
+NOTE: Discovery between hosts is currently untested after the Zenoh migration
+
 - The environment variables `ROS_DISCOVERY_SERVER` or `FASTRTPS_DEFAULT_PROFILES_FILE` (with a generated XML) control how DDS is configured.
 
 ### rosbridge
@@ -101,6 +104,8 @@ Below is a summary of the main ROS 2 topics and services used. They are standard
 - etc.
 
 ### DDS Discovery Protocol
+
+Note: Discovery between hosts is currently untested after the Zenoh migration
 
 If using **Fast DDS SUPER_CLIENT** configuration:
 - The client node sets `ROS_DISCOVERY_SERVER=<IP>:<PORT>`.
