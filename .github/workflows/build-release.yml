@@ -1,0 +1,176 @@
+name: Build ROS2 Workspace and Release
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  ROS_DISTRO: humble
+
+jobs:
+  build:
+    runs-on: selfhosted
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version info
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          VERSION="${{ github.ref_name }}"
+          IS_TAG="true"
+        else
+          # For main branch, use latest tag + commit
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="${LATEST_TAG}-${SHORT_SHA}"
+          IS_TAG="false"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "is_tag=$IS_TAG" >> $GITHUB_OUTPUT
+        echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        echo "commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+    - name: Build ROS2 workspace in Docker
+      run: |
+        docker build -t ros2-builder -f Dockerfile.build .
+
+    - name: Extract built artifacts from Docker
+      run: |
+        docker create --name build-container ros2-builder
+        # Copy built artifacts
+        docker cp build-container:/root/innate-os/ros2_ws/install ./ros2_ws/install
+        docker cp build-container:/root/innate-os/ros2_ws/build ./ros2_ws/build
+        # Copy src with vcs-imported dependencies (rplidar_ros, etc.)
+        rm -rf ./ros2_ws/src
+        docker cp build-container:/root/innate-os/ros2_ws/src ./ros2_ws/src
+        docker rm build-container
+
+    - name: Create release archive
+      run: |
+        mkdir -p release-package/innate-os
+
+        # Copy all files
+        cp -r ros2_ws release-package/innate-os/
+        cp -r dds release-package/innate-os/
+        cp -r config release-package/innate-os/ || true
+        cp -r maps release-package/innate-os/ || true
+        cp -r primitives release-package/innate-os/ || true
+        cp -r directives release-package/innate-os/ || true
+        cp -r inputs release-package/innate-os/ || true
+        cp -r scripts release-package/innate-os/ || true
+        cp -r systemd release-package/innate-os/ || true
+        cp -r udev release-package/innate-os/ || true
+        cp -r zshrcs release-package/innate-os/ || true
+
+        cp README.md release-package/innate-os/ || true
+        cp SYSTEM_SETUP.md release-package/innate-os/ || true
+        cp SYSTEM_OVERVIEW.md release-package/innate-os/ || true
+        cp Dockerfile release-package/innate-os/ || true
+        cp Dockerfile.build release-package/innate-os/ || true
+        cp docker-compose*.yml release-package/innate-os/ || true
+        cp .env.template release-package/innate-os/ || true
+        cp os_config.json release-package/innate-os/ || true
+
+        # Version file
+        echo "Version: ${{ steps.version.outputs.version }}" > release-package/innate-os/VERSION
+        echo "Build Date: ${{ steps.version.outputs.date }}" >> release-package/innate-os/VERSION
+        echo "Commit: ${{ github.sha }}" >> release-package/innate-os/VERSION
+        echo "ROS Distro: humble" >> release-package/innate-os/VERSION
+
+        # Full archive with built artifacts
+        cd release-package
+        tar -czvf ../innate-os-${{ steps.version.outputs.version }}.tar.gz innate-os
+
+        # Source-only archive
+        cd innate-os/ros2_ws
+        rm -rf build install log
+        cd ../..
+        tar -czvf ../innate-os-${{ steps.version.outputs.version }}-source.tar.gz innate-os
+
+    - name: Cleanup Docker
+      if: always()
+      run: |
+        docker rmi ros2-builder || true
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: innate-os-${{ steps.version.outputs.version }}
+        path: innate-os-${{ steps.version.outputs.version }}.tar.gz
+        retention-days: 30
+
+    - name: Upload source artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: innate-os-${{ steps.version.outputs.version }}-source
+        path: innate-os-${{ steps.version.outputs.version }}-source.tar.gz
+        retention-days: 30
+
+    - name: Create GitHub Release
+      if: github.event_name != 'pull_request'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        body: |
+          ## Innate OS Release ${{ steps.version.outputs.version }}
+
+          **Build Date:** ${{ steps.version.outputs.date }}
+          **Commit:** ${{ steps.version.outputs.commit }}
+          **ROS Distribution:** Humble
+          **Release Type:** ${{ steps.version.outputs.is_tag == 'true' && 'Stable' || 'Development' }}
+
+          ### Installation
+
+          **Fresh install:**
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
+          ```
+
+          **Update existing installation:**
+          ```bash
+          innate-update check
+          innate-update apply
+          ```
+
+          ### Manual Download
+
+          - `innate-os-${{ steps.version.outputs.version }}.tar.gz` - Full release with pre-built ROS2 artifacts
+          - `innate-os-${{ steps.version.outputs.version }}-source.tar.gz` - Source code only (requires build)
+
+          ### Manual Installation
+
+          1. Extract the archive:
+             ```bash
+             tar -xzvf innate-os-${{ steps.version.outputs.version }}.tar.gz
+             cd innate-os
+             ```
+
+          2. If using the source archive, build the workspace:
+             ```bash
+             cd ros2_ws
+             source /opt/ros/humble/setup.bash
+             colcon build
+             ```
+
+          3. Source the workspace:
+             ```bash
+             source ros2_ws/install/setup.bash
+             ```
+        draft: false
+        prerelease: ${{ steps.version.outputs.is_tag != 'true' }}
+        files: |
+          innate-os-${{ steps.version.outputs.version }}.tar.gz
+          innate-os-${{ steps.version.outputs.version }}-source.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -3,16 +3,21 @@
 <package format="3">
   <name>brain_messages</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Message, service, and action definitions for the brain system</description>
   <maintainer email="vignesh.anand.1503@gmail.com">vignesh</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Message generation dependencies -->
   <build_depend>rosidl_default_generators</build_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
-  <build_depend>builtin_interfaces</build_depend>
-  <exec_depend>builtin_interfaces</exec_depend>
+
+  <!-- Message base types -->
+  <depend>builtin_interfaces</depend>
+  <depend>std_msgs</depend>
+  <depend>action_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -4,7 +4,6 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Consider running as a non-root user if possible, adjusting permissions as needed
 User=jetson1
 Group=jetson1
 
@@ -20,6 +19,9 @@ RestartSec=5
 # Standard output goes to journald
 StandardOutput=journal
 StandardError=journal
+
+# Give it time to bind to port
+TimeoutStartSec=10
 
 [Install]
 WantedBy=multi-user.target 

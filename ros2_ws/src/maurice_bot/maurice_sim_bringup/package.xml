@@ -6,8 +6,20 @@
   <maintainer email="you@example.com">Your Name</maintainer>
   <license>Apache-2.0</license>
 
-  <!-- We only need ament_cmake for building, and rosbridge_server for launching -->
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Core ROS dependencies -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Message dependencies -->
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+
+  <!-- TF dependencies -->
+  <exec_depend>tf2_ros</exec_depend>
 
   <!-- rosbridge_server provides rosbridge_websocket_launch.xml -->
   <exec_depend>rosbridge_server</exec_depend>
