@@ -11,6 +11,7 @@ from typing import Optional
 
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from brain_client.logging_config import UniversalLogger
 
 
 class MobilityInterface:
@@ -21,7 +22,7 @@ class MobilityInterface:
 
     def __init__(self, node: Node, logger, cmd_vel_topic: str = "/cmd_vel"):
         self.node = node
-        self.logger = logger
+        self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.cmd_vel_topic = cmd_vel_topic
 
         self._cmd_vel_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -47,8 +48,7 @@ class MobilityInterface:
             try:
                 stop_cmd = Twist()
                 self._cmd_vel_pub.publish(stop_cmd)
-                if self.logger:
-                    self.logger.debug("MobilityInterface: stop command published")
+                self.logger.debug("MobilityInterface: stop command published")
             finally:
                 if self._stop_timer is not None:
                     try:
@@ -78,10 +78,9 @@ class MobilityInterface:
 
         self._cmd_vel_pub.publish(twist)
 
-        if self.logger:
-            self.logger.debug(
-                f"MobilityInterface: cmd_vel published (linear_x={linear_x}, angular_z={angular_z}, duration={duration})"
-            )
+        self.logger.debug(
+            f"MobilityInterface: cmd_vel published (linear_x={linear_x}, angular_z={angular_z}, duration={duration})"
+        )
 
         if duration is not None and duration > 0.0:
             self._schedule_stop(duration)
