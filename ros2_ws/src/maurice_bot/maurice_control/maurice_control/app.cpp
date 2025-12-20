@@ -481,7 +481,8 @@ private:
             json default_robot_info = {
                 {"robot_name", "MARS"},
                 {"robot_id", nullptr},
-                {"hardware_revision", default_hw_rev}
+                {"hardware_revision", default_hw_rev},
+                {"color_variant", "black"}
             };
 
             json robot_info;
@@ -520,6 +521,7 @@ private:
                 data_to_publish_dict["robot_id"] = nullptr;
             }
             data_to_publish_dict["hardware_revision"] = robot_info.value("hardware_revision", default_hw_rev);
+            data_to_publish_dict["color_variant"] = robot_info.value("color_variant", "black");
 
             // Read minimum_app_version from os_config.json
             if (app_config_.contains("minimum_app_version")) {
