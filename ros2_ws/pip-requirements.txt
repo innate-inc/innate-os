@@ -3,7 +3,7 @@
 # See DEPENDENCIES.md for full analysis of where each package is used
 
 # Core
-numpy
+numpy<2
 opencv-python
 
 # Networking/API
