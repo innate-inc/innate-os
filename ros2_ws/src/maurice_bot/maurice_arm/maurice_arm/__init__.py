@@ -1,3 +1,1 @@
-from .dynamixel import Dynamixel, OperatingMode, ReadAttribute
-
-__all__ = ['Dynamixel', 'OperatingMode', 'ReadAttribute']
+# Python module for maurice_arm
