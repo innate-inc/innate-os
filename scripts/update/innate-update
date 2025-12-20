@@ -29,13 +29,6 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
-# Ensure log directory exists and log file is writable
-mkdir -p "$LOG_DIR"
-# Fix ownership if log file exists and is owned by root
-if [ -f "$LOG_DIR/update.log" ] && [ ! -w "$LOG_DIR/update.log" ]; then
-    sudo chown "$(whoami):$(whoami)" "$LOG_DIR/update.log" 2>/dev/null || true
-fi
-
 # ANSI color codes
 class Colors:
     RED = '\033[0;31m'
@@ -336,6 +329,11 @@ class GitRepo:
         result = self._run(args, check=False)
         return result.returncode == 0
 
+    def fetch_tags_only(self) -> bool:
+        """Fetch only tags from remote, without fetching branch commits."""
+        result = self._run(['fetch', 'origin', 'refs/tags/*:refs/tags/*', '--prune'], check=False)
+        return result.returncode == 0
+
     def current_commit(self) -> str:
         result = self._run(['rev-parse', 'HEAD'], check=False)
         return result.stdout.strip() if result.returncode == 0 else 'unknown'
@@ -399,10 +397,11 @@ class GitRepo:
 class UpdateManager:
     """Main update manager."""
 
-    def __init__(self, config: Config, logger: Logger, dev_mode: bool = False):
+    def __init__(self, config: Config, logger: Logger, dev_mode: bool = False, yes: bool = False):
         self.config = config
         self.logger = logger
         self.dev_mode = dev_mode
+        self.yes = yes
         self.git = GitRepo(config)
         self.github = GitHubAPI(config)
         self.services = ServiceManager(config, logger)
@@ -589,15 +588,16 @@ class UpdateManager:
         """Download and extract release artifacts."""
         print()
 
-        # Confirm
-        try:
-            response = input(f"Continue with update to {tag}? [y/N] ")
-        except EOFError:
-            response = 'n'
+        # Confirm (skip if -y flag provided)
+        if not self.yes:
+            try:
+                response = input(f"Continue with update to {tag}? [y/N] ")
+            except EOFError:
+                response = 'n'
 
-        if response.lower() != 'y':
-            self.logger.warning("Update cancelled")
-            return 0
+            if response.lower() != 'y':
+                self.logger.warning("Update cancelled")
+                return 0
 
         # Try to fetch release artifacts from GitHub
         self.logger.info(f"Fetching release {tag} from GitHub...")
@@ -684,7 +684,7 @@ class UpdateManager:
 
     def _do_git_update(self, target_ref: str, target_display: str, old_commit: str, skip_confirm: bool = False) -> int:
         """Perform git-based update (for dev mode or fallback)."""
-        if not skip_confirm:
+        if not skip_confirm and not self.yes:
             print()
             try:
                 response = input(f"Continue with update to {target_display}? [y/N] ")
@@ -855,6 +855,13 @@ class UpdateManager:
         """Run as background daemon."""
         self.logger.info(f"Starting innate-update daemon (interval: {self.config.daemon_interval}s)")
 
+        # Fetch latest tags before doing anything else
+        self.logger.info("Daemon: fetching latest tags...")
+        if self.git.fetch_tags_only():
+            self.logger.info("Daemon: tags fetched successfully")
+        else:
+            self.logger.warning("Daemon: failed to fetch tags")
+
         while True:
             self.logger.info("Daemon: checking for updates...")
 
@@ -904,6 +911,8 @@ Use --dev flag to update via git to the latest commit.
                         help='Command to run')
     parser.add_argument('--dev', '-d', action='store_true',
                         help='Use development mode (git-based update to latest commit)')
+    parser.add_argument('--yes', '-y', action='store_true',
+                        help='Skip confirmation prompts (auto-confirm updates)')
 
     args = parser.parse_args()
 
@@ -914,7 +923,7 @@ Use --dev flag to update via git to the latest commit.
     config = Config()
     config.load_github_token()
     logger = Logger(config.log_dir / 'update.log')
-    manager = UpdateManager(config, logger, dev_mode=args.dev)
+    manager = UpdateManager(config, logger, dev_mode=args.dev, yes=args.yes)
 
     commands = {
         'check': manager.check,
