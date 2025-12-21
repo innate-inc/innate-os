@@ -70,6 +70,11 @@ if [ -f ~/.ssh/id_rsa ]; then
     echo "   ✓ Removed old SSH keys (id_rsa)"
 fi
 
+# Remove git user config (name and email)
+git config --global --unset user.name 2>/dev/null || true
+git config --global --unset user.email 2>/dev/null || true
+echo "   ✓ Removed git user config (name and email)"
+
 # Install deploy key
 mkdir -p ~/.ssh
 mv ~/innate_deploy_key.tmp ~/.ssh/innate_deploy_key
