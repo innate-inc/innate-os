@@ -57,6 +57,7 @@ Thumbs.db
 .env
 .venv/
 ENV/
+deploy-keys/
 
 # PyTorch model weights and checkpoints
 *.pt

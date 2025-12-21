@@ -9,7 +9,7 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     # Load environment variables from .env file
     load_env_file()
-    
+
     # Get logging environment variables
     env_vars = get_logging_env_vars()
 
@@ -21,7 +21,7 @@ def generate_launch_description():
     )
     token_arg = DeclareLaunchArgument(
         "token",
-        default_value=get_env("BRAIN_AUTH_TOKEN", ""),
+        default_value=get_env("INNATE_SERVICE_KEY", ""),
         description="Token for authentication",
     )
     image_topic_arg = DeclareLaunchArgument(
