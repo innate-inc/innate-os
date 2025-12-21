@@ -45,11 +45,10 @@ Generate and install deploy keys for robots:
 # Generate keys for N robots (run from dev machine)
 cd /path/to/innate-os
 export GITHUB_TOKEN=$(gh auth token)
-./scripts/update/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
+./scripts/ejection/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
 
 # Install key on a robot
-cd deploy-keys
-./install-key-on-robot.sh robot-001 jetson1@192.168.55.1
+./scripts/ejection/install-key-on-robot.sh deploy-keys/robot-001/innate_deploy_key jetson1@192.168.55.1
 ```
 
 The install script will:
@@ -400,8 +399,8 @@ gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id
   xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
 
 # Regenerate
-./scripts/update/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
+./scripts/ejection/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
 
 # Re-deploy to robots
-./deploy-keys/install-key-on-robot.sh robot-001 jetson1@<ip>
+./scripts/ejection/install-key-on-robot.sh deploy-keys/robot-001/innate_deploy_key jetson1@<ip>
 ```

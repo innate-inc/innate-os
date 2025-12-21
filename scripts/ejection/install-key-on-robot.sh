@@ -1,32 +1,34 @@
 #!/bin/bash
 # Install deploy key on a robot and configure git remote
-# Usage: ./install-key-on-robot.sh <robot-id> <robot-user@robot-ip>
+# Usage: ./install-key-on-robot.sh <key-file> <robot-user@robot-ip>
 #
-# Example: ./install-key-on-robot.sh robot-001 jetson1@192.168.1.100
+# Example: ./install-key-on-robot.sh ./deploy-keys/robot-001/innate_deploy_key jetson1@192.168.55.1
 
 set -e
 
-# Configuration (set during key generation)
-RELEASE_REPO="innate-inc/innate-os-release"
-INNATE_OS_PATH="/home/jetson1/innate-os"
+# Configuration
+RELEASE_REPO="${RELEASE_REPO:-innate-inc/innate-os-release}"
+INNATE_OS_PATH="${INNATE_OS_PATH:-/home/jetson1/innate-os}"
 
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 <robot-id> <robot-user@robot-ip>"
-    echo "Example: $0 robot-001 jetson1@192.168.1.100"
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <key-file> <robot-user@robot-ip>"
+    echo "Example: $0 ./deploy-keys/robot-001/innate_deploy_key jetson1@192.168.55.1"
+    echo ""
+    echo "Environment variables:"
+    echo "  RELEASE_REPO     Release repository (default: innate-inc/innate-os-release)"
+    echo "  INNATE_OS_PATH   Path to innate-os on robot (default: /home/jetson1/innate-os)"
     exit 1
 fi
 
-ROBOT_ID="$1"
+KEY_FILE="$1"
 ROBOT_HOST="$2"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-KEY_DIR="$SCRIPT_DIR/$ROBOT_ID"
 
-if [ ! -d "$KEY_DIR" ]; then
-    echo "Error: Robot directory not found: $KEY_DIR"
-    echo "Available robots:"
-    ls -d "$SCRIPT_DIR"/*/  2>/dev/null | xargs -n1 basename
+if [ ! -f "$KEY_FILE" ]; then
+    echo "Error: Key file not found: $KEY_FILE"
     exit 1
 fi
+
+ROBOT_ID=$(basename "$(dirname "$KEY_FILE")")
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Installing deploy key for $ROBOT_ID"
@@ -37,7 +39,7 @@ echo ""
 
 # Copy private key
 echo "1. Copying deploy key..."
-scp "$KEY_DIR/innate_deploy_key" "$ROBOT_HOST:~/innate_deploy_key.tmp"
+scp "$KEY_FILE" "$ROBOT_HOST:~/innate_deploy_key.tmp"
 
 # Setup on robot (use bash explicitly to avoid zsh issues)
 echo "2. Configuring SSH and git remote..."
@@ -80,8 +82,8 @@ else
 fi
 
 # Update git remote to release repo
-if [ -d "$INNATE_OS_PATH/.git" ]; then
-    cd "$INNATE_OS_PATH"
+if [ -d "\$INNATE_OS_PATH/.git" ]; then
+    cd "\$INNATE_OS_PATH"
     
     # Switch to main branch
     git checkout main 2>/dev/null || git checkout -b main
@@ -94,15 +96,15 @@ if [ -d "$INNATE_OS_PATH/.git" ]; then
     
     # Update remote to release repo
     git remote set-url origin "git@github.com:\$RELEASE_REPO.git"
-    echo "   ✓ Git remote set to git@github.com:$RELEASE_REPO.git"
+    echo "   ✓ Git remote set to git@github.com:\$RELEASE_REPO.git"
     
     # Prune remote tracking branches
     git remote prune origin 2>/dev/null || true
     git fetch --prune 2>/dev/null || true
     echo "   ✓ Pruned stale remote branches"
 else
-    echo "   ⚠ innate-os not found at $INNATE_OS_PATH"
-    echo "     Clone it first with: git clone git@github.com:$RELEASE_REPO.git $INNATE_OS_PATH"
+    echo "   ⚠ innate-os not found at \$INNATE_OS_PATH"
+    echo "     Clone it first with: git clone git@github.com:\$RELEASE_REPO.git \$INNATE_OS_PATH"
 fi
 
 # Test GitHub connection
@@ -134,4 +136,4 @@ echo "  ✓ Setup complete for $ROBOT_ID"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 echo "The robot can now pull updates:"
-echo "  ssh $ROBOT_HOST 'cd /home/jetson1/innate-os && git pull'"
+echo "  ssh $ROBOT_HOST 'cd $INNATE_OS_PATH && git pull'"

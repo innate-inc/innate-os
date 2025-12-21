@@ -208,149 +208,6 @@ for customer in "${CUSTOMERS[@]}"; do
     echo "$customer,$KEY_FILE,$KEY_FILE.pub,$FINGERPRINT,$GITHUB_KEY_ID,$GITHUB_ADDED,$CREATED_AT" >> "$CSV_FILE"
 done
 
-# Create install script for robots (with embedded config)
-INSTALL_SCRIPT="$OUTPUT_DIR/install-key-on-robot.sh"
-cat > "$INSTALL_SCRIPT" << INSTALL_EOF
-#!/bin/bash
-# Install deploy key on a robot and configure git remote
-# Usage: ./install-key-on-robot.sh <robot-id> <robot-user@robot-ip>
-#
-# Example: ./install-key-on-robot.sh robot-001 jetson1@192.168.1.100
-
-set -e
-
-# Configuration (set during key generation)
-RELEASE_REPO="$RELEASE_REPO"
-INNATE_OS_PATH="$INNATE_OS_PATH"
-
-if [ \$# -ne 2 ]; then
-    echo "Usage: \$0 <robot-id> <robot-user@robot-ip>"
-    echo "Example: \$0 robot-001 jetson1@192.168.1.100"
-    exit 1
-fi
-
-ROBOT_ID="\$1"
-ROBOT_HOST="\$2"
-SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-KEY_DIR="\$SCRIPT_DIR/\$ROBOT_ID"
-
-if [ ! -d "\$KEY_DIR" ]; then
-    echo "Error: Robot directory not found: \$KEY_DIR"
-    echo "Available robots:"
-    ls -d "\$SCRIPT_DIR"/*/  2>/dev/null | xargs -n1 basename
-    exit 1
-fi
-
-echo "═══════════════════════════════════════════════════════════════"
-echo "  Installing deploy key for \$ROBOT_ID"
-echo "  Target: \$ROBOT_HOST"
-echo "  Release repo: \$RELEASE_REPO"
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
-
-# Copy private key
-echo "1. Copying deploy key..."
-scp "\$KEY_DIR/innate_deploy_key" "\$ROBOT_HOST:~/innate_deploy_key.tmp"
-
-# Setup on robot (use bash explicitly to avoid zsh issues)
-echo "2. Configuring SSH and git remote..."
-ssh "\$ROBOT_HOST" bash << REMOTE_EOF
-set -e
-RELEASE_REPO="$RELEASE_REPO"
-INNATE_OS_PATH="$INNATE_OS_PATH"
-
-# Remove old SSH keys (no longer needed with deploy keys)
-if [ -f ~/.ssh/id_ed25519 ]; then
-    rm -f ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
-    echo "   ✓ Removed old SSH keys (id_ed25519)"
-fi
-if [ -f ~/.ssh/id_rsa ]; then
-    rm -f ~/.ssh/id_rsa ~/.ssh/id_rsa.pub
-    echo "   ✓ Removed old SSH keys (id_rsa)"
-fi
-
-# Install deploy key
-mkdir -p ~/.ssh
-mv ~/innate_deploy_key.tmp ~/.ssh/innate_deploy_key
-chmod 600 ~/.ssh/innate_deploy_key
-echo "   ✓ Deploy key installed"
-
-# Add SSH config if not present
-if ! grep -q "innate_deploy_key" ~/.ssh/config 2>/dev/null; then
-    cat >> ~/.ssh/config << 'SSHCONFIG'
-
-# Innate OS deploy key
-Host github.com
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/innate_deploy_key
-    IdentitiesOnly yes
-SSHCONFIG
-    chmod 600 ~/.ssh/config
-    echo "   ✓ SSH config updated"
-else
-    echo "   ✓ SSH config already configured"
-fi
-
-# Update git remote to release repo
-if [ -d "\\\$INNATE_OS_PATH/.git" ]; then
-    cd "\\\$INNATE_OS_PATH"
-    
-    # Switch to main branch
-    git checkout main 2>/dev/null || git checkout -b main
-    echo "   ✓ Switched to main branch"
-    
-    # Delete all other local branches
-    git branch | grep -v '^\* main\\\$' | grep -v '^  main\\\$' | while read branch; do
-        git branch -D "\\\$branch" 2>/dev/null && echo "   ✓ Deleted branch: \\\$branch"
-    done
-    
-    # Update remote to release repo
-    git remote set-url origin "git@github.com:\\\$RELEASE_REPO.git"
-    echo "   ✓ Git remote set to git@github.com:\\\$RELEASE_REPO.git"
-    
-    # Prune remote tracking branches
-    git remote prune origin 2>/dev/null || true
-    git fetch --prune 2>/dev/null || true
-    echo "   ✓ Pruned stale remote branches"
-else
-    echo "   ⚠ innate-os not found at \\\$INNATE_OS_PATH"
-    echo "     Clone it first with: git clone git@github.com:\\\$RELEASE_REPO.git \\\$INNATE_OS_PATH"
-fi
-
-# Test GitHub connection
-echo ""
-echo "3. Testing GitHub connection..."
-ssh -T git@github.com 2>&1 | head -1 || true
-
-# Final report
-echo ""
-echo "4. Final report..."
-echo ""
-echo "   SSH keys in ~/.ssh:"
-ls -la ~/.ssh/*.pub ~/.ssh/innate_deploy_key 2>/dev/null | awk '{print "     " \$NF}' || echo "     (none)"
-echo ""
-echo "   Git remote:"
-cd "\\\$INNATE_OS_PATH" 2>/dev/null && git remote -v | head -2 | awk '{print "     " \\\$0}' || echo "     (not configured)"
-echo ""
-echo "   .env file:"
-if [ -f "\\\$INNATE_OS_PATH/.env" ]; then
-    cat "\\\$INNATE_OS_PATH/.env" | awk '{print "     " \\\$0}'
-else
-    echo "     (no .env file found)"
-fi
-REMOTE_EOF
-
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo "  ✓ Setup complete for \$ROBOT_ID"
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
-echo "The robot can now pull updates:"
-echo "  ssh \$ROBOT_HOST 'cd $INNATE_OS_PATH && git pull'"
-INSTALL_EOF
-chmod +x "$INSTALL_SCRIPT"
-
 # Summary
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
@@ -368,16 +225,14 @@ echo "  Structure:"
 echo "  $OUTPUT_DIR/"
 for customer in "${CUSTOMERS[@]:0:3}"; do
     echo "  ├── $customer/"
-    echo "  │   ├── innate_deploy_key      ← copy to robot"
+    echo "  │   ├── innate_deploy_key      ← key file"
     echo "  │   └── innate_deploy_key.pub"
 done
 echo "  ├── ..."
-echo "  ├── deploy-keys.csv               ← master tracking file"
-echo "  └── install-key-on-robot.sh       ← deployment helper"
+echo "  └── deploy-keys.csv               ← master tracking file"
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 echo "To deploy a key to a robot:"
-echo "  cd $OUTPUT_DIR"
-echo "  ./install-key-on-robot.sh robot-001 jetson1@<robot-ip>"
+echo "  ./scripts/ejection/install-key-on-robot.sh $OUTPUT_DIR/robot-001/innate_deploy_key jetson1@<robot-ip>"
 echo ""
