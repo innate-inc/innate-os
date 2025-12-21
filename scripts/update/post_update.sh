@@ -265,6 +265,38 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# 4c. Disable WiFi Power Management
+# -----------------------------------------------------------------------------
+log "Configuring WiFi power management..."
+
+WIFI_POWERSAVE_CONF="/etc/NetworkManager/conf.d/default-wifi-powersave-off.conf"
+WIFI_POWERSAVE_ON_CONF="/etc/NetworkManager/conf.d/default-wifi-powersave-on.conf"
+
+# Create NetworkManager config directory if it doesn't exist
+mkdir -p /etc/NetworkManager/conf.d
+
+# Create config to disable WiFi power saving
+cat > "$WIFI_POWERSAVE_CONF" << 'EOF'
+[connection]
+wifi.powersave = 2
+EOF
+log "  Created $WIFI_POWERSAVE_CONF"
+
+# Remove conflicting "on" config if it exists
+if [ -f "$WIFI_POWERSAVE_ON_CONF" ]; then
+    rm -f "$WIFI_POWERSAVE_ON_CONF"
+    log "  Removed conflicting $WIFI_POWERSAVE_ON_CONF"
+fi
+
+# Restart NetworkManager to apply changes
+if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+    systemctl restart NetworkManager
+    log "  NetworkManager restarted"
+else
+    log "  NetworkManager not running (skipping restart)"
+fi
+
+# -----------------------------------------------------------------------------
 # 5. Install/update dependencies (skip on first install)
 # -----------------------------------------------------------------------------
 if [ "$FIRST_INSTALL" = true ]; then
