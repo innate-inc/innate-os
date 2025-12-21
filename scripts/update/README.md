@@ -2,15 +2,13 @@
 
 ## Table of Contents
 - [Quick Start](#quick-start)
-- [Installation](#installation)
-  - [Install Script Options](#install-script-options)
-  - [GitHub Token Setup](#github-token-setup)
+- [Deploy Key Setup](#deploy-key-setup)
 - [Commands](#commands)
-- [Running GitHub Actions with a Local Runner](#running-github-actions-with-a-local-runner)
 - [Configuration](#configuration)
 - [Update Process](#update-process)
 - [Service Management](#service-management)
 - [Troubleshooting](#troubleshooting)
+- [For Developers](#for-developers)
 
 ---
 
@@ -35,84 +33,46 @@ innate-update view     # Attach to tmux session
 
 ---
 
-## Installation
+## Deploy Key Setup
 
-### Basic Installation (Public Repository)
+Robots use SSH deploy keys for secure, read-only access to the release repository.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
-```
+### For Administrators
 
-### Private Repository Installation
+Generate and install deploy keys for robots:
 
 ```bash
-GITHUB_TOKEN=ghp_your_token_here \
-  curl -fsSL -H "Authorization: token ghp_your_token_here" \
-  https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
+# Generate keys for N robots (run from dev machine)
+cd /path/to/innate-os
+export GITHUB_TOKEN=$(gh auth token)
+./scripts/update/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
+
+# Install key on a robot
+cd deploy-keys
+./install-key-on-robot.sh robot-001 jetson1@192.168.55.1
 ```
 
-### Install Script Options
+The install script will:
+1. Remove old SSH keys (id_ed25519, id_rsa)
+2. Install the deploy key
+3. Configure SSH for GitHub
+4. Switch to main branch and delete other branches
+5. Update git remote to `innate-os-release`
+6. Show final configuration report
 
-The install script supports the following environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GITHUB_TOKEN` | *(none)* | GitHub Personal Access Token for private repos. **Token is saved automatically for future updates.** |
-| `BUILD_FROM_SOURCE` | `false` | Set to `true` to build from source instead of downloading pre-built release artifacts |
-| `INNATE_OS_DIR` | `~/innate-os` | Installation directory |
-| `GITHUB_REPO` | `innate-inc/innate-os` | GitHub repository (owner/repo format) |
-
-**Examples:**
+### Managing Deploy Keys
 
 ```bash
-# Install to custom directory
-INNATE_OS_DIR=/opt/innate-os curl -fsSL .../install.sh | bash
+# List all deploy keys on the repo
+gh repo deploy-key list --repo innate-inc/innate-os-release
 
-# Force build from source
-BUILD_FROM_SOURCE=true curl -fsSL .../install.sh | bash
+# Remove a specific key
+gh repo deploy-key delete <KEY_ID> --repo innate-inc/innate-os-release
 
-# Private repo with token (token is saved automatically)
-GITHUB_TOKEN=ghp_xxx curl -fsSL -H "Authorization: token ghp_xxx" \
-  https://raw.githubusercontent.com/innate-inc/innate-os/main/install.sh | bash
-
-# Use a fork
-GITHUB_REPO=myorg/innate-os-fork curl -fsSL .../install.sh | bash
+# Remove all keys
+gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id' | \
+  xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
 ```
-
-### GitHub Token Setup
-
-For private repositories, you need a GitHub Personal Access Token (PAT).
-
-#### Creating a Token
-
-1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Click "Generate new token (classic)"
-3. Select scopes:
-   - `repo` (Full control of private repositories)
-4. Copy the token (starts with `ghp_`)
-
-#### Token Persistence
-
-The GitHub token is automatically saved and persists between launches:
-
-- **During installation**: The token is saved to `~/.github_token`
-- **During updates**: The `innate-update` command loads the saved token automatically
-- **File permissions**: Token file is saved with `chmod 666` (read/write for all)
-
-**To manually set or update the token:**
-
-```bash
-# Set token for current session
-export GITHUB_TOKEN=ghp_your_token_here
-
-# Save token permanently
-echo "ghp_your_token_here" > ~/.github_token
-chmod 666 ~/.github_token
-```
-
-**Token loading priority:**
-1. `GITHUB_TOKEN` environment variable (if set)
-2. Saved token from `~/.github_token`
 
 ---
 
@@ -243,17 +203,9 @@ gh run watch
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `INNATE_OS_DIR` | `~/innate-os` | Installation directory |
-| `INNATE_STATE_DIR` | `/var/lib/innate-update` | State/cache directory (tokens, cache) |
+| `INNATE_STATE_DIR` | `/var/lib/innate-update` | State/cache directory |
 | `INNATE_UPDATE_BRANCH` | `main` | Git branch to track |
 | `INNATE_UPDATE_INTERVAL` | `3600` | Daemon check interval (seconds) |
-| `GITHUB_REPO` | `innate-inc/innate-os` | GitHub repository |
-| `GITHUB_TOKEN` | *(from file)* | GitHub token (auto-loaded from saved file) |
-
-### Token File Location
-
-```
-~/.github_token
-```
 
 ### Update Cache
 
@@ -271,19 +223,16 @@ gh run watch
 innate-update apply
        |
        v
-1. Fetch latest release from GitHub API
+1. Git fetch with tags
        |
        v
-2. Download pre-built .tar.gz archive
+2. Find latest tag
        |
        v
-3. Extract and replace files (preserves .git)
+3. Git checkout to tag
        |
        v
-4. Update git checkout to release tag
-       |
-       v
-5. Run post_update.sh:
+4. Run post_update.sh:
    - Install apt dependencies
    - Install pip dependencies
    - Update systemd services
@@ -291,7 +240,7 @@ innate-update apply
    - Restart services
        |
        v
-6. Start ROS services
+5. Start ROS services
 ```
 
 ### Development Updates (--dev)
@@ -371,19 +320,21 @@ journalctl -u ros-app.service -f
 
 ### Common Issues
 
-**"Bad credentials" or "Requires authentication"**
+**"Permission denied (publickey)"**
 ```bash
-# Check if token is set
-echo $GITHUB_TOKEN
+# Check if deploy key is installed
+ls -la ~/.ssh/innate_deploy_key
 
-# Re-save token
-echo "ghp_your_new_token" > ~/.github_token
-chmod 666 ~/.github_token
+# Test GitHub connection
+ssh -T git@github.com
+
+# Re-run install script if needed
+./install-key-on-robot.sh robot-XXX jetson1@<ip>
 ```
 
-**"No releases found"**
-- Ensure the repository has at least one release with `.tar.gz` assets
-- Check you're using the correct `GITHUB_REPO`
+**"No tags found"**
+- Ensure the release repository has tagged releases
+- Check git remote: `git remote -v`
 
 **Update fails at post_update.sh**
 ```bash
@@ -396,19 +347,8 @@ sudo ~/innate-os/scripts/update/post_update.sh
 ```bash
 cd ~/innate-os
 git log --oneline --tags        # Find version to rollback to
-git checkout v1.2.3             # Checkout specific version
+git checkout 0.1.97             # Checkout specific version
 sudo ./scripts/update/post_update.sh  # Rebuild and restart
-```
-
-### Reset Token
-
-```bash
-# Remove saved token
-rm ~/.github_token
-
-# Set new token
-echo "ghp_new_token_here" > ~/.github_token
-chmod 666 ~/.github_token
 ```
 
 ---
@@ -425,15 +365,43 @@ This shows a notification on login if updates are available.
 
 ---
 
-## GitHub App Authentication (Alternative)
+## For Developers
 
-For organizations preferring GitHub App authentication over personal tokens:
+### Release Workflow
 
-1. Create a GitHub App with repository access
-2. Get: App ID, Installation ID, Private key (.pem)
-3. Run setup:
-   ```bash
-   ./scripts/update/setup-github-app.sh <APP_ID> <INSTALLATION_ID> ~/path/to/key.pem
-   ```
+When you push a tag to `innate-os`, GitHub Actions automatically pushes to `innate-os-release`:
 
-This generates short-lived tokens automatically.
+```bash
+# Create and push a new release
+git tag 0.1.99
+git push origin 0.1.99
+```
+
+The workflow (`.github/workflows/release-to-deploy-repo.yml`):
+1. Checks out the tagged commit
+2. Removes `.github/workflows` (deploy keys can't push workflows)
+3. Commits as "Release X.Y.Z"
+4. Pushes to `innate-os-release` with the tag
+
+### Repository Structure
+
+| Repository | Purpose | Access |
+|------------|---------|--------|
+| `innate-os` | Development repo | Developers only |
+| `innate-os-release` | Customer-facing releases | Deploy keys (read-only) |
+
+### Regenerating Deploy Keys
+
+If you need to regenerate keys (e.g., key compromise):
+
+```bash
+# Remove all existing keys
+gh repo deploy-key list --repo innate-inc/innate-os-release --json id -q '.[].id' | \
+  xargs -I {} gh repo deploy-key delete {} --repo innate-inc/innate-os-release --yes
+
+# Regenerate
+./scripts/update/generate-deploy-keys.sh -n 40 -r innate-inc/innate-os-release --release innate-inc/innate-os-release
+
+# Re-deploy to robots
+./deploy-keys/install-key-on-robot.sh robot-001 jetson1@<ip>
+```
