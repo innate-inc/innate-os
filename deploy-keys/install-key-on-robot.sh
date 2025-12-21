@@ -46,6 +46,16 @@ set -e
 RELEASE_REPO="$RELEASE_REPO"
 INNATE_OS_PATH="$INNATE_OS_PATH"
 
+# Remove old SSH keys (no longer needed with deploy keys)
+if [ -f ~/.ssh/id_ed25519 ]; then
+    rm -f ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
+    echo "   ✓ Removed old SSH keys (id_ed25519)"
+fi
+if [ -f ~/.ssh/id_rsa ]; then
+    rm -f ~/.ssh/id_rsa ~/.ssh/id_rsa.pub
+    echo "   ✓ Removed old SSH keys (id_rsa)"
+fi
+
 # Install deploy key
 mkdir -p ~/.ssh
 mv ~/innate_deploy_key.tmp ~/.ssh/innate_deploy_key
@@ -99,6 +109,23 @@ fi
 echo ""
 echo "3. Testing GitHub connection..."
 ssh -T git@github.com 2>&1 | head -1 || true
+
+# Final report
+echo ""
+echo "4. Final report..."
+echo ""
+echo "   SSH keys in ~/.ssh:"
+ls -la ~/.ssh/*.pub ~/.ssh/innate_deploy_key 2>/dev/null | awk '{print "     " \$NF}' || echo "     (none)"
+echo ""
+echo "   Git remote:"
+cd "\$INNATE_OS_PATH" 2>/dev/null && git remote -v | head -2 | awk '{print "     " \$0}' || echo "     (not configured)"
+echo ""
+echo "   .env file:"
+if [ -f "\$INNATE_OS_PATH/.env" ]; then
+    cat "\$INNATE_OS_PATH/.env" | awk '{print "     " \$0}'
+else
+    echo "     (no .env file found)"
+fi
 REMOTE_EOF
 
 echo ""
