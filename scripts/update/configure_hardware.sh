@@ -6,6 +6,7 @@
 # Usage: sudo ./configure_hardware.sh <REPO_DIR>
 #
 # This script handles:
+#   - I2S audio amplifier (MAX98357A via Adafruit UDA1334A overlay)
 #   - Bluetooth configuration
 #   - Arducam microphone setup (ALSA + PulseAudio)
 #   - WiFi power management (disable power saving for stable ROS/DDS)
@@ -32,8 +33,33 @@ if ! type log &>/dev/null; then
     }
 fi
 
+REBOOT_REQUIRED=false
+
 # -----------------------------------------------------------------------------
-# 1. Bluetooth Configuration
+# 1. I2S Audio Amplifier (MAX98357A)
+# -----------------------------------------------------------------------------
+log "Checking I2S audio configuration..."
+
+# Only run on Jetson (check if jetson-io exists)
+if [ -f "/opt/nvidia/jetson-io/config-by-hardware.py" ]; then
+    # Check if Adafruit UDA1334A overlay is already configured
+    if grep -q "UDA1334" /boot/extlinux/extlinux.conf 2>/dev/null; then
+        log "  I2S audio overlay already configured"
+    else
+        log "  Configuring I2S audio overlay (Adafruit UDA1334A for MAX98357A)..."
+        if /opt/nvidia/jetson-io/config-by-hardware.py -n "Adafruit UDA1334A" 2>&1; then
+            log "  I2S audio overlay configured successfully"
+            REBOOT_REQUIRED=true
+        else
+            log "  WARNING: Failed to configure I2S audio overlay"
+        fi
+    fi
+else
+    log "  Skipping I2S config - not a Jetson device"
+fi
+
+# -----------------------------------------------------------------------------
+# 2. Bluetooth Configuration
 # -----------------------------------------------------------------------------
 log "Checking Bluetooth configurations..."
 if [ -f "$REPO_DIR/config/bluetooth/main.conf" ]; then
@@ -59,7 +85,7 @@ if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 2. Arducam Microphone (ALSA + PulseAudio)
+# 3. Arducam Microphone (ALSA + PulseAudio)
 # -----------------------------------------------------------------------------
 log "Configuring Arducam microphone..."
 
@@ -76,7 +102,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 3. WiFi Power Management
+# 4. WiFi Power Management
 # -----------------------------------------------------------------------------
 log "Configuring WiFi power management..."
 
@@ -108,3 +134,12 @@ else
 fi
 
 log "Hardware configuration completed"
+
+# Notify if reboot is required
+if [ "$REBOOT_REQUIRED" = true ]; then
+    log ""
+    log "╔════════════════════════════════════════════════════════════╗"
+    log "║  REBOOT REQUIRED                                           ║"
+    log "║  Hardware configuration changes require a system reboot.   ║"
+    log "╚════════════════════════════════════════════════════════════╝"
+fi
