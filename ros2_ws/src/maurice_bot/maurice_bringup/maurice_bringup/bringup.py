@@ -33,10 +33,8 @@ class Bringup(Node):
         self._setup_services_and_topics()
 
         self.i2c_manager.set_light_command(mode=1, r=255, g=255, b=255, interval=100)
-        time.sleep(5)
         self.i2c_manager.set_light_command(mode=0, r=0, g=0, b=0, interval=0)
         # Request calibration at startup
-        time.sleep(10)
         self.get_logger().info('Requesting initial calibration. Ensure robot is stationary.')
         self.i2c_manager.request_calibration()
 
