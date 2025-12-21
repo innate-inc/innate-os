@@ -135,11 +135,9 @@ fi
 
 log "Hardware configuration completed"
 
-# Notify if reboot is required
+# Exit with code 2 if reboot is required (allows caller to detect this)
 if [ "$REBOOT_REQUIRED" = true ]; then
-    log ""
-    log "╔════════════════════════════════════════════════════════════╗"
-    log "║  REBOOT REQUIRED                                           ║"
-    log "║  Hardware configuration changes require a system reboot.   ║"
-    log "╚════════════════════════════════════════════════════════════╝"
+    exit 2
 fi
+
+exit 0

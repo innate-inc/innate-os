@@ -226,11 +226,17 @@ fi
 # -----------------------------------------------------------------------------
 log "Configuring hardware..."
 
+HARDWARE_REBOOT_REQUIRED=false
 HARDWARE_SCRIPT="$REPO_DIR/scripts/update/configure_hardware.sh"
 if [ -f "$HARDWARE_SCRIPT" ]; then
     chmod +x "$HARDWARE_SCRIPT"
-    if "$HARDWARE_SCRIPT" "$REPO_DIR" 2>&1 | tee -a "$LOG_FILE"; then
+    "$HARDWARE_SCRIPT" "$REPO_DIR" 2>&1 | tee -a "$LOG_FILE"
+    HARDWARE_EXIT_CODE=${PIPESTATUS[0]}
+    if [ $HARDWARE_EXIT_CODE -eq 0 ]; then
         log "  Hardware configuration completed successfully"
+    elif [ $HARDWARE_EXIT_CODE -eq 2 ]; then
+        log "  Hardware configuration completed (reboot required)"
+        HARDWARE_REBOOT_REQUIRED=true
     else
         log "  WARNING: Hardware configuration script failed"
     fi
@@ -434,6 +440,16 @@ log "  tmux attach -t ros_nodes  (if already running)"
 log "  OR"
 log "  launch_ros_in_tmux.sh     (to start fresh)"
 log ""
+
+# Notify if reboot is required for hardware changes
+if [ "$HARDWARE_REBOOT_REQUIRED" = true ]; then
+    log ""
+    log "╔════════════════════════════════════════════════════════════╗"
+    log "║  REBOOT REQUIRED                                           ║"
+    log "║  Hardware configuration changes require a system reboot.   ║"
+    log "╚════════════════════════════════════════════════════════════╝"
+    log ""
+fi
 
 # Fix log file ownership
 ensure_log_ownership
