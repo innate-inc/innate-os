@@ -25,7 +25,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 # Import your policy class and trajectory generator
-from act_test.ACT import ACTPolicy, ACTConfig
+from manipulation.ACT import ACTPolicy, ACTConfig
 
 def create_act_config(action_dim=8):
     """Create ACT configuration matching the training setup."""
