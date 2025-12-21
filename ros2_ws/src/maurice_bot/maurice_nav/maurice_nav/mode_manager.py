@@ -238,6 +238,13 @@ class ModeManager(Node):
         """Auto-start the mode manager in the last saved mode"""
         self.startup_timer.cancel()  # One-time execution
         
+        # Check if we want to start navigation but have no maps available
+        # In this case, automatically switch to mapping mode
+        if self.current_mode == "navigation" and not self.available_maps:
+            self.get_logger().warn("No maps available for navigation - automatically starting in mapping mode")
+            self.get_logger().info("Create a map first, then switch to navigation mode")
+            self.current_mode = "mapping"
+        
         if self.current_mode in ["navigation", "mapping"]:
             self.get_logger().info(f"Auto-starting in {self.current_mode} mode...")
             # Simulate a service request
@@ -593,6 +600,13 @@ class ModeManager(Node):
             if target_mode not in ["navigation", "mapping", "mapfree"]:
                 response.success = False
                 response.message = f"Invalid mode '{target_mode}'. Use 'navigation', 'mapping', or 'mapfree'"
+                self.get_logger().error(response.message)
+                return response
+            
+            # Check if trying to switch to navigation but no maps are available
+            if target_mode == "navigation" and not self.available_maps:
+                response.success = False
+                response.message = "Cannot switch to navigation mode - no maps available. Create a map first using mapping mode."
                 self.get_logger().error(response.message)
                 return response
             
