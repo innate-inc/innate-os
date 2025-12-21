@@ -62,10 +62,12 @@ jobs:
           echo "Pushing main branch to release repo..."
           git push release HEAD:main --force
           
-          # Create new tag on the cleaned commit and push
-          git tag -f "$TAG"
-          echo "Pushing tag $TAG to release repo..."
-          git push release "$TAG" --force
+          # Delete old tag on remote, create new tag on HEAD, and push
+          echo "Updating tag $TAG on release repo..."
+          git push release :refs/tags/"$TAG" 2>/dev/null || true
+          git tag -d "$TAG" 2>/dev/null || true
+          git tag "$TAG"
+          git push release "$TAG"
           
           echo "✓ Released $TAG to ${{ env.RELEASE_REPO }}"
 
