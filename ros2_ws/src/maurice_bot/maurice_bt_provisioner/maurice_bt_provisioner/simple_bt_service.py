@@ -359,9 +359,30 @@ class BleProvisionerServer:
 
         adapter_address = self.adapter.address
         logger.info(f"Using adapter at address: {adapter_address}")
-        logger.info(f"Adapter properties: Discoverable={self.adapter.discoverable}, Powered={self.adapter.powered}, Pairable={self.adapter.pairable}")
+        
+        # Set adapter alias to match robot name
+        try:
+            self.adapter.alias = ROBOT_NAME
+            logger.info(f"Set adapter alias to '{ROBOT_NAME}'")
+        except Exception as e:
+            logger.warning(f"Failed to set adapter alias: {e}")
+        
+        # Check current discoverable state
+        is_discoverable = self.adapter.discoverable
+        logger.info(f"Adapter properties: Discoverable={is_discoverable}, Powered={self.adapter.powered}, Pairable={self.adapter.pairable}")
+        
+        # If already discoverable, temporarily disable to avoid Busy error when AdvertisingManager tries to set it
+        if is_discoverable:
+            logger.info("Adapter is already discoverable, temporarily disabling to avoid conflict...")
+            try:
+                self.adapter.discoverable = False
+                time.sleep(0.5)  # Brief pause to let the state change
+                logger.info("Temporarily disabled discoverable state")
+            except Exception as e:
+                logger.warning(f"Could not disable discoverable state: {e}")
 
         try:
+            # Create Peripheral - AdvertisingManager will set discoverable=True internally
             self.peripheral = peripheral.Peripheral(adapter_address,
                                                  local_name=ROBOT_NAME,
                                                  appearance=192) # 192: Generic Computer
@@ -402,7 +423,8 @@ class BleProvisionerServer:
             # Start advertising
             logger.info("Starting BLE advertisement...")
             self.peripheral.publish()
-            self.adapter.discoverable = True
+            # Note: discoverable is already set to True by AdvertisingManager inside Peripheral
+            # No need to set it again here (removed redundant line)
             logger.info("BLE Server is running. Press Ctrl+C to stop.")
         
         except Exception as e:
