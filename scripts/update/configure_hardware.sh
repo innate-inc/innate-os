@@ -125,13 +125,8 @@ if [ -f "$WIFI_POWERSAVE_ON_CONF" ]; then
     log "  Removed conflicting $WIFI_POWERSAVE_ON_CONF"
 fi
 
-# Restart NetworkManager to apply changes
-if systemctl is-active --quiet NetworkManager 2>/dev/null; then
-    systemctl restart NetworkManager
-    log "  NetworkManager restarted"
-else
-    log "  NetworkManager not running (skipping restart)"
-fi
+# Note: Not restarting NetworkManager here to avoid SSH disconnection.
+# The config will be applied on next reboot or manual NetworkManager restart.
 
 log "Hardware configuration completed"
 
