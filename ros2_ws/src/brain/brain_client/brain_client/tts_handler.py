@@ -27,7 +27,7 @@ class TTSHandler:
     """
     
     # Default voice ID (Katie - Friendly Fixer)
-    DEFAULT_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+    DEFAULT_VOICE_ID = "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
 
     def __init__(
         self,

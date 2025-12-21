@@ -126,7 +126,7 @@ class BrainClientNode(Node):
         # --- Proxy service configuration ---
         # Credentials (INNATE_PROXY_URL, INNATE_SERVICE_KEY) come from env vars
         # These are service configs that can be overridden at launch
-        self.declare_parameter("cartesia_voice_id", "f786b574-daa5-4673-aa0c-cbe3e8534c02")
+        self.declare_parameter("cartesia_voice_id", "9fdaae0b-f885-4813-b589-3c07cf9d5fea")
         self.declare_parameter("openai_realtime_model", "gpt-4o-realtime-preview")
         self.declare_parameter("openai_realtime_url", "wss://api.openai.com/v1/realtime")
         self.declare_parameter("openai_transcribe_model", "gpt-4o-mini-transcribe")
