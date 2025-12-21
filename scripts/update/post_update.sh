@@ -415,14 +415,18 @@ if systemctl list-unit-files bluetooth.service &>/dev/null; then
     SERVICES+=("bluetooth.service")
 fi
 
-for service in "${SERVICES[@]}"; do
-    if [ -f "/etc/systemd/system/$service" ] || systemctl list-unit-files "$service" &>/dev/null; then
-        log "  Enabling $service"
-        systemctl enable "$service" 2>/dev/null || true
-        log "  Starting $service"
-        systemctl start "$service" 2>/dev/null || true
-    fi
-done
+if [ "$HARDWARE_REBOOT_REQUIRED" = true ]; then
+    log "  Skipping service restart (reboot required)"
+else
+    for service in "${SERVICES[@]}"; do
+        if [ -f "/etc/systemd/system/$service" ] || systemctl list-unit-files "$service" &>/dev/null; then
+            log "  Enabling $service"
+            systemctl enable "$service" 2>/dev/null || true
+            log "  Starting $service"
+            systemctl start "$service" 2>/dev/null || true
+        fi
+    done
+fi
 
 # -----------------------------------------------------------------------------
 # 11. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
@@ -434,12 +438,15 @@ done
 log "========================================"
 log "Post-update script completed successfully"
 log "========================================"
-log ""
-log "To start ROS manually:"
-log "  tmux attach -t ros_nodes  (if already running)"
-log "  OR"
-log "  launch_ros_in_tmux.sh     (to start fresh)"
-log ""
+
+if [ "$HARDWARE_REBOOT_REQUIRED" != true ]; then
+    log ""
+    log "To start ROS manually:"
+    log "  tmux attach -t ros_nodes  (if already running)"
+    log "  OR"
+    log "  launch_ros_in_tmux.sh     (to start fresh)"
+    log ""
+fi
 
 # Notify if reboot is required for hardware changes
 if [ "$HARDWARE_REBOOT_REQUIRED" = true ]; then
