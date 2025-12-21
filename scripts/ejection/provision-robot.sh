@@ -90,6 +90,13 @@ cd /tmp
 # Clean up setup script
 rm -f /tmp/setup_robot_with.sh
 echo "✓ Cleaned up setup script"
+
+# Run post_update script
+echo ""
+echo "Running post_update script..."
+cd $INNATE_OS_PATH/scripts/update
+./post_update
+echo "✓ Post-update script completed"
 REMOTE_EOF
 
 echo ""
@@ -105,4 +112,6 @@ echo ""
 echo "To verify, SSH into the robot:"
 echo "  ssh $ROBOT_HOST"
 echo ""
+
+
 
