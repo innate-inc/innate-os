@@ -29,29 +29,34 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
+
 # ANSI color codes
 class Colors:
-    RED = '\033[0;31m'
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    BLUE = '\033[0;34m'
-    BOLD = '\033[1m'
-    NC = '\033[0m'  # No Color
+    RED = "\033[0;31m"
+    GREEN = "\033[0;32m"
+    YELLOW = "\033[1;33m"
+    BLUE = "\033[0;34m"
+    BOLD = "\033[1m"
+    NC = "\033[0m"  # No Color
 
 
 class Config:
     """Configuration loaded from environment variables."""
 
     def __init__(self):
-        self.repo_dir = Path(os.environ.get('INNATE_OS_DIR', Path.home() / 'innate-os'))
-        self.state_dir = Path(os.environ.get('INNATE_STATE_DIR', '/var/lib/innate-update'))
-        self.log_dir = self.repo_dir / 'logs'
-        self.update_cache = self.state_dir / 'update-cache'
-        self.update_lock = Path('/tmp/innate-update.lock')  # Use /tmp (always user-writable)
-        self.branch = os.environ.get('INNATE_UPDATE_BRANCH', 'main')
-        self.github_repo = os.environ.get('GITHUB_REPO', 'cristidragomir97/innate-os')
-        self.daemon_interval = int(os.environ.get('INNATE_UPDATE_INTERVAL', '3600'))
-        self.github_token = os.environ.get('GITHUB_TOKEN', '')
+        self.repo_dir = Path(os.environ.get("INNATE_OS_DIR", Path.home() / "innate-os"))
+        self.state_dir = Path(
+            os.environ.get("INNATE_STATE_DIR", "/var/lib/innate-update")
+        )
+        self.log_dir = self.repo_dir / "logs"
+        self.update_cache = self.state_dir / "update-cache"
+        self.update_lock = Path(
+            "/tmp/innate-update.lock"
+        )  # Use /tmp (always user-writable)
+        self.branch = os.environ.get("INNATE_UPDATE_BRANCH", "main")
+        self.github_repo = os.environ.get("GITHUB_REPO", "cristidragomir97/innate-os")
+        self.daemon_interval = int(os.environ.get("INNATE_UPDATE_INTERVAL", "3600"))
+        self.github_token = os.environ.get("GITHUB_TOKEN", "")
 
         # Ensure directories exist
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -65,10 +70,10 @@ class Config:
         if self.github_token:
             return
 
-        token_file = Path.home() / '.github_token'
+        token_file = Path.home() / ".github_token"
         if token_file.exists():
             self.github_token = token_file.read_text().strip()
-            os.environ['GITHUB_TOKEN'] = self.github_token
+            os.environ["GITHUB_TOKEN"] = self.github_token
 
 
 class Logger:
@@ -78,15 +83,15 @@ class Logger:
         self.log_file = log_file
 
     def _write_to_file(self, message: str):
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            with open(self.log_file, 'a') as f:
-                f.write(f'[{timestamp}] {message}\n')
+            with open(self.log_file, "a") as f:
+                f.write(f"[{timestamp}] {message}\n")
         except (PermissionError, OSError):
             pass
 
     def info(self, message: str):
-        timestamp = datetime.now().strftime('%H:%M:%S')
+        timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"{Colors.BLUE}[{timestamp}]{Colors.NC} {message}")
         self._write_to_file(message)
 
@@ -98,7 +103,7 @@ class Logger:
 
     def error(self, message: str):
         print(f"{Colors.RED}[ERROR]{Colors.NC} {message}", file=sys.stderr)
-        self._write_to_file(f'ERROR: {message}')
+        self._write_to_file(f"ERROR: {message}")
 
 
 class GitHubAPI:
@@ -145,13 +150,15 @@ class GitHubAPI:
         req = urllib.request.Request(asset_url, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=300) as response:
-                with open(dest_path, 'wb') as f:
+                with open(dest_path, "wb") as f:
                     shutil.copyfileobj(response, f)
             return True
         except (urllib.error.HTTPError, urllib.error.URLError):
             return False
 
-    def find_asset_url(self, release: dict, pattern: str = ".tar.gz") -> tuple[str, str]:
+    def find_asset_url(
+        self, release: dict, pattern: str = ".tar.gz"
+    ) -> tuple[str, str]:
         """Find asset URL matching pattern (excluding -source.tar.gz).
 
         Returns (api_url, asset_name) tuple.
@@ -174,23 +181,25 @@ class ServiceManager:
     def __init__(self, config: Config, logger: Logger):
         self.config = config
         self.logger = logger
-        self.launch_script = config.repo_dir / 'scripts' / 'launch_ros_in_tmux.sh'
+        self.launch_script = config.repo_dir / "scripts" / "launch_ros_in_tmux.sh"
 
     def _run(self, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
         """Run a command."""
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+            raise subprocess.CalledProcessError(
+                result.returncode, cmd, result.stdout, result.stderr
+            )
         return result
 
     def _tmux_session_exists(self, session: str) -> bool:
         """Check if a tmux session exists."""
-        result = self._run(['tmux', 'has-session', '-t', session], check=False)
+        result = self._run(["tmux", "has-session", "-t", session], check=False)
         return result.returncode == 0
 
     def _systemd_service_active(self, service: str) -> bool:
         """Check if a systemd service is active."""
-        result = self._run(['systemctl', 'is-active', '--quiet', service], check=False)
+        result = self._run(["systemctl", "is-active", "--quiet", service], check=False)
         return result.returncode == 0
 
     def is_running(self) -> bool:
@@ -199,20 +208,20 @@ class ServiceManager:
 
     def is_discovery_running(self) -> bool:
         """Check if discovery server is running."""
-        if self._systemd_service_active('discovery-server.service'):
+        if self._systemd_service_active("discovery-server.service"):
             return True
         return self._tmux_session_exists(self.DISCOVERY_SESSION)
 
     def is_update_running(self) -> bool:
         """Check if an update is currently in progress (via lock file).
-        
+
         Also checks if the PID in the lock file is still alive to detect stale locks.
         """
         if not self.config.update_lock.exists():
             return False
-        
+
         try:
-            content = self.config.update_lock.read_text().strip().split('\n')
+            content = self.config.update_lock.read_text().strip().split("\n")
             if content:
                 pid = int(content[0])
                 # Check if process is still running
@@ -228,13 +237,15 @@ class ServiceManager:
         except PermissionError:
             # Process exists but we can't signal it (different user)
             return True
-        
+
         return False
 
     def start(self) -> int:
         """Start ROS services."""
         if self.is_running():
-            self.logger.warning(f"ROS services already running (tmux session '{self.TMUX_SESSION}')")
+            self.logger.warning(
+                f"ROS services already running (tmux session '{self.TMUX_SESSION}')"
+            )
             print("Use 'innate-update view' to attach to the session")
             print("Use 'innate-update restart' to restart services")
             return 0
@@ -250,15 +261,16 @@ class ServiceManager:
         try:
             # Start in background using nohup
             subprocess.Popen(
-                ['nohup', 'bash', str(self.launch_script)],
+                ["nohup", "bash", str(self.launch_script)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
-                cwd=str(self.config.repo_dir)
+                cwd=str(self.config.repo_dir),
             )
 
             # Wait a moment for session to start
             import time
+
             time.sleep(2)
 
             if self.is_running():
@@ -281,14 +293,16 @@ class ServiceManager:
         # Stop ROS tmux session
         if self._tmux_session_exists(self.TMUX_SESSION):
             self.logger.info(f"Stopping tmux session '{self.TMUX_SESSION}'...")
-            self._run(['tmux', 'kill-session', '-t', self.TMUX_SESSION], check=False)
+            self._run(["tmux", "kill-session", "-t", self.TMUX_SESSION], check=False)
             stopped_something = True
 
         # Stop discovery tmux session (if not managed by systemd)
-        if not self._systemd_service_active('discovery-server.service'):
+        if not self._systemd_service_active("discovery-server.service"):
             if self._tmux_session_exists(self.DISCOVERY_SESSION):
                 self.logger.info(f"Stopping tmux session '{self.DISCOVERY_SESSION}'...")
-                self._run(['tmux', 'kill-session', '-t', self.DISCOVERY_SESSION], check=False)
+                self._run(
+                    ["tmux", "kill-session", "-t", self.DISCOVERY_SESSION], check=False
+                )
                 stopped_something = True
 
         if stopped_something:
@@ -303,13 +317,16 @@ class ServiceManager:
         self.logger.info("Restarting ROS services...")
         self.stop()
         import time
+
         time.sleep(1)
         return self.start()
 
     def view(self) -> int:
         """Attach to tmux session."""
         if not self.is_running():
-            self.logger.error(f"ROS services not running (no tmux session '{self.TMUX_SESSION}')")
+            self.logger.error(
+                f"ROS services not running (no tmux session '{self.TMUX_SESSION}')"
+            )
             print("Use 'innate-update start' to start services first")
             return 1
 
@@ -319,16 +336,18 @@ class ServiceManager:
         print()
 
         # Replace current process with tmux attach
-        os.execvp('tmux', ['tmux', 'attach', '-t', self.TMUX_SESSION])
+        os.execvp("tmux", ["tmux", "attach", "-t", self.TMUX_SESSION])
         return 0  # Never reached
 
     def status(self) -> dict:
         """Get service status."""
         return {
-            'ros_running': self.is_running(),
-            'discovery_running': self.is_discovery_running(),
-            'discovery_systemd': self._systemd_service_active('discovery-server.service'),
-            'update_running': self.is_update_running(),
+            "ros_running": self.is_running(),
+            "discovery_running": self.is_discovery_running(),
+            "discovery_systemd": self._systemd_service_active(
+                "discovery-server.service"
+            ),
+            "update_running": self.is_update_running(),
         }
 
 
@@ -343,92 +362,105 @@ class GitRepo:
     def _run(self, args, check=True) -> subprocess.CompletedProcess:
         """Run a git command."""
         result = subprocess.run(
-            ['git', '-C', str(self.repo_dir)] + args,
-            capture_output=True, text=True, check=False
+            ["git", "-C", str(self.repo_dir)] + args,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if check and result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, args, result.stdout, result.stderr)
+            raise subprocess.CalledProcessError(
+                result.returncode, args, result.stdout, result.stderr
+            )
         return result
 
     def check_is_repo(self) -> bool:
-        return (self.repo_dir / '.git').is_dir()
+        return (self.repo_dir / ".git").is_dir()
 
     def fetch(self, tags=True) -> bool:
-        args = ['fetch', 'origin', self.branch]
+        args = ["fetch", "origin", self.branch]
         if tags:
-            args.append('--tags')
+            args.append("--tags")
         result = self._run(args, check=False)
         return result.returncode == 0
 
     def fetch_tags_only(self) -> bool:
         """Fetch only tags from remote, without fetching branch commits."""
-        result = self._run(['fetch', 'origin', 'refs/tags/*:refs/tags/*', '--prune'], check=False)
+        result = self._run(
+            ["fetch", "origin", "refs/tags/*:refs/tags/*", "--prune"], check=False
+        )
         return result.returncode == 0
 
     def current_commit(self) -> str:
-        result = self._run(['rev-parse', 'HEAD'], check=False)
-        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+        result = self._run(["rev-parse", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
 
     def current_branch(self) -> str:
-        result = self._run(['rev-parse', '--abbrev-ref', 'HEAD'], check=False)
-        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+        result = self._run(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
 
     def remote_url(self) -> str:
-        result = self._run(['config', '--get', 'remote.origin.url'], check=False)
-        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+        result = self._run(["config", "--get", "remote.origin.url"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
 
     def get_latest_tag(self) -> str:
-        result = self._run(['tag', '--sort=-v:refname', '--merged', f'origin/{self.branch}'], check=False)
+        result = self._run(
+            ["tag", "--sort=-v:refname", "--merged", f"origin/{self.branch}"],
+            check=False,
+        )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split('\n')[0]
-        return ''
+            return result.stdout.strip().split("\n")[0]
+        return ""
 
     def get_current_tag(self) -> str:
-        result = self._run(['describe', '--tags', '--exact-match', 'HEAD'], check=False)
-        return result.stdout.strip() if result.returncode == 0 else ''
+        result = self._run(["describe", "--tags", "--exact-match", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
 
     def resolve_ref(self, ref: str) -> str:
-        result = self._run(['rev-parse', ref], check=False)
-        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+        result = self._run(["rev-parse", ref], check=False)
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
-        result = self._run(['merge-base', '--is-ancestor', ancestor, descendant], check=False)
+        result = self._run(
+            ["merge-base", "--is-ancestor", ancestor, descendant], check=False
+        )
         return result.returncode == 0
 
     def commits_between(self, ref1: str, ref2: str) -> int:
-        result = self._run(['rev-list', f'{ref1}..{ref2}', '--count'], check=False)
+        result = self._run(["rev-list", f"{ref1}..{ref2}", "--count"], check=False)
         try:
             return int(result.stdout.strip()) if result.returncode == 0 else 0
         except ValueError:
             return 0
 
     def log_oneline(self, ref1: str, ref2: str, limit: int = None) -> list[str]:
-        args = ['--no-pager', 'log', '--oneline', f'{ref1}..{ref2}']
+        args = ["--no-pager", "log", "--oneline", f"{ref1}..{ref2}"]
         result = self._run(args, check=False)
         if result.returncode != 0:
             return []
-        lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
+        lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
         if limit and len(lines) > limit:
             return lines[:limit]
         return lines
 
     def has_local_changes(self) -> bool:
-        result = self._run(['diff-index', '--quiet', 'HEAD', '--'], check=False)
+        result = self._run(["diff-index", "--quiet", "HEAD", "--"], check=False)
         return result.returncode != 0
 
     def stash(self, message: str) -> bool:
-        result = self._run(['stash', 'push', '-m', message], check=False)
+        result = self._run(["stash", "push", "-m", message], check=False)
         return result.returncode == 0
 
     def checkout(self, ref: str) -> bool:
-        result = self._run(['checkout', ref], check=False)
+        result = self._run(["checkout", ref], check=False)
         return result.returncode == 0
 
 
 class UpdateManager:
     """Main update manager."""
 
-    def __init__(self, config: Config, logger: Logger, dev_mode: bool = False, yes: bool = False):
+    def __init__(
+        self, config: Config, logger: Logger, dev_mode: bool = False, yes: bool = False
+    ):
         self.config = config
         self.logger = logger
         self.dev_mode = dev_mode
@@ -455,7 +487,7 @@ class UpdateManager:
                 return self.config.update_cache.read_text().strip()
         except PermissionError:
             pass
-        return ''
+        return ""
 
     def _clear_cache(self):
         try:
@@ -478,7 +510,9 @@ class UpdateManager:
         self.logger.info("Checking for updates...")
 
         if not self.git.fetch():
-            self.logger.error("Failed to fetch from remote. Check network and git authentication.")
+            self.logger.error(
+                "Failed to fetch from remote. Check network and git authentication."
+            )
             return 1
 
         current = self.git.current_commit()
@@ -489,8 +523,10 @@ class UpdateManager:
             return self._check_tag_mode(current)
 
     def _check_dev_mode(self, current: str) -> int:
-        target = self.git.resolve_ref(f'origin/{self.config.branch}')
-        commits_behind = self.git.commits_between('HEAD', f'origin/{self.config.branch}')
+        target = self.git.resolve_ref(f"origin/{self.config.branch}")
+        commits_behind = self.git.commits_between(
+            "HEAD", f"origin/{self.config.branch}"
+        )
 
         self._write_cache(str(commits_behind))
 
@@ -499,12 +535,14 @@ class UpdateManager:
             print(f"Current: {current[:7]}")
             return 0
 
-        self.logger.warning(f"Updates available (dev mode): {commits_behind} new commit(s)")
+        self.logger.warning(
+            f"Updates available (dev mode): {commits_behind} new commit(s)"
+        )
         print(f"Current: {current[:7]}")
         print(f"Latest:  {target[:7]}")
         print()
         print("Recent changes:")
-        self._show_commits('HEAD', f'origin/{self.config.branch}', commits_behind)
+        self._show_commits("HEAD", f"origin/{self.config.branch}", commits_behind)
         print()
         print("Run 'innate-update apply --dev' to install updates")
         return 1
@@ -521,13 +559,13 @@ class UpdateManager:
         latest_tag_commit = self.git.resolve_ref(latest_tag)
 
         if current == latest_tag_commit:
-            self._write_cache('0')
+            self._write_cache("0")
             self.logger.success("System is up to date")
             print(f"Current: {current_tag} ({current[:7]})")
             return 0
 
         if self.git.is_ancestor(latest_tag_commit, current):
-            self._write_cache('0')
+            self._write_cache("0")
             self.logger.success("System is ahead of latest stable release")
             print(f"Current: {current[:7]} (dev)")
             print(f"Latest tag: {latest_tag} ({latest_tag_commit[:7]})")
@@ -536,8 +574,8 @@ class UpdateManager:
             print("Use 'innate-update check --dev' to check for newer dev commits.")
             return 0
 
-        self._write_cache('1')
-        commits_behind = self.git.commits_between('HEAD', latest_tag)
+        self._write_cache("1")
+        commits_behind = self.git.commits_between("HEAD", latest_tag)
 
         self.logger.warning(f"Update available: {latest_tag}")
         print(f"Current: {current_tag or current[:7]}")
@@ -546,7 +584,7 @@ class UpdateManager:
 
         if commits_behind > 0:
             print(f"Changes in {latest_tag}:")
-            self._show_commits('HEAD', latest_tag, commits_behind)
+            self._show_commits("HEAD", latest_tag, commits_behind)
 
         print()
         print("Run 'innate-update apply' to install updates")
@@ -556,7 +594,9 @@ class UpdateManager:
         """Create lock file to indicate update in progress."""
         try:
             self.config.update_lock.parent.mkdir(parents=True, exist_ok=True)
-            self.config.update_lock.write_text(f"{os.getpid()}\n{datetime.now().isoformat()}\n")
+            self.config.update_lock.write_text(
+                f"{os.getpid()}\n{datetime.now().isoformat()}\n"
+            )
         except Exception:
             pass  # Best effort
 
@@ -590,9 +630,9 @@ class UpdateManager:
 
     def _apply_dev_mode(self, current: str) -> int:
         """Apply updates to latest commit (git-based, no artifacts)."""
-        target_ref = f'origin/{self.config.branch}'
-        target_display = f'latest commit on {self.config.branch}'
-        commits_behind = self.git.commits_between('HEAD', target_ref)
+        target_ref = f"origin/{self.config.branch}"
+        target_display = f"latest commit on {self.config.branch}"
+        commits_behind = self.git.commits_between("HEAD", target_ref)
 
         if commits_behind == 0:
             self.logger.success("Already up to date (dev mode)")
@@ -602,7 +642,7 @@ class UpdateManager:
         self.logger.info(f"Found {commits_behind} commit(s) to apply (dev mode)")
         print()
         print("Changes to be applied:")
-        self._show_commits('HEAD', target_ref, commits_behind, max_show=20)
+        self._show_commits("HEAD", target_ref, commits_behind, max_show=20)
 
         return self._do_git_update(target_ref, target_display, current)
 
@@ -628,11 +668,11 @@ class UpdateManager:
             self._remove_update_lock()
             return 0
 
-        commits_behind = self.git.commits_between('HEAD', latest_tag)
+        commits_behind = self.git.commits_between("HEAD", latest_tag)
         self.logger.info(f"Updating to {latest_tag} ({commits_behind} commits)")
         print()
         print(f"Changes to be applied for {latest_tag}:")
-        self._show_commits('HEAD', latest_tag, commits_behind, max_show=20)
+        self._show_commits("HEAD", latest_tag, commits_behind, max_show=20)
 
         # Try to download release artifacts
         return self._do_artifact_update(latest_tag, current)
@@ -646,9 +686,9 @@ class UpdateManager:
             try:
                 response = input(f"Continue with update to {tag}? [y/N] ")
             except EOFError:
-                response = 'n'
+                response = "n"
 
-            if response.lower() != 'y':
+            if response.lower() != "y":
                 self.logger.warning("Update cancelled")
                 return 0
 
@@ -660,13 +700,15 @@ class UpdateManager:
             asset_url, asset_name = self.github.find_asset_url(release)
 
             if not asset_url:
-                self.logger.warning("No release artifacts found, falling back to git update")
+                self.logger.warning(
+                    "No release artifacts found, falling back to git update"
+                )
                 return self._do_git_update(tag, tag, old_commit, skip_confirm=True)
 
             self.logger.info(f"Downloading {asset_name}...")
 
             # Download to temp file
-            with tempfile.NamedTemporaryFile(suffix='.tar.gz', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
                 tmp_path = Path(tmp.name)
 
             if not self.github.download_asset(asset_url, tmp_path):
@@ -699,8 +741,8 @@ class UpdateManager:
                     src_dir = Path(tmp_dir)
 
                 # Backup current ros2_ws build artifacts (just in case)
-                backup_dir = self.config.repo_dir / '.update-backup'
-                ros2_ws = self.config.repo_dir / 'ros2_ws'
+                backup_dir = self.config.repo_dir / ".update-backup"
+                ros2_ws = self.config.repo_dir / "ros2_ws"
 
                 # Update files from the archive
                 self.logger.info("Updating installation...")
@@ -708,7 +750,7 @@ class UpdateManager:
                 # Copy new files, preserving .git directory
                 for item in src_dir.iterdir():
                     dest = self.config.repo_dir / item.name
-                    if item.name == '.git':
+                    if item.name == ".git":
                         continue  # Preserve existing .git
 
                     if dest.exists():
@@ -737,16 +779,22 @@ class UpdateManager:
         # Run post-update script
         return self._run_post_update()
 
-    def _do_git_update(self, target_ref: str, target_display: str, old_commit: str, skip_confirm: bool = False) -> int:
+    def _do_git_update(
+        self,
+        target_ref: str,
+        target_display: str,
+        old_commit: str,
+        skip_confirm: bool = False,
+    ) -> int:
         """Perform git-based update (for dev mode or fallback)."""
         if not skip_confirm and not self.yes:
             print()
             try:
                 response = input(f"Continue with update to {target_display}? [y/N] ")
             except EOFError:
-                response = 'n'
+                response = "n"
 
-            if response.lower() != 'y':
+            if response.lower() != "y":
                 self.logger.warning("Update cancelled")
                 return 0
 
@@ -771,15 +819,19 @@ class UpdateManager:
 
     def _run_post_update(self) -> int:
         """Run post-update script and restart services."""
-        post_update_script = self.config.repo_dir / 'scripts' / 'update' / 'post_update.sh'
+        post_update_script = (
+            self.config.repo_dir / "scripts" / "update" / "post_update.sh"
+        )
 
         if post_update_script.exists():
             self.logger.info("Running post-update script...")
-            result = subprocess.run(['sudo', str(post_update_script)], check=False)
+            result = subprocess.run(["sudo", str(post_update_script)], check=False)
             if result.returncode == 0:
                 self.logger.success("Post-update script completed")
             else:
-                self.logger.error(f"Post-update script failed. Check logs: {self.config.log_dir}/post_update.log")
+                self.logger.error(
+                    f"Post-update script failed. Check logs: {self.config.log_dir}/post_update.log"
+                )
                 self._remove_update_lock()
                 return 1
         else:
@@ -820,21 +872,27 @@ class UpdateManager:
         # Service status
         svc_status = self.services.status()
         print("Services:")
-        if svc_status['ros_running']:
-            print(f"  {Colors.GREEN}●{Colors.NC} ROS nodes: running (tmux session 'ros_nodes')")
+        if svc_status["ros_running"]:
+            print(
+                f"  {Colors.GREEN}●{Colors.NC} ROS nodes: running (tmux session 'ros_nodes')"
+            )
         else:
             print(f"  {Colors.RED}○{Colors.NC} ROS nodes: stopped")
 
-        if svc_status['discovery_running']:
-            if svc_status['discovery_systemd']:
+        if svc_status["discovery_running"]:
+            if svc_status["discovery_systemd"]:
                 print(f"  {Colors.GREEN}●{Colors.NC} Discovery: running (systemd)")
             else:
-                print(f"  {Colors.GREEN}●{Colors.NC} Discovery: running (tmux session 'discovery')")
+                print(
+                    f"  {Colors.GREEN}●{Colors.NC} Discovery: running (tmux session 'discovery')"
+                )
         else:
             print(f"  {Colors.RED}○{Colors.NC} Discovery: stopped")
 
-        if svc_status['update_running']:
-            print(f"  {Colors.YELLOW}●{Colors.NC} Update: in progress (lock: {self.config.update_lock})")
+        if svc_status["update_running"]:
+            print(
+                f"  {Colors.YELLOW}●{Colors.NC} Update: in progress (lock: {self.config.update_lock})"
+            )
         print()
 
         cached = self._read_cache()
@@ -869,7 +927,6 @@ class UpdateManager:
         """View ROS services in tmux."""
         return self.services.view()
 
-
     def quick_check(self) -> int:
         """Quick silent check for .zshrc integration."""
         self._check_repo()
@@ -896,25 +953,27 @@ class UpdateManager:
         latest_tag = self.git.get_latest_tag()
 
         if not latest_tag:
-            self._write_cache('0')
+            self._write_cache("0")
             return 0
 
         latest_tag_commit = self.git.resolve_ref(latest_tag)
 
         if current == latest_tag_commit:
-            self._write_cache('0')
+            self._write_cache("0")
             return 0
 
         if self.git.is_ancestor(latest_tag_commit, current):
-            self._write_cache('0')
+            self._write_cache("0")
             return 0
 
-        self._write_cache('1')
+        self._write_cache("1")
         return 1
 
     def daemon(self) -> int:
         """Run as background daemon."""
-        self.logger.info(f"Starting innate-update daemon (interval: {self.config.daemon_interval}s)")
+        self.logger.info(
+            f"Starting innate-update daemon (interval: {self.config.daemon_interval}s)"
+        )
 
         # Fetch latest tags before doing anything else
         self.logger.info("Daemon: fetching latest tags...")
@@ -939,7 +998,7 @@ class UpdateManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Innate-OS Update Manager',
+        description="Innate-OS Update Manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
@@ -964,20 +1023,47 @@ Configuration (environment variables):
 
 By default, updates download pre-built release artifacts.
 Use --dev flag to update via git to the latest commit.
-"""
+""",
     )
 
-    parser.add_argument('command', nargs='?',
-                        choices=['check', 'apply', 'status', 'start', 'stop', 'restart', 'view', 'daemon', 'hello', '--quick-check'],
-                        help='Command to run')
-    parser.add_argument('--dev', '-d', action='store_true',
-                        help='Use development mode (git-based update to latest commit)')
-    parser.add_argument('--yes', '-y', action='store_true',
-                        help='Skip confirmation prompts (auto-confirm updates)')
-    parser.add_argument('--background', '-b', action='store_true',
-                        help='Run in background tmux session (for apply command)')
-    parser.add_argument('--in-tmux', action='store_true',
-                        help=argparse.SUPPRESS)  # Internal flag, set when already in tmux
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=[
+            "check",
+            "apply",
+            "status",
+            "start",
+            "stop",
+            "restart",
+            "view",
+            "daemon",
+            "hello",
+            "--quick-check",
+        ],
+        help="Command to run",
+    )
+    parser.add_argument(
+        "--dev",
+        "-d",
+        action="store_true",
+        help="Use development mode (git-based update to latest commit)",
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip confirmation prompts (auto-confirm updates)",
+    )
+    parser.add_argument(
+        "--background",
+        "-b",
+        action="store_true",
+        help="Run in background tmux session (for apply command)",
+    )
+    parser.add_argument(
+        "--in-tmux", action="store_true", help=argparse.SUPPRESS
+    )  # Internal flag, set when already in tmux
 
     args = parser.parse_args()
 
@@ -986,15 +1072,15 @@ Use --dev flag to update via git to the latest commit.
         sys.exit(1)
 
     # Handle --background: re-exec in a detached tmux session
-    if args.background and args.command == 'apply' and not args.in_tmux:
+    if args.background and args.command == "apply" and not args.in_tmux:
         # Build command to run in tmux
-        cmd_parts = [sys.executable, sys.argv[0], 'apply', '--in-tmux']
+        cmd_parts = [sys.executable, sys.argv[0], "apply", "--in-tmux"]
         if args.dev:
-            cmd_parts.append('--dev')
+            cmd_parts.append("--dev")
         if args.yes:
-            cmd_parts.append('--yes')
-        
-        tmux_cmd = ['tmux', 'new-session', '-d', '-s', 'innate_update'] + cmd_parts
+            cmd_parts.append("--yes")
+
+        tmux_cmd = ["tmux", "new-session", "-d", "-s", "innate_update"] + cmd_parts
         result = subprocess.run(tmux_cmd)
         if result.returncode == 0:
             print(f"Update started in background (tmux session 'innate_update')")
@@ -1006,23 +1092,23 @@ Use --dev flag to update via git to the latest commit.
 
     config = Config()
     config.load_github_token()
-    logger = Logger(config.log_dir / 'update.log')
+    logger = Logger(config.log_dir / "update.log")
     manager = UpdateManager(config, logger, dev_mode=args.dev, yes=args.yes)
 
     commands = {
-        'check': manager.check,
-        'apply': manager.apply,
-        'status': manager.status,
-        'start': manager.start_services,
-        'stop': manager.stop_services,
-        'restart': manager.restart_services,
-        'view': manager.view_services,
-        'daemon': manager.daemon,
-        '--quick-check': manager.quick_check,
+        "check": manager.check,
+        "apply": manager.apply,
+        "status": manager.status,
+        "start": manager.start_services,
+        "stop": manager.stop_services,
+        "restart": manager.restart_services,
+        "view": manager.view_services,
+        "daemon": manager.daemon,
+        "--quick-check": manager.quick_check,
     }
 
     sys.exit(commands[args.command]())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
