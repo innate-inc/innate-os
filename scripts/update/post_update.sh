@@ -222,46 +222,26 @@ if [ -d "$REPO_DIR/udev" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 4. Update Bluetooth configurations (optional - only on systems with bluetooth)
+# 4. Configure Hardware (Bluetooth, Arducam, WiFi power management)
 # -----------------------------------------------------------------------------
-log "Checking Bluetooth configurations..."
-if [ -f "$REPO_DIR/config/bluetooth/main.conf" ]; then
-    if [ -d "/etc/bluetooth" ]; then
-        log "  Updating /etc/bluetooth/main.conf"
-        rm -f /etc/bluetooth/main.conf
-        cp "$REPO_DIR/config/bluetooth/main.conf" /etc/bluetooth/main.conf
-    else
-        log "  Skipping bluetooth config - /etc/bluetooth not found (VM or no bluetooth)"
-    fi
-fi
+log "Configuring hardware..."
 
-if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
-    if [ -d "/lib/systemd/system" ]; then
-        log "  Updating bluetooth service override"
-        mkdir -p /lib/systemd/system/bluetooth.service.d/
-        rm -f /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
-        cp "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" /lib/systemd/system/bluetooth.service.d/nv-bluetooth-service.conf
-        systemctl daemon-reload
+HARDWARE_REBOOT_REQUIRED=false
+HARDWARE_SCRIPT="$REPO_DIR/scripts/update/configure_hardware.sh"
+if [ -f "$HARDWARE_SCRIPT" ]; then
+    chmod +x "$HARDWARE_SCRIPT"
+    "$HARDWARE_SCRIPT" "$REPO_DIR" 2>&1 | tee -a "$LOG_FILE"
+    HARDWARE_EXIT_CODE=${PIPESTATUS[0]}
+    if [ $HARDWARE_EXIT_CODE -eq 0 ]; then
+        log "  Hardware configuration completed successfully"
+    elif [ $HARDWARE_EXIT_CODE -eq 2 ]; then
+        log "  Hardware configuration completed (reboot required)"
+        HARDWARE_REBOOT_REQUIRED=true
     else
-        log "  Skipping bluetooth service override - systemd not found"
-    fi
-fi
-
-# -----------------------------------------------------------------------------
-# 4b. Configure Arducam Microphone (ALSA + PulseAudio)
-# -----------------------------------------------------------------------------
-log "Configuring Arducam microphone..."
-
-ARDUCAM_SCRIPT="$REPO_DIR/scripts/update/setup_arducam.sh"
-if [ -f "$ARDUCAM_SCRIPT" ]; then
-    chmod +x "$ARDUCAM_SCRIPT"
-    if "$ARDUCAM_SCRIPT" 2>&1 | tee -a "$LOG_FILE"; then
-        log "  Arducam setup completed successfully"
-    else
-        log "  WARNING: Arducam setup script failed (microphone may not work)"
+        log "  WARNING: Hardware configuration script failed"
     fi
 else
-    log "  WARNING: setup_arducam.sh not found at $ARDUCAM_SCRIPT"
+    log "  WARNING: configure_hardware.sh not found at $HARDWARE_SCRIPT"
 fi
 
 # -----------------------------------------------------------------------------
@@ -435,14 +415,18 @@ if systemctl list-unit-files bluetooth.service &>/dev/null; then
     SERVICES+=("bluetooth.service")
 fi
 
-for service in "${SERVICES[@]}"; do
-    if [ -f "/etc/systemd/system/$service" ] || systemctl list-unit-files "$service" &>/dev/null; then
-        log "  Enabling $service"
-        systemctl enable "$service" 2>/dev/null || true
-        log "  Starting $service"
-        systemctl start "$service" 2>/dev/null || true
-    fi
-done
+if [ "$HARDWARE_REBOOT_REQUIRED" = true ]; then
+    log "  Skipping service restart (reboot required)"
+else
+    for service in "${SERVICES[@]}"; do
+        if [ -f "/etc/systemd/system/$service" ] || systemctl list-unit-files "$service" &>/dev/null; then
+            log "  Enabling $service"
+            systemctl enable "$service" 2>/dev/null || true
+            log "  Starting $service"
+            systemctl start "$service" 2>/dev/null || true
+        fi
+    done
+fi
 
 # -----------------------------------------------------------------------------
 # 11. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
@@ -454,12 +438,25 @@ done
 log "========================================"
 log "Post-update script completed successfully"
 log "========================================"
-log ""
-log "To start ROS manually:"
-log "  tmux attach -t ros_nodes  (if already running)"
-log "  OR"
-log "  launch_ros_in_tmux.sh     (to start fresh)"
-log ""
+
+if [ "$HARDWARE_REBOOT_REQUIRED" != true ]; then
+    log ""
+    log "To start ROS manually:"
+    log "  tmux attach -t ros_nodes  (if already running)"
+    log "  OR"
+    log "  launch_ros_in_tmux.sh     (to start fresh)"
+    log ""
+fi
+
+# Notify if reboot is required for hardware changes
+if [ "$HARDWARE_REBOOT_REQUIRED" = true ]; then
+    log ""
+    log "╔════════════════════════════════════════════════════════════╗"
+    log "║  REBOOT REQUIRED                                           ║"
+    log "║  Hardware configuration changes require a system reboot.   ║"
+    log "╚════════════════════════════════════════════════════════════╝"
+    log ""
+fi
 
 # Fix log file ownership
 ensure_log_ownership
