@@ -1,34 +1,40 @@
 #!/bin/bash
 # Install deploy key on a robot and configure git remote
-# Usage: ./install-key-on-robot.sh <key-file> <robot-user@robot-ip>
+# Usage: ./install-key-on-robot.sh <robot-number> <robot-user@robot-ip>
 #
-# Example: ./install-key-on-robot.sh ./deploy-keys/robot-001/innate_deploy_key jetson1@192.168.55.1
+# Example: ./install-key-on-robot.sh 1 jetson1@192.168.55.1
+#          ./install-key-on-robot.sh 42 jetson1@192.168.1.100
 
 set -e
 
 # Configuration
 RELEASE_REPO="${RELEASE_REPO:-innate-inc/innate-os-release}"
 INNATE_OS_PATH="${INNATE_OS_PATH:-/home/jetson1/innate-os}"
+DEPLOY_KEYS_DIR="${DEPLOY_KEYS_DIR:-$(cd "$(dirname "$0")/../../deploy-keys" && pwd)}"
+PREFIX="robot"
 
-if [ $# -lt 2 ]; then
-    echo "Usage: $0 <key-file> <robot-user@robot-ip>"
-    echo "Example: $0 ./deploy-keys/robot-001/innate_deploy_key jetson1@192.168.55.1"
-    echo ""
-    echo "Environment variables:"
-    echo "  RELEASE_REPO     Release repository (default: innate-inc/innate-os-release)"
-    echo "  INNATE_OS_PATH   Path to innate-os on robot (default: /home/jetson1/innate-os)"
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <robot-number> [robot-user@robot-ip]"
+    echo "Example: $0 1"
+    echo "         $0 1 jetson1@192.168.55.1"
     exit 1
 fi
 
-KEY_FILE="$1"
-ROBOT_HOST="$2"
+ROBOT_NUM="$1"
+ROBOT_HOST="${2:-jetson1@192.168.55.1}"
+
+# Format robot ID with zero-padding (1 -> robot-001)
+ROBOT_ID=$(printf '%s-%03d' "$PREFIX" "$ROBOT_NUM")
+KEY_FILE="$DEPLOY_KEYS_DIR/$ROBOT_ID/innate_deploy_key"
 
 if [ ! -f "$KEY_FILE" ]; then
-    echo "Error: Key file not found: $KEY_FILE"
+    echo "Error: Robot #$ROBOT_NUM not found"
+    echo "       Looked for: $KEY_FILE"
+    echo ""
+    echo "Available robots:"
+    ls -d "$DEPLOY_KEYS_DIR"/*/ 2>/dev/null | xargs -n1 basename | sort || echo "  (none)"
     exit 1
 fi
-
-ROBOT_ID=$(basename "$(dirname "$KEY_FILE")")
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Installing deploy key for $ROBOT_ID"
@@ -102,6 +108,10 @@ if [ -d "\$INNATE_OS_PATH/.git" ]; then
     git remote prune origin 2>/dev/null || true
     git fetch --prune 2>/dev/null || true
     echo "   ✓ Pruned stale remote branches"
+    
+    # Pull latest
+    git pull origin main 2>/dev/null || git pull 2>/dev/null || true
+    echo "   ✓ Pulled latest from release repo"
 else
     echo "   ⚠ innate-os not found at \$INNATE_OS_PATH"
     echo "     Clone it first with: git clone git@github.com:\$RELEASE_REPO.git \$INNATE_OS_PATH"
