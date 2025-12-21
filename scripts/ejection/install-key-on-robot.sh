@@ -54,6 +54,12 @@ set -e
 RELEASE_REPO="$RELEASE_REPO"
 INNATE_OS_PATH="$INNATE_OS_PATH"
 
+# Kill any running tmux sessions (ros_nodes)
+if tmux has-session -t ros_nodes 2>/dev/null; then
+    tmux kill-session -t ros_nodes
+    echo "   ✓ Killed ros_nodes tmux session"
+fi
+
 # Remove old SSH keys (no longer needed with deploy keys)
 if [ -f ~/.ssh/id_ed25519 ]; then
     rm -f ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
