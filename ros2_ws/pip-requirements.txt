@@ -12,6 +12,7 @@ websockets
 
 # Data/ML
 h5py
+einops
 torch
 torchvision
 
@@ -21,6 +22,7 @@ dynamixel-sdk
 pyserial
 trimesh
 smbus2
+sounddevice
 
 # Text-to-Speech
 cartesia

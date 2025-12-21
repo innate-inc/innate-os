@@ -17,6 +17,7 @@ tmux
 libudev-dev
 libusb-1.0-0-dev
 nlohmann-json3-dev
+portaudio19-dev
 
 # GStreamer (for WebRTC streaming)
 gstreamer1.0-tools
