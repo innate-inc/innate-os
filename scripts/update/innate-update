@@ -16,16 +16,10 @@ Usage:
 """
 
 import argparse
-import json
 import os
-import shutil
 import subprocess
 import sys
-import tarfile
-import tempfile
 import time
-import urllib.request
-import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -54,9 +48,7 @@ class Config:
             "/tmp/innate-update.lock"
         )  # Use /tmp (always user-writable)
         self.branch = os.environ.get("INNATE_UPDATE_BRANCH", "main")
-        self.github_repo = os.environ.get("GITHUB_REPO", "cristidragomir97/innate-os")
         self.daemon_interval = int(os.environ.get("INNATE_UPDATE_INTERVAL", "3600"))
-        self.github_token = os.environ.get("GITHUB_TOKEN", "")
 
         # Ensure directories exist
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -64,16 +56,6 @@ class Config:
             self.state_dir.mkdir(parents=True, exist_ok=True)
         except PermissionError:
             pass
-
-    def load_github_token(self):
-        """Load saved GitHub token for private repos."""
-        if self.github_token:
-            return
-
-        token_file = Path.home() / ".github_token"
-        if token_file.exists():
-            self.github_token = token_file.read_text().strip()
-            os.environ["GITHUB_TOKEN"] = self.github_token
 
 
 class Logger:
@@ -104,71 +86,6 @@ class Logger:
     def error(self, message: str):
         print(f"{Colors.RED}[ERROR]{Colors.NC} {message}", file=sys.stderr)
         self._write_to_file(f"ERROR: {message}")
-
-
-class GitHubAPI:
-    """GitHub API client for fetching release information."""
-
-    def __init__(self, config: Config):
-        self.config = config
-        self.base_url = f"https://api.github.com/repos/{config.github_repo}"
-
-    def _request(self, url: str, accept: str = "application/vnd.github+json") -> bytes:
-        """Make authenticated request to GitHub API."""
-        headers = {"Accept": accept}
-        if self.config.github_token:
-            headers["Authorization"] = f"token {self.config.github_token}"
-
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=30) as response:
-                return response.read()
-        except urllib.error.HTTPError as e:
-            raise Exception(f"GitHub API error: {e.code} {e.reason}")
-        except urllib.error.URLError as e:
-            raise Exception(f"Network error: {e.reason}")
-
-    def get_latest_release(self) -> dict:
-        """Get latest release info from GitHub."""
-        url = f"{self.base_url}/releases/latest"
-        data = self._request(url)
-        return json.loads(data)
-
-    def get_release_by_tag(self, tag: str) -> dict:
-        """Get release info by tag name."""
-        url = f"{self.base_url}/releases/tags/{tag}"
-        data = self._request(url)
-        return json.loads(data)
-
-    def download_asset(self, asset_url: str, dest_path: Path) -> bool:
-        """Download a release asset."""
-        # For private repos, need to use API URL with octet-stream accept header
-        headers = {"Accept": "application/octet-stream"}
-        if self.config.github_token:
-            headers["Authorization"] = f"token {self.config.github_token}"
-
-        req = urllib.request.Request(asset_url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=300) as response:
-                with open(dest_path, "wb") as f:
-                    shutil.copyfileobj(response, f)
-            return True
-        except (urllib.error.HTTPError, urllib.error.URLError):
-            return False
-
-    def find_asset_url(
-        self, release: dict, pattern: str = ".tar.gz"
-    ) -> tuple[str, str]:
-        """Find asset URL matching pattern (excluding -source.tar.gz).
-
-        Returns (api_url, asset_name) tuple.
-        """
-        for asset in release.get("assets", []):
-            name = asset.get("name", "")
-            if name.endswith(pattern) and "-source" not in name:
-                # Use API URL for downloading (works with private repos)
-                return asset.get("url", ""), name
-        return "", ""
 
 
 class ServiceManager:
@@ -379,14 +296,14 @@ class GitRepo:
     def fetch(self, tags=True) -> bool:
         args = ["fetch", "origin", self.branch]
         if tags:
-            args.append("--tags")
+            args.extend(["--tags", "--force"])  # Force to handle remote tag updates
         result = self._run(args, check=False)
         return result.returncode == 0
 
     def fetch_tags_only(self) -> bool:
         """Fetch only tags from remote, without fetching branch commits."""
         result = self._run(
-            ["fetch", "origin", "refs/tags/*:refs/tags/*", "--prune"], check=False
+            ["fetch", "origin", "--tags", "--force", "--prune"], check=False
         )
         return result.returncode == 0
 
@@ -466,7 +383,6 @@ class UpdateManager:
         self.dev_mode = dev_mode
         self.yes = yes
         self.git = GitRepo(config)
-        self.github = GitHubAPI(config)
         self.services = ServiceManager(config, logger)
 
     def _check_repo(self):
@@ -647,7 +563,7 @@ class UpdateManager:
         return self._do_git_update(target_ref, target_display, current)
 
     def _apply_tag_mode(self, current: str) -> int:
-        """Apply updates to latest tag by downloading release artifacts."""
+        """Apply updates to latest tag via git checkout."""
         latest_tag = self.git.get_latest_tag()
 
         if not latest_tag:
@@ -674,110 +590,7 @@ class UpdateManager:
         print(f"Changes to be applied for {latest_tag}:")
         self._show_commits("HEAD", latest_tag, commits_behind, max_show=20)
 
-        # Try to download release artifacts
-        return self._do_artifact_update(latest_tag, current)
-
-    def _do_artifact_update(self, tag: str, old_commit: str) -> int:
-        """Download and extract release artifacts."""
-        print()
-
-        # Confirm (skip if -y flag provided)
-        if not self.yes:
-            try:
-                response = input(f"Continue with update to {tag}? [y/N] ")
-            except EOFError:
-                response = "n"
-
-            if response.lower() != "y":
-                self.logger.warning("Update cancelled")
-                return 0
-
-        # Try to fetch release artifacts from GitHub
-        self.logger.info(f"Fetching release {tag} from GitHub...")
-
-        try:
-            release = self.github.get_release_by_tag(tag)
-            asset_url, asset_name = self.github.find_asset_url(release)
-
-            if not asset_url:
-                self.logger.warning(
-                    "No release artifacts found, falling back to git update"
-                )
-                return self._do_git_update(tag, tag, old_commit, skip_confirm=True)
-
-            self.logger.info(f"Downloading {asset_name}...")
-
-            # Download to temp file
-            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-
-            if not self.github.download_asset(asset_url, tmp_path):
-                self.logger.error("Failed to download release artifact")
-                tmp_path.unlink(missing_ok=True)
-                self._remove_update_lock()
-                return 1
-
-            # Verify it's a valid archive
-            if not tarfile.is_tarfile(tmp_path):
-                self.logger.error("Downloaded file is not a valid archive")
-                tmp_path.unlink(missing_ok=True)
-                self._remove_update_lock()
-                return 1
-
-            self.logger.info("Extracting artifacts...")
-
-            # Extract to temp directory
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                with tarfile.open(tmp_path) as tar:
-                    tar.extractall(tmp_dir)
-
-                tmp_path.unlink(missing_ok=True)
-
-                # Find the extracted directory (usually innate-os/)
-                extracted_dirs = list(Path(tmp_dir).iterdir())
-                if len(extracted_dirs) == 1 and extracted_dirs[0].is_dir():
-                    src_dir = extracted_dirs[0]
-                else:
-                    src_dir = Path(tmp_dir)
-
-                # Backup current ros2_ws build artifacts (just in case)
-                backup_dir = self.config.repo_dir / ".update-backup"
-                ros2_ws = self.config.repo_dir / "ros2_ws"
-
-                # Update files from the archive
-                self.logger.info("Updating installation...")
-
-                # Copy new files, preserving .git directory
-                for item in src_dir.iterdir():
-                    dest = self.config.repo_dir / item.name
-                    if item.name == ".git":
-                        continue  # Preserve existing .git
-
-                    if dest.exists():
-                        if dest.is_dir():
-                            shutil.rmtree(dest)
-                        else:
-                            dest.unlink()
-
-                    if item.is_dir():
-                        shutil.copytree(item, dest)
-                    else:
-                        shutil.copy2(item, dest)
-
-            # Update git to point to the new tag
-            self.git.fetch(tags=True)
-            self.git.checkout(tag)
-
-            new_commit = self.git.current_commit()
-            self.logger.success(f"Code updated: {old_commit[:7]} → {new_commit[:7]}")
-
-        except Exception as e:
-            self.logger.error(f"Failed to download release: {e}")
-            self.logger.warning("Falling back to git update")
-            return self._do_git_update(tag, tag, old_commit, skip_confirm=True)
-
-        # Run post-update script
-        return self._run_post_update()
+        return self._do_git_update(latest_tag, latest_tag, current)
 
     def _do_git_update(
         self,
@@ -1003,7 +816,7 @@ def main():
         epilog="""
 Commands:
   check         Check if updates are available (latest tag)
-  apply         Apply pending updates (downloads release artifacts)
+  apply         Apply pending updates (via git checkout)
   status        Show current version and service status
   start         Start ROS services (tmux session)
   stop          Stop ROS services
@@ -1019,10 +832,9 @@ Configuration (environment variables):
   INNATE_STATE_DIR       State directory (default: /var/lib/innate-update)
   INNATE_UPDATE_BRANCH   Git branch to track (default: main)
   INNATE_UPDATE_INTERVAL Daemon check interval in seconds (default: 3600)
-  GITHUB_REPO            GitHub repository (default: innate-inc/innate-os)
 
-By default, updates download pre-built release artifacts.
-Use --dev flag to update via git to the latest commit.
+Updates are performed via git using deploy keys (no GitHub API token required).
+Changelog is derived from git log between tags.
 """,
     )
 
@@ -1091,7 +903,6 @@ Use --dev flag to update via git to the latest commit.
             sys.exit(1)
 
     config = Config()
-    config.load_github_token()
     logger = Logger(config.log_dir / "update.log")
     manager = UpdateManager(config, logger, dev_mode=args.dev, yes=args.yes)
 
