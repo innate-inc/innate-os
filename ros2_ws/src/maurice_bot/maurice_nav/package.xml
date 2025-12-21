@@ -25,6 +25,8 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-cupy</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
 
   <!-- Navigation dependencies -->
   <exec_depend>nav2_simple_commander</exec_depend>

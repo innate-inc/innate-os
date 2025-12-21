@@ -1,0 +1,128 @@
+# Costmap configuration with vision-based obstacle detection
+#
+# This configuration adds camera-based obstacle detection as an additional
+# observation source alongside the laser scanner. Objects detected by the
+# vision system are published as PointCloud2 and integrated into the costmap.
+#
+# Usage:
+#   1. Run the vision_obstacle_detector node (publishes to /camera/obstacle_points)
+#   2. Use this config file instead of costmap.yaml or costmap_mapfree.yaml
+#
+# The camera observation source is configured with:
+#   - Marking: Objects detected by camera are marked as obstacles
+#   - Clearing: Camera does NOT clear obstacles (only laser does this)
+#   - Lower priority than laser for accurate obstacle boundaries
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: false
+      footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+      resolution: 0.05
+      track_unknown_space: false
+      rolling_window: true
+      width: 10
+      height: 10
+      
+      # Plugins: obstacle layer now has multiple observation sources
+      plugins: ["obstacle_layer", "inflation_layer"]
+      
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        # Multiple observation sources: laser scan + camera point cloud
+        observation_sources: scan camera
+        
+        # Laser scanner - primary obstacle detection with clearing
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          max_obstacle_height: 2.0
+          min_obstacle_height: 0.0
+          clearing: True   # Laser clears obstacles (raytracing)
+          marking: True    # Laser marks obstacles
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+        
+        # Camera-based vision detection - supplementary obstacle detection
+        camera:
+          topic: /camera/obstacle_points
+          data_type: "PointCloud2"
+          max_obstacle_height: 1.0     # Objects up to 1m tall
+          min_obstacle_height: 0.0     # Include ground-level obstacles
+          clearing: False              # Camera does NOT clear (avoid phantom clearing)
+          marking: True                # Camera marks detected obstacles
+          obstacle_max_range: 3.0      # Max detection range
+          obstacle_min_range: 0.1      # Min detection range
+          # Note: No raytrace for PointCloud2 - it only marks, doesn't clear
+      
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.3
+      
+      always_send_full_costmap: True
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: false
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+      track_unknown_space: false
+      
+      plugins: ["obstacle_layer", "inflation_layer"]
+      
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan camera
+        
+        # Laser scanner
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          max_obstacle_height: 2.0
+          min_obstacle_height: 0.0
+          clearing: True
+          marking: True
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+        
+        # Camera vision detection
+        camera:
+          topic: /camera/obstacle_points
+          data_type: "PointCloud2"
+          max_obstacle_height: 1.0
+          min_obstacle_height: 0.0
+          clearing: False
+          marking: True
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.1
+      
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.2
+      
+      goal_checker:
+        plugin: "nav2_controller::SimpleGoalChecker"
+        xy_goal_tolerance: 0.10
+        yaw_goal_tolerance: 0.15
+        stateful: true
+

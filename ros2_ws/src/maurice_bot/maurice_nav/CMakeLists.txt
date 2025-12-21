@@ -34,6 +34,13 @@ install(PROGRAMS
   maurice_nav/__init__.py
   maurice_nav/mode_manager.py
   maurice_nav/grid_localizer.py
+  maurice_nav/vision_obstacle_detector.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install executable scripts (entry points)
+install(PROGRAMS
+  scripts/vision_obstacle_detector
   DESTINATION lib/${PROJECT_NAME}
 )
 

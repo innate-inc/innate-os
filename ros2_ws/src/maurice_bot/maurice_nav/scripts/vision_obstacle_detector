@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""
+Entry point script for vision_obstacle_detector node.
+
+This script allows running the node with:
+    ros2 run maurice_nav vision_obstacle_detector
+"""
+
+import sys
+import os
+
+# Add the package lib directory to the path
+lib_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, lib_dir)
+
+from vision_obstacle_detector import main
+
+if __name__ == '__main__':
+    main()
+
