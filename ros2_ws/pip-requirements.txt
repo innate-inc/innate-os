@@ -20,6 +20,7 @@ urdf-parser-py
 dynamixel-sdk
 pyserial
 trimesh
+smbus2
 
 # Text-to-Speech
 cartesia

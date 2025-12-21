@@ -95,8 +95,10 @@ ros-humble-depth-image-proc
 ros-humble-camera-calibration
 ros-humble-compressed-image-transport
 ros-humble-vision-msgs
+ros-humble-rplidar-ros
 
 # ROS2 Humble packages - Hardware/Manipulation
+ros-humble-dynamixel-sdk
 ros-humble-moveit
 # ros-humble-moveit-py
 ros-humble-moveit-ros-move-group
