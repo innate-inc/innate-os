@@ -53,6 +53,7 @@ ssh "$ROBOT_HOST" bash << REMOTE_EOF
 set -e
 RELEASE_REPO="$RELEASE_REPO"
 INNATE_OS_PATH="$INNATE_OS_PATH"
+ROBOT_ID="$ROBOT_ID"
 
 # Kill any running tmux sessions (ros_nodes)
 if tmux has-session -t ros_nodes 2>/dev/null; then
@@ -89,21 +90,31 @@ if ! grep -q "github.com" ~/.ssh/known_hosts 2>/dev/null; then
     echo "   ✓ GitHub added to known_hosts"
 fi
 
-# Add SSH config if not present
-if [ ! -f ~/.ssh/config ] || ! grep -q "innate_deploy_key" ~/.ssh/config 2>/dev/null; then
-    touch ~/.ssh/config
-    chmod 600 ~/.ssh/config
-    echo "" >> ~/.ssh/config
-    echo "# Innate OS deploy key" >> ~/.ssh/config
-    echo "Host github.com" >> ~/.ssh/config
-    echo "    HostName github.com" >> ~/.ssh/config
-    echo "    User git" >> ~/.ssh/config
-    echo "    IdentityFile ~/.ssh/innate_deploy_key" >> ~/.ssh/config
-    echo "    IdentitiesOnly yes" >> ~/.ssh/config
-    echo "   ✓ SSH config updated"
-else
-    echo "   ✓ SSH config already configured"
+# Add/update SSH config to ensure it uses the correct deploy key for this robot
+mkdir -p ~/.ssh
+touch ~/.ssh/config
+chmod 600 ~/.ssh/config
+
+# Remove existing github.com entry if present (to ensure we use the correct key)
+if grep -q "^Host github.com" ~/.ssh/config 2>/dev/null; then
+    # Create a temporary file without the github.com section
+    # Remove from "Host github.com" to the next "Host" line or end of file
+    awk '
+        /^Host github.com$/ { skip=1; next }
+        /^Host / && skip { skip=0 }
+        !skip { print }
+    ' ~/.ssh/config > ~/.ssh/config.tmp 2>/dev/null && mv ~/.ssh/config.tmp ~/.ssh/config || true
 fi
+
+# Always add the correct SSH config for this robot's deploy key
+echo "" >> ~/.ssh/config
+echo "# Innate OS deploy key for \$ROBOT_ID" >> ~/.ssh/config
+echo "Host github.com" >> ~/.ssh/config
+echo "    HostName github.com" >> ~/.ssh/config
+echo "    User git" >> ~/.ssh/config
+echo "    IdentityFile ~/.ssh/innate_deploy_key" >> ~/.ssh/config
+echo "    IdentitiesOnly yes" >> ~/.ssh/config
+echo "   ✓ SSH config updated for \$ROBOT_ID"
 
 # Clone or update git remote to release repo
 if [ ! -d "\$INNATE_OS_PATH/.git" ]; then
@@ -155,9 +166,19 @@ else
     git fetch --prune 2>/dev/null || true
     echo "   ✓ Pruned stale remote branches"
     
-    # Pull latest
-    git pull origin main 2>/dev/null || git pull 2>/dev/null || true
-    echo "   ✓ Pulled latest from release repo"
+    # Reset to match remote exactly (discard any local commits/changes)
+    # This ensures the robot always matches the release repo state
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+        git reset --hard origin/main 2>/dev/null || {
+            echo "   ⚠️  Warning: Failed to reset to origin/main, attempting pull..."
+            git pull origin main 2>/dev/null || git pull 2>/dev/null || true
+        }
+        echo "   ✓ Reset to match origin/main"
+    else
+        # Fallback to pull if origin/main doesn't exist yet
+        git pull origin main 2>/dev/null || git pull 2>/dev/null || true
+        echo "   ✓ Pulled latest from release repo"
+    fi
 fi
 
 # Test GitHub connection

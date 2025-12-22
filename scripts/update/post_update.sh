@@ -474,18 +474,21 @@ if systemctl list-unit-files bluetooth.service &>/dev/null; then
     SERVICES+=("bluetooth.service")
 fi
 
-if [ "$HARDWARE_REBOOT_REQUIRED" = true ]; then
-    log "  Skipping service restart (reboot required)"
-else
-    for service in "${SERVICES[@]}"; do
-        if [ -f "/etc/systemd/system/$service" ] || systemctl list-unit-files "$service" &>/dev/null; then
-            log "  Enabling $service"
-            systemctl enable "$service" 2>/dev/null || true
+# Always enable services (so they start on boot after reboot)
+# But only start them if reboot is not required
+for service in "${SERVICES[@]}"; do
+    if [ -f "/etc/systemd/system/$service" ] || systemctl list-unit-files "$service" &>/dev/null; then
+        log "  Enabling $service"
+        systemctl enable "$service" 2>/dev/null || true
+        
+        if [ "$HARDWARE_REBOOT_REQUIRED" = true ]; then
+            log "  Skipping start of $service (reboot required - will start after reboot)"
+        else
             log "  Starting $service"
             systemctl start "$service" 2>/dev/null || true
         fi
-    done
-fi
+    fi
+done
 
 # -----------------------------------------------------------------------------
 # 11. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
