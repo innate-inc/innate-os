@@ -4,8 +4,6 @@ Description=Play shutdown sound (last service before poweroff)
 DefaultDependencies=no
 # After=shutdown.target means this runs AFTER all normal services are stopped
 After=shutdown.target
-# Conflicts ensures this only runs during actual shutdown/reboot
-Conflicts=reboot.target halt.target poweroff.target
 # Before=final.target ensures this is one of the last things to run
 Before=final.target
 
