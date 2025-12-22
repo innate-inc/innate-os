@@ -129,14 +129,13 @@ GITIGNORE
     git remote set-url origin "git@github.com:\$RELEASE_REPO.git"
     echo "   ✓ Git remote set to git@github.com:\$RELEASE_REPO.git"
     
-    # Prune remote tracking branches (suppress all output)
-    git remote prune origin >/dev/null 2>&1 || true
-    git fetch --prune --quiet 2>/dev/null || true
+    # Prune remote tracking branches
+    git remote prune origin 2>/dev/null || true
+    git fetch --prune 2>/dev/null || true
     echo "   ✓ Pruned stale remote branches"
     
-    # Pull latest (suppress status output)
-    GIT_TERMINAL_PROMPT=0 git pull origin main --quiet 2>/dev/null || \
-        GIT_TERMINAL_PROMPT=0 git pull --quiet 2>/dev/null || true
+    # Pull latest
+    git pull origin main 2>/dev/null || git pull 2>/dev/null || true
     echo "   ✓ Pulled latest from release repo"
 else
     echo "   ⚠ innate-os not found at \$INNATE_OS_PATH"
