@@ -252,6 +252,44 @@ if [ "$FIRST_INSTALL" = true ]; then
 else
     # Apt dependencies
     log "Checking apt dependencies..."
+    
+    # Check if ROS 2 Humble is installed
+    if ! dpkg -l | grep -q "^ii.*ros-humble-ros-base"; then
+        log "  ROS 2 Humble not found. Installing ROS 2 Humble base..."
+        
+        # Add ROS2 GPG key
+        if [ ! -f /usr/share/keyrings/ros-archive-keyring.gpg ]; then
+            log "    Adding ROS 2 GPG key..."
+            curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+                -o /usr/share/keyrings/ros-archive-keyring.gpg || {
+                log "    ERROR: Failed to download ROS 2 GPG key"
+                exit 1
+            }
+        fi
+        
+        # Add ROS2 repository
+        if [ ! -f /etc/apt/sources.list.d/ros2.list ]; then
+            log "    Adding ROS 2 repository..."
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | \
+                tee /etc/apt/sources.list.d/ros2.list > /dev/null
+        fi
+        
+        # Install ROS2 base
+        log "    Updating package lists..."
+        apt-get update || {
+            log "    ERROR: Failed to update package lists"
+            exit 1
+        }
+        log "    Installing ROS 2 Humble base..."
+        apt-get install -y ros-humble-ros-base || {
+            log "    ERROR: Failed to install ROS 2 Humble base"
+            exit 1
+        }
+        log "  ROS 2 Humble base installed"
+    else
+        log "  ROS 2 Humble base already installed"
+    fi
+    
     APT_DEPS_FILE="$REPO_DIR/ros2_ws/apt-dependencies.txt"
     if [ -f "$APT_DEPS_FILE" ]; then
         # Add git-core PPA for latest git version (if not already added)

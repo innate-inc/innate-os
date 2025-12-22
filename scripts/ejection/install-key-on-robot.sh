@@ -81,35 +81,56 @@ mv ~/innate_deploy_key.tmp ~/.ssh/innate_deploy_key
 chmod 600 ~/.ssh/innate_deploy_key
 echo "   ✓ Deploy key installed"
 
-# Add SSH config if not present
-if ! grep -q "innate_deploy_key" ~/.ssh/config 2>/dev/null; then
-    cat >> ~/.ssh/config << 'SSHCONFIG'
+# Add GitHub to known_hosts if not present
+if ! grep -q "github.com" ~/.ssh/known_hosts 2>/dev/null; then
+    echo "   Adding GitHub to known_hosts..."
+    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+    chmod 644 ~/.ssh/known_hosts
+    echo "   ✓ GitHub added to known_hosts"
+fi
 
-# Innate OS deploy key
-Host github.com
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/innate_deploy_key
-    IdentitiesOnly yes
-SSHCONFIG
+# Add SSH config if not present
+if [ ! -f ~/.ssh/config ] || ! grep -q "innate_deploy_key" ~/.ssh/config 2>/dev/null; then
+    touch ~/.ssh/config
     chmod 600 ~/.ssh/config
+    echo "" >> ~/.ssh/config
+    echo "# Innate OS deploy key" >> ~/.ssh/config
+    echo "Host github.com" >> ~/.ssh/config
+    echo "    HostName github.com" >> ~/.ssh/config
+    echo "    User git" >> ~/.ssh/config
+    echo "    IdentityFile ~/.ssh/innate_deploy_key" >> ~/.ssh/config
+    echo "    IdentitiesOnly yes" >> ~/.ssh/config
     echo "   ✓ SSH config updated"
 else
     echo "   ✓ SSH config already configured"
 fi
 
-# Update git remote to release repo
-if [ -d "\$INNATE_OS_PATH/.git" ]; then
+# Clone or update git remote to release repo
+if [ ! -d "\$INNATE_OS_PATH/.git" ]; then
+    # Remove existing directory if it exists but isn't a git repo
+    if [ -d "\$INNATE_OS_PATH" ]; then
+        echo "   Removing existing innate-os directory..."
+        rm -rf "\$INNATE_OS_PATH"
+    fi
+    # Clone the repository
+    echo "   Cloning innate-os repository..."
+    mkdir -p "\$(dirname "\$INNATE_OS_PATH")"
+    git clone "git@github.com:\$RELEASE_REPO.git" "\$INNATE_OS_PATH" || {
+        echo "   ❌ Failed to clone repository"
+        echo "     Please ensure the deploy key has access to \$RELEASE_REPO"
+        exit 1
+    }
+    echo "   ✓ Cloned innate-os repository"
+    cd "\$INNATE_OS_PATH"
+else
     cd "\$INNATE_OS_PATH"
     
     # Ensure maps/.gitignore exists before git operations
     if [ ! -f "\$INNATE_OS_PATH/maps/.gitignore" ]; then
         mkdir -p "\$INNATE_OS_PATH/maps"
-        cat > "\$INNATE_OS_PATH/maps/.gitignore" << 'GITIGNORE'
-*.pgm
-*.yaml
-
-GITIGNORE
+        echo "*.pgm" > "\$INNATE_OS_PATH/maps/.gitignore"
+        echo "*.yaml" >> "\$INNATE_OS_PATH/maps/.gitignore"
+        echo "" >> "\$INNATE_OS_PATH/maps/.gitignore"
         echo "   ✓ Restored maps/.gitignore"
     fi
     
@@ -137,9 +158,6 @@ GITIGNORE
     # Pull latest
     git pull origin main 2>/dev/null || git pull 2>/dev/null || true
     echo "   ✓ Pulled latest from release repo"
-else
-    echo "   ⚠ innate-os not found at \$INNATE_OS_PATH"
-    echo "     Clone it first with: git clone git@github.com:\$RELEASE_REPO.git \$INNATE_OS_PATH"
 fi
 
 # Test GitHub connection

@@ -81,8 +81,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Run setup script on robot
-ssh "$ROBOT_HOST" bash << REMOTE_EOF
+# Use -tt flag to force TTY allocation even with redirected stdin (for sudo password prompts)
+ROBOT_PASSWORD="${ROBOT_PASSWORD:-goodbot}"
+INNATE_OS_PATH="${INNATE_OS_PATH:-/home/jetson1/innate-os}"
+ssh -tt "$ROBOT_HOST" bash << REMOTE_EOF
 set -e
+export ROBOT_PASSWORD="$ROBOT_PASSWORD"
+export INNATE_OS_PATH="$INNATE_OS_PATH"
 chmod +x /tmp/setup_robot_with.sh
 cd /tmp
 ./setup_robot_with.sh $ROBOT_NUM
@@ -91,18 +96,24 @@ cd /tmp
 rm -f /tmp/setup_robot_with.sh
 echo "✓ Cleaned up setup script"
 
-# Run post_update script
+# Run post_update script (don't exit on error)
+set +e
 echo ""
 echo "Running post_update script..."
-cd $INNATE_OS_PATH/scripts/update
-if [ -f "./post_update.sh" ]; then
-    chmod +x ./post_update.sh
-    sudo ./post_update.sh || {
-        echo "⚠️  Warning: post_update.sh failed, but continuing..."
-    }
-    echo "✓ Post-update script completed"
+if [ -d "\$INNATE_OS_PATH/scripts/update" ]; then
+    cd "\$INNATE_OS_PATH/scripts/update"
+    if [ -f "./post_update.sh" ]; then
+        chmod +x ./post_update.sh
+        echo "\$ROBOT_PASSWORD" | sudo -S ./post_update.sh || {
+            echo "⚠️  Warning: post_update.sh failed, but continuing..."
+        }
+        echo "✓ Post-update script completed"
+    else
+        echo "⚠️  Warning: post_update.sh not found at \$INNATE_OS_PATH/scripts/update/post_update.sh"
+        echo "   Skipping post-update step"
+    fi
 else
-    echo "⚠️  Warning: post_update.sh not found at $INNATE_OS_PATH/scripts/update/post_update.sh"
+    echo "⚠️  Warning: \$INNATE_OS_PATH/scripts/update directory not found"
     echo "   Skipping post-update step"
 fi
 
@@ -128,6 +139,7 @@ echo "  Shutting down robot in 3 seconds..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 sleep 3
 sudo shutdown now
+set -e
 REMOTE_EOF
 
 echo ""
