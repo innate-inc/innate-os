@@ -851,7 +851,7 @@ Changelog is derived from git log between tags.
             "view",
             "daemon",
             "hello",
-            "--quick-check",
+            "quick-check",
         ],
         help="Command to run",
     )
@@ -915,7 +915,7 @@ Changelog is derived from git log between tags.
         "restart": manager.restart_services,
         "view": manager.view_services,
         "daemon": manager.daemon,
-        "--quick-check": manager.quick_check,
+        "quick-check": manager.quick_check,
     }
 
     sys.exit(commands[args.command]())
