@@ -23,9 +23,11 @@ pyserial
 trimesh
 smbus2
 sounddevice
+bluezero
 
 # Text-to-Speech
 cartesia
+websocket-client
 
 # Input handling
 pygame

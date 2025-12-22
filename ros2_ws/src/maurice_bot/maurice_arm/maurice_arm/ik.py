@@ -17,14 +17,15 @@ import time
 class KDLIKNode(Node):
     def __init__(self):
         super().__init__("kdl_ik_from_file")
-        # 1) declare & read solver parameters
+
+        # 1) Declare & read solver parameters
         self.declare_parameter("search_resolution", 0.001)
         self.declare_parameter("timeout", 0.2)
         eps = self.get_parameter("search_resolution").value
         timeout = self.get_parameter("timeout").value
         maxiter = max(1, int(timeout / eps))
 
-        # 2) load URDF file directly from maurice_sim package
+        # 2) Load URDF file directly from maurice_sim package
         pkg_dir = get_package_share_directory("maurice_sim")
         urdf_path = os.path.join(pkg_dir, "urdf", "maurice.urdf")
         if not os.path.exists(urdf_path):
