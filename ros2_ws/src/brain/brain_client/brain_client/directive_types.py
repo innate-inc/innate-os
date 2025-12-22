@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Directive Type Definitions
+Agent Type Definitions
 
-Base class and types for robot directives.
+Base class and types for robot agents.
 """
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
 
-class Directive(ABC):
+class Agent(ABC):
     """
-    Base class for all directives.
+    Base class for all agents.
 
-    A directive provides personality and behavior guidelines for the robot,
-    along with the list of primitives that should be available when this
-    directive is active.
+    An agent provides personality and behavior guidelines for the robot,
+    along with the list of skills that should be available when this
+    agent is active.
     """
 
     @property
@@ -59,10 +59,10 @@ class Directive(ABC):
     def display_icon(self) -> Optional[str]:
         """
         Optional path to a 32x32 pixel icon asset for this directive.
-        
+
         Subclasses can override this property to specify an icon.
         Default: return None (no icon).
-        
+
         Example:
             return "assets/my_directive_icon.png"
         """
@@ -81,3 +81,6 @@ class Directive(ABC):
         """
         return []
 
+
+# Alias for backwards compatibility
+Directive = Agent
