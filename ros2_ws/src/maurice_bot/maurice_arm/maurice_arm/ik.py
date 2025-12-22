@@ -17,6 +17,7 @@ import time
 class KDLIKNode(Node):
     def __init__(self):
         super().__init__("kdl_ik_from_file")
+
         # 1) declare & read solver parameters
         self.declare_parameter("search_resolution", 0.001)
         self.declare_parameter("timeout", 0.2)
