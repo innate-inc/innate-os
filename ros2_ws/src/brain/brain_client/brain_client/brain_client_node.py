@@ -39,7 +39,7 @@ from brain_client.message_types import (
     MessageOut,
     VisionAgentOutput,
 )
-from brain_client.primitive_types import PrimitiveResult
+from brain_client.primitive_types import SkillResult
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
@@ -1521,7 +1521,7 @@ class BrainClientNode(Node):
         # Determine the appropriate message type based on the result
         self.get_logger().info(f"Primitive result details: {result}")
         outgoing_msg = None
-        if result.success and result.success_type == PrimitiveResult.SUCCESS.value:
+        if result.success and result.success_type == SkillResult.SUCCESS.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_COMPLETED,
                 payload={
@@ -1529,7 +1529,7 @@ class BrainClientNode(Node):
                     "primitive_id": primitive_id,
                 },
             )
-        elif result.success_type == PrimitiveResult.CANCELLED.value:
+        elif result.success_type == SkillResult.CANCELLED.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_INTERRUPTED,
                 payload={
@@ -1537,7 +1537,7 @@ class BrainClientNode(Node):
                     "primitive_id": primitive_id,
                 },
             )
-        elif not result.success or result.success_type == PrimitiveResult.FAILURE.value:
+        elif not result.success or result.success_type == SkillResult.FAILURE.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_FAILED,
                 payload={
@@ -1562,7 +1562,7 @@ class BrainClientNode(Node):
         # --- THEN, check and execute pending task if previous was cancelled OR succeeded in the meantime ---
         if (
             result.success_type
-            in [PrimitiveResult.CANCELLED.value, PrimitiveResult.SUCCESS.value]
+            in [SkillResult.CANCELLED.value, SkillResult.SUCCESS.value]
             and self._pending_next_task is not None
         ):
             self.get_logger().info(

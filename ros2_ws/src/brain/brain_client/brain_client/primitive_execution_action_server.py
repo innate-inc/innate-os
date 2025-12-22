@@ -28,9 +28,9 @@ from brain_messages.action import ExecutePrimitive, ExecuteBehavior
 from brain_messages.srv import GetAvailablePrimitives
 
 # Import primitive loader and types
-from brain_client.primitive_loader import PrimitiveLoader
+from brain_client.primitive_loader import SkillLoader
 from brain_client.primitive_types import (
-    PrimitiveResult,
+    SkillResult,
     RobotStateType,
 )
 from brain_client.manipulation_interface import ManipulationInterface
@@ -110,7 +110,7 @@ class PrimitiveExecutionActionServer(Node):
         self.head = HeadInterface(self, self.get_logger(), self.head_position_topic)
         
         # Dynamic primitive loading
-        self.primitive_loader = PrimitiveLoader(self.get_logger())
+        self.primitive_loader = SkillLoader(self.get_logger())
         
         # Define directory to scan for primitives
         # Using the unified primitives directory at the root
@@ -122,7 +122,7 @@ class PrimitiveExecutionActionServer(Node):
             raise FileNotFoundError(f"Primitives directory must exist at {primitives_directory}")
         
         # Load all primitives dynamically
-        discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
+        discovered_primitives = self.primitive_loader.discover_skills_in_directory(primitives_directory)
 
         self.get_logger().info(f"Discovered primitives: {list(discovered_primitives.keys())} in {primitives_directory}")
         
@@ -196,7 +196,7 @@ class PrimitiveExecutionActionServer(Node):
         primitives_directory = os.path.join(maurice_root, 'primitives')
         
         # Reload code primitives
-        discovered_primitives = self.primitive_loader.discover_primitives_in_directory(primitives_directory)
+        discovered_primitives = self.primitive_loader.discover_skills_in_directory(primitives_directory)
         
         # Handle simulator mode nav swap
         if self.simulator_mode and "navigate_to_position_sim" in discovered_primitives:
@@ -413,7 +413,7 @@ class PrimitiveExecutionActionServer(Node):
             return ExecutePrimitive.Result(
                 success=False,
                 message="Invalid inputs JSON",
-                success_type=PrimitiveResult.FAILURE.value,
+                success_type=SkillResult.FAILURE.value,
             )
 
         primitive_type = goal_handle.request.primitive_type
@@ -442,7 +442,7 @@ class PrimitiveExecutionActionServer(Node):
                 success=False,
                 message="Primitive not available",
                 primitive_type=primitive_type,
-                success_type=PrimitiveResult.FAILURE.value,
+                success_type=SkillResult.FAILURE.value,
             )
 
     def _update_primitive_robot_state(self, primitive):
@@ -639,8 +639,8 @@ class PrimitiveExecutionActionServer(Node):
                 f"[PEAS] _execute_code_primitive DONE '{primitive_type}' with status {result_status}"
             )
 
-            # Handle the result based on the PrimitiveResult enum
-            if result_status == PrimitiveResult.SUCCESS:
+            # Handle the result based on the SkillResult enum
+            if result_status == SkillResult.SUCCESS:
                 self.get_logger().info(
                     f"Primitive '{primitive_type}' succeeded: {result_message}"
                 )
@@ -649,9 +649,9 @@ class PrimitiveExecutionActionServer(Node):
                     success=True,
                     message=result_message,
                     primitive_type=primitive_type,
-                    success_type=PrimitiveResult.SUCCESS.value,
+                    success_type=SkillResult.SUCCESS.value,
                 )
-            elif result_status == PrimitiveResult.CANCELLED:
+            elif result_status == SkillResult.CANCELLED:
                 self.get_logger().info(
                     f"Primitive '{primitive_type}' cancelled: {result_message}"
                 )
@@ -660,9 +660,9 @@ class PrimitiveExecutionActionServer(Node):
                     success=True,
                     message=result_message,
                     primitive_type=primitive_type,
-                    success_type=PrimitiveResult.CANCELLED.value,
+                    success_type=SkillResult.CANCELLED.value,
                 )
-            else:  # PrimitiveResult.FAILURE
+            else:  # SkillResult.FAILURE
                 self.get_logger().info(
                     f"Primitive '{primitive_type}' failed: {result_message}"
                 )
@@ -671,7 +671,7 @@ class PrimitiveExecutionActionServer(Node):
                     success=False,
                     message=result_message,
                     primitive_type=primitive_type,
-                    success_type=PrimitiveResult.FAILURE.value,
+                    success_type=SkillResult.FAILURE.value,
                 )
 
         except Exception as e:
@@ -681,7 +681,7 @@ class PrimitiveExecutionActionServer(Node):
                 success=False,
                 message=str(e),
                 primitive_type=primitive_type,
-                success_type=PrimitiveResult.FAILURE.value,
+                success_type=SkillResult.FAILURE.value,
             )
 
     def _execute_physical_primitive(self, goal_handle, primitive_type, inputs):
@@ -699,7 +699,7 @@ class PrimitiveExecutionActionServer(Node):
                 success=False,
                 message="Behavior server not available",
                 primitive_type=primitive_type,
-                success_type=PrimitiveResult.FAILURE.value,
+                success_type=SkillResult.FAILURE.value,
             )
         
         # Create behavior goal with config from metadata
@@ -721,7 +721,7 @@ class PrimitiveExecutionActionServer(Node):
                 success=False,
                 message="Timeout waiting for behavior goal acceptance",
                 primitive_type=primitive_type,
-                success_type=PrimitiveResult.FAILURE.value,
+                success_type=SkillResult.FAILURE.value,
             )
         
         behavior_goal_handle = send_goal_future.result()
@@ -732,7 +732,7 @@ class PrimitiveExecutionActionServer(Node):
                 success=False,
                 message="Behavior goal rejected by behavior_server",
                 primitive_type=primitive_type,
-                success_type=PrimitiveResult.FAILURE.value,
+                success_type=SkillResult.FAILURE.value,
             )
         
         self.get_logger().info("Behavior goal accepted, waiting for result...")
@@ -753,7 +753,7 @@ class PrimitiveExecutionActionServer(Node):
                 success=True,
                 message=behavior_result.message,
                 primitive_type=primitive_type,
-                success_type=PrimitiveResult.SUCCESS.value,
+                success_type=SkillResult.SUCCESS.value,
             )
         else:
             # Check if it was cancelled
@@ -764,7 +764,7 @@ class PrimitiveExecutionActionServer(Node):
                     success=True,
                     message=behavior_result.message,
                     primitive_type=primitive_type,
-                    success_type=PrimitiveResult.CANCELLED.value,
+                    success_type=SkillResult.CANCELLED.value,
                 )
             else:
                 self.get_logger().error(f"Physical primitive '{primitive_type}' failed: {behavior_result.message}")
@@ -773,7 +773,7 @@ class PrimitiveExecutionActionServer(Node):
                     success=False,
                     message=behavior_result.message,
                     primitive_type=primitive_type,
-                    success_type=PrimitiveResult.FAILURE.value,
+                    success_type=SkillResult.FAILURE.value,
                 )
 
     def destroy(self):
