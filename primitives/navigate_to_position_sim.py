@@ -5,7 +5,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import String, Bool
 from nav2_simple_commander.robot_navigator import BasicNavigator
-from brain_client.primitive_types import Skill, SkillResult
+from brain_client.skill_types import Skill, SkillResult
 import rclpy
 from rclpy.node import Node
 

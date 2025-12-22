@@ -11,8 +11,8 @@ import sys
 import importlib.util
 from typing import Dict, Any, Optional, Tuple
 
-from brain_client.primitive_loader import SkillLoader
-from brain_client.directive_loader import AgentLoader
+from brain_client.skill_loader import SkillLoader
+from brain_client.agent_loader import AgentLoader
 
 
 def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
