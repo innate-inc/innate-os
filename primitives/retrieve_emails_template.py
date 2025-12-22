@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import imaplib
 import email
-from brain_client.primitive_types import Primitive, PrimitiveResult
+from brain_client.primitive_types import Skill, SkillResult
 
 
-class RetrieveEmails(Primitive):
+class RetrieveEmails(Skill):
     def __init__(self, logger):
         self.logger = logger
         self.imap_server = "imap.gmail.com"
@@ -25,6 +25,9 @@ class RetrieveEmails(Primitive):
             # ... fetch and process emails ...
             email_data = "Email 1: Subject, From, Content..."
             self._send_feedback(email_data)
-            return f"Retrieved {count} emails with subjects and content", PrimitiveResult.SUCCESS
+            return (
+                f"Retrieved {count} emails with subjects and content",
+                SkillResult.SUCCESS,
+            )
         except Exception as e:
-            return f"Failed to retrieve emails: {str(e)}", PrimitiveResult.FAILURE
+            return f"Failed to retrieve emails: {str(e)}", SkillResult.FAILURE

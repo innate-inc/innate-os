@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.directive_types import Agent
 
 
-class MarsDirective(Directive):
+class MarsAgent(Agent):
     """
     MARS directive for the robot.
     An agentic robot that can be programmed by anyone to perform physical and digital actions.

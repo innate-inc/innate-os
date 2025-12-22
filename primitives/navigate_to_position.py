@@ -3,7 +3,7 @@ import threading
 import time
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-from brain_client.primitive_types import Primitive, PrimitiveResult
+from brain_client.primitive_types import Skill, SkillResult
 
 
 class Nav2Controller:
@@ -185,7 +185,7 @@ class Nav2Controller:
         self._cancel_requested.set()
 
 
-class NavigateToPosition(Primitive):
+class NavigateToPosition(Skill):
     def __init__(self, logger):
         self.nav2_controller = Nav2Controller(logger, self)
         self.logger = logger
@@ -211,15 +211,15 @@ class NavigateToPosition(Primitive):
         # Check if the navigation was canceled
         if result == TaskResult.CANCELED:
             self.logger.info("Navigation was canceled")
-            return "Navigation canceled", PrimitiveResult.CANCELLED
+            return "Navigation canceled", SkillResult.CANCELLED
         elif result == TaskResult.SUCCEEDED:
             self.logger.info(
                 f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}"
             )
-            return f"Reached position ({x}, {y}, {theta})", PrimitiveResult.SUCCESS
+            return f"Reached position ({x}, {y}, {theta})", SkillResult.SUCCESS
         else:
             self.logger.info(f"Navigation failed with result: {result}")
-            return f"Navigation failed with result: {result}", PrimitiveResult.FAILURE
+            return f"Navigation failed with result: {result}", SkillResult.FAILURE
 
     def cancel(self):
         """

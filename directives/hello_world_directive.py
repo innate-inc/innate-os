@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.directive_types import Agent
 
 
-class HelloWorld(Directive):
+class HelloWorld(Agent):
     """
     Makes the robot turn and greet humans with a friendly wave.
     """
@@ -20,10 +20,7 @@ class HelloWorld(Directive):
         return "assets/hello_world.png"
 
     def get_primitives(self) -> List[str]:
-        return [
-            "navigate_to_position",
-            "wave"
-        ]
+        return ["navigate_to_position", "wave"]
 
     def get_inputs(self) -> List[str]:
         """This directive needs microphone input to hear user"""

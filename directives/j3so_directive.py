@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.directive_types import Agent
 
 
-class J3SODirective(Directive):
+class J3SOAgent(Agent):
     """
     J3SO directive for the robot.
     A blunt, sarcastic droid that navigates and provides brutally honest commentary.

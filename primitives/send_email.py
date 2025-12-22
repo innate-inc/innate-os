@@ -2,10 +2,10 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from brain_client.primitive_types import Primitive, PrimitiveResult
+from brain_client.primitive_types import Skill, SkillResult
 
 
-class SendEmail(Primitive):
+class SendEmail(Skill):
     """
     Primitive for sending emails for emergency notifications.
     This is a simplified version that logs the email content rather than actually
@@ -57,7 +57,7 @@ class SendEmail(Primitive):
 
         if not current_recipients:
             self.logger.error("No recipients specified for email.")
-            return "No recipients specified for email.", PrimitiveResult.FAILURE
+            return "No recipients specified for email.", SkillResult.FAILURE
 
         recipients_str = ", ".join(current_recipients)
 
@@ -69,10 +69,9 @@ class SendEmail(Primitive):
         )
 
         self.logger.info(
-            f"\033[92m[BrainClient] Emergency email sent to {recipients_str}"
-            "\033[0m"
+            f"\033[92m[BrainClient] Emergency email sent to {recipients_str}" "\033[0m"
         )
-        return f"Email sent to {recipients_str}", PrimitiveResult.SUCCESS
+        return f"Email sent to {recipients_str}", SkillResult.SUCCESS
 
         # Just pretending here it worked for sure.
 
@@ -96,11 +95,11 @@ class SendEmail(Primitive):
                 f"\033[92m[BrainClient] Emergency email sent to {recipients_str}"
                 "\033[0m"
             )
-            return f"Email sent to {recipients_str}", PrimitiveResult.SUCCESS
+            return f"Email sent to {recipients_str}", SkillResult.SUCCESS
 
         except Exception as e:
             self.logger.error(f"Failed to send email: {str(e)}")
-            return f"Failed to send email: {str(e)}", PrimitiveResult.FAILURE
+            return f"Failed to send email: {str(e)}", SkillResult.FAILURE
 
     def cancel(self):
         """

@@ -15,7 +15,7 @@ import inspect
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
-from brain_client.directive_types import Agent, Directive
+from brain_client.directive_types import Agent
 
 
 class AgentLoader:
@@ -342,7 +342,3 @@ class AgentLoader:
             self.logger.error(
                 f"Error validating skills for agent '{agent_instance.id}': {e}"
             )
-
-
-# Alias for backwards compatibility
-DirectiveLoader = AgentLoader

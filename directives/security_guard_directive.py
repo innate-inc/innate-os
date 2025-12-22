@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.directive_types import Agent
 
 
-class SecurityGuardDirective(Directive):
+class SecurityGuardAgent(Agent):
     """
     Security guard directive for the robot.
     Provides a security guard personality that looks for intruders and sends an email if they find one.
