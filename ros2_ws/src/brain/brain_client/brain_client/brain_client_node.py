@@ -39,7 +39,7 @@ from brain_client.message_types import (
     MessageOut,
     VisionAgentOutput,
 )
-from brain_client.primitive_types import SkillResult
+from brain_client.skill_types import SkillResult
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String

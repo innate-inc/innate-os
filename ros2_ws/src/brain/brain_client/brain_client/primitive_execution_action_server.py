@@ -28,8 +28,8 @@ from brain_messages.action import ExecutePrimitive, ExecuteBehavior
 from brain_messages.srv import GetAvailablePrimitives
 
 # Import primitive loader and types
-from brain_client.primitive_loader import SkillLoader
-from brain_client.primitive_types import (
+from brain_client.skill_loader import SkillLoader
+from brain_client.skill_types import (
     SkillResult,
     RobotStateType,
 )

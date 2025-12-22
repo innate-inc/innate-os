@@ -15,7 +15,7 @@ import inspect
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
-from brain_client.directive_types import Agent
+from brain_client.agent_types import Agent
 
 
 class AgentLoader:

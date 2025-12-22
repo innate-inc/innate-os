@@ -1,5 +1,5 @@
 from typing import List
-from brain_client.directive_types import Agent
+from brain_client.agent_types import Agent
 
 
 class EmptyAgent(Agent):

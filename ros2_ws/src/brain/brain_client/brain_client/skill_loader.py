@@ -17,7 +17,7 @@ import re
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
-from brain_client.primitive_types import Skill
+from brain_client.skill_types import Skill
 
 
 class SkillLoader:
