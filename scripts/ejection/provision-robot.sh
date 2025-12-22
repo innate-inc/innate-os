@@ -126,9 +126,18 @@ echo "  Running system diagnostics..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 cd $INNATE_OS_PATH/scripts
 if [ -f "./diagnostics.py" ]; then
-    python3 ./diagnostics.py 2>&1 || {
-        echo "⚠️  Warning: diagnostics.py returned non-zero exit code"
-    }
+    # Try to run diagnostics with dialout group if user is in it
+    if groups | grep -q "\bdialout\b"; then
+        # User is in dialout group, run diagnostics with that group active
+        sg dialout -c "cd $INNATE_OS_PATH/scripts && python3 ./diagnostics.py" 2>&1 || {
+            echo "⚠️  Warning: diagnostics.py returned non-zero exit code"
+        }
+    else
+        # User not in dialout group yet, run diagnostics anyway (will show permission warning)
+        python3 ./diagnostics.py 2>&1 || {
+            echo "⚠️  Warning: diagnostics.py returned non-zero exit code"
+        }
+    fi
     echo "✓ Diagnostics completed"
 else
     echo "⚠️  Warning: diagnostics.py not found at $INNATE_OS_PATH/scripts/diagnostics.py"
