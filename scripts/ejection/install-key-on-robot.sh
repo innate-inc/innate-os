@@ -102,26 +102,41 @@ fi
 if [ -d "\$INNATE_OS_PATH/.git" ]; then
     cd "\$INNATE_OS_PATH"
     
+    # Ensure maps/.gitignore exists before git operations
+    if [ ! -f "\$INNATE_OS_PATH/maps/.gitignore" ]; then
+        mkdir -p "\$INNATE_OS_PATH/maps"
+        cat > "\$INNATE_OS_PATH/maps/.gitignore" << 'GITIGNORE'
+*.pgm
+*.yaml
+
+GITIGNORE
+        echo "   ✓ Restored maps/.gitignore"
+    fi
+    
     # Switch to main branch
     git checkout main 2>/dev/null || git checkout -b main
     echo "   ✓ Switched to main branch"
     
-    # Delete all other local branches
-    git branch | grep -v '^\* main\$' | grep -v '^  main\$' | while read branch; do
-        git branch -D "\$branch" 2>/dev/null && echo "   ✓ Deleted branch: \$branch"
-    done
+    # Delete all other local branches (handle empty case)
+    BRANCHES_TO_DELETE=\$(git branch | grep -v '^\* main\$' | grep -v '^  main\$' | grep -v '^$' || true)
+    if [ -n "\$BRANCHES_TO_DELETE" ]; then
+        echo "\$BRANCHES_TO_DELETE" | while read branch; do
+            [ -n "\$branch" ] && git branch -D "\$branch" 2>/dev/null && echo "   ✓ Deleted branch: \$branch" || true
+        done
+    fi
     
     # Update remote to release repo
     git remote set-url origin "git@github.com:\$RELEASE_REPO.git"
     echo "   ✓ Git remote set to git@github.com:\$RELEASE_REPO.git"
     
-    # Prune remote tracking branches
-    git remote prune origin 2>/dev/null || true
-    git fetch --prune 2>/dev/null || true
+    # Prune remote tracking branches (suppress all output)
+    git remote prune origin >/dev/null 2>&1 || true
+    git fetch --prune --quiet 2>/dev/null || true
     echo "   ✓ Pruned stale remote branches"
     
-    # Pull latest
-    git pull origin main 2>/dev/null || git pull 2>/dev/null || true
+    # Pull latest (suppress status output)
+    GIT_TERMINAL_PROMPT=0 git pull origin main --quiet 2>/dev/null || \
+        GIT_TERMINAL_PROMPT=0 git pull --quiet 2>/dev/null || true
     echo "   ✓ Pulled latest from release repo"
 else
     echo "   ⚠ innate-os not found at \$INNATE_OS_PATH"
