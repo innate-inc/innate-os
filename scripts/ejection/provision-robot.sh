@@ -95,8 +95,16 @@ echo "✓ Cleaned up setup script"
 echo ""
 echo "Running post_update script..."
 cd $INNATE_OS_PATH/scripts/update
-./post_update
-echo "✓ Post-update script completed"
+if [ -f "./post_update.sh" ]; then
+    chmod +x ./post_update.sh
+    sudo ./post_update.sh || {
+        echo "⚠️  Warning: post_update.sh failed, but continuing..."
+    }
+    echo "✓ Post-update script completed"
+else
+    echo "⚠️  Warning: post_update.sh not found at $INNATE_OS_PATH/scripts/update/post_update.sh"
+    echo "   Skipping post-update step"
+fi
 REMOTE_EOF
 
 echo ""

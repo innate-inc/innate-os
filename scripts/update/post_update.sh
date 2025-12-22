@@ -269,6 +269,15 @@ else
     log "Checking Python dependencies..."
     PIP_DEPS_FILE="$REPO_DIR/ros2_ws/pip-requirements.txt"
     if [ -f "$PIP_DEPS_FILE" ]; then
+        # Uninstall mediapipe to avoid protobuf dependency conflict
+        # mediapipe requires protobuf<5, but we need protobuf>=6 for other packages
+        if sudo -u "$ACTUAL_USER" pip3 show mediapipe &>/dev/null; then
+            log "  Uninstalling mediapipe (protobuf conflict)..."
+            sudo -u "$ACTUAL_USER" pip3 uninstall -y mediapipe 2>/dev/null || true
+            log "  Mediapipe uninstalled"
+        else
+            log "  Mediapipe not installed, skipping uninstall"
+        fi
         log "  Installing pip dependencies..."
         sudo -u "$ACTUAL_USER" pip3 install -r "$PIP_DEPS_FILE" --upgrade
         log "  Pip dependencies installed"
