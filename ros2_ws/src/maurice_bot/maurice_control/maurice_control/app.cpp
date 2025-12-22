@@ -172,7 +172,7 @@ std::string nmcli_get_active_wifi_ssid() {
  */
 bool check_update_available(const std::string& maurice_root) {
     // innate-update --quick-check returns 0 if up-to-date, 1 if updates available
-    std::string cmd = maurice_root + "/scripts/update/innate-update --quick-check >/dev/null 2>&1";
+    std::string cmd = maurice_root + "/scripts/update/innate-update quick-check >/dev/null 2>&1";
     int result = std::system(cmd.c_str());
     return (WEXITSTATUS(result) != 0);
 }

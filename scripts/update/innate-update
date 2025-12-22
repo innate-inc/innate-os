@@ -307,6 +307,48 @@ class GitRepo:
         )
         return result.returncode == 0
 
+    def prune_stale_local_tags(self) -> list[str]:
+        """Delete local tags that don't exist on the remote.
+
+        This is important: if we accidentally push a tag with a version that's
+        too high (e.g. 2.0.0 instead of 1.0.1), all users would be pulled to
+        that bad tag. If we then delete it from the remote, users need to also
+        have their local copy deleted - otherwise they'd be stuck on the bad
+        tag forever since the update system would never consider going back
+        to a "lower" version tag.
+
+        Returns list of deleted tag names.
+        """
+        # Get local tags
+        local_result = self._run(["tag", "-l"], check=False)
+        if local_result.returncode != 0 or not local_result.stdout.strip():
+            return []
+        local_tags = set(local_result.stdout.strip().split("\n"))
+
+        # Get remote tags
+        remote_result = self._run(["ls-remote", "--tags", "origin"], check=False)
+        if remote_result.returncode != 0:
+            return []
+
+        remote_tags = set()
+        for line in remote_result.stdout.strip().split("\n"):
+            if line and "refs/tags/" in line:
+                # Format: <sha>\trefs/tags/<tagname> or refs/tags/<tagname>^{}
+                tag_ref = line.split("refs/tags/")[-1]
+                # Remove ^{} suffix (used for annotated tags)
+                tag_name = tag_ref.replace("^{}", "")
+                remote_tags.add(tag_name)
+
+        # Delete local tags not on remote
+        stale_tags = local_tags - remote_tags
+        deleted = []
+        for tag in stale_tags:
+            result = self._run(["tag", "-d", tag], check=False)
+            if result.returncode == 0:
+                deleted.append(tag)
+
+        return deleted
+
     def current_commit(self) -> str:
         result = self._run(["rev-parse", "HEAD"], check=False)
         return result.stdout.strip() if result.returncode == 0 else "unknown"
@@ -430,6 +472,11 @@ class UpdateManager:
                 "Failed to fetch from remote. Check network and git authentication."
             )
             return 1
+
+        # Prune local tags that no longer exist on remote
+        deleted_tags = self.git.prune_stale_local_tags()
+        if deleted_tags:
+            self.logger.info(f"Pruned stale local tags: {', '.join(deleted_tags)}")
 
         current = self.git.current_commit()
 
