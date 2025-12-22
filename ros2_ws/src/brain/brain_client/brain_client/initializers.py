@@ -30,13 +30,16 @@ def initialize_primitives(logger, simulator_mode: bool = False) -> Dict[str, Any
 
     # Define directories to scan for primitives
     # Using the unified primitives directory at the root plus ~/skills
-    maurice_root = os.environ.get(
+    innate_root = os.environ.get(
         "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
     )
     primitives_directories = [
-        os.path.join(maurice_root, "primitives"),
+        os.path.join(innate_root, "primitives"),
         os.path.join(os.path.expanduser("~"), "skills"),
     ]
+
+    # Ensure ~/skills directory exists
+    os.makedirs(primitives_directories[1], exist_ok=True)
 
     # Load all primitives dynamically from all directories
     discovered_primitives = primitive_loader.load_primitives_from_directories(
@@ -94,13 +97,17 @@ def initialize_directives(
 
     # Define directories to scan for directives
     # Using the unified directives directory at the root plus ~/agents
-    maurice_root = os.environ.get(
+    innate_root = os.environ.get(
         "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
     )
     directives_directories = [
-        os.path.join(maurice_root, "directives"),
+        os.path.join(innate_root, "directives"),
         os.path.join(os.path.expanduser("~"), "agents"),
     ]
+
+    # Ensure ~/agents directory exists
+    os.makedirs(directives_directories[1], exist_ok=True)
+
     directives_directory = directives_directories[0]  # Keep for icon loading
 
     # Load all directives dynamically from all directories
