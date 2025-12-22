@@ -405,6 +405,13 @@ if [ "$(getent passwd $ACTUAL_USER | cut -d: -f7)" != "/bin/zsh" ] && [ -x /bin/
     chsh -s /bin/zsh "$ACTUAL_USER" || true
 fi
 
+# Add user to dialout group for serial port access
+if ! groups "$ACTUAL_USER" | grep -q "\bdialout\b"; then
+    log "  Adding $ACTUAL_USER to dialout group for serial port access"
+    usermod -aG dialout "$ACTUAL_USER" || true
+    log "  Note: User may need to log out and back in for group changes to take effect"
+fi
+
 # -----------------------------------------------------------------------------
 # 8. Setup DDS configuration
 # -----------------------------------------------------------------------------

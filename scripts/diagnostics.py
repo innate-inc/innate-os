@@ -79,9 +79,20 @@ def check_servos():
     port = PortHandler(DYNAMIXEL_DEVICE)
     packet = PacketHandler(2.0)
     
-    if not port.openPort():
-        fail("Failed to open serial port")
-        return False
+    try:
+        if not port.openPort():
+            fail("Failed to open serial port")
+            return False
+    except Exception as e:
+        error_msg = str(e)
+        if "Permission denied" in error_msg or "PermissionError" in str(type(e).__name__) or "[Errno 13]" in error_msg:
+            warn(f"Permission denied accessing {DYNAMIXEL_DEVICE}")
+            warn("  User may need to be in 'dialout' group. Run: sudo usermod -aG dialout $USER")
+            warn("  Then log out and back in, or run: newgrp dialout")
+            return False
+        else:
+            fail(f"Failed to open serial port: {error_msg}")
+            return False
     
     if not port.setBaudRate(DYNAMIXEL_BAUDRATE):
         fail(f"Failed to set baudrate to {DYNAMIXEL_BAUDRATE}")

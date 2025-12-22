@@ -85,18 +85,20 @@ echo ""
 ROBOT_PASSWORD="${ROBOT_PASSWORD:-goodbot}"
 INNATE_OS_PATH="${INNATE_OS_PATH:-/home/jetson1/innate-os}"
 ssh -tt "$ROBOT_HOST" bash << REMOTE_EOF
-set -e
+# Don't exit on error initially - we want to continue even if setup_robot_with.sh has issues
+set +e
 export ROBOT_PASSWORD="$ROBOT_PASSWORD"
 export INNATE_OS_PATH="$INNATE_OS_PATH"
 chmod +x /tmp/setup_robot_with.sh
 cd /tmp
 ./setup_robot_with.sh $ROBOT_NUM
+SETUP_EXIT_CODE=$?
 
 # Clean up setup script
 rm -f /tmp/setup_robot_with.sh
 echo "✓ Cleaned up setup script"
 
-# Run post_update script (don't exit on error)
+# Continue even if setup script had errors
 set +e
 echo ""
 echo "Running post_update script..."
