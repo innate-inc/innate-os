@@ -10,7 +10,8 @@ Group=jetson1
 Environment="ZENOH_CONFIG_OVERRIDE='listen/endpoints=["tcp/0.0.0.0:0"]'"
 # Source the ROS environment first, then execute the zenoh-router wrapper script using sh
 # Binds to all interfaces on port 11811, using domain ID 0
-ExecStart=/bin/zsh -c ". ~/.zshrc && . /opt/ros/humble/setup.sh && ros2 run rmw_zenoh_cpp rmw_zenohd"
+# Use exec so SIGTERM goes directly to rmw_zenohd, not the shell
+ExecStart=/bin/zsh -c ". ~/.zshrc && . /opt/ros/humble/setup.sh && exec ros2 run rmw_zenoh_cpp rmw_zenohd"
 
 # Restart the service if it fails
 Restart=on-failure
@@ -22,6 +23,11 @@ StandardError=journal
 
 # Give it time to bind to port
 TimeoutStartSec=10
+
+# Don't wait too long during shutdown
+TimeoutStopSec=10
+# Kill main process with SIGTERM, then SIGKILL remaining children
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target 

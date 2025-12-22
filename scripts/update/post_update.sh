@@ -419,6 +419,11 @@ if [ -f "/etc/systemd/system/arducam-audio.service" ]; then
     SERVICES+=("arducam-audio.service")
 fi
 
+# Add shutdown-sound if the service file exists (enable only, runs at shutdown)
+if [ -f "/etc/systemd/system/shutdown-sound.service" ]; then
+    SERVICES+=("shutdown-sound.service")
+fi
+
 # Add bluetooth if available
 if systemctl list-unit-files bluetooth.service &>/dev/null; then
     SERVICES+=("bluetooth.service")
