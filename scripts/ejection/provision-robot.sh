@@ -105,6 +105,29 @@ else
     echo "⚠️  Warning: post_update.sh not found at $INNATE_OS_PATH/scripts/update/post_update.sh"
     echo "   Skipping post-update step"
 fi
+
+# Run diagnostics
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Running system diagnostics..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+cd $INNATE_OS_PATH/scripts
+if [ -f "./diagnostics.py" ]; then
+    python3 ./diagnostics.py 2>&1 || {
+        echo "⚠️  Warning: diagnostics.py returned non-zero exit code"
+    }
+    echo "✓ Diagnostics completed"
+else
+    echo "⚠️  Warning: diagnostics.py not found at $INNATE_OS_PATH/scripts/diagnostics.py"
+fi
+
+# Shutdown after 3 seconds
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Shutting down robot in 3 seconds..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+sleep 3
+sudo shutdown now
 REMOTE_EOF
 
 echo ""
