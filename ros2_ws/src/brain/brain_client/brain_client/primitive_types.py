@@ -278,9 +278,3 @@ class PhysicalSkill(Skill):
                 f"\033[91m[BrainClient] {self.display_name} operation cannot be canceled as no goal is active. \033[0m"
             )
             return f"\033[91m[BrainClient] No active {self.display_name.lower()} operation to cancel. \033[0m"
-
-
-# Aliases for backwards compatibility
-Primitive = Skill
-PrimitiveResult = SkillResult
-PhysicalPrimitive = PhysicalSkill

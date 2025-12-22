@@ -17,7 +17,7 @@ import re
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
-from brain_client.primitive_types import Skill, Primitive
+from brain_client.primitive_types import Skill
 
 
 class SkillLoader:
@@ -308,7 +308,3 @@ class SkillLoader:
     def _validate_replay_primitive(self, primitive_dir: str, execution: dict) -> bool:
         """Validate a replay primitive. Returns bool for backwards compatibility."""
         return self._validate_replay_primitive_internal(primitive_dir, execution)
-
-
-# Alias for backwards compatibility
-PrimitiveLoader = SkillLoader

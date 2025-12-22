@@ -137,8 +137,3 @@ def initialize_agents(
         logger.error("No agents loaded! This will cause issues.")
 
     return agents, current_agent
-
-
-# Aliases for backwards compatibility
-initialize_primitives = initialize_skills
-initialize_directives = initialize_agents

@@ -5,7 +5,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import String, Bool
 from nav2_simple_commander.robot_navigator import BasicNavigator
-from brain_client.primitive_types import Primitive, PrimitiveResult
+from brain_client.primitive_types import Skill, SkillResult
 import rclpy
 from rclpy.node import Node
 
@@ -123,7 +123,7 @@ class SimPathPlanningController:
         self._cancel_requested.set()
 
 
-class NavigateToPositionSim(Primitive):
+class NavigateToPositionSim(Skill):
     def __init__(self, logger):
         self.path_controller = SimPathPlanningController(logger, self)
         self.logger = logger
@@ -150,15 +150,15 @@ class NavigateToPositionSim(Primitive):
         # Process result
         if result == "CANCELED":
             self.logger.info("Navigation was canceled")
-            return "Navigation canceled", PrimitiveResult.CANCELLED
+            return "Navigation canceled", SkillResult.CANCELLED
         elif result == "SUCCEEDED":
             self.logger.info(
                 f"Navigation complete. Arrived at position: x={x}, y={y}, theta={theta}"
             )
-            return f"Reached position ({x}, {y}, {theta})", PrimitiveResult.SUCCESS
+            return f"Reached position ({x}, {y}, {theta})", SkillResult.SUCCESS
         else:
             self.logger.info(f"Navigation failed with result: {result}")
-            return f"Navigation failed with result: {result}", PrimitiveResult.FAILURE
+            return f"Navigation failed with result: {result}", SkillResult.FAILURE
 
     def cancel(self):
         """Cancels the current navigation task."""

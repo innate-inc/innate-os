@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.directive_types import Agent
 
 
-class EmptyDirective(Directive):
+class EmptyAgent(Agent):
     """
     Default directive for the robot.
     Provides a basic professional personality and enables navigation primitives.

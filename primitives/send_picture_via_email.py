@@ -4,10 +4,10 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
-from brain_client.primitive_types import Primitive, PrimitiveResult, RobotStateType
+from brain_client.primitive_types import Skill, SkillResult, RobotStateType
 
 
-class SendPictureViaEmail(Primitive):
+class SendPictureViaEmail(Skill):
     """
     Primitive for sending an email with an attached picture.
     """
@@ -64,7 +64,7 @@ class SendPictureViaEmail(Primitive):
 
         if not self.last_main_camera_image_b64:
             self.logger.error("[SendPictureViaEmail] No image available to send.")
-            return "No image available to send", PrimitiveResult.FAILURE
+            return "No image available to send", SkillResult.FAILURE
 
         self.logger.info(
             f"\\033[96m[BrainClient] Sending email with picture to {recipient}\\033[0m"
@@ -97,11 +97,11 @@ class SendPictureViaEmail(Primitive):
             self.logger.info(
                 f"\\033[92m[BrainClient] Email with picture sent to {recipient}\\033[0m"
             )
-            return f"Email with picture sent to {recipient}", PrimitiveResult.SUCCESS
+            return f"Email with picture sent to {recipient}", SkillResult.SUCCESS
 
         except Exception as e:
             self.logger.error(f"[SendPictureViaEmail] Failed to send email: {str(e)}")
-            return f"Failed to send email: {str(e)}", PrimitiveResult.FAILURE
+            return f"Failed to send email: {str(e)}", SkillResult.FAILURE
 
     def cancel(self):
         """

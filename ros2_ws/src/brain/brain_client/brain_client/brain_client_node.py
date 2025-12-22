@@ -55,7 +55,7 @@ from brain_messages.srv import GetAvailablePrimitives
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
-from brain_client.initializers import initialize_primitives, initialize_directives
+from brain_client.initializers import initialize_skills, initialize_agents
 from brain_client.tts_handler import TTSHandler
 
 
@@ -473,9 +473,9 @@ class BrainClientNode(Node):
         self.primitives_dict = self._query_available_primitives()
         if not self.primitives_dict:
             self.get_logger().warn("No primitives available from primitive_execution_action_server, using fallback local loading")
-            self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
+            self.primitives_dict = initialize_skills(self.get_logger(), self.simulator_mode)
         
-        self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
+        self.directives, self.current_directive = initialize_agents(self.get_logger(), self.primitives_dict)
 
         # Load startup directive from file
         startup_directive = self.load_startup_directive()
@@ -1924,10 +1924,10 @@ class BrainClientNode(Node):
             self.primitives_dict = self._query_available_primitives()
             if not self.primitives_dict:
                 self.get_logger().warn("No primitives from PEAS, using fallback local loading")
-                self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
+                self.primitives_dict = initialize_skills(self.get_logger(), self.simulator_mode)
             
             # Reload directives locally
-            self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
+            self.directives, self.current_directive = initialize_agents(self.get_logger(), self.primitives_dict)
             
             # Re-register with server
             self.register_primitives_and_directive()
@@ -2082,7 +2082,7 @@ class BrainClientNode(Node):
                     os.remove(self.directive_file)
                 self.get_logger().info(
                     "\033[1;92m[BrainClient] Startup directive cleared. "
-                    "Will use default from initialize_directives() on next startup.\033[0m"
+                    "Will use default from initialize_agents() on next startup.\033[0m"
                 )
             except Exception as e:
                 self.get_logger().error(f"Error clearing directive file: {e}")
@@ -2160,7 +2160,7 @@ class BrainClientNode(Node):
                     if saved_directive:
                         self.get_logger().info(f"Loaded startup directive: {saved_directive}")
                         return saved_directive
-            self.get_logger().info("No startup directive configured, using default from initialize_directives()")
+            self.get_logger().info("No startup directive configured, using default from initialize_agents()")
             return None
         except Exception as e:
             self.get_logger().error(f"Error loading startup directive: {e}")

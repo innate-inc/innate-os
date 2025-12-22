@@ -80,7 +80,3 @@ class Agent(ABC):
             return ["micro", "camera"]
         """
         return []
-
-
-# Alias for backwards compatibility
-Directive = Agent
