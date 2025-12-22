@@ -1,0 +1,22 @@
+[Unit]
+Description=Play shutdown sound (last service before poweroff)
+# DefaultDependencies=no prevents automatic ordering with other services
+DefaultDependencies=no
+# After=shutdown.target means this runs AFTER all normal services are stopped
+After=shutdown.target
+# Before=final.target ensures this is one of the last things to run
+Before=final.target
+
+[Service]
+Type=oneshot
+User=jetson1
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+# Play custom shutdown sound
+ExecStart=/usr/bin/gst-play-1.0 /home/jetson1/innate-os/sounds/turnoff.mp3
+TimeoutStartSec=10
+RemainAfterExit=yes
+
+[Install]
+# WantedBy=final.target ensures this runs in the final shutdown phase
+WantedBy=final.target
+
