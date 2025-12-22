@@ -11,9 +11,8 @@ After=zenoh-router.service network-online.target
 # Preserve common/ROS environment variables including INNATE_OS_ROOT
 Environment="INNATE_OS_ROOT=/home/jetson1/innate-os"
 ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/launch_ros_in_tmux.sh'
-# Gracefully stop the tmux session and all ROS processes
-# Send Ctrl-C to all panes in all windows, then kill the session
-ExecStop=/usr/bin/sudo -u jetson1 -- /bin/bash -c 'for pane in $(tmux list-panes -s -t ros_nodes -F "#{window_index}.#{pane_index}" 2>/dev/null); do tmux send-keys -t ros_nodes:$pane C-c 2>/dev/null; done; sleep 3; tmux kill-session -t ros_nodes 2>/dev/null || true'
+# Stop the tmux session (kills all ROS processes in it)
+ExecStop=/usr/bin/sudo -u jetson1 -- /bin/bash -c 'tmux kill-session -t ros_nodes 2>/dev/null || true'
 
 # Type=simple should work if the script exits after starting tmux detached.
 # If the script waits for tmux, Type=forking might be needed, but usually not.
