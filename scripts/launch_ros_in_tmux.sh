@@ -91,6 +91,10 @@ tmux select-window -t $SESSION_NAME:"${WINDOW_NAMES[1]}"
 echo "✓ ROS nodes launched in tmux session '$SESSION_NAME'"
 echo "  Attach: tmux attach -t $SESSION_NAME"
 echo ""
+
+# Wait for processes to initialize then play startup sound
+(sleep 20 && XDG_RUNTIME_DIR=/run/user/1000 gst-play-1.0 "$INNATE_OS_ROOT/sounds/turnon.mp3" 2>/dev/null) &
+
 while tmux has-session -t $SESSION_NAME 2>/dev/null; do
     sleep 5
 done
