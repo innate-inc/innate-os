@@ -27,6 +27,7 @@ bluezero
 
 # Text-to-Speech
 cartesia
+websocket-client
 
 # Input handling
 pygame
