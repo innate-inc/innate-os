@@ -85,10 +85,16 @@ def check_servos():
             return False
     except Exception as e:
         error_msg = str(e)
-        if "Permission denied" in error_msg or "PermissionError" in str(type(e).__name__) or "[Errno 13]" in error_msg:
+        error_type = type(e).__name__
+        # Check for permission errors (can be SerialException, PermissionError, or OSError)
+        if ("Permission denied" in error_msg or 
+            "PermissionError" in error_type or 
+            "[Errno 13]" in error_msg or
+            "could not open port" in error_msg.lower()):
             warn(f"Permission denied accessing {DYNAMIXEL_DEVICE}")
-            warn("  User may need to be in 'dialout' group. Run: sudo usermod -aG dialout $USER")
-            warn("  Then log out and back in, or run: newgrp dialout")
+            warn("  User may need to be in 'dialout' group.")
+            warn("  If post_update.sh added you to dialout, run: newgrp dialout")
+            warn("  Or log out and back in for group changes to take effect")
             return False
         else:
             fail(f"Failed to open serial port: {error_msg}")
@@ -367,7 +373,24 @@ def main():
     
     results = {}
     
-    results['servos'] = check_servos()
+    # Wrap check_servos to catch any unhandled exceptions from SDK
+    try:
+        results['servos'] = check_servos()
+    except Exception as e:
+        # If exception wasn't caught in check_servos(), handle it here
+        error_msg = str(e)
+        if "[Errno 13]" in error_msg or "Permission denied" in error_msg:
+            header("DYNAMIXEL SERVOS (1-7)")
+            ok(f"Serial port found: {DYNAMIXEL_DEVICE}")
+            warn(f"Permission denied accessing {DYNAMIXEL_DEVICE}")
+            warn("  User may need to be in 'dialout' group.")
+            warn("  If post_update.sh added you to dialout, run: newgrp dialout")
+            warn("  Or log out and back in for group changes to take effect")
+            results['servos'] = False
+        else:
+            # Re-raise if it's a different error
+            raise
+    
     results['pcb'] = check_pcb()
     results['lidar'] = check_lidar()
     results['cameras'] = check_cameras()
