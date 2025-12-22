@@ -724,7 +724,7 @@ private:
     // Timer
     rclcpp::TimerBase::SharedPtr robot_info_timer_;
 
-    // Servicess
+    // Services
     rclcpp::Service<maurice_msgs::srv::SetRobotName>::SharedPtr set_robot_name_srv_;
     rclcpp::Service<maurice_msgs::srv::TriggerUpdate>::SharedPtr trigger_update_srv_;
     rclcpp::Service<maurice_msgs::srv::Shutdown>::SharedPtr shutdown_srv_;
