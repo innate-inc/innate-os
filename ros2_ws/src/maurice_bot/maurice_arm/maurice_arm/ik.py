@@ -25,7 +25,7 @@ class KDLIKNode(Node):
         timeout = self.get_parameter("timeout").value
         maxiter = max(1, int(timeout / eps))
 
-        # 2) load URDF file directly from maurice_sim package
+        # 2) Load URDF file directly from maurice_sim package
         pkg_dir = get_package_share_directory("maurice_sim")
         urdf_path = os.path.join(pkg_dir, "urdf", "maurice.urdf")
         if not os.path.exists(urdf_path):
