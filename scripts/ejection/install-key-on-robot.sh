@@ -136,6 +136,13 @@ if [ ! -d "\$INNATE_OS_PATH/.git" ]; then
 else
     cd "\$INNATE_OS_PATH"
     
+    # Preserve .env file if it exists (before git operations that might overwrite it)
+    ENV_BACKUP=""
+    if [ -f "\$INNATE_OS_PATH/.env" ]; then
+        ENV_BACKUP=\$(cat "\$INNATE_OS_PATH/.env")
+        echo "   ✓ Preserved existing .env file"
+    fi
+    
     # Ensure maps/.gitignore exists before git operations
     if [ ! -f "\$INNATE_OS_PATH/maps/.gitignore" ]; then
         mkdir -p "\$INNATE_OS_PATH/maps"
@@ -178,6 +185,14 @@ else
         # Fallback to pull if origin/main doesn't exist yet
         git pull origin main 2>/dev/null || git pull 2>/dev/null || true
         echo "   ✓ Pulled latest from release repo"
+    fi
+    
+    # Restore .env file if it was backed up and was overwritten by git operations
+    if [ -n "\$ENV_BACKUP" ]; then
+        if [ ! -f "\$INNATE_OS_PATH/.env" ] || ! grep -q "INNATE_SERVICE_KEY=" "\$INNATE_OS_PATH/.env" 2>/dev/null; then
+            echo "\$ENV_BACKUP" > "\$INNATE_OS_PATH/.env"
+            echo "   ✓ Restored .env file from backup"
+        fi
     fi
 fi
 

@@ -169,34 +169,51 @@ echo "  STEP 3: Running setup script on robot"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Run setup script on robot
-# Use -tt flag to force TTY allocation even with redirected stdin (for sudo password prompts)
+# Run setup script on robot in a SEPARATE SSH session to avoid heredoc conflicts
+# This prevents setup_robot_with.sh's internal heredocs from consuming the parent heredoc
 ROBOT_PASSWORD="${ROBOT_PASSWORD:-goodbot}"
 INNATE_OS_PATH="${INNATE_OS_PATH:-/home/jetson1/innate-os}"
 SKIP_TOKEN_FLAG="${SKIP_TOKEN:-false}"
+
+# Preserve .env file before setup (in case setup overwrites it)
+echo "Preserving .env file..."
+ENV_BACKUP=$(ssh "$ROBOT_HOST" "cat $INNATE_OS_PATH/.env 2>/dev/null" || echo "")
+
+# Run setup script in separate SSH session to completely isolate it from heredoc
+echo "Running setup_robot_with.sh..."
+if [ "$SKIP_TOKEN_FLAG" = "true" ]; then
+    ssh -tt "$ROBOT_HOST" "export ROBOT_PASSWORD='$ROBOT_PASSWORD'; export INNATE_OS_PATH='$INNATE_OS_PATH'; cd /tmp && chmod +x /tmp/setup_robot_with.sh && bash /tmp/setup_robot_with.sh $ROBOT_NUM --skip-token"
+    SETUP_EXIT_CODE=$?
+else
+    ssh -tt "$ROBOT_HOST" "export ROBOT_PASSWORD='$ROBOT_PASSWORD'; export INNATE_OS_PATH='$INNATE_OS_PATH'; cd /tmp && chmod +x /tmp/setup_robot_with.sh && bash /tmp/setup_robot_with.sh $ROBOT_NUM"
+    SETUP_EXIT_CODE=$?
+fi
+
+# Now continue with the rest in the heredoc
 ssh -tt "$ROBOT_HOST" bash << REMOTE_EOF
-# Don't exit on error - we want to continue even if setup_robot_with.sh has issues
+# Don't exit on error - we want to continue even if setup_robot_with.sh had issues
 set +e
 export ROBOT_PASSWORD="$ROBOT_PASSWORD"
 export INNATE_OS_PATH="$INNATE_OS_PATH"
-SKIP_TOKEN="$SKIP_TOKEN_FLAG"
-chmod +x /tmp/setup_robot_with.sh
-cd /tmp
-# Run setup script - capture exit code but continue regardless
-if [ "$SKIP_TOKEN" = "true" ]; then
-    ./setup_robot_with.sh $ROBOT_NUM --skip-token || true
-else
-    ./setup_robot_with.sh $ROBOT_NUM || true
+SETUP_EXIT_CODE=$SETUP_EXIT_CODE
+
+# Restore .env file if it was backed up and doesn't exist or was overwritten
+ENV_BACKUP='$ENV_BACKUP'
+if [ -n "\$ENV_BACKUP" ]; then
+    if [ ! -f "\$INNATE_OS_PATH/.env" ] || ! grep -q "INNATE_SERVICE_KEY=" "\$INNATE_OS_PATH/.env" 2>/dev/null; then
+        echo "\$ENV_BACKUP" > "\$INNATE_OS_PATH/.env"
+        echo "✓ Restored .env file from backup"
+    fi
 fi
-SETUP_EXIT_CODE=$?
 
 # Clean up setup script
 rm -f /tmp/setup_robot_with.sh
 echo "✓ Cleaned up setup script"
 echo "  Setup script exit code: $SETUP_EXIT_CODE"
 
-# Continue even if setup script had errors
-set +e
+# CRITICAL: Force continuation - add explicit markers to verify heredoc continues
+echo ""
+echo ">>> SETUP_SCRIPT_COMPLETED - CONTINUING TO POST_UPDATE <<<"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Continuing with post-update and diagnostics..."
@@ -225,12 +242,12 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Running system diagnostics..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-cd $INNATE_OS_PATH/scripts
+cd "\$INNATE_OS_PATH/scripts"
 if [ -f "./diagnostics.py" ]; then
     # Try to run diagnostics with dialout group if user is in it
     if groups | grep -q "\bdialout\b"; then
         # User is in dialout group, run diagnostics with that group active
-        sg dialout -c "cd $INNATE_OS_PATH/scripts && python3 ./diagnostics.py" 2>&1 || {
+        sg dialout -c "cd \$INNATE_OS_PATH/scripts && python3 ./diagnostics.py" 2>&1 || {
             echo "⚠️  Warning: diagnostics.py returned non-zero exit code"
         }
     else
@@ -241,7 +258,7 @@ if [ -f "./diagnostics.py" ]; then
     fi
     echo "✓ Diagnostics completed"
 else
-    echo "⚠️  Warning: diagnostics.py not found at $INNATE_OS_PATH/scripts/diagnostics.py"
+    echo "⚠️  Warning: diagnostics.py not found at \$INNATE_OS_PATH/scripts/diagnostics.py"
 fi
 
 # Shutdown after 3 seconds
