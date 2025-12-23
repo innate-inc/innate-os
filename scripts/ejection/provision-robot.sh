@@ -261,6 +261,39 @@ else
     echo "⚠️  Warning: diagnostics.py not found at \$INNATE_OS_PATH/scripts/diagnostics.py"
 fi
 
+# Copy arm_wave data to primitives/wave folder
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Copying arm_wave data to primitives/wave..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ -d "\$INNATE_OS_PATH/primitives/wave" ]; then
+    echo "✓ primitives/wave directory exists"
+else
+    echo "Creating primitives/wave directory..."
+    mkdir -p "\$INNATE_OS_PATH/primitives/wave"
+    echo "✓ Created primitives/wave directory"
+fi
+REMOTE_EOF
+
+# Copy arm_wave files to robot (run from local machine)
+# arm_wave is expected to be in the parent directory of innate-os (same level as innate-os)
+ARM_WAVE_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")/arm_wave"
+if [ -d "$ARM_WAVE_DIR" ]; then
+    echo "Copying arm_wave files to robot..."
+    ssh "$ROBOT_HOST" "mkdir -p $INNATE_OS_PATH/primitives/wave"
+    scp -r "$ARM_WAVE_DIR"/* "$ROBOT_HOST:$INNATE_OS_PATH/primitives/wave/" || {
+        echo "⚠️  Warning: Failed to copy arm_wave files, but continuing..."
+    }
+    echo "✓ arm_wave files copied to primitives/wave"
+else
+    echo "⚠️  Warning: arm_wave directory not found at $ARM_WAVE_DIR, skipping..."
+fi
+
+# Continue with shutdown in a new SSH session
+ssh -tt "$ROBOT_HOST" bash << SHUTDOWN_EOF
+set +e
+export ROBOT_PASSWORD="$ROBOT_PASSWORD"
+
 # Shutdown after 3 seconds
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -274,7 +307,7 @@ else
     echo "\$ROBOT_PASSWORD" | sudo -S shutdown now
 fi
 set -e
-REMOTE_EOF
+SHUTDOWN_EOF
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════════╗"
