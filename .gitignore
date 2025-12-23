@@ -96,3 +96,6 @@ logs
 .last_map
 .last_mode
 .onnx
+
+# arm_wave directory (local data, not tracked)
+arm_wave/

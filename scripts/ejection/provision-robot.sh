@@ -275,18 +275,29 @@ else
 fi
 REMOTE_EOF
 
+# Wait a moment for SSH session to close
+sleep 1
+
 # Copy arm_wave files to robot (run from local machine)
 # arm_wave is expected to be in the parent directory of innate-os (same level as innate-os)
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Copying arm_wave data to primitives/wave..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ARM_WAVE_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")/arm_wave"
 if [ -d "$ARM_WAVE_DIR" ]; then
-    echo "Copying arm_wave files to robot..."
+    echo "Found arm_wave directory at: $ARM_WAVE_DIR"
+    # Ensure target directory exists (redundant but safe)
     ssh "$ROBOT_HOST" "mkdir -p $INNATE_OS_PATH/primitives/wave"
+    # Always copy files, even if directory already exists (overwrites existing files)
+    echo "Copying arm_wave files to robot (will overwrite existing files)..."
     scp -r "$ARM_WAVE_DIR"/* "$ROBOT_HOST:$INNATE_OS_PATH/primitives/wave/" || {
         echo "⚠️  Warning: Failed to copy arm_wave files, but continuing..."
     }
     echo "✓ arm_wave files copied to primitives/wave"
 else
     echo "⚠️  Warning: arm_wave directory not found at $ARM_WAVE_DIR, skipping..."
+    echo "  Expected location: $(dirname "$(dirname "$SCRIPT_DIR")")/arm_wave"
 fi
 
 # Continue with shutdown in a new SSH session
