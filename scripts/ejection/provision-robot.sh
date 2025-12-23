@@ -190,7 +190,8 @@ else
 fi
 
 # Now continue with the rest in the heredoc
-ssh -tt "$ROBOT_HOST" bash << REMOTE_EOF
+# Use ssh without -tt for the final part to avoid TTY issues with heredoc closing
+ssh "$ROBOT_HOST" bash << REMOTE_EOF
 # Don't exit on error - we want to continue even if setup_robot_with.sh had issues
 set +e
 export ROBOT_PASSWORD="$ROBOT_PASSWORD"
@@ -273,6 +274,8 @@ else
     mkdir -p "\$INNATE_OS_PATH/primitives/wave"
     echo "✓ Created primitives/wave directory"
 fi
+# Explicitly close stdin to ensure heredoc closes
+exec <&-
 REMOTE_EOF
 
 # Wait a moment for SSH session to close
