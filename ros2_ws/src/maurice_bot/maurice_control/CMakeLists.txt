@@ -68,7 +68,6 @@ install(PROGRAMS
   maurice_control/keyboard.py
   maurice_control/joystick.py
   maurice_control/leader.py
-  maurice_control/health_monitor.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
