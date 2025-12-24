@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CUDA Setup</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0d0d12;
+            --bg-secondary: #14141c;
+            --bg-card: #1c1c28;
+            --bg-hover: #252534;
+            --accent: #76b900;
+            --accent-dim: #5a8f00;
+            --accent-glow: rgba(118, 185, 0, 0.2);
+            --secondary: #00d4aa;
+            --danger: #ff4757;
+            --warning: #ffb800;
+            --text-primary: #f0f0f5;
+            --text-secondary: #9090a8;
+            --text-dim: #606078;
+            --border: #2a2a3c;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            background-image: 
+                radial-gradient(ellipse at top left, rgba(118, 185, 0, 0.05) 0%, transparent 40%),
+                radial-gradient(ellipse at bottom right, rgba(0, 212, 170, 0.05) 0%, transparent 40%);
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            margin-bottom: 16px;
+        }
+
+        .robot-info {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bg-card);
+            padding: 10px 20px;
+            border-radius: 50px;
+            border: 1px solid var(--border);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.online {
+            background: var(--accent);
+            box-shadow: 0 0 10px var(--accent);
+        }
+
+        .status-dot.offline {
+            background: var(--danger);
+            box-shadow: 0 0 10px var(--danger);
+        }
+
+        .status-dot.checking {
+            background: var(--warning);
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .section {
+            margin-bottom: 24px;
+        }
+
+        .section-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 12px;
+            padding-left: 4px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 20px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+            color: var(--text-primary);
+        }
+
+        .btn:hover:not(:disabled) {
+            background: var(--bg-hover);
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn.loading {
+            pointer-events: none;
+        }
+
+        .btn.loading .btn-icon {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .btn-icon {
+            font-size: 1.8rem;
+            transition: transform 0.2s ease;
+        }
+
+        .btn-label {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        .btn.primary {
+            background: linear-gradient(135deg, var(--accent-dim) 0%, var(--accent) 100%);
+            border-color: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .btn.primary .btn-label {
+            color: var(--bg-primary);
+        }
+
+        .btn.primary:hover:not(:disabled) {
+            box-shadow: 0 0 30px var(--accent-glow);
+        }
+
+        .btn-step {
+            position: relative;
+        }
+
+        .btn-step::before {
+            content: attr(data-step);
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            background: var(--bg-secondary);
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .terminal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: 24px;
+        }
+
+        .terminal-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .terminal-dot.red { background: #ff5f56; }
+        .terminal-dot.yellow { background: #ffbd2e; }
+        .terminal-dot.green { background: #27c93f; }
+
+        .terminal-title {
+            margin-left: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-clear {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-clear:hover {
+            color: var(--text-secondary);
+        }
+
+        .terminal-body {
+            padding: 16px;
+            min-height: 180px;
+            max-height: 350px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .terminal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal-body::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        .terminal-body::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        .log-entry {
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .log-time {
+            color: var(--text-dim);
+            font-size: 0.75rem;
+        }
+
+        .log-action {
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .log-output {
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .log-success {
+            color: var(--accent);
+        }
+
+        .log-error {
+            color: var(--danger);
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚡ CUDA Setup</h1>
+            <p class="subtitle">Install CUDA 12.6 dependencies on robot</p>
+            <div class="robot-info">
+                <span class="status-dot checking" id="statusDot"></span>
+                <span id="robotHost">{{ robot_host }}</span>
+            </div>
+        </header>
+
+        <div class="section">
+            <div class="section-title">Connection</div>
+            <div class="grid">
+                <button class="btn" onclick="checkConnection()" id="btnPing">
+                    <span class="btn-icon">📡</span>
+                    <span class="btn-label">Check Connection</span>
+                </button>
+                <button class="btn" onclick="clearKnownHosts()" id="btnClearHosts">
+                    <span class="btn-icon">🔑</span>
+                    <span class="btn-label">Reset SSH Keys</span>
+                </button>
+                <button class="btn" onclick="checkCuda()" id="btnCheckCuda">
+                    <span class="btn-icon">🔍</span>
+                    <span class="btn-label">Check CUDA Status</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Install Steps (Individual)</div>
+            <div class="grid">
+                <button class="btn btn-step" data-step="1" onclick="installNvrtc()" id="btnNvrtc">
+                    <span class="btn-icon">📦</span>
+                    <span class="btn-label">cuda-nvrtc-dev-12-6</span>
+                </button>
+                <button class="btn btn-step" data-step="2" onclick="createSymlink()" id="btnSymlink">
+                    <span class="btn-icon">🔗</span>
+                    <span class="btn-label">Create CUDA Symlink</span>
+                </button>
+                <button class="btn btn-step" data-step="3" onclick="installCudart()" id="btnCudart">
+                    <span class="btn-icon">📦</span>
+                    <span class="btn-label">cuda-cudart-dev-12-6</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Quick Action</div>
+            <div class="grid">
+                <button class="btn primary" onclick="installAll()" id="btnInstallAll" style="grid-column: 1 / -1;">
+                    <span class="btn-icon">🚀</span>
+                    <span class="btn-label">Install All (Run Steps 1-3)</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="terminal">
+            <div class="terminal-header">
+                <span class="terminal-dot red"></span>
+                <span class="terminal-dot yellow"></span>
+                <span class="terminal-dot green"></span>
+                <span class="terminal-title">output</span>
+                <button class="terminal-clear" onclick="clearTerminal()">clear</button>
+            </div>
+            <div class="terminal-body" id="terminal">
+                <div class="log-entry">
+                    <span class="log-time">Ready</span>
+                    <div class="log-output">Click a button to run a command...</div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            innate-os cuda setup tool
+        </footer>
+    </div>
+
+    <script>
+        const terminal = document.getElementById('terminal');
+        const statusDot = document.getElementById('statusDot');
+        
+        function log(action, output, success = true) {
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `
+                <span class="log-time">${time}</span>
+                <span class="log-action"> › ${action}</span>
+                <div class="log-output ${success ? 'log-success' : 'log-error'}">${escapeHtml(output)}</div>
+            `;
+            terminal.insertBefore(entry, terminal.firstChild);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function setLoading(btnId, loading) {
+            const btn = document.getElementById(btnId);
+            if (loading) {
+                btn.classList.add('loading');
+                btn.disabled = true;
+            } else {
+                btn.classList.remove('loading');
+                btn.disabled = false;
+            }
+        }
+
+        function updateStatus(status) {
+            statusDot.className = 'status-dot ' + status;
+        }
+
+        function clearTerminal() {
+            terminal.innerHTML = '<div class="log-entry"><span class="log-time">Cleared</span></div>';
+        }
+
+        async function apiCall(endpoint, btnId, action) {
+            setLoading(btnId, true);
+            try {
+                const res = await fetch(`/api/${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+                log(action, data.output || 'Done', data.success);
+                return data;
+            } catch (e) {
+                log(action, 'Request failed: ' + e.message, false);
+                return { success: false };
+            } finally {
+                setLoading(btnId, false);
+            }
+        }
+
+        async function clearKnownHosts() {
+            await apiCall('clear-known-hosts', 'btnClearHosts', 'Reset SSH Keys');
+        }
+
+        async function checkConnection() {
+            updateStatus('checking');
+            const ping = await apiCall('ping', 'btnPing', 'Ping');
+            if (ping.success) {
+                const ssh = await apiCall('ssh-check', 'btnPing', 'SSH Check');
+                updateStatus(ssh.success ? 'online' : 'offline');
+            } else {
+                updateStatus('offline');
+            }
+        }
+
+        async function checkCuda() {
+            await apiCall('check-cuda', 'btnCheckCuda', 'Check CUDA Status');
+        }
+
+        async function installNvrtc() {
+            log('Install nvrtc', 'Installing cuda-nvrtc-dev-12-6 (this may take a while)...', true);
+            await apiCall('install-nvrtc', 'btnNvrtc', 'Install cuda-nvrtc-dev-12-6');
+        }
+
+        async function createSymlink() {
+            await apiCall('create-symlink', 'btnSymlink', 'Create CUDA Symlink');
+        }
+
+        async function installCudart() {
+            log('Install cudart', 'Installing cuda-cudart-dev-12-6 (this may take a while)...', true);
+            await apiCall('install-cudart', 'btnCudart', 'Install cuda-cudart-dev-12-6');
+        }
+
+        async function installAll() {
+            if (!confirm('This will run all 3 installation steps. Continue?')) return;
+            log('Install All', 'Starting full CUDA installation (this may take several minutes)...', true);
+            await apiCall('install-all', 'btnInstallAll', 'Install All CUDA Dependencies');
+        }
+
+        // Check connection on load
+        checkConnection();
+    </script>
+</body>
+</html>
+

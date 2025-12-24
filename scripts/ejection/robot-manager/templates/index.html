@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a24;
+            --bg-hover: #22222e;
+            --accent: #00ff88;
+            --accent-dim: #00cc6a;
+            --accent-glow: rgba(0, 255, 136, 0.15);
+            --danger: #ff4757;
+            --danger-dim: #cc3945;
+            --warning: #ffa502;
+            --text-primary: #ffffff;
+            --text-secondary: #8888aa;
+            --text-dim: #555566;
+            --border: #2a2a3a;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            background-image: 
+                radial-gradient(ellipse at top, rgba(0, 255, 136, 0.03) 0%, transparent 50%),
+                radial-gradient(ellipse at bottom right, rgba(100, 100, 255, 0.03) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .robot-info {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bg-card);
+            padding: 10px 20px;
+            border-radius: 50px;
+            border: 1px solid var(--border);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.online {
+            background: var(--accent);
+            box-shadow: 0 0 10px var(--accent);
+        }
+
+        .status-dot.offline {
+            background: var(--danger);
+            box-shadow: 0 0 10px var(--danger);
+        }
+
+        .status-dot.checking {
+            background: var(--warning);
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+
+        .btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 24px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+            color: var(--text-primary);
+        }
+
+        .btn:hover:not(:disabled) {
+            background: var(--bg-hover);
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn.loading {
+            pointer-events: none;
+        }
+
+        .btn.loading .btn-icon {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .btn-icon {
+            font-size: 2rem;
+            transition: transform 0.2s ease;
+        }
+
+        .btn-label {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .btn.primary {
+            background: linear-gradient(135deg, var(--accent-dim) 0%, var(--accent) 100%);
+            border-color: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .btn.primary .btn-label {
+            color: var(--bg-primary);
+        }
+
+        .btn.primary:hover:not(:disabled) {
+            box-shadow: 0 0 30px var(--accent-glow);
+        }
+
+        .btn.danger {
+            border-color: var(--danger);
+        }
+
+        .btn.danger:hover:not(:disabled) {
+            background: rgba(255, 71, 87, 0.1);
+            border-color: var(--danger);
+        }
+
+        .terminal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .terminal-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .terminal-dot.red { background: #ff5f56; }
+        .terminal-dot.yellow { background: #ffbd2e; }
+        .terminal-dot.green { background: #27c93f; }
+
+        .terminal-title {
+            margin-left: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-clear {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-clear:hover {
+            color: var(--text-secondary);
+        }
+
+        .terminal-body {
+            padding: 16px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .terminal-body::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal-body::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        .terminal-body::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        .log-entry {
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .log-time {
+            color: var(--text-dim);
+            font-size: 0.75rem;
+        }
+
+        .log-action {
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .log-output {
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .log-success {
+            color: var(--accent);
+        }
+
+        .log-error {
+            color: var(--danger);
+        }
+
+        .custom-cmd {
+            display: flex;
+            gap: 12px;
+            margin-top: 30px;
+        }
+
+        .custom-cmd input {
+            flex: 1;
+            padding: 14px 18px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        .custom-cmd input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .custom-cmd input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .custom-cmd button {
+            padding: 14px 24px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .custom-cmd button:hover {
+            background: var(--bg-hover);
+            border-color: var(--accent);
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Robot Manager</h1>
+            <div class="robot-info">
+                <span class="status-dot checking" id="statusDot"></span>
+                <span id="robotHost">{{ robot_host }}</span>
+            </div>
+        </header>
+
+        <div class="grid">
+            <button class="btn" onclick="clearKnownHosts()" id="btnClearHosts">
+                <span class="btn-icon">🔑</span>
+                <span class="btn-label">Clear Known Hosts</span>
+            </button>
+            <button class="btn primary" onclick="copyWave()" id="btnCopyWave">
+                <span class="btn-icon">📦</span>
+                <span class="btn-label">Copy Wave Primitive</span>
+            </button>
+            <button class="btn" onclick="clearMaps()" id="btnClearMaps">
+                <span class="btn-icon">🗺️</span>
+                <span class="btn-label">Clear Maps</span>
+            </button>
+            <button class="btn" onclick="speakerTest()" id="btnSpeaker">
+                <span class="btn-icon">🔊</span>
+                <span class="btn-label">Speaker Test (10s)</span>
+            </button>
+            <button class="btn" onclick="checkConnection()" id="btnCheck">
+                <span class="btn-icon">📡</span>
+                <span class="btn-label">Check Connection</span>
+            </button>
+            <button class="btn danger" onclick="shutdown()" id="btnShutdown">
+                <span class="btn-icon">⏻</span>
+                <span class="btn-label">Shutdown Robot</span>
+            </button>
+        </div>
+
+        <div class="terminal">
+            <div class="terminal-header">
+                <span class="terminal-dot red"></span>
+                <span class="terminal-dot yellow"></span>
+                <span class="terminal-dot green"></span>
+                <span class="terminal-title">output</span>
+                <button class="terminal-clear" onclick="clearTerminal()">clear</button>
+            </div>
+            <div class="terminal-body" id="terminal">
+                <div class="log-entry">
+                    <span class="log-time">Ready</span>
+                    <div class="log-output">Click a button to run a command...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="custom-cmd">
+            <input type="text" id="customCmd" placeholder="Run custom command on robot..." onkeypress="if(event.key==='Enter')runCustom()">
+            <button onclick="runCustom()">Run</button>
+        </div>
+
+        <footer>
+            innate-os robot manager
+        </footer>
+    </div>
+
+    <script>
+        const terminal = document.getElementById('terminal');
+        const statusDot = document.getElementById('statusDot');
+        
+        function log(action, output, success = true) {
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `
+                <span class="log-time">${time}</span>
+                <span class="log-action"> › ${action}</span>
+                <div class="log-output ${success ? 'log-success' : 'log-error'}">${escapeHtml(output)}</div>
+            `;
+            terminal.insertBefore(entry, terminal.firstChild);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function setLoading(btnId, loading) {
+            const btn = document.getElementById(btnId);
+            if (loading) {
+                btn.classList.add('loading');
+                btn.disabled = true;
+            } else {
+                btn.classList.remove('loading');
+                btn.disabled = false;
+            }
+        }
+
+        function updateStatus(status) {
+            statusDot.className = 'status-dot ' + status;
+        }
+
+        function clearTerminal() {
+            terminal.innerHTML = '<div class="log-entry"><span class="log-time">Cleared</span></div>';
+        }
+
+        async function apiCall(endpoint, btnId, action, options = {}) {
+            setLoading(btnId, true);
+            try {
+                const res = await fetch(`/api/${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(options)
+                });
+                const data = await res.json();
+                log(action, data.output || 'Done', data.success);
+                return data;
+            } catch (e) {
+                log(action, 'Request failed: ' + e.message, false);
+                return { success: false };
+            } finally {
+                setLoading(btnId, false);
+            }
+        }
+
+        async function clearKnownHosts() {
+            await apiCall('clear-known-hosts', 'btnClearHosts', 'Clear Known Hosts');
+        }
+
+        async function copyWave() {
+            log('Copy Wave', 'Starting copy (this may take a minute)...', true);
+            await apiCall('copy-wave', 'btnCopyWave', 'Copy Wave Primitive');
+        }
+
+        async function clearMaps() {
+            await apiCall('clear-maps', 'btnClearMaps', 'Clear Maps');
+        }
+
+        async function speakerTest() {
+            log('Speaker Test', 'Playing for 10 seconds...', true);
+            await apiCall('speaker-test', 'btnSpeaker', 'Speaker Test', { duration: 10 });
+        }
+
+        async function shutdown() {
+            if (!confirm('Are you sure you want to shutdown the robot?')) return;
+            await apiCall('shutdown', 'btnShutdown', 'Shutdown');
+            updateStatus('offline');
+        }
+
+        async function checkConnection() {
+            updateStatus('checking');
+            const ping = await apiCall('ping', 'btnCheck', 'Ping');
+            if (ping.success) {
+                const ssh = await apiCall('ssh-check', 'btnCheck', 'SSH Check');
+                updateStatus(ssh.success ? 'online' : 'offline');
+            } else {
+                updateStatus('offline');
+            }
+        }
+
+        async function runCustom() {
+            const input = document.getElementById('customCmd');
+            const cmd = input.value.trim();
+            if (!cmd) return;
+            input.value = '';
+            await apiCall('run-command', 'btnCheck', `Run: ${cmd}`, { command: cmd });
+        }
+
+        // Check connection on load
+        checkConnection();
+    </script>
+</body>
+</html>
+
