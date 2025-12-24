@@ -16,7 +16,7 @@ class EmptyAgent(Agent):
     def display_name(self) -> str:
         return "Empty Directive"
 
-    def get_primitives(self) -> List[str]:
+    def get_skills(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
             "navigate_to_position",

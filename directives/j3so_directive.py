@@ -20,7 +20,7 @@ class J3SOAgent(Agent):
     def display_icon(self) -> str:
         return "assets/j3so.png"
 
-    def get_primitives(self) -> List[str]:
+    def get_skills(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
             "navigate_to_position",

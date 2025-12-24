@@ -19,7 +19,7 @@ class HelloWorld(Agent):
     def display_icon(self) -> str:
         return "assets/hello_world.png"
 
-    def get_primitives(self) -> List[str]:
+    def get_skills(self) -> List[str]:
         return ["navigate_to_position", "wave"]
 
     def get_inputs(self) -> List[str]:
