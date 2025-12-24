@@ -141,7 +141,7 @@ class AgentLoader:
         """
         try:
             # Check that required abstract methods are implemented
-            required_methods = ["id", "display_name", "get_primitives", "get_prompt"]
+            required_methods = ["id", "display_name", "get_skills", "get_prompt"]
             for method_name in required_methods:
                 if not hasattr(agent_class, method_name):
                     self.logger.error(
@@ -321,7 +321,7 @@ class AgentLoader:
             Warning if a skill is not found (logged, not raised)
         """
         try:
-            agent_skills = agent_instance.get_primitives()
+            agent_skills = agent_instance.get_skills()
             missing_skills = []
 
             for skill_name in agent_skills:

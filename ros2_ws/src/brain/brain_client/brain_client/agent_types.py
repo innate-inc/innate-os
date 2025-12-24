@@ -36,10 +36,10 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def get_primitives(self) -> List[str]:
+    def get_skills(self) -> List[str]:
         """
-        Returns a list of primitive names that should be available
-        when this directive is active.
+        Returns a list of skill names that should be available
+        when this agent is active.
 
         Subclasses must implement this method.
         """
