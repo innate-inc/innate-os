@@ -75,7 +75,7 @@ void WebRTCStreamer::create_subscriptions(const std::string& source)
     main_topic = replay_main_topic_;
     arm_topic = replay_arm_topic_;
   } else {
-    main_topic = live_mhain_topic_;
+    main_topic = live_main_topic_;
     arm_topic = live_arm_topic_;
   }
 
@@ -102,24 +102,24 @@ cv::Mat WebRTCStreamer::process_image(
 
   if (msg->encoding == "rgb8") {
     cv_type = CV_8UC3;
-    conversion_code = -1;  // No conversion needed, already RGB
+    conversion_code = cv::COLOR_RGB2BGR;
   } else if (msg->encoding == "bgr8") {
     cv_type = CV_8UC3;
-    conversion_code = cv::COLOR_BGR2RGB;
+    conversion_code = -1;  // No conversion needed, already BGR
   } else if (msg->encoding == "mono8") {
     cv_type = CV_8UC1;
-    conversion_code = cv::COLOR_GRAY2RGB;
+    conversion_code = cv::COLOR_GRAY2BGR;
   } else if (msg->encoding == "rgba8") {
     cv_type = CV_8UC4;
-    conversion_code = cv::COLOR_RGBA2RGB;
+    conversion_code = cv::COLOR_RGBA2BGR;
   } else if (msg->encoding == "bgra8") {
     cv_type = CV_8UC4;
-    conversion_code = cv::COLOR_BGRA2RGB;
+    conversion_code = cv::COLOR_BGRA2BGR;
   } else {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
       "Unsupported image encoding: %s, assuming bgr8", msg->encoding.c_str());
     cv_type = CV_8UC3;
-    conversion_code = cv::COLOR_BGR2RGB;
+    conversion_code = -1;  // Already BGR
   }
 
   cv::Mat img(msg->height, msg->width, cv_type, const_cast<uint8_t*>(msg->data.data()), msg->step);
@@ -127,20 +127,20 @@ cv::Mat WebRTCStreamer::process_image(
     return cv::Mat();
   }
 
-  // Convert to RGB if needed
-  cv::Mat rgb_img;
+  // Convert to BGR if needed
+  cv::Mat bgr_img;
   if (conversion_code >= 0) {
-    cv::cvtColor(img, rgb_img, conversion_code);
+    cv::cvtColor(img, bgr_img, conversion_code);
   } else {
-    rgb_img = img.clone();
+    bgr_img = img.clone();
   }
 
   // Resize if needed
-  if (rgb_img.rows != target_height || rgb_img.cols != target_width) {
-    cv::resize(rgb_img, rgb_img, cv::Size(target_width, target_height));
+  if (bgr_img.rows != target_height || bgr_img.cols != target_width) {
+    cv::resize(bgr_img, bgr_img, cv::Size(target_width, target_height));
   }
 
-  return rgb_img;
+  return bgr_img;
 }
 
 void WebRTCStreamer::push_frame(GstElement* appsrc, const cv::Mat& frame)
@@ -166,28 +166,40 @@ void WebRTCStreamer::push_frame(GstElement* appsrc, const cv::Mat& frame)
 
 void WebRTCStreamer::on_image_main(const sensor_msgs::msg::Image::SharedPtr msg)
 {
-  std::lock_guard<std::mutex> lock(pipeline_mutex_);
-  if (!appsrc_main_) {
-    return;
+  GstElement* appsrc = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    appsrc = appsrc_main_;
+    if (appsrc) gst_object_ref(appsrc);
   }
+
+  if (!appsrc) return;
 
   cv::Mat img = process_image(msg, 640, 480);
   if (!img.empty()) {
-    push_frame(appsrc_main_, img);
+    push_frame(appsrc, img);
   }
+
+  gst_object_unref(appsrc);
 }
 
 void WebRTCStreamer::on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg)
 {
-  std::lock_guard<std::mutex> lock(pipeline_mutex_);
-  if (!appsrc_arm_) {
-    return;
+  GstElement* appsrc = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(pipeline_mutex_);
+    appsrc = appsrc_arm_;
+    if (appsrc) gst_object_ref(appsrc);
   }
+
+  if (!appsrc) return;
 
   cv::Mat img = process_image(msg, 640, 480);
   if (!img.empty()) {
-    push_frame(appsrc_arm_, img);
+    push_frame(appsrc, img);
   }
+
+  gst_object_unref(appsrc);
 }
 
 void WebRTCStreamer::cleanup_pipeline()
@@ -238,7 +250,7 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg)
     "webrtcbin name=webrtc bundle-policy=max-bundle "
     
     "appsrc name=src_main is-live=true format=time "
-    "caps=video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! "
+    "caps=video/x-raw,format=BGR,width=640,height=480,framerate=30/1 ! "
     "videoconvert ! "
     "vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! "
     "rtpvp8pay pt=96 ! "
@@ -246,7 +258,7 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg)
     "webrtc.sink_0 "
     
     "appsrc name=src_arm is-live=true format=time "
-    "caps=video/x-raw,format=RGB,width=640,height=480,framerate=15/1 ! "
+    "caps=video/x-raw,format=BGR,width=640,height=480,framerate=15/1 ! "
     "videoconvert ! "
     "vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! "
     "rtpvp8pay pt=97 ! "
