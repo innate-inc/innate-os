@@ -24,14 +24,6 @@ def generate_launch_description():
         parameters=[config_file],
         output='screen'
     )
-
-    # Create the camera node
-    camera_node = Node(
-        package='maurice_arm',
-        executable='camera_node',
-        name='camera',
-        output='screen'
-    )
     
     # Include the planning launch file (MoveIt move_group)
     planning_launch = IncludeLaunchDescription(
@@ -40,6 +32,5 @@ def generate_launch_description():
 
     return LaunchDescription([
         maurice_arm_node,
-        camera_node,
         planning_launch
     ])
