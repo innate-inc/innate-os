@@ -16,6 +16,10 @@ find_package(image_transport REQUIRED)
 # Find OpenCV
 find_package(OpenCV REQUIRED)
 
+# Find TurboJPEG
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
+
 # Set Python version
 set(PYTHON_VERSION "python3.10")
 
@@ -30,7 +34,8 @@ ament_target_dependencies(main_camera_driver
   cv_bridge
   image_transport
 )
-target_link_libraries(main_camera_driver ${OpenCV_LIBS})
+target_include_directories(main_camera_driver PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
+target_link_libraries(main_camera_driver ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
 
 # Create arm camera driver executable
 add_executable(arm_camera_driver maurice_cam/arm_camera_driver.cpp)

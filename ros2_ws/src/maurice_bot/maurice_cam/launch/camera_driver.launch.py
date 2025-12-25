@@ -37,7 +37,8 @@ def generate_launch_description():
             os.path.join(pkg_share, 'launch', 'main_camera_driver.launch.py')
         ),
         launch_arguments={
-            'use_sim_time': LaunchConfiguration('use_sim_time')
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'camera_symlink': 'usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0'
         }.items()
     )
     
@@ -47,7 +48,8 @@ def generate_launch_description():
             os.path.join(pkg_share, 'launch', 'arm_camera_driver.launch.py')
         ),
         launch_arguments={
-            'use_sim_time': LaunchConfiguration('use_sim_time')
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'camera_symlink': 'usb-Arducam_Technology_Co.__Ltd._Arducam_USB_Camera_UC684-video-index0'
         }.items()
     )
     

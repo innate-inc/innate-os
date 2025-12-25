@@ -102,6 +102,10 @@ MainCameraDriver::MainCameraDriver()
   RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, rotated)");
   RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (full stereo, rotated)");
 
+  // Initialize TurboJPEG encoder
+  jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
+  RCLCPP_INFO(this->get_logger(), "TurboJPEG encoder initialized");
+
   // Initialize camera
   if (initializeCamera()) {
     camera_initialized_ = true;
@@ -455,9 +459,9 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   
   // -------------------------
   // (A2) Left ROI view into rotated stereo (no clone)
-  // After 180° rotation, original left half appears on the right half.
+  // After 180° rotation, original right half appears on the left half.
   // -------------------------
-  cv::Rect left_roi(left_width_, 0, left_width_, left_height_);
+  cv::Rect left_roi(0, 0, left_width_, left_height_);
   cv::Mat left_view = stereo_out(left_roi);  // View only, no copy
   
   // -------------------------
@@ -479,13 +483,19 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   image_pub_->publish(left_msg_);
   
   // -------------------------
-  // (A4) Left compressed: encode from left_out (no extra clone)
+  // (A4) Left compressed: encode from left_out using TurboJPEG (no extra clone)
   // -------------------------
   left_compressed_msg_.header.stamp = current_time;
   left_compressed_msg_.header.frame_id = frame_id_;
   
-  // Encode from the left buffer (reuses left_out cv::Mat view)
-  cv::imencode(".jpg", left_out, left_compressed_msg_.data, jpeg_params_);
+  // Encode from the left buffer using TurboJPEG for faster compression
+  try {
+    jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg_.data);
+  } catch (const std::exception& e) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                         "JPEG turbo encode failed: %s", e.what());
+    return;  // Skip publishing this frame
+  }
   
   // Publish left camera compressed image
   compressed_pub_->publish(left_compressed_msg_);

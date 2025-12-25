@@ -12,6 +12,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <cstring>
+#include <stdexcept>
+
+#include <turbojpeg.h>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
@@ -21,6 +24,76 @@
 
 namespace maurice_cam
 {
+
+/**
+ * @brief Hardware-accelerated JPEG encoder using libturbojpeg
+ * 
+ * Provides faster JPEG encoding compared to cv::imencode by using
+ * libjpeg-turbo's optimized SIMD routines.
+ */
+class JpegTurboEncoder {
+public:
+  JpegTurboEncoder() {
+    handle_ = tjInitCompress();
+    if (!handle_) throw std::runtime_error("tjInitCompress failed");
+  }
+
+  ~JpegTurboEncoder() {
+    if (handle_) tjDestroy(handle_);
+  }
+
+  // Non-copyable
+  JpegTurboEncoder(const JpegTurboEncoder&) = delete;
+  JpegTurboEncoder& operator=(const JpegTurboEncoder&) = delete;
+
+  /**
+   * @brief Encode BGR8 cv::Mat into JPEG
+   * @param bgr Input BGR image (CV_8UC3)
+   * @param quality JPEG quality (1-100)
+   * @param out Output buffer for compressed JPEG data
+   */
+  void encodeBGR(const cv::Mat& bgr, int quality, std::vector<uint8_t>& out) {
+    if (bgr.empty()) throw std::runtime_error("encodeBGR: empty image");
+    if (bgr.type() != CV_8UC3) throw std::runtime_error("encodeBGR: expected CV_8UC3 (BGR)");
+    
+    if (!bgr.isContinuous()) {
+      // Make it continuous (rare case)
+      cv::Mat tmp = bgr.clone();
+      encodeBGR(tmp, quality, out);
+      return;
+    }
+
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+
+    // TJSAMP_420 is fastest/most common; TJFLAG_FASTDCT prioritizes speed
+    int flags = TJFLAG_FASTDCT;
+    int rc = tjCompress2(
+      handle_,
+      bgr.data,
+      bgr.cols,
+      0,                // pitch 0 => infer from width * pixelSize (works because continuous)
+      bgr.rows,
+      TJPF_BGR,
+      &jpegBuf,
+      &jpegSize,
+      TJSAMP_420,
+      quality,
+      flags
+    );
+
+    if (rc != 0) {
+      const char* err = tjGetErrorStr2(handle_);
+      throw std::runtime_error(std::string("tjCompress2 failed: ") + (err ? err : ""));
+    }
+
+    out.assign(jpegBuf, jpegBuf + jpegSize);
+    tjFree(jpegBuf);
+  }
+
+private:
+  tjhandle handle_{nullptr};
+};
 
 /**
  * @brief PID-based auto exposure controller with center weighting
@@ -216,6 +289,9 @@ private:
   sensor_msgs::msg::CompressedImage left_compressed_msg_;
   std::vector<int> jpeg_params_;
   bool buffers_initialized_{false};
+
+  // TurboJPEG encoder for faster JPEG compression
+  std::unique_ptr<JpegTurboEncoder> jpeg_encoder_;
 };
 
 } // namespace maurice_cam
