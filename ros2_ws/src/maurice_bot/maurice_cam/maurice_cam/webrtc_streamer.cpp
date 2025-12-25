@@ -311,18 +311,22 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg)
     
     "appsrc name=src_main is-live=true format=time "
     "caps=video/x-raw,format=BGR,width=640,height=480,framerate=30/1 ! "
+    "queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 ! "
     "videoconvert ! "
-    "vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! "
-    "rtpvp8pay pt=96 ! "
-    "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96 ! "
+    "x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=5000 ! "
+    "video/x-h264,profile=constrained-baseline ! "
+    "rtph264pay config-interval=-1 pt=96 ! "
+    "application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96 ! "
     "webrtc.sink_0 "
     
     "appsrc name=src_arm is-live=true format=time "
     "caps=video/x-raw,format=BGR,width=640,height=480,framerate=15/1 ! "
+    "queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 ! "
     "videoconvert ! "
-    "vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! "
-    "rtpvp8pay pt=97 ! "
-    "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=97 ! "
+    "x264enc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=2500 ! "
+    "video/x-h264,profile=constrained-baseline ! "
+    "rtph264pay config-interval=-1 pt=97 ! "
+    "application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=97 ! "
     "webrtc.sink_1";
 
   GError* error = nullptr;
@@ -342,9 +346,11 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg)
   pool_main_ = create_frame_pool(640, 480, 3);
   pool_arm_ = create_frame_pool(640, 480, 3);
 
-  // Configure appsrc elements
-  g_object_set(appsrc_main_, "format", GST_FORMAT_TIME, "do-timestamp", TRUE, "is-live", TRUE, nullptr);
-  g_object_set(appsrc_arm_, "format", GST_FORMAT_TIME, "do-timestamp", TRUE, "is-live", TRUE, nullptr);
+  // Configure appsrc elements - non-blocking with limited buffer
+  g_object_set(appsrc_main_, "format", GST_FORMAT_TIME, "do-timestamp", TRUE, "is-live", TRUE,
+               "block", FALSE, "max-bytes", 2*640*480*3, nullptr);
+  g_object_set(appsrc_arm_, "format", GST_FORMAT_TIME, "do-timestamp", TRUE, "is-live", TRUE,
+               "block", FALSE, "max-bytes", 2*640*480*3, nullptr);
 
   // Connect signals
   g_signal_connect(webrtc_, "on-ice-candidate", G_CALLBACK(on_ice_candidate), this);
