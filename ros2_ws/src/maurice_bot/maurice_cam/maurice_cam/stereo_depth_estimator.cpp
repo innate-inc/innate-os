@@ -630,14 +630,15 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
   }
 
   // Create depth message with zero-copy publishing
+  // Using 16UC1 format (millimeters) - ROS standard for depth images
   auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
   depth_msg->header.stamp = timestamp;
   depth_msg->header.frame_id = frame_id_;
   depth_msg->height = image_height_;
   depth_msg->width = image_width_;
-  depth_msg->encoding = "32FC1";  // Float depth in meters
+  depth_msg->encoding = "16UC1";  // Depth in millimeters (uint16)
   depth_msg->is_bigendian = false;
-  depth_msg->step = image_width_ * sizeof(float);
+  depth_msg->step = image_width_ * sizeof(uint16_t);
   depth_msg->data.resize(depth_msg->height * depth_msg->step);
 
   // Prepare disparity visualization message if needed (do both in single pass)
@@ -661,31 +662,32 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
 
   // Convert disparity to depth (optimized single-pass loop)
   // Disparity is in Q10.5 format: actual_disparity = raw_value / 32
-  // depth = baseline * focal_length / actual_disparity
-  //       = baseline * focal_length * 32 / raw_value
-  //       = bf_scaled / raw_value
-  float* depth_ptr = reinterpret_cast<float*>(depth_msg->data.data());
+  // depth_mm = baseline_mm * focal_length / actual_disparity
+  //          = baseline_mm * focal_length * 32 / raw_value
+  //          = bf_scaled_mm / raw_value
+  uint16_t* depth_ptr = reinterpret_cast<uint16_t*>(depth_msg->data.data());
   const int16_t* disp_ptr = reinterpret_cast<const int16_t*>(disparity_data.buffer.pitch.planes[0].data);
   const int disp_pitch = disparity_data.buffer.pitch.planes[0].pitchBytes / sizeof(int16_t);
 
-  // Precompute: bf * 32 to avoid division by 32 in loop
-  const float bf_scaled = static_cast<float>(baseline_ * focal_length_ * 32.0);
-  const float nan_val = std::numeric_limits<float>::quiet_NaN();
+  // Precompute: bf * 32 * 1000 (convert meters to millimeters)
+  const float bf_scaled_mm = static_cast<float>(baseline_ * focal_length_ * 32.0 * 1000.0);
 
   // Process row by row for better cache locality
   for (int y = 0; y < image_height_; y++) {
     const int16_t* disp_row = disp_ptr + y * disp_pitch;
-    float* depth_row = depth_ptr + y * image_width_;
+    uint16_t* depth_row = depth_ptr + y * image_width_;
     uint8_t* vis_row = vis_ptr ? (vis_ptr + y * image_width_) : nullptr;
 
     for (int x = 0; x < image_width_; x++) {
       const int16_t disp_q10_5 = disp_row[x];
       
       if (disp_q10_5 > 0) {
-        // depth = bf * 32 / disp_q10_5 (single division, no intermediate float conversion)
-        depth_row[x] = bf_scaled / static_cast<float>(disp_q10_5);
+        // depth_mm = bf_mm * 32 / disp_q10_5
+        float depth_mm = bf_scaled_mm / static_cast<float>(disp_q10_5);
+        // Clamp to uint16 range (0-65535 mm = 0-65.5m), 0 = invalid
+        depth_row[x] = static_cast<uint16_t>(std::clamp(depth_mm, 1.0f, 65535.0f));
       } else {
-        depth_row[x] = nan_val;
+        depth_row[x] = 0;  // 0 = invalid depth (ROS convention)
       }
 
       // Disparity visualization in same pass (avoids second lock)
