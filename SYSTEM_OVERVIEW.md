@@ -70,7 +70,7 @@ A remote server or application that:
 
 - We can run a **Zenoh Router** (`rmw_zenohd`), so that distributed ROS 2 nodes find each other on the network without heavy multicast.
 
-- The environment variables in `dds/setup_dds.sh` and `start_zenoh_router.sh` control how Zenoh is configured.
+- The environment variables in `dds/setup_dds.sh` and `start_zenoh_router.zsh` control how Zenoh is configured.
 
 - You can use `start_zenoh_rotuer.sh {ip/hostname}` to connect your local ROS instance to the robot.
 
