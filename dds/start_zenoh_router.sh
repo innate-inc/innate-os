@@ -1,5 +1,8 @@
 #!/bin/zsh
 
+# This script either starts a defaut Zenoh router when trigerred without any arguments (by deafult from systemd).
+# Or, it starts a Zenoh Router which connects to another Zenoh router, linking two machines running ROS.
+
 # Source the user's zshrc and ROS environment, then start the Zenoh DDS server
 . ~/.zshrc
 if [ -f /opt/ros/humble/setup.sh ]; then

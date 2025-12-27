@@ -21,7 +21,7 @@ Below is an overview of each major component, the communication protocols, and r
 - [Protocols and Message Types](#protocols-and-message-types)
   - [ROS 2 Topics & Services](#ros-2-topics--services)
   - [Custom WebSocket Protocol](#custom-websocket-protocol)
-  - [DDS Discovery Protocol](#dds-discovery-protocol)
+  - [Zenoh Protocol](#zenoh-protocol)
 - [System Diagrams](#system-diagrams)
   - [Simulation Diagram](#simulation-diagram)
   - [Real Robot Diagram](#real-robot-diagram)
@@ -70,9 +70,9 @@ A remote server or application that:
 
 - We can run a **Zenoh Router** (`rmw_zenohd`), so that distributed ROS 2 nodes find each other on the network without heavy multicast.
 
-NOTE: Discovery between hosts is currently untested after the Zenoh migration
+- The environment variables in `dds/setup_dds.sh` and `start_zenoh_router.sh` control how Zenoh is configured.
 
-- The environment variables `ROS_DISCOVERY_SERVER` or `FASTRTPS_DEFAULT_PROFILES_FILE` (with a generated XML) control how DDS is configured.
+- You can use `start_zenoh_rotuer.sh {ip/hostname}` to connect your local ROS instance to the robot.
 
 ### rosbridge
 
@@ -105,12 +105,9 @@ Below is a summary of the main ROS 2 topics and services used. They are standard
 
 ### DDS Discovery Protocol
 
-Note: Discovery between hosts is currently untested after the Zenoh migration
+Every ROS node contains a Zenoh session which connects to `localhost:7447` by default. The Zenoh Router must be running at this address.
 
-If using **Fast DDS SUPER_CLIENT** configuration:
-- The client node sets `ROS_DISCOVERY_SERVER=<IP>:<PORT>`.
-- We place a `super_client_configuration.xml` referencing the server IP/Port.  
-- The discovery server runs `fastdds discovery -p <PORT> -i <ID>` on the host or a separate machine.
+This behavior is controlled by scripts in the `dds` directory.
 
 ---
 
