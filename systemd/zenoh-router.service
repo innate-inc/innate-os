@@ -7,7 +7,7 @@ Wants=network-online.target
 User=jetson1
 Group=jetson1
 
-ExecStart=%h/innate-os/dds/start_zenoh_router.sh
+ExecStart=/home/jetson1/innate-os/dds/start_zenoh_router.sh
 
 # Restart the service if it fails
 Restart=on-failure
