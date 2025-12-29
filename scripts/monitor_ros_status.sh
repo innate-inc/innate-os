@@ -22,7 +22,7 @@ for i in {1..100}; do
     {
         # ros2 node list > /tmp/ros_nodes 2>&1 & 
         echo nah > /tmp/ros_nodes 2>&1 & 
-        ros2 topic list > /tmp/ros_topics 2>&1 & 
+        timeout 2 ros2 topic list > /tmp/ros_topics 2>&1 & 
         # ros2 service list > /tmp/ros_services 2>&1 & 
         echo nah > /tmp/ros_services 2>&1 & 
 
