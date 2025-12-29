@@ -72,7 +72,7 @@ A remote server or application that:
 
 - The environment variables in `dds/setup_dds.sh` and `start_zenoh_router.zsh` control how Zenoh is configured.
 
-- You can use `start_zenoh_rotuer.sh {ip/hostname}` to connect your local ROS instance to the robot.
+- You can use `start_zenoh_router.zsh {ip/hostname}` to connect your local ROS instance to the robot.
 
 ### rosbridge
 
