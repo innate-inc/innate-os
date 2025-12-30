@@ -46,49 +46,24 @@ And then drop into the container:
 docker compose -f docker-compose.dev.yml exec innate zsh -l
 ```
 
-See the nodes running with tmux
-```
-tmux a
+Inside the container, launch all simulation nodes in tmux:
+
+```bash
+./scripts/launch-sim-in-tmux.zsh
 ```
 
-You can use novnc to connect to rviz2. After launching rviz2 inside the container, you can connect to the instance in your browser:
+This starts everything in organized tmux windows:
+- **Window 0 (zenoh)**: Zenoh router
+- **Window 1 (rosbridge-app)**: Rosbridge + App control
+- **Window 2 (nav-brain)**: Navigation + Brain client
+
+Switch between windows with `Ctrl+b` then `n`/`p` or `0`/`1`/`2`. Detach with `Ctrl+b d`.
+
+You can use novnc to connect to rviz2. After launching rviz2 inside the container, connect in your browser:
 
 ```bash
 http://localhost:8080/vnc.html
 ```
-
-Inside the container, first run the discovery service:
-
-```bash
-discovery-and-launch-sim
-```
-
-VERIFY THAT THE IP ADDRESS IS CORRECT IN SETUP_DDS.ZSH
-
-Then join the tmux session:
-
-```bash
-tmux a
-```
-
-Then run the simulation in a new tmux pane:
-
-```bash
-ros2 launch maurice_sim_bringup sim_rosbridge.launch.py
-```
-
-The run the nav system in a new tmux pane:
-
-```bash
-ros2 launch maurice_nav maurice_nav_launch.py
-```
-
-Then run the brain client in a new tmux pane:
-
-```bash
-ros2 launch brain_client brain_client.launch.py
-```
-
 
 ## Quick start (Physical Robot)
 
