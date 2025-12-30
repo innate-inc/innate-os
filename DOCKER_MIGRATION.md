@@ -393,7 +393,7 @@ docker stats
 
 ### Hardware not accessible
 - Ensure `privileged: true` is set
-- Check device permissions: `ls -la /dev/ttyTHS1 /dev/rplidar`
+- Check device permissions: `ls -la /dev/ttyACM0 /dev/rplidar`
 - User must be in `dialout` group: `sudo usermod -aG dialout $USER`
 
 ### Image pull fails
