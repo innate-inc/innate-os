@@ -112,10 +112,10 @@ class PrimitiveExecutionActionServer(Node):
         # Dynamic primitive loading
         self.primitive_loader = SkillLoader(self.get_logger())
         
-        # Define directory to scan for primitives
-        # Using the unified primitives directory at the root
+        # Define directory to scan for skills
+        # Using the unified skills directory at the root
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
-        primitives_directory = os.path.join(maurice_root, 'primitives')
+        primitives_directory = os.path.join(maurice_root, 'skills')
         
         if not os.path.exists(primitives_directory):
             self.get_logger().fatal(f"Primitives directory not found: {primitives_directory}")
@@ -193,7 +193,7 @@ class PrimitiveExecutionActionServer(Node):
         self.get_logger().info("Reloading primitives...")
         
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
-        primitives_directory = os.path.join(maurice_root, 'primitives')
+        primitives_directory = os.path.join(maurice_root, 'skills')
         
         # Reload code primitives
         discovered_primitives = self.primitive_loader.discover_skills_in_directory(primitives_directory)
