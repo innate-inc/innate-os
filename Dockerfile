@@ -37,10 +37,18 @@ RUN chsh -s /usr/bin/zsh root
 #    RobbyRussell is default; here we switch to `agnoster`, or pick another if you like
 RUN sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' /root/.zshrc
 
+# 6b. Pre-approve GitHub SSH host key to avoid prompts
+RUN mkdir -p /root/.ssh && \
+    ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
+
 # 7. Copy your entire innate-os directory (including dds, ros2_ws, .git for version info)
 COPY ros2_ws /root/innate-os/ros2_ws
 COPY dds /root/innate-os/dds
+COPY scripts /root/innate-os/scripts
+
+# For version tracking, git needs to be present
 COPY .git /root/innate-os/.git
+
 WORKDIR /root/innate-os
 
 # 8. Build your ROS 2 workspace.
