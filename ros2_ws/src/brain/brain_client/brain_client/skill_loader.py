@@ -22,7 +22,7 @@ from brain_client.skill_types import Skill
 
 class SkillLoader:
     """
-    Dynamically loads primitive classes from specified directories.
+    Dynamically loads skill classes from specified directories.
     """
 
     def __init__(self, logger):
@@ -31,18 +31,18 @@ class SkillLoader:
     def discover_skills_in_directory(
         self, directory_path: str
     ) -> Dict[str, Type[Skill]]:
-        primitives = {}
+        skills = {}
         directory = Path(directory_path)
 
         if not directory.exists():
-            self.logger.warning(f"Primitive directory does not exist: {directory_path}")
-            return primitives
+            self.logger.warning(f"Skill directory does not exist: {directory_path}")
+            return skills
 
         if not directory.is_dir():
             self.logger.warning(f"Path is not a directory: {directory_path}")
-            return primitives
+            return skills
 
-        self.logger.info(f"Scanning for primitives in: {directory_path}")
+        self.logger.info(f"Scanning for skills in: {directory_path}")
 
         # Look for Python files (excluding __init__.py and __pycache__)
         python_files = [
@@ -54,22 +54,22 @@ class SkillLoader:
         for py_file in python_files:
             try:
                 discovered = self._load_skills_from_file(py_file)
-                primitives.update(discovered)
+                skills.update(discovered)
             except Exception as e:
-                self.logger.error(f"Error loading primitives from {py_file}: {e}")
+                self.logger.error(f"Error loading skills from {py_file}: {e}")
 
-        self.logger.info(f"Discovered {len(primitives)} primitives in {directory_path}")
-        return primitives
+        self.logger.info(f"Discovered {len(skills)} skills in {directory_path}")
+        return skills
 
     def _load_skills_from_file(self, file_path: Path) -> Dict[str, Type[Skill]]:
-        primitives = {}
+        skills = {}
         module_name = file_path.stem
 
         # Load the module
         spec = importlib.util.spec_from_file_location(module_name, file_path)
         if spec is None or spec.loader is None:
             self.logger.warning(f"Could not load spec for {file_path}")
-            return primitives
+            return skills
 
         module = importlib.util.module_from_spec(spec)
 
@@ -84,7 +84,7 @@ class SkillLoader:
             spec.loader.exec_module(module)
         except Exception as e:
             self.logger.error(f"Error executing module {module_name}: {e}")
-            return primitives
+            return skills
         finally:
             # Remove from sys.path if we added it
             if maurice_prod_dir in sys.path:
@@ -98,19 +98,15 @@ class SkillLoader:
                 and obj.__module__ == module.__name__
             ):
 
-                # Validate the primitive class
+                # Validate the skill class
                 if self._validate_skill_class(obj):
-                    primitive_name = self._get_skill_name(obj)
-                    primitives[primitive_name] = obj
-                    self.logger.debug(
-                        f"Loaded primitive: {primitive_name} from {file_path}"
-                    )
+                    skill_name = self._get_skill_name(obj)
+                    skills[skill_name] = obj
+                    self.logger.debug(f"Loaded skill: {skill_name} from {file_path}")
                 else:
-                    self.logger.warning(
-                        f"Invalid primitive class: {name} in {file_path}"
-                    )
+                    self.logger.warning(f"Invalid skill class: {name} in {file_path}")
 
-        return primitives
+        return skills
 
     def _validate_skill_class(self, skill_class: Type[Skill]) -> bool:
         # Check that required abstract methods are implemented
@@ -156,60 +152,58 @@ class SkillLoader:
     def load_skills_from_directories(
         self, directories: List[str]
     ) -> Dict[str, Type[Skill]]:
-        all_primitives = {}
+        all_skills = {}
 
         for directory in directories:
             try:
                 discovered = self.discover_skills_in_directory(directory)
 
                 # Check for name conflicts
-                for name, primitive_class in discovered.items():
-                    if name in all_primitives:
+                for name, skill_class in discovered.items():
+                    if name in all_skills:
                         self.logger.warning(
-                            f"Primitive name conflict: '{name}' found in both "
-                            f"{all_primitives[name].__module__} and {primitive_class.__module__}. "
+                            f"Skill name conflict: '{name}' found in both "
+                            f"{all_skills[name].__module__} and {skill_class.__module__}. "
                             f"Using the latter."
                         )
-                    all_primitives[name] = primitive_class
+                    all_skills[name] = skill_class
 
             except Exception as e:
-                self.logger.error(f"Error loading primitives from {directory}: {e}")
+                self.logger.error(f"Error loading skills from {directory}: {e}")
 
-        return all_primitives
+        return all_skills
 
-    def validate_physical_primitive(self, primitive_dir: str, metadata: dict) -> tuple:
-        """Validate a physical primitive.
+    def validate_physical_skill(self, skill_dir: str, metadata: dict) -> tuple:
+        """Validate a physical skill.
 
         Returns:
             tuple: (is_valid: bool, is_in_training: bool, episode_count: int)
-                - is_valid: True if the primitive can be loaded (either ready or in training)
-                - is_in_training: True if the primitive is a learned type missing its checkpoint
+                - is_valid: True if the skill can be loaded (either ready or in training)
+                - is_in_training: True if the skill is a learned type missing its checkpoint
                 - episode_count: Number of recorded episodes (0 if not applicable or not found)
         """
-        primitive_type = metadata.get("type", "").lower()
+        skill_type = metadata.get("type", "").lower()
         execution = metadata.get("execution", {})
 
-        if primitive_type == "learned":
-            is_valid, is_in_training = self._validate_learned_primitive(
-                primitive_dir, execution
+        if skill_type == "learned":
+            is_valid, is_in_training = self._validate_learned_skill(
+                skill_dir, execution
             )
-            episode_count = self._get_episode_count(primitive_dir)
+            episode_count = self._get_episode_count(skill_dir)
             return (is_valid, is_in_training, episode_count)
-        elif primitive_type == "replay":
-            is_valid = self._validate_replay_primitive(primitive_dir, execution)
+        elif skill_type == "replay":
+            is_valid = self._validate_replay_skill(skill_dir, execution)
             return (
                 is_valid,
                 False,
                 0,
-            )  # Replay primitives are never "in training", no episodes
+            )  # Replay skills are never "in training", no episodes
         else:
-            self.logger.warning(
-                f"Unknown primitive type '{primitive_type}' in {primitive_dir}"
-            )
+            self.logger.warning(f"Unknown skill type '{skill_type}' in {skill_dir}")
             return (True, False, 0)  # Allow unknown types but log warning
 
-    def _validate_learned_primitive(self, primitive_dir: str, execution: dict) -> tuple:
-        """Validate a learned primitive.
+    def _validate_learned_skill(self, skill_dir: str, execution: dict) -> tuple:
+        """Validate a learned skill.
 
         Returns:
             tuple: (is_valid: bool, is_in_training: bool)
@@ -218,42 +212,40 @@ class SkillLoader:
         # If no checkpoint specified, it's in training
         if not checkpoint_file:
             self.logger.info(
-                f"Learned primitive in {primitive_dir} has no checkpoint - marked as in_training"
+                f"Learned skill in {skill_dir} has no checkpoint - marked as in_training"
             )
             return (True, True)  # Valid but in training
 
-        checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
+        checkpoint_path = os.path.join(skill_dir, checkpoint_file)
         if not os.path.exists(checkpoint_path):
             self.logger.info(
-                f"Learned primitive checkpoint not found: {checkpoint_path} - marked as in_training"
+                f"Learned skill checkpoint not found: {checkpoint_path} - marked as in_training"
             )
             return (True, True)  # Valid but in training
 
         # Check for stats file (optional but commonly needed)
         stats_file = execution.get("stats_file", "dataset_stats.pt")
-        stats_path = os.path.join(primitive_dir, stats_file)
+        stats_path = os.path.join(skill_dir, stats_file)
         if not os.path.exists(stats_path):
             self.logger.warning(
-                f"Learned primitive stats file not found: {stats_path} (optional)"
+                f"Learned skill stats file not found: {stats_path} (optional)"
             )
 
-        self.logger.info(f"Learned primitive validation passed: {primitive_dir}")
+        self.logger.info(f"Learned skill validation passed: {skill_dir}")
         return (True, False)  # Valid and ready
 
-    def _get_episode_count(self, primitive_dir: str) -> int:
-        """Get the number of recorded episodes for a learned primitive.
+    def _get_episode_count(self, skill_dir: str) -> int:
+        """Get the number of recorded episodes for a learned skill.
 
         Looks for data/dataset_metadata.json and reads the number_of_episodes field.
 
         Args:
-            primitive_dir: Path to the primitive directory.
+            skill_dir: Path to the skill directory.
 
         Returns:
             int: Number of episodes, or 0 if not found.
         """
-        dataset_metadata_path = os.path.join(
-            primitive_dir, "data", "dataset_metadata.json"
-        )
+        dataset_metadata_path = os.path.join(skill_dir, "data", "dataset_metadata.json")
 
         if not os.path.exists(dataset_metadata_path):
             return 0
@@ -268,20 +260,18 @@ class SkillLoader:
             )
             return 0
 
-    def _validate_replay_primitive_internal(
-        self, primitive_dir: str, execution: dict
-    ) -> bool:
-        """Internal validation for replay primitives. Returns bool for validity."""
+    def _validate_replay_skill_internal(self, skill_dir: str, execution: dict) -> bool:
+        """Internal validation for replay skills. Returns bool for validity."""
         replay_file = execution.get("replay_file")
         if not replay_file:
             self.logger.error(
-                f"Replay primitive in {primitive_dir} missing replay_file in execution config"
+                f"Replay skill in {skill_dir} missing replay_file in execution config"
             )
             return False
 
-        replay_path = os.path.join(primitive_dir, replay_file)
+        replay_path = os.path.join(skill_dir, replay_file)
         if not os.path.exists(replay_path):
-            self.logger.error(f"Replay primitive file not found: {replay_path}")
+            self.logger.error(f"Replay skill file not found: {replay_path}")
             return False
 
         # Validate H5 file structure
@@ -302,9 +292,9 @@ class SkillLoader:
             self.logger.error(f"Failed to validate replay file {replay_path}: {e}")
             return False
 
-        self.logger.info(f"Replay primitive validation passed: {primitive_dir}")
+        self.logger.info(f"Replay skill validation passed: {skill_dir}")
         return True
 
-    def _validate_replay_primitive(self, primitive_dir: str, execution: dict) -> bool:
-        """Validate a replay primitive. Returns bool for backwards compatibility."""
-        return self._validate_replay_primitive_internal(primitive_dir, execution)
+    def _validate_replay_skill(self, skill_dir: str, execution: dict) -> bool:
+        """Validate a replay skill. Returns bool for backwards compatibility."""
+        return self._validate_replay_skill_internal(skill_dir, execution)
