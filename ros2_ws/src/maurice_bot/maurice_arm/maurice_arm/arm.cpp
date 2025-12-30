@@ -48,7 +48,7 @@ public:
         parseJointConfig(joints_str);
         
         // Use fixed device path
-        std::string device_name = "/dev/ttyTHS1";
+        std::string device_name = "/dev/ttyACM0";
         RCLCPP_INFO(this->get_logger(), "Using device: %s", device_name.c_str());
         
         // Create Dynamixel interface

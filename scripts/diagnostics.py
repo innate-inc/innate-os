@@ -20,7 +20,7 @@ import glob
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-DYNAMIXEL_DEVICE = "/dev/ttyTHS1"
+DYNAMIXEL_DEVICE = "/dev/ttyACM0"
 DYNAMIXEL_BAUDRATE = 1000000
 SERVO_IDS = [1, 2, 3, 4, 5, 6, 7]  # All arm + head servos
 
