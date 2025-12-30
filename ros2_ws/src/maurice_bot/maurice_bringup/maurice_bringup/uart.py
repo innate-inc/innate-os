@@ -27,7 +27,7 @@ class UartManager:
     RESP_STATUS = 0x83  # Health (status) feedback
     RESP_CALIBRATE = 0x84 # Calibration status feedback
 
-    def __init__(self, node: Node, port='/dev/ttyACM0', baud_rate=115200, timeout=0.1, update_frequency=30.0, debug=False, speed_command_timeout=5.0):
+    def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, update_frequency=30.0, debug=False, speed_command_timeout=5.0):
         self.node = node
         self.debug = debug
         self.logger = self.node.get_logger()
