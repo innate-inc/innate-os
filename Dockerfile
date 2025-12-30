@@ -49,8 +49,6 @@ COPY scripts /root/innate-os/scripts
 # For version tracking, git needs to be present
 COPY .git /root/innate-os/.git
 
-WORKDIR /root/innate-os
-
 # 8. Build your ROS 2 workspace.
 #    We have to source the system setup.zsh for colcon to find ROS packages.
 WORKDIR /root/innate-os/ros2_ws
@@ -87,4 +85,5 @@ export INNATE_OS_ROOT=/root/innate-os\n\
 
 # 10. When the container starts with no command, we just run zsh (login shell).
 #    You'll drop into an interactive oh-my-zsh environment with everything set up.
+WORKDIR /root/innate-os
 CMD ["zsh", "-l"]
