@@ -54,8 +54,8 @@ COPY dds /root/innate-os/dds
 
 # Copy additional directories needed at runtime
 COPY config /root/innate-os/config
-COPY primitives /root/innate-os/primitives
-COPY directives /root/innate-os/directives
+COPY skills /root/innate-os/skills
+COPY agents /root/innate-os/agents
 
 # Import external dependencies using vcs
 RUN cd /root/innate-os/ros2_ws/src && \

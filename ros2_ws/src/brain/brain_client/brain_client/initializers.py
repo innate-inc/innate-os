@@ -28,23 +28,21 @@ def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
     """
     skill_loader = SkillLoader(logger)
 
-    # Define directories to scan for primitives
-    # Using the unified primitives directory at the root plus ~/skills
+    # Define directories to scan for skills
+    # Using the unified skills directory at the root plus ~/skills
     innate_root = os.environ.get(
         "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
     )
-    primitives_directories = [
-        os.path.join(innate_root, "primitives"),
+    skills_directories = [
+        os.path.join(innate_root, "skills"),
         os.path.join(os.path.expanduser("~"), "skills"),
     ]
 
     # Ensure ~/skills directory exists
-    os.makedirs(primitives_directories[1], exist_ok=True)
+    os.makedirs(skills_directories[1], exist_ok=True)
 
     # Load all skills dynamically from all directories
-    discovered_skills = skill_loader.load_skills_from_directories(
-        primitives_directories
-    )
+    discovered_skills = skill_loader.load_skills_from_directories(skills_directories)
 
     logger.info(f"Discovered skills: {list(discovered_skills.keys())}")
 
@@ -95,31 +93,31 @@ def initialize_agents(
     """
     agent_loader = AgentLoader(logger)
 
-    # Define directories to scan for directives
-    # Using the unified directives directory at the root plus ~/agents
+    # Define directories to scan for agents
+    # Using the unified agents directory at the root plus ~/agents
     innate_root = os.environ.get(
         "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
     )
-    directives_directories = [
-        os.path.join(innate_root, "directives"),
+    agents_directories = [
+        os.path.join(innate_root, "agents"),
         os.path.join(os.path.expanduser("~"), "agents"),
     ]
 
     # Ensure ~/agents directory exists
-    os.makedirs(directives_directories[1], exist_ok=True)
+    os.makedirs(agents_directories[1], exist_ok=True)
 
-    directives_directory = directives_directories[0]  # Keep for icon loading
+    agents_directory = agents_directories[0]  # Keep for icon loading
 
     # Load all agents dynamically from all directories
     discovered_agent_classes = agent_loader.load_agents_from_directories(
-        directives_directories
+        agents_directories
     )
 
     # Create agent instances with skill validation and icon loading
     agents = agent_loader.create_agent_instances(
         discovered_agent_classes,
         available_skills=skills_dict,
-        agents_directory=directives_directory,
+        agents_directory=agents_directory,
     )
 
     logger.info(f"Successfully loaded {len(agents)} agents")

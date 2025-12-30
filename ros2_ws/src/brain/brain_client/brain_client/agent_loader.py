@@ -20,7 +20,7 @@ from brain_client.agent_types import Agent
 
 class AgentLoader:
     """
-    Dynamically loads directive classes from specified directories.
+    Dynamically loads agent classes from specified directories.
     """
 
     def __init__(self, logger):
@@ -31,26 +31,26 @@ class AgentLoader:
         self, directory_path: str
     ) -> Dict[str, Type[Agent]]:
         """
-        Scans a directory for Python files and attempts to load directive classes.
+        Scans a directory for Python files and attempts to load agent classes.
 
         Args:
-            directory_path: Path to directory containing directive files
+            directory_path: Path to directory containing agent files
 
         Returns:
-            Dictionary mapping directive names to their classes
+            Dictionary mapping agent names to their classes
         """
-        directives = {}
+        agents = {}
         directory = Path(directory_path)
 
         if not directory.exists():
-            self.logger.warning(f"Directive directory does not exist: {directory_path}")
-            return directives
+            self.logger.warning(f"Agent directory does not exist: {directory_path}")
+            return agents
 
         if not directory.is_dir():
             self.logger.warning(f"Path is not a directory: {directory_path}")
-            return directives
+            return agents
 
-        self.logger.info(f"Scanning for directives in: {directory_path}")
+        self.logger.info(f"Scanning for agents in: {directory_path}")
 
         # Look for Python files (excluding __init__.py, __pycache__, and types.py)
         python_files = [
@@ -62,31 +62,31 @@ class AgentLoader:
         for py_file in python_files:
             try:
                 discovered = self._load_agents_from_file(py_file)
-                directives.update(discovered)
+                agents.update(discovered)
             except Exception as e:
-                self.logger.error(f"Error loading directives from {py_file}: {e}")
+                self.logger.error(f"Error loading agents from {py_file}: {e}")
 
-        self.logger.info(f"Discovered {len(directives)} directives in {directory_path}")
-        return directives
+        self.logger.info(f"Discovered {len(agents)} agents in {directory_path}")
+        return agents
 
     def _load_agents_from_file(self, file_path: Path) -> Dict[str, Type[Agent]]:
         """
-        Loads directive classes from a single Python file.
+        Loads agent classes from a single Python file.
 
         Args:
             file_path: Path to the Python file
 
         Returns:
-            Dictionary mapping directive names to their classes
+            Dictionary mapping agent names to their classes
         """
-        directives = {}
+        agents = {}
         module_name = file_path.stem
 
         # Load the module
         spec = importlib.util.spec_from_file_location(module_name, file_path)
         if spec is None or spec.loader is None:
             self.logger.warning(f"Could not load spec for {file_path}")
-            return directives
+            return agents
 
         module = importlib.util.module_from_spec(spec)
 
@@ -101,7 +101,7 @@ class AgentLoader:
             spec.loader.exec_module(module)
         except Exception as e:
             self.logger.error(f"Error executing module {module_name}: {e}")
-            return directives
+            return agents
         finally:
             # Remove from sys.path if we added it
             if maurice_prod_dir in sys.path:
@@ -115,19 +115,15 @@ class AgentLoader:
                 and obj.__module__ == module.__name__
             ):
 
-                # Validate the directive class
+                # Validate the agent class
                 if self._validate_agent_class(obj):
-                    directive_name = self._get_agent_name(obj)
-                    directives[directive_name] = obj
-                    self.logger.debug(
-                        f"Loaded directive: {directive_name} from {file_path}"
-                    )
+                    agent_name = self._get_agent_name(obj)
+                    agents[agent_name] = obj
+                    self.logger.debug(f"Loaded agent: {agent_name} from {file_path}")
                 else:
-                    self.logger.warning(
-                        f"Invalid directive class: {name} in {file_path}"
-                    )
+                    self.logger.warning(f"Invalid agent class: {name} in {file_path}")
 
-        return directives
+        return agents
 
     def _validate_agent_class(self, agent_class: Type[Agent]) -> bool:
         """
@@ -198,8 +194,11 @@ class AgentLoader:
         """Convert CamelCase to snake_case."""
         import re
 
-        # Remove "Directive" suffix if present
-        if class_name.endswith("Directive"):
+        # Remove "Agent" suffix if present
+        if class_name.endswith("Agent"):
+            class_name = class_name[:-5]  # Remove "Agent"
+        # Also handle legacy "Directive" suffix
+        elif class_name.endswith("Directive"):
             class_name = class_name[:-9]  # Remove "Directive"
 
         # Insert underscore before uppercase letters that follow lowercase letters
@@ -210,34 +209,34 @@ class AgentLoader:
         self, directories: List[str]
     ) -> Dict[str, Type[Agent]]:
         """
-        Load directives from multiple directories.
+        Load agents from multiple directories.
 
         Args:
             directories: List of directory paths to scan
 
         Returns:
-            Dictionary mapping directive names to their classes
+            Dictionary mapping agent names to their classes
         """
-        all_directives = {}
+        all_agents = {}
 
         for directory in directories:
             try:
                 discovered = self.discover_agents_in_directory(directory)
 
                 # Check for name conflicts
-                for name, directive_class in discovered.items():
-                    if name in all_directives:
+                for name, agent_class in discovered.items():
+                    if name in all_agents:
                         self.logger.warning(
-                            f"Directive name conflict: '{name}' found in both "
-                            f"{all_directives[name].__module__} and {directive_class.__module__}. "
+                            f"Agent name conflict: '{name}' found in both "
+                            f"{all_agents[name].__module__} and {agent_class.__module__}. "
                             f"Using the latter."
                         )
-                    all_directives[name] = directive_class
+                    all_agents[name] = agent_class
 
             except Exception as e:
-                self.logger.error(f"Error loading directives from {directory}: {e}")
+                self.logger.error(f"Error loading agents from {directory}: {e}")
 
-        return all_directives
+        return all_agents
 
     def create_agent_instances(
         self,
@@ -246,15 +245,15 @@ class AgentLoader:
         agents_directory: Optional[str] = None,
     ) -> Dict[str, Agent]:
         """
-        Create instances of directive classes.
+        Create instances of agent classes.
 
         Args:
-            directive_classes: Dictionary of directive name to class mappings
-            available_primitives: Optional dictionary of available primitive names to validate against
-            directives_directory: Optional path to directives directory for loading icons
+            agent_classes: Dictionary of agent name to class mappings
+            available_skills: Optional dictionary of available skill names to validate against
+            agents_directory: Optional path to agents directory for loading icons
 
         Returns:
-            Dictionary mapping directive names to their instances
+            Dictionary mapping agent names to their instances
         """
         agent_instances = {}
 
@@ -280,11 +279,11 @@ class AgentLoader:
         self, agent_instance: Agent, agents_directory: Optional[str]
     ) -> None:
         """
-        Load and encode the directive's display icon as base64.
+        Load and encode the agent's display icon as base64.
 
         Args:
-            directive_instance: The directive instance
-            directives_directory: Path to the directives directory
+            agent_instance: The agent instance
+            agents_directory: Path to the agents directory
         """
         # Initialize the attribute for storing base64 icon data
         agent_instance.display_icon_data = None
