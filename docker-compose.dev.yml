@@ -31,8 +31,8 @@ services:
       # 1) Mount your local code
       - ./ros2_ws:/root/innate-os/ros2_ws:rw
       - ./scripts:/root/innate-os/scripts:rw
-      - ./directives:/root/innate-os/directives:rw
-      - ./primitives:/root/innate-os/primitives:rw
+      - ./agents:/root/innate-os/agents:rw
+      - ./skills:/root/innate-os/skills:rw
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
       - ros2_ws_build:/root/innate-os/ros2_ws/build
