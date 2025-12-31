@@ -1,8 +1,9 @@
 #!/bin/bash
 # Remove all map files from a robot via SSH
-# Usage: ./clear-remote-maps.sh [robot-user@robot-ip]
+# Usage: ./clear-remote-maps.sh [--ip <ip-address>] [robot-user@robot-ip]
 #
 # Example: ./clear-remote-maps.sh
+#          ./clear-remote-maps.sh --ip 192.168.55.1
 #          ./clear-remote-maps.sh jetson1@192.168.55.1
 #          ./clear-remote-maps.sh jetson1@192.168.1.100
 
@@ -11,9 +12,31 @@ set -e
 # Configuration
 INNATE_OS_REMOTE="${INNATE_OS_REMOTE:-/home/jetson1/innate-os}"
 MAPS_DIR="$INNATE_OS_REMOTE/maps"
+DEFAULT_USER="jetson1"
 
 # Parse arguments
-ROBOT_HOST="${1:-jetson1@mars.local}"
+ROBOT_HOST=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ip|-i)
+            ROBOT_HOST="${DEFAULT_USER}@$2"
+            shift 2
+            ;;
+        *)
+            if [ -z "$ROBOT_HOST" ]; then
+                # If it looks like just an IP address, prepend the default user
+                if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    ROBOT_HOST="${DEFAULT_USER}@$1"
+                else
+                    ROBOT_HOST="$1"
+                fi
+            fi
+            shift
+            ;;
+    esac
+done
+
+ROBOT_HOST="${ROBOT_HOST:-${DEFAULT_USER}@mars.local}"
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Clearing maps from robot"

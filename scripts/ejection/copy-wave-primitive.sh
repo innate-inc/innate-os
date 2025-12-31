@@ -1,8 +1,9 @@
 #!/bin/bash
 # Copy wave primitive h5 file to a robot via SSH
-# Usage: ./copy-wave-primitive.sh [robot-user@robot-ip]
+# Usage: ./copy-wave-primitive.sh [--ip <ip-address>] [robot-user@robot-ip]
 #
 # Example: ./copy-wave-primitive.sh
+#          ./copy-wave-primitive.sh --ip 192.168.55.1
 #          ./copy-wave-primitive.sh jetson1@192.168.55.1
 #          ./copy-wave-primitive.sh jetson1@192.168.1.100
 
@@ -13,13 +14,35 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INNATE_OS_LOCAL="$(cd "$SCRIPT_DIR/../.." && pwd)"
 INNATE_OS_REMOTE="${INNATE_OS_REMOTE:-/home/jetson1/innate-os}"
 WAVE_DIR="primitives/wave"
+DEFAULT_USER="jetson1"
 
 # Source and destination paths
 LOCAL_WAVE_DIR="$INNATE_OS_LOCAL/$WAVE_DIR"
 REMOTE_WAVE_DIR="$INNATE_OS_REMOTE/$WAVE_DIR"
 
 # Parse arguments
-ROBOT_HOST="${1:-jetson1@mars.local}"
+ROBOT_HOST=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ip|-i)
+            ROBOT_HOST="${DEFAULT_USER}@$2"
+            shift 2
+            ;;
+        *)
+            if [ -z "$ROBOT_HOST" ]; then
+                # If it looks like just an IP address, prepend the default user
+                if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    ROBOT_HOST="${DEFAULT_USER}@$1"
+                else
+                    ROBOT_HOST="$1"
+                fi
+            fi
+            shift
+            ;;
+    esac
+done
+
+ROBOT_HOST="${ROBOT_HOST:-${DEFAULT_USER}@mars.local}"
 
 # Verify local wave directory exists
 if [ ! -d "$LOCAL_WAVE_DIR" ]; then

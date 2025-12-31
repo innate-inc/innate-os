@@ -1,8 +1,10 @@
 #!/bin/bash
 # Install deploy key on a robot and configure git remote
-# Usage: ./install-key-on-robot.sh <robot-number> <robot-user@robot-ip>
+# Usage: ./install-key-on-robot.sh <robot-number> [--ip <ip-address>] [robot-user@robot-ip]
 #
-# Example: ./install-key-on-robot.sh 1 jetson1@192.168.55.1
+# Example: ./install-key-on-robot.sh 1
+#          ./install-key-on-robot.sh 1 --ip 192.168.55.1
+#          ./install-key-on-robot.sh 1 jetson1@192.168.55.1
 #          ./install-key-on-robot.sh 42 jetson1@192.168.1.100
 
 set -e
@@ -12,16 +14,43 @@ RELEASE_REPO="${RELEASE_REPO:-innate-inc/innate-os-release}"
 INNATE_OS_PATH="${INNATE_OS_PATH:-/home/jetson1/innate-os}"
 DEPLOY_KEYS_DIR="${DEPLOY_KEYS_DIR:-$(cd "$(dirname "$0")/../../deploy-keys" && pwd)}"
 PREFIX="robot"
+DEFAULT_USER="jetson1"
 
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 <robot-number> [robot-user@robot-ip]"
+# Parse arguments
+ROBOT_NUM=""
+ROBOT_HOST=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ip|-i)
+            ROBOT_HOST="${DEFAULT_USER}@$2"
+            shift 2
+            ;;
+        *)
+            if [ -z "$ROBOT_NUM" ]; then
+                ROBOT_NUM="$1"
+            elif [ -z "$ROBOT_HOST" ]; then
+                # If it looks like just an IP address, prepend the default user
+                if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    ROBOT_HOST="${DEFAULT_USER}@$1"
+                else
+                    ROBOT_HOST="$1"
+                fi
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$ROBOT_NUM" ]; then
+    echo "Usage: $0 <robot-number> [--ip <ip-address>] [robot-user@robot-ip]"
     echo "Example: $0 1"
+    echo "         $0 1 --ip 192.168.55.1"
     echo "         $0 1 jetson1@192.168.55.1"
     exit 1
 fi
 
-ROBOT_NUM="$1"
-ROBOT_HOST="${2:-jetson1@mars.local}"
+ROBOT_HOST="${ROBOT_HOST:-${DEFAULT_USER}@mars.local}"
 
 # Format robot ID with zero-padding (1 -> robot-001)
 ROBOT_ID=$(printf '%s-%03d' "$PREFIX" "$ROBOT_NUM")

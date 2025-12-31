@@ -11,12 +11,30 @@ from pathlib import Path
 
 app = Flask(__name__)
 
-# Configuration
-ROBOT_HOST = os.environ.get("ROBOT_HOST", "jetson1@mars.local")
-ROBOT_IP = ROBOT_HOST.split("@")[-1]
-ROBOT_PASSWORD = os.environ.get("ROBOT_PASSWORD", "goodbot")
+# Configuration (mutable at runtime)
+DEFAULT_USER = "jetson1"
+robot_config = {
+    "host": os.environ.get("ROBOT_HOST", "jetson1@mars.local"),
+    "password": os.environ.get("ROBOT_PASSWORD", "goodbot"),
+}
 SCRIPT_DIR = Path(__file__).parent.parent
 KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts"
+
+
+def get_robot_host():
+    return robot_config["host"]
+
+
+def get_robot_ip():
+    return robot_config["host"].split("@")[-1]
+
+
+def get_robot_user():
+    return robot_config["host"].split("@")[0] if "@" in robot_config["host"] else DEFAULT_USER
+
+
+def get_robot_password():
+    return robot_config["password"]
 
 
 def run_command(cmd, timeout=120):
@@ -28,7 +46,7 @@ def run_command(cmd, timeout=120):
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "ROBOT_PASSWORD": ROBOT_PASSWORD}
+            env={**os.environ, "ROBOT_PASSWORD": get_robot_password()}
         )
         return {
             "success": result.returncode == 0,
@@ -43,13 +61,46 @@ def run_command(cmd, timeout=120):
 
 @app.route("/")
 def index():
-    return render_template("index.html", robot_host=ROBOT_HOST, robot_ip=ROBOT_IP)
+    return render_template("index.html", robot_host=get_robot_host(), robot_ip=get_robot_ip())
+
+
+@app.route("/api/set-robot", methods=["POST"])
+def set_robot():
+    """Update robot IP/host at runtime"""
+    data = request.json
+    if not data:
+        return jsonify({"success": False, "output": "No data provided", "returncode": 1})
+    
+    new_ip = data.get("ip", "").strip()
+    new_user = data.get("user", DEFAULT_USER).strip() or DEFAULT_USER
+    
+    if new_ip:
+        # Validate IP format (basic check)
+        robot_config["host"] = f"{new_user}@{new_ip}"
+        return jsonify({
+            "success": True,
+            "output": f"Robot updated to {robot_config['host']}",
+            "host": robot_config["host"],
+            "ip": get_robot_ip()
+        })
+    
+    return jsonify({"success": False, "output": "No IP provided", "returncode": 1})
+
+
+@app.route("/api/get-robot", methods=["GET"])
+def get_robot():
+    """Get current robot configuration"""
+    return jsonify({
+        "host": get_robot_host(),
+        "ip": get_robot_ip(),
+        "user": get_robot_user()
+    })
 
 
 @app.route("/api/clear-known-hosts", methods=["POST"])
 def clear_known_hosts():
     """Remove robot IP from known_hosts"""
-    cmd = f'ssh-keygen -f "{KNOWN_HOSTS}" -R "{ROBOT_IP}" 2>&1 || true'
+    cmd = f'ssh-keygen -f "{KNOWN_HOSTS}" -R "{get_robot_ip()}" 2>&1 || true'
     return jsonify(run_command(cmd))
 
 
@@ -57,8 +108,10 @@ def clear_known_hosts():
 def copy_wave():
     """Copy wave primitive to robot"""
     script = SCRIPT_DIR / "copy-wave-primitive.sh"
+    robot_host = get_robot_host()
+    robot_password = get_robot_password()
     # Use sshpass to avoid password prompts, with StrictHostKeyChecking disabled
-    cmd = f'sshpass -p "{ROBOT_PASSWORD}" ssh -o StrictHostKeyChecking=no {ROBOT_HOST} "mkdir -p /home/jetson1/innate-os/primitives/wave" 2>&1'
+    cmd = f'sshpass -p "{robot_password}" ssh -o StrictHostKeyChecking=no {robot_host} "mkdir -p /home/jetson1/innate-os/primitives/wave" 2>&1'
     result1 = run_command(cmd)
     
     # Find h5 file
@@ -70,7 +123,7 @@ def copy_wave():
     
     # Copy h5 file
     h5_file = h5_files[0]
-    cmd = f'sshpass -p "{ROBOT_PASSWORD}" scp -o StrictHostKeyChecking=no "{h5_file}" {ROBOT_HOST}:/home/jetson1/innate-os/primitives/wave/ 2>&1'
+    cmd = f'sshpass -p "{robot_password}" scp -o StrictHostKeyChecking=no "{h5_file}" {robot_host}:/home/jetson1/innate-os/primitives/wave/ 2>&1'
     result = run_command(cmd, timeout=300)  # 5 min timeout for large file
     
     if result["success"]:
@@ -82,7 +135,7 @@ def copy_wave():
 @app.route("/api/clear-maps", methods=["POST"])
 def clear_maps():
     """Clear maps from robot"""
-    cmd = f'''sshpass -p "{ROBOT_PASSWORD}" ssh -o StrictHostKeyChecking=no {ROBOT_HOST} "rm -f /home/jetson1/innate-os/maps/*.pgm /home/jetson1/innate-os/maps/*.yaml && echo '✓ Maps cleared'" 2>&1'''
+    cmd = f'''sshpass -p "{get_robot_password()}" ssh -o StrictHostKeyChecking=no {get_robot_host()} "rm -f /home/jetson1/innate-os/maps/*.pgm /home/jetson1/innate-os/maps/*.yaml && echo '✓ Maps cleared'" 2>&1'''
     return jsonify(run_command(cmd))
 
 
@@ -91,7 +144,7 @@ def speaker_test():
     """Run speaker test on robot"""
     duration = request.json.get("duration", 10) if request.json else 10
     # Use gst-launch with volume=0.3 (30%) for quieter test tone
-    cmd = f'''sshpass -p "{ROBOT_PASSWORD}" ssh -o StrictHostKeyChecking=no {ROBOT_HOST} "timeout {duration} gst-launch-1.0 audiotestsrc freq=440 volume=0.3 ! audioconvert ! alsasink 2>&1 && echo 'Speaker test complete' || true" 2>&1'''
+    cmd = f'''sshpass -p "{get_robot_password()}" ssh -o StrictHostKeyChecking=no {get_robot_host()} "timeout {duration} gst-launch-1.0 audiotestsrc freq=440 volume=0.3 ! audioconvert ! alsasink 2>&1 && echo 'Speaker test complete' || true" 2>&1'''
     result = run_command(cmd, timeout=duration + 10)
     if "Setting pipeline to PLAYING" in result["output"] or "Speaker test complete" in result["output"]:
         result["success"] = True
@@ -102,7 +155,8 @@ def speaker_test():
 @app.route("/api/shutdown", methods=["POST"])
 def shutdown():
     """Shutdown the robot"""
-    cmd = f'''sshpass -p "{ROBOT_PASSWORD}" ssh -o StrictHostKeyChecking=no {ROBOT_HOST} "echo '{ROBOT_PASSWORD}' | sudo -S shutdown now" 2>&1 || true'''
+    robot_password = get_robot_password()
+    cmd = f'''sshpass -p "{robot_password}" ssh -o StrictHostKeyChecking=no {get_robot_host()} "echo '{robot_password}' | sudo -S shutdown now" 2>&1 || true'''
     result = run_command(cmd)
     result["output"] = "✓ Shutdown command sent\n" + result["output"]
     result["success"] = True
@@ -112,7 +166,7 @@ def shutdown():
 @app.route("/api/ping", methods=["POST"])
 def ping():
     """Check if robot is reachable"""
-    cmd = f'ping -c 1 -W 2 {ROBOT_IP} 2>&1'
+    cmd = f'ping -c 1 -W 2 {get_robot_ip()} 2>&1'
     result = run_command(cmd, timeout=5)
     result["success"] = "1 packets received" in result["output"] or "1 received" in result["output"]
     return jsonify(result)
@@ -121,7 +175,7 @@ def ping():
 @app.route("/api/ssh-check", methods=["POST"])
 def ssh_check():
     """Check SSH connection"""
-    cmd = f'''sshpass -p "{ROBOT_PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {ROBOT_HOST} "echo '✓ SSH connection successful' && hostname" 2>&1'''
+    cmd = f'''sshpass -p "{get_robot_password()}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {get_robot_host()} "echo '✓ SSH connection successful' && hostname" 2>&1'''
     return jsonify(run_command(cmd, timeout=10))
 
 
@@ -133,8 +187,20 @@ def run_custom_command():
         return jsonify({"success": False, "output": "No command provided", "returncode": 1})
     
     remote_cmd = data["command"]
-    cmd = f'''sshpass -p "{ROBOT_PASSWORD}" ssh -o StrictHostKeyChecking=no {ROBOT_HOST} "{remote_cmd}" 2>&1'''
+    cmd = f'''sshpass -p "{get_robot_password()}" ssh -o StrictHostKeyChecking=no {get_robot_host()} "{remote_cmd}" 2>&1'''
     return jsonify(run_command(cmd, timeout=30))
+
+
+@app.route("/api/update-robot", methods=["POST"])
+def update_robot():
+    """Run innate-update apply on the robot"""
+    robot_password = get_robot_password()
+    # Run innate-update apply with sudo (it may need elevated permissions)
+    cmd = f'''sshpass -p "{robot_password}" ssh -o StrictHostKeyChecking=no {get_robot_host()} "echo '{robot_password}' | sudo -S innate-update apply" 2>&1'''
+    result = run_command(cmd, timeout=300)  # 5 min timeout for updates
+    if result["success"]:
+        result["output"] = "✓ Update completed\n" + result["output"]
+    return jsonify(result)
 
 
 if __name__ == "__main__":
@@ -142,8 +208,9 @@ if __name__ == "__main__":
 ╔═══════════════════════════════════════════════════════════════╗
 ║           Robot Manager Web Interface                         ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Robot: {ROBOT_HOST:<52} ║
+║  Robot: {get_robot_host():<52} ║
 ║  URL:   http://localhost:5050                                 ║
+║  Note:  You can change the robot IP in the web interface      ║
 ╚═══════════════════════════════════════════════════════════════╝
 """)
     app.run(host="0.0.0.0", port=5050, debug=True)

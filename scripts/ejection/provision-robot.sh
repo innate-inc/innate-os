@@ -1,8 +1,9 @@
 #!/bin/bash
 # Provision a robot: Install deploy key and run full setup
-# Usage: ./provision-robot.sh <robot-number> [robot-user@robot-ip] [--skip-token]
+# Usage: ./provision-robot.sh <robot-number> [--ip <ip-address>] [robot-user@robot-ip] [--skip-token]
 #
 # Example: ./provision-robot.sh 1
+#          ./provision-robot.sh 1 --ip 192.168.55.1
 #          ./provision-robot.sh 1 jetson1@192.168.55.1
 #          ./provision-robot.sh 1 jetson1@192.168.55.1 --skip-token
 #
@@ -19,36 +20,49 @@ SETUP_SCRIPT="$SCRIPT_DIR/setup_robot_with.sh"
 
 # Configuration
 INNATE_OS_PATH="${INNATE_OS_PATH:-/home/jetson1/innate-os}"
+DEFAULT_USER="jetson1"
 
 # Parse arguments
 SKIP_TOKEN=false
 ROBOT_NUM=""
 ROBOT_HOST=""
 
-for arg in "$@"; do
-    case $arg in
+while [[ $# -gt 0 ]]; do
+    case $1 in
         --skip-token)
             SKIP_TOKEN=true
             shift
             ;;
+        --ip|-i)
+            ROBOT_HOST="${DEFAULT_USER}@$2"
+            shift 2
+            ;;
         *)
             if [ -z "$ROBOT_NUM" ]; then
-                ROBOT_NUM="$arg"
+                ROBOT_NUM="$1"
             elif [ -z "$ROBOT_HOST" ]; then
-                ROBOT_HOST="$arg"
+                # If it looks like just an IP address, prepend the default user
+                if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    ROBOT_HOST="${DEFAULT_USER}@$1"
+                else
+                    ROBOT_HOST="$1"
+                fi
             fi
+            shift
             ;;
     esac
 done
 
 if [ -z "$ROBOT_NUM" ]; then
-    echo "Usage: $0 <robot-number> [robot-user@robot-ip] [--skip-token]"
+    echo "Usage: $0 <robot-number> [--ip <ip-address>] [robot-user@robot-ip] [--skip-token]"
     echo ""
     echo "Example: $0 1"
+    echo "         $0 1 --ip 192.168.55.1"
     echo "         $0 1 jetson1@192.168.55.1"
     echo "         $0 1 jetson1@192.168.55.1 --skip-token"
     echo ""
     echo "Options:"
+    echo "  --ip, -i        IP address of the robot (uses jetson1 as default user)"
     echo "  --skip-token    Skip token generation (use existing .env if present)"
     echo ""
     echo "This script will:"
@@ -58,7 +72,7 @@ if [ -z "$ROBOT_NUM" ]; then
     exit 1
 fi
 
-ROBOT_HOST="${ROBOT_HOST:-jetson1@mars.local}"
+ROBOT_HOST="${ROBOT_HOST:-${DEFAULT_USER}@mars.local}"
 
 # Verify scripts exist
 if [ ! -f "$INSTALL_KEY_SCRIPT" ]; then

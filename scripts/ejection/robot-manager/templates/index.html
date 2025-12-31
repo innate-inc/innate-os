@@ -75,6 +75,65 @@
             font-size: 0.9rem;
         }
 
+        .robot-config {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+            flex-wrap: wrap;
+        }
+
+        .robot-config input {
+            padding: 10px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            width: 160px;
+            text-align: center;
+        }
+
+        .robot-config input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .robot-config input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .robot-config button {
+            padding: 10px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-weight: 500;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .robot-config button:hover {
+            background: var(--bg-hover);
+            border-color: var(--accent);
+        }
+
+        .robot-config button.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .robot-config label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+
         .status-dot {
             width: 10px;
             height: 10px;
@@ -354,6 +413,11 @@
                 <span class="status-dot checking" id="statusDot"></span>
                 <span id="robotHost">{{ robot_host }}</span>
             </div>
+            <div class="robot-config">
+                <label>IP:</label>
+                <input type="text" id="robotIp" placeholder="192.168.x.x" value="{{ robot_ip }}" onkeypress="if(event.key==='Enter')updateRobot()">
+                <button onclick="updateRobot()" id="btnUpdateRobot">Update</button>
+            </div>
         </header>
 
         <div class="grid">
@@ -376,6 +440,10 @@
             <button class="btn" onclick="checkConnection()" id="btnCheck">
                 <span class="btn-icon">📡</span>
                 <span class="btn-label">Check Connection</span>
+            </button>
+            <button class="btn primary" onclick="updateRobotSoftware()" id="btnUpdate">
+                <span class="btn-icon">⬆️</span>
+                <span class="btn-label">Update Robot</span>
             </button>
             <button class="btn danger" onclick="shutdown()" id="btnShutdown">
                 <span class="btn-icon">⏻</span>
@@ -493,6 +561,12 @@
             updateStatus('offline');
         }
 
+        async function updateRobotSoftware() {
+            if (!confirm('Run innate-update apply? This may take a few minutes.')) return;
+            log('Update Robot', 'Running innate-update apply (this may take a few minutes)...', true);
+            await apiCall('update-robot', 'btnUpdate', 'Update Robot');
+        }
+
         async function checkConnection() {
             updateStatus('checking');
             const ping = await apiCall('ping', 'btnCheck', 'Ping');
@@ -510,6 +584,44 @@
             if (!cmd) return;
             input.value = '';
             await apiCall('run-command', 'btnCheck', `Run: ${cmd}`, { command: cmd });
+        }
+
+        async function updateRobot() {
+            const ipInput = document.getElementById('robotIp');
+            const ip = ipInput.value.trim();
+            if (!ip) {
+                log('Update Robot', 'Please enter an IP address', false);
+                return;
+            }
+            
+            const btn = document.getElementById('btnUpdateRobot');
+            btn.disabled = true;
+            btn.textContent = '...';
+            
+            try {
+                const res = await fetch('/api/set-robot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ip: ip })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    document.getElementById('robotHost').textContent = data.host;
+                    log('Update Robot', `✓ Robot changed to ${data.host}`, true);
+                    btn.classList.add('active');
+                    setTimeout(() => btn.classList.remove('active'), 1000);
+                    // Check connection to new robot
+                    checkConnection();
+                } else {
+                    log('Update Robot', data.output || 'Failed to update robot', false);
+                }
+            } catch (e) {
+                log('Update Robot', 'Request failed: ' + e.message, false);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Update';
+            }
         }
 
         // Check connection on load
