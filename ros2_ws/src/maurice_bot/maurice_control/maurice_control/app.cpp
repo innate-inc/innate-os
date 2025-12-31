@@ -148,13 +148,13 @@ std::string get_robot_version(const std::string& maurice_root) {
         throw std::runtime_error("No git tags found - repository must have at least one tag");
     }
 
-    // Validate tag format (x.y.z) and return dev version
-    std::regex version_regex("^(\\d+)\\.(\\d+)\\.(\\d+)$");
+    // Validate tag format (x, x.y, x.y.z, x.y.z.a, etc.) and return dev version
+    std::regex version_regex("^(\\d+)(\\.\\d+)*$");
     std::smatch match;
     if (std::regex_match(latest_tag, match, version_regex)) {
         return latest_tag + "-dev";
     } else {
-        throw std::runtime_error("Invalid tag format: " + latest_tag + ". Expected format: x.y.z");
+        throw std::runtime_error("Invalid tag format: " + latest_tag + ". Expected format: x[.y[.z[...]]]");
     }
 }
 

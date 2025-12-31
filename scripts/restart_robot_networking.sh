@@ -2,7 +2,7 @@
 # This script is intended to be run via sudo by the BLE provisioning service
 # when a network change requires restarting ROS/DDS components.
 
-echo "Restarting DDS Discovery Server due to network change..." >&2
+echo "Restarting Zenoh Server due to network change..." >&2
 systemctl restart zenoh-router.service
 if [ $? -ne 0 ]; then
   echo "ERROR: Failed to restart zenoh-router.service" >&2
