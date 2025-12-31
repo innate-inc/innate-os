@@ -90,7 +90,7 @@ class SkillLoader:
             if maurice_prod_dir in sys.path:
                 sys.path.remove(maurice_prod_dir)
 
-        # Find all classes in the module that inherit from Primitive
+        # Find all classes in the module that inherit from Skill
         for name, obj in inspect.getmembers(module, inspect.isclass):
             if (
                 obj != Skill
