@@ -56,9 +56,11 @@ class ProxyClient:
         # Lazy-initialized service adapters
         self._cartesia = None
         self._openai = None
+        self._training = None
         
         # HTTP client (shared, lazy-initialized)
         self._http_client: Optional[httpx.Client] = None
+        self._async_http_client: Optional[httpx.AsyncClient] = None
     
     @property
     def proxy_url(self) -> str:
@@ -110,6 +112,20 @@ class ProxyClient:
             self._openai = ProxyOpenAIClient(self)
         return self._openai
     
+    @property
+    def training(self):
+        """
+        Training service adapter (upload datasets, track jobs, download models)
+        
+        Usage:
+            async with proxy.training as client:
+                jobs = await client.list_jobs()
+        """
+        if self._training is None:
+            from brain_client.client.adapters.training_adapter import TrainingClient
+            self._training = TrainingClient(self)
+        return self._training
+    
     def _get_headers(self) -> Dict[str, str]:
         """Build authentication headers."""
         return {
@@ -124,6 +140,15 @@ class ProxyClient:
                 headers=self._get_headers(),
         )
         return self._http_client
+    
+    def get_async_http_client(self) -> httpx.AsyncClient:
+        """Get shared async HTTP client."""
+        if self._async_http_client is None:
+            self._async_http_client = httpx.AsyncClient(
+                timeout=60.0,
+                headers=self._get_headers(),
+            )
+        return self._async_http_client
     
     def request(
         self,
@@ -177,11 +202,69 @@ class ProxyClient:
             logger.error(f"Proxy request error: {e}")
             raise
     
+    async def request_async(
+        self,
+        service_name: str,
+        endpoint: str,
+        method: str = "POST",
+        json: Optional[Dict[str, Any]] = None,
+        data: Optional[bytes] = None,
+        params: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
+    ) -> httpx.Response:
+        """
+        Make an async request through the proxy.
+        
+        Args:
+            service_name: Name of the service (e.g., 'cartesia', 'openai', 'training')
+            endpoint: API endpoint path
+            method: HTTP method
+            json: JSON body
+            data: Raw body data
+            params: Query parameters
+            stream: Whether to stream the response
+            
+        Returns:
+            httpx.Response
+        """
+        client = self.get_async_http_client()
+        url = f"{self._proxy_url}/v1/services/{service_name}/{endpoint.lstrip('/')}"
+        
+        try:
+            if json is not None:
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    json=json,
+                    params=params,
+                )
+            else:
+                response = await client.request(
+                    method=method,
+                    url=url,
+                    content=data,
+                    params=params,
+                )
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Proxy async request failed: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Proxy async request error: {e}")
+            raise
+    
     def close(self):
         """Close HTTP client and clean up resources."""
         if self._http_client is not None:
             self._http_client.close()
             self._http_client = None
+    
+    async def close_async(self):
+        """Close async HTTP client and clean up resources."""
+        if self._async_http_client is not None:
+            await self._async_http_client.aclose()
+            self._async_http_client = None
     
     def __enter__(self):
         """Context manager entry."""
@@ -190,3 +273,11 @@ class ProxyClient:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.close()
+    
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.close_async()
