@@ -168,6 +168,70 @@ std::string nmcli_get_active_wifi_ssid() {
 }
 
 /**
+ * Sanitize hostname to follow DNS rules:
+ * - Only letters (a-z), numbers (0-9), and hyphens (-)
+ * - Cannot start or end with hyphens
+ * - Max 63 characters
+ */
+std::string sanitize_hostname(const std::string& hostname) {
+    if (hostname.empty()) return "mars";
+    
+    std::string result;
+    result.reserve(hostname.length());
+    
+    // Convert to lowercase and replace invalid chars with hyphens
+    for (char c : hostname) {
+        if (std::isalnum(c)) {
+            result += std::tolower(c);
+        } else {
+            result += '-';
+        }
+    }
+    
+    // Remove consecutive hyphens
+    result.erase(std::unique(result.begin(), result.end(), 
+        [](char a, char b) { return a == '-' && b == '-'; }), result.end());
+    
+    // Trim leading/trailing hyphens
+    size_t start = result.find_first_not_of('-');
+    size_t end = result.find_last_not_of('-');
+    if (start == std::string::npos) return "mars";
+    
+    result = result.substr(start, std::min(end - start + 1, size_t(63)));
+    if (result.back() == '-') result.pop_back();
+    
+    return result.empty() ? "mars" : result;
+}
+
+/**
+ * Set system hostname using hostnamectl command.
+ * Sets the static hostname using the hostnamectl command-line tool.
+ * Uses sudo to run with elevated privileges.
+ * Returns true on success, false on failure.
+ */
+bool set_system_hostname(const std::string& hostname, std::string& error_msg) {
+    // Sanitize hostname to follow DNS rules
+    std::string clean_hostname = sanitize_hostname(hostname);
+    
+    // Use sudo hostnamectl to set the hostname
+    std::string cmd = "sudo hostnamectl hostname \"" + clean_hostname + "\" 2>&1";
+    
+    // Execute the command
+    std::string output = exec_command(cmd);
+    int exit_code = std::system(cmd.c_str());
+    
+    if (WEXITSTATUS(exit_code) != 0) {
+        error_msg = "Failed to set hostname via hostnamectl: " + output;
+        return false;
+    }
+    
+    // Restart avahi-daemon to apply hostname changes to mDNS
+    std::system("sudo systemctl restart avahi-daemon.service 2>/dev/null");
+    
+    return true;
+}
+
+/**
  * Check if system updates are available using innate-update --quick-check.
  * Returns true if updates are available, false otherwise.
  */
@@ -627,8 +691,18 @@ private:
             out_file << robot_info.dump(2);
             out_file.close();
 
-            response->success = true;
-            response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name + "'";
+            // Set system hostname to match robot name
+            std::string hostname_error;
+            if (!set_system_hostname(request->robot_name, hostname_error)) {
+                RCLCPP_WARN(this->get_logger(), "Failed to set system hostname: %s", hostname_error.c_str());
+                response->success = true;  // Still success for robot_info update
+                response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name + 
+                                   "', but failed to set system hostname: " + hostname_error;
+            } else {
+                response->success = true;
+                response->message = "Robot name and system hostname changed from '" + old_name + "' to '" + request->robot_name + "'";
+            }
+            
             RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
 
         } catch (const std::exception& e) {

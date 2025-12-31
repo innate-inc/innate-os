@@ -128,6 +128,32 @@ fi
 # Note: Not restarting NetworkManager here to avoid SSH disconnection.
 # The config will be applied on next reboot or manual NetworkManager restart.
 
+# -----------------------------------------------------------------------------
+# 6. Sudo Permissions for Hostname Control
+# -----------------------------------------------------------------------------
+log "Configuring sudo permissions for hostname control..."
+
+SUDOERS_FILE="/etc/sudoers.d/99-jetson1-hostnamectl"
+
+# Create sudoers file to allow jetson1 to run hostnamectl and avahi-daemon restart without password
+cat > "$SUDOERS_FILE" << 'EOF'
+# Allow jetson1 user to set hostname and restart avahi-daemon without password
+jetson1 ALL=(ALL) NOPASSWD: /usr/bin/hostnamectl *
+jetson1 ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart avahi-daemon.service
+EOF
+
+# Set proper permissions for sudoers file (must be 0440)
+chmod 0440 "$SUDOERS_FILE"
+log "  Created $SUDOERS_FILE with proper permissions"
+
+# Verify the sudoers file is valid
+if visudo -c -f "$SUDOERS_FILE" >/dev/null 2>&1; then
+    log "  Sudoers file validated successfully"
+else
+    log "  ERROR: Invalid sudoers file, removing for safety"
+    rm -f "$SUDOERS_FILE"
+fi
+
 log "Hardware configuration completed"
 
 # Exit with code 2 if reboot is required (allows caller to detect this)
