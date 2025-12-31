@@ -16,12 +16,12 @@ Below is an overview of each major component, the communication protocols, and r
   - [Maurice Robot / Simulation](#maurice-robot--simulation)
   - [ROS 2 Nodes & Packages](#ros-2-nodes--packages)
   - [Cloud Agent](#cloud-agent)
-  - [DDS Discovery & Networking](#dds-discovery--networking)
+  - [Zenoh Discovery & Networking](#zenoh-networking)
   - [rosbridge](#rosbridge)
 - [Protocols and Message Types](#protocols-and-message-types)
   - [ROS 2 Topics & Services](#ros-2-topics--services)
   - [Custom WebSocket Protocol](#custom-websocket-protocol)
-  - [DDS Discovery Protocol](#dds-discovery-protocol)
+  - [Zenoh Protocol](#zenoh-protocol)
 - [System Diagrams](#system-diagrams)
   - [Simulation Diagram](#simulation-diagram)
   - [Real Robot Diagram](#real-robot-diagram)
@@ -66,10 +66,13 @@ A remote server or application that:
 - Requests images (`ready_for_image`) and receives them as base64-encoded JPEG.
 - Issues commands (`action_to_do`) that become `/cmd_vel` in ROS 2.
 
-### DDS Discovery & Networking
+### Zenoh Networking
 
-- We can run a **Fast DDS discovery server** (`fastdds discovery`), so that distributed ROS 2 nodes find each other on the network without heavy multicast.
-- The environment variables `ROS_DISCOVERY_SERVER` or `FASTRTPS_DEFAULT_PROFILES_FILE` (with a generated XML) control how DDS is configured.
+- We can run a **Zenoh Router** (`rmw_zenohd`), so that distributed ROS 2 nodes find each other on the network without heavy multicast.
+
+- The environment variables in `dds/setup_dds.sh` and `start_zenoh_router.zsh` control how Zenoh is configured.
+
+- You can use `start_zenoh_router.zsh {ip/hostname}` to connect your local ROS instance to the robot.
 
 ### rosbridge
 
@@ -102,10 +105,9 @@ Below is a summary of the main ROS 2 topics and services used. They are standard
 
 ### DDS Discovery Protocol
 
-If using **Fast DDS SUPER_CLIENT** configuration:
-- The client node sets `ROS_DISCOVERY_SERVER=<IP>:<PORT>`.
-- We place a `super_client_configuration.xml` referencing the server IP/Port.  
-- The discovery server runs `fastdds discovery -p <PORT> -i <ID>` on the host or a separate machine.
+Every ROS node contains a Zenoh session which connects to `localhost:7447` by default. The Zenoh Router must be running at this address.
+
+This behavior is controlled by scripts in the `dds` directory.
 
 ---
 

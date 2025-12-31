@@ -1,6 +1,6 @@
 # System Setup for Dynamic Networking and ROS/DDS Management
 
-This document outlines the setup required to manage the Fast DDS discovery server and ROS 2 application using `systemd`, allowing for automatic restarts when the robot's IP address changes (e.g., due to Wi-Fi network changes triggered via the BLE provisioner service).
+This document outlines the setup required to manage the Zenoh Router and ROS 2 application using `systemd`, allowing for automatic restarts when the robot's IP address changes (e.g., due to Wi-Fi network changes triggered via the BLE provisioner service).
 
 ## Todo
 
@@ -10,11 +10,11 @@ Write a script that for a new robot installs everything where it needs to be
 
 The system uses `systemd` to manage three main services:
 
-1.  **`discovery-server.service`**: Runs the `fastdds discovery` server.
+1.  **`zenoh-router.service`**: Runs the `rmw_zenohd` server.
 2.  **`ros-app.service`**: Launches the main ROS 2 application within a `tmux` session using a wrapper script. This allows developers to attach to the `tmux` session for monitoring while still being managed by `systemd`.
 3.  **`ble-provisioner.service`**: Runs the Python BLE service (`simple_bt_service.py`) which handles network changes.
 
-When the BLE service connects the robot to a new network and detects an IP address change, it uses `sudo` to execute a helper script (`restart_robot_networking.sh`) which in turn uses `systemctl` to restart the `discovery-server` and `ros-app` services. The `setup_dds.zsh` script has been modified to dynamically detect the current IP, ensuring restarted services use the correct configuration.
+When the BLE service connects the robot to a new network and detects an IP address change, it uses `sudo` to execute a helper script (`restart_robot_networking.sh`) which in turn uses `systemctl` to restart the `zenoh-router` and `ros-app` services. The `setup_dds.zsh` script has been modified to dynamically detect the current IP, ensuring restarted services use the correct configuration.
 
 ## Setup Steps
 
@@ -94,7 +94,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
 6.  **Install Systemd Unit Files:**
     *   Copy the generated unit files to the systemd system directory:
         ```bash
-        sudo cp innate-os/systemd/discovery-server.service /etc/systemd/system/
+        sudo cp innate-os/systemd/zenoh-router.service /etc/systemd/system/
         sudo cp innate-os/systemd/ros-app.service /etc/systemd/system/
         sudo cp innate-os/systemd/ble-provisioner.service /etc/systemd/system/
         ```
@@ -107,13 +107,13 @@ When the BLE service connects the robot to a new network and detects an IP addre
         ```
     *   Enable the services to start automatically on boot:
         ```bash
-        sudo systemctl enable discovery-server.service
+        sudo systemctl enable zenoh-router.service
         sudo systemctl enable ros-app.service
         sudo systemctl enable ble-provisioner.service
         ```
     *   Start the services manually for the first time (or reboot):
         ```bash
-        sudo systemctl start discovery-server.service
+        sudo systemctl start zenoh-router.service
         sudo systemctl start ble-provisioner.service
         sudo systemctl start ros-app.service 
         ```
@@ -123,13 +123,13 @@ When the BLE service connects the robot to a new network and detects an IP addre
 
 *   **Check Service Status:**
     ```bash
-    sudo systemctl status discovery-server.service
+    sudo systemctl status zenoh-router.service
     sudo systemctl status ros-app.service
     sudo systemctl status ble-provisioner.service
     ```
 *   **View Logs:**
     ```bash
-    sudo journalctl -u discovery-server.service -f
+    sudo journalctl -u zenoh-router.service -f
     sudo journalctl -u ros-app.service -f # Shows output from launch_ros_in_tmux.sh
     sudo journalctl -u ble-provisioner.service -f # Shows output from simple_bt_service.py
     ```
@@ -143,14 +143,14 @@ When the BLE service connects the robot to a new network and detects an IP addre
 *   **Restarting Manually:**
     ```bash
     sudo systemctl restart ble-provisioner.service
-    sudo systemctl restart discovery-server.service
+    sudo systemctl restart zenoh-router.service
     sudo systemctl restart ros-app.service
     ```
 *   **Stopping:**
     ```bash
     sudo systemctl stop ros-app.service
     sudo systemctl stop ble-provisioner.service
-    sudo systemctl stop discovery-server.service
+    sudo systemctl stop zenoh-router.service
     ```
 
 ## Troubleshooting
