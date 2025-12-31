@@ -12,7 +12,7 @@ from pathlib import Path
 app = Flask(__name__)
 
 # Configuration
-ROBOT_HOST = os.environ.get("ROBOT_HOST", "jetson1@192.168.55.1")
+ROBOT_HOST = os.environ.get("ROBOT_HOST", "jetson1@mars.local")
 ROBOT_IP = ROBOT_HOST.split("@")[-1]
 ROBOT_PASSWORD = os.environ.get("ROBOT_PASSWORD", "goodbot")
 KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts"
@@ -27,12 +27,12 @@ def run_command(cmd, timeout=300):
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "ROBOT_PASSWORD": ROBOT_PASSWORD}
+            env={**os.environ, "ROBOT_PASSWORD": ROBOT_PASSWORD},
         )
         return {
             "success": result.returncode == 0,
             "output": result.stdout + result.stderr,
-            "returncode": result.returncode
+            "returncode": result.returncode,
         }
     except subprocess.TimeoutExpired:
         return {"success": False, "output": "Command timed out", "returncode": -1}
@@ -63,9 +63,11 @@ def clear_known_hosts():
 @app.route("/api/ping", methods=["POST"])
 def ping():
     """Check if robot is reachable"""
-    cmd = f'ping -c 1 -W 2 {ROBOT_IP} 2>&1'
+    cmd = f"ping -c 1 -W 2 {ROBOT_IP} 2>&1"
     result = run_command(cmd, timeout=5)
-    result["success"] = "1 packets received" in result["output"] or "1 received" in result["output"]
+    result["success"] = (
+        "1 packets received" in result["output"] or "1 received" in result["output"]
+    )
     return jsonify(result)
 
 
@@ -79,7 +81,9 @@ def ssh_check():
 @app.route("/api/install-nvrtc", methods=["POST"])
 def install_nvrtc():
     """Install cuda-nvrtc-dev-12-6"""
-    result = ssh_cmd("apt-get install -y cuda-nvrtc-dev-12-6", timeout=300, use_sudo=True)
+    result = ssh_cmd(
+        "apt-get install -y cuda-nvrtc-dev-12-6", timeout=300, use_sudo=True
+    )
     if result["success"]:
         result["output"] = "✓ cuda-nvrtc-dev-12-6 installed\n" + result["output"]
     return jsonify(result)
@@ -90,28 +94,37 @@ def create_symlink():
     """Create CUDA symlink"""
     # First check if symlink already exists
     check_result = ssh_cmd("ls -la /usr/local/cuda 2>&1 || true", timeout=30)
-    
+
     if "/usr/local/cuda-12.6" in check_result.get("output", ""):
-        return jsonify({
-            "success": True,
-            "output": "✓ Symlink already exists: /usr/local/cuda -> /usr/local/cuda-12.6",
-            "returncode": 0
-        })
-    
+        return jsonify(
+            {
+                "success": True,
+                "output": "✓ Symlink already exists: /usr/local/cuda -> /usr/local/cuda-12.6",
+                "returncode": 0,
+            }
+        )
+
     # Remove existing symlink if it points elsewhere
     ssh_cmd("rm -f /usr/local/cuda", timeout=30, use_sudo=True)
-    
+
     # Create new symlink
-    result = ssh_cmd("ln -s /usr/local/cuda-12.6 /usr/local/cuda", timeout=30, use_sudo=True)
+    result = ssh_cmd(
+        "ln -s /usr/local/cuda-12.6 /usr/local/cuda", timeout=30, use_sudo=True
+    )
     if result["success"]:
-        result["output"] = "✓ Created symlink: /usr/local/cuda -> /usr/local/cuda-12.6\n" + result["output"]
+        result["output"] = (
+            "✓ Created symlink: /usr/local/cuda -> /usr/local/cuda-12.6\n"
+            + result["output"]
+        )
     return jsonify(result)
 
 
 @app.route("/api/install-cudart", methods=["POST"])
 def install_cudart():
     """Install cuda-cudart-dev-12-6"""
-    result = ssh_cmd("apt-get install -y cuda-cudart-dev-12-6", timeout=300, use_sudo=True)
+    result = ssh_cmd(
+        "apt-get install -y cuda-cudart-dev-12-6", timeout=300, use_sudo=True
+    )
     if result["success"]:
         result["output"] = "✓ cuda-cudart-dev-12-6 installed\n" + result["output"]
     return jsonify(result)
@@ -122,72 +135,90 @@ def install_all():
     """Run all CUDA installation steps in order"""
     outputs = []
     all_success = True
-    
+
     # Step 1: Install nvrtc
     outputs.append("=== Step 1/3: Installing cuda-nvrtc-dev-12-6 ===")
-    result = ssh_cmd("apt-get install -y cuda-nvrtc-dev-12-6", timeout=300, use_sudo=True)
+    result = ssh_cmd(
+        "apt-get install -y cuda-nvrtc-dev-12-6", timeout=300, use_sudo=True
+    )
     outputs.append(result["output"])
     if not result["success"]:
         all_success = False
         outputs.append("❌ Step 1 failed")
     else:
         outputs.append("✓ Step 1 complete")
-    
+
     # Step 2: Create symlink
     outputs.append("\n=== Step 2/3: Creating CUDA symlink ===")
     ssh_cmd("rm -f /usr/local/cuda", timeout=30, use_sudo=True)
-    result = ssh_cmd("ln -s /usr/local/cuda-12.6 /usr/local/cuda", timeout=30, use_sudo=True)
+    result = ssh_cmd(
+        "ln -s /usr/local/cuda-12.6 /usr/local/cuda", timeout=30, use_sudo=True
+    )
     outputs.append(result["output"])
     if not result["success"]:
         all_success = False
         outputs.append("❌ Step 2 failed")
     else:
         outputs.append("✓ Step 2 complete: /usr/local/cuda -> /usr/local/cuda-12.6")
-    
+
     # Step 3: Install cudart
     outputs.append("\n=== Step 3/3: Installing cuda-cudart-dev-12-6 ===")
-    result = ssh_cmd("apt-get install -y cuda-cudart-dev-12-6", timeout=300, use_sudo=True)
+    result = ssh_cmd(
+        "apt-get install -y cuda-cudart-dev-12-6", timeout=300, use_sudo=True
+    )
     outputs.append(result["output"])
     if not result["success"]:
         all_success = False
         outputs.append("❌ Step 3 failed")
     else:
         outputs.append("✓ Step 3 complete")
-    
-    outputs.append("\n" + ("✓ All steps completed successfully!" if all_success else "⚠️ Some steps failed"))
-    
-    return jsonify({
-        "success": all_success,
-        "output": "\n".join(outputs),
-        "returncode": 0 if all_success else 1
-    })
+
+    outputs.append(
+        "\n"
+        + (
+            "✓ All steps completed successfully!"
+            if all_success
+            else "⚠️ Some steps failed"
+        )
+    )
+
+    return jsonify(
+        {
+            "success": all_success,
+            "output": "\n".join(outputs),
+            "returncode": 0 if all_success else 1,
+        }
+    )
 
 
 @app.route("/api/check-cuda", methods=["POST"])
 def check_cuda():
     """Check current CUDA installation status"""
     outputs = []
-    
+
     # Check symlink
-    result = ssh_cmd("ls -la /usr/local/cuda 2>&1 || echo 'No symlink found'", timeout=30)
+    result = ssh_cmd(
+        "ls -la /usr/local/cuda 2>&1 || echo 'No symlink found'", timeout=30
+    )
     outputs.append("=== CUDA Symlink ===")
     outputs.append(result["output"])
-    
+
     # Check installed packages
-    result = ssh_cmd("dpkg -l | grep -E 'cuda-nvrtc-dev|cuda-cudart-dev' 2>&1 || echo 'No CUDA dev packages found'", timeout=30)
+    result = ssh_cmd(
+        "dpkg -l | grep -E 'cuda-nvrtc-dev|cuda-cudart-dev' 2>&1 || echo 'No CUDA dev packages found'",
+        timeout=30,
+    )
     outputs.append("\n=== Installed CUDA Packages ===")
     outputs.append(result["output"])
-    
+
     # Check nvcc
-    result = ssh_cmd("/usr/local/cuda/bin/nvcc --version 2>&1 || echo 'nvcc not found'", timeout=30)
+    result = ssh_cmd(
+        "/usr/local/cuda/bin/nvcc --version 2>&1 || echo 'nvcc not found'", timeout=30
+    )
     outputs.append("\n=== NVCC Version ===")
     outputs.append(result["output"])
-    
-    return jsonify({
-        "success": True,
-        "output": "\n".join(outputs),
-        "returncode": 0
-    })
+
+    return jsonify({"success": True, "output": "\n".join(outputs), "returncode": 0})
 
 
 if __name__ == "__main__":
@@ -200,4 +231,3 @@ if __name__ == "__main__":
 ╚═══════════════════════════════════════════════════════════════╝
 """)
     app.run(host="0.0.0.0", port=5051, debug=True)
-

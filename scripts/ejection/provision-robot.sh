@@ -58,7 +58,7 @@ if [ -z "$ROBOT_NUM" ]; then
     exit 1
 fi
 
-ROBOT_HOST="${ROBOT_HOST:-jetson1@192.168.55.1}"
+ROBOT_HOST="${ROBOT_HOST:-jetson1@mars.local}"
 
 # Verify scripts exist
 if [ ! -f "$INSTALL_KEY_SCRIPT" ]; then

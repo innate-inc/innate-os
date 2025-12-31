@@ -13,7 +13,7 @@ INNATE_OS_REMOTE="${INNATE_OS_REMOTE:-/home/jetson1/innate-os}"
 MAPS_DIR="$INNATE_OS_REMOTE/maps"
 
 # Parse arguments
-ROBOT_HOST="${1:-jetson1@192.168.55.1}"
+ROBOT_HOST="${1:-jetson1@mars.local}"
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Clearing maps from robot"

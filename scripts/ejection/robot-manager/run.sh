@@ -33,7 +33,7 @@ if ! python3 -c "import flask" 2>/dev/null; then
 fi
 
 # Set robot host from argument or use default
-export ROBOT_HOST="${1:-jetson1@192.168.55.1}"
+export ROBOT_HOST="${1:-jetson1@mars.local}"
 export ROBOT_PASSWORD="${ROBOT_PASSWORD:-goodbot}"
 
 echo ""

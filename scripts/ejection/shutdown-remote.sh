@@ -12,7 +12,7 @@ set -e
 ROBOT_PASSWORD="${ROBOT_PASSWORD:-goodbot}"
 
 # Parse arguments
-ROBOT_HOST="${1:-jetson1@192.168.55.1}"
+ROBOT_HOST="${1:-jetson1@mars.local}"
 
 echo "═══════════════════════════════════════════════════════════════"
 echo "  Shutting down robot"
@@ -25,4 +25,6 @@ ssh "$ROBOT_HOST" "echo '$ROBOT_PASSWORD' | sudo -S shutdown now" || true
 
 echo "   ✓ Shutdown command sent"
 echo ""
+
+
 

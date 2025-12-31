@@ -21,7 +21,7 @@ if [ $# -lt 1 ]; then
 fi
 
 ROBOT_NUM="$1"
-ROBOT_HOST="${2:-jetson1@192.168.55.1}"
+ROBOT_HOST="${2:-jetson1@mars.local}"
 
 # Format robot ID with zero-padding (1 -> robot-001)
 ROBOT_ID=$(printf '%s-%03d' "$PREFIX" "$ROBOT_NUM")

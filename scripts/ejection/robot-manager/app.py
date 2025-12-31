@@ -12,7 +12,7 @@ from pathlib import Path
 app = Flask(__name__)
 
 # Configuration
-ROBOT_HOST = os.environ.get("ROBOT_HOST", "jetson1@192.168.55.1")
+ROBOT_HOST = os.environ.get("ROBOT_HOST", "jetson1@mars.local")
 ROBOT_IP = ROBOT_HOST.split("@")[-1]
 ROBOT_PASSWORD = os.environ.get("ROBOT_PASSWORD", "goodbot")
 SCRIPT_DIR = Path(__file__).parent.parent

@@ -19,7 +19,7 @@ LOCAL_WAVE_DIR="$INNATE_OS_LOCAL/$WAVE_DIR"
 REMOTE_WAVE_DIR="$INNATE_OS_REMOTE/$WAVE_DIR"
 
 # Parse arguments
-ROBOT_HOST="${1:-jetson1@192.168.55.1}"
+ROBOT_HOST="${1:-jetson1@mars.local}"
 
 # Verify local wave directory exists
 if [ ! -d "$LOCAL_WAVE_DIR" ]; then
