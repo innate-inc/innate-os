@@ -15,16 +15,18 @@ from rclpy.node import Node
 import asyncio
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import json
 import os
 import shutil
-import shutil
+import uuid
+import traceback
 
 from brain_messages.srv import (
     SubmitTrainingJob,
     GetTrainingJobStatus,
+    GetTrainingJobStatusByName,
     ListTrainingJobs,
     DownloadTrainingModel,
 )
@@ -98,7 +100,6 @@ class TrainingJobTrackerNode(Node):
                 self.proxy = None
         except Exception as e:
             self.logger.error(f"⚠️ Could not initialize proxy client: {e}")
-            import traceback
             self.logger.error(traceback.format_exc())
             self.proxy = None
         
@@ -133,6 +134,11 @@ class TrainingJobTrackerNode(Node):
             "/training/get_job_status",
             self._handle_get_job_status
         )
+        self.get_job_status_by_name_srv = self.create_service(
+            GetTrainingJobStatusByName,
+            "/training/get_job_status_by_name",
+            self._handle_get_job_status_by_name
+        )
         self.list_jobs_srv = self.create_service(
             ListTrainingJobs,
             "/training/list_jobs",
@@ -147,12 +153,169 @@ class TrainingJobTrackerNode(Node):
         self.logger.info("✅ ROS services registered:")
         self.logger.info("  - /training/submit_job")
         self.logger.info("  - /training/get_job_status")
+        self.logger.info("  - /training/get_job_status_by_name")
         self.logger.info("  - /training/list_jobs")
         self.logger.info("  - /training/download_model")
         
         # Create a timer to keep the node alive and check tracker status
         # This also allows ROS to handle shutdown gracefully
         self.timer = self.create_timer(60.0, self._check_tracker_status)
+    
+    def _run_async_in_thread(self, coro_func, timeout: float = 30.0):
+        """
+        Run an async function in a separate thread with its own event loop.
+        
+        Args:
+            coro_func: Async function to run (will be called with no arguments)
+            timeout: Maximum time to wait for completion
+            
+        Returns:
+            Tuple of (result, error) - one will be None
+        """
+        result_container = {"result": None, "error": None}
+        
+        def run_in_thread():
+            """Run async function in thread with new event loop."""
+            loop = None
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result_container["result"] = loop.run_until_complete(coro_func())
+            except Exception as e:
+                result_container["error"] = e
+            finally:
+                if loop:
+                    try:
+                        # Cancel any remaining tasks
+                        pending = asyncio.all_tasks(loop)
+                        for task in pending:
+                            task.cancel()
+                        # Give tasks a chance to clean up
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    except Exception:
+                        pass
+                    finally:
+                        loop.close()
+        
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+        
+        if thread.is_alive():
+            return None, TimeoutError(f"Operation timed out after {timeout} seconds")
+        
+        return result_container["result"], result_container["error"]
+    
+    def _calculate_number_of_samples(self, primitive_path: str) -> int:
+        """
+        Calculate the total number of samples from dataset_metadata.json.
+        
+        For each episode, calculates duration from start_timestamp and end_timestamp,
+        then multiplies by data_frequency to get number of frames/samples.
+        Sums over all episodes.
+        
+        Args:
+            primitive_path: Path to primitive folder
+            
+        Returns:
+            Total number of samples (timesteps) across all episodes, or 0 if error
+        """
+        try:
+            dataset_metadata_path = Path(primitive_path) / "data" / "dataset_metadata.json"
+            
+            if not dataset_metadata_path.exists():
+                self.logger.warning(f"  dataset_metadata.json not found at {dataset_metadata_path}")
+                return 0
+            
+            with open(dataset_metadata_path, 'r') as f:
+                dataset_metadata = json.load(f)
+            
+            data_frequency = dataset_metadata.get("data_frequency", 20)  # Default to 20 Hz
+            episodes = dataset_metadata.get("episodes", [])
+            
+            if not episodes:
+                self.logger.warning(f"  No episodes found in dataset_metadata.json")
+                return 0
+            
+            total_samples = 0
+            
+            for episode_info in episodes:
+                start_timestamp_str = episode_info.get("start_timestamp")
+                end_timestamp_str = episode_info.get("end_timestamp")
+                
+                if not start_timestamp_str or not end_timestamp_str:
+                    self.logger.warning(f"  Episode {episode_info.get('episode_id', 'unknown')} missing timestamps")
+                    continue
+                
+                try:
+                    # Parse timestamps (ISO format: "2025-12-30T08:11:28")
+                    # Try fromisoformat first (Python 3.7+), fall back to manual parsing
+                    try:
+                        start_time = datetime.fromisoformat(start_timestamp_str)
+                        end_time = datetime.fromisoformat(end_timestamp_str)
+                    except (ValueError, AttributeError):
+                        # Fallback: parse manually if fromisoformat not available
+                        # Format: "YYYY-MM-DDTHH:MM:SS"
+                        start_time = datetime.strptime(start_timestamp_str, "%Y-%m-%dT%H:%M:%S")
+                        end_time = datetime.strptime(end_timestamp_str, "%Y-%m-%dT%H:%M:%S")
+                    
+                    # Calculate duration in seconds
+                    duration_seconds = (end_time - start_time).total_seconds()
+                    
+                    # Calculate number of samples for this episode
+                    episode_samples = int(duration_seconds * data_frequency)
+                    total_samples += episode_samples
+                    
+                    self.logger.debug(f"  Episode {episode_info.get('episode_id', 'unknown')}: "
+                                    f"{duration_seconds:.2f}s * {data_frequency}Hz = {episode_samples} samples")
+                    
+                except Exception as e:
+                    self.logger.warning(f"  Error parsing timestamps for episode {episode_info.get('episode_id', 'unknown')}: {e}")
+                    continue
+            
+            self.logger.info(f"  Calculated total samples: {total_samples} from {len(episodes)} episode(s) "
+                           f"(data_frequency={data_frequency}Hz)")
+            return total_samples
+            
+        except Exception as e:
+            self.logger.error(f"  Error calculating number of samples: {e}")
+            return 0
+    
+    def _calculate_batch_size(self, num_samples: int) -> Tuple[int, int]:
+        """
+        Calculate optimal batch size and world size based on number of samples.
+
+        The function tries world_size in [8, 4, 2, 1] (high to low), each time:
+        - Compute samples_per_worker = num_samples / (world_size * no_of_cycles)
+        - If samples_per_worker >= 4, batch_size = largest multiple of 4 <= min(96, samples_per_worker)
+        - If none fit, fall back to batch_size=1, world_size=1
+
+        Args:
+            num_samples: Total samples in the dataset
+
+        Returns:
+            (batch_size, world_size)
+        """
+        if num_samples <= 0:
+            self.logger.warning("  Invalid number of samples, using default batch_size=96, world_size=8")
+            return 96, 8
+
+        no_of_cycles = 64
+        self.logger.info(f"  Calculating batch size for {num_samples} samples")
+        for world_size in [8, 4, 2]:
+            samples_per_worker = num_samples / (world_size * no_of_cycles)
+            self.logger.debug(f"  world_size={world_size}, no_of_cycles={no_of_cycles}, samples_per_worker={samples_per_worker:.2f}")
+            if samples_per_worker >= 4:
+                max_batch = min(96, int(samples_per_worker))
+                batch_size = (max_batch // 4) * 4
+                self.logger.info(f"  ✓ Batch size calculated: {batch_size}, world_size={world_size} (samples_per_worker={samples_per_worker:.2f})")
+                return batch_size, world_size
+
+        # If nothing fit above, fall back to batch_size=1, world_size=1
+        self.logger.debug("  Too few samples for normal batch sizes, using batch_size=1, world_size=1")
+        self.logger.info("  ✓ Batch size calculated: 1, world_size=1 (samples too few)")
+        return 1, 1
     
     def _extract_primitive_name(self, job_status: Dict, job_id: str = None) -> str:
         """
@@ -200,8 +363,20 @@ class TrainingJobTrackerNode(Node):
             return False
         
         # Check for required model files
-        # We need both the ONNX model and dataset stats
         required_files = ["act_policy_final.onnx", "dataset_stats.pt"]
+        
+        # Get max_steps from training_params to check for final step .pth file
+        training_params = job_status.get("training_params", {})
+        if isinstance(training_params, str):
+            try:
+                training_params = json.loads(training_params)
+            except json.JSONDecodeError:
+                training_params = {}
+        
+        max_steps = training_params.get("max_steps")
+        if max_steps:
+            required_files.append(f"act_policy_step_{max_steps}.pth")
+        
         for filename in required_files:
             if not (ckpts_dir / filename).exists():
                 return False
@@ -227,8 +402,20 @@ class TrainingJobTrackerNode(Node):
         try:
             async with self.proxy.training as client:
                 # Download required model files
-                # Only download the ONNX model and dataset stats (not intermediate checkpoints)
                 required_files = ["act_policy_final.onnx", "dataset_stats.pt"]
+                
+                # Get max_steps from training_params to download final step .pth file
+                training_params = job_status.get("training_params", {})
+                if isinstance(training_params, str):
+                    try:
+                        training_params = json.loads(training_params)
+                    except json.JSONDecodeError:
+                        training_params = {}
+                
+                max_steps = training_params.get("max_steps")
+                if max_steps:
+                    required_files.append(f"act_policy_step_{max_steps}.pth")
+                
                 downloaded = []
                 failed_files = []
                 
@@ -310,18 +497,9 @@ class TrainingJobTrackerNode(Node):
                             if not job_id:
                                 continue
                             
-                            # Get fresh job status to ensure we have primitive_name for proper check
-                            # list_jobs doesn't include primitive_name, so we need get_job_status
-                            try:
-                                fresh_status = await client.get_job_status(job_id)
-                                # Check if already downloaded using fresh status with primitive_name
-                                if not self._is_job_downloaded(job_id, fresh_status):
-                                    completed_jobs_to_download.append(fresh_status)
-                            except Exception as e:
-                                self.logger.warning(f"Failed to get job status for {job_id} during download check: {e}")
-                                # Fallback: use job_data without primitive_name (will check "unknown" folder)
-                                if not self._is_job_downloaded(job_id, job_data):
-                                    completed_jobs_to_download.append(job_data)
+                            # Check if already downloaded using job_data (now includes primitive_name)
+                            if not self._is_job_downloaded(job_id, job_data):
+                                completed_jobs_to_download.append(job_data)
                         
                         if completed_jobs_to_download:
                             self.logger.info(f"Found {len(completed_jobs_to_download)} completed job(s) not yet downloaded")
@@ -480,7 +658,10 @@ class TrainingJobTrackerNode(Node):
     
     def _handle_submit_job(self, request: SubmitTrainingJob.Request, response: SubmitTrainingJob.Response) -> SubmitTrainingJob.Response:
         """ROS service handler for submitting a training job."""
-        self.logger.info("📤 Received submit_job service request")
+        request_id = str(uuid.uuid4())[:8]  # Short unique ID for this request
+        call_stack = ''.join(traceback.format_stack()[-3:-1])  # Get caller info
+        self.logger.info(f"📤 [REQUEST {request_id}] Received submit_job service request")
+        self.logger.info(f"  [REQUEST {request_id}] Caller stack: {call_stack}")
         
         try:
             # Parse training params
@@ -495,6 +676,9 @@ class TrainingJobTrackerNode(Node):
                     response.error_message = f"Invalid JSON in training_params_json: {e}"
                     return response
             
+            # Get primitive_name from request (required for proper job tracking)
+            primitive_name = request.primitive_name if request.primitive_name else None
+            
             # Determine if primitive folder or single file
             # Resolve paths relative to INNATE_OS_ROOT (or ~/innate-os)
             innate_os_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
@@ -506,7 +690,12 @@ class TrainingJobTrackerNode(Node):
                     path_to_upload = os.path.join(innate_os_root, path_to_upload)
                 path_to_upload = os.path.abspath(path_to_upload)
                 is_primitive = True
+                # Extract primitive_name from path if not provided (fallback)
+                if not primitive_name:
+                    primitive_name = Path(path_to_upload).name
+                    self.logger.info(f"  Extracted primitive_name from path: {primitive_name}")
                 self.logger.info(f"  Uploading primitive folder: {path_to_upload}")
+                self.logger.info(f"  Primitive name: {primitive_name}")
             elif request.file_path:
                 path_to_upload = request.file_path
                 # Resolve relative paths relative to INNATE_OS_ROOT
@@ -514,11 +703,27 @@ class TrainingJobTrackerNode(Node):
                     path_to_upload = os.path.join(innate_os_root, path_to_upload)
                 path_to_upload = os.path.abspath(path_to_upload)
                 is_primitive = False
+                # Extract primitive_name from filename if not provided (fallback)
+                if not primitive_name:
+                    filename = Path(path_to_upload).name
+                    if filename.endswith('.tar.gz'):
+                        primitive_name = filename[:-7]  # Remove .tar.gz
+                    else:
+                        primitive_name = Path(path_to_upload).stem  # Remove extension
+                    self.logger.info(f"  Extracted primitive_name from filename: {primitive_name}")
                 self.logger.info(f"  Uploading single file: {path_to_upload}")
+                self.logger.info(f"  Primitive name: {primitive_name}")
             else:
                 self.logger.error("  Missing required parameter: must provide either primitive_path or file_path")
                 response.success = False
                 response.error_message = "Must provide either primitive_path or file_path"
+                return response
+            
+            # Ensure primitive_name is set (should always be set by now via request or extraction)
+            if not primitive_name:
+                self.logger.error("  Could not determine primitive_name")
+                response.success = False
+                response.error_message = "Could not determine primitive_name. Please provide it explicitly."
                 return response
             
             # Validate path exists
@@ -528,71 +733,139 @@ class TrainingJobTrackerNode(Node):
                 response.error_message = f"Path does not exist: {path_to_upload}"
                 return response
             
-            # Run async operation in separate thread to avoid blocking ROS executor
-            result_container = {"job_id": None, "error": None}
-            
-            def run_async_upload():
-                """Run async upload in separate thread."""
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    async def submit():
-                        async with self.proxy.training as client:
-                            if is_primitive:
-                                result = await client.upload_primitive_folder(
-                                    primitive_path=path_to_upload,
-                                    primitive_name=Path(path_to_upload).name,
-                                    training_params=training_params,
-                                )
-                            else:
-                                result = await client.upload_file_resumable(
-                                    file_path=path_to_upload,
-                                    filename=Path(path_to_upload).name,
-                                    training_params=training_params,
-                                )
-                            
-                            job_id = result["job_id"]
-                            # Notify upload complete
-                            await client.notify_upload_complete(job_id)
-                            return job_id
+            # Calculate batch size and world size dynamically from dataset_metadata.json (only for primitive folders)
+            if is_primitive:
+                self.logger.info("  Calculating batch size and world size from dataset...")
+                num_samples = self._calculate_number_of_samples(path_to_upload)
+                
+                if num_samples > 0:
+                    calculated_batch_size, calculated_world_size = self._calculate_batch_size(num_samples)
                     
-                    self.logger.info(f"  Starting async upload and submission...")
-                    result_container["job_id"] = loop.run_until_complete(submit())
-                except Exception as e:
-                    result_container["error"] = e
-                finally:
-                    loop.close()
+                    # Override batch_size and world_size in training_params with calculated values
+                    user_batch_size = training_params.get("batch_size")
+                    user_world_size = training_params.get("world_size")
+                    
+                    if user_batch_size:
+                        self.logger.info(f"  Overriding user-provided batch_size={user_batch_size} "
+                                       f"with calculated batch_size={calculated_batch_size}")
+                    else:
+                        self.logger.info(f"  Setting calculated batch_size={calculated_batch_size} "
+                                       f"(not provided by user)")
+                    
+                    if user_world_size:
+                        self.logger.info(f"  Overriding user-provided world_size={user_world_size} "
+                                       f"with calculated world_size={calculated_world_size}")
+                    else:
+                        self.logger.info(f"  Setting calculated world_size={calculated_world_size} "
+                                       f"(not provided by user)")
+                    
+                    training_params["batch_size"] = calculated_batch_size
+                    training_params["world_size"] = calculated_world_size
+                else:
+                    self.logger.warning("  Could not calculate batch size from dataset, using provided values or defaults")
+                    if "batch_size" not in training_params:
+                        training_params["batch_size"] = 96  # Default fallback
+                        self.logger.info(f"  Using default batch_size=96")
+                    if "world_size" not in training_params:
+                        training_params["world_size"] = 8  # Default fallback
+                        self.logger.info(f"  Using default world_size=8")
+            else:
+                # For single file uploads, we can't read dataset_metadata.json
+                # Use provided batch_size/world_size or defaults
+                if "batch_size" not in training_params:
+                    training_params["batch_size"] = 96  # Default fallback
+                    self.logger.info(f"  Using default batch_size=96 (single file upload, cannot calculate from dataset)")
+                if "world_size" not in training_params:
+                    training_params["world_size"] = 8  # Default fallback
+                    self.logger.info(f"  Using default world_size=8 (single file upload, cannot calculate from dataset)")
             
-            self.logger.info(f"  Starting upload thread...")
-            self.logger.info(f"  Note: Large uploads may take >10 minutes. Zenoh may timeout, but upload continues.")
-            upload_thread = threading.Thread(target=run_async_upload, daemon=True)
-            upload_thread.start()
+            # Get job_id and upload_url immediately by requesting upload permission (non-blocking)
+            # This allows us to return quickly and let the upload continue in background
+            async def request_permission():
+                self.logger.info(f"  [REQUEST {request_id}] Calling request_upload_permission...")
+                async with self.proxy.training as client:
+                    if is_primitive:
+                        filename = f"{primitive_name}.tar.gz"
+                    else:
+                        filename = Path(path_to_upload).name
+                    
+                    permission = await client.request_upload_permission(
+                        filename=filename,
+                        content_type="application/gzip" if is_primitive else "application/octet-stream",
+                        training_params=training_params,
+                        primitive_name=primitive_name,  # Send as top-level field for server
+                    )
+                    job_id_from_permission = permission["job_id"]
+                    self.logger.info(f"  [REQUEST {request_id}] Got job_id: {job_id_from_permission}")
+                    return job_id_from_permission, permission["upload_url"]
             
-            # Wait for upload with timeout (upload can take a while)
-            # Note: Zenoh has a 600s (10min) query timeout, but we allow up to 1 hour for the actual upload
-            upload_thread.join(timeout=3600)  # 1 hour timeout for large uploads
+            result, error = self._run_async_in_thread(request_permission, timeout=10.0)
             
-            if upload_thread.is_alive():
-                # Upload is still running - this is OK, it will complete in background
-                # But we can't wait longer for the ROS service response
-                self.logger.warning(f"  Upload still in progress after 1 hour. It will continue in background.")
-                self.logger.warning(f"  Job ID will be available via polling. Zenoh timeout is expected for long uploads.")
-                raise TimeoutError("Upload is taking longer than 1 hour. Check job status via polling.")
+            if error:
+                raise error
+            if result is None:
+                raise RuntimeError("Failed to get job_id from upload permission request")
             
-            if result_container["error"]:
-                raise result_container["error"]
+            job_id, upload_url = result
+            self.logger.info(f"  [REQUEST {request_id}] Using job_id: {job_id} for upload")
             
-            if result_container["job_id"] is None:
-                raise RuntimeError("Upload completed but no job_id returned")
+            # Capture variables in local scope to prevent closure issues with concurrent uploads
+            # Python closures capture by reference, so we need to capture values explicitly
+            upload_job_id = job_id
+            upload_url_local = upload_url
+            upload_path = path_to_upload
+            upload_primitive_name = primitive_name
+            upload_is_primitive = is_primitive
+            upload_training_params = training_params.copy() if training_params else {}
             
-            job_id = result_container["job_id"]
+            # Now start the actual upload in background (non-blocking)
+            # Pass job_id and upload_url to avoid duplicate job creation
+            async def submit_upload():
+                async with self.proxy.training as client:
+                    if upload_is_primitive:
+                        result = await client.upload_primitive_folder(
+                            primitive_path=upload_path,
+                            job_id=upload_job_id,
+                            upload_url=upload_url_local,
+                            primitive_name=upload_primitive_name,
+                            training_params=upload_training_params,
+                        )
+                    else:
+                        upload_params = upload_training_params.copy()
+                        if upload_primitive_name:
+                            upload_params["primitive_name"] = upload_primitive_name
+                        
+                        result = await client.upload_file_resumable(
+                            file_path=upload_path,
+                            job_id=upload_job_id,
+                            upload_url=upload_url_local,
+                            filename=Path(upload_path).name,
+                            training_params=upload_params,
+                        )
+                    
+                    if result["job_id"] != upload_job_id:
+                        self.logger.warning(f"  Job ID mismatch: expected {upload_job_id}, got {result['job_id']}")
+                    
+                    await client.notify_upload_complete(upload_job_id)
+                    self.logger.info(f"✅ Upload completed successfully for job {upload_job_id}")
             
+            def run_upload():
+                """Run upload in background thread."""
+                _, error = self._run_async_in_thread(submit_upload, timeout=7200.0)  # 2 hour timeout
+                if error:
+                    self.logger.error(f"❌ Error during background upload for job {upload_job_id}: {error}")
+                    self.logger.error(f"  Traceback: {traceback.format_exc()}")
+            
+            self.logger.info(f"  Starting background upload for job {job_id}...")
+            self.logger.info(f"  Note: Large uploads may take >10 minutes. Upload continues in background.")
+            threading.Thread(target=run_upload, daemon=True).start()
+            
+            # Return immediately with job_id - upload continues in background
             response.success = True
             response.job_id = job_id
-            self.logger.info(f"✅ Job submitted successfully via service: {job_id}")
+            self.logger.info(f"✅ Job submitted successfully via service: {job_id} (upload in progress)")
             
         except Exception as e:
-            import traceback
             self.logger.error(f"❌ Error submitting job: {e}")
             self.logger.error(f"  Traceback: {traceback.format_exc()}")
             response.success = False
@@ -611,39 +884,16 @@ class TrainingJobTrackerNode(Node):
                 response.error_message = "job_id required"
                 return response
             
-            # Run async operation in separate thread to avoid blocking ROS executor
-            result_container = {"status": None, "error": None}
+            async def get_status():
+                async with self.proxy.training as client:
+                    return await client.get_job_status(request.job_id)
             
-            def run_async_query():
-                """Run async query in separate thread."""
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    async def get_status():
-                        async with self.proxy.training as client:
-                            return await client.get_job_status(request.job_id)
-                    
-                    self.logger.debug(f"  Querying proxy for job status...")
-                    result_container["status"] = loop.run_until_complete(get_status())
-                except Exception as e:
-                    result_container["error"] = e
-                finally:
-                    loop.close()
+            status, error = self._run_async_in_thread(get_status, timeout=30.0)
             
-            query_thread = threading.Thread(target=run_async_query, daemon=True)
-            query_thread.start()
-            query_thread.join(timeout=30)  # 30 second timeout for status query
-            
-            if query_thread.is_alive():
-                raise TimeoutError("Status query timed out after 30 seconds")
-            
-            if result_container["error"]:
-                raise result_container["error"]
-            
-            if result_container["status"] is None:
+            if error:
+                raise error
+            if status is None:
                 raise RuntimeError("Query completed but no status returned")
-            
-            status = result_container["status"]
             
             job_status = status.get("status", "unknown")
             self.logger.info(f"✅ Retrieved job status: {job_status}")
@@ -652,8 +902,43 @@ class TrainingJobTrackerNode(Node):
             response.status_json = json.dumps(status)
             
         except Exception as e:
-            import traceback
             self.logger.error(f"❌ Error getting job status: {e}")
+            self.logger.error(f"  Traceback: {traceback.format_exc()}")
+            response.success = False
+            response.error_message = str(e)
+        
+        return response
+    
+    def _handle_get_job_status_by_name(self, request: GetTrainingJobStatusByName.Request, response: GetTrainingJobStatusByName.Response) -> GetTrainingJobStatusByName.Response:
+        """ROS service handler for getting job status by primitive name."""
+        self.logger.info(f"📊 Received get_job_status_by_name service request for primitive: {request.primitive_name}")
+        
+        try:
+            if not request.primitive_name:
+                self.logger.error("  Missing required parameter: primitive_name")
+                response.success = False
+                response.error_message = "primitive_name required"
+                return response
+            
+            async def get_status():
+                async with self.proxy.training as client:
+                    return await client.get_job_status_by_name(request.primitive_name)
+            
+            status, error = self._run_async_in_thread(get_status, timeout=30.0)
+            
+            if error:
+                raise error
+            if status is None:
+                raise RuntimeError("Query completed but no status returned")
+            
+            job_status = status.get("status", "unknown")
+            self.logger.info(f"✅ Retrieved job status for {request.primitive_name}: {job_status}")
+            
+            response.success = True
+            response.status_json = json.dumps(status)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error getting job status by name: {e}")
             self.logger.error(f"  Traceback: {traceback.format_exc()}")
             response.success = False
             response.error_message = str(e)
@@ -670,46 +955,24 @@ class TrainingJobTrackerNode(Node):
             status_filter = request.status_filter if request.status_filter else None
             limit = request.limit if request.limit > 0 else None
             
-            # Run async operation in separate thread to avoid blocking ROS executor
-            result_container = {"jobs": None, "error": None}
+            async def list_jobs():
+                async with self.proxy.training as client:
+                    return await client.list_jobs(status_filter=status_filter, limit=limit)
             
-            def run_async_query():
-                """Run async query in separate thread."""
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    async def list_jobs():
-                        async with self.proxy.training as client:
-                            return await client.list_jobs(status_filter=status_filter, limit=limit)
-                    
-                    self.logger.debug(f"  Querying proxy for jobs...")
-                    result_container["jobs"] = loop.run_until_complete(list_jobs())
-                except Exception as e:
-                    result_container["error"] = e
-                finally:
-                    loop.close()
+            jobs, error = self._run_async_in_thread(list_jobs, timeout=30.0)
             
-            query_thread = threading.Thread(target=run_async_query, daemon=True)
-            query_thread.start()
-            query_thread.join(timeout=30)  # 30 second timeout for list query
-            
-            if query_thread.is_alive():
-                raise TimeoutError("List jobs query timed out after 30 seconds")
-            
-            if result_container["error"]:
-                raise result_container["error"]
-            
-            if result_container["jobs"] is None:
+            if error:
+                raise error
+            if jobs is None:
                 raise RuntimeError("Query completed but no jobs returned")
-            
-            jobs = result_container["jobs"]
             
             self.logger.info(f"✅ Retrieved {len(jobs)} job(s) from proxy")
             if jobs:
                 for job in jobs[:5]:  # Log first 5
                     job_id = job.get("job_id", "unknown")
                     status = job.get("status", "unknown")
-                    self.logger.debug(f"    - {job_id[:8]}... | {status}")
+                    primitive_name = job.get("primitive_name", "N/A")
+                    self.logger.debug(f"    - {job_id[:8]}... | {status} | primitive: {primitive_name}")
                 if len(jobs) > 5:
                     self.logger.debug(f"    ... and {len(jobs) - 5} more")
             
@@ -717,7 +980,6 @@ class TrainingJobTrackerNode(Node):
             response.jobs_json = json.dumps(jobs)
             
         except Exception as e:
-            import traceback
             self.logger.error(f"❌ Error listing jobs: {e}")
             self.logger.error(f"  Traceback: {traceback.format_exc()}")
             response.success = False
@@ -737,43 +999,21 @@ class TrainingJobTrackerNode(Node):
                 response.error_message = "job_id required"
                 return response
             
-            # Run async operation in separate thread to avoid blocking ROS executor
-            result_container = {"job_status": None, "error": None}
+            async def download():
+                async with self.proxy.training as client:
+                    self.logger.debug(f"  Getting job status for {request.job_id}...")
+                    job_status = await client.get_job_status(request.job_id)
+                    self.logger.info(f"  Job status: {job_status.get('status')}")
+                    self.logger.info(f"  Starting model download...")
+                    await self._download_model(request.job_id, job_status)
+                    return job_status
             
-            def run_async_download():
-                """Run async download in separate thread."""
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    async def download():
-                        async with self.proxy.training as client:
-                            self.logger.debug(f"  Getting job status for {request.job_id}...")
-                            job_status = await client.get_job_status(request.job_id)
-                            self.logger.info(f"  Job status: {job_status.get('status')}")
-                            self.logger.info(f"  Starting model download...")
-                            await self._download_model(request.job_id, job_status)
-                            return job_status
-                    
-                    result_container["job_status"] = loop.run_until_complete(download())
-                except Exception as e:
-                    result_container["error"] = e
-                finally:
-                    loop.close()
+            job_status, error = self._run_async_in_thread(download, timeout=300.0)
             
-            download_thread = threading.Thread(target=run_async_download, daemon=True)
-            download_thread.start()
-            download_thread.join(timeout=300)  # 5 minute timeout for download
-            
-            if download_thread.is_alive():
-                raise TimeoutError("Download timed out after 5 minutes")
-            
-            if result_container["error"]:
-                raise result_container["error"]
-            
-            if result_container["job_status"] is None:
+            if error:
+                raise error
+            if job_status is None:
                 raise RuntimeError("Download completed but no job_status returned")
-            
-            job_status = result_container["job_status"]
             
             primitive_name = self._extract_primitive_name(job_status, request.job_id)
             output_path = self.download_dir / primitive_name / "ckpts" / filename
@@ -784,7 +1024,6 @@ class TrainingJobTrackerNode(Node):
             response.output_path = str(output_path)
             
         except Exception as e:
-            import traceback
             self.logger.error(f"❌ Error downloading model: {e}")
             self.logger.error(f"  Traceback: {traceback.format_exc()}")
             response.success = False
