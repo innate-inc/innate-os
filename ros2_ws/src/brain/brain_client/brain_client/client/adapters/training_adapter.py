@@ -7,6 +7,8 @@ import subprocess
 from typing import Optional, Dict, Any, List
 import httpx
 from pathlib import Path
+import traceback
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,7 @@ class TrainingClient:
         filename: str,
         content_type: str = "application/octet-stream",
         training_params: Optional[Dict[str, Any]] = None,
+        primitive_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Request permission to upload training data and get presigned URL.
@@ -106,6 +109,7 @@ class TrainingClient:
             filename: Name of the file to upload (e.g., "dataset.h5")
             content_type: MIME type of the file
             training_params: Optional training parameters (batch_size, max_steps, etc.)
+            primitive_name: Optional primitive name (sent as top-level field for server to store)
         
         Returns:
             Dict with:
@@ -119,15 +123,19 @@ class TrainingClient:
         }
         if training_params:
             payload["training_params"] = training_params
+        if primitive_name:
+            payload["primitive_name"] = primitive_name
         
         client = self._get_async_client()
         url = self._build_training_url("/upload-permission")
         headers = self._get_headers()
         
+        call_stack = ''.join(traceback.format_stack()[-4:-1])  # Get caller info
         logger.info(f"🔐 Requesting upload permission (auth handshake)")
         logger.info(f"  URL: {url}")
         logger.info(f"  Filename: {filename}")
         logger.info(f"  Content-Type: {content_type}")
+        logger.info(f"  Caller stack: {call_stack}")
         logger.info(f"  Training params: {training_params}")
         logger.debug(f"  Headers: X-Innate-Token present={bool(headers.get('X-Innate-Token'))}")
         
@@ -260,6 +268,8 @@ class TrainingClient:
     async def upload_file_resumable(
         self,
         file_path: str,
+        job_id: str,
+        upload_url: str,
         filename: Optional[str] = None,
         content_type: str = "application/octet-stream",
         chunk_size: int = 32 * 1024 * 1024,  # 32MB chunks (increased for faster uploads)
@@ -268,18 +278,22 @@ class TrainingClient:
         """
         Upload a file using resumable upload protocol.
         
-        This is a convenience method that handles the full upload flow:
-        1. Request upload permission
-        2. Initiate resumable upload session
-        3. Upload file in chunks
-        4. Handle resume on failure
+        This method uploads a file using an existing job_id and upload_url.
+        Call request_upload_permission() first to get these values.
+        
+        Flow:
+        1. Initiate resumable upload session
+        2. Upload file in chunks
+        3. Handle resume on failure
         
         Args:
             file_path: Path to local file to upload
+            job_id: Job ID from request_upload_permission()
+            upload_url: Upload URL from request_upload_permission()
             filename: Optional filename (defaults to file_path basename)
             content_type: MIME type of the file (default: "application/octet-stream")
             chunk_size: Size of each chunk in bytes (default: 32MB for faster uploads)
-            training_params: Optional training parameters
+            training_params: Optional training parameters (not used, but kept for compatibility)
         
         Returns:
             Dict with job_id and upload status
@@ -294,29 +308,24 @@ class TrainingClient:
         file_size_mb = file_size / (1024 * 1024)
         logger.info(f"📤 Starting resumable upload")
         logger.info(f"  File: {filename}")
+        logger.info(f"  Job ID: {job_id}")
         logger.info(f"  Size: {file_size:,} bytes ({file_size_mb:.2f} MB)")
         logger.info(f"  Chunk size: {chunk_size:,} bytes ({chunk_size / (1024*1024):.2f} MB)")
         logger.info(f"  Estimated chunks: {(file_size + chunk_size - 1) // chunk_size}")
-        
-        # Step 1: Request upload permission
-        permission = await self.request_upload_permission(
-            filename=filename,
-            content_type=content_type,
-            training_params=training_params
-        )
-        job_id = permission["job_id"]
-        upload_url = permission["upload_url"]
         
         # Step 2: Initiate resumable upload session
         # Note: content_type must match what was used in request_upload_permission
         # because it's included in the signed headers of the presigned URL
         session_uri = await self.initiate_resumable_upload(upload_url, content_type=content_type)
         
-        # Step 3: Upload file in chunks
+        # Step 3: Upload file in chunks (streaming from disk to avoid RAM issues)
         logger.info(f"🚀 Starting chunked upload: {file_size:,} bytes in chunks of {chunk_size:,} bytes")
+        logger.info(f"  📝 Streaming from disk (not loading entire file into memory)")
         uploaded_bytes = 0
         
         try:
+            # Open file in binary mode and read chunks sequentially
+            # This ensures we only keep one chunk in memory at a time
             with open(file_path, "rb") as f:
                 while uploaded_bytes < file_size:
                     chunk = f.read(chunk_size)
@@ -354,7 +363,8 @@ class TrainingClient:
                     else:
                         # Unexpected status code - should not happen
                         logger.warning(f"Unexpected status code: {result['status_code']}")
-                    uploaded_bytes += len(chunk)
+                        # For unexpected status codes, still increment by chunk size
+                        uploaded_bytes += len(chunk)
                     
                     progress = (uploaded_bytes / file_size) * 100
                     uploaded_mb = uploaded_bytes / (1024 * 1024)
@@ -454,6 +464,38 @@ class TrainingClient:
         response = await client.get(url, headers=self._get_headers())
         response.raise_for_status()
         return response.json()
+    
+    async def get_job_status_by_name(self, primitive_name: str) -> Dict[str, Any]:
+        """
+        Get current status of a training job by primitive name.
+        
+        Queries the most recent job for the given primitive name.
+        This requires the server to support querying by primitive_name.
+        
+        Args:
+            primitive_name: Primitive name (e.g., "minecraft_wave")
+        
+        Returns:
+            Dict with job status, timestamps, paths, etc.
+            Returns the most recent job for the given primitive name.
+        
+        Raises:
+            httpx.HTTPStatusError: If the request fails (404 if no job found)
+        """
+        client = self._get_async_client()
+        url = self._build_training_url(f"/jobs/by-name/{primitive_name}")
+        
+        logger.info(f"📊 Querying job status by primitive name: {primitive_name}")
+        logger.debug(f"  URL: {url}")
+        
+        # Explicitly pass headers to ensure they're sent
+        response = await client.get(url, headers=self._get_headers())
+        response.raise_for_status()
+        
+        result = response.json()
+        logger.info(f"✅ Retrieved job status for {primitive_name}: {result.get('status', 'unknown')}")
+        
+        return result
     
     async def list_jobs(
         self,
@@ -598,15 +640,41 @@ class TrainingClient:
         download_info = await self.get_download_url(job_id, filename)
         download_url = download_info["download_url"]
         
-        # Download file
-        logger.info(f"Downloading {filename} to {output_path}")
+        # Download file using streaming to avoid RAM issues
+        logger.info(f"📥 Downloading {filename} to {output_path}")
+        logger.info(f"  📝 Streaming in chunks of {chunk_size / (1024*1024):.2f} MB (not loading entire file into memory)")
+        
         async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream("GET", download_url) as response:
                 response.raise_for_status()
                 
+                # Try to get file size from Content-Length header if available
+                content_length = response.headers.get("Content-Length")
+                file_size_bytes = None
+                if content_length:
+                    try:
+                        file_size_bytes = int(content_length)
+                        file_size_mb = file_size_bytes / (1024 * 1024)
+                        logger.info(f"  📊 File size: {file_size_bytes:,} bytes ({file_size_mb:.2f} MB)")
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Stream chunks directly to disk, one chunk at a time
+                # This ensures we only keep one chunk in memory at a time
+                downloaded_bytes = 0
                 with open(output_path, "wb") as f:
                     async for chunk in response.aiter_bytes(chunk_size=chunk_size):
                         f.write(chunk)
+                        downloaded_bytes += len(chunk)
+                        # Log progress periodically (every 4 chunks or if we know file size)
+                        if file_size_bytes:
+                            progress = (downloaded_bytes / file_size_bytes) * 100
+                            if downloaded_bytes % (chunk_size * 4) == 0 or downloaded_bytes == file_size_bytes:
+                                downloaded_mb = downloaded_bytes / (1024 * 1024)
+                                logger.info(f"  📊 Progress: {downloaded_bytes:,}/{file_size_bytes:,} bytes ({downloaded_mb:.2f}/{file_size_mb:.2f} MB) - {progress:.1f}%")
+                        elif downloaded_bytes % (chunk_size * 4) == 0:
+                            downloaded_mb = downloaded_bytes / (1024 * 1024)
+                            logger.debug(f"  📊 Downloaded: {downloaded_bytes:,} bytes ({downloaded_mb:.2f} MB)")
         
         logger.info(f"Download complete: {output_path}")
         return output_path
@@ -638,8 +706,6 @@ class TrainingClient:
         Raises:
             TimeoutError: If timeout is exceeded
         """
-        import time
-        
         start_time = time.time()
         last_status = None
         
@@ -674,6 +740,8 @@ class TrainingClient:
     async def upload_primitive_folder(
         self,
         primitive_path: str,
+        job_id: str,
+        upload_url: str,
         primitive_name: Optional[str] = None,
         chunk_size: int = 32 * 1024 * 1024,  # 32MB chunks
         training_params: Optional[Dict[str, Any]] = None,
@@ -689,9 +757,11 @@ class TrainingClient:
         
         Args:
             primitive_path: Path to primitive folder (e.g., "primitives/minecraft_wave")
+            job_id: Job ID from request_upload_permission()
+            upload_url: Upload URL from request_upload_permission()
             primitive_name: Optional primitive name (defaults to folder name)
             chunk_size: Size of each chunk in bytes (default: 32MB)
-            training_params: Optional training parameters
+            training_params: Optional training parameters (not used, but kept for compatibility)
         
         Returns:
             Dict with job_id and upload status
@@ -700,7 +770,7 @@ class TrainingClient:
         if not primitive_dir.exists() or not primitive_dir.is_dir():
             raise ValueError(f"Primitive folder not found: {primitive_path}")
         
-        primitive_name = primitive_name or primitive_dir.name
+        primitive_name = primitive_name
         
         # Check required structure
         data_dir = primitive_dir / "data"
@@ -783,6 +853,8 @@ class TrainingClient:
             
             result = await self.upload_file_resumable(
                 file_path=tar_path,
+                job_id=job_id,
+                upload_url=upload_url,
                 filename=filename,
                 content_type="application/gzip",
                 chunk_size=chunk_size,
