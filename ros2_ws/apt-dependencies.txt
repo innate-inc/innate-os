@@ -127,6 +127,7 @@ ros-humble-joint-state-publisher-gui
 # ROS2 Humble packages - Utilities (commonly missing!)
 ros-humble-topic-tools
 ros-humble-xacro
+ros-humble-bondpy
 
 # ROS2 Humble packages - Simulation (optional)
 # ros-humble-stage-ros
