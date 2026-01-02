@@ -82,7 +82,6 @@ def main():
             sock.sendto(packet, (args.broadcast, args.port))
             sequence += 1
 
-            # Sleep remainder of period
             elapsed = time.perf_counter() - t0
             if elapsed < period:
                 time.sleep(period - elapsed)
