@@ -73,10 +73,10 @@ def generate_launch_description():
         executable='amcl',
         name='amcl',
         output='screen',
-        parameters=[LaunchConfiguration('amcl_params_file')]
+        parameters=[LaunchConfiguration('amcl_params_file')],
     )
 
-    # Grid localizer for initial pose estimation (runs OUTSIDE lifecycle manager)
+    # Grid localizer for initial pose estimation
     # Provides coarse localization before AMCL for "kidnapped robot" / unknown initial pose
     # Uses transient_local QoS so /initialpose persists for late-starting AMCL
     grid_localizer_node = Node(
@@ -128,12 +128,13 @@ def generate_launch_description():
         name='lifecycle_manager',
         output='screen',
         parameters=[{
-            'autostart': True,
+            'autostart': False,
             'bond_timeout': 60.0,
             'attempt_respawn_reconnection': True,
             'bond_respawn_max_duration': 30.0,
             'node_names': [
                 'map_server', 
+                'grid_localizer',
                 'amcl', 
                 'planner_server', 
                 'controller_server', 
@@ -178,19 +179,15 @@ def generate_launch_description():
     return LaunchDescription([
         map_arg,
         amcl_params_arg,
-        # Grid localizer starts first - runs independently (not lifecycle-managed)
-        # Publishes to /initialpose with transient_local QoS for late subscribers
-        grid_localizer_node,
         # Nav2 lifecycle-managed nodes
         map_server_node,
+        grid_localizer,
         amcl_node,
         planner_node,
         controller_node,
         velocity_smoother_node,
         bt_navigator_node,
         behavior_server_node,
-        TimerAction(
-            period=1.0,
-            actions=[lifecycle_manager_node]
-        )
+
+        lifecycle_manager_node,
     ])
