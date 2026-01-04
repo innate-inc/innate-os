@@ -17,6 +17,7 @@ from src.agent.types import (
     OccupancyGridMsg,
     RobotStateMsg,
     VelocityCmd,
+    ArmCmd,
     PositionCmd,
     DirectiveCmd,
     ResetRobotCmd,
@@ -96,6 +97,15 @@ async def inbound_loop(ws, shared_queues):
                 if vel_cmd:
                     try:
                         shared_queues.agent_to_sim.put_nowait(vel_cmd)
+                    except queue.Full:
+                        pass
+
+            # 1b) /mars/arm/commands
+            elif topic == "/mars/arm/commands":
+                arm_cmd = parse_arm_command(msg_data)
+                if arm_cmd:
+                    try:
+                        shared_queues.agent_to_sim.put_nowait(arm_cmd)
                     except queue.Full:
                         pass
 
@@ -308,11 +318,17 @@ async def outbound_loop(ws, shared_queues):
         "/sim_navigation/global_plan", "nav_msgs/msg/Path"
     )
     sub_nav_cancel = rosbridge_subscribe("/sim_navigation/cancel", "std_msgs/msg/Bool")
+    sub_arm_cmd = rosbridge_subscribe(
+        "/mars/arm/commands", "std_msgs/msg/Float64MultiArray"
+    )
     await ws.send(json.dumps(sub_cmd_vel))
     await ws.send(json.dumps(sub_chat_out))
     await ws.send(json.dumps(sub_nav_path))
     await ws.send(json.dumps(sub_nav_cancel))
-    print("[ROSBridge] Subscribed to /cmd_vel, /brain/chat_out, and navigation topics")
+    await ws.send(json.dumps(sub_arm_cmd))
+    print(
+        "[ROSBridge] Subscribed to /cmd_vel, /brain/chat_out, /mars/arm/commands, and navigation topics"
+    )
 
     # Initialize navigation controller
     nav_controller = NavigationController(shared_queues)
@@ -664,6 +680,18 @@ def parse_twist(msg: dict) -> VelocityCmd | None:
         vx = float(lin.get("x", 0.0))
         vz = float(ang.get("z", 0.0))
         return VelocityCmd(linear_x=vx, angular_z=vz)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_arm_command(msg: dict) -> ArmCmd | None:
+    """Parse std_msgs/Float64MultiArray for arm joint commands."""
+    try:
+        data = msg.get("data", [])
+        if len(data) >= 6:
+            joint_positions = [float(d) for d in data[:6]]
+            return ArmCmd(joint_positions=joint_positions)
+        return None
     except (TypeError, ValueError):
         return None
 
