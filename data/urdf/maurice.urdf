@@ -72,7 +72,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 -1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/base.STL" scale="1 1 1"/>
+        <mesh filename="meshes/base.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -104,14 +104,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link1.STL" scale="1 1 1"/>
+        <mesh filename="meshes/link1.STL" scale="1 1 1"/>
       </geometry>
       <material name="bright_orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link1.STL" scale="1 1 1"/>
+        <mesh filename="meshes/link1.STL" scale="1 1 1"/>
       </geometry>
     </collision>
   </link>
@@ -134,7 +134,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link2.STL" scale="1 1 1"/>
+        <mesh filename="meshes/link2.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -166,7 +166,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link3.STL" scale="1 1 1"/>
+        <mesh filename="meshes/link3.STL" scale="1 1 1"/>
       </geometry>
       <material name="bright_orange"/>
     </visual>
@@ -198,14 +198,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link4.STL" scale="1 1 1"/>
+        <mesh filename="meshes/link4.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link4.STL" scale="1 1 1"/>
+        <mesh filename="meshes/link4.STL" scale="1 1 1"/>
       </geometry>
     </collision>
   </link>
@@ -228,14 +228,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="meshes/link5.STL" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="bright_orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="meshes/link5.STL" scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
   </link>
@@ -258,7 +258,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link61.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="meshes/link61.STL" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -291,7 +291,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link62.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="meshes/link62.STL" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -326,11 +326,13 @@
     </visual>
   </link>
 
-  <!-- fixed camera link -->
-  <joint name="fixed_arm_camera_link" type="fixed">
+  <!-- arm camera link -->
+  <joint name="arm_camera_joint" type="revolute">
     <parent link="link5"/>
     <child  link="arm_camera_link"/>
     <origin xyz="0.00454 0 0.05448" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="0" effort="0" velocity="0"/>
   </joint>
   <link name="arm_camera_link">
     <inertial>
@@ -338,7 +340,13 @@
       <mass value="0.01"/>
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
-    <!-- for simulation you can attach a Gazebo camera plugin here -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="bright_orange"/>
+    </visual>
   </link>
 
 </robot>
