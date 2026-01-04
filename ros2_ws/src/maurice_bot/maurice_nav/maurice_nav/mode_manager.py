@@ -4,12 +4,15 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from brain_messages.srv import ChangeMap, ChangeNavigationMode, SaveMap, DeleteMap
+from nav2_msgs.srv import ManageLifecycleNodes, LoadMap
 import subprocess
 import signal
 import os
 import time
 import glob
 import json
+from enum import Enum
+from typing import Tuple
 from nav2_simple_commander.robot_navigator import BasicNavigator
 
 # TF2 imports for transform lookup
@@ -17,6 +20,11 @@ import tf2_ros
 from geometry_msgs.msg import Pose
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
+
+class NavigationMode(Enum):
+    NAV = "navigation"
+    MAPPING = "mapping"
+    MAPFREE = "mapfree"
 
 class ModeManager(Node):
     def __init__(self):
@@ -276,6 +284,137 @@ class ModeManager(Node):
         current_map_msg.data = self.current_map
         self.current_map_publisher.publish(current_map_msg)
 
+    def shutdown_lifecycle_managers(self, modes_to_shutdown: list[str]) -> None:
+        """Shutdown lifecycle managers for the specified modes (parallelized)"""
+        clients = []
+        futures = []
+        modes = []
+        
+        # Create all clients and send shutdown requests in parallel
+        for check_mode in modes_to_shutdown:
+            try:
+                shutdown_client = self.create_client(
+                    ManageLifecycleNodes,
+                    f'/{check_mode}_lifecycle_manager/manage_nodes'
+                )
+                if shutdown_client.wait_for_service(timeout_sec=1.0):
+                    shutdown_request = ManageLifecycleNodes.Request()
+                    shutdown_request.command = ManageLifecycleNodes.Request.SHUTDOWN
+                    shutdown_future = shutdown_client.call_async(shutdown_request)
+                    clients.append(shutdown_client)
+                    futures.append(shutdown_future)
+                    modes.append(check_mode)
+                else:
+                    self.destroy_client(shutdown_client)
+            except Exception as e:
+                self.get_logger().debug(f"Could not create client for {check_mode}: {e}")
+        
+        # Wait for all futures to complete
+        if futures:
+            start_time = time.time()
+            while not all(f.done() for f in futures) and (time.time() - start_time) < 2.0:
+                rclpy.spin_once(self, timeout_sec=0.1)
+            
+            # Check results
+            for mode, future in zip(modes, futures):
+                if future.done() and future.result() is not None and future.result().success:
+                    self.get_logger().info(f"Shutdown {mode} lifecycle manager")
+        
+        # Clean up all clients
+        for client in clients:
+            self.destroy_client(client)
+
+    def request_mode_startup(self, mode: NavigationMode) -> Tuple[bool, str]:
+        """
+        Request the navigation lifecycle manager to startup navigation nodes
+        Args:
+            mode: The mode type - must be NavigationMode.NAV, NavigationMode.MAPPING, or NavigationMode.MAPFREE
+        Returns: (success: bool, message: str)
+        """
+        try:
+            self.get_logger().info("Requesting navigation lifecycle manager startup")
+            
+            # Stop other lifecycle managers first
+            modes_to_shutdown = [m.value for m in NavigationMode if m != mode]
+            self.shutdown_lifecycle_managers(modes_to_shutdown)
+            
+            # Now start the requested lifecycle manager
+            lifecycle_client = self.create_client(
+                ManageLifecycleNodes,
+                f'/{mode.value}_lifecycle_manager/manage_nodes'
+            )
+            
+            if not lifecycle_client.wait_for_service(timeout_sec=5.0):
+                msg = "Lifecycle manager service not available"
+                self.get_logger().error(msg)
+                self.destroy_client(lifecycle_client)
+                return False, msg
+            
+            lifecycle_request = ManageLifecycleNodes.Request()
+            lifecycle_request.command = ManageLifecycleNodes.Request.STARTUP
+            
+            lifecycle_future = lifecycle_client.call_async(lifecycle_request)
+            
+            # For navigation mode, keep trying to load map until it succeeds or lifecycle completes
+            map_client = None
+            map_load_success = False
+            
+            if mode == NavigationMode.NAV:
+                map_client = self.create_client(LoadMap, '/map_server/load_map')
+                
+                if map_client.wait_for_service(timeout_sec=2.0):
+                    self.get_logger().info(f"Attempting to load map: {os.path.join(self.maps_dir, self.current_map)}")
+                    
+                    while not map_load_success and not lifecycle_future.done():
+                        # Try to load the map
+                        map_request = LoadMap.Request()
+                        map_request.map_url = os.path.join(self.maps_dir, self.current_map)
+                        map_future = map_client.call_async(map_request)
+                        
+                        # Wait for map response with short timeout, keep spinning to check lifecycle
+                        start_time = time.time()
+                        while not map_future.done() and not lifecycle_future.done() and (time.time() - start_time) < 1.0:
+                            rclpy.spin_once(self, timeout_sec=0.1)
+                        
+                        # Check map result
+                        if map_future.done():
+                            if map_future.result() is not None and map_future.result().result == 0:
+                                map_load_success = True
+                                self.get_logger().info("Map loaded successfully")
+                                break
+                            else:
+                                self.get_logger().warning("Map load failed, retrying...")
+                                time.sleep(0.5)  # Brief pause before retry
+                else:
+                    self.get_logger().warning("Map server service not available")
+            
+            # Wait for lifecycle manager to complete if not already done
+            while not lifecycle_future.done():
+                rclpy.spin_once(self, timeout_sec=0.1)
+            
+            success = False
+            message = "Lifecycle startup failed"
+            
+            if lifecycle_future.result() is not None and lifecycle_future.result().success:
+                success = True
+                map_status = "loaded" if map_load_success else "not loaded" if mode == NavigationMode.NAV else "N/A"
+                message = f"Navigation lifecycle manager started successfully (map: {map_status})"
+                self.get_logger().info(message)
+            else:
+                self.get_logger().error(message)
+            
+            # Clean up clients
+            self.destroy_client(lifecycle_client)
+            if map_client is not None:
+                self.destroy_client(map_client)
+            
+            return success, message
+            
+        except Exception as e:
+            error_msg = f"Error requesting navigation startup: {str(e)}"
+            self.get_logger().error(error_msg)
+            return False, error_msg
+
     def change_map_callback(self, request, response):
         """
         Service callback to change the map for navigation mode
@@ -302,39 +441,19 @@ class ModeManager(Node):
             if self.current_mode == "navigation" and self.current_process and self.current_process.poll() is None:
                 self.get_logger().info(f"Restarting navigation with new map: {requested_map}")
                 
-                # Kill current navigation process
-                self.kill_current_process()
-                time.sleep(2)  # Give some time for cleanup
+                # TODO: how to minimize reset speed. do we even need a reset does just publishing a new map handle everything
+                # Shutdown nav first, then startup with new map
+                self.shutdown_lifecycle_managers(["nav"])
+                success, message = self.request_mode_startup(NavigationMode.NAV)
                 
-                # Start navigation with the new map
-                map_path = os.path.join(self.maps_dir, self.current_map)
-                launch_cmd = [
-                    'ros2', 'launch', 'maurice_nav', 'navigation.launch.py',
-                    f'map:={map_path}'
-                ]
-                
-                self.get_logger().info(f"Launching navigation with map: {self.current_map}")
-                
-                # Start the new process
-                self.current_process = subprocess.Popen(
-                    launch_cmd,
-                    preexec_fn=os.setsid,  # Create new process group for easier cleanup
-                )
-                
-                # Give it a moment to start
-                time.sleep(3)
-                
-                # Check if process is still running
-                if self.current_process.poll() is None:
+                if success:
                     response.success = True
                     response.message = f"Successfully changed map to '{requested_map}' and restarted navigation"
                     self.get_logger().info(response.message)
                 else:
                     response.success = False
-                    response.message = f"Failed to restart navigation with map '{requested_map}'"
+                    response.message = f"Failed to restart navigation with map '{requested_map}': {message}"
                     self.get_logger().error(response.message)
-                    self.current_mode = "none"
-                    self.current_process = None
             else:
                 # If not in navigation mode, just update the map for next time navigation starts
                 response.success = True
@@ -484,6 +603,7 @@ class ModeManager(Node):
             
             self.get_logger().info(f"Saving current map as: {map_name}")
             
+            # TODO: make this better
             # Use nav2_map_server map_saver_cli to save the map
             save_cmd = [
                 'ros2', 'run', 'nav2_map_server', 'map_saver_cli',
@@ -536,56 +656,12 @@ class ModeManager(Node):
     def _cleanup_orphaned_processes(self):
         """Kill any orphaned navigation processes from previous mode_manager runs."""
         try:
-            # Kill orphaned navigation launch processes
-            subprocess.run(['pkill', '-f', 'navigation.launch.py'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'mapfree_local_nav.launch.py'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'mapping.launch.py'], capture_output=True)
-            subprocess.run(['pkill', '-f', 'slam_toolbox'], capture_output=True)
-            
-            # Kill orphaned lifecycle managers (critical to prevent conflicts)
-            # Wait a moment for nav2 nodes to die first
-            import time
-            time.sleep(1)
-            subprocess.run(['pkill', '-9', '-f', 'nav2_lifecycle_manager'], capture_output=True)
-            
-            # Kill orphaned nav2 nodes with parent PID 1 (adopted by init)
-            try:
-                # Get all nav2 processes with PPID=1 (orphaned)
-                result = subprocess.run(
-                    ['ps', '-o', 'pid,ppid,cmd', '-e'],
-                    capture_output=True,
-                    text=True
-                )
-                for line in result.stdout.split('\n'):
-                    if 'nav2_' in line or 'lifecycle_manager' in line:
-                        parts = line.split()
-                        if len(parts) >= 2 and parts[1] == '1':  # PPID == 1 (orphaned)
-                            pid = parts[0]
-                            self.get_logger().info(f'Killing orphaned nav2 process: {pid}')
-                            subprocess.run(['kill', '-9', pid], capture_output=True)
-            except Exception as e:
-                self.get_logger().warn(f'Could not clean orphaned processes: {e}')
-            
-            self.get_logger().info('Cleaned up any orphaned navigation processes')
+            # Shutdown all lifecycle managers gracefully
+            self.get_logger().info('Attempting to shutdown lifecycle managers...')
+            self.shutdown_lifecycle_managers([m.value for m in NavigationMode])
+            self.get_logger().info('Cleaned up lifecycle managers')
         except Exception as e:
             self.get_logger().warn(f'Cleanup warning: {e}')
-
-    def kill_current_process(self):
-        """Safely kill the current launch process"""
-        if self.current_process:
-            try:
-                # Send SIGINT (Ctrl+C) to the process group
-                os.killpg(os.getpgid(self.current_process.pid), signal.SIGINT)
-                self.current_process.wait(timeout=10)  # Wait up to 10 seconds
-                self.get_logger().info(f"Successfully terminated {self.current_mode} mode")
-            except subprocess.TimeoutExpired:
-                # Force kill if it doesn't respond to SIGINT
-                os.killpg(os.getpgid(self.current_process.pid), signal.SIGKILL)
-                self.get_logger().warning(f"Force killed {self.current_mode} mode")
-            except Exception as e:
-                self.get_logger().error(f"Error killing process: {e}")
-            finally:
-                self.current_process = None
 
     def change_mode_callback(self, request, response):
         """
@@ -624,94 +700,53 @@ class ModeManager(Node):
 
             # For mapfree, launch local-only Nav2 (planner, controller, costmaps) without map/AMCL
             if target_mode == "mapfree":
-                # Stop anything running
-                if self.current_process:
-                    self.get_logger().info(f"Stopping current mode: {self.current_mode}")
-                    self.kill_current_process()
-                    time.sleep(2)
-                launch_cmd = [
-                    'ros2', 'launch', 'maurice_nav', 'mapfree_local_nav.launch.py'
-                ]
                 self.get_logger().info("Starting mapfree local navigation stack...")
-                self.current_process = subprocess.Popen(
-                    launch_cmd,
-                    preexec_fn=os.setsid,
-                )
-                self.save_last_mode("mapfree")
-                time.sleep(3)
-                if self.current_process.poll() is None:
+                success, message = self.request_mode_startup(NavigationMode.MAPFREE)
+                
+                if success:
                     response.success = True
                     response.message = "Switched to mapfree mode (local Nav2 running)"
                     self.current_mode = "mapfree"
+                    self.save_last_mode("mapfree")
                 else:
                     response.success = False
-                    response.message = "Failed to start mapfree local navigation"
+                    response.message = f"Failed to start mapfree local navigation: {message}"
                     self.current_mode = "none"
-                    self.current_process = None
+                
                 self.get_logger().info(response.message)
                 return response
 
-            # Kill current process if running
-            if self.current_process:
-                self.get_logger().info(f"Stopping current mode: {self.current_mode}")
-                self.kill_current_process()
-                time.sleep(2)  # Give some time for cleanup
-
-            # Determine which mode to launch
-            if target_mode == "mapping":
-                launch_cmd = [
-                    'ros2', 'launch', 'maurice_nav', 'mapping.launch.py'
-                ]
-            else:  # navigation mode
-                # Use the current map when launching navigation
-                map_path = os.path.join(self.maps_dir, self.current_map)
-                launch_cmd = [
-                    'ros2', 'launch', 'maurice_nav', 'navigation.launch.py',
-                    f'map:={map_path}'
-                ]
-
+            # Map target_mode string to NavigationMode enum
+            mode_enum_map = {
+                "navigation": NavigationMode.NAV,
+                "mapping": NavigationMode.MAPPING,
+            }
+            target_mode_enum = mode_enum_map.get(target_mode)
+            
+            # Use service call to start the lifecycle manager
             self.get_logger().info(f"Starting {target_mode} mode...")
-            if target_mode == "navigation":
-                self.get_logger().info(f"Using map: {self.current_map}")
+            success, message = self.request_mode_startup(target_mode_enum)
             
-            # Start the new process (output goes to terminal)
-            self.current_process = subprocess.Popen(
-                launch_cmd,
-                preexec_fn=os.setsid,  # Create new process group for easier cleanup
-                # stdout and stderr will go to the terminal where mode_manager is running
-            )
-            
-            # Save the mode for persistence
-            self.save_last_mode(target_mode)
-            
-            # Initialize BasicNavigator for navigation mode
-            if target_mode == "navigation":
-                try:
-                    if self.navigator is None:
-                        self.navigator = BasicNavigator()
-                    self.get_logger().info("BasicNavigator initialized for navigation mode")
-                except Exception as e:
-                    self.get_logger().warning(f"Could not initialize BasicNavigator: {e}")
-            
-            # Give it a moment to start
-            time.sleep(3)
-            
-            # Set the current mode after launch attempt
-            self.current_mode = target_mode
-            
-            # Check if process is still running
-            if self.current_process.poll() is None:
+            if success:
                 response.success = True
                 response.message = f"Successfully switched to {target_mode} mode"
                 if target_mode == "navigation":
                     response.message += f" with map '{self.current_map}'"
+                    # Initialize BasicNavigator for navigation mode
+                    try:
+                        if self.navigator is None:
+                            self.navigator = BasicNavigator()
+                        self.get_logger().info("BasicNavigator initialized for navigation mode")
+                    except Exception as e:
+                        self.get_logger().warning(f"Could not initialize BasicNavigator: {e}")
+                self.current_mode = target_mode
+                self.save_last_mode(target_mode)
                 self.get_logger().info(response.message)
             else:
                 response.success = False
-                response.message = f"Failed to start {target_mode} mode - process exited"
-                self.get_logger().error(response.message)
+                response.message = f"Failed to start {target_mode} mode: {message}"
                 self.current_mode = "none"
-                self.current_process = None
+                self.get_logger().error(response.message)
 
         except Exception as e:
             response.success = False
@@ -724,8 +759,11 @@ class ModeManager(Node):
 
     def __del__(self):
         """Cleanup when node is destroyed"""
-        if self.current_process:
-            self.kill_current_process()
+        try:
+            self.shutdown_lifecycle_managers([m.value for m in NavigationMode])
+        except Exception as e:
+            pass  # Silently ignore cleanup errors during destruction
+            # TODO: is this a good idea?
 
 def main(args=None):
     rclpy.init(args=args)
@@ -738,8 +776,13 @@ def main(args=None):
         pass
     finally:
         # Clean up any running processes
-        if mode_manager.current_process:
-            mode_manager.kill_current_process()
+        try:
+            self.shutdown_lifecycle_managers([m.value for m in NavigationMode])
+        except Exception as e:
+            pass  # Silently ignore cleanup errors during destruction
+            # TODO: is this a good idea?
+
+
         mode_manager.destroy_node()
         rclpy.shutdown()
 
