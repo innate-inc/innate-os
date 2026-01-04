@@ -76,6 +76,12 @@ class VelocityCmd(NamedTuple):
     angular_z: float
 
 
+class ArmCmd(NamedTuple):
+    """Agent -> Simulation: arm joint positions in radians."""
+
+    joint_positions: list  # [j0, j1, j2, j3, j4, j5] - 6 floats in radians
+
+
 class PositionCmd(NamedTuple):
     """Agent -> Simulation: a direct position command for navigation."""
 

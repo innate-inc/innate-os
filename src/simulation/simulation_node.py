@@ -15,6 +15,7 @@ from src.agent.types import (
     RobotStateMsg,
     OccupancyGridMsg,
     VelocityCmd,
+    ArmCmd,
     PositionCmd,
     ResetRobotCmd,
     SetEnvironmentCmd,
@@ -969,12 +970,15 @@ class SimulationNode:
                 latest_position_cmd = None
                 latest_reset_cmd = None
                 latest_set_env_cmd = None  # Variable to hold the latest env command
+                latest_arm_cmd = None
 
                 while True:
                     try:
                         cmd = self.shared_queues.agent_to_sim.get_nowait()
                         if isinstance(cmd, VelocityCmd):
                             latest_velocity_cmd = cmd
+                        elif isinstance(cmd, ArmCmd):
+                            latest_arm_cmd = cmd
                         elif isinstance(cmd, PositionCmd):
                             latest_position_cmd = cmd
                         elif isinstance(cmd, ResetRobotCmd):
@@ -1017,7 +1021,28 @@ class SimulationNode:
                     # Reset commanded velocities
                     self.commanded_lin_vel = np.zeros(3)
                     self.commanded_ang_vel = np.zeros(3)
-                elif latest_position_cmd is not None:
+
+                # Apply arm joint positions if we have an arm command
+                if latest_arm_cmd is not None:
+                    joint_positions = latest_arm_cmd.joint_positions
+                    # Map joint indices to URDF joint names: j0->joint1, j1->joint2, etc.
+                    joint_names = [
+                        "joint1",
+                        "joint2",
+                        "joint3",
+                        "joint4",
+                        "joint5",
+                        "joint6",
+                    ]
+                    for i, joint_name in enumerate(joint_names):
+                        if i < len(joint_positions):
+                            try:
+                                joint = self.robot.get_joint(joint_name)
+                                joint.set_dofs_position([joint_positions[i]])
+                            except Exception as e:
+                                pass  # Joint may not exist
+
+                if latest_position_cmd is not None:
                     # Set navigation target for smooth movement
                     self.nav_target_pos = np.array(
                         [
@@ -1109,7 +1134,7 @@ class SimulationNode:
 
             # Check if enough time has passed since last render
             if sim_time - self.last_render_time >= self.render_interval:
-                camera_link = self.robot.get_link("arm_camera_link")
+                camera_link = self.robot.get_link("head_camera_link")
                 camera_pos = camera_link.get_pos()
                 camera_quat = camera_link.get_quat()
                 look_dir = rotate_vector(local_forward, camera_quat)
