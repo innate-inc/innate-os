@@ -519,30 +519,39 @@ async def outbound_loop(ws, shared_queues):
     print("[ROSBridge] outbound_loop stopped.")
 
 
-async def rosbridge_loop(shared_queues, rosbridge_uri: str):
+async def rosbridge_loop(
+    shared_queues, rosbridge_uri: str, retry_interval: float = 2.0
+):
     """
     High-level function that connects to rosbridge and starts
     two concurrent tasks: inbound_loop & outbound_loop & chat_bridge_loop.
+    Automatically retries connection if it drops.
     """
-    print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
+    while not shared_queues.exit_event.is_set():
+        print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
 
-    try:
-        async with websockets.connect(rosbridge_uri) as ws:
-            print(f"[ROSBridge] Connected to {rosbridge_uri}")
+        try:
+            async with websockets.connect(rosbridge_uri) as ws:
+                print(f"[ROSBridge] Connected to {rosbridge_uri}")
 
-            # Run inbound & outbound in parallel
-            tasks = []
-            tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
-            tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
-            # Wait for them to complete
-            done, pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
-    except Exception as e:
-        print(f"[ROSBridge] Connection error: {e}")
-        print(f"Stack trace: {traceback.format_exc()}")
+                # Run inbound & outbound in parallel
+                tasks = []
+                tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
+                tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
+                # Wait for them to complete
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+        except Exception as e:
+            print(f"[ROSBridge] Connection error: {e}")
+
+        if shared_queues.exit_event.is_set():
+            break
+
+        print(f"[ROSBridge] Connection lost. Retrying in {retry_interval}s...")
+        await asyncio.sleep(retry_interval)
 
     print("[ROSBridge] Stopped rosbridge_loop.")
 
