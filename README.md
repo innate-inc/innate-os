@@ -49,13 +49,15 @@ docker compose -f docker-compose.dev.yml exec innate zsh -l
 Inside the container, launch all simulation nodes in tmux:
 
 ```bash
-./scripts/launch-sim-in-tmux.zsh
+./scripts/launch_sim_in_tmux.zsh
 ```
 
 This starts everything in organized tmux windows:
 - **Window 0 (zenoh)**: Zenoh router
 - **Window 1 (rosbridge-app)**: Rosbridge + App control
-- **Window 2 (nav-brain)**: Navigation + Brain client
+- **Window 2 (webrtc)**: Webrtc transmitter for the phone app
+- **Window 3 (nav-brain)**: Navigation + Brain client
+- **Window 4 (behavior)**: Controlling the arm
 
 Switch between windows with `Ctrl+b` then `n`/`p` or `0`/`1`/`2`. Detach with `Ctrl+b d`.
 
