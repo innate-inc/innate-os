@@ -77,9 +77,24 @@ class VelocityCmd(NamedTuple):
 
 
 class ArmCmd(NamedTuple):
-    """Agent -> Simulation: arm joint positions in radians."""
+    """Agent -> Simulation: arm joint positions in radians (immediate)."""
 
     joint_positions: list  # [j0, j1, j2, j3, j4, j5] - 6 floats in radians
+
+
+class ArmGotoCmd(NamedTuple):
+    """Agent -> Simulation: arm goto with interpolation over time."""
+
+    joint_positions: list  # [j0, j1, j2, j3, j4, j5] - 6 floats in radians
+    duration: float  # Duration in seconds
+    service_id: str = None  # For service response callback
+
+
+class ArmStateMsg(NamedTuple):
+    """Simulation -> Agent: current arm joint state for publishing."""
+
+    joint_positions: list  # [j0, j1, j2, j3, j4, j5] - 6 floats in radians
+    joint_names: list = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 
 
 class PositionCmd(NamedTuple):

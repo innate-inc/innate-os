@@ -16,6 +16,8 @@ from src.agent.types import (
     OccupancyGridMsg,
     VelocityCmd,
     ArmCmd,
+    ArmGotoCmd,
+    ArmStateMsg,
     PositionCmd,
     ResetRobotCmd,
     SetEnvironmentCmd,
@@ -69,6 +71,23 @@ class SimulationNode:
         # Current navigation target (None if no active target)
         self.nav_target_pos = None
         self.nav_target_yaw = None
+
+        # Arm control state
+        self.arm_joint_names = [
+            "joint1",
+            "joint2",
+            "joint3",
+            "joint4",
+            "joint5",
+            "joint6",
+        ]
+        self.arm_current_positions = [0.0] * 6  # Current joint positions
+        self.arm_target_positions = None  # Target for interpolation
+        self.arm_start_positions = None  # Start positions for interpolation
+        self.arm_interpolation_start_time = None
+        self.arm_interpolation_duration = None
+        self.last_arm_state_time = 0
+        self.arm_state_interval = 0.02  # Publish at ~50Hz
 
         self.render_camera_vfov = 40
         self.render_camera_hfov = degrees(
@@ -533,6 +552,51 @@ class SimulationNode:
             )
         )
 
+    def _apply_arm_positions(self, joint_positions):
+        """Apply joint positions to arm and update current state.
+
+        Args:
+            joint_positions: List of 6 floats [j0, j1, j2, j3, j4, j5] in radians
+        """
+        import torch
+
+        # Get DOF indices for all arm joints
+        dof_indices = []
+        positions = []
+        for i, joint_name in enumerate(self.arm_joint_names):
+            if i < len(joint_positions):
+                try:
+                    joint = self.robot.get_joint(joint_name)
+                    dof_idx = joint.dof_idx_local
+                    if dof_idx is not None:
+                        dof_indices.append(dof_idx)
+                        positions.append(joint_positions[i])
+                        self.arm_current_positions[i] = joint_positions[i]
+                except Exception as e:
+                    print(f"[SimulationNode] Error getting joint {joint_name}: {e}")
+
+        # Also add the mirrored gripper finger (joint6M mirrors joint6)
+        if len(joint_positions) >= 6:
+            try:
+                joint6m = self.robot.get_joint("joint6M")
+                dof_idx = joint6m.dof_idx_local
+                if dof_idx is not None:
+                    dof_indices.append(dof_idx)
+                    positions.append(-joint_positions[5])  # Mimic with -1 multiplier
+            except Exception as e:
+                print(f"[SimulationNode] Error getting joint6M: {e}")
+
+        # Apply all positions at once using robot entity
+        if dof_indices and positions:
+            try:
+                self.robot.set_dofs_position(
+                    position=torch.tensor(positions, dtype=torch.float32),
+                    dofs_idx_local=dof_indices,
+                    zero_velocity=True,
+                )
+            except Exception as e:
+                print(f"[SimulationNode] Error applying arm positions: {e}")
+
     def _init_camera(self):
         """Initialize robot camera, arm wrist camera, and chase camera"""
         # Main robot camera (will be positioned at arm_camera_link)
@@ -971,6 +1035,7 @@ class SimulationNode:
                 latest_reset_cmd = None
                 latest_set_env_cmd = None  # Variable to hold the latest env command
                 latest_arm_cmd = None
+                latest_arm_goto_cmd = None
 
                 while True:
                     try:
@@ -979,6 +1044,8 @@ class SimulationNode:
                             latest_velocity_cmd = cmd
                         elif isinstance(cmd, ArmCmd):
                             latest_arm_cmd = cmd
+                        elif isinstance(cmd, ArmGotoCmd):
+                            latest_arm_goto_cmd = cmd
                         elif isinstance(cmd, PositionCmd):
                             latest_position_cmd = cmd
                         elif isinstance(cmd, ResetRobotCmd):
@@ -1022,25 +1089,38 @@ class SimulationNode:
                     self.commanded_lin_vel = np.zeros(3)
                     self.commanded_ang_vel = np.zeros(3)
 
-                # Apply arm joint positions if we have an arm command
+                # Apply arm joint positions if we have an arm command (immediate)
                 if latest_arm_cmd is not None:
                     joint_positions = latest_arm_cmd.joint_positions
-                    # Map joint indices to URDF joint names: j0->joint1, j1->joint2, etc.
-                    joint_names = [
-                        "joint1",
-                        "joint2",
-                        "joint3",
-                        "joint4",
-                        "joint5",
-                        "joint6",
+                    print(f"[SimulationNode] Applying arm positions: {joint_positions}")
+                    self._apply_arm_positions(joint_positions)
+                    # Cancel any ongoing interpolation
+                    self.arm_target_positions = None
+
+                # Start arm interpolation if we have a goto command
+                if latest_arm_goto_cmd is not None:
+                    self.arm_start_positions = self.arm_current_positions.copy()
+                    self.arm_target_positions = latest_arm_goto_cmd.joint_positions
+                    self.arm_interpolation_start_time = sim_time
+                    self.arm_interpolation_duration = max(
+                        0.1, latest_arm_goto_cmd.duration
+                    )
+
+                # Update arm interpolation if active
+                if self.arm_target_positions is not None:
+                    elapsed = sim_time - self.arm_interpolation_start_time
+                    t = min(1.0, elapsed / self.arm_interpolation_duration)
+                    # Smooth interpolation using ease-in-out
+                    t_smooth = t * t * (3 - 2 * t)
+                    interpolated = [
+                        self.arm_start_positions[i]
+                        + t_smooth
+                        * (self.arm_target_positions[i] - self.arm_start_positions[i])
+                        for i in range(6)
                     ]
-                    for i, joint_name in enumerate(joint_names):
-                        if i < len(joint_positions):
-                            try:
-                                joint = self.robot.get_joint(joint_name)
-                                joint.set_dofs_position([joint_positions[i]])
-                            except Exception as e:
-                                pass  # Joint may not exist
+                    self._apply_arm_positions(interpolated)
+                    if t >= 1.0:
+                        self.arm_target_positions = None  # Done interpolating
 
                 if latest_position_cmd is not None:
                     # Set navigation target for smooth movement
@@ -1197,6 +1277,18 @@ class SimulationNode:
                 rgb_to_send = None
                 depth_to_send = None
                 arm_rgb_to_send = None
+
+            # --- (E2) Publish arm joint state at ~50Hz
+            if sim_time - self.last_arm_state_time >= self.arm_state_interval:
+                arm_state_msg = ArmStateMsg(
+                    joint_positions=self.arm_current_positions.copy(),
+                    joint_names=self.arm_joint_names,
+                )
+                try:
+                    self.shared_queues.sim_to_agent.put_nowait(arm_state_msg)
+                except queue.Full:
+                    pass
+                self.last_arm_state_time = sim_time
 
             # --- (F) Build and publish RobotStateMsg with latest state
             state_msg = RobotStateMsg(

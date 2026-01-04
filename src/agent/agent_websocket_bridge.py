@@ -18,7 +18,8 @@ from src.agent.types import (
     RobotStateMsg,
     VelocityCmd,
     ArmCmd,
-    PositionCmd,
+    ArmGotoCmd,
+    ArmStateMsg,
     DirectiveCmd,
     ResetRobotCmd,
     BrainActiveCmd,
@@ -58,6 +59,22 @@ def rosbridge_publish(topic: str, msg_dict: dict) -> dict:
 
 def rosbridge_call_service(service: str, srv_type: str) -> dict:
     return {"op": "call_service", "service": service, "type": srv_type}
+
+
+def rosbridge_advertise_service(service: str, srv_type: str) -> dict:
+    return {"op": "advertise_service", "service": service, "type": srv_type}
+
+
+def rosbridge_service_response(service: str, result: dict, call_id: str = None) -> dict:
+    resp = {
+        "op": "service_response",
+        "service": service,
+        "values": result,
+        "result": True,
+    }
+    if call_id:
+        resp["id"] = call_id
+    return resp
 
 
 async def inbound_loop(ws, shared_queues):
@@ -104,6 +121,9 @@ async def inbound_loop(ws, shared_queues):
             elif topic == "/mars/arm/commands":
                 arm_cmd = parse_arm_command(msg_data)
                 if arm_cmd:
+                    print(
+                        f"[ROSBridge] Received arm command: {arm_cmd.joint_positions}"
+                    )
                     try:
                         shared_queues.agent_to_sim.put_nowait(arm_cmd)
                     except queue.Full:
@@ -207,6 +227,36 @@ async def inbound_loop(ws, shared_queues):
                     if hasattr(shared_queues, "nav_controller"):
                         shared_queues.nav_controller.cancel_navigation()
 
+        # Process incoming service calls (services we provide)
+        elif op_type == "call_service":
+            service_name = inbound_data.get("service", "")
+            call_id = inbound_data.get("id", None)
+            args = inbound_data.get("args", {})
+
+            # Handle /mars/arm/goto_js service
+            if service_name == "/mars/arm/goto_js":
+                data = args.get("data", {})
+                joint_data = data.get("data", [])
+                duration = args.get("time", 1)
+
+                if len(joint_data) >= 6:
+                    joint_positions = [float(d) for d in joint_data[:6]]
+                    arm_goto_cmd = ArmGotoCmd(
+                        joint_positions=joint_positions,
+                        duration=float(duration),
+                        service_id=call_id,
+                    )
+                    try:
+                        shared_queues.agent_to_sim.put_nowait(arm_goto_cmd)
+                    except queue.Full:
+                        pass
+
+                    # Send immediate success response (motion started)
+                    response = rosbridge_service_response(
+                        service_name, {"success": True}, call_id
+                    )
+                    await ws.send(json.dumps(response))
+
         # Process service responses (responses to service calls that we initiated)
         elif op_type == "service_response":
             service_name = inbound_data.get("service", "")
@@ -289,6 +339,12 @@ async def outbound_loop(ws, shared_queues):
     )
     adv_nav_mode = rosbridge_advertise("/nav/current_mode", "std_msgs/msg/String")
 
+    # Arm topics and services
+    adv_arm_state = rosbridge_advertise("/mars/arm/state", "sensor_msgs/msg/JointState")
+    adv_arm_goto_service = rosbridge_advertise_service(
+        "/mars/arm/goto_js", "maurice_msgs/srv/GotoJS"
+    )
+
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
     await ws.send(json.dumps(adv_cinfo))
@@ -301,8 +357,10 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_nav_status))
     await ws.send(json.dumps(adv_nav_feedback))
     await ws.send(json.dumps(adv_nav_mode))
+    await ws.send(json.dumps(adv_arm_state))
+    await ws.send(json.dumps(adv_arm_goto_service))
     print(
-        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, and navigation topics"
+        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, navigation topics, and arm interfaces"
     )
 
     # Publish initial navigation mode (simulator always uses mapfree)
@@ -364,6 +422,8 @@ async def outbound_loop(ws, shared_queues):
                 await publish_robot_state(ws, msg, shared_queues)
             elif isinstance(msg, OccupancyGridMsg):
                 await publish_occupancy_grid(ws, msg, shared_queues)
+            elif isinstance(msg, ArmStateMsg):
+                await publish_arm_state(ws, msg)
             elif isinstance(msg, DirectiveCmd):
                 directive_msg = {"data": msg.directive}
                 outbound = rosbridge_publish("/brain/set_directive", directive_msg)
@@ -669,6 +729,27 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):
     await ws.send(json.dumps(outbound, default=np_encoder))
 
 
+async def publish_arm_state(ws, arm_state: ArmStateMsg):
+    """Publish arm joint state to /mars/arm/state (sensor_msgs/JointState)."""
+    now = time.time()
+    sec = int(now)
+    nsec = int((now - sec) * 1e9)
+
+    joint_state_msg = {
+        "header": {
+            "stamp": {"sec": sec, "nanosec": nsec},
+            "frame_id": "base_link",
+        },
+        "name": arm_state.joint_names,
+        "position": arm_state.joint_positions,
+        "velocity": [0.0] * len(arm_state.joint_positions),
+        "effort": [0.0] * len(arm_state.joint_positions),
+    }
+
+    outbound = rosbridge_publish("/mars/arm/state", joint_state_msg)
+    await ws.send(json.dumps(outbound))
+
+
 #
 # Helper: parse geometry_msgs/Twist from inbound rosbridge JSON
 #
@@ -691,8 +772,13 @@ def parse_arm_command(msg: dict) -> ArmCmd | None:
         if len(data) >= 6:
             joint_positions = [float(d) for d in data[:6]]
             return ArmCmd(joint_positions=joint_positions)
+        else:
+            print(
+                f"[ROSBridge] Arm command has {len(data)} values, need 6. Data: {data}"
+            )
         return None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        print(f"[ROSBridge] Failed to parse arm command: {e}, msg={msg}")
         return None
 
 
