@@ -26,6 +26,10 @@ class RobotStateMsg(NamedTuple):
     fy: float
     cx: float
     cy: float
+
+    # --- optional camera images ---
+    arm_rgb_frame: np.ndarray | None = None
+
     frame_id: str = "camera_color_frame"
     distortion_model: str = "plumb_bob"
     D: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
