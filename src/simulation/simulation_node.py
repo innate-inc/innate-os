@@ -533,9 +533,17 @@ class SimulationNode:
         )
 
     def _init_camera(self):
-        """Initialize robot camera and chase camera"""
-        # Original robot camera
+        """Initialize robot camera, arm wrist camera, and chase camera"""
+        # Main robot camera (will be positioned at arm_camera_link)
         self.robot_camera = self.scene.add_camera(
+            res=self.robot_camera_res,
+            pos=(0, 0, 0),
+            lookat=(1, 0, 0),
+            fov=self.robot_camera_vfov,
+        )
+
+        # Arm wrist camera (mounted on link5, looking forward along the arm)
+        self.arm_wrist_camera = self.scene.add_camera(
             res=self.robot_camera_res,
             pos=(0, 0, 0),
             lookat=(1, 0, 0),
@@ -1108,6 +1116,17 @@ class SimulationNode:
                 lookat = camera_pos.cpu().numpy() + look_dir
                 self.robot_camera.set_pose(pos=camera_pos.cpu().numpy(), lookat=lookat)
 
+                # Update arm wrist camera (mounted on link5, looking forward along the arm)
+                link5 = self.robot.get_link("link5")
+                link5_pos = link5.get_pos()
+                link5_quat = link5.get_quat()
+                arm_forward = np.array([1.0, 0.0, 0.0])  # Arm points along X axis
+                arm_look_dir = rotate_vector(arm_forward, link5_quat)
+                arm_lookat = link5_pos.cpu().numpy() + arm_look_dir
+                self.arm_wrist_camera.set_pose(
+                    pos=link5_pos.cpu().numpy(), lookat=arm_lookat
+                )
+
                 # Update chase camera to follow robot
                 robot_pos = self.robot.get_pos().cpu().numpy()
                 robot_quat = self.robot.get_quat().cpu().numpy()
@@ -1116,8 +1135,9 @@ class SimulationNode:
                 chase_pos = robot_pos + rotated_offset
                 self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
 
-                # Render both cameras
+                # Render all cameras
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
+                arm_rgb, _, _, _ = self.arm_wrist_camera.render()
                 chase_rgb, _, _, _ = self.chase_camera.render()
 
                 # Convert RGB to BGR format if needed (or BGR to RGB)
@@ -1126,13 +1146,22 @@ class SimulationNode:
                 else:
                     rgb_to_send = None
 
+                if arm_rgb is not None:
+                    arm_rgb_to_send = cv2.cvtColor(arm_rgb, cv2.COLOR_RGB2BGR)
+                else:
+                    arm_rgb_to_send = None
+
                 if chase_rgb is not None:
                     chase_rgb = cv2.cvtColor(chase_rgb, cv2.COLOR_RGB2BGR)
 
                 depth_to_send = depth
 
                 try:
-                    camera_views = {"first_person": rgb_to_send, "chase": chase_rgb}
+                    camera_views = {
+                        "first_person": rgb_to_send,
+                        "arm_wrist": arm_rgb_to_send,
+                        "chase": chase_rgb,
+                    }
                     self.shared_queues.sim_to_web.put_nowait(camera_views)
                 except queue.Full:
                     pass
@@ -1142,12 +1171,16 @@ class SimulationNode:
             else:
                 rgb_to_send = None
                 depth_to_send = None
+                arm_rgb_to_send = None
 
             # --- (F) Build and publish RobotStateMsg with latest state
             state_msg = RobotStateMsg(
                 # camera data
                 rgb_frame=rgb_to_send if "rgb_to_send" in locals() else None,
                 depth_frame=depth_to_send if "depth_to_send" in locals() else None,
+                arm_rgb_frame=(
+                    arm_rgb_to_send if "arm_rgb_to_send" in locals() else None
+                ),
                 # camera intrinsics
                 width=self.width,
                 height=self.height,

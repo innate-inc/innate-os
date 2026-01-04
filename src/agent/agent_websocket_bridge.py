@@ -253,6 +253,9 @@ async def outbound_loop(ws, shared_queues):
     adv_color = rosbridge_advertise(
         "/mars/main_camera/image/compressed", "sensor_msgs/msg/CompressedImage"
     )
+    adv_arm_camera = rosbridge_advertise(
+        "/mars/arm/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
+    )
     adv_depth = rosbridge_advertise("/camera/depth/image_raw", "sensor_msgs/msg/Image")
     adv_cinfo = rosbridge_advertise(
         "/camera/color/camera_info", "sensor_msgs/msg/CameraInfo"
@@ -502,6 +505,29 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
             }
             outbound = rosbridge_publish(
                 "/mars/main_camera/image/compressed", compressed_msg
+            )
+            await ws.send(json.dumps(outbound))
+
+    # -- 1b) COMPRESS ARM WRIST CAMERA IMAGE --
+    if rsm.arm_rgb_frame is not None:
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]  # 70% quality
+        ret, encoded_img = cv2.imencode(".jpg", rsm.arm_rgb_frame, encode_params)
+
+        if ret:
+            jpg_bytes = encoded_img.tobytes()
+            base64_jpg = base64.b64encode(jpg_bytes).decode("utf-8")
+
+            # Build a sensor_msgs/CompressedImage message
+            compressed_msg = {
+                "header": {
+                    "stamp": {"sec": sec, "nanosec": nsec},
+                    "frame_id": "arm_wrist_camera_frame",
+                },
+                "format": "jpeg",
+                "data": base64_jpg,
+            }
+            outbound = rosbridge_publish(
+                "/mars/arm/image_raw/compressed", compressed_msg
             )
             await ws.send(json.dumps(outbound))
 
