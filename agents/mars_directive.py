@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.agent_types import Agent
 
 
-class MarsDirective(Directive):
+class MarsAgent(Agent):
     """
     MARS directive for the robot.
     An agentic robot that can be programmed by anyone to perform physical and digital actions.
@@ -21,7 +21,7 @@ class MarsDirective(Directive):
     def display_icon(self) -> str:
         return "assets/mars.png"
 
-    def get_primitives(self) -> List[str]:
+    def get_skills(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
             "navigate_to_position",

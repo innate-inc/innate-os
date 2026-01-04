@@ -262,17 +262,17 @@ else
     echo "⚠️  Warning: diagnostics.py not found at \$INNATE_OS_PATH/scripts/diagnostics.py"
 fi
 
-# Copy arm_wave data to primitives/wave folder
+# Copy arm_wave data to skills/wave folder
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Copying arm_wave data to primitives/wave..."
+echo "  Copying arm_wave data to skills/wave..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-if [ -d "\$INNATE_OS_PATH/primitives/wave" ]; then
-    echo "✓ primitives/wave directory exists"
+if [ -d "\$INNATE_OS_PATH/skills/wave" ]; then
+    echo "✓ skills/wave directory exists"
 else
-    echo "Creating primitives/wave directory..."
-    mkdir -p "\$INNATE_OS_PATH/primitives/wave"
-    echo "✓ Created primitives/wave directory"
+    echo "Creating skills/wave directory..."
+    mkdir -p "\$INNATE_OS_PATH/skills/wave"
+    echo "✓ Created skills/wave directory"
 fi
 # Explicitly close stdin to ensure heredoc closes
 exec <&-
@@ -285,19 +285,19 @@ sleep 1
 # arm_wave is expected to be in the parent directory of innate-os (same level as innate-os)
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Copying arm_wave data to primitives/wave..."
+echo "  Copying arm_wave data to skills/wave..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ARM_WAVE_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")/arm_wave"
 if [ -d "$ARM_WAVE_DIR" ]; then
     echo "Found arm_wave directory at: $ARM_WAVE_DIR"
     # Ensure target directory exists (redundant but safe)
-    ssh "$ROBOT_HOST" "mkdir -p $INNATE_OS_PATH/primitives/wave"
+    ssh "$ROBOT_HOST" "mkdir -p $INNATE_OS_PATH/skills/wave"
     # Always copy files, even if directory already exists (overwrites existing files)
     echo "Copying arm_wave files to robot (will overwrite existing files)..."
-    scp -r "$ARM_WAVE_DIR"/* "$ROBOT_HOST:$INNATE_OS_PATH/primitives/wave/" || {
+    scp -r "$ARM_WAVE_DIR"/* "$ROBOT_HOST:$INNATE_OS_PATH/skills/wave/" || {
         echo "⚠️  Warning: Failed to copy arm_wave files, but continuing..."
     }
-    echo "✓ arm_wave files copied to primitives/wave"
+    echo "✓ arm_wave files copied to skills/wave"
 else
     echo "⚠️  Warning: arm_wave directory not found at $ARM_WAVE_DIR, skipping..."
     echo "  Expected location: $(dirname "$(dirname "$SCRIPT_DIR")")/arm_wave"

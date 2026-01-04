@@ -85,7 +85,7 @@ class BehaviorServer(Node):
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         
         # Primitives directory for loading checkpoints/data
-        self.primitives_directory = os.path.join(maurice_root, 'primitives')
+        self.primitives_directory = os.path.join(maurice_root, 'skills')
         
         # Get data directory from recorder config
         default_data_dir = os.path.join(maurice_root, 'data')

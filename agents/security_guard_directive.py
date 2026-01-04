@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.agent_types import Agent
 
 
-class SecurityGuardDirective(Directive):
+class SecurityGuardAgent(Agent):
     """
     Security guard directive for the robot.
     Provides a security guard personality that looks for intruders and sends an email if they find one.
@@ -20,7 +20,7 @@ class SecurityGuardDirective(Directive):
     def display_icon(self) -> str:
         return "assets/security_guard.png"
 
-    def get_primitives(self) -> List[str]:
+    def get_skills(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
             "navigate_to_position",

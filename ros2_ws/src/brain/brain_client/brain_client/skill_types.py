@@ -8,9 +8,9 @@ from brain_messages.action import ExecuteBehavior
 from brain_client.logging_config import UniversalLogger
 
 
-class PrimitiveResult(Enum):
+class SkillResult(Enum):
     """
-    Enum representing the possible results of a primitive execution.
+    Enum representing the possible results of a skill execution.
     """
 
     SUCCESS = "success"  # The primitive completed successfully
@@ -22,17 +22,20 @@ class RobotStateType(Enum):
     """
     Enum representing the types of robot state a primitive might require.
     """
+
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
     LAST_ODOM = "last_odom"
     LAST_MAP = "last_map"
     LAST_HEAD_POSITION = "last_head_position"
 
 
-class Primitive(ABC):
+class Skill(ABC):
     def __init__(self, logger):
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.node: Node | None = None
-        self.manipulation = None  # Will be injected by primitive_execution_action_server
+        self.manipulation = (
+            None  # Will be injected by primitive_execution_action_server
+        )
         self.mobility = None  # Will be injected by primitive_execution_action_server
         self.head = None  # Will be injected by primitive_execution_action_server
         self._feedback_callback = None
@@ -92,7 +95,7 @@ class Primitive(ABC):
         Subclasses may override this method if guidelines are available.
         """
         return None
-    
+
     def guidelines_when_running(self):
         """
         Optionally provide guidelines for this primitive when it is running.
@@ -116,10 +119,10 @@ class Primitive(ABC):
                 )
 
 
-class PhysicalPrimitive(Primitive):
+class PhysicalSkill(Skill):
     """
     Base class for primitives that execute physical behaviors via the ExecuteBehavior action server.
-    
+
     Subclasses only need to define:
     - behavior_name: The name of the behavior to execute on the action server
     - display_name: Human-readable name for logging and messages
@@ -127,8 +130,14 @@ class PhysicalPrimitive(Primitive):
     - guidelines(): Method returning usage guidelines
     - guidelines_when_running(): Method returning runtime guidelines (optional)
     """
-    
-    def __init__(self, logger, behavior_name: str, display_name: str, success_feedback_message: str):
+
+    def __init__(
+        self,
+        logger,
+        behavior_name: str,
+        display_name: str,
+        success_feedback_message: str,
+    ):
         super().__init__(logger)
         self._action_client = None
         self._goal_handle = None
@@ -155,15 +164,17 @@ class PhysicalPrimitive(Primitive):
             self.logger.error(
                 f"{self.display_name} primitive is not functional due to missing ROS node."
             )
-            return "Primitive not initialized correctly (no ROS node)", PrimitiveResult.FAILURE
+            return "Skill not initialized correctly (no ROS node)", SkillResult.FAILURE
 
         if not self._action_client:
-            self._action_client = ActionClient(self.node, ExecuteBehavior, "/behavior/execute")
+            self._action_client = ActionClient(
+                self.node, ExecuteBehavior, "/behavior/execute"
+            )
             if not self._action_client:
                 self.logger.error(
                     f"{self.display_name} primitive could not create ExecuteBehavior action client."
                 )
-                return "Primitive could not create action client", PrimitiveResult.FAILURE
+                return "Skill could not create action client", SkillResult.FAILURE
 
         self.logger.info(
             f" \033[96m[BrainClient] Calling ExecuteBehavior for {self.display_name.lower()} (blocking)\033[0m"
@@ -171,7 +182,7 @@ class PhysicalPrimitive(Primitive):
 
         if not self._action_client.wait_for_server(timeout_sec=5.0):
             self.logger.error("ExecuteBehavior action server not available.")
-            return "ExecuteBehavior action server not available", PrimitiveResult.FAILURE
+            return "ExecuteBehavior action server not available", SkillResult.FAILURE
 
         goal_msg = ExecuteBehavior.Goal()
         goal_msg.behavior_name = self.behavior_name
@@ -182,29 +193,25 @@ class PhysicalPrimitive(Primitive):
         )
 
         try:
-            rclpy.spin_until_future_complete(
-                self.node, goal_future, timeout_sec=10.0
-            )
+            rclpy.spin_until_future_complete(self.node, goal_future, timeout_sec=10.0)
         except Exception as e:
             self.logger.error(f"Exception while spinning for goal future: {e}")
-            return f"Failed to send goal: {e}", PrimitiveResult.FAILURE
+            return f"Failed to send goal: {e}", SkillResult.FAILURE
 
         if not goal_future.done():
             self.logger.error("Goal acceptance timed out.")
-            return "Goal acceptance timed out", PrimitiveResult.FAILURE
+            return "Goal acceptance timed out", SkillResult.FAILURE
 
         self._goal_handle = goal_future.result()
         if not self._goal_handle.accepted:
             self.logger.info("Goal rejected by action server")
-            return "Goal rejected by action server", PrimitiveResult.FAILURE
+            return "Goal rejected by action server", SkillResult.FAILURE
 
         self.logger.info("Goal accepted by action server. Waiting for result...")
         result_future = self._goal_handle.get_result_async()
 
         try:
-            rclpy.spin_until_future_complete(
-                self.node, result_future, timeout_sec=60.0
-            )
+            rclpy.spin_until_future_complete(self.node, result_future, timeout_sec=60.0)
         except Exception as e:
             self.logger.error(f"Exception while spinning for result future: {e}")
             if self._goal_handle:
@@ -212,20 +219,20 @@ class PhysicalPrimitive(Primitive):
                     "Attempting to cancel goal due to exception during result wait."
                 )
                 self._goal_handle.cancel_goal_async()
-            return f"Failed to get result: {e}", PrimitiveResult.FAILURE
+            return f"Failed to get result: {e}", SkillResult.FAILURE
 
         if not result_future.done():
             self.logger.error("Getting action result timed out.")
             if self._goal_handle:
                 self.logger.info("Timing out, attempting to cancel goal.")
                 self._goal_handle.cancel_goal_async()
-            return f"{self.display_name} action timed out", PrimitiveResult.FAILURE
+            return f"{self.display_name} action timed out", SkillResult.FAILURE
 
         result_response = result_future.result()
         status = result_response.status
 
         action_result_message = ""
-        primitive_status = PrimitiveResult.FAILURE
+        skill_status = SkillResult.FAILURE
 
         self._send_feedback(self.success_feedback_message)
 
@@ -234,18 +241,18 @@ class PhysicalPrimitive(Primitive):
             self.logger.info(f"Action succeeded! Result: {final_result.success}")
             if final_result.success:
                 action_result_message = f"{self.display_name} completed successfully"
-                primitive_status = PrimitiveResult.SUCCESS
+                skill_status = SkillResult.SUCCESS
             else:
                 action_result_message = f"{self.display_name} action reported failure"
-                primitive_status = PrimitiveResult.FAILURE
+                skill_status = SkillResult.FAILURE
         elif status == GoalStatus.STATUS_ABORTED:
             self.logger.info("Goal aborted")
-            primitive_status = PrimitiveResult.CANCELLED
+            skill_status = SkillResult.CANCELLED
             action_result_message = f"{self.display_name} aborted"
         elif status == GoalStatus.STATUS_CANCELED:
             self.logger.info("Goal canceled")
             action_result_message = f"{self.display_name} canceled"
-            primitive_status = PrimitiveResult.CANCELLED
+            skill_status = SkillResult.CANCELLED
         else:
             self.logger.info(f"Goal failed with unknown status: {status}")
             action_result_message = (
@@ -253,7 +260,7 @@ class PhysicalPrimitive(Primitive):
             )
 
         self._goal_handle = None
-        return action_result_message, primitive_status
+        return action_result_message, skill_status
 
     def cancel(self):
         """
@@ -261,7 +268,9 @@ class PhysicalPrimitive(Primitive):
         This is a best-effort cancellation.
         """
         if self._goal_handle:
-            self.logger.info(f"\033[91m[BrainClient] Canceling {self.display_name.lower()} operation \033[0m")
+            self.logger.info(
+                f"\033[91m[BrainClient] Canceling {self.display_name.lower()} operation \033[0m"
+            )
             self._goal_handle.cancel_goal_async()
             return f"\033[92m[BrainClient] Cancellation request sent for {self.display_name.lower()}. \033[0m"
         else:
