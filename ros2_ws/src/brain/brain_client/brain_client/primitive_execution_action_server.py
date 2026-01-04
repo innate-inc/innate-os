@@ -255,7 +255,7 @@ class PrimitiveExecutionActionServer(Node):
                         primitive_name = metadata.get('name', item)
                         
                         # Validate primitive before loading
-                        is_valid, is_in_training, episode_count = self.primitive_loader.validate_physical_primitive(item_path, metadata)
+                        is_valid, is_in_training, episode_count = self.primitive_loader.validate_physical_skill(item_path, metadata)
                         
                         if is_valid:
                             primitive_data = {
