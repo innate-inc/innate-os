@@ -31,7 +31,7 @@ def generate_launch_description():
     planner_node = Node(
         package='nav2_planner',
         executable='planner_server',
-        name='planner_server',
+        name='mapfree_planner_server',
         output='screen',
         parameters=[planner_params_file, costmap_params_file]
     )
@@ -39,7 +39,7 @@ def generate_launch_description():
     controller_node = Node(
         package='nav2_controller',
         executable='controller_server',
-        name='controller_server',
+        name='mapfree_controller_server',
         output='screen',
         parameters=[controller_params_file, costmap_params_file],
         remappings=[('cmd_vel', 'cmd_vel_raw')]
@@ -48,7 +48,7 @@ def generate_launch_description():
     velocity_smoother_node = Node(
         package='nav2_velocity_smoother',
         executable='velocity_smoother',
-        name='velocity_smoother',
+        name='mapfree_velocity_smoother',
         output='screen',
         parameters=[smoother_params_file],
         remappings=[('cmd_vel', '/cmd_vel_raw'), ('cmd_vel_smoothed', '/cmd_vel')]
@@ -61,7 +61,7 @@ def generate_launch_description():
     bt_navigator_node = Node(
         package='nav2_bt_navigator',
         executable='bt_navigator',
-        name='bt_navigator',
+        name='mapfree_bt_navigator',
         output='screen',
         parameters=[
             bt_navigator_params_file,
@@ -73,7 +73,7 @@ def generate_launch_description():
     behavior_server_node = Node(
         package='nav2_behaviors',
         executable='behavior_server',
-        name='behavior_server',
+        name='mapfree_behavior_server',
         output='screen',
         parameters=[behavior_params_file],
         remappings=[('cmd_vel', 'cmd_vel_raw')]
@@ -82,16 +82,16 @@ def generate_launch_description():
     lifecycle_manager_node = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
-        name='lifecycle_manager',
+        name='mapfree_lifecycle_manager',
         output='screen',
         parameters=[{
-            'autostart': True,
+            'autostart': False,
             'node_names': [
-                'planner_server',
-                'controller_server',
-                'bt_navigator',
-                'behavior_server',
-                'velocity_smoother'
+                'mapfree_planner_server',
+                'mapfree_controller_server',
+                'mapfree_bt_navigator',
+                'mapfree_behavior_server',
+                'mapfree_velocity_smoother'
             ]
         }]
     )

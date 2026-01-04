@@ -46,11 +46,7 @@ def generate_launch_description():
     default_map_path = os.path.join(maurice_root, 'maps', 'home.yaml')
     
     # Declare launch arguments so that these paths can be overridden if needed
-    map_arg = DeclareLaunchArgument(
-        'map',
-        default_value=default_map_path,
-        description='Full path to the map file to load'
-    )
+  
     
     amcl_params_arg = DeclareLaunchArgument(
         'amcl_params_file',
@@ -62,16 +58,16 @@ def generate_launch_description():
     map_server_node = Node(
         package='nav2_map_server',
         executable='map_server',
-        name='map_server',
+        name='navigation_map_server',
         output='screen',
-        parameters=[{'yaml_filename': LaunchConfiguration('map')}]
+        parameters=[]
     )
     
     # Create the AMCL node
     amcl_node = Node(
         package='nav2_amcl',
         executable='amcl',
-        name='amcl',
+        name='navigation_amcl',
         output='screen',
         parameters=[LaunchConfiguration('amcl_params_file')],
     )
@@ -82,7 +78,7 @@ def generate_launch_description():
     grid_localizer_node = Node(
         package='maurice_nav',
         executable='grid_localizer.py',
-        name='grid_localizer',
+        name='navigation_grid_localizer',
         output='screen',
         parameters=[{
             'auto_localize': True,
@@ -95,7 +91,7 @@ def generate_launch_description():
     planner_node = Node(
         package='nav2_planner',
         executable='planner_server',
-        name='planner_server',
+        name='navigation_planner_server',
         output='screen',
         parameters=[planner_params_file, costmap_params_file]
     )
@@ -104,7 +100,7 @@ def generate_launch_description():
     controller_node = Node(
         package='nav2_controller',
         executable='controller_server',
-        name='controller_server',
+        name='navigation_controller_server',
         output='screen',
         parameters=[controller_params_file, costmap_params_file],
         remappings=[('cmd_vel', 'cmd_vel_raw')]
@@ -114,7 +110,7 @@ def generate_launch_description():
     velocity_smoother_node = Node(
         package='nav2_velocity_smoother',
         executable='velocity_smoother',
-        name='velocity_smoother',
+        name='navigation_velocity_smoother',
         output='screen',
         parameters=[smoother_params_file],
         remappings=[('cmd_vel', '/cmd_vel_raw'),
@@ -124,8 +120,8 @@ def generate_launch_description():
     # Create the lifecycle manager node to manage all nodes
     lifecycle_manager_node = Node(
         package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager',
+        executable='navigation_lifecycle_manager',
+        name='lifecycle_manager_navigation',
         output='screen',
         parameters=[{
             'autostart': False,
@@ -133,14 +129,14 @@ def generate_launch_description():
             'attempt_respawn_reconnection': True,
             'bond_respawn_max_duration': 30.0,
             'node_names': [
-                'map_server', 
-                'grid_localizer',
-                'amcl', 
-                'planner_server', 
-                'controller_server', 
-                'bt_navigator', 
-                'behavior_server',
-                'velocity_smoother'
+                'navigation_map_server', 
+                'navigation_grid_localizer',
+                'navigation_amcl', 
+                'navigation_planner_server', 
+                'navigation_controller_server', 
+                'navigation_bt_navigator', 
+                'navigation_behavior_server',
+                'navigation_velocity_smoother'
                 ]
         }]
     )
@@ -153,7 +149,7 @@ def generate_launch_description():
     bt_navigator_node = Node(
         package='nav2_bt_navigator',
         executable='bt_navigator',
-        name='bt_navigator',
+        name='navigation_bt_navigator',
         output='screen',
         parameters=[
             bt_navigator_params_file,
@@ -166,7 +162,7 @@ def generate_launch_description():
     behavior_server_node = Node(
         package='nav2_behaviors',
         executable='behavior_server',
-        name='behavior_server',
+        name='navigation_behavior_server',
         output='screen',
         parameters=[behavior_params_file],
         arguments=['--ros-args', '--log-level', 'warn'],
@@ -177,11 +173,10 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        map_arg,
         amcl_params_arg,
         # Nav2 lifecycle-managed nodes
         map_server_node,
-        grid_localizer,
+        grid_localizer_node,
         amcl_node,
         planner_node,
         controller_node,
