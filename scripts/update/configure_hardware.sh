@@ -128,6 +128,33 @@ fi
 # Note: Not restarting NetworkManager here to avoid SSH disconnection.
 # The config will be applied on next reboot or manual NetworkManager restart.
 
+# -----------------------------------------------------------------------------
+# 5. Boot Timeout Configuration
+# -----------------------------------------------------------------------------
+log "Checking boot timeout configuration..."
+
+EXTLINUX_CONF="/boot/extlinux/extlinux.conf"
+if [ -f "$EXTLINUX_CONF" ]; then
+    # Check if there's a TIMEOUT line that is not already "TIMEOUT 0"
+    if grep -q "TIMEOUT" "$EXTLINUX_CONF" && ! grep -q "TIMEOUT 0" "$EXTLINUX_CONF"; then
+        log "  Modifying boot timeout to 0..."
+        # Create a backup
+        cp "$EXTLINUX_CONF" "${EXTLINUX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
+        
+        # Replace TIMEOUT <number> with TIMEOUT 0
+        sed -i 's/TIMEOUT [0-9]\+/TIMEOUT 0/' "$EXTLINUX_CONF"
+        
+        log "  Boot timeout set to 0"
+        REBOOT_REQUIRED=true
+    elif grep -q "TIMEOUT 0" "$EXTLINUX_CONF"; then
+        log "  Boot timeout already set to 0"
+    else
+        log "  No TIMEOUT line found in extlinux.conf"
+    fi
+else
+    log "  Skipping boot timeout config - $EXTLINUX_CONF not found"
+fi
+
 log "Hardware configuration completed"
 
 # Exit with code 2 if reboot is required (allows caller to detect this)

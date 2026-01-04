@@ -1,0 +1,30 @@
+[Unit]
+Description=ROS Application Launcher in Tmux
+# Only depends on /tmp existing
+#After=tmp.mount
+
+[Service]
+# Run service manager as root, but execute script as jetson1 via sudo
+# User=jetson1 # Removed
+# Group=jetson1 # Removed
+
+# The launch script handles sourcing, tmux management, and running ros2 launch
+# Ensure this script is executable (chmod +x)
+# Preserve common/ROS environment variables including INNATE_OS_ROOT
+Environment="INNATE_OS_ROOT=/home/jetson1/innate-os"
+ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/monitor_ros_status.sh'
+
+# Ensure the service runs only once and does not restart
+Type=simple
+RemainAfterExit=true
+
+# Disable automatic restarts
+Restart=no
+
+# Log output of the launch script to journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Enable this service to start on boot
+WantedBy=multi-user.target
