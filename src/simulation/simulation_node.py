@@ -7,6 +7,7 @@ import json
 from scipy.spatial.transform import Rotation as R, Slerp
 import time  # Add import for time functions
 import os  # Add os import for path joining
+import torch
 from typing import Dict, Any  # Add typing imports
 
 from src.simulation.stl_slicing import slice_stl
@@ -558,8 +559,6 @@ class SimulationNode:
         Args:
             joint_positions: List of 6 floats [j0, j1, j2, j3, j4, j5] in radians
         """
-        import torch
-
         # Get DOF indices for all arm joints
         dof_indices = []
         positions = []
@@ -567,9 +566,9 @@ class SimulationNode:
             if i < len(joint_positions):
                 try:
                     joint = self.robot.get_joint(joint_name)
-                    dof_idx = joint.dof_idx_local
-                    if dof_idx is not None:
-                        dof_indices.append(dof_idx)
+                    dof_idx = joint.dofs_idx_local
+                    if dof_idx is not None and len(dof_idx) > 0:
+                        dof_indices.append(dof_idx[0])
                         positions.append(joint_positions[i])
                         self.arm_current_positions[i] = joint_positions[i]
                 except Exception as e:
@@ -579,9 +578,9 @@ class SimulationNode:
         if len(joint_positions) >= 6:
             try:
                 joint6m = self.robot.get_joint("joint6M")
-                dof_idx = joint6m.dof_idx_local
-                if dof_idx is not None:
-                    dof_indices.append(dof_idx)
+                dof_idx = joint6m.dofs_idx_local
+                if dof_idx is not None and len(dof_idx) > 0:
+                    dof_indices.append(dof_idx[0])
                     positions.append(-joint_positions[5])  # Mimic with -1 multiplier
             except Exception as e:
                 print(f"[SimulationNode] Error getting joint6M: {e}")
@@ -1121,6 +1120,9 @@ class SimulationNode:
                     self._apply_arm_positions(interpolated)
                     if t >= 1.0:
                         self.arm_target_positions = None  # Done interpolating
+                else:
+                    # Continuously apply current positions to maintain arm pose (torque control)
+                    self._apply_arm_positions(self.arm_current_positions)
 
                 if latest_position_cmd is not None:
                     # Set navigation target for smooth movement
