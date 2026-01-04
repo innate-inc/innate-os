@@ -235,6 +235,7 @@ async def inbound_loop(ws, shared_queues):
 
             # Handle /mars/arm/goto_js service
             if service_name == "/mars/arm/goto_js":
+                print(f"[ROSBridge] Received goto_js service call: {args}")
                 data = args.get("data", {})
                 joint_data = data.get("data", [])
                 duration = args.get("time", 1)
