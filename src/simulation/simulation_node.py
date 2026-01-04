@@ -526,19 +526,11 @@ class SimulationNode:
         """Initialize robot and its parameters"""
         self.robot = self.scene.add_entity(
             gs.morphs.URDF(
-                file="data/urdf/turtlebot3_burger.urdf",
+                file="data/urdf/maurice.urdf",
                 pos=ROBOT_INIT_POS,
                 quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
             )
         )
-
-        # Set up wheel joints
-        self.left_idx = self.robot.get_joint("wheel_left_joint").dof_idx_local
-        self.right_idx = self.robot.get_joint("wheel_right_joint").dof_idx_local
-
-        # Robot parameters
-        self.wheel_radius = 0.033  # meters
-        self.wheel_separation = 0.160  # meters
 
     def _init_camera(self):
         """Initialize robot camera and chase camera"""
@@ -592,19 +584,8 @@ class SimulationNode:
         )
 
     def init_movement(self):
-        """Initialize robot movement"""
-        self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
-
-    def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
-        """Convert linear and angular velocity to left and right wheel velocities."""
-        # Convert m/s and rad/s to wheel velocities (rad/s)
-        left_vel = (
-            linear_vel - (angular_vel * self.wheel_separation / 2.0)
-        ) / self.wheel_radius
-        right_vel = (
-            linear_vel + (angular_vel * self.wheel_separation / 2.0)
-        ) / self.wheel_radius
-        return left_vel, right_vel
+        """Initialize robot movement - no-op for Maurice"""
+        pass
 
     def _update_navigation_movement(self, dt):
         """Smoothly move robot towards navigation target with velocity limits."""
@@ -1120,7 +1101,7 @@ class SimulationNode:
 
             # Check if enough time has passed since last render
             if sim_time - self.last_render_time >= self.render_interval:
-                camera_link = self.robot.get_link("camera_link")
+                camera_link = self.robot.get_link("arm_camera_link")
                 camera_pos = camera_link.get_pos()
                 camera_quat = camera_link.get_quat()
                 look_dir = rotate_vector(local_forward, camera_quat)
