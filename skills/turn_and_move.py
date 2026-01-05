@@ -22,7 +22,7 @@ class TurnAndMove(Skill):
     """
     
     # Movement speeds
-    LINEAR_SPEED = 0.15  # m/s for forward/backward
+    LINEAR_SPEED = 0.1  # m/s for forward/backward
     ANGULAR_SPEED = 0.5  # rad/s for turning
     
     def __init__(self, logger):
