@@ -206,15 +206,29 @@ class LiveAgentRunner:
     
     async def _main(self) -> None:
         """Main Gemini Live API loop."""
-        # Initialize components
+        from concurrent.futures import ThreadPoolExecutor
+        
+        # Initialize lightweight components
         self.state = AgentState()
         self.text_processor = TextProcessor()
-        self.pya = pyaudio.PyAudio()
         self.audio_queue_mic = asyncio.Queue(maxsize=AudioConfig.QUEUE_SIZE)
         self.action_queue = asyncio.Queue()
         
-        # Initialize Gemini client
-        client = genai.Client(api_key=self.api_key)
+        # Parallel initialization of slow components (PyAudio + Gemini)
+        def init_pyaudio():
+            return pyaudio.PyAudio()
+        
+        def init_gemini():
+            return genai.Client(api_key=self.api_key)
+        
+        self.logger.info("⏳ Initializing audio and Gemini client...")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pya_future = executor.submit(init_pyaudio)
+            gemini_future = executor.submit(init_gemini)
+            
+            self.pya = pya_future.result()
+            client = gemini_future.result()
+        self.logger.info("✅ Audio and Gemini client initialized")
         
         # Build tool declarations from skills
         tools = self._build_tools(types)

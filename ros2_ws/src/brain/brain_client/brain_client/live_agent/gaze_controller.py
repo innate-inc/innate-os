@@ -29,6 +29,7 @@ class FaceDetector:
         self._session = None
         
         try:
+            # Lazy import: inspireface is heavy (~1s), only load when FaceDetector is created
             import inspireface as isf
             param = isf.SessionCustomParameter()
             self._session = isf.InspireFaceSession(
@@ -239,6 +240,8 @@ class GazeController:
 class PersonTracker:
     """
     Autonomous person tracking using face detection.
+    
+    FaceDetector is lazy-loaded on first start() for faster agent startup.
     """
     
     def __init__(
@@ -251,7 +254,8 @@ class PersonTracker:
         self._get_frame = get_frame_fn
         self._rate = perception_rate
         
-        self._detector = FaceDetector(min_detection_confidence=0.3)
+        # Lazy init: FaceDetector created on first start() to speed up agent startup
+        self._detector: Optional[FaceDetector] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         
@@ -263,16 +267,24 @@ class PersonTracker:
     
     @property
     def is_available(self) -> bool:
-        return self._detector.is_available
+        return self._detector is not None and self._detector.is_available
+    
+    def _init_detector(self):
+        """Initialize FaceDetector in background thread."""
+        self._detector = FaceDetector(min_detection_confidence=0.3)
     
     def start(self):
-        if self._running or not self._detector.is_available:
+        if self._running:
             return
         
         self._running = True
         self._gaze.start()
         self._thread = threading.Thread(target=self._perception_loop, daemon=True)
         self._thread.start()
+        
+        # Lazy init: Load FaceDetector in background thread (non-blocking)
+        if self._detector is None:
+            threading.Thread(target=self._init_detector, daemon=True).start()
     
     def stop(self):
         self._running = False
@@ -303,6 +315,10 @@ class PersonTracker:
                 time.sleep(dt - elapsed)
     
     def _process_frame(self, frame, shape: Tuple[int, int]):
+        # Skip if detector not yet initialized (loading in background)
+        if self._detector is None:
+            return
+        
         faces = self._detector.detect(frame)
         
         if not faces:
