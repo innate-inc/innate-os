@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.agent_types import Agent
+from brain_client.agent_types import CloudAgent
 
 
-class EmptyAgent(Agent):
+class EmptyAgent(CloudAgent):
     """
     Default directive for the robot.
     Provides a basic professional personality and enables navigation primitives.

@@ -15,7 +15,7 @@ import inspect
 from typing import Dict, List, Type, Optional
 from pathlib import Path
 
-from brain_client.agent_types import Agent
+from brain_client.agent_types import Agent, CloudAgent, LiveAgent
 
 
 class AgentLoader:
@@ -136,28 +136,59 @@ class AgentLoader:
             True if valid, False otherwise
         """
         try:
-            # Check that required abstract methods are implemented
-            required_methods = ["id", "display_name", "get_skills", "get_prompt"]
-            for method_name in required_methods:
-                if not hasattr(agent_class, method_name):
-                    self.logger.error(
-                        f"Agent {agent_class.__name__} missing required method: {method_name}"
-                    )
-                    return False
-
-            # Check that id is a property
+            # Check that id and display_name are properties
             if not hasattr(agent_class, "id") or not isinstance(
                 agent_class.id, property
             ):
                 self.logger.error(f"Agent {agent_class.__name__} id must be a property")
                 return False
 
-            # Check that display_name is a property
             if not hasattr(agent_class, "display_name") or not isinstance(
                 agent_class.display_name, property
             ):
                 self.logger.error(
                     f"Agent {agent_class.__name__} display_name must be a property"
+                )
+                return False
+
+            # Check that get_skills is implemented
+            if not hasattr(agent_class, "get_skills"):
+                self.logger.error(
+                    f"Agent {agent_class.__name__} missing required method: get_skills"
+                )
+                return False
+
+            # Validate based on agent type
+            # Skip abstract base classes
+            if agent_class in (Agent, CloudAgent, LiveAgent):
+                return False
+            
+            if issubclass(agent_class, LiveAgent):
+                # LiveAgent requires get_system_instruction and get_proactive_prompt
+                if not hasattr(agent_class, "get_system_instruction"):
+                    self.logger.error(
+                        f"LiveAgent {agent_class.__name__} missing required method: get_system_instruction"
+                    )
+                    return False
+                if not hasattr(agent_class, "get_proactive_prompt"):
+                    self.logger.error(
+                        f"LiveAgent {agent_class.__name__} missing required method: get_proactive_prompt"
+                    )
+                    return False
+                self.logger.debug(f"Validated LiveAgent: {agent_class.__name__}")
+            elif issubclass(agent_class, CloudAgent):
+                # CloudAgent requires get_prompt
+                if not hasattr(agent_class, "get_prompt"):
+                    self.logger.error(
+                        f"CloudAgent {agent_class.__name__} missing required method: get_prompt"
+                    )
+                    return False
+                self.logger.debug(f"Validated CloudAgent: {agent_class.__name__}")
+            else:
+                # Reject direct Agent subclasses - must use CloudAgent or LiveAgent
+                self.logger.error(
+                    f"Agent {agent_class.__name__} must inherit from CloudAgent or LiveAgent, "
+                    f"not directly from Agent"
                 )
                 return False
 

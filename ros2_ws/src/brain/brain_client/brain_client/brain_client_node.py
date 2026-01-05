@@ -57,6 +57,8 @@ from std_srvs.srv import SetBool, Trigger
 from brain_client.ws_bridge import WSBridge
 from brain_client.initializers import initialize_skills, initialize_agents
 from brain_client.tts_handler import TTSHandler
+from brain_client.agent_types import CloudAgent, LiveAgent
+from brain_client.live_agent import LiveAgentRunner, ROSGazeController
 
 
 class BrainClientNode(Node):
@@ -119,7 +121,12 @@ class BrainClientNode(Node):
         )  # Default to sending single image
 
         # --- New: Brain active state flag ---
-        self.is_brain_active = False  # Brain starts active
+        self.is_brain_active = False  # Brain starts inactive
+        
+        # --- LiveAgent mode support ---
+        self.current_mode = None  # "cloud" | "live" | None
+        self.live_agent_runner = None  # LiveAgentRunner instance when in live mode
+        self.gaze_controller = None  # ROSGazeController instance for live mode
 
         # --- New: Simulator mode parameter ---
         self.declare_parameter("simulator_mode", False)
@@ -1156,6 +1163,15 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Brain not active. Skipping agent_loop_callback.\033[0m"
             )
             return
+        
+        # Skip cloud-agent image loop when in live mode
+        if self.current_mode == "live":
+            # In live mode, pass images to live_agent_runner instead
+            if self.live_agent_runner and self.last_image is not None:
+                self.live_agent_runner.update_image(self.last_image)
+                if self.gaze_controller:
+                    self.gaze_controller.update_frame(self.last_image)
+            return
 
         if not self.primitives_registered:
             # If primitives are not yet registered, don't send images
@@ -2023,6 +2039,11 @@ class BrainClientNode(Node):
         """Deactivates the brain's main operational loops and interactions."""
         self.get_logger().info("\033[1;93m[BrainClient] Deactivating brain...\033[0m")
         self.is_brain_active = False
+        
+        # Stop live mode if active
+        if self.current_mode == "live":
+            self._deactivate_live_mode()
+        self.current_mode = None
 
         # Stop timers
         if self.agent_timer and not self.agent_timer.is_canceled():
@@ -2115,6 +2136,92 @@ class BrainClientNode(Node):
         self.get_logger().info(
             "\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m"
         )
+        
+        # Determine and activate the appropriate mode based on current agent type
+        self._activate_agent_mode()
+
+    def _activate_agent_mode(self):
+        """Activate the appropriate mode based on current agent type."""
+        if isinstance(self.current_directive, LiveAgent):
+            self._activate_live_mode()
+        else:
+            self._activate_cloud_mode()
+
+    def _activate_cloud_mode(self):
+        """Activate cloud mode (innate-cloud-agent via WebSocket)."""
+        # First deactivate live mode if active
+        if self.current_mode == "live":
+            self._deactivate_live_mode()
+        
+        self.current_mode = "cloud"
+        self.get_logger().info(
+            "\033[1;92m[BrainClient] Cloud mode activated (innate-cloud-agent)\033[0m"
+        )
+
+    def _activate_live_mode(self):
+        """Activate live mode (Gemini Live API for real-time conversation)."""
+        # First deactivate cloud mode if active
+        if self.current_mode == "cloud":
+            # Nothing special needed for cloud mode deactivation
+            pass
+        
+        self.current_mode = "live"
+        self.get_logger().info(
+            "\033[1;92m[BrainClient] 🎙️ Live mode activating (Gemini Live API)...\033[0m"
+        )
+        
+        try:
+            # Initialize gaze controller if not already done
+            if self.gaze_controller is None:
+                try:
+                    self.gaze_controller = ROSGazeController(
+                        self, self.get_logger(), self.cmd_vel_topic
+                    )
+                except Exception as e:
+                    self.get_logger().warning(f"Gaze controller init failed: {e}")
+                    self.gaze_controller = None
+            
+            # Create and start live agent runner
+            self.live_agent_runner = LiveAgentRunner(
+                node=self,
+                agent=self.current_directive,
+                skill_client=self.primitive_action_client,
+                skills_dict=self.primitives_dict,
+                tts_handler=self.tts_handler,
+                logger=self.get_logger(),
+                gaze_controller=self.gaze_controller,
+                chat_out_pub=self.chat_out_pub,
+                chat_history=self.chat_history,
+            )
+            self.live_agent_runner.start()
+            
+            self.get_logger().info(
+                "\033[1;92m[BrainClient] 🎙️ Live mode activated successfully\033[0m"
+            )
+        except Exception as e:
+            self.get_logger().error(f"Failed to activate live mode: {e}")
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+            # Fall back to cloud mode
+            self.current_mode = "cloud"
+
+    def _deactivate_live_mode(self):
+        """Deactivate live mode (stop Gemini Live API)."""
+        if self.live_agent_runner:
+            self.get_logger().info(
+                "\033[1;93m[BrainClient] 🎙️ Deactivating live mode...\033[0m"
+            )
+            try:
+                self.live_agent_runner.stop()
+            except Exception as e:
+                self.get_logger().warning(f"Error stopping live agent runner: {e}")
+            self.live_agent_runner = None
+        
+        if self.gaze_controller:
+            try:
+                self.gaze_controller.stop()
+            except Exception:
+                pass
 
     def handle_set_brain_active(self, request, response):
         """Service handler for activating or deactivating the brain."""
@@ -2180,22 +2287,36 @@ class BrainClientNode(Node):
             self.save_startup_directive(directive_name)
 
             # Also immediately switch to it if brain is active
+            old_agent = self.current_directive
             self.current_directive = self.directives[directive_name]
             self.get_logger().info(
                 f"\033[1;92m[BrainClient] Startup directive set to: {directive_name}\033[0m"
             )
 
-            # Re-register primitives and directive with the server to update immediately
-            if self.is_brain_active and self.primitives_registered:
-                self.register_primitives_and_directive()
+            # Handle mode switching based on agent type
+            if self.is_brain_active:
+                old_is_live = isinstance(old_agent, LiveAgent)
+                new_is_live = isinstance(self.current_directive, LiveAgent)
+                
+                if old_is_live != new_is_live:
+                    # Mode change needed
+                    self._activate_agent_mode()
+                elif new_is_live and self.live_agent_runner:
+                    # Same mode (live) but different agent - restart runner
+                    self._deactivate_live_mode()
+                    self._activate_live_mode()
+                elif not new_is_live and self.primitives_registered:
+                    # Same mode (cloud) - re-register with cloud-agent
+                    self.register_primitives_and_directive()
 
             # Activate input devices required by this directive
             self.activate_directive_inputs()
 
             # Publish confirmation
+            agent_type = "LiveAgent" if isinstance(self.current_directive, LiveAgent) else "CloudAgent"
             chat_entry = {
                 "sender": "system",
-                "text": f"Startup directive set to: {directive_name}. Active now and will be used on next startup.",
+                "text": f"Startup directive set to: {directive_name} ({agent_type}). Active now and will be used on next startup.",
                 "timestamp": time.time(),
             }
             self.chat_history.append(chat_entry)

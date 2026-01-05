@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.agent_types import Agent
+from brain_client.agent_types import CloudAgent
 
 
-class HelloWorld(Agent):
+class HelloWorld(CloudAgent):
     """
     Makes the robot turn and greet humans with a friendly wave.
     """
