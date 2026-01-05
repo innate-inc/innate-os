@@ -17,7 +17,9 @@ from src.agent.types import (
     OccupancyGridMsg,
     RobotStateMsg,
     VelocityCmd,
-    PositionCmd,
+    ArmCmd,
+    ArmGotoCmd,
+    ArmStateMsg,
     DirectiveCmd,
     ResetRobotCmd,
     BrainActiveCmd,
@@ -59,6 +61,22 @@ def rosbridge_call_service(service: str, srv_type: str) -> dict:
     return {"op": "call_service", "service": service, "type": srv_type}
 
 
+def rosbridge_advertise_service(service: str, srv_type: str) -> dict:
+    return {"op": "advertise_service", "service": service, "type": srv_type}
+
+
+def rosbridge_service_response(service: str, result: dict, call_id: str = None) -> dict:
+    resp = {
+        "op": "service_response",
+        "service": service,
+        "values": result,
+        "result": True,
+    }
+    if call_id:
+        resp["id"] = call_id
+    return resp
+
+
 async def inbound_loop(ws, shared_queues):
     """
     Continuously receive inbound messages on the WebSocket (e.g. /cmd_vel, /chat_in, service calls)
@@ -96,6 +114,18 @@ async def inbound_loop(ws, shared_queues):
                 if vel_cmd:
                     try:
                         shared_queues.agent_to_sim.put_nowait(vel_cmd)
+                    except queue.Full:
+                        pass
+
+            # 1b) /mars/arm/commands
+            elif topic == "/mars/arm/commands":
+                arm_cmd = parse_arm_command(msg_data)
+                if arm_cmd:
+                    print(
+                        f"[ROSBridge] Received arm command: {arm_cmd.joint_positions}"
+                    )
+                    try:
+                        shared_queues.agent_to_sim.put_nowait(arm_cmd)
                     except queue.Full:
                         pass
 
@@ -197,6 +227,37 @@ async def inbound_loop(ws, shared_queues):
                     if hasattr(shared_queues, "nav_controller"):
                         shared_queues.nav_controller.cancel_navigation()
 
+        # Process incoming service calls (services we provide)
+        elif op_type == "call_service":
+            service_name = inbound_data.get("service", "")
+            call_id = inbound_data.get("id", None)
+            args = inbound_data.get("args", {})
+
+            # Handle /mars/arm/goto_js service
+            if service_name == "/mars/arm/goto_js":
+                print(f"[ROSBridge] Received goto_js service call: {args}")
+                data = args.get("data", {})
+                joint_data = data.get("data", [])
+                duration = args.get("time", 1)
+
+                if len(joint_data) >= 6:
+                    joint_positions = [float(d) for d in joint_data[:6]]
+                    arm_goto_cmd = ArmGotoCmd(
+                        joint_positions=joint_positions,
+                        duration=float(duration),
+                        service_id=call_id,
+                    )
+                    try:
+                        shared_queues.agent_to_sim.put_nowait(arm_goto_cmd)
+                    except queue.Full:
+                        pass
+
+                    # Send immediate success response (motion started)
+                    response = rosbridge_service_response(
+                        service_name, {"success": True}, call_id
+                    )
+                    await ws.send(json.dumps(response))
+
         # Process service responses (responses to service calls that we initiated)
         elif op_type == "service_response":
             service_name = inbound_data.get("service", "")
@@ -253,6 +314,9 @@ async def outbound_loop(ws, shared_queues):
     adv_color = rosbridge_advertise(
         "/mars/main_camera/image/compressed", "sensor_msgs/msg/CompressedImage"
     )
+    adv_arm_camera = rosbridge_advertise(
+        "/mars/arm/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
+    )
     adv_depth = rosbridge_advertise("/camera/depth/image_raw", "sensor_msgs/msg/Image")
     adv_cinfo = rosbridge_advertise(
         "/camera/color/camera_info", "sensor_msgs/msg/CameraInfo"
@@ -276,6 +340,12 @@ async def outbound_loop(ws, shared_queues):
     )
     adv_nav_mode = rosbridge_advertise("/nav/current_mode", "std_msgs/msg/String")
 
+    # Arm topics and services
+    adv_arm_state = rosbridge_advertise("/mars/arm/state", "sensor_msgs/msg/JointState")
+    adv_arm_goto_service = rosbridge_advertise_service(
+        "/mars/arm/goto_js", "maurice_msgs/srv/GotoJS"
+    )
+
     await ws.send(json.dumps(adv_color))
     await ws.send(json.dumps(adv_depth))
     await ws.send(json.dumps(adv_cinfo))
@@ -288,8 +358,10 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_nav_status))
     await ws.send(json.dumps(adv_nav_feedback))
     await ws.send(json.dumps(adv_nav_mode))
+    await ws.send(json.dumps(adv_arm_state))
+    await ws.send(json.dumps(adv_arm_goto_service))
     print(
-        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, and navigation topics"
+        "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, navigation topics, and arm interfaces"
     )
 
     # Publish initial navigation mode (simulator always uses mapfree)
@@ -305,11 +377,17 @@ async def outbound_loop(ws, shared_queues):
         "/sim_navigation/global_plan", "nav_msgs/msg/Path"
     )
     sub_nav_cancel = rosbridge_subscribe("/sim_navigation/cancel", "std_msgs/msg/Bool")
+    sub_arm_cmd = rosbridge_subscribe(
+        "/mars/arm/commands", "std_msgs/msg/Float64MultiArray"
+    )
     await ws.send(json.dumps(sub_cmd_vel))
     await ws.send(json.dumps(sub_chat_out))
     await ws.send(json.dumps(sub_nav_path))
     await ws.send(json.dumps(sub_nav_cancel))
-    print("[ROSBridge] Subscribed to /cmd_vel, /brain/chat_out, and navigation topics")
+    await ws.send(json.dumps(sub_arm_cmd))
+    print(
+        "[ROSBridge] Subscribed to /cmd_vel, /brain/chat_out, /mars/arm/commands, and navigation topics"
+    )
 
     # Initialize navigation controller
     nav_controller = NavigationController(shared_queues)
@@ -345,6 +423,8 @@ async def outbound_loop(ws, shared_queues):
                 await publish_robot_state(ws, msg, shared_queues)
             elif isinstance(msg, OccupancyGridMsg):
                 await publish_occupancy_grid(ws, msg, shared_queues)
+            elif isinstance(msg, ArmStateMsg):
+                await publish_arm_state(ws, msg)
             elif isinstance(msg, DirectiveCmd):
                 directive_msg = {"data": msg.directive}
                 outbound = rosbridge_publish("/brain/set_directive", directive_msg)
@@ -439,30 +519,39 @@ async def outbound_loop(ws, shared_queues):
     print("[ROSBridge] outbound_loop stopped.")
 
 
-async def rosbridge_loop(shared_queues, rosbridge_uri: str):
+async def rosbridge_loop(
+    shared_queues, rosbridge_uri: str, retry_interval: float = 2.0
+):
     """
     High-level function that connects to rosbridge and starts
     two concurrent tasks: inbound_loop & outbound_loop & chat_bridge_loop.
+    Automatically retries connection if it drops.
     """
-    print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
+    while not shared_queues.exit_event.is_set():
+        print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
 
-    try:
-        async with websockets.connect(rosbridge_uri) as ws:
-            print(f"[ROSBridge] Connected to {rosbridge_uri}")
+        try:
+            async with websockets.connect(rosbridge_uri) as ws:
+                print(f"[ROSBridge] Connected to {rosbridge_uri}")
 
-            # Run inbound & outbound in parallel
-            tasks = []
-            tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
-            tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
-            # Wait for them to complete
-            done, pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in pending:
-                task.cancel()
-    except Exception as e:
-        print(f"[ROSBridge] Connection error: {e}")
-        print(f"Stack trace: {traceback.format_exc()}")
+                # Run inbound & outbound in parallel
+                tasks = []
+                tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
+                tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
+                # Wait for them to complete
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+        except Exception as e:
+            print(f"[ROSBridge] Connection error: {e}")
+
+        if shared_queues.exit_event.is_set():
+            break
+
+        print(f"[ROSBridge] Connection lost. Retrying in {retry_interval}s...")
+        await asyncio.sleep(retry_interval)
 
     print("[ROSBridge] Stopped rosbridge_loop.")
 
@@ -502,6 +591,29 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
             }
             outbound = rosbridge_publish(
                 "/mars/main_camera/image/compressed", compressed_msg
+            )
+            await ws.send(json.dumps(outbound))
+
+    # -- 1b) COMPRESS ARM WRIST CAMERA IMAGE --
+    if rsm.arm_rgb_frame is not None:
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]  # 70% quality
+        ret, encoded_img = cv2.imencode(".jpg", rsm.arm_rgb_frame, encode_params)
+
+        if ret:
+            jpg_bytes = encoded_img.tobytes()
+            base64_jpg = base64.b64encode(jpg_bytes).decode("utf-8")
+
+            # Build a sensor_msgs/CompressedImage message
+            compressed_msg = {
+                "header": {
+                    "stamp": {"sec": sec, "nanosec": nsec},
+                    "frame_id": "arm_wrist_camera_frame",
+                },
+                "format": "jpeg",
+                "data": base64_jpg,
+            }
+            outbound = rosbridge_publish(
+                "/mars/arm/image_raw/compressed", compressed_msg
             )
             await ws.send(json.dumps(outbound))
 
@@ -627,6 +739,27 @@ async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):
     await ws.send(json.dumps(outbound, default=np_encoder))
 
 
+async def publish_arm_state(ws, arm_state: ArmStateMsg):
+    """Publish arm joint state to /mars/arm/state (sensor_msgs/JointState)."""
+    now = time.time()
+    sec = int(now)
+    nsec = int((now - sec) * 1e9)
+
+    joint_state_msg = {
+        "header": {
+            "stamp": {"sec": sec, "nanosec": nsec},
+            "frame_id": "base_link",
+        },
+        "name": arm_state.joint_names,
+        "position": arm_state.joint_positions,
+        "velocity": [0.0] * len(arm_state.joint_positions),
+        "effort": [0.0] * len(arm_state.joint_positions),
+    }
+
+    outbound = rosbridge_publish("/mars/arm/state", joint_state_msg)
+    await ws.send(json.dumps(outbound))
+
+
 #
 # Helper: parse geometry_msgs/Twist from inbound rosbridge JSON
 #
@@ -639,6 +772,23 @@ def parse_twist(msg: dict) -> VelocityCmd | None:
         vz = float(ang.get("z", 0.0))
         return VelocityCmd(linear_x=vx, angular_z=vz)
     except (TypeError, ValueError):
+        return None
+
+
+def parse_arm_command(msg: dict) -> ArmCmd | None:
+    """Parse std_msgs/Float64MultiArray for arm joint commands."""
+    try:
+        data = msg.get("data", [])
+        if len(data) >= 6:
+            joint_positions = [float(d) for d in data[:6]]
+            return ArmCmd(joint_positions=joint_positions)
+        else:
+            print(
+                f"[ROSBridge] Arm command has {len(data)} values, need 6. Data: {data}"
+            )
+        return None
+    except (TypeError, ValueError) as e:
+        print(f"[ROSBridge] Failed to parse arm command: {e}, msg={msg}")
         return None
 
 

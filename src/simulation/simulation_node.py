@@ -7,6 +7,7 @@ import json
 from scipy.spatial.transform import Rotation as R, Slerp
 import time  # Add import for time functions
 import os  # Add os import for path joining
+import torch
 from typing import Dict, Any  # Add typing imports
 
 from src.simulation.stl_slicing import slice_stl
@@ -15,6 +16,9 @@ from src.agent.types import (
     RobotStateMsg,
     OccupancyGridMsg,
     VelocityCmd,
+    ArmCmd,
+    ArmGotoCmd,
+    ArmStateMsg,
     PositionCmd,
     ResetRobotCmd,
     SetEnvironmentCmd,
@@ -68,6 +72,23 @@ class SimulationNode:
         # Current navigation target (None if no active target)
         self.nav_target_pos = None
         self.nav_target_yaw = None
+
+        # Arm control state
+        self.arm_joint_names = [
+            "joint1",
+            "joint2",
+            "joint3",
+            "joint4",
+            "joint5",
+            "joint6",
+        ]
+        self.arm_current_positions = [0.0] * 6  # Current joint positions
+        self.arm_target_positions = None  # Target for interpolation
+        self.arm_start_positions = None  # Start positions for interpolation
+        self.arm_interpolation_start_time = None
+        self.arm_interpolation_duration = None
+        self.last_arm_state_time = 0
+        self.arm_state_interval = 0.02  # Publish at ~50Hz
 
         self.render_camera_vfov = 40
         self.render_camera_hfov = degrees(
@@ -526,24 +547,67 @@ class SimulationNode:
         """Initialize robot and its parameters"""
         self.robot = self.scene.add_entity(
             gs.morphs.URDF(
-                file="data/urdf/turtlebot3_burger.urdf",
+                file="data/urdf/maurice.urdf",
                 pos=ROBOT_INIT_POS,
                 quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
             )
         )
 
-        # Set up wheel joints
-        self.left_idx = self.robot.get_joint("wheel_left_joint").dof_idx_local
-        self.right_idx = self.robot.get_joint("wheel_right_joint").dof_idx_local
+    def _apply_arm_positions(self, joint_positions):
+        """Apply joint positions to arm and update current state.
 
-        # Robot parameters
-        self.wheel_radius = 0.033  # meters
-        self.wheel_separation = 0.160  # meters
+        Args:
+            joint_positions: List of 6 floats [j0, j1, j2, j3, j4, j5] in radians
+        """
+        # Get DOF indices for all arm joints
+        dof_indices = []
+        positions = []
+        for i, joint_name in enumerate(self.arm_joint_names):
+            if i < len(joint_positions):
+                try:
+                    joint = self.robot.get_joint(joint_name)
+                    dof_idx = joint.dofs_idx_local
+                    if dof_idx is not None and len(dof_idx) > 0:
+                        dof_indices.append(dof_idx[0])
+                        positions.append(joint_positions[i])
+                        self.arm_current_positions[i] = joint_positions[i]
+                except Exception as e:
+                    print(f"[SimulationNode] Error getting joint {joint_name}: {e}")
+
+        # Also add the mirrored gripper finger (joint6M mirrors joint6)
+        if len(joint_positions) >= 6:
+            try:
+                joint6m = self.robot.get_joint("joint6M")
+                dof_idx = joint6m.dofs_idx_local
+                if dof_idx is not None and len(dof_idx) > 0:
+                    dof_indices.append(dof_idx[0])
+                    positions.append(-joint_positions[5])  # Mimic with -1 multiplier
+            except Exception as e:
+                print(f"[SimulationNode] Error getting joint6M: {e}")
+
+        # Apply all positions at once using robot entity
+        if dof_indices and positions:
+            try:
+                self.robot.set_dofs_position(
+                    position=torch.tensor(positions, dtype=torch.float32),
+                    dofs_idx_local=dof_indices,
+                    zero_velocity=True,
+                )
+            except Exception as e:
+                print(f"[SimulationNode] Error applying arm positions: {e}")
 
     def _init_camera(self):
-        """Initialize robot camera and chase camera"""
-        # Original robot camera
+        """Initialize robot camera, arm wrist camera, and chase camera"""
+        # Main robot camera (will be positioned at arm_camera_link)
         self.robot_camera = self.scene.add_camera(
+            res=self.robot_camera_res,
+            pos=(0, 0, 0),
+            lookat=(1, 0, 0),
+            fov=self.robot_camera_vfov,
+        )
+
+        # Arm wrist camera (mounted on link5, looking forward along the arm)
+        self.arm_wrist_camera = self.scene.add_camera(
             res=self.robot_camera_res,
             pos=(0, 0, 0),
             lookat=(1, 0, 0),
@@ -592,19 +656,8 @@ class SimulationNode:
         )
 
     def init_movement(self):
-        """Initialize robot movement"""
-        self.robot.set_dofs_kv([1.0, 1.0], [self.left_idx, self.right_idx])
-
-    def cmd_vel_to_wheel_velocities(self, linear_vel, angular_vel):
-        """Convert linear and angular velocity to left and right wheel velocities."""
-        # Convert m/s and rad/s to wheel velocities (rad/s)
-        left_vel = (
-            linear_vel - (angular_vel * self.wheel_separation / 2.0)
-        ) / self.wheel_radius
-        right_vel = (
-            linear_vel + (angular_vel * self.wheel_separation / 2.0)
-        ) / self.wheel_radius
-        return left_vel, right_vel
+        """Initialize robot movement - no-op for Maurice"""
+        pass
 
     def _update_navigation_movement(self, dt):
         """Smoothly move robot towards navigation target with velocity limits."""
@@ -980,12 +1033,18 @@ class SimulationNode:
                 latest_position_cmd = None
                 latest_reset_cmd = None
                 latest_set_env_cmd = None  # Variable to hold the latest env command
+                latest_arm_cmd = None
+                latest_arm_goto_cmd = None
 
                 while True:
                     try:
                         cmd = self.shared_queues.agent_to_sim.get_nowait()
                         if isinstance(cmd, VelocityCmd):
                             latest_velocity_cmd = cmd
+                        elif isinstance(cmd, ArmCmd):
+                            latest_arm_cmd = cmd
+                        elif isinstance(cmd, ArmGotoCmd):
+                            latest_arm_goto_cmd = cmd
                         elif isinstance(cmd, PositionCmd):
                             latest_position_cmd = cmd
                         elif isinstance(cmd, ResetRobotCmd):
@@ -1028,7 +1087,44 @@ class SimulationNode:
                     # Reset commanded velocities
                     self.commanded_lin_vel = np.zeros(3)
                     self.commanded_ang_vel = np.zeros(3)
-                elif latest_position_cmd is not None:
+
+                # Apply arm joint positions if we have an arm command (immediate)
+                if latest_arm_cmd is not None:
+                    joint_positions = latest_arm_cmd.joint_positions
+                    print(f"[SimulationNode] Applying arm positions: {joint_positions}")
+                    self._apply_arm_positions(joint_positions)
+                    # Cancel any ongoing interpolation
+                    self.arm_target_positions = None
+
+                # Start arm interpolation if we have a goto command
+                if latest_arm_goto_cmd is not None:
+                    self.arm_start_positions = self.arm_current_positions.copy()
+                    self.arm_target_positions = latest_arm_goto_cmd.joint_positions
+                    self.arm_interpolation_start_time = sim_time
+                    self.arm_interpolation_duration = max(
+                        0.1, latest_arm_goto_cmd.duration
+                    )
+
+                # Update arm interpolation if active
+                if self.arm_target_positions is not None:
+                    elapsed = sim_time - self.arm_interpolation_start_time
+                    t = min(1.0, elapsed / self.arm_interpolation_duration)
+                    # Smooth interpolation using ease-in-out
+                    t_smooth = t * t * (3 - 2 * t)
+                    interpolated = [
+                        self.arm_start_positions[i]
+                        + t_smooth
+                        * (self.arm_target_positions[i] - self.arm_start_positions[i])
+                        for i in range(6)
+                    ]
+                    self._apply_arm_positions(interpolated)
+                    if t >= 1.0:
+                        self.arm_target_positions = None  # Done interpolating
+                else:
+                    # Continuously apply current positions to maintain arm pose (torque control)
+                    self._apply_arm_positions(self.arm_current_positions)
+
+                if latest_position_cmd is not None:
                     # Set navigation target for smooth movement
                     self.nav_target_pos = np.array(
                         [
@@ -1120,12 +1216,23 @@ class SimulationNode:
 
             # Check if enough time has passed since last render
             if sim_time - self.last_render_time >= self.render_interval:
-                camera_link = self.robot.get_link("camera_link")
+                camera_link = self.robot.get_link("head_camera_link")
                 camera_pos = camera_link.get_pos()
                 camera_quat = camera_link.get_quat()
                 look_dir = rotate_vector(local_forward, camera_quat)
                 lookat = camera_pos.cpu().numpy() + look_dir
                 self.robot_camera.set_pose(pos=camera_pos.cpu().numpy(), lookat=lookat)
+
+                # Update arm wrist camera (mounted on link5, looking forward along the arm)
+                link5 = self.robot.get_link("link5")
+                link5_pos = link5.get_pos()
+                link5_quat = link5.get_quat()
+                arm_forward = np.array([1.0, 0.0, 0.0])  # Arm points along X axis
+                arm_look_dir = rotate_vector(arm_forward, link5_quat)
+                arm_lookat = link5_pos.cpu().numpy() + arm_look_dir
+                self.arm_wrist_camera.set_pose(
+                    pos=link5_pos.cpu().numpy(), lookat=arm_lookat
+                )
 
                 # Update chase camera to follow robot
                 robot_pos = self.robot.get_pos().cpu().numpy()
@@ -1135,8 +1242,9 @@ class SimulationNode:
                 chase_pos = robot_pos + rotated_offset
                 self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
 
-                # Render both cameras
+                # Render all cameras
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
+                arm_rgb, _, _, _ = self.arm_wrist_camera.render()
                 chase_rgb, _, _, _ = self.chase_camera.render()
 
                 # Convert RGB to BGR format if needed (or BGR to RGB)
@@ -1145,13 +1253,22 @@ class SimulationNode:
                 else:
                     rgb_to_send = None
 
+                if arm_rgb is not None:
+                    arm_rgb_to_send = cv2.cvtColor(arm_rgb, cv2.COLOR_RGB2BGR)
+                else:
+                    arm_rgb_to_send = None
+
                 if chase_rgb is not None:
                     chase_rgb = cv2.cvtColor(chase_rgb, cv2.COLOR_RGB2BGR)
 
                 depth_to_send = depth
 
                 try:
-                    camera_views = {"first_person": rgb_to_send, "chase": chase_rgb}
+                    camera_views = {
+                        "first_person": rgb_to_send,
+                        "arm_wrist": arm_rgb_to_send,
+                        "chase": chase_rgb,
+                    }
                     self.shared_queues.sim_to_web.put_nowait(camera_views)
                 except queue.Full:
                     pass
@@ -1161,12 +1278,28 @@ class SimulationNode:
             else:
                 rgb_to_send = None
                 depth_to_send = None
+                arm_rgb_to_send = None
+
+            # --- (E2) Publish arm joint state at ~50Hz
+            if sim_time - self.last_arm_state_time >= self.arm_state_interval:
+                arm_state_msg = ArmStateMsg(
+                    joint_positions=self.arm_current_positions.copy(),
+                    joint_names=self.arm_joint_names,
+                )
+                try:
+                    self.shared_queues.sim_to_agent.put_nowait(arm_state_msg)
+                except queue.Full:
+                    pass
+                self.last_arm_state_time = sim_time
 
             # --- (F) Build and publish RobotStateMsg with latest state
             state_msg = RobotStateMsg(
                 # camera data
                 rgb_frame=rgb_to_send if "rgb_to_send" in locals() else None,
                 depth_frame=depth_to_send if "depth_to_send" in locals() else None,
+                arm_rgb_frame=(
+                    arm_rgb_to_send if "arm_rgb_to_send" in locals() else None
+                ),
                 # camera intrinsics
                 width=self.width,
                 height=self.height,
