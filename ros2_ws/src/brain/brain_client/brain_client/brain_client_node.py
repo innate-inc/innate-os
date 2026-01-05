@@ -1820,19 +1820,21 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Received directive change request: {directive_name}")
 
         if directive_name in self.directives:
+            old_agent = self.current_directive
             self.current_directive = self.directives[directive_name]
             self.get_logger().info(f"Activated directive: {directive_name}")
 
-            # Re-register primitives and directive with the server to update
-            self.register_primitives_and_directive()
+            # Handle mode switching based on agent type
+            self._handle_directive_mode_switch(old_agent, self.current_directive)
 
             # Activate input devices required by this directive
             self.activate_directive_inputs()
 
             # Publish confirmation
+            agent_type = "LiveAgent" if isinstance(self.current_directive, LiveAgent) else "CloudAgent"
             chat_entry = {
                 "sender": "system",
-                "text": f"Directive updated to: {directive_name}",
+                "text": f"Directive updated to: {directive_name} ({agent_type})",
                 "timestamp": time.time(),
             }
             self.chat_history.append(chat_entry)
@@ -2151,6 +2153,36 @@ class BrainClientNode(Node):
         else:
             self._activate_cloud_mode()
 
+    def _handle_directive_mode_switch(self, old_agent, new_agent):
+        """
+        Handle mode switching when directive changes.
+        
+        Determines if a mode change is needed (CloudAgent <-> LiveAgent) and
+        performs the appropriate activation/deactivation.
+        
+        Args:
+            old_agent: The previous directive (can be None)
+            new_agent: The new directive being activated
+        """
+        if not self.is_brain_active:
+            # Brain not active, just register with cloud-agent
+            self.register_primitives_and_directive()
+            return
+        
+        old_is_live = isinstance(old_agent, LiveAgent) if old_agent else False
+        new_is_live = isinstance(new_agent, LiveAgent)
+        
+        if old_is_live != new_is_live:
+            # Mode change needed (CloudAgent <-> LiveAgent)
+            self._activate_agent_mode()
+        elif new_is_live and self.live_agent_runner:
+            # Same mode (live) but different agent - restart runner
+            self._deactivate_live_mode()
+            self._activate_live_mode()
+        elif not new_is_live:
+            # Cloud mode - re-register with cloud-agent
+            self.register_primitives_and_directive()
+
     def _activate_cloud_mode(self):
         """Activate cloud mode (innate-cloud-agent via WebSocket)."""
         # First deactivate live mode if active
@@ -2298,20 +2330,7 @@ class BrainClientNode(Node):
             )
 
             # Handle mode switching based on agent type
-            if self.is_brain_active:
-                old_is_live = isinstance(old_agent, LiveAgent)
-                new_is_live = isinstance(self.current_directive, LiveAgent)
-                
-                if old_is_live != new_is_live:
-                    # Mode change needed
-                    self._activate_agent_mode()
-                elif new_is_live and self.live_agent_runner:
-                    # Same mode (live) but different agent - restart runner
-                    self._deactivate_live_mode()
-                    self._activate_live_mode()
-                elif not new_is_live and self.primitives_registered:
-                    # Same mode (cloud) - re-register with cloud-agent
-                    self.register_primitives_and_directive()
+            self._handle_directive_mode_switch(old_agent, self.current_directive)
 
             # Activate input devices required by this directive
             self.activate_directive_inputs()
