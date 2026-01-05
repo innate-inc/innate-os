@@ -1861,11 +1861,17 @@ class BrainClientNode(Node):
         # Build detailed directive information as JSON
         directive_details = []
         for directive_name, directive in self.directives.items():
+            # Get prompt based on agent type (LiveAgent uses system_instruction)
+            if isinstance(directive, LiveAgent):
+                prompt = directive.get_system_instruction()
+            else:
+                prompt = directive.get_prompt()
+            
             directive_info = {
                 "id": directive.id,
                 "display_name": directive.display_name,
                 "display_icon": directive.display_icon_data,
-                "prompt": directive.get_prompt(),
+                "prompt": prompt,
                 "skills": directive.get_skills(),
             }
             directive_details.append(directive_info)
