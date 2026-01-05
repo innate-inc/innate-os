@@ -37,8 +37,8 @@ class VoiceAssistant(LiveAgent):
         return ["wave", "move_head"]
 
     def get_inputs(self) -> List[str]:
-        """This agent needs microphone input for voice conversation."""
-        return ["micro", "camera"]
+        """Camera only - voice is handled internally by Gemini Live API."""
+        return ["camera"]
 
     def get_system_instruction(self) -> str:
         """

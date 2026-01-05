@@ -669,6 +669,10 @@ class BrainClientNode(Node):
         return False
 
     def chat_in_callback(self, msg: String):
+        # Ignore chat_in when in live mode - voice is handled by LiveAgentRunner
+        if self.current_mode == "live":
+            return
+        
         data = json.loads(msg.data)
         self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {data}\033[0m")
         self.chat_history.append(data)
