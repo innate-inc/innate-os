@@ -53,7 +53,7 @@ class TurnAndMove(Skill):
                         "type": "number",
                         "description": (
                             "For turn: angle in degrees (default 90). "
-                            "For move: distance in meters (default 0.5). "
+                            "For move: distance in meters (default 0.2). "
                             "For head: angle in degrees (-15 down, 0 center, +15 up)."
                         )
                     }
@@ -79,9 +79,9 @@ class TurnAndMove(Skill):
         elif action == "turn_right":
             return self._turn(angle_degrees=value or 90, direction="right")
         elif action == "move_forward":
-            return self._move(distance=value or 0.5, direction="forward")
+            return self._move(distance=value or 0.2, direction="forward")
         elif action == "move_backward":
-            return self._move(distance=value or 0.5, direction="backward")
+            return self._move(distance=value or 0.2, direction="backward")
         elif action == "move_head":
             return self._move_head(angle=value or 0)
         else:
