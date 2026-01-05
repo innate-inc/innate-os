@@ -8,7 +8,7 @@ from typing import Tuple
 class TextProcessor:
     """Handles text buffering and sentence extraction for speech synthesis."""
     
-    SENTENCE_PATTERN = r'([.!?]+\s+)'
+    SENTENCE_PATTERN = r'([.!?]+(?:\s+|$))'  # Match punctuation followed by whitespace OR end of string
     THINKING_PATTERN = r'<thinking>.*?</thinking>'
     
     @staticmethod

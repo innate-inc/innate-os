@@ -231,9 +231,17 @@ class LiveAgentRunner:
             "output_audio_transcription": {},
             "system_instruction": self.system_instruction,
             "tools": tools,
+            "realtime_input_config": {
+                "automatic_activity_detection": {
+                    "start_of_speech_sensitivity": "START_SENSITIVITY_HIGH",  # Detect speech start faster
+                    "end_of_speech_sensitivity": "END_SENSITIVITY_HIGH",      # Detect speech end faster
+                    "prefix_padding_ms": 50,      # Shorter delay before committing start-of-speech
+                    "silence_duration_ms": 100,    # Shorter silence to commit end-of-speech (lower = faster response)
+                }
+            },
         }
         
-        model_name = "gemini-2.0-flash-exp"
+        model_name = "gemini-2.5-flash-native-audio-preview-12-2025"
         
         try:
             self.logger.info(f"Connecting to Gemini Live API ({model_name})...")
