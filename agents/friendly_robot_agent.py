@@ -62,7 +62,7 @@ class VoiceAssistant(LiveAgent):
         """Seconds between image updates sent to Gemini."""
         return 3.0
 
-    def get_voice_name(self) -> str:
-        """Gemini Live API voice. Options: Puck, Charon, Kore, Fenrir, Aoede."""
-        return "Puck"
+    def get_gaze_enabled(self) -> bool:
+        """Enable autonomous face tracking."""
+        return True
 

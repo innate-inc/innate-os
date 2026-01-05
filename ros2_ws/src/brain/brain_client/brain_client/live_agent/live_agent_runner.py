@@ -120,7 +120,7 @@ class LiveAgentRunner:
         self.proactive_prompt = agent.get_proactive_prompt()
         self.proactive_timeout = agent.get_proactive_timeout()
         self.image_interval = agent.get_image_interval()
-        self.voice_name = agent.get_voice_name()
+        self.gaze_enabled = agent.get_gaze_enabled()
         
         # Hardcoded timing
         self.proactive_idle_buffer = 3.0
@@ -238,7 +238,7 @@ class LiveAgentRunner:
             "response_modalities": ["AUDIO"],
             "speech_config": {
                 "voice_config": {
-                    "prebuilt_voice_config": {"voice_name": self.voice_name}
+                    "prebuilt_voice_config": {"voice_name": "Puck"}
                 }
             },
             "input_audio_transcription": {},
@@ -441,7 +441,7 @@ class LiveAgentRunner:
     
     async def _gaze_monitor(self) -> None:
         """Control gaze tracking based on agent state."""
-        if not self.gaze_controller:
+        if not self.gaze_controller or not self.gaze_enabled:
             return
         
         gaze_active = False

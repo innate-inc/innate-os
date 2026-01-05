@@ -157,14 +157,13 @@ class LiveAgent(Agent):
         """
         return 3.0
     
-    def get_voice_name(self) -> str:
+    def get_gaze_enabled(self) -> bool:
         """
-        Gemini Live API voice name for speech synthesis.
+        Whether to enable autonomous gaze tracking (face detection + head/wheel follow).
         
-        Options: "Puck", "Charon", "Kore", "Fenrir", "Aoede"
-        Override to customize. Default: "Puck".
+        Override to customize. Default: True.
         """
-        return "Puck"
+        return True
     
     def get_prompt(self) -> Optional[str]:
         """
