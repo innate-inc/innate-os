@@ -261,38 +261,50 @@ class LiveAgentRunner:
         
         for skill_name in self.agent.get_skills():
             if skill_name not in self.skills_dict:
+                self.logger.warning(f"Skill '{skill_name}' not found in skills_dict")
                 continue
             
             skill = self.skills_dict[skill_name]
             metadata = getattr(skill, 'metadata', {})
             
-            # Build parameters schema from skill inputs
-            inputs = metadata.get('inputs', {})
-            properties = {}
-            required = []
+            # Get description from metadata (try 'description' first, then 'guidelines')
+            description = metadata.get('description') or metadata.get('guidelines') or f"Execute {skill_name} skill"
             
-            for param_name, param_type in inputs.items():
-                param_schema = {"type": "string"}  # Default
-                if "float" in str(param_type).lower():
-                    param_schema = {"type": "number"}
-                elif "int" in str(param_type).lower():
-                    param_schema = {"type": "integer"}
-                elif "bool" in str(param_type).lower():
-                    param_schema = {"type": "boolean"}
+            # Get parameters - use full schema if provided, otherwise build from 'inputs'
+            if 'parameters' in metadata:
+                # Full Gemini-style parameters schema provided
+                parameters = metadata['parameters']
+            else:
+                # Build from simple 'inputs' dict (legacy format)
+                inputs = metadata.get('inputs', {})
+                properties = {}
+                required = []
                 
-                properties[param_name] = param_schema
+                for param_name, param_type in inputs.items():
+                    param_schema = {"type": "string"}  # Default
+                    if "float" in str(param_type).lower():
+                        param_schema = {"type": "number"}
+                    elif "int" in str(param_type).lower():
+                        param_schema = {"type": "integer"}
+                    elif "bool" in str(param_type).lower():
+                        param_schema = {"type": "boolean"}
+                    
+                    properties[param_name] = param_schema
+                
+                parameters = {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                }
             
             # Create function declaration
             func_decl = types.FunctionDeclaration(
                 name=skill_name,
-                description=metadata.get('guidelines', f"Execute {skill_name} skill"),
-                parameters={
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                },
+                description=description,
+                parameters=parameters,
             )
             declarations.append(func_decl)
+            self.logger.info(f"🔧 Registered skill: {skill_name}")
         
         if declarations:
             return [types.Tool(function_declarations=declarations)]

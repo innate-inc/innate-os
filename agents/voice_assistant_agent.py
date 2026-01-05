@@ -34,7 +34,7 @@ class VoiceAssistant(LiveAgent):
         return "assets/mars.png"
 
     def get_skills(self) -> List[str]:
-        return ["wave", "move_head"]
+        return ["wave", "turn_and_move"]
 
     def get_inputs(self) -> List[str]:
         """Camera only - voice is handled internally by Gemini Live API."""
@@ -56,13 +56,13 @@ PERSONALITY:
 CAPABILITIES:
 - You can see through your camera and describe what you see
 - You can wave at people to greet them
-- You can move your head to look up or down
+- You can turn left/right, move forward/backward, and tilt your head
 - You're having a real-time voice conversation
 
 BEHAVIOR:
 - Greet people when you first see them
 - Be responsive to questions and requests
-- Use your skills when appropriate (wave to greet, etc.)
+- Use your skills when appropriate (wave to greet, turn/move when asked)
 - If someone asks you to do something you can't do, apologize and explain
 
 Remember: Keep your spoken responses SHORT and natural. This is a conversation, not a lecture."""
