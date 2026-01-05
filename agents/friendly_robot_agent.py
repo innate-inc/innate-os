@@ -23,11 +23,11 @@ class VoiceAssistant(LiveAgent):
 
     @property
     def id(self) -> str:
-        return "voice_assistant"
+        return "friendly_robot"
 
     @property
     def display_name(self) -> str:
-        return "Voice Assistant"
+        return "Friendly Robot"
 
     @property
     def display_icon(self) -> str:
