@@ -344,7 +344,8 @@ class LiveAgentRunner:
         """Send mic audio to Gemini."""
         while self.running:
             msg = await self.audio_queue_mic.get()
-            await session.send_realtime_input(audio=msg)
+            if not self.state.is_speaking():
+                await session.send_realtime_input(audio=msg)
     
     # ==================== IMAGE HANDLING ====================
     
