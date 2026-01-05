@@ -511,7 +511,11 @@ class LiveAgentRunner:
             self.state.stop_skill()
     
     async def _send_skill_goal(self, skill_name: str, params: dict) -> dict:
-        """Send skill goal and wait for result."""
+        """Send skill goal using proper ROS2 callback + asyncio bridge pattern.
+        
+        ROS2 action futures are processed by the main executor thread.
+        We use callbacks + call_soon_threadsafe to bridge to asyncio.
+        """
         goal = ExecutePrimitive.Goal()
         goal.primitive_type = skill_name
         goal.inputs = json.dumps(params)
@@ -520,27 +524,48 @@ class LiveAgentRunner:
         if not self.skill_client.wait_for_server(timeout_sec=5.0):
             return {"success": False, "message": "Skill server not available"}
         
-        # Send goal
-        future = self.skill_client.send_goal_async(goal)
+        # asyncio.Event for cross-thread signaling
+        done = asyncio.Event()
+        result_holder = {}
         
-        # Wait for goal acceptance
-        goal_handle = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: future.result()
-        )
+        def on_goal_response(future):
+            """ROS callback - runs in main executor thread."""
+            try:
+                goal_handle = future.result()
+                if goal_handle is None or not goal_handle.accepted:
+                    result_holder["success"] = False
+                    result_holder["message"] = "Goal rejected"
+                    self._loop.call_soon_threadsafe(done.set)
+                    return
+                # Goal accepted - now wait for result
+                goal_handle.get_result_async().add_done_callback(on_result)
+            except Exception as e:
+                result_holder["success"] = False
+                result_holder["message"] = str(e)
+                self._loop.call_soon_threadsafe(done.set)
         
-        if not goal_handle.accepted:
-            return {"success": False, "message": "Skill goal rejected"}
+        def on_result(future):
+            """ROS callback - runs in main executor thread."""
+            try:
+                result = future.result()
+                result_holder["success"] = result.result.success
+                result_holder["message"] = result.result.message
+            except Exception as e:
+                result_holder["success"] = False
+                result_holder["message"] = str(e)
+            # Signal asyncio loop from ROS thread
+            self._loop.call_soon_threadsafe(done.set)
         
-        # Wait for result
-        result_future = goal_handle.get_result_async()
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: result_future.result()
-        )
+        # Send goal - callback will be processed by main executor
+        self.skill_client.send_goal_async(goal).add_done_callback(on_goal_response)
         
-        return {
-            "success": result.result.success,
-            "message": result.result.message
-        }
+        # Await completion with timeout
+        try:
+            await asyncio.wait_for(done.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            return {"success": False, "message": "Skill timeout"}
+        
+        return result_holder
     
     def _handle_interrupt(self) -> None:
         """Cancel current action (skill execution) on interrupt."""
