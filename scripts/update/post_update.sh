@@ -17,7 +17,8 @@
 #   7. Zsh configuration
 #   8. DDS setup
 #   9. Sudoers configuration
-#   10. Service restart
+#   10. Move primitives .h5 files to skills directory
+#   11. Service restart
 
 set -e  # Exit on error
 
@@ -447,7 +448,29 @@ chmod 440 "$SUDOERS_FILE"
 log "  Sudoers configured for $ACTUAL_USER"
 
 # -----------------------------------------------------------------------------
-# 10. Enable and restart services
+# 10. Move primitives .h5 files to skills directory
+# -----------------------------------------------------------------------------
+log "Migrating primitives .h5 files to skills directory..."
+PRIMITIVES_DIR="$REPO_DIR/primitives"
+if [ -d "$PRIMITIVES_DIR" ]; then
+    # Move each .h5 file to corresponding skills/ path (e.g. primitives/x/a.h5 -> skills/x/a.h5)
+    find "$PRIMITIVES_DIR" -name "*.h5" -type f | while read -r h5_file; do
+        # Remove the primitives directory path to get just the relative path (e.g. /path/primitives/x/a.h5 -> x/a.h5)
+        rel_path="${h5_file#$PRIMITIVES_DIR/}"
+        mkdir -p "$REPO_DIR/skills/$(dirname "$rel_path")"
+        log "  Moving $rel_path"
+        mv "$h5_file" "$REPO_DIR/skills/$rel_path"
+    done
+    
+    # Remove primitives directory if no files remain
+    if [ -z "$(find "$PRIMITIVES_DIR" -type f)" ]; then
+        rm -rf "$PRIMITIVES_DIR"
+        log "  Removed empty primitives directory"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+# 11. Enable and restart services
 # -----------------------------------------------------------------------------
 log "Enabling and starting services..."
 
@@ -491,7 +514,7 @@ for service in "${SERVICES[@]}"; do
 done
 
 # -----------------------------------------------------------------------------
-# 11. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
+# 12. Launch ROS nodes in Tmux (optional, depends on ros-app.service)
 # -----------------------------------------------------------------------------
 # Note: If ros-app.service is configured correctly, it will launch the tmux session
 # If not using systemd, you can manually launch:
