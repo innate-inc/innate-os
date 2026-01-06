@@ -60,7 +60,7 @@ def generate_launch_description():
         executable='map_server',
         name='navigation_map_server',
         output='screen',
-        parameters=[]
+        parameters=[{'yaml_filename': ''}]
     )
     
     # Create the AMCL node
@@ -105,48 +105,6 @@ def generate_launch_description():
         parameters=[controller_params_file, costmap_params_file],
         remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
-    
-    # Create the velocity smoother node
-    velocity_smoother_node = Node(
-        package='nav2_velocity_smoother',
-        executable='velocity_smoother',
-        name='navigation_velocity_smoother',
-        output='screen',
-        parameters=[smoother_params_file],
-        remappings=[('cmd_vel', '/cmd_vel_raw'),
-                    ('cmd_vel_smoothed', '/cmd_vel')]
-    )
-
-    # Create the BT Navigator node
-    # Override BT XML paths with package-relative paths
-    nav_to_pose_bt_xml = os.path.join(share_dir, 'config', 'nav_to_pose.xml')
-    nav_through_poses_bt_xml = os.path.join(share_dir, 'config', 'nav_through_poses.xml')
-    
-    bt_navigator_node = Node(
-        package='nav2_bt_navigator',
-        executable='bt_navigator',
-        name='navigation_bt_navigator',
-        output='screen',
-        parameters=[
-            bt_navigator_params_file,
-            {'default_nav_to_pose_bt_xml': nav_to_pose_bt_xml},
-            {'default_nav_through_poses_bt_xml': nav_through_poses_bt_xml}
-        ]
-    )
-    
-    # Create the behavior server node
-    behavior_server_node = Node(
-        package='nav2_behaviors',
-        executable='behavior_server',
-        name='navigation_behavior_server',
-        output='screen',
-        parameters=[behavior_params_file],
-        arguments=['--ros-args', '--log-level', 'warn'],
-        remappings=[
-            # send behavior_server's cmd_vel into the smoother's input
-            ('cmd_vel', 'cmd_vel_raw'),
-        ]
-    )
 
     return LaunchDescription([
         amcl_params_arg,
@@ -156,7 +114,4 @@ def generate_launch_description():
         amcl_node,
         planner_node,
         controller_node,
-        velocity_smoother_node,
-        bt_navigator_node,
-        behavior_server_node,
     ])

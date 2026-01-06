@@ -32,9 +32,9 @@ modes_nodes = {
     'mapfree': [
             'mapfree_planner_server',
             'mapfree_controller_server',
-            'mapfree_bt_navigator',
-            'mapfree_behavior_server',
-            'mapfree_velocity_smoother'
+            'bt_navigator',
+            'behavior_server',
+            'velocity_smoother'
 
     ],
     'navigation': [
@@ -43,9 +43,9 @@ modes_nodes = {
             'navigation_amcl', 
             'navigation_planner_server', 
             'navigation_controller_server', 
-            'navigation_bt_navigator', 
-            'navigation_behavior_server',
-            'navigation_velocity_smoother'
+            'bt_navigator', 
+            'behavior_server',
+            'velocity_smoother'
 
     ],
 }
@@ -56,6 +56,7 @@ class NavigationMode(Enum):
 
 class ModeManager(Node):
     def __init__(self):
+        self.log_num = 0
         super().__init__('mode_manager')
 
         # Service clients created in callbacks need a re-entrant callback group,
@@ -325,7 +326,9 @@ class ModeManager(Node):
 
     def publish_status(self):
         """Publish current mode, available maps, and current map"""
-        self.get_logger().info("Publishing status every second...")
+        # self.log_num += 1
+        # if not (self.log_num % 10): 
+        self.get_logger().info("Publishing status every second....", throttle_duration_sec = 10)
         # Publish current mode
         mode_msg = String()
         mode_msg.data = self.current_mode
