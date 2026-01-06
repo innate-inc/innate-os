@@ -92,16 +92,17 @@ class GridLocalizer(Node):
         super().__init__(node_name, **kwargs)
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         """Unconfigured → Inactive: Declare parameters and create resources."""
-        # Parameters
-        self.declare_parameter('sample_distance', 0.15)  # meters between samples
-        self.declare_parameter('angle_samples', 36)  # angles to try (360/36 = 10° increments)
-        self.declare_parameter('batch_size', 4000)  # poses per GPU batch (reduced for memory)
-        self.declare_parameter('max_range', 12.0)  # max lidar range
-        self.declare_parameter('scan_topic', '/scan_fast')
-        self.declare_parameter('auto_localize_timeout', 30.0)  # seconds
-        self.declare_parameter('max_score_threshold', 0.3)  # lower = stricter match
-        self.declare_parameter('auto_localize', True)  # enable auto-localize on startup
-        self.declare_parameter('bond_heartbeat_period', 0.25)  # bond heartbeat period
+        # Parameters - only declare if first one doesn't exist
+        if not self.has_parameter('sample_distance'):
+            self.declare_parameter('sample_distance', 0.15)  # meters between samples
+            self.declare_parameter('angle_samples', 36)  # angles to try (360/36 = 10° increments)
+            self.declare_parameter('batch_size', 4000)  # poses per GPU batch (reduced for memory)
+            self.declare_parameter('max_range', 12.0)  # max lidar range
+            self.declare_parameter('scan_topic', '/scan_fast')
+            self.declare_parameter('auto_localize_timeout', 30.0)  # seconds
+            self.declare_parameter('max_score_threshold', 0.3)  # lower = stricter match
+            self.declare_parameter('auto_localize', True)  # enable auto-localize on startup
+            self.declare_parameter('bond_heartbeat_period', 0.25)  # bond heartbeat period
         
         self.sample_dist = self.get_parameter('sample_distance').value
         self.angle_samples = self.get_parameter('angle_samples').value
