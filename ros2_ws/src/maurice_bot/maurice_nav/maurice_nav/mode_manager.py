@@ -2,9 +2,13 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from brain_messages.srv import ChangeMap, ChangeNavigationMode, SaveMap, DeleteMap
-from nav2_msgs.srv import ManageLifecycleNodes, LoadMap
+from nav2_msgs.srv import LoadMap
+from lifecycle_msgs.msg import Transition, State
+from lifecycle_msgs.srv import GetState, ChangeState
 import subprocess
 import signal
 import os
@@ -21,6 +25,30 @@ from geometry_msgs.msg import Pose
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 
+
+# TODO: move this into launch file?
+modes_nodes = {
+    'mapping': ['slam_toolbox'],
+    'mapfree': [
+            'mapfree_planner_server',
+            'mapfree_controller_server',
+            'mapfree_bt_navigator',
+            'mapfree_behavior_server',
+            'mapfree_velocity_smoother'
+
+    ],
+    'navigation': [
+            'navigation_map_server', 
+            'navigation_grid_localizer',
+            'navigation_amcl', 
+            'navigation_planner_server', 
+            'navigation_controller_server', 
+            'navigation_bt_navigator', 
+            'navigation_behavior_server',
+            'navigation_velocity_smoother'
+
+    ],
+}
 class NavigationMode(Enum):
     NAV = "navigation"
     MAPPING = "mapping"
@@ -29,6 +57,24 @@ class NavigationMode(Enum):
 class ModeManager(Node):
     def __init__(self):
         super().__init__('mode_manager')
+
+        # Service clients created in callbacks need a re-entrant callback group,
+        # otherwise the response callback can be blocked by the running service callback.
+        self._client_cb_group = ReentrantCallbackGroup()
+
+        # Will be set in main() after adding this node to an executor.
+        self._executor = None
+        
+        # Declare parameter for modes_nodes mapping
+        # self.declare_parameter('modes_nodes', {})
+        
+        # # Get modes_nodes from parameter or use default
+        # modes_nodes_param = self.get_parameter('modes_nodes').value
+        # if modes_nodes_param:
+        #     self.modes_nodes = modes_nodes_param
+        #     self.get_logger().info(f'Loaded modes_nodes from parameter: {self.modes_nodes}')
+        # else:
+        #     self.get_logger().error('modes_nodes parameter not provided, using default mapping')
         
         # Service to switch modes
         self.mode_service = self.create_service(
@@ -67,9 +113,6 @@ class ModeManager(Node):
         # Publisher to announce current map
         self.current_map_publisher = self.create_publisher(String, '/nav/current_map', 10)
         
-        # Track current processes
-        self.current_process = None
-        
         # Kill any orphaned navigation processes from previous runs
         self._cleanup_orphaned_processes()
         
@@ -98,7 +141,7 @@ class ModeManager(Node):
         self.current_map = self.load_last_map()
         
         # Timer to publish current mode and maps
-        self.timer = self.create_timer(1.0, self.publish_status)
+        self.timer = self.create_timer(0.1, self.publish_status)
 
         # --- TF2: Mapping pose publisher ---
         self.tf_buffer = tf2_ros.Buffer()
@@ -259,16 +302,17 @@ class ModeManager(Node):
             request = ChangeNavigationMode.Request()
             request.mode = self.current_mode
             response = ChangeNavigationMode.Response()
-            self.change_mode_callback(request, response)
+            self.change_mode_callback(request, response, first_start = True)
         elif self.current_mode == "mapfree":
             self.get_logger().info("Auto-starting in mapfree mode (local Nav2)")
             request = ChangeNavigationMode.Request()
             request.mode = self.current_mode
             response = ChangeNavigationMode.Response()
-            self.change_mode_callback(request, response)
+            self.change_mode_callback(request, response, first_start = True)
 
     def publish_status(self):
         """Publish current mode, available maps, and current map"""
+        self.get_logger().info("Publishing status every second...")
         # Publish current mode
         mode_msg = String()
         mode_msg.data = self.current_mode
@@ -284,136 +328,241 @@ class ModeManager(Node):
         current_map_msg.data = self.current_map
         self.current_map_publisher.publish(current_map_msg)
 
-    def shutdown_lifecycle_managers(self, modes_to_shutdown: list[str]) -> None:
-        """Shutdown lifecycle managers for the specified modes (parallelized)"""
-        clients = []
-        futures = []
-        modes = []
+    def _call_service(self, service_type, service_name: str, request, timeout_sec: float = 2.0):
+        """
+        Generic helper to call any ROS2 service with timeout.
+        Args:
+            service_type: The service type class (e.g., GetState, ChangeState)
+            service_name: Full service name (e.g., '/node_name/get_state')
+            request: The service request object
+            timeout_sec: Timeout for both service availability and response
+        Returns:
+            The service response if successful, None otherwise
+        """
+
+        client = self.create_client(
+            service_type,
+            service_name,
+            callback_group=self._client_cb_group,
+        )
         
-        # Create all clients and send shutdown requests in parallel
-        for check_mode in modes_to_shutdown:
-            try:
-                shutdown_client = self.create_client(
-                    ManageLifecycleNodes,
-                    f'/{check_mode}_lifecycle_manager/manage_nodes'
-                )
-                if shutdown_client.wait_for_service(timeout_sec=1.0):
-                    shutdown_request = ManageLifecycleNodes.Request()
-                    shutdown_request.command = ManageLifecycleNodes.Request.SHUTDOWN
-                    shutdown_future = shutdown_client.call_async(shutdown_request)
-                    clients.append(shutdown_client)
-                    futures.append(shutdown_future)
-                    modes.append(check_mode)
-                else:
-                    self.destroy_client(shutdown_client)
-            except Exception as e:
-                self.get_logger().debug(f"Could not create client for {check_mode}: {e}")
-        
-        # Wait for all futures to complete
-        if futures:
-            start_time = time.time()
-            while not all(f.done() for f in futures) and (time.time() - start_time) < 2.0:
-                rclpy.spin_once(self, timeout_sec=0.1)
+        try:
+            if not client.wait_for_service(timeout_sec=timeout_sec):
+                self.get_logger().info(f"Service '{service_name}' not available")
+                return None
             
-            # Check results
-            for mode, future in zip(modes, futures):
-                if future.done() and future.result() is not None and future.result().success:
-                    self.get_logger().info(f"Shutdown {mode} lifecycle manager")
-        
-        # Clean up all clients
-        for client in clients:
+            future = client.call_async(request)
+            # IMPORTANT: don't call rclpy.spin_until_future_complete(self, ...) here.
+            # This node is already being spun by an executor; creating a nested executor
+            # (or re-adding this node) is unreliable and can deadlock.
+            if self._executor is not None:
+                self._executor.spin_until_future_complete(future, timeout_sec=timeout_sec)
+            else:
+                # Fallback for unit tests / unusual entrypoints.
+                rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
+            raise 1
+            
+            if future.done():
+                result = future.result()
+                if result is not None:
+                    return result
+                else:
+                    self.get_logger().info(f"Service '{service_name}' returned None")
+                    return None
+            else:
+                self.get_logger().info(f"Timeout calling service '{service_name}'")
+                return None
+                
+        except Exception as e:
+            self.get_logger().warning(f"Exception calling service '{service_name}': {e}")
+            return None
+        finally:
             self.destroy_client(client)
+
+    def shutdown_mode(self, mode: str) -> None:
+        """Shutdown all nodes for a given mode in reverse order using proper lifecycle transitions"""
+        if mode not in modes_nodes:
+            self.get_logger().debug(f"Mode '{mode}' not found in modes_nodes")
+            return
+        
+        nodes = modes_nodes.get(mode, [])
+        if not nodes:
+            self.get_logger().debug(f"No nodes configured for mode '{mode}'")
+            return
+        
+        # Iterate in reverse order for shutdown
+        for node_name in reversed(nodes):
+            try:
+                # Get current state of the node
+                get_state_request = GetState.Request()
+                get_state_result = self._call_service(
+                    GetState, 
+                    f'/{node_name}/get_state', 
+                    get_state_request,
+                    timeout_sec=10.0
+                )
+                
+                if get_state_result is None:
+                    self.get_logger().warning(f"Failed to get state for {node_name}")
+                    continue
+                
+                current_state = get_state_result.current_state
+                
+                # Deactivate if active, then cleanup
+                if current_state.id == State.PRIMARY_STATE_ACTIVE:
+                    # Step 1: Deactivate (ACTIVE -> INACTIVE)
+                    self.get_logger().info(f"Deactivating {node_name}")
+                    deactivate_success = self._transition_node(node_name, Transition.TRANSITION_DEACTIVATE)
+                    if deactivate_success:
+                        self.get_logger().info(f"Deactivated {node_name}")
+                        # Step 2: Cleanup (INACTIVE -> UNCONFIGURED)
+                        self.get_logger().info(f"Cleaning up {node_name}")
+                        cleanup_success = self._transition_node(node_name, Transition.TRANSITION_CLEANUP)
+                        if cleanup_success:
+                            self.get_logger().info(f"Cleaned up {node_name}")
+                        else:
+                            self.get_logger().warning(f"Failed to cleanup {node_name}")
+                    else:
+                        self.get_logger().warning(f"Failed to deactivate {node_name}")
+                        
+                elif current_state.id == State.PRIMARY_STATE_INACTIVE:
+                    self.get_logger().info(f"Cleaning up {node_name}")
+                    # Just cleanup (INACTIVE -> UNCONFIGURED)
+                    cleanup_success = self._transition_node(node_name, Transition.TRANSITION_CLEANUP)
+                    if cleanup_success:
+                        self.get_logger().info(f"Cleaned up {node_name}")
+                    else:
+                        self.get_logger().warning(f"Failed to cleanup {node_name}")
+                        
+                elif current_state.id == State.PRIMARY_STATE_UNCONFIGURED:
+                    self.get_logger().info(f"Node {node_name} already unconfigured, skipping")
+                else:
+                    self.get_logger().debug(f"Node {node_name} in state {current_state.label}, no shutdown needed")
+                
+            except Exception as e:
+                self.get_logger().debug(f"Error shutting down {node_name}: {e}")
 
     def request_mode_startup(self, mode: NavigationMode) -> Tuple[bool, str]:
         """
-        Request the navigation lifecycle manager to startup navigation nodes
+        Request startup of navigation nodes for the given mode.
+        First configures all nodes in forward order, then activates them one by one.
         Args:
             mode: The mode type - must be NavigationMode.NAV, NavigationMode.MAPPING, or NavigationMode.MAPFREE
         Returns: (success: bool, message: str)
         """
+
         try:
-            self.get_logger().info("Requesting navigation lifecycle manager startup")
+            self.get_logger().info(f"Requesting {mode.value} mode startup")
             
-            # Stop other lifecycle managers first
-            modes_to_shutdown = [m.value for m in NavigationMode if m != mode]
-            self.shutdown_lifecycle_managers(modes_to_shutdown)
+            # Stop other modes first
+            for other_mode in NavigationMode:
+                if other_mode != mode:
+                    self.shutdown_mode(other_mode.value)
+            self.get_logger().info(f"Shut down other nodes")
             
-            # Now start the requested lifecycle manager
-            lifecycle_client = self.create_client(
-                ManageLifecycleNodes,
-                f'/{mode.value}_lifecycle_manager/manage_nodes'
-            )
-            
-            if not lifecycle_client.wait_for_service(timeout_sec=5.0):
-                msg = "Lifecycle manager service not available"
+            # Get nodes for this mode
+            nodes = modes_nodes.get(mode.value, [])
+            if not nodes:
+                msg = f"No nodes configured for mode '{mode.value}'"
                 self.get_logger().error(msg)
-                self.destroy_client(lifecycle_client)
                 return False, msg
             
-            lifecycle_request = ManageLifecycleNodes.Request()
-            lifecycle_request.command = ManageLifecycleNodes.Request.STARTUP
+            # Phase 1: Configure all nodes in forward order
+            self.get_logger().info(f"Configuring {len(nodes)} nodes for {mode.value} mode")
+            for node_name in nodes:
+                success = self._transition_node(node_name, Transition.TRANSITION_CONFIGURE)
+                if not success:
+                    self.get_logger().warning(f"Failed to configure {node_name}, continuing...")
+            self.get_logger().info(f"Configured nodes")
             
-            lifecycle_future = lifecycle_client.call_async(lifecycle_request)
             
-            # For navigation mode, keep trying to load map until it succeeds or lifecycle completes
-            map_client = None
+            # Phase 2: Activate nodes in forward order
             map_load_success = False
+            activation_failures = []
             
-            if mode == NavigationMode.NAV:
-                map_client = self.create_client(LoadMap, '/map_server/load_map')
+            self.get_logger().info(f"Activating {len(nodes)} nodes for {mode.value} mode")
+            for node_name in nodes:
+                success = self._transition_node(node_name, Transition.TRANSITION_ACTIVATE)
+                if not success:
+                    activation_failures.append(node_name)
+                    self.get_logger().warning(f"Failed to activate {node_name}")
                 
-                if map_client.wait_for_service(timeout_sec=2.0):
-                    self.get_logger().info(f"Attempting to load map: {os.path.join(self.maps_dir, self.current_map)}")
+                # Load map immediately after map server is activated (navigation mode only)
+                if mode == NavigationMode.NAV and 'map_server' in node_name and success:
+                    map_request = LoadMap.Request()
+                    map_request.map_url = os.path.join(self.maps_dir, self.current_map)
                     
-                    while not map_load_success and not lifecycle_future.done():
-                        # Try to load the map
-                        map_request = LoadMap.Request()
-                        map_request.map_url = os.path.join(self.maps_dir, self.current_map)
-                        map_future = map_client.call_async(map_request)
+                    self.get_logger().info(f"Loading map: {os.path.join(self.maps_dir, self.current_map)}")
+                    
+                    # Retry map loading until success
+                    retry_count = 0
+                    while not map_load_success:
+                        map_result = self._call_service(
+                            LoadMap,
+                            f'/{node_name}/load_map',
+                            map_request,
+                            timeout_sec=5.0
+                        )
                         
-                        # Wait for map response with short timeout, keep spinning to check lifecycle
-                        start_time = time.time()
-                        while not map_future.done() and not lifecycle_future.done() and (time.time() - start_time) < 1.0:
-                            rclpy.spin_once(self, timeout_sec=0.1)
-                        
-                        # Check map result
-                        if map_future.done():
-                            if map_future.result() is not None and map_future.result().result == 0:
-                                map_load_success = True
-                                self.get_logger().info("Map loaded successfully")
-                                break
-                            else:
-                                self.get_logger().warning("Map load failed, retrying...")
-                                time.sleep(0.5)  # Brief pause before retry
-                else:
-                    self.get_logger().warning("Map server service not available")
+                        if map_result is not None and map_result.result == 0:
+                            map_load_success = True
+                            self.get_logger().info(f"Map loaded successfully after {retry_count + 1} attempt(s)")
+                        else:
+                            retry_count += 1
+                            self.get_logger().warning(f"Map load attempt {retry_count} failed, retrying...")
+                            time.sleep(0.25)
             
-            # Wait for lifecycle manager to complete if not already done
-            while not lifecycle_future.done():
-                rclpy.spin_once(self, timeout_sec=0.1)
+            self.get_logger().info(f"Activated nodes")
             
-            success = False
-            message = "Lifecycle startup failed"
-            
-            if lifecycle_future.result() is not None and lifecycle_future.result().success:
-                success = True
-                map_status = "loaded" if map_load_success else "not loaded" if mode == NavigationMode.NAV else "N/A"
-                message = f"Navigation lifecycle manager started successfully (map: {map_status})"
-                self.get_logger().info(message)
+            if activation_failures:
+                message = f"{mode.value} mode started with {len(activation_failures)} activation failures: {activation_failures}"
+                self.get_logger().warning(message)
             else:
-                self.get_logger().error(message)
+                map_status = "loaded" if map_load_success else "not loaded" if mode == NavigationMode.NAV else "N/A"
+                message = f"{mode.value} mode started successfully (map: {map_status})"
+                self.get_logger().info(message)
             
-            # Clean up clients
-            self.destroy_client(lifecycle_client)
-            if map_client is not None:
-                self.destroy_client(map_client)
-            
-            return success, message
+            return len(activation_failures) == 0, message
             
         except Exception as e:
-            error_msg = f"Error requesting navigation startup: {str(e)}"
+            error_msg = f"Error requesting {mode.value} startup: {str(e)}"
             self.get_logger().error(error_msg)
             return False, error_msg
+    
+    def _transition_node(self, node_name: str, transition_id: int) -> bool:
+        """
+        Send a lifecycle transition to a specific node.
+        Args:
+            node_name: Name of the node to transition
+            transition_id: The transition ID from Transition message
+        Returns: True if transition succeeded, False otherwise
+        """
+        try:
+            change_state_request = ChangeState.Request()
+            change_state_request.transition = Transition()
+            change_state_request.transition.id = transition_id
+            
+            change_state_result = self._call_service(
+                ChangeState,
+                f'/{node_name}/change_state',
+                change_state_request,
+                timeout_sec=8.0
+            )
+            
+            if change_state_result is not None:
+                success = change_state_result.success
+                if success:
+                    self.get_logger().debug(f"Transition {transition_id} succeeded for {node_name}")
+                else:
+                    self.get_logger().debug(f"Transition {transition_id} failed for {node_name}")
+                return success
+            else:
+                self.get_logger().warning(f"Timeout waiting for transition on {node_name}")
+                return False
+            
+        except Exception as e:
+            self.get_logger().debug(f"Error transitioning {node_name}: {e}")
+            return False
 
     def change_map_callback(self, request, response):
         """
@@ -438,12 +587,12 @@ class ModeManager(Node):
             self.save_last_map(requested_map)
             
             # If we're in navigation mode, restart navigation with the new map
-            if self.current_mode == "navigation" and self.current_process and self.current_process.poll() is None:
+            if self.current_mode == "navigation":
                 self.get_logger().info(f"Restarting navigation with new map: {requested_map}")
                 
                 # TODO: how to minimize reset speed. do we even need a reset does just publishing a new map handle everything
                 # Shutdown nav first, then startup with new map
-                self.shutdown_lifecycle_managers(["nav"])
+                self.shutdown_mode("navigation")
                 success, message = self.request_mode_startup(NavigationMode.NAV)
                 
                 if success:
@@ -491,7 +640,7 @@ class ModeManager(Node):
                 return response
 
             # Prevent deleting the active map while navigation is running
-            if map_yaml_name == self.current_map and self.current_mode == "navigation" and self.current_process and self.current_process.poll() is None:
+            if map_yaml_name == self.current_map and self.current_mode == "navigation":
                 response.success = False
                 response.message = f"Cannot delete the active map '{map_yaml_name}' while navigation is running. Change map or stop navigation first."
                 self.get_logger().error(response.message)
@@ -656,19 +805,22 @@ class ModeManager(Node):
     def _cleanup_orphaned_processes(self):
         """Kill any orphaned navigation processes from previous mode_manager runs."""
         try:
-            # Shutdown all lifecycle managers gracefully
-            self.get_logger().info('Attempting to shutdown lifecycle managers...')
-            self.shutdown_lifecycle_managers([m.value for m in NavigationMode])
-            self.get_logger().info('Cleaned up lifecycle managers')
+            # Shutdown all modes gracefully
+            self.get_logger().info('Attempting to shutdown all modes...')
+            for mode in NavigationMode:
+                self.shutdown_mode(mode.value)
+            self.get_logger().info('Cleaned up all modes')
         except Exception as e:
             self.get_logger().warn(f'Cleanup warning: {e}')
 
-    def change_mode_callback(self, request, response):
+    def change_mode_callback(self, request, response, first_start = False):
         """
         Service callback to switch between modes
         request.mode = "navigation": Switch to navigation mode
         request.mode = "mapping": Switch to mapping mode
         """
+
+        self.get_logger().info("Attempting to change mode")
         try:
             target_mode = request.mode.strip().lower()
             
@@ -687,8 +839,7 @@ class ModeManager(Node):
                 return response
             
             # Don't restart if already in the requested mode
-            if self.current_mode == target_mode and (
-                (self.current_process and self.current_process.poll() is None)):
+            if self.current_mode == target_mode and not first_start:
                 response.success = True
                 response.message = f"Already in {target_mode} mode"
                 self.get_logger().info(response.message)
@@ -723,7 +874,6 @@ class ModeManager(Node):
             }
             target_mode_enum = mode_enum_map.get(target_mode)
             
-            # Use service call to start the lifecycle manager
             self.get_logger().info(f"Starting {target_mode} mode...")
             success, message = self.request_mode_startup(target_mode_enum)
             
@@ -753,14 +903,15 @@ class ModeManager(Node):
             response.message = f"Error switching modes: {str(e)}"
             self.get_logger().error(response.message)
             self.current_mode = "none"
-            self.current_process = None
 
+        self.get_logger().info("returning from change mode callback")
         return response
 
     def __del__(self):
         """Cleanup when node is destroyed"""
         try:
-            self.shutdown_lifecycle_managers([m.value for m in NavigationMode])
+            for mode in NavigationMode:
+                self.shutdown_mode(mode.value)
         except Exception as e:
             pass  # Silently ignore cleanup errors during destruction
             # TODO: is this a good idea?
@@ -771,17 +922,27 @@ def main(args=None):
     mode_manager = ModeManager()
     
     try:
-        rclpy.spin(mode_manager)
+        executor = MultiThreadedExecutor()
+        executor.add_node(mode_manager)
+        mode_manager._executor = executor
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
         # Clean up any running processes
         try:
-            self.shutdown_lifecycle_managers([m.value for m in NavigationMode])
+            for mode in NavigationMode:
+                mode_manager.shutdown_mode(mode.value)
         except Exception as e:
             pass  # Silently ignore cleanup errors during destruction
             # TODO: is this a good idea?
 
+        try:
+            if getattr(mode_manager, '_executor', None) is not None:
+                mode_manager._executor.remove_node(mode_manager)
+                mode_manager._executor.shutdown()
+        except Exception:
+            pass
 
         mode_manager.destroy_node()
         rclpy.shutdown()

@@ -207,12 +207,13 @@ class GridLocalizer(Node):
     
     def _destroy_bond(self):
         """Destroy bond connection to lifecycle manager."""
-        if self.bond_heartbeat_period > 0.0:
+        if self.bond is not None:
             self.get_logger().info(f'Destroying bond ({self.get_name()}) to lifecycle manager.')
             self.bond = None
     def _cleanup_resources(self):
         """Helper method to clean up all node resources."""
         self.get_logger().info('Attempting to clean up Grid Localizer')
+        self._destroy_bond()
         # Destroy timers
         if self._auto_timer:
             self.destroy_timer(self._auto_timer)
@@ -646,26 +647,22 @@ class GridLocalizer(Node):
         
         return scores  # Return CuPy array, caller handles transfer
 
+
 def main(args=None):
     rclpy.init(args=args)
     
-    executor = SingleThreadedExecutor()
+    # executor = SingleThreadedExecutor()
     lc_node = GridLocalizer('grid_localizer')
-    executor.add_node(lc_node)
+    # executor.add_node(lc_node)
     
     try:
-        executor.spin()
+        rclpy.spin(lc_node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        executor.shutdown()
-        lc_node.destroy_node()
         rclpy.shutdown()
+        #lc_node.destroy_node()
+        #rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
-
-
-
-
-

@@ -117,30 +117,6 @@ def generate_launch_description():
                     ('cmd_vel_smoothed', '/cmd_vel')]
     )
 
-    # Create the lifecycle manager node to manage all nodes
-    lifecycle_manager_node = Node(
-        package='nav2_lifecycle_manager',
-        executable='navigation_lifecycle_manager',
-        name='lifecycle_manager_navigation',
-        output='screen',
-        parameters=[{
-            'autostart': False,
-            'bond_timeout': 60.0,
-            'attempt_respawn_reconnection': True,
-            'bond_respawn_max_duration': 30.0,
-            'node_names': [
-                'navigation_map_server', 
-                'navigation_grid_localizer',
-                'navigation_amcl', 
-                'navigation_planner_server', 
-                'navigation_controller_server', 
-                'navigation_bt_navigator', 
-                'navigation_behavior_server',
-                'navigation_velocity_smoother'
-                ]
-        }]
-    )
-
     # Create the BT Navigator node
     # Override BT XML paths with package-relative paths
     nav_to_pose_bt_xml = os.path.join(share_dir, 'config', 'nav_to_pose.xml')
@@ -183,6 +159,4 @@ def generate_launch_description():
         velocity_smoother_node,
         bt_navigator_node,
         behavior_server_node,
-
-        lifecycle_manager_node,
     ])
