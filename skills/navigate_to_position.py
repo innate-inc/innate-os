@@ -25,7 +25,7 @@ class Nav2Controller:
 
         self.logger.info("Nav2 position primitive node created")
 
-    def go_to_position(self, x: float, y: float, theta: float):
+    def go_to_position(self, x: float, y: float, theta: float, global_frame: bool):
         """
         Sends a navigation goal to the navigator and waits until navigation ends.
         The method returns the TaskResult indicating whether the goal

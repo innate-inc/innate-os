@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from brain_messages.srv import ChangeMap, ChangeNavigationMode, SaveMap, DeleteMap
@@ -60,10 +60,16 @@ class ModeManager(Node):
 
         # Service clients created in callbacks need a re-entrant callback group,
         # otherwise the response callback can be blocked by the running service callback.
-        self._client_cb_group = ReentrantCallbackGroup()
+        # self._calls_going_outside_group = MutuallyExclusiveCallbackGroup()
+        # self._internal_callbacks_group = MutuallyExclusiveCallbackGroup()
+        self._calls_going_outside_group = ReentrantCallbackGroup()
+        self._internal_callbacks_group = ReentrantCallbackGroup()
 
         # Will be set in main() after adding this node to an executor.
         self._executor = None
+        
+        # Pre-create service clients and store in dictionary
+        self._service_clients = {}
         
         # Declare parameter for modes_nodes mapping
         # self.declare_parameter('modes_nodes', {})
@@ -80,9 +86,11 @@ class ModeManager(Node):
         self.mode_service = self.create_service(
             ChangeNavigationMode,
             '/nav/change_mode',
-            self.change_mode_callback
+            self.change_mode_callback,
+            callback_group=self._internal_callbacks_group
         )
         
+        # TODO: check if im publishing new map over load_map properly
         # Service to change maps in navigation mode
         self.map_service = self.create_service(
             ChangeMap,
@@ -113,8 +121,11 @@ class ModeManager(Node):
         # Publisher to announce current map
         self.current_map_publisher = self.create_publisher(String, '/nav/current_map', 10)
         
+        # Pre-create service clients for all nodes and service types we'll use
+        self._init_service_clients()
+        
         # Kill any orphaned navigation processes from previous runs
-        self._cleanup_orphaned_processes()
+        # self._cleanup_orphaned_processes()
         
         # Use environment variable if set, otherwise construct from HOME
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
@@ -141,7 +152,7 @@ class ModeManager(Node):
         self.current_map = self.load_last_map()
         
         # Timer to publish current mode and maps
-        self.timer = self.create_timer(0.1, self.publish_status)
+        self.timer = self.create_timer(1, self.publish_status)
 
         # --- TF2: Mapping pose publisher ---
         self.tf_buffer = tf2_ros.Buffer()
@@ -165,7 +176,7 @@ class ModeManager(Node):
         self.get_logger().info(f'- Available maps: {self.available_maps}')
         
         # Auto-start in the saved mode after a short delay
-        self.startup_timer = self.create_timer(3.0, self.auto_start_mode)
+        self.startup_timer = self.create_timer(3.0, self.auto_start_mode, callback_group=self._internal_callbacks_group)
 
     def odom_callback(self, msg):
         # Only publish mapping_pose in mapping mode
@@ -288,6 +299,8 @@ class ModeManager(Node):
     def auto_start_mode(self):
         """Auto-start the mode manager in the last saved mode"""
         self.startup_timer.cancel()  # One-time execution
+
+        self._cleanup_orphaned_processes()
         
         # Check if we want to start navigation but have no maps available
         # In this case, automatically switch to mapping mode
@@ -328,9 +341,52 @@ class ModeManager(Node):
         current_map_msg.data = self.current_map
         self.current_map_publisher.publish(current_map_msg)
 
+    def _init_service_clients(self):
+        """Pre-create all service clients needed for lifecycle management."""
+        # Collect all nodes from all modes
+        all_nodes = set()
+        for nodes_list in modes_nodes.values():
+            all_nodes.update(nodes_list)
+        
+        # Create clients for each node's lifecycle services and map loading
+        for node_name in all_nodes:
+            # GetState service
+            service_key = f'/{node_name}/get_state'
+            if service_key not in self._service_clients:
+                client = self.create_client(
+                    GetState,
+                    service_key,
+                    callback_group=self._calls_going_outside_group
+                )
+                self._service_clients[service_key] = client
+            
+            # ChangeState service
+            service_key = f'/{node_name}/change_state'
+            if service_key not in self._service_clients:
+                client = self.create_client(
+                    ChangeState,
+                    service_key,
+                    callback_group=self._calls_going_outside_group
+                )
+                self._service_clients[service_key] = client
+            
+            # LoadMap service (for map_server nodes)
+            if 'map_server' in node_name:
+                service_key = f'/{node_name}/load_map'
+                if service_key not in self._service_clients:
+                    client = self.create_client(
+                        LoadMap,
+                        service_key,
+                        callback_group=self._calls_going_outside_group
+                    )
+                    self._service_clients[service_key] = client
+        
+        self.get_logger().info(f"Initialized {len(self._service_clients)} service clients")
+
     def _call_service(self, service_type, service_name: str, request, timeout_sec: float = 2.0):
         """
         Generic helper to call any ROS2 service with timeout.
+        Uses pre-created clients from the dictionary.
         Args:
             service_type: The service type class (e.g., GetState, ChangeState)
             service_name: Full service name (e.g., '/node_name/get_state')
@@ -339,28 +395,23 @@ class ModeManager(Node):
         Returns:
             The service response if successful, None otherwise
         """
-
-        client = self.create_client(
-            service_type,
-            service_name,
-            callback_group=self._client_cb_group,
-        )
+        client = self._service_clients[service_name]
         
         try:
             if not client.wait_for_service(timeout_sec=timeout_sec):
                 self.get_logger().info(f"Service '{service_name}' not available")
                 return None
             
+            # result = client.call(request)
             future = client.call_async(request)
-            # IMPORTANT: don't call rclpy.spin_until_future_complete(self, ...) here.
-            # This node is already being spun by an executor; creating a nested executor
-            # (or re-adding this node) is unreliable and can deadlock.
-            if self._executor is not None:
-                self._executor.spin_until_future_complete(future, timeout_sec=timeout_sec)
-            else:
-                # Fallback for unit tests / unusual entrypoints.
-                rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
-            raise 1
+            start_time = time.time()
+            while not future.done():
+                # self.get_logger().info(f"Service not done yet")
+                elapsed = time.time() - start_time
+                if elapsed >= timeout_sec:
+                    self.get_logger().warning(f"Timeout waiting for service '{service_name}' after {elapsed:.2f}s")
+                    return None
+                time.sleep(.1)
             
             if future.done():
                 result = future.result()
@@ -376,8 +427,6 @@ class ModeManager(Node):
         except Exception as e:
             self.get_logger().warning(f"Exception calling service '{service_name}': {e}")
             return None
-        finally:
-            self.destroy_client(client)
 
     def shutdown_mode(self, mode: str) -> None:
         """Shutdown all nodes for a given mode in reverse order using proper lifecycle transitions"""
@@ -407,6 +456,7 @@ class ModeManager(Node):
                     continue
                 
                 current_state = get_state_result.current_state
+                self.get_logger().info(f"{node_name} state {current_state}")
                 
                 # Deactivate if active, then cleanup
                 if current_state.id == State.PRIMARY_STATE_ACTIVE:
@@ -435,7 +485,7 @@ class ModeManager(Node):
                         self.get_logger().warning(f"Failed to cleanup {node_name}")
                         
                 elif current_state.id == State.PRIMARY_STATE_UNCONFIGURED:
-                    self.get_logger().info(f"Node {node_name} already unconfigured, skipping")
+                    self.get_logger().debug(f"Node {node_name} already unconfigured, skipping")
                 else:
                     self.get_logger().debug(f"Node {node_name} in state {current_state.label}, no shutdown needed")
                 
@@ -467,25 +517,30 @@ class ModeManager(Node):
                 self.get_logger().error(msg)
                 return False, msg
             
+            failures = []
             # Phase 1: Configure all nodes in forward order
             self.get_logger().info(f"Configuring {len(nodes)} nodes for {mode.value} mode")
             for node_name in nodes:
                 success = self._transition_node(node_name, Transition.TRANSITION_CONFIGURE)
                 if not success:
+                    failures.append(node_name)
                     self.get_logger().warning(f"Failed to configure {node_name}, continuing...")
             self.get_logger().info(f"Configured nodes")
             
             
             # Phase 2: Activate nodes in forward order
             map_load_success = False
-            activation_failures = []
             
             self.get_logger().info(f"Activating {len(nodes)} nodes for {mode.value} mode")
             for node_name in nodes:
+                if node_name in failures:
+                    self.get_logger().warning(f"{node_name} failed configuration. Not proceeding further.")
+                    break # don't process the rest of the nodes
                 success = self._transition_node(node_name, Transition.TRANSITION_ACTIVATE)
                 if not success:
-                    activation_failures.append(node_name)
-                    self.get_logger().warning(f"Failed to activate {node_name}")
+                    failures.append(node_name)
+                    self.get_logger().warning(f"Failed to activate {node_name}. Not proceeding further.")
+                    break
                 
                 # Load map immediately after map server is activated (navigation mode only)
                 if mode == NavigationMode.NAV and 'map_server' in node_name and success:
@@ -514,15 +569,15 @@ class ModeManager(Node):
             
             self.get_logger().info(f"Activated nodes")
             
-            if activation_failures:
-                message = f"{mode.value} mode started with {len(activation_failures)} activation failures: {activation_failures}"
+            if failures:
+                message = f"{mode.value} mode started with {len(failures)} activation failures: {failures}"
                 self.get_logger().warning(message)
             else:
                 map_status = "loaded" if map_load_success else "not loaded" if mode == NavigationMode.NAV else "N/A"
                 message = f"{mode.value} mode started successfully (map: {map_status})"
                 self.get_logger().info(message)
             
-            return len(activation_failures) == 0, message
+            return len(failures) == 0, message
             
         except Exception as e:
             error_msg = f"Error requesting {mode.value} startup: {str(e)}"
@@ -552,9 +607,9 @@ class ModeManager(Node):
             if change_state_result is not None:
                 success = change_state_result.success
                 if success:
-                    self.get_logger().debug(f"Transition {transition_id} succeeded for {node_name}")
+                    self.get_logger().info(f"Transition {transition_id} succeeded for {node_name}")
                 else:
-                    self.get_logger().debug(f"Transition {transition_id} failed for {node_name}")
+                    self.get_logger().info(f"Transition {transition_id} failed for {node_name}")
                 return success
             else:
                 self.get_logger().warning(f"Timeout waiting for transition on {node_name}")
@@ -922,7 +977,7 @@ def main(args=None):
     mode_manager = ModeManager()
     
     try:
-        executor = MultiThreadedExecutor()
+        executor = MultiThreadedExecutor(num_threads=2)
         executor.add_node(mode_manager)
         mode_manager._executor = executor
         executor.spin()
