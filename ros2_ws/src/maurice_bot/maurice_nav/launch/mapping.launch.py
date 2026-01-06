@@ -36,28 +36,12 @@ def generate_launch_description():
         ],
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
-        name='mapping_slam_toolbox',
+        name='slam_toolbox',
         namespace='',
         output='screen'
     )
-    # Create the lifecycle manager node to manage slam_toolbox
-    lifecycle_manager_node = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager_mapping',
-        output='screen',
-        parameters=[{
-            'autostart': False,
-            'bond_timeout': 60.0,
-            'attempt_respawn_reconnection': True,
-            'bond_respawn_max_duration': 30.0,
-            'node_names': ['mapping_slam_toolbox']
-        }]
-    )
-
     ld = LaunchDescription()
 
     ld.add_action(declare_use_sim_time_argument)
     ld.add_action(async_slam_toolbox_node)
-    ld.add_action(lifecycle_manager_node)
     return ld

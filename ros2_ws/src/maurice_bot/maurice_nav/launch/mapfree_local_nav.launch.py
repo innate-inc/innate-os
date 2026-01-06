@@ -79,23 +79,6 @@ def generate_launch_description():
         remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
 
-    lifecycle_manager_node = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='mapfree_lifecycle_manager',
-        output='screen',
-        parameters=[{
-            'autostart': False,
-            'node_names': [
-                'mapfree_planner_server',
-                'mapfree_controller_server',
-                'mapfree_bt_navigator',
-                'mapfree_behavior_server',
-                'mapfree_velocity_smoother'
-            ]
-        }]
-    )
-
     return LaunchDescription([
         static_tf,
         planner_node,
@@ -103,7 +86,6 @@ def generate_launch_description():
         velocity_smoother_node,
         bt_navigator_node,
         behavior_server_node,
-        lifecycle_manager_node,
     ])
 
 

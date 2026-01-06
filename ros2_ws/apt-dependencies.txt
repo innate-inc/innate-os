@@ -89,9 +89,6 @@ ros-humble-nav2-bt-navigator
 ros-humble-nav2-behaviors
 ros-humble-nav2-lifecycle-manager
 
-# ROS2 Humble packages - SLAM
-ros-humble-slam-toolbox
-
 # ROS2 Humble packages - Vision/Perception
 ros-humble-cv-bridge
 ros-humble-camera-info-manager
