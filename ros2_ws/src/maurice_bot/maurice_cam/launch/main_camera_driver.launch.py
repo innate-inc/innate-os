@@ -18,14 +18,14 @@ def generate_launch_description():
     
     width_arg = DeclareLaunchArgument(
         'width',
-        default_value='2560',
-        description='Camera capture width (full FOV)'
+        default_value='1280',
+        description='Camera capture width (640x480 per side)'
     )
     
     height_arg = DeclareLaunchArgument(
         'height',
-        default_value='720',
-        description='Camera capture height (full FOV)'
+        default_value='480',
+        description='Camera capture height (640x480 per side)'
     )
     
     publish_left_width_arg = DeclareLaunchArgument(

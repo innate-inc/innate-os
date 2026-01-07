@@ -11,8 +11,8 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
 {
   // Declare parameters with defaults
   this->declare_parameter<std::string>("camera_symlink", "usb-3D_USB_Camera_3D_USB_Camera_01.00.00-video-index0");
-  this->declare_parameter<int>("width", 2560);  // Capture at full FOV (2560x720)
-  this->declare_parameter<int>("height", 720);
+  this->declare_parameter<int>("width", 1280);  // Capture at 1280x480 (640x480 per side)
+  this->declare_parameter<int>("height", 480);
   this->declare_parameter<int>("publish_left_width", 640);   // Publish left at 640x480
   this->declare_parameter<int>("publish_left_height", 480);
   this->declare_parameter<int>("publish_stereo_width", 1280); // Publish stereo at 1280x480
@@ -90,7 +90,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Resolved device: %s", camera_device_.c_str());
   RCLCPP_INFO(this->get_logger(), "Capture resolution: %dx%d (full FOV)", capture_width_, capture_height_);
   RCLCPP_INFO(this->get_logger(), "Publish stereo: %dx%d (downscaled in GStreamer)", publish_stereo_width_, publish_stereo_height_);
-  RCLCPP_INFO(this->get_logger(), "Publish left: %dx%d", publish_left_width_, publish_left_height_);
+  RCLCPP_INFO(this->get_logger(), "Publish left: %dx%d (natural split: %dx%d)", publish_left_width_, publish_left_height_, left_width_, left_height_);
   RCLCPP_INFO(this->get_logger(), "FPS: %.1f", fps_);
   RCLCPP_INFO(this->get_logger(), "Frame ID: %s", frame_id_.c_str());
   RCLCPP_INFO(this->get_logger(), "JPEG Quality: %d", jpeg_quality_);
@@ -488,11 +488,11 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   // (A2) Left ROI view from frame (already at publish resolution)
   // After 180° rotation in GStreamer, original right half appears on the left half.
   // -------------------------
-  cv::Rect left_roi(0, 0, publish_stereo_width_ / 2, publish_stereo_height_);
+  cv::Rect left_roi(0, 0, left_width_, left_height_);
   cv::Mat left_view = stereo_out(left_roi);  // Use stereo_out which is guaranteed BGR
   
   // -------------------------
-  // (A3) Left raw msg: Downscale to publish_left_width x publish_left_height
+  // (A3) Left msg: Use publish_left_width x publish_left_height, scale only if needed
   // -------------------------
   auto left_msg = std::make_unique<sensor_msgs::msg::Image>();
   left_msg->header.stamp = current_time;
@@ -511,8 +511,14 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
     left_msg->step
   );
   
-  // Downscale left view to publish resolution (only one resize operation now)
-  cv::resize(left_view, left_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
+  // Only resize if the natural split size doesn't match the requested publish size
+  if (left_width_ == publish_left_width_ && left_height_ == publish_left_height_) {
+    // No scaling needed, copy directly
+    left_view.copyTo(left_out);
+  } else {
+    // Scale to requested size
+    cv::resize(left_view, left_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
+  }
   
   // -------------------------
   // Publish with std::move() for zero-copy intra-process communication
