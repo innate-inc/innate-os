@@ -5,12 +5,19 @@ Launch file for the stereo depth estimator node.
 This launch file runs the stereo depth estimator as a standalone node or as a
 composable node with intra-process communication enabled.
 
+Uses VPI Block Matching algorithm with:
+- Downscaling to calibration resolution for processing
+- OpenCV rectification (accurate)
+- VPI Block Matching (fast, good quality)
+- No post-filtering (cleanest results)
+- Upscaling depth back to input resolution
+
 Usage:
     # Standalone node (subscribes to existing stereo topic)
     ros2 launch maurice_cam stereo_depth_estimator.launch.py
 
     # With custom parameters
-    ros2 launch maurice_cam stereo_depth_estimator.launch.py max_disparity:=128 publish_disparity:=true
+    ros2 launch maurice_cam stereo_depth_estimator.launch.py max_disparity:=80 publish_disparity:=true
 
     # With composable mode for zero-copy IPC (when main camera is in same container)
     ros2 launch maurice_cam stereo_depth_estimator.launch.py use_composable:=true
@@ -53,7 +60,7 @@ def generate_launch_description():
     depth_topic_arg = DeclareLaunchArgument(
         'depth_topic',
         default_value='/mars/main_camera/depth',
-        description='Output depth image topic (32FC1 in meters)'
+        description='Output depth image topic (16UC1 in millimeters)'
     )
     
     disparity_topic_arg = DeclareLaunchArgument(
@@ -70,7 +77,7 @@ def generate_launch_description():
     
     max_disparity_arg = DeclareLaunchArgument(
         'max_disparity',
-        default_value='64',
+        default_value='80',
         description='Maximum disparity for stereo matching (higher = closer objects, more compute)'
     )
     
@@ -116,35 +123,23 @@ def generate_launch_description():
         description='Point cloud decimation (1=full, 2=half, 4=quarter, 8=1/8th resolution)'
     )
     
-    # Disparity filtering arguments
-    enable_disparity_filter_arg = DeclareLaunchArgument(
-        'enable_disparity_filter',
-        default_value='true',
-        description='Enable disparity filtering (median + bilateral)'
+    # Block Matching parameters (from Python script that worked best)
+    bm_window_size_arg = DeclareLaunchArgument(
+        'bm_window_size',
+        default_value='11',
+        description='Block matching window size (odd number, typically 5-15)'
     )
     
-    median_filter_size_arg = DeclareLaunchArgument(
-        'median_filter_size',
-        default_value='5',
-        description='Median filter kernel size (0=disabled, 3/5/7). Removes outlier speckles.'
+    bm_quality_arg = DeclareLaunchArgument(
+        'bm_quality',
+        default_value='8',
+        description='Block matching quality level (0-8, higher = better quality but slower)'
     )
     
-    bilateral_filter_size_arg = DeclareLaunchArgument(
-        'bilateral_filter_size',
-        default_value='5',
-        description='Bilateral filter kernel size (0=disabled, 3/5/7/9). Edge-preserving smoothing.'
-    )
-    
-    bilateral_sigma_space_arg = DeclareLaunchArgument(
-        'bilateral_sigma_space',
-        default_value='1.5',
-        description='Bilateral filter spatial sigma (larger = more spatial smoothing)'
-    )
-    
-    bilateral_sigma_color_arg = DeclareLaunchArgument(
-        'bilateral_sigma_color',
-        default_value='50.0',
-        description='Bilateral filter intensity sigma (larger = smoother across intensity boundaries)'
+    bm_conf_threshold_arg = DeclareLaunchArgument(
+        'bm_conf_threshold',
+        default_value='16000',
+        description='Confidence threshold (0-65535, lower = more details/noise)'
     )
 
     # Common parameters for both modes
@@ -163,11 +158,9 @@ def generate_launch_description():
         'publish_pointcloud': LaunchConfiguration('publish_pointcloud'),
         'pointcloud_topic': LaunchConfiguration('pointcloud_topic'),
         'pointcloud_decimation': LaunchConfiguration('pointcloud_decimation'),
-        'enable_disparity_filter': LaunchConfiguration('enable_disparity_filter'),
-        'median_filter_size': LaunchConfiguration('median_filter_size'),
-        'bilateral_filter_size': LaunchConfiguration('bilateral_filter_size'),
-        'bilateral_sigma_space': LaunchConfiguration('bilateral_sigma_space'),
-        'bilateral_sigma_color': LaunchConfiguration('bilateral_sigma_color'),
+        'bm_window_size': LaunchConfiguration('bm_window_size'),
+        'bm_quality': LaunchConfiguration('bm_quality'),
+        'bm_conf_threshold': LaunchConfiguration('bm_conf_threshold'),
     }]
 
     # Standalone node (default)
@@ -218,13 +211,10 @@ def generate_launch_description():
         publish_pointcloud_arg,
         pointcloud_topic_arg,
         pointcloud_decimation_arg,
-        enable_disparity_filter_arg,
-        median_filter_size_arg,
-        bilateral_filter_size_arg,
-        bilateral_sigma_space_arg,
-        bilateral_sigma_color_arg,
+        bm_window_size_arg,
+        bm_quality_arg,
+        bm_conf_threshold_arg,
         # Nodes (one will be active based on use_composable)
         standalone_node,
         composable_container,
     ])
-

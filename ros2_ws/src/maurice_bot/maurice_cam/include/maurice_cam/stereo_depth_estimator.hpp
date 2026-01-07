@@ -15,12 +15,7 @@
 // VPI headers
 #include <vpi/VPI.h>
 #include <vpi/OpenCVInterop.hpp>
-#include <vpi/algo/Remap.h>
 #include <vpi/algo/StereoDisparity.h>
-#include <vpi/algo/ConvertImageFormat.h>
-#include <vpi/algo/MedianFilter.h>
-#include <vpi/algo/BilateralFilter.h>
-#include <vpi/WarpMap.h>
 
 namespace maurice_cam
 {
@@ -29,8 +24,14 @@ namespace maurice_cam
  * @brief Stereo Depth Estimator component node using NVIDIA VPI
  * 
  * This node subscribes to stereo image topic using zero-copy intra-process
- * communication, performs GPU-accelerated rectification, disparity and depth
- * estimation using NVIDIA VPI, and publishes the depth image.
+ * communication, performs GPU-accelerated stereo matching using VPI Block
+ * Matching algorithm, and publishes the depth image.
+ * 
+ * Key features:
+ * - Scales input to calibration resolution for processing
+ * - Uses VPI Block Matching (faster than SGM, good quality)
+ * - No post-filtering (cleanest results per testing)
+ * - Scales depth back to input resolution for publishing
  */
 class StereoDepthEstimator : public rclcpp::Node
 {
@@ -65,12 +66,6 @@ private:
    * @return true if successful, false otherwise
    */
   bool initializeVPI();
-
-  /**
-   * @brief Create warp maps for stereo rectification
-   * @return true if successful, false otherwise
-   */
-  bool createWarpMaps();
 
   /**
    * @brief Cleanup VPI resources
@@ -109,23 +104,21 @@ private:
   int process_every_n_frames_;  // Process 1 out of every N frames
   int pointcloud_decimation_;   // Decimate point cloud (1=full, 2=half, 4=quarter)
 
-  // Disparity filtering parameters
-  bool enable_disparity_filter_;    // Enable disparity filtering pipeline
-  int median_filter_size_;          // Median filter kernel size (0=disabled, 3/5/7)
-  int bilateral_filter_size_;       // Bilateral filter kernel size (0=disabled, 3/5/7/9)
-  float bilateral_sigma_space_;     // Bilateral spatial sigma
-  float bilateral_sigma_color_;     // Bilateral intensity sigma
+  // Block Matching parameters (from Python script that worked best)
+  int bm_window_size_;          // Block matching window size (default: 11)
+  int bm_quality_;              // Quality level 0-8 (default: 8 = max quality)
+  int bm_conf_threshold_;       // Confidence threshold (default: 16000, lower = more details)
 
-  // Quality parameters (to match OpenCV SGBM)
-  int confidence_threshold_;        // Reject pixels with confidence below this (0-65535)
-  int min_disparity_threshold_;     // Minimum disparity in Q11.4 (reject noise, 16 = 1 pixel)
-  int window_size_;                 // SGM window size
-
-  // Image dimensions
-  int stereo_width_;   // Full stereo image width (left + right)
-  int stereo_height_;  // Full stereo image height
-  int image_width_;    // Single camera image width
+  // Image dimensions - input (from camera)
+  int stereo_width_;   // Full stereo image width (left + right) from camera
+  int stereo_height_;  // Full stereo image height from camera
+  int image_width_;    // Single camera image width (stereo_width / 2)
   int image_height_;   // Single camera image height
+
+  // Image dimensions - calibration (processing resolution)
+  int calib_width_;    // Calibration image width (from YAML)
+  int calib_height_;   // Calibration image height (from YAML)
+  double depth_scale_; // Scale factor: calib_width / image_width
 
   // Calibration parameters (loaded from YAML)
   cv::Mat K1_, D1_;  // Left camera intrinsics and distortion
@@ -137,34 +130,19 @@ private:
   double baseline_;  // Baseline distance (meters)
   double focal_length_; // Focal length in pixels (after rectification)
 
-  // OpenCV rectification maps (used to build VPI warp maps)
+  // OpenCV rectification maps (at calibration resolution)
   cv::Mat map1_left_, map2_left_;
   cv::Mat map1_right_, map2_right_;
 
   // VPI resources
   VPIStream vpi_stream_{nullptr};
   
-  // VPI images
-  VPIImage vpi_left_input_{nullptr};
-  VPIImage vpi_right_input_{nullptr};
-  VPIImage vpi_left_gray_{nullptr};
-  VPIImage vpi_right_gray_{nullptr};
-  VPIImage vpi_left_rectified_{nullptr};
-  VPIImage vpi_right_rectified_{nullptr};
+  // VPI images (at calibration resolution)
   VPIImage vpi_disparity_{nullptr};
-  VPIImage vpi_disparity_filtered_{nullptr};  // For median/bilateral filtering
-  VPIImage vpi_disparity_temp_{nullptr};      // Temp buffer for filter chain
   VPIImage vpi_confidence_{nullptr};
 
-  // VPI payloads
-  VPIPayload remap_left_payload_{nullptr};
-  VPIPayload remap_right_payload_{nullptr};
+  // VPI stereo payload
   VPIPayload stereo_payload_{nullptr};
-
-  // VPI warp maps
-  VPIWarpMap warp_map_left_{};
-  VPIWarpMap warp_map_right_{};
-  bool warp_maps_allocated_{false};
 
   // Processing state
   bool vpi_initialized_{false};
@@ -177,4 +155,3 @@ private:
 };
 
 } // namespace maurice_cam
-
