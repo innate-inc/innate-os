@@ -5,81 +5,61 @@
 # Start with a minimal ROS 2 Humble base
 FROM ros:humble-ros-base
 
-# 1. Install system packages
-#    - zsh and git/curl so we can install oh-my-zsh
-#    - python3-colcon-* for building ROS packages
-#    - tmux for your discovery script
-#    - Python libraries you need (numpy, serial, pygame)
-#    - fastdds CLI tools
-# ... existing code ...
-
-# 1a. Install base system packages
+# 1. Install base packages needed before apt-dependencies.txt
 RUN apt-get update && apt-get install -y \
-    zsh \
-    git \
     curl \
-    tmux \
-    iputils-ping \
-    libudev-dev
+    iputils-ping
 
-# 1b. Install ROS-related packages
-RUN apt-get update && apt-get install -y \
-    python3-colcon-common-extensions
+# 2. Copy and install all apt dependencies from the central list
+COPY ros2_ws/apt-dependencies.txt /tmp/apt-dependencies.txt
+RUN apt-get update && \
+    grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | xargs apt-get install -y && \
+    rm /tmp/apt-dependencies.txt
 
-RUN apt-get update && apt-get install -y \
-    ros-humble-fastrtps \
-    ros-humble-rosbridge-suite \
-    ros-humble-launch-xml \
-    ros-humble-cv-bridge \
-    ros-humble-navigation2 \
-    ros-humble-demo-nodes-cpp \
-    ros-humble-nav2-bringup \
-    ros-humble-depthai-ros \
-    ros-humble-rqt-plot \
-    ros-humble-rviz2
-
-# 1c. Install Python packages and pip
-RUN apt-get install -y \
-    python3-pip \
-    python3-numpy \
-    python3-serial \
-    python3-pygame \
-    python3-opencv \
-    python3-websockets
-
-# 1d. Install updated python packages
+# 3. Install pip packages
 RUN pip install --upgrade \
     websockets \
     pydantic \
-    opencv-python \
+    'numpy<2' \
+    'opencv-python<4.10' \
     h5py \
-    cartesia
+    cartesia \
+    torch \
+    torchvision \
+    einops
 
-# 2. Install oh-my-zsh (for root, since containers typically run as root unless changed)
+# 4. Install oh-my-zsh (for root, since containers typically run as root unless changed)
 #    The official install script tries to prompt, so we run it in a way that doesn't hang.
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" \
     || true
 
-# 3. Make zsh the default shell for root inside the container
+# 5. Make zsh the default shell for root inside the container
 SHELL ["/usr/bin/zsh", "-c"]
 RUN chsh -s /usr/bin/zsh root
 
-# 4. (Optional) Change oh-my-zsh theme for root
+# 6. (Optional) Change oh-my-zsh theme for root
 #    RobbyRussell is default; here we switch to `agnoster`, or pick another if you like
 RUN sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' /root/.zshrc
 
-# 5. Copy your entire innate-os directory (including dds, ros2_ws, etc.)
+# 6b. Pre-approve GitHub SSH host key to avoid prompts
+RUN mkdir -p /root/.ssh && \
+    ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
+
+# 7. Copy your entire innate-os directory (including dds, ros2_ws, .git for version info)
 COPY ros2_ws /root/innate-os/ros2_ws
 COPY dds /root/innate-os/dds
-WORKDIR /root/innate-os
+COPY scripts /root/innate-os/scripts
 
-# 6. Build your ROS 2 workspace.
+# For version tracking, git needs to be present
+COPY .git /root/innate-os/.git
+
+# 8. Build your ROS 2 workspace.
 #    We have to source the system setup.zsh for colcon to find ROS packages.
 WORKDIR /root/innate-os/ros2_ws
 RUN source /opt/ros/humble/setup.zsh && colcon build
 
 #
-# 7. Patch the root .zshrc to set up your environment the same way
+# 9. Patch the root .zshrc to set up your environment the same way
 #    "setup_dds.zsh" does. This means:
 #      - Source ROS 2
 #      - Source your workspace
@@ -107,6 +87,7 @@ source /root/innate-os/dds/setup_dds.zsh\n\
 export INNATE_OS_ROOT=/root/innate-os\n\
 ' >> /root/.zshrc
 
-# 8. When the container starts with no command, we just run zsh (login shell).
+# 10. When the container starts with no command, we just run zsh (login shell).
 #    You'll drop into an interactive oh-my-zsh environment with everything set up.
+WORKDIR /root/innate-os
 CMD ["zsh", "-l"]

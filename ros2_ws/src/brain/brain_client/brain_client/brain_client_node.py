@@ -39,7 +39,7 @@ from brain_client.message_types import (
     MessageOut,
     VisionAgentOutput,
 )
-from brain_client.primitive_types import PrimitiveResult
+from brain_client.skill_types import SkillResult
 from sensor_msgs.msg import CompressedImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
@@ -55,7 +55,7 @@ from brain_messages.srv import GetAvailablePrimitives
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
-from brain_client.initializers import initialize_primitives, initialize_directives
+from brain_client.initializers import initialize_skills, initialize_agents
 from brain_client.tts_handler import TTSHandler
 
 
@@ -78,7 +78,9 @@ class BrainClientNode(Node):
         self.declare_parameter("map_topic", "/map")
 
         # New parameters for arm camera
-        self.declare_parameter("arm_camera_image_topic", "/mars/arm/image_raw/compressed")
+        self.declare_parameter(
+            "arm_camera_image_topic", "/mars/arm/image_raw/compressed"
+        )
         self.declare_parameter("send_arm_camera_image", True)
 
         # Set to True if you wish to receive and forward depth images as well
@@ -126,27 +128,42 @@ class BrainClientNode(Node):
         # --- Proxy service configuration ---
         # Credentials (INNATE_PROXY_URL, INNATE_SERVICE_KEY) come from env vars
         # These are service configs that can be overridden at launch
-        self.declare_parameter("cartesia_voice_id", "9fdaae0b-f885-4813-b589-3c07cf9d5fea")
+        self.declare_parameter(
+            "cartesia_voice_id", "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
+        )
         self.declare_parameter("openai_realtime_model", "gpt-4o-realtime-preview")
-        self.declare_parameter("openai_realtime_url", "wss://api.openai.com/v1/realtime")
+        self.declare_parameter(
+            "openai_realtime_url", "wss://api.openai.com/v1/realtime"
+        )
         self.declare_parameter("openai_transcribe_model", "gpt-4o-mini-transcribe")
-        
+
         # Build proxy config from params
         proxy_config = {
-            "cartesia_voice_id": self.get_parameter("cartesia_voice_id").get_parameter_value().string_value,
-            "openai_realtime_model": self.get_parameter("openai_realtime_model").get_parameter_value().string_value,
-            "openai_realtime_url": self.get_parameter("openai_realtime_url").get_parameter_value().string_value,
-            "openai_transcribe_model": self.get_parameter("openai_transcribe_model").get_parameter_value().string_value,
+            "cartesia_voice_id": self.get_parameter("cartesia_voice_id")
+            .get_parameter_value()
+            .string_value,
+            "openai_realtime_model": self.get_parameter("openai_realtime_model")
+            .get_parameter_value()
+            .string_value,
+            "openai_realtime_url": self.get_parameter("openai_realtime_url")
+            .get_parameter_value()
+            .string_value,
+            "openai_transcribe_model": self.get_parameter("openai_transcribe_model")
+            .get_parameter_value()
+            .string_value,
         }
-        
+
         # Initialize unified proxy client (credentials from env, config from params)
         from brain_client.client.proxy_client import ProxyClient
+
         try:
             self.proxy = ProxyClient(config=proxy_config)
             if self.proxy.is_available():
                 self.get_logger().info(f"✅ Proxy client initialized")
             else:
-                self.get_logger().warning("⚠️ Proxy not configured (check INNATE_PROXY_URL, INNATE_SERVICE_KEY)")
+                self.get_logger().warning(
+                    "⚠️ Proxy not configured (check INNATE_PROXY_URL, INNATE_SERVICE_KEY)"
+                )
                 self.proxy = None
         except Exception as e:
             self.get_logger().warning(f"⚠️ Could not initialize proxy: {e}")
@@ -284,8 +301,10 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
         # Directive on startup persistence file
-        maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
-        self.directive_file = os.path.join(maurice_root, '.directive_on_startup')
+        maurice_root = os.environ.get(
+            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
+        )
+        self.directive_file = os.path.join(maurice_root, ".directive_on_startup")
 
         # Initialize TF2 buffer and listener
         self.tf_buffer = Buffer()
@@ -356,10 +375,10 @@ class BrainClientNode(Node):
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
 
         self.chat_history = []
-        
+
         # Wait for input_manager to be ready (optional but recommended)
         self._wait_for_input_manager()
-        
+
         self.chat_in_sub = self.create_subscription(
             String, "/brain/chat_in", self.chat_in_callback, 10
         )
@@ -368,11 +387,15 @@ class BrainClientNode(Node):
             String, "/input_manager/custom", self.custom_input_callback, 10
         )
         # Publisher to tell input_manager which inputs should be active
-        self.active_inputs_pub = self.create_publisher(String, "/input_manager/active_inputs", 10)
+        self.active_inputs_pub = self.create_publisher(
+            String, "/input_manager/active_inputs", 10
+        )
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         # Publisher for memory positions from the cloud agent's posegraph
-        self.memory_positions_pub = self.create_publisher(String, "/brain/memory_positions", 10)
+        self.memory_positions_pub = self.create_publisher(
+            String, "/brain/memory_positions", 10
+        )
         # Subscriber for direct TTS requests
         self.tts_sub = self.create_subscription(
             String, "/brain/tts", self.tts_callback, 10
@@ -398,16 +421,22 @@ class BrainClientNode(Node):
 
         # --- Service for setting directive on startup ---
         self.set_directive_on_startup_srv = self.create_service(
-            SetDirectiveOnStartup, "/brain/set_directive_on_startup", self.handle_set_directive_on_startup
+            SetDirectiveOnStartup,
+            "/brain/set_directive_on_startup",
+            self.handle_set_directive_on_startup,
         )
 
         # --- Helper node for making synchronous service calls from callbacks ---
         # This node isn't registered with any executor, so spin_until_future_complete works on it
-        self._service_call_node = rclpy.create_node('brain_client_service_caller')
-        
+        self._service_call_node = rclpy.create_node("brain_client_service_caller")
+
         # --- Service clients on helper node (for synchronous calls) ---
-        self._reload_primitives_client = self._service_call_node.create_client(Trigger, '/brain/reload_primitives')
-        self._get_primitives_client_sync = self._service_call_node.create_client(GetAvailablePrimitives, '/brain/get_available_primitives')
+        self._reload_primitives_client = self._service_call_node.create_client(
+            Trigger, "/brain/reload_primitives"
+        )
+        self._get_primitives_client_sync = self._service_call_node.create_client(
+            GetAvailablePrimitives, "/brain/get_available_primitives"
+        )
 
         # --- Service for reloading primitives and directives ---
         self._reload_srv = self.create_service(
@@ -422,9 +451,13 @@ class BrainClientNode(Node):
                 tts_status_pub=self.tts_status_pub,
             )
             if self.tts_handler.is_available():
-                self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})")
+                self.get_logger().info(
+                    f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})"
+                )
             else:
-                self.get_logger().warning("⚠️ TTS handler created but Cartesia client unavailable")
+                self.get_logger().warning(
+                    "⚠️ TTS handler created but Cartesia client unavailable"
+                )
         else:
             self.tts_handler = None
             self.get_logger().info("🔇 Text-to-speech disabled (proxy not available)")
@@ -461,7 +494,9 @@ class BrainClientNode(Node):
         )
 
         # Timer for regular memory positions publishing (1Hz)
-        self.memory_positions_timer = self.create_timer(1.0, self._publish_memory_positions)
+        self.memory_positions_timer = self.create_timer(
+            1.0, self._publish_memory_positions
+        )
 
         for _ in range(10):
             self.ws_bridge.send_message(
@@ -472,10 +507,16 @@ class BrainClientNode(Node):
         # Initialize primitives - query from primitive_execution_action_server
         self.primitives_dict = self._query_available_primitives()
         if not self.primitives_dict:
-            self.get_logger().warn("No primitives available from primitive_execution_action_server, using fallback local loading")
-            self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
-        
-        self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
+            self.get_logger().warn(
+                "No primitives available from primitive_execution_action_server, using fallback local loading"
+            )
+            self.primitives_dict = initialize_skills(
+                self.get_logger(), self.simulator_mode
+            )
+
+        self.directives, self.current_directive = initialize_agents(
+            self.get_logger(), self.primitives_dict
+        )
 
         # Load startup directive from file
         startup_directive = self.load_startup_directive()
@@ -493,7 +534,7 @@ class BrainClientNode(Node):
                 f"Startup directive '{startup_directive}' not found in available directives. "
                 f"Available: {list(self.directives.keys())}. Using default."
             )
-        
+
         # Activate input devices required by the current directive
         if self.current_directive:
             self.activate_directive_inputs()
@@ -506,8 +547,6 @@ class BrainClientNode(Node):
         self.directive_sub = self.create_subscription(
             String, "/brain/set_directive", self.set_directive_callback, 10
         )
-        
-
 
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
@@ -520,8 +559,6 @@ class BrainClientNode(Node):
         self.primitive_action_client = ActionClient(
             self, ExecutePrimitive, "execute_primitive"
         )
-
-        
 
         # After initializing the primitive_action_client
         # Register the primitives with the server
@@ -538,29 +575,33 @@ class BrainClientNode(Node):
         """
         # Use helper node's client for synchronous calls (works from callbacks)
         client = self._get_primitives_client_sync
-        
+
         # Wait for service to be available
         self.get_logger().info("Waiting for /brain/get_available_primitives service...")
         if not client.wait_for_service(timeout_sec=10.0):
-            self.get_logger().error("Timeout waiting for /brain/get_available_primitives service")
+            self.get_logger().error(
+                "Timeout waiting for /brain/get_available_primitives service"
+            )
             return {}
-        
+
         # Call service via helper node (not registered with any executor)
         request = GetAvailablePrimitives.Request()
         future = client.call_async(request)
-        rclpy.spin_until_future_complete(self._service_call_node, future, timeout_sec=10.0)
-        
+        rclpy.spin_until_future_complete(
+            self._service_call_node, future, timeout_sec=10.0
+        )
+
         if not future.done():
             self.get_logger().error("Service call timeout")
             return {}
-        
+
         try:
             response = future.result()
             primitives_list = json.loads(response.primitives_json)
-            
+
             # Store the full primitives list for later use in registration
             self.primitives_metadata_list = primitives_list
-            
+
             # Create a simple dict with primitive instances (mock objects with metadata)
             primitives_dict = {}
             for prim in primitives_list:
@@ -568,23 +609,35 @@ class BrainClientNode(Node):
                 class MockPrimitive:
                     def __init__(self, metadata):
                         self.metadata = metadata
+
                     def guidelines(self):
-                        return self.metadata.get('guidelines', '')
+                        return self.metadata.get("guidelines", "")
+
                     def guidelines_when_running(self):
-                        return self.metadata.get('guidelines_when_running', '')
-                
-                primitives_dict[prim['name']] = MockPrimitive(prim)
-            
+                        return self.metadata.get("guidelines_when_running", "")
+
+                primitives_dict[prim["name"]] = MockPrimitive(prim)
+
             # Log validation status
-            learned_count = sum(1 for prim in primitives_list if prim.get('type') == 'learned')
-            replay_count = sum(1 for prim in primitives_list if prim.get('type') == 'replay')
-            code_count = sum(1 for prim in primitives_list if prim.get('type') == 'code')
-            
-            self.get_logger().info(f"Loaded {len(primitives_dict)} validated primitives from service: {list(primitives_dict.keys())}")
-            self.get_logger().info(f"Primitive types: {code_count} code, {learned_count} learned, {replay_count} replay")
-            
+            learned_count = sum(
+                1 for prim in primitives_list if prim.get("type") == "learned"
+            )
+            replay_count = sum(
+                1 for prim in primitives_list if prim.get("type") == "replay"
+            )
+            code_count = sum(
+                1 for prim in primitives_list if prim.get("type") == "code"
+            )
+
+            self.get_logger().info(
+                f"Loaded {len(primitives_dict)} validated primitives from service: {list(primitives_dict.keys())}"
+            )
+            self.get_logger().info(
+                f"Primitive types: {code_count} code, {learned_count} learned, {replay_count} replay"
+            )
+
             return primitives_dict
-            
+
         except Exception as e:
             self.get_logger().error(f"Error parsing primitives service response: {e}")
             return {}
@@ -596,23 +649,25 @@ class BrainClientNode(Node):
         """
         self.get_logger().info("⏳ Waiting for input_manager_node...")
         start_time = self.get_clock().now()
-        
+
         while (self.get_clock().now() - start_time).nanoseconds / 1e9 < timeout_sec:
             # Check if input_manager_node exists in the node graph
             node_names = self.get_node_names()
-            if 'input_manager_node' in node_names:
+            if "input_manager_node" in node_names:
                 self.get_logger().info("✅ input_manager_node is ready")
                 return True
             time.sleep(0.1)
-        
+
         self.get_logger().warning("⚠️ input_manager_node not found - continuing anyway")
         return False
-    
+
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
         self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {data}\033[0m")
         self.chat_history.append(data)
-        outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload={"text": data['text']})
+        outgoing_msg = MessageIn(
+            type=MessageInType.CHAT_IN, payload={"text": data["text"]}
+        )
         self.ws_bridge.send_message(outgoing_msg)
         self.get_logger().info(f"\033[1;92mSent MessageIn: {outgoing_msg}\033[0m")
 
@@ -627,7 +682,9 @@ class BrainClientNode(Node):
         """Handle custom input data from input_manager."""
         try:
             data = json.loads(msg.data)
-            self.get_logger().info(f"\033[1;94mReceived custom input from {data.get('input_device', 'unknown')}\033[0m")
+            self.get_logger().info(
+                f"\033[1;94mReceived custom input from {data.get('input_device', 'unknown')}\033[0m"
+            )
             outgoing_msg = MessageIn(type=MessageInType.CUSTOM_INPUT, payload=data)
             self.ws_bridge.send_message(outgoing_msg)
         except Exception as e:
@@ -640,17 +697,21 @@ class BrainClientNode(Node):
         """
         if not self.current_directive:
             return
-        
+
         try:
             required_inputs = self.current_directive.get_inputs()
             msg = String()
             msg.data = json.dumps({"inputs": required_inputs})
             self.active_inputs_pub.publish(msg)
-            
+
             if required_inputs:
-                self.get_logger().info(f"🔌 Activated inputs for directive '{self.current_directive.id}': {required_inputs}")
+                self.get_logger().info(
+                    f"🔌 Activated inputs for directive '{self.current_directive.id}': {required_inputs}"
+                )
             else:
-                self.get_logger().debug(f"No inputs required for directive '{self.current_directive.id}'")
+                self.get_logger().debug(
+                    f"No inputs required for directive '{self.current_directive.id}'"
+                )
         except Exception as e:
             self.get_logger().error(f"Error activating directive inputs: {e}")
 
@@ -850,10 +911,7 @@ class BrainClientNode(Node):
         self.ready_for_image = True
 
         # Start the pose image timer after the first ready_for_image, if not already started
-        if (
-            not self.pose_image_started
-            and self.primitives_registered
-        ):
+        if not self.pose_image_started and self.primitives_registered:
             self.get_logger().info("Starting regular pose image transmission")
             self.pose_image_started = True
             self.pose_image_timer = self.create_timer(
@@ -862,7 +920,7 @@ class BrainClientNode(Node):
 
     def pose_image_callback(self):
         """Send pose images regularly with the robot's current position.
-        
+
         Uses TF lookup to compute robotPoseInMap by composing:
           map → odom (from AMCL/localization) ⊕ odom → base_link (from odometry)
         This matches how the web client computes the robot pose.
@@ -887,8 +945,8 @@ class BrainClientNode(Node):
             # This matches how the web client computes robotPoseInMap
             try:
                 transform = self.tf_buffer.lookup_transform(
-                    target_frame='map',
-                    source_frame='base_link',
+                    target_frame="map",
+                    source_frame="base_link",
                     time=rclpy.time.Time(),
                     timeout=rclpy.time.Duration(seconds=0.5),
                 )
@@ -929,9 +987,9 @@ class BrainClientNode(Node):
             # Add covariance from AMCL pose if available (TF doesn't provide covariance)
             if self.cur_nav_mode == "navigation" and self.last_amcl_pose:
                 cov = self.last_amcl_pose.pose.covariance
-                payload["cov_x"] = cov[0]    # Variance of x
-                payload["cov_y"] = cov[7]    # Variance of y
-                payload["cov_yaw"] = cov[35] # Variance of yaw
+                payload["cov_x"] = cov[0]  # Variance of x
+                payload["cov_y"] = cov[7]  # Variance of y
+                payload["cov_yaw"] = cov[35]  # Variance of yaw
             elif self.cur_nav_mode == "mapfree":
                 # In mapfree mode, set high uncertainty covariance
                 payload["cov_x"] = 1e4
@@ -993,7 +1051,7 @@ class BrainClientNode(Node):
         self.get_logger().debug(f"Received brain/chat_out: {chat_entry}")
         out_msg = String(data=json.dumps(chat_entry))
         self.chat_out_pub.publish(out_msg)
-        
+
         # Generate speech for robot messages (but not thoughts or anticipation)
         if sender == "robot" and text and text.strip():
             self._speak(text)
@@ -1057,9 +1115,7 @@ class BrainClientNode(Node):
             self.get_logger().info(
                 f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
             )
-            self.get_logger().info(
-                f"Primitive task type: {payload.next_task.type}"
-            )
+            self.get_logger().info(f"Primitive task type: {payload.next_task.type}")
 
             if payload.next_task.type in self.primitives_dict:
                 self.send_primitive_goal(
@@ -1114,7 +1170,7 @@ class BrainClientNode(Node):
             )
             try:
                 # Select pose source based on navigation mode
-                use_mapfree = (self.cur_nav_mode == "mapfree")
+                use_mapfree = self.cur_nav_mode == "mapfree"
                 pose_source = None  # Either AMCL (preferred) or ODOM (mapfree)
                 if not use_mapfree and self.last_amcl_pose:
                     pose_source = ("amcl", self.last_amcl_pose.pose)
@@ -1349,7 +1405,11 @@ class BrainClientNode(Node):
                     "frame_id": (
                         self.last_amcl_pose.header.frame_id
                         if pose_source[0] == "amcl"
-                        else (getattr(self.last_odom, "header", None).frame_id if hasattr(self.last_odom, "header") else "odom")
+                        else (
+                            getattr(self.last_odom, "header", None).frame_id
+                            if hasattr(self.last_odom, "header")
+                            else "odom"
+                        )
                     ),
                 }
                 # Add covariance if available
@@ -1521,7 +1581,7 @@ class BrainClientNode(Node):
         # Determine the appropriate message type based on the result
         self.get_logger().info(f"Primitive result details: {result}")
         outgoing_msg = None
-        if result.success and result.success_type == PrimitiveResult.SUCCESS.value:
+        if result.success and result.success_type == SkillResult.SUCCESS.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_COMPLETED,
                 payload={
@@ -1529,7 +1589,7 @@ class BrainClientNode(Node):
                     "primitive_id": primitive_id,
                 },
             )
-        elif result.success_type == PrimitiveResult.CANCELLED.value:
+        elif result.success_type == SkillResult.CANCELLED.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_INTERRUPTED,
                 payload={
@@ -1537,7 +1597,7 @@ class BrainClientNode(Node):
                     "primitive_id": primitive_id,
                 },
             )
-        elif not result.success or result.success_type == PrimitiveResult.FAILURE.value:
+        elif not result.success or result.success_type == SkillResult.FAILURE.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_FAILED,
                 payload={
@@ -1562,7 +1622,7 @@ class BrainClientNode(Node):
         # --- THEN, check and execute pending task if previous was cancelled OR succeeded in the meantime ---
         if (
             result.success_type
-            in [PrimitiveResult.CANCELLED.value, PrimitiveResult.SUCCESS.value]
+            in [SkillResult.CANCELLED.value, SkillResult.SUCCESS.value]
             and self._pending_next_task is not None
         ):
             self.get_logger().info(
@@ -1661,17 +1721,19 @@ class BrainClientNode(Node):
         )
 
         # Use primitives metadata from service if available
-        if hasattr(self, 'primitives_metadata_list') and self.primitives_metadata_list:
+        if hasattr(self, "primitives_metadata_list") and self.primitives_metadata_list:
             primitives = self.primitives_metadata_list
             self.get_logger().info(f"Using {len(primitives)} primitives from service")
         else:
-            self.get_logger().warn("No primitives metadata available, falling back to local introspection")
+            self.get_logger().warn(
+                "No primitives metadata available, falling back to local introspection"
+            )
             primitives = []
             if self.primitives_dict:
                 for primitive_name, primitive in self.primitives_dict.items():
                     # Extract parameter information using introspection
                     params = {}
-                    if hasattr(primitive, 'execute'):
+                    if hasattr(primitive, "execute"):
                         signature = inspect.signature(primitive.execute)
 
                         for param_name, param in signature.parameters.items():
@@ -1684,7 +1746,8 @@ class BrainClientNode(Node):
                                 # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
                                 if (
                                     isinstance(
-                                        param.annotation, (types.UnionType, types.GenericAlias)
+                                        param.annotation,
+                                        (types.UnionType, types.GenericAlias),
                                     )
                                     or hasattr(param.annotation, "_name")
                                     and param.annotation._name
@@ -1711,9 +1774,7 @@ class BrainClientNode(Node):
                     )
 
         included_primitives = [
-            p
-            for p in primitives
-            if p["name"] in self.current_directive.get_primitives()
+            p for p in primitives if p["name"] in self.current_directive.get_skills()
         ]
 
         # Create and send the registration message
@@ -1744,7 +1805,7 @@ class BrainClientNode(Node):
 
             # Re-register primitives and directive with the server to update
             self.register_primitives_and_directive()
-            
+
             # Activate input devices required by this directive
             self.activate_directive_inputs()
 
@@ -1774,7 +1835,7 @@ class BrainClientNode(Node):
         Service handler that returns detailed information about all available directives.
         """
         self.get_logger().info("Received request for available directives")
-        
+
         # Build detailed directive information as JSON
         directive_details = []
         for directive_name, directive in self.directives.items():
@@ -1783,18 +1844,18 @@ class BrainClientNode(Node):
                 "display_name": directive.display_name,
                 "display_icon": directive.display_icon_data,
                 "prompt": directive.get_prompt(),
-                "primitives": directive.get_primitives()
+                "skills": directive.get_skills(),
             }
             directive_details.append(directive_info)
-        
+
         # Convert the detailed info to JSON string for the directives field
         response.directives = [json.dumps(directive_details)]
         response.current_directive = self.current_directive.id
-        
+
         # Get startup directive from file
         startup_directive = self.load_startup_directive()
         response.startup_directive = startup_directive if startup_directive else ""
-        
+
         return response
 
     def _unregister_primitives(self):
@@ -1882,7 +1943,7 @@ class BrainClientNode(Node):
         self.get_logger().info(
             "\033[1;92m[BrainClient] Received /brain/reload request\033[0m"
         )
-        
+
         try:
             self._perform_reload()
             response.success = True
@@ -1897,44 +1958,56 @@ class BrainClientNode(Node):
         try:
             # Deactivate brain: stops agent loop, cancels running primitive
             self._deactivate_brain()
-            
+
             # Clear current state so queries during reload return empty
             self.directives = {}
             self.primitives_dict = {}
             self.current_directive = None
-            
+
             # Call PEAS to reload primitives (synchronous via helper node)
             if self._reload_primitives_client.wait_for_service(timeout_sec=10.0):
                 peas_request = Trigger.Request()
                 future = self._reload_primitives_client.call_async(peas_request)
-                rclpy.spin_until_future_complete(self._service_call_node, future, timeout_sec=30.0)
-                
+                rclpy.spin_until_future_complete(
+                    self._service_call_node, future, timeout_sec=30.0
+                )
+
                 if future.done():
                     peas_result = future.result()
                     if peas_result.success:
                         self.get_logger().info(f"PEAS reload: {peas_result.message}")
                     else:
-                        self.get_logger().warn(f"PEAS reload failed: {peas_result.message}")
+                        self.get_logger().warn(
+                            f"PEAS reload failed: {peas_result.message}"
+                        )
                 else:
                     self.get_logger().warn("PEAS reload timed out")
             else:
-                self.get_logger().warn("PEAS reload service not available, using local primitive loading")
-            
+                self.get_logger().warn(
+                    "PEAS reload service not available, using local primitive loading"
+                )
+
             # Re-query primitives from PEAS (or load locally if PEAS unavailable)
             self.primitives_dict = self._query_available_primitives()
             if not self.primitives_dict:
-                self.get_logger().warn("No primitives from PEAS, using fallback local loading")
-                self.primitives_dict = initialize_primitives(self.get_logger(), self.simulator_mode)
-            
+                self.get_logger().warn(
+                    "No primitives from PEAS, using fallback local loading"
+                )
+                self.primitives_dict = initialize_skills(
+                    self.get_logger(), self.simulator_mode
+                )
+
             # Reload directives locally
-            self.directives, self.current_directive = initialize_directives(self.get_logger(), self.primitives_dict)
-            
+            self.directives, self.current_directive = initialize_agents(
+                self.get_logger(), self.primitives_dict
+            )
+
             # Re-register with server
             self.register_primitives_and_directive()
-            
+
             # Reactivate brain
             self._reactivate_brain()
-            
+
             self.get_logger().info(
                 f"\033[1;92m[BrainClient] Reloaded {len(self.primitives_dict)} primitives, {len(self.directives)} directives\033[0m"
             )
@@ -2074,7 +2147,7 @@ class BrainClientNode(Node):
         Note: This only affects the NEXT startup, not reactivation.
         """
         directive_name = request.directive_name.strip()
-        
+
         if not directive_name:  # Empty string means clear the saved directive
             # Remove the directive file
             try:
@@ -2082,11 +2155,11 @@ class BrainClientNode(Node):
                     os.remove(self.directive_file)
                 self.get_logger().info(
                     "\033[1;92m[BrainClient] Startup directive cleared. "
-                    "Will use default from initialize_directives() on next startup.\033[0m"
+                    "Will use default from initialize_agents() on next startup.\033[0m"
                 )
             except Exception as e:
                 self.get_logger().error(f"Error clearing directive file: {e}")
-            
+
             # Publish confirmation
             chat_entry = {
                 "sender": "system",
@@ -2096,27 +2169,29 @@ class BrainClientNode(Node):
             self.chat_history.append(chat_entry)
             out_msg = String(data=json.dumps(chat_entry))
             self.chat_out_pub.publish(out_msg)
-            
+
             response.success = True
-            response.message = "Startup directive cleared. Will use default on next startup."
-            
+            response.message = (
+                "Startup directive cleared. Will use default on next startup."
+            )
+
         elif directive_name in self.directives:
             # Save directive to file
             self.save_startup_directive(directive_name)
-            
+
             # Also immediately switch to it if brain is active
             self.current_directive = self.directives[directive_name]
             self.get_logger().info(
                 f"\033[1;92m[BrainClient] Startup directive set to: {directive_name}\033[0m"
             )
-            
+
             # Re-register primitives and directive with the server to update immediately
             if self.is_brain_active and self.primitives_registered:
                 self.register_primitives_and_directive()
-            
+
             # Activate input devices required by this directive
             self.activate_directive_inputs()
-            
+
             # Publish confirmation
             chat_entry = {
                 "sender": "system",
@@ -2126,10 +2201,10 @@ class BrainClientNode(Node):
             self.chat_history.append(chat_entry)
             out_msg = String(data=json.dumps(chat_entry))
             self.chat_out_pub.publish(out_msg)
-            
+
             response.success = True
             response.message = f"Startup directive set to: {directive_name}. Active now and will be used on next startup."
-            
+
         else:
             self.get_logger().error(
                 f"\033[91m[BrainClient] Unknown directive: {directive_name}\033[0m"
@@ -2143,24 +2218,26 @@ class BrainClientNode(Node):
             self.chat_history.append(error_msg)
             out_msg = String(data=json.dumps(error_msg))
             self.chat_out_pub.publish(out_msg)
-            
+
             response.success = False
             response.message = f"Unknown directive '{directive_name}'. Available directives: {available_directives}"
-        
+
         return response
-
-
 
     def load_startup_directive(self):
         """Load the startup directive from file, returns None if not configured"""
         try:
             if os.path.exists(self.directive_file):
-                with open(self.directive_file, 'r') as f:
+                with open(self.directive_file, "r") as f:
                     saved_directive = f.read().strip()
                     if saved_directive:
-                        self.get_logger().info(f"Loaded startup directive: {saved_directive}")
+                        self.get_logger().info(
+                            f"Loaded startup directive: {saved_directive}"
+                        )
                         return saved_directive
-            self.get_logger().info("No startup directive configured, using default from initialize_directives()")
+            self.get_logger().info(
+                "No startup directive configured, using default from initialize_agents()"
+            )
             return None
         except Exception as e:
             self.get_logger().error(f"Error loading startup directive: {e}")
@@ -2171,7 +2248,7 @@ class BrainClientNode(Node):
         try:
             # Ensure directory exists
             os.makedirs(os.path.dirname(self.directive_file), exist_ok=True)
-            with open(self.directive_file, 'w') as f:
+            with open(self.directive_file, "w") as f:
                 f.write(directive_name)
             self.get_logger().debug(f"Saved startup directive: {directive_name}")
         except Exception as e:
@@ -2191,10 +2268,10 @@ class BrainClientNode(Node):
         if self.agent_timer and not self.agent_timer.is_canceled():
             self.agent_timer.cancel()
         # Clean up TTS handler
-        if hasattr(self, 'tts_handler') and self.tts_handler is not None:
+        if hasattr(self, "tts_handler") and self.tts_handler is not None:
             self.tts_handler.close()
         # Clean up helper node for service calls
-        if hasattr(self, '_service_call_node'):
+        if hasattr(self, "_service_call_node"):
             self._service_call_node.destroy_node()
         return super().destroy_node()
 

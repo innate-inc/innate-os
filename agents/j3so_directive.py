@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.directive_types import Directive
+from brain_client.agent_types import Agent
 
 
-class J3SODirective(Directive):
+class J3SOAgent(Agent):
     """
     J3SO directive for the robot.
     A blunt, sarcastic droid that navigates and provides brutally honest commentary.
@@ -20,7 +20,7 @@ class J3SODirective(Directive):
     def display_icon(self) -> str:
         return "assets/j3so.png"
 
-    def get_primitives(self) -> List[str]:
+    def get_skills(self) -> List[str]:
         """Return the list of primitives this directive can use"""
         return [
             "navigate_to_position",

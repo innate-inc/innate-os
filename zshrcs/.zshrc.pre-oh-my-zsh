@@ -55,14 +55,14 @@ alias jetsonx="ssh jetsonx@jetsonx-desktop"
 alias jetson4="ssh jetson1@jetson4-desktop"
 alias marcel-setup='source ~/marcel-brain/scripts/marcel_venv.zsh'
 alias marcel-build='~/marcel-brain/scripts/build_marcel.zsh'
-alias cb='cd ~/innate-os/ros2_ws && colcon build && source install/setup.zsh && \
+alias cb='pushd ~/innate-os/ros2_ws > /dev/null && colcon build && source install/setup.zsh && \
 if command -v register-python-argcomplete3 >/dev/null 2>&1; then \
 eval "$(register-python-argcomplete3 ros2)"; \
 eval "$(register-python-argcomplete3 colcon)"; \
 elif command -v register-python-argcomplete >/dev/null 2>&1; then \
 eval "$(register-python-argcomplete ros2)"; \
 eval "$(register-python-argcomplete colcon)"; \
-fi'
+fi; popd > /dev/null'
 
 # Add useful environment variables
 export EDITOR='vim'

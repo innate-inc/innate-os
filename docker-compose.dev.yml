@@ -23,7 +23,6 @@ services:
       - novnc
     environment:
       - DISPLAY=novnc:0.0
-      - ROS_DISCOVERY_SERVER_IP_OVERRIDE=127.0.0.1
       - INNATE_OS_ROOT=/root/innate-os
     ports:
       - "9090:9090"
@@ -31,9 +30,9 @@ services:
     volumes:
       # 1) Mount your local code
       - ./ros2_ws:/root/innate-os/ros2_ws:rw
-      - ./dds:/root/innate-os/dds:rw
-      - ./directives:/root/innate-os/directives:rw
-      - ./primitives:/root/innate-os/primitives:rw
+      - ./scripts:/root/innate-os/scripts:rw
+      - ./agents:/root/innate-os/agents:rw
+      - ./skills:/root/innate-os/skills:rw
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
       - ros2_ws_build:/root/innate-os/ros2_ws/build
@@ -46,6 +45,7 @@ services:
     # 3) Keep container open for interactive usage
     tty: true
     stdin_open: true
+    shm_size: "2g"
     networks:
       - x11
     extra_hosts:

@@ -64,8 +64,8 @@ jobs:
         cp -r dds release-package/innate-os/
         cp -r config release-package/innate-os/ || true
         cp -r maps release-package/innate-os/ || true
-        cp -r primitives release-package/innate-os/ || true
-        cp -r directives release-package/innate-os/ || true
+        cp -r skills release-package/innate-os/ || true
+        cp -r agents release-package/innate-os/ || true
         cp -r inputs release-package/innate-os/ || true
         cp -r scripts release-package/innate-os/ || true
         cp -r systemd release-package/innate-os/ || true

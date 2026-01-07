@@ -25,7 +25,6 @@ void Dynamixel::connect() {
         glob_t glob_result;
         glob("/dev/ttyUSB*", GLOB_TILDE, NULL, &glob_result);
         glob("/dev/ttyACM*", GLOB_APPEND | GLOB_TILDE, NULL, &glob_result);
-        glob("/dev/ttyTHS*", GLOB_APPEND | GLOB_TILDE, NULL, &glob_result);
         
         if (glob_result.gl_pathc > 0) {
             config_.device_name = glob_result.gl_pathv[0];
