@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.agent_types import Agent
+from brain_client.agent_types import CloudAgent
 
 
-class J3SOAgent(Agent):
+class J3SOAgent(CloudAgent):
     """
     J3SO directive for the robot.
     A blunt, sarcastic droid that navigates and provides brutally honest commentary.

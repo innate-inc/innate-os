@@ -1,8 +1,8 @@
 from typing import List
-from brain_client.agent_types import Agent
+from brain_client.agent_types import CloudAgent
 
 
-class SecurityGuardAgent(Agent):
+class SecurityGuardAgent(CloudAgent):
     """
     Security guard directive for the robot.
     Provides a security guard personality that looks for intruders and sends an email if they find one.
