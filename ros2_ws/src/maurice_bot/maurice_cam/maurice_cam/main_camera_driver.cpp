@@ -273,8 +273,9 @@ std::string MainCameraDriver::createGStreamerPipeline()
   // This is much faster than CPU-based OpenCV operations
   // flip-method=2 rotates 180 degrees, interpolation-method=4 uses Smart interpolation
   // nvvidconv outputs YUV/BGRx format, videoconvert converts to BGR for OpenCV
+  // Add io-mode=2 for memory-mapped I/O (better compatibility) and do-timestamp=true for proper timestamping
   std::string pipeline = 
-    "v4l2src device=" + camera_device_ + " ! "
+    "v4l2src device=" + camera_device_ + " io-mode=2 do-timestamp=true ! "
     "image/jpeg,width=" + std::to_string(capture_width_) + 
     ",height=" + std::to_string(capture_height_) + 
     ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! "
@@ -286,7 +287,7 @@ std::string MainCameraDriver::createGStreamerPipeline()
     "appsink max-buffers=1 drop=true sync=false";
   
   // Alternative pipeline using videoscale (fallback if nvvidconv fails):
-  // "v4l2src device=" + camera_device_ + " ! "
+  // "v4l2src device=" + camera_device_ + " io-mode=2 do-timestamp=true ! "
   // "image/jpeg,width=" + std::to_string(capture_width_) + 
   // ",height=" + std::to_string(capture_height_) + 
   // ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! "
@@ -294,7 +295,8 @@ std::string MainCameraDriver::createGStreamerPipeline()
   // "videoscale ! "
   // "video/x-raw,width=" + std::to_string(publish_stereo_width_) + 
   // ",height=" + std::to_string(publish_stereo_height_) + " ! "
-  // "videoconvert ! appsink max-buffers=1 drop=true sync=false";
+  // "videoconvert ! video/x-raw,format=BGR ! "
+  // "appsink max-buffers=1 drop=true sync=false";
   // Note: Rotation would need to be done in OpenCV with this fallback
   
   return pipeline;
