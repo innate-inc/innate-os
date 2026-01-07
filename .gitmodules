@@ -1,4 +1,0 @@
-[submodule "ros2_ws/vendor/slam_toolbox"]
-	path = ros2_ws/vendor/slam_toolbox
-	url = git@github.com:SteveMacenski/slam_toolbox.git
-	branch = humble_lifecycle

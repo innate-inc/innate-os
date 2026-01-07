@@ -302,6 +302,32 @@ else
         log "  ROS 2 Humble base already installed"
     fi
     
+    # Check if Innate packages repository is configured
+    if [ ! -f /usr/share/keyrings/innate-archive-keyring.gpg ] || [ ! -f /etc/apt/sources.list.d/innate.list ]; then
+        log "  Adding Innate packages repository..."
+        
+        # Add Innate GPG key
+        if [ ! -f /usr/share/keyrings/innate-archive-keyring.gpg ]; then
+            log "    Adding Innate GPG key..."
+            curl -fsSL https://innate-inc.github.io/innate-packages/pubkey.gpg | \
+                gpg --dearmor -o /usr/share/keyrings/innate-archive-keyring.gpg || {
+                log "    ERROR: Failed to download Innate GPG key"
+                exit 1
+            }
+        fi
+        
+        # Add Innate repository
+        if [ ! -f /etc/apt/sources.list.d/innate.list ]; then
+            log "    Adding Innate repository..."
+            echo "deb [signed-by=/usr/share/keyrings/innate-archive-keyring.gpg] https://innate-inc.github.io/innate-packages/ $(lsb_release -cs) main" | \
+                tee /etc/apt/sources.list.d/innate.list > /dev/null
+        fi
+        
+        log "  Innate packages repository configured"
+    else
+        log "  Innate packages repository already configured"
+    fi
+    
     APT_DEPS_FILE="$REPO_DIR/ros2_ws/apt-dependencies.txt"
     if [ -f "$APT_DEPS_FILE" ]; then
         # Add git-core PPA for latest git version (if not already added)
@@ -343,7 +369,7 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     cd "$REPO_DIR/ros2_ws"
 
     # Run as the actual user, not root
-    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
+    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash &&  colcon build"
 
     if [ $? -eq 0 ]; then
         log "ROS2 workspace rebuilt successfully"
