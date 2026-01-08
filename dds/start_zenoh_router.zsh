@@ -13,6 +13,8 @@ else
 fi
 source "$(dirname "$0")/setup_dds.zsh"
 
+export ZENOH_CONFIG_OVERRIDE="$ZENOH_ROUTER_CONFIG_OVERRIDE"
+
 # Check if an argument is provided
 if [ -n "$1" ]; then
   # echo "Initiating a satellite zenoh router for debugging"
@@ -33,7 +35,5 @@ if [ -n "$1" ]; then
 else
   echo "Running Zenoh in default router mode"
 fi
-
-export ZENOH_CONFIG_OVERRIDE="$ZENOH_ROUTER_CONFIG_OVERRIDE"
 
 exec ros2 run rmw_zenoh_cpp rmw_zenohd
