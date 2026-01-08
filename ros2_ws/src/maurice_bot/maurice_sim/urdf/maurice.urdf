@@ -120,7 +120,7 @@
   <joint name="joint2" type="revolute">
     <parent link="link1"/>
     <child  link="link2"/>
-    <origin xyz="0 0 0.04225" rpy="0 0 0"/>
+    <origin xyz="0 0 0.04425" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
     <limit lower="-1.5708" upper="1.22" effort="2.0" velocity="2.0"/>
@@ -184,7 +184,7 @@
   <joint name="joint4" type="revolute">
     <parent link="link3"/>
     <child  link="link4"/>
-    <origin xyz="0.1375 0 -0.0045" rpy="0 0 0"/>
+    <origin xyz="0.1375 0 0.0045" rpy="0 0 0"/>
     <axis  xyz="0 1 0"/>
     <dynamics damping="5"/>
     <limit lower="-1.9199" upper="1.7453" effort="2.0" velocity="2.0"/>
@@ -244,7 +244,7 @@
   <joint name="joint6" type="revolute">
     <parent link="link5"/>
     <child  link="link61"/>
-    <origin xyz="0.044 -0.0091 0" rpy="0 0 0"/>
+    <origin xyz="0.044 -0.0092 0" rpy="0 0 0"/>
     <axis  xyz="0 0 1"/>
     <dynamics damping="5"/>
     <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
@@ -309,7 +309,7 @@
   <joint name="ee_joint" type="fixed">
     <parent link="link5"/>
     <child  link="ee_link"/>
-    <origin xyz="0.09285 0 0" rpy="0 0 0"/>
+    <origin xyz="0.0887 0 0" rpy="0 0 0"/>
   </joint>
   <link name="ee_link">
     <inertial>
@@ -330,7 +330,7 @@
   <joint name="fixed_arm_camera_link" type="fixed">
     <parent link="link5"/>
     <child  link="arm_camera_link"/>
-    <origin xyz="0.00454 0 0.05448" rpy="0 0 0"/>
+    <origin xyz="0.03378 0 0.05052" rpy="0 0.43633 0"/>
   </joint>
   <link name="arm_camera_link">
     <inertial>
@@ -339,6 +339,75 @@
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
     <!-- for simulation you can attach a Gazebo camera plugin here -->
+  </link>
+
+  <!-- Head Link -->
+  <joint name="joint_head" type="fixed">
+    <parent link="base_link"/>
+    <child  link="head"/>
+    <origin xyz="-0.040751 -0.0002 0.25882" rpy="0 0 0"/>
+  </joint>
+  <link name="head">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.148"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/head.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/head.STL" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Head Camera Left Link -->
+  <joint name="fixed_head_camera_left" type="fixed">
+    <parent link="head"/>
+    <child  link="head_camera_left"/>
+    <origin xyz="0.04327 0.0297 -0.000275" rpy="0 0 0"/>
+  </joint>
+  <link name="head_camera_left">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+  </link>
+
+  <!-- Head Camera Right Link -->
+  <joint name="fixed_head_camera_right" type="fixed">
+    <parent link="head"/>
+    <child  link="head_camera_right"/>
+    <origin xyz="0.04327 -0.0303 -0.000275" rpy="0 0 0"/>
+  </joint>
+  <link name="head_camera_right">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.005"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
   </link>
 
 </robot>
