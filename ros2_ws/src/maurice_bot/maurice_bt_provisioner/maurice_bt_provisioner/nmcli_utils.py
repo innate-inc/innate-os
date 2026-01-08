@@ -11,8 +11,20 @@ DEFAULT_WIFI_INTERFACE = 'wlP1p1s0'
 
 # --- NetworkManager Utility Functions ---
 
-def _run_nmcli(command_list, timeout=10, check=True, capture_output=True):
-    """Runs an nmcli command using subprocess, handling common errors."""
+def _run_nmcli(command_list, timeout=10, check=True, capture_output=True, use_sudo=False):
+    """Runs an nmcli command using subprocess, handling common errors.
+    
+    Args:
+        command_list: List of command arguments (e.g., ['nmcli', 'connection', 'show'])
+        timeout: Command timeout in seconds
+        check: Whether to raise exception on non-zero return code
+        capture_output: Whether to capture stdout/stderr
+        use_sudo: Whether to prefix the command with 'sudo'
+    """
+    if use_sudo:
+        # Prepend 'sudo' to the command list
+        command_list = ['sudo'] + command_list
+    
     nm_logger.debug(f"Running nmcli command: {' '.join(command_list)}")
     try:
         result = subprocess.run(
