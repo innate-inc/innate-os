@@ -36,6 +36,4 @@ else
   echo "Running Zenoh in default router mode"
 fi
 
-export ZENOH_CONFIG_OVERRIDE="$ZENOH_ROUTER_CONFIG_OVERRIDE"
-
 exec ros2 run rmw_zenoh_cpp rmw_zenohd
