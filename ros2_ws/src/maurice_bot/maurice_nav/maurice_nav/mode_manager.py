@@ -19,6 +19,8 @@ from enum import Enum
 from typing import Tuple
 from nav2_simple_commander.robot_navigator import BasicNavigator
 
+from maurice_nav.service_utils import call_service, get_node_state, send_lifecycle_transition, transition_node
+
 # TF2 imports for transform lookup
 import tf2_ros
 from geometry_msgs.msg import Pose
@@ -27,6 +29,8 @@ from nav_msgs.msg import Odometry
 
 
 # TODO: move this into launch file?
+map_server_node = 'navigation_map_server'
+bt_node = 'bt_navigator'
 modes_nodes = {
     'mapping': ['slam_toolbox'],
     'mapfree': [
@@ -37,15 +41,16 @@ modes_nodes = {
             'velocity_smoother'
 
     ],
-    'navigation': [
-            'navigation_map_server', 
-            'navigation_grid_localizer',
-            'navigation_amcl', 
-            'navigation_planner_server', 
-            'navigation_controller_server', 
-            'bt_navigator', 
-            'behavior_server',
-            'velocity_smoother'
+    'navigation': [                      # on map switch
+            'navigation_map_server',      # load_map topic 
+            'navigation_grid_localizer',  # localize Trigger service - USE THE TRIGGER SERVICE AND RELOAD MAP SERVICE
+            'navigation_amcl',            # either restart or make sure its not first_map_only and send /map and /initialpose
+            'navigation_planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
+            'navigation_controller_server',  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
+            'bt_navigator',              # could stay on but underlying actions r gonna fail and be in a weird state; 
+            'behavior_server',            # i guess this can just be deactivated - WHY??
+            'velocity_smoother',           # might be able to leave it running throughout any changes
+            # TODO: kill any running BTs or behaviors on switch
 
     ],
 }
@@ -328,7 +333,7 @@ class ModeManager(Node):
         """Publish current mode, available maps, and current map"""
         # self.log_num += 1
         # if not (self.log_num % 10): 
-        self.get_logger().info("Publishing status every second....", throttle_duration_sec = 10)
+        # self.get_logger().info("Publishing status every second....", throttle_duration_sec = 10)
         # Publish current mode
         mode_msg = String()
         mode_msg.data = self.current_mode
@@ -349,7 +354,8 @@ class ModeManager(Node):
         # Collect all nodes from all modes
         all_nodes = set()
         for nodes_list in modes_nodes.values():
-            all_nodes.update(nodes_list)
+            for node_name in nodes_list:
+                all_nodes.add(node_name)
         
         # Create clients for each node's lifecycle services and map loading
         for node_name in all_nodes:
@@ -446,51 +452,27 @@ class ModeManager(Node):
         for node_name in reversed(nodes):
             try:
                 # Get current state of the node
-                get_state_request = GetState.Request()
-                get_state_result = self._call_service(
-                    GetState, 
-                    f'/{node_name}/get_state', 
-                    get_state_request,
-                    timeout_sec=10.0
-                )
+                current_state_id = get_node_state(self._service_clients, self.get_logger(), node_name)
                 
-                if get_state_result is None:
+                if current_state_id is None:
                     self.get_logger().warning(f"Failed to get state for {node_name}")
                     continue
                 
-                current_state = get_state_result.current_state
-                self.get_logger().info(f"{node_name} state {current_state}")
+                self.get_logger().info(f"{node_name} state {current_state_id}")
                 
-                # Deactivate if active, then cleanup
-                if current_state.id == State.PRIMARY_STATE_ACTIVE:
-                    # Step 1: Deactivate (ACTIVE -> INACTIVE)
-                    self.get_logger().info(f"Deactivating {node_name}")
-                    deactivate_success = self._transition_node(node_name, Transition.TRANSITION_DEACTIVATE)
-                    if deactivate_success:
-                        self.get_logger().info(f"Deactivated {node_name}")
-                        # Step 2: Cleanup (INACTIVE -> UNCONFIGURED)
-                        self.get_logger().info(f"Cleaning up {node_name}")
-                        cleanup_success = self._transition_node(node_name, Transition.TRANSITION_CLEANUP)
-                        if cleanup_success:
-                            self.get_logger().info(f"Cleaned up {node_name}")
-                        else:
-                            self.get_logger().warning(f"Failed to cleanup {node_name}")
+                # Transition to UNCONFIGURED (handles both ACTIVE and INACTIVE)
+                if current_state_id != State.PRIMARY_STATE_UNCONFIGURED:
+                    self.get_logger().info(f"Shutting down {node_name}")
+                    success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_UNCONFIGURED)
+                    if success:
+                        self.get_logger().info(f"Shut down {node_name}")
                     else:
-                        self.get_logger().warning(f"Failed to deactivate {node_name}")
+                        self.get_logger().warning(f"Failed to shut down {node_name}")
                         
-                elif current_state.id == State.PRIMARY_STATE_INACTIVE:
-                    self.get_logger().info(f"Cleaning up {node_name}")
-                    # Just cleanup (INACTIVE -> UNCONFIGURED)
-                    cleanup_success = self._transition_node(node_name, Transition.TRANSITION_CLEANUP)
-                    if cleanup_success:
-                        self.get_logger().info(f"Cleaned up {node_name}")
-                    else:
-                        self.get_logger().warning(f"Failed to cleanup {node_name}")
-                        
-                elif current_state.id == State.PRIMARY_STATE_UNCONFIGURED:
+                elif current_state_id == State.PRIMARY_STATE_UNCONFIGURED:
                     self.get_logger().debug(f"Node {node_name} already unconfigured, skipping")
                 else:
-                    self.get_logger().debug(f"Node {node_name} in state {current_state.label}, no shutdown needed")
+                    self.get_logger().debug(f"Node {node_name} in unknown state {current_state_id}, no shutdown needed")
                 
             except Exception as e:
                 self.get_logger().debug(f"Error shutting down {node_name}: {e}")
@@ -520,11 +502,13 @@ class ModeManager(Node):
                 self.get_logger().error(msg)
                 return False, msg
             
+            node_names = nodes
+            
             failures = []
             # Phase 1: Configure all nodes in forward order
-            self.get_logger().info(f"Configuring {len(nodes)} nodes for {mode.value} mode")
-            for node_name in nodes:
-                success = self._transition_node(node_name, Transition.TRANSITION_CONFIGURE)
+            self.get_logger().info(f"Configuring {len(node_names)} nodes for {mode.value} mode")
+            for node_name in node_names:
+                success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_INACTIVE)
                 if not success:
                     failures.append(node_name)
                     self.get_logger().warning(f"Failed to configure {node_name}, continuing...")
@@ -534,12 +518,12 @@ class ModeManager(Node):
             # Phase 2: Activate nodes in forward order
             map_load_success = False
             
-            self.get_logger().info(f"Activating {len(nodes)} nodes for {mode.value} mode")
-            for node_name in nodes:
+            self.get_logger().info(f"Activating {len(node_names)} nodes for {mode.value} mode")
+            for node_name in node_names:
                 if node_name in failures:
                     self.get_logger().warning(f"{node_name} failed configuration. Not proceeding further.")
                     break # don't process the rest of the nodes
-                success = self._transition_node(node_name, Transition.TRANSITION_ACTIVATE)
+                success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_ACTIVE)
                 if not success:
                     failures.append(node_name)
                     self.get_logger().warning(f"Failed to activate {node_name}. Not proceeding further.")
@@ -547,28 +531,9 @@ class ModeManager(Node):
                 
                 # Load map immediately after map server is activated (navigation mode only)
                 if mode == NavigationMode.NAV and 'map_server' in node_name and success:
-                    map_request = LoadMap.Request()
-                    map_request.map_url = os.path.join(self.maps_dir, self.current_map)
-                    
-                    self.get_logger().info(f"Loading map: {os.path.join(self.maps_dir, self.current_map)}")
-                    
-                    # Retry map loading until success
-                    retry_count = 0
-                    while not map_load_success:
-                        map_result = self._call_service(
-                            LoadMap,
-                            f'/{node_name}/load_map',
-                            map_request,
-                            timeout_sec=5.0
-                        )
-                        
-                        if map_result is not None and map_result.result == 0:
-                            map_load_success = True
-                            self.get_logger().info(f"Map loaded successfully after {retry_count + 1} attempt(s)")
-                        else:
-                            retry_count += 1
-                            self.get_logger().warning(f"Map load attempt {retry_count} failed, retrying...")
-                            time.sleep(0.25)
+                    map_load_success = self._load_map_on_server(node_name)
+                    if not map_load_success:
+                        failures.append(f"{node_name}_map_load")
             
             self.get_logger().info(f"Activated nodes")
             
@@ -587,40 +552,82 @@ class ModeManager(Node):
             self.get_logger().error(error_msg)
             return False, error_msg
     
-    def _transition_node(self, node_name: str, transition_id: int) -> bool:
+    def _load_map_on_server(self, node_name: str, max_retries: int = 20) -> bool:
         """
-        Send a lifecycle transition to a specific node.
+        Load the current map on the specified map server node.
+        Retries until successful or max_retries is reached.
         Args:
-            node_name: Name of the node to transition
-            transition_id: The transition ID from Transition message
-        Returns: True if transition succeeded, False otherwise
+            node_name: Name of the map server node
+            max_retries: Maximum number of retry attempts
+        Returns: True if map loaded successfully, False otherwise
         """
-        try:
-            change_state_request = ChangeState.Request()
-            change_state_request.transition = Transition()
-            change_state_request.transition.id = transition_id
-            
-            change_state_result = self._call_service(
-                ChangeState,
-                f'/{node_name}/change_state',
-                change_state_request,
-                timeout_sec=8.0
+        map_request = LoadMap.Request()
+        map_request.map_url = os.path.join(self.maps_dir, self.current_map)
+        
+        self.get_logger().info(f"Loading map: {self.current_map} on {node_name}")
+        
+        retry_count = 0
+        while retry_count <= max_retries:
+            map_result = call_service(
+                self._service_clients,
+                self.get_logger(),
+                f'/{node_name}/load_map',
+                map_request,
+                timeout_sec=5.0
             )
             
-            if change_state_result is not None:
-                success = change_state_result.success
-                if success:
-                    self.get_logger().info(f"Transition {transition_id} succeeded for {node_name}")
-                else:
-                    self.get_logger().info(f"Transition {transition_id} failed for {node_name}")
-                return success
+            if map_result is not None and map_result.result == 0:
+                self.get_logger().info(f"Map loaded successfully after {retry_count + 1} attempt(s)")
+                return True
             else:
-                self.get_logger().warning(f"Timeout waiting for transition on {node_name}")
-                return False
-            
-        except Exception as e:
-            self.get_logger().debug(f"Error transitioning {node_name}: {e}")
-            return False
+                retry_count += 1
+                if retry_count <= max_retries:
+                    self.get_logger().warning(f"Map load attempt {retry_count} failed, retrying...")
+                    time.sleep(0.25)
+        
+        self.get_logger().error(f"Failed to load map after {max_retries} attempts")
+        return False
+
+    def _efficient_map_switch(self) -> Tuple[bool, str]:
+        """
+        Efficiently switch maps by transitioning bt_navigator down, loading map, then bringing all nodes up.
+        
+        Algorithm:
+        1. Transition bt_navigator to inactive
+        2. Load new map on map_server
+        3. Transition all nodes to active
+        """
+        nodes = modes_nodes.get('navigation', [])
+        if not nodes:
+            return False, "No navigation nodes configured"
+        
+        failures = []
+        
+        # Step 1: Transition bt_navigator down to inactive
+        self.get_logger().info(f"Step 1: Transitioning {bt_node} to inactive")
+        success = transition_node(self._service_clients, self.get_logger(), bt_node, State.PRIMARY_STATE_INACTIVE)
+        if not success:
+            failures.append('bt_navigator')
+            self.get_logger().warning(f"Failed to transition bt_navigator down")
+        
+        # Step 2: Load new map
+        self.get_logger().info("Step 2: Loading new map")
+        map_load_success = self._load_map_on_server(map_server_node)
+        if not map_load_success:
+            failures.append(f"{map_server_node}_map_load")
+        
+        # Step 3: Transition all nodes to active
+        self.get_logger().info("Step 3: Activating all nodes")
+        for node_name in nodes:
+            success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_ACTIVE, only_up=True)
+            if not success:
+                failures.append(node_name)
+                self.get_logger().warning(f"Failed to activate {node_name}")
+        
+        if failures:
+            return False, f"Map switch completed with failures: {failures}"
+        else:
+            return True, f"Map switched successfully to {self.current_map}"
 
     def change_map_callback(self, request, response):
         """
@@ -644,22 +651,19 @@ class ModeManager(Node):
             # Save the new map choice for persistence
             self.save_last_map(requested_map)
             
-            # If we're in navigation mode, restart navigation with the new map
+            # If we're in navigation mode, use efficient map switch
             if self.current_mode == "navigation":
-                self.get_logger().info(f"Restarting navigation with new map: {requested_map}")
+                self.get_logger().info(f"Efficiently switching to new map: {requested_map}")
                 
-                # TODO: how to minimize reset speed. do we even need a reset does just publishing a new map handle everything
-                # Shutdown nav first, then startup with new map
-                self.shutdown_mode("navigation")
-                success, message = self.request_mode_startup(NavigationMode.NAV)
+                success, message = self._efficient_map_switch()
                 
                 if success:
                     response.success = True
-                    response.message = f"Successfully changed map to '{requested_map}' and restarted navigation"
+                    response.message = f"Successfully changed map to '{requested_map}'"
                     self.get_logger().info(response.message)
                 else:
                     response.success = False
-                    response.message = f"Failed to restart navigation with map '{requested_map}': {message}"
+                    response.message = f"Failed to switch to map '{requested_map}': {message}"
                     self.get_logger().error(response.message)
             else:
                 # If not in navigation mode, just update the map for next time navigation starts
