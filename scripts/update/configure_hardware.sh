@@ -10,6 +10,7 @@
 #   - Bluetooth configuration
 #   - Arducam microphone setup (ALSA + PulseAudio)
 #   - WiFi power management (disable power saving for stable ROS/DDS)
+#   - Ethernet connection for SSH access (static IP, non-default route)
 
 set -e  # Exit on error
 
@@ -127,6 +128,55 @@ fi
 
 # Note: Not restarting NetworkManager here to avoid SSH disconnection.
 # The config will be applied on next reboot or manual NetworkManager restart.
+
+# -----------------------------------------------------------------------------
+# 5. Ethernet Connection for SSH Access
+# -----------------------------------------------------------------------------
+log "Configuring Ethernet connection for SSH access..."
+
+ETH_CONNECTION="jetson-eth"
+ETH_INTERFACE="enP8p1s0"
+ETH_IP="192.168.50.2/24"
+
+# Bail safely if this Jetson doesn't have the expected interface name
+if ! ip link show "$ETH_INTERFACE" >/dev/null 2>&1; then
+    log "  WARNING: Interface $ETH_INTERFACE not found; skipping Ethernet profile"
+else
+    # Make sure link is up (safe even if unplugged)
+    nmcli dev set "$ETH_INTERFACE" managed yes 2>/dev/null || true
+    ip link set "$ETH_INTERFACE" up 2>/dev/null || true
+
+    if nmcli con show "$ETH_CONNECTION" &>/dev/null; then
+        log "  Ethernet connection '$ETH_CONNECTION' already exists, updating..."
+        nmcli con modify "$ETH_CONNECTION" \
+            connection.type ethernet \
+            connection.interface-name "$ETH_INTERFACE" \
+            connection.autoconnect yes \
+            connection.autoconnect-priority 10 \
+            ipv4.method manual \
+            ipv4.addresses "$ETH_IP" \
+            ipv4.never-default yes \
+            ipv4.dns "" \
+            ipv4.ignore-auto-dns yes
+    else
+        log "  Creating Ethernet connection '$ETH_CONNECTION'..."
+        nmcli con add type ethernet \
+            ifname "$ETH_INTERFACE" \
+            con-name "$ETH_CONNECTION" \
+            connection.autoconnect yes \
+            connection.autoconnect-priority 10 \
+            ipv4.method manual \
+            ipv4.addresses "$ETH_IP" \
+            ipv4.never-default yes \
+            ipv4.dns "" \
+            ipv4.ignore-auto-dns yes
+    fi
+
+    log "  Activating Ethernet connection..."
+    nmcli con up "$ETH_CONNECTION" || log "  Ethernet not plugged in yet — profile will auto-activate later"
+
+    log "  Ethernet configuration completed"
+fi
 
 # -----------------------------------------------------------------------------
 # 6. Sudo Permissions for Hostname Control
