@@ -72,6 +72,19 @@ std::string get_bluetooth_device_id() {
 }
 
 /**
+ * Get the system hostname.
+ * Returns the hostname as a string, or empty string if not available.
+ */
+std::string get_hostname() {
+    std::string result = exec_command("avahi-resolve -a $(hostname -I | awk '{print $1}') | awk '{print $2}' 2>/dev/null");
+    if (result.empty()) {
+        // Fallback to hostname command
+        result = exec_command("hostname 2>/dev/null") + ".local";
+    }
+    return result;
+}
+
+/**
  * Get the subject (first line) of the latest tag's annotation message.
  * Returns empty string if no tags or tag has no message.
  */
@@ -686,6 +699,12 @@ private:
             std::string device_id = get_bluetooth_device_id();
             if (!device_id.empty()) {
                 data_to_publish_dict["device_id"] = device_id;
+            }
+
+            // Include system hostname
+            std::string hostname = get_hostname();
+            if (!hostname.empty()) {
+                data_to_publish_dict["hostname"] = hostname;
             }
 
             // Include update availability status
