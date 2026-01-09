@@ -67,6 +67,7 @@ def _get_gaze_tracker_class():
     global ROSPersonTracker
     if ROSPersonTracker is None:
         from brain_client.gaze import ROSPersonTracker as _ROSPersonTracker
+
         ROSPersonTracker = _ROSPersonTracker
     return ROSPersonTracker
 
@@ -732,9 +733,10 @@ class BrainClientNode(Node):
             self.get_logger().error(f"Error activating directive inputs: {e}")
 
     def _update_gaze_tracker(self):
-        """Start or stop gaze tracker based on current directive's uses_gaze() setting."""
+        """Start or stop gaze tracker based on brain active state and directive's uses_gaze() setting."""
         wants_gaze = (
-            self.current_directive is not None
+            self.is_brain_active
+            and self.current_directive is not None
             and hasattr(self.current_directive, "uses_gaze")
             and self.current_directive.uses_gaze()
         )
@@ -918,7 +920,7 @@ class BrainClientNode(Node):
             )
         except Exception as e:
             self.get_logger().error(
-                f"Error in fetch_transform_callback: {e}, " f"{traceback.format_exc()}"
+                f"Error in fetch_transform_callback: {e}, {traceback.format_exc()}"
             )
 
     def map_callback(self, msg: OccupancyGrid):
