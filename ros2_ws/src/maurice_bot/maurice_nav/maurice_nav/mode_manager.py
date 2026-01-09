@@ -35,9 +35,9 @@ modes_nodes = {
     'mapping': ['slam_toolbox'],
     'mapfree': [
             'null_map_node',
-            'planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
+            'mapfree/planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
             'controller_server',  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
-            'bt_navigator',              # could stay on but underlying actions r gonna fail and be in a weird state; 
+            'mapfree/bt_navigator',              # could stay on but underlying actions r gonna fail and be in a weird state; 
             'behavior_server',            # i guess this can just be deactivated - WHY??
             'velocity_smoother',           # might be able to leave it running throughout any changes
     ],
@@ -45,9 +45,11 @@ modes_nodes = {
             'navigation_map_server',      # load_map topic 
             'navigation_grid_localizer',  # localize Trigger service - USE THE TRIGGER SERVICE AND RELOAD MAP SERVICE
             'navigation_amcl',            # either restart or make sure its not first_map_only and send /map and /initialpose
+            'mapfree/planner_server',
             'planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
             'controller_server',  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
             'bt_navigator',              # could stay on but underlying actions r gonna fail and be in a weird state; 
+            'mapfree/bt_navigator',
             'behavior_server',            # i guess this can just be deactivated - WHY??
             'velocity_smoother',           # might be able to leave it running throughout any changes
             # TODO: kill any running BTs or behaviors on switch
