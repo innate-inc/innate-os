@@ -70,7 +70,7 @@
       <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 -1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/base.STL" scale="1 1 1"/>
       </geometry>
@@ -102,14 +102,14 @@
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link1.STL" scale="1 1 1"/>
       </geometry>
       <material name="bright_orange"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link1.STL" scale="1 1 1"/>
       </geometry>
@@ -132,7 +132,7 @@
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link2.STL" scale="1 1 1"/>
       </geometry>
@@ -164,7 +164,7 @@
       <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link3.STL" scale="1 1 1"/>
       </geometry>
@@ -172,6 +172,7 @@
     </visual>
     <!-- Simplified collision: Cylinder length 118mm, diameter 46mm -->
     <collision>
+    <!-- May need to update rpy here -->
       <origin xyz="0.059 0 0" rpy="0 1.5708 0"/>
       <geometry>
         <cylinder radius="0.023" length="0.118"/>
@@ -196,14 +197,14 @@
       <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00005"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link4.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link4.STL" scale="1 1 1"/>
       </geometry>
@@ -226,16 +227,16 @@
       <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00005"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
       </geometry>
       <material name="bright_orange"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
       </geometry>
     </collision>
   </link>
@@ -256,9 +257,9 @@
       <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link61.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://maurice_sim/meshes/link61.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -289,9 +290,9 @@
       <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 1.5708"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link62.STL" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://maurice_sim/meshes/link62.STL" scale="1 1 1"/>
       </geometry>
       <material name="matt_black"/>
     </visual>
@@ -342,10 +343,13 @@
   </link>
 
   <!-- Head Link -->
-  <joint name="joint_head" type="fixed">
+  <joint name="joint_head" type="revolute">
     <parent link="base_link"/>
     <child  link="head"/>
     <origin xyz="-0.040751 -0.0002 0.25882" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="5"/>
+    <limit lower="-0.1745" upper="0.5236" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="head">
     <inertial>
