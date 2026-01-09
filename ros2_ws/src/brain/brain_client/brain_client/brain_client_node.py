@@ -3,7 +3,7 @@ import traceback
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 import threading
 import json
 import time
@@ -365,10 +365,13 @@ class BrainClientNode(Node):
             )
 
         # Subscribe to AMCL pose topic
+        # NOTE: AMCL publishes with TRANSIENT_LOCAL durability, so we must match it
+        # to receive the latched pose even if we subscribe after AMCL starts
         amcl_pose_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.amcl_pose_sub = self.create_subscription(
             PoseWithCovarianceStamped,
@@ -678,6 +681,16 @@ class BrainClientNode(Node):
         self.get_logger().warning("⚠️ input_manager_node not found - continuing anyway")
         return False
 
+    def _encode_current_image(self) -> str | None:
+        """Encode the current camera image as base64 JPEG. Returns None on failure."""
+        if self.last_image is None:
+            return None
+        try:
+            success, encoded = cv2.imencode(".jpg", self.last_image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            return base64.b64encode(encoded.tobytes()).decode("utf-8") if success else None
+        except Exception:
+            return None
+
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
         self.get_logger().info(f"Received brain/chat_in: {data}")
@@ -689,9 +702,12 @@ class BrainClientNode(Node):
             return
         
         self.chat_history.append(data)
-        outgoing_msg = MessageIn(
-            type=MessageInType.CHAT_IN, payload={"text": data["text"]}
-        )
+        
+        payload = {"text": data["text"]}
+        if image_b64 := self._encode_current_image():
+            payload["image_b64"] = image_b64
+        
+        outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
         self.ws_bridge.send_message(outgoing_msg)
         self.get_logger().info(f"Sent MessageIn: {outgoing_msg}")
 
