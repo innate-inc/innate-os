@@ -14,7 +14,7 @@
       movement_time_allowance: 10.0
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.05
       yaw_goal_tolerance: 0.1
       stateful: True
 
@@ -57,9 +57,6 @@
       gamma: 0.015                      # Smoothness vs energy trade-off
       visualize: true                   # Set to true for debugging (slows performance)
       regenerate_noises: false
-      
-      # Goal tolerances
-      xy_goal_tolerance: 0.25           # matches existing xy_goal_tolerance
       
       # Critics (objective functions)
       critics: [
