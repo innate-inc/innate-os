@@ -39,8 +39,16 @@ def generate_launch_description():
         )
     )
     
+    # Include the camera driver from maurice_cam
+    camera_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(cam_pkg_dir, 'launch', 'camera_driver.launch.py')
+        )
+    )
+    
     return LaunchDescription([
         robot_state_publisher_node,
         bringup_core_launch,
-        lidar_launch
+        lidar_launch,
+        camera_launch
     ])
