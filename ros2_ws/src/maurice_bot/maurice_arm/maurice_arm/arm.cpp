@@ -114,7 +114,7 @@ public:
         // Setup HEAD publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up HEAD publishers/subscribers/services");
         head_position_pub_ = this->create_publisher<std_msgs::msg::String>("/mars/head/current_position", 10);
-        head_joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
+        joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
         head_position_sub_ = this->create_subscription<std_msgs::msg::Int32>(
             "/mars/head/set_position", 10,
             std::bind(&MauriceArmNode::headPositionCallback, this, std::placeholders::_1));
@@ -131,10 +131,9 @@ public:
             rmw_qos_profile_services_default,
             service_callback_group_);
         
-        // Initialize joint state message
-        RCLCPP_INFO(this->get_logger(), "Initializing joint state message with 6 joint names");
-        joint_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
-        head_joint_state_msg_.name = {"joint_head"};
+        // Initialize joint state message with all 7 joints (arm + head)
+        RCLCPP_INFO(this->get_logger(), "Initializing joint state message with 7 joint names");
+        joint_state_msg_.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint_head"};
         
         // Define home position
         home_position_ = {1.445009902188274, -1.3882526130365052, 1.517106999218899, 
@@ -344,32 +343,35 @@ private:
                 }
             }
             
-            // Publish arm joint state (only first 6 servos)
-            joint_state_msg_.header.stamp = this->now();
-            joint_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
-            joint_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
-            arm_state_pub_->publish(joint_state_msg_);
-            
-            // Store latest joint positions for trajectory planning
-            {
-                std::lock_guard<std::mutex> js_lock(joint_state_mutex_);
-                latest_joint_positions_ = joint_state_msg_.position;
-            }
-            
             // ========== PUBLISH HEAD POSITION ==========
             int head_encoder = positions[6];  // Index 6 = servo 7
             publishHeadPosition(head_encoder);
 
-            // ========== PUBLISH HEAD JOINT STATE (for TF tree) ==========
+            // ========== PUBLISH JOINT STATE (all 7 joints) ==========
             // Convert head position to radians with direction reversal
             double head_angle_rad = positions_rad[6];
             if (joint_configs_[6].head_direction_reversed) {
                 head_angle_rad = -head_angle_rad;
             }
-            head_joint_state_msg_.header.stamp = this->now();
-            head_joint_state_msg_.position = {head_angle_rad};
-            head_joint_state_msg_.velocity = {velocities_rad[6]};
-            head_joint_state_pub_->publish(head_joint_state_msg_);
+            
+            // Build full 7-joint state (arm positions already direction-flipped)
+            joint_state_msg_.header.stamp = this->now();
+            std::vector<double> all_positions(positions_rad.begin(), positions_rad.begin() + 6);
+            all_positions.push_back(head_angle_rad);
+            joint_state_msg_.position = all_positions;
+            std::vector<double> all_velocities(velocities_rad.begin(), velocities_rad.begin() + 6);
+            all_velocities.push_back(velocities_rad[6]);
+            joint_state_msg_.velocity = all_velocities;
+            
+            // Publish to both topics
+            arm_state_pub_->publish(joint_state_msg_);           // /mars/arm/state
+            joint_state_pub_->publish(joint_state_msg_);    // /joint_states (for robot_state_publisher)
+            
+            // Store latest joint positions for trajectory planning (first 6 only)
+            {
+                std::lock_guard<std::mutex> js_lock(joint_state_mutex_);
+                latest_joint_positions_ = std::vector<double>(all_positions.begin(), all_positions.begin() + 6);
+            }
             
             // ========== SEND COMMANDS IF AVAILABLE ==========
             if (has_arm_command_.load() || has_head_command_.load()) {
@@ -1016,9 +1018,8 @@ private:
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr head_position_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr head_ai_position_service_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr head_enable_service_;
-    // Head joint state for TF tree
-    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_pub_;
-    sensor_msgs::msg::JointState head_joint_state_msg_;
+    // Joint state publisher for robot_state_publisher (/joint_states)
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
     int latest_head_command_{0};
     std::mutex head_command_mutex_;
     std::atomic<bool> has_head_command_{false};
