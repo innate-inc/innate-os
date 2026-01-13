@@ -118,7 +118,6 @@ def generate_launch_description():
     
     # Add service remappings (not actions)
     mapfree_service_remappings = [
-        ('global_costmap/clear_entirely_global_costmap', '/global_costmap/clear_entirely_global_costmap'),
         ('local_costmap/clear_entirely_local_costmap', '/local_costmap/clear_entirely_local_costmap'),
     ]
     
