@@ -8,7 +8,6 @@ import os
 def generate_launch_description():
     # Get the package share directories
     pkg_dir = get_package_share_directory('maurice_bringup')
-    cam_pkg_dir = get_package_share_directory('maurice_cam')
     sim_pkg_dir = get_package_share_directory('maurice_sim')
     
     # Read URDF file for robot_state_publisher
@@ -39,16 +38,8 @@ def generate_launch_description():
         )
     )
     
-    # Include the camera driver from maurice_cam
-    camera_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(cam_pkg_dir, 'launch', 'camera_driver.launch.py')
-        )
-    )
-    
     return LaunchDescription([
         robot_state_publisher_node,
         bringup_core_launch,
-        lidar_launch,
-        camera_launch
+        lidar_launch
     ])
