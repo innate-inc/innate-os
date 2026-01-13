@@ -11,7 +11,6 @@ import struct
 import threading
 
 from rclpy.node import Node
-from geometry_msgs.msg import TransformStamped
 
 # CRC-8/MAXIM constants
 CRC8_POLY = 0x8C
@@ -55,8 +54,10 @@ class I2CManager:
         # -------------------------
         # Stored responses
         # -------------------------
-        # Initialize zero transform for odom->base_link using a dedicated method.
-        self.current_transform = self._initialize_transform()
+        # Odometry values (in meters and radians)
+        self.odom_x = 0.0
+        self.odom_y = 0.0
+        self.odom_yaw = 0.0
         self.battery_voltage = 0.0
         self.motor_temperature = 0.0
         self.fault_code = 0
@@ -77,22 +78,6 @@ class I2CManager:
                 else:
                     crc >>= 1
         return crc
-
-    def _initialize_transform(self) -> TransformStamped:
-        """
-        Initializes and returns a zero (identity) transform from "odom" to "base_link".
-        """
-        transform = TransformStamped()
-        transform.header.frame_id = "odom"
-        transform.child_frame_id = "base_link"
-        transform.transform.translation.x = 0.0
-        transform.transform.translation.y = 0.0
-        transform.transform.translation.z = 0.0
-        transform.transform.rotation.x = 0.0
-        transform.transform.rotation.y = 0.0
-        transform.transform.rotation.z = 0.0
-        transform.transform.rotation.w = 1.0
-        return transform
 
     def _send_command(self, cmd_id, data_bytes):
         """
@@ -170,21 +155,12 @@ class I2CManager:
             except struct.error as e:
                 self.logger.error(f"Failed to unpack movement response: {e}")
                 return
-            now = self.node.get_clock().now().to_msg()
-            self.current_transform.header.stamp = now
-            self.current_transform.header.frame_id = "odom"
-            self.current_transform.child_frame_id = "base_link"
-            self.current_transform.transform.translation.x = x / 100.0
-            self.current_transform.transform.translation.y = y / 100.0
-            self.current_transform.transform.translation.z = 0.0
-            import math
-            theta_rad = theta / 100.0
-            self.current_transform.transform.rotation.x = 0.0
-            self.current_transform.transform.rotation.y = 0.0
-            self.current_transform.transform.rotation.z = math.sin(theta_rad / 2.0)
-            self.current_transform.transform.rotation.w = math.cos(theta_rad / 2.0)
+            # Store in meters and radians
+            self.odom_x = x / 100.0
+            self.odom_y = y / 100.0
+            self.odom_yaw = theta / 100.0
             if self.debug:
-                self.logger.debug(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
+                self.logger.debug(f"Position Update - X: {self.odom_x}, Y: {self.odom_y}, θ: {self.odom_yaw} rad")
         elif resp_id == self.RESP_STATUS:
             # Health status: battery voltage, motor temp, fault code
             try:
