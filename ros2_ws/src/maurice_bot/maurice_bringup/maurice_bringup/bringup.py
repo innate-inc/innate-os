@@ -7,8 +7,8 @@ from maurice_bringup.battery import BatteryManager
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from maurice_msgs.srv import LightCommand
-from sensor_msgs.msg import BatteryState, JointState
-import math
+from tf2_ros import TransformBroadcaster
+from sensor_msgs.msg import BatteryState
 from std_srvs.srv import Trigger
 import time
 
@@ -120,12 +120,8 @@ class Bringup(Node):
             10  # QoS profile depth
         )
         
-        # Create joint state publisher for base odometry joints
-        self.base_joint_pub = self.create_publisher(
-            JointState,
-            '/joint_states',
-            10
-        )
+        # Initialize the transform broadcaster
+        self.tf_broadcaster = TransformBroadcaster(self)
 
         # Create timer for odometry and transform updates
         odom_period = 1.0 / self.params['ros_topics']['odom_frequency']
@@ -233,31 +229,24 @@ class Bringup(Node):
         return response
 
     def _publish_odometry(self):
-        """Publish odometry data and base joint states from I2C readings."""
-        x = self.i2c_manager.odom_x
-        y = self.i2c_manager.odom_y
-        yaw = self.i2c_manager.odom_yaw
+        """Publish odometry data, transform, and battery state from I2C readings."""
+        transform = self.i2c_manager.current_transform
         
-        now = self.get_clock().now().to_msg()
+        # Broadcast the transform
+        self.tf_broadcaster.sendTransform(transform)
         
-        # Publish base joint states (for robot_state_publisher TF)
-        joint_msg = JointState()
-        joint_msg.header.stamp = now
-        joint_msg.name = ['base_x', 'base_y', 'base_yaw']
-        joint_msg.position = [x, y, yaw]
-        self.base_joint_pub.publish(joint_msg)
-        
-        # Create and publish odometry message (for Nav2 velocity info)
+        # Create and publish odometry message
         odom = Odometry()
-        odom.header.stamp = now
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id = 'base_link'
-        odom.pose.pose.position.x = x
-        odom.pose.pose.position.y = y
-        odom.pose.pose.position.z = 0.0
-        # Convert yaw to quaternion
-        odom.pose.pose.orientation.z = math.sin(yaw / 2.0)
-        odom.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        odom.header = transform.header
+        odom.child_frame_id = transform.child_frame_id
+        
+        # Copy pose from transform
+        odom.pose.pose.position.x = transform.transform.translation.x
+        odom.pose.pose.position.y = transform.transform.translation.y
+        odom.pose.pose.position.z = transform.transform.translation.z
+        odom.pose.pose.orientation = transform.transform.rotation
+        
+        # Publish the odometry message
         self.odom_pub.publish(odom)
 
     def _publish_battery(self):

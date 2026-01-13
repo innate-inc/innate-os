@@ -11,13 +11,18 @@
     <color rgba="0.0 1.0 0.0 0.3"/>  <!-- Semi-transparent green -->
   </material>
 
-  <!-- odom link (root frame for odometry) -->
-  <link name="odom">
+  <!-- base_root link (inertial tag removed) -->
+  <link name="base_root">
+    <!-- <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1"/>
+    </inertial> -->
   </link>
 
   <!-- prismatic X -->
   <joint name="base_x" type="prismatic">
-    <parent link="odom"/>
+    <parent link="base_root"/>
     <child  link="base_x"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis  xyz="1 0 0"/>
