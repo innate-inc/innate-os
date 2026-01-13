@@ -260,7 +260,7 @@
   <joint name="ee_joint" type="fixed">
     <parent link="link5"/>
     <child  link="ee_link"/>
-    <origin xyz="0.0887 0 0" rpy="0 0 0"/>
+    <origin xyz="0.091838 0 0" rpy="0 0 0"/>
   </joint>
   <link name="ee_link">
     <inertial>
