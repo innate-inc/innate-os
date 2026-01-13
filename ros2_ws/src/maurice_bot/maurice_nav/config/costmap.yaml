@@ -51,10 +51,6 @@ local_costmap:
       track_unknown_space: false        # Ensure unknown space is considered as obstacles
       unknown_cost_value: 255          # Unknown cells get a lethal cost value
       plugins: ["obstacle_layer", "inflation_layer"]
-
-      # static_layer:
-      #   plugin: "nav2_costmap_2d::StaticLayer"
-      #   map_subscribe_transient_local: True
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
