@@ -7,7 +7,7 @@
     min_theta_velocity_threshold: 0.001
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
-    controller_plugins: ["FollowPathEEE"]
+    controller_plugins: ["InnateFollowPath"]
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
@@ -19,7 +19,7 @@
       stateful: True
 
     # MPPI controller parameters for the "FollowPath" plugin
-    FollowPathEEE:
+    InnateFollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       
       # Motion model and basic parameters
