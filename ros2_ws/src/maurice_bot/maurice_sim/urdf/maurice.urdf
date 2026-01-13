@@ -56,7 +56,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link1.STL" scale="1 1 1"/>
       </geometry>
-      <material name="bright_orange"/>
+      <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -118,7 +118,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link3.STL" scale="1 1 1"/>
       </geometry>
-      <material name="bright_orange"/>
+      <material name="matt_black"/>
     </visual>
     <!-- Simplified collision: Cylinder length 118mm, diameter 46mm -->
     <collision>
@@ -181,7 +181,7 @@
       <geometry>
         <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
       </geometry>
-      <material name="bright_orange"/>
+      <material name="matt_black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -273,7 +273,7 @@
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
-      <material name="bright_orange"/>
+      <material name="matt_black"/>
     </visual>
   </link>
 
