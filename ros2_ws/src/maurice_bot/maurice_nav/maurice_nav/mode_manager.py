@@ -79,17 +79,6 @@ class ModeManager(Node):
         # Pre-create service clients and store in dictionary
         self._service_clients = {}
         
-        # Declare parameter for modes_nodes mapping
-        # self.declare_parameter('modes_nodes', {})
-        
-        # # Get modes_nodes from parameter or use default
-        # modes_nodes_param = self.get_parameter('modes_nodes').value
-        # if modes_nodes_param:
-        #     self.modes_nodes = modes_nodes_param
-        #     self.get_logger().info(f'Loaded modes_nodes from parameter: {self.modes_nodes}')
-        # else:
-        #     self.get_logger().error('modes_nodes parameter not provided, using default mapping')
-        
         # Service to switch modes
         self.mode_service = self.create_service(
             ChangeNavigationMode,
@@ -98,7 +87,6 @@ class ModeManager(Node):
             callback_group=self._internal_callbacks_group
         )
         
-        # TODO: check if im publishing new map over load_map properly
         # Service to change maps in navigation mode
         self.map_service = self.create_service(
             ChangeMap,
@@ -131,9 +119,6 @@ class ModeManager(Node):
         
         # Pre-create service clients for all nodes and service types we'll use
         self._init_service_clients()
-        
-        # Kill any orphaned navigation processes from previous runs
-        # self._cleanup_orphaned_processes()
         
         # Use environment variable if set, otherwise construct from HOME
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
