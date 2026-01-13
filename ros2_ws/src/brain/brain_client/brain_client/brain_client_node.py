@@ -1355,8 +1355,24 @@ class BrainClientNode(Node):
                     }
                     payload["depth"] = depth_payload
 
-                # Include map data if available; in mapfree mode map may be absent
-                if self.last_map is not None:
+                # Include map data if available; in mapfree mode use dummy map
+                if use_mapfree:
+                    # In mapfree mode, send a dummy 1x1 map
+                    dummy_map_data = np.array([0], dtype=np.int8)  # 1 byte, value 0 (free space)
+                    map_payload = {
+                        "resolution": 100.0,  # 1 meter resolution
+                        "width": 1,
+                        "height": 1,
+                        "origin_x": 0.0,
+                        "origin_y": 0.0,
+                        "origin_z": 0.0,
+                        "origin_yaw": 0.0,
+                        "frame_id": "odom",
+                        "data": base64.b64encode(dummy_map_data.tobytes()).decode("utf-8"),
+                    }
+                    payload["map"] = map_payload
+                    self.get_logger().debug("Including dummy map data for mapfree mode")
+                elif self.last_map is not None:
                     # Create a simplified map payload with only the necessary information
                     map_data = self.last_map.data
 
@@ -1382,14 +1398,16 @@ class BrainClientNode(Node):
                     payload["map"] = map_payload
                     self.get_logger().debug("Including map data in image message")
                 else:
-                    if not use_mapfree:
-                        self.get_logger().warn(
-                            "\033[93m[BrainClient] No map data available. Skipping image callback.\033[0m"
-                        )
-                        return
-                    # In mapfree, proceed without a map
+                    # Not in mapfree and no map available
+                    self.get_logger().warn(
+                        "\033[93m[BrainClient] No map data available. Skipping image callback.\033[0m"
+                    )
+                    return
 
                 # Include robot coordinates (use selected pose source)
+                self.get_logger().info(
+                    f"\033[93m[BrainClient] using pose from {pose_source}.\033[0m"
+                )
                 pose_msg = pose_source[1]  # PoseWithCovariance or Odometry.pose
                 pos = pose_msg.pose.position
                 ori = pose_msg.pose.orientation
