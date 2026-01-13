@@ -114,7 +114,7 @@
       
       # Path following critic - drives progress along path
       PathFollowCritic:
-        enabled: false
+        enabled: true
         cost_power: 1
         cost_weight: 5.0
         offset_from_furthest: 6
