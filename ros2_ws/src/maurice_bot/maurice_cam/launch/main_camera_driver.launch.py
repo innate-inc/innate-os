@@ -78,7 +78,7 @@ def generate_launch_description():
     
     compressed_frame_interval_arg = DeclareLaunchArgument(
         'compressed_frame_interval',
-        default_value='3',
+        default_value='6',
         description='Publish compressed image every N frames'
     )
     

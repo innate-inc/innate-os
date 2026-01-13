@@ -42,13 +42,13 @@ def generate_launch_description():
     
     publish_compressed_arg = DeclareLaunchArgument(
         'publish_compressed',
-        default_value='false',
+        default_value='true',
         description='Publish compressed image topic'
     )
     
     compressed_frame_interval_arg = DeclareLaunchArgument(
         'compressed_frame_interval',
-        default_value='5',
+        default_value='6',
         description='Publish compressed image every N frames'
     )
     

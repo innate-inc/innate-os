@@ -116,7 +116,7 @@ def generate_launch_description():
     
     main_camera_compressed_frame_interval_arg = DeclareLaunchArgument(
         'main_camera_compressed_frame_interval',
-        default_value='3',
+        default_value='6',
         description='Main camera publish compressed image every N frames'
     )
     
@@ -257,13 +257,13 @@ def generate_launch_description():
     
     arm_camera_publish_compressed_arg = DeclareLaunchArgument(
         'arm_camera_publish_compressed',
-        default_value='false',
+        default_value='true',
         description='Arm camera publish compressed image topic'
     )
     
     arm_camera_compressed_frame_interval_arg = DeclareLaunchArgument(
         'arm_camera_compressed_frame_interval',
-        default_value='5',
+        default_value='6',
         description='Arm camera publish compressed image every N frames'
     )
 
