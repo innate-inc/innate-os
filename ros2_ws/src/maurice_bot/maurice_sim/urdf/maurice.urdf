@@ -196,7 +196,7 @@
     <parent link="link5"/>
     <child  link="link61"/>
     <origin xyz="0.044 -0.0092 0" rpy="0 0 0"/>
-    <axis  xyz="0 0 1"/>
+    <axis  xyz="0 0 -1"/>
     <dynamics damping="5"/>
     <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
   </joint>
@@ -228,7 +228,7 @@
     <parent link="link5"/>
     <child  link="link62"/>
     <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
-    <axis  xyz="0 0 1"/>
+    <axis  xyz="0 0 -1"/>
     <dynamics damping="5"/>
     <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
     <mimic joint="joint6" multiplier="-1" offset="0"/>
@@ -297,7 +297,7 @@
     <parent link="base_link"/>
     <child  link="head"/>
     <origin xyz="-0.040751 -0.0002 0.25882" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
+    <axis xyz="0 -1 0"/>
     <dynamics damping="5"/>
     <limit lower="-0.1745" upper="0.5236" effort="2.0" velocity="2.0"/>
   </joint>

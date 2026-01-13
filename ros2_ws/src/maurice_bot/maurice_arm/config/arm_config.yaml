@@ -108,8 +108,8 @@ maurice_arm:
                   "kd": 0
               },
               "head_config": {
-                  "ai_position_deg": 20.0,
-                  "direction_reversed": false
+                  "ai_position_deg": -20.0,
+                  "direction_reversed": true
               }
           }
       }
