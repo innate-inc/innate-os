@@ -31,6 +31,7 @@
 
   <!-- Internal package dependencies -->
   <exec_depend>maurice_msgs</exec_depend>
+  <exec_depend>maurice_sim</exec_depend>
 
   <!-- Python dependencies (installed via pip-requirements.txt and apt-dependencies.txt) -->
   <exec_depend>rosbag2_py</exec_depend>
