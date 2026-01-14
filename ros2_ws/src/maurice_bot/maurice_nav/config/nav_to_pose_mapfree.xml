@@ -1,7 +1,8 @@
 <root main_tree_to_execute="MainTree">
     <BehaviorTree ID="MainTree">
-        <RecoveryNode number_of_retries="2" name="NavigateRecovery">
-            <PipelineSequence name="NavigateWithReplanning">
+        <Timeout msec="14000">
+            <RecoveryNode number_of_retries="2" name="NavigateRecovery">
+                <PipelineSequence name="NavigateWithReplanning">
                 <RateController hz="1.0">
                     <RecoveryNode number_of_retries="1" name="ComputePathToPose">
                         <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
@@ -32,5 +33,6 @@
                 </RoundRobin>
             </ReactiveFallback>
         </RecoveryNode>
+        </Timeout>
     </BehaviorTree>
 </root>

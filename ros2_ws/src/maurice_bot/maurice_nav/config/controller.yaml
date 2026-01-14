@@ -14,8 +14,8 @@
       movement_time_allowance: 10.0
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.10
-      yaw_goal_tolerance: 0.1
+      xy_goal_tolerance: 0.01
+      yaw_goal_tolerance: 0.05
       stateful: True
 
     # MPPI controller parameters for the "FollowPath" plugin
@@ -26,7 +26,7 @@
       motion_model: "DiffDrive"
       time_steps: 50                    # 50 steps * 0.05s = 2.5s prediction horizon (matches old sim_time)
       model_dt: 0.05                    # 1/controller_frequency = 1/20 = 0.05s
-      batch_size: 1000                  # Number of trajectory samples
+      batch_size: 500                  # Number of trajectory samples
       iteration_count: 1
       
       # Velocity limits (from existing DWB config)
@@ -92,7 +92,7 @@
         enabled: true
         cost_power: 2
         cost_weight: 15.0
-        threshold_to_consider: 1.2       # Start considering when within this distance of goal
+        threshold_to_consider: 1.0       # Start considering when within this distance of goal
       
       # Goal angle critic - aligns robot with goal orientation
       GoalAngleCritic:
@@ -105,10 +105,10 @@
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0
+        cost_weight: 20.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.8
         offset_from_furthest: 20
         use_path_orientations: false
       
@@ -118,7 +118,7 @@
         cost_power: 1
         cost_weight: 5.0
         offset_from_furthest: 6
-        threshold_to_consider: 1.2
+        threshold_to_consider: 0.8
       
       # Path angle critic - handles sharp turns
       PathAngleCritic:
@@ -126,7 +126,7 @@
         cost_power: 1
         cost_weight: 2.2
         offset_from_furthest: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.8
         max_angle_to_furthest: 1.0
         mode: 0                          # Forward preference mode
       
