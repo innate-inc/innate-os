@@ -2,7 +2,7 @@
 /**:
   ros__parameters:
     data_directory: "~/innate-os/skills"  # Base directory for skills (each task stores episodes in {task}/data/)
-    data_frequency: 20                    # Frequency (e.g., Hz) at which data is recorded
+    data_frequency: 30                    # Frequency (e.g., Hz) at which data is recorded
     image_topics:                         # List of image topic names
       - "/mars/main_camera/image"
       - "/mars/arm/image_raw"
