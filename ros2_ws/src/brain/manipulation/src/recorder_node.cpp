@@ -311,9 +311,16 @@ void RecorderNode::timer_callback() {
     for (const auto& topic : image_topics_) {
         try {
             auto cv_ptr = cv_bridge::toCvCopy(latest_images_[topic], "bgr8");
-            cv::Mat resized;
-            cv::resize(cv_ptr->image, resized, cv::Size(image_size_[0], image_size_[1]));
-            images_converted.push_back(resized);
+            
+            // Only resize if dimensions don't match
+            if (cv_ptr->image.cols != image_size_[0] || cv_ptr->image.rows != image_size_[1]) {
+                cv::Mat resized;
+                cv::resize(cv_ptr->image, resized, cv::Size(image_size_[0], image_size_[1]));
+                images_converted.push_back(resized);
+            } else {
+                // Already the correct size, use it directly
+                images_converted.push_back(cv_ptr->image);
+            }
 
             double img_ts = latest_images_[topic]->header.stamp.sec +
                             latest_images_[topic]->header.stamp.nanosec * 1e-9;
