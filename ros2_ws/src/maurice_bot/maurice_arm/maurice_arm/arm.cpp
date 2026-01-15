@@ -259,7 +259,7 @@ private:
         configureServosLocked();
     }
 
-    void configureServosLocked() {
+    void configureServosLocked(bool enable_torque = true) {
         RCLCPP_INFO(this->get_logger(), "Configuring all 7 servos...");
         
         // Configure all servos (IDs 1-7) uniformly
@@ -318,10 +318,12 @@ private:
             dynamixel_->setD(config.servo_id, config.kd);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             
-            // Enable torque
-            RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", config.servo_id);
-            dynamixel_->enableTorque(config.servo_id);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Enable torque (if requested)
+            if (enable_torque) {
+                RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", config.servo_id);
+                dynamixel_->enableTorque(config.servo_id);
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
         
         // Move head to default position
@@ -630,11 +632,15 @@ private:
             RCLCPP_INFO(this->get_logger(), "Rebooting all servos (IDs 1-7)");
             robot_->rebootAllServos();
             
-            RCLCPP_INFO(this->get_logger(), "Reapplying configuration after reboot");
-            configureServosLocked();
+            RCLCPP_INFO(this->get_logger(), "Reapplying configuration after reboot (arm torque off)");
+            configureServosLocked(false);
+            
+            // Re-enable torque only for head servo
+            RCLCPP_INFO(this->get_logger(), "Enabling torque on head servo (ID 7)");
+            dynamixel_->enableTorque(7);
             
             response->success = true;
-            response->message = "Rebooted and reinitialized all servos";
+            response->message = "Rebooted and reinitialized all servos (arm torque off, head torque on)";
             RCLCPP_INFO(this->get_logger(), "Successfully rebooted and reinitialized all servos");
         } catch (const std::exception& e) {
             response->success = false;
