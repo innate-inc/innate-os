@@ -4,15 +4,15 @@ velocity_smoother:
     smoothing_frequency: 40.0       # Hz, Match controller_frequency from controller.yaml
     scale_velocities: false         # Clamp velocities instead of scaling
     feedback: "OPEN_LOOP"           # Options: OPEN_LOOP, CLOSED_LOOP (requires odometry)
-    velocity_timeout: 1.0           # Seconds. If no commands received for this duration, output zero velocity.
+    velocity_timeout: 0.2           # Seconds. If no commands received for this duration, output zero velocity.
 
     # Limits using flat list structure [x, y, theta]
     max_velocity: [0.5, 0.0, 0.8]   # Based on controller max_vel_x, max_vel_y, max_vel_theta
     min_velocity: [-0.2, 0.0, -0.8]  # Based on controller min_vel_x, min_vel_y, symmetric min_vel_theta
     
-    max_accel: [0.3, 0.0, 0.5]      # Based on controller acc_lim_x, acc_lim_y, acc_lim_theta
+    max_accel: [2.5, 0.0, 3.2]      # Increased for more responsive behavior
     # NOTE: This format often uses negative values for max_decel, representing deceleration limits.
-    max_decel: [-0.3, 0.0, -0.5]    # Based on controller decel_lim_x, decel_lim_y, decel_lim_theta (negated)
+    max_decel: [-2.5, 0.0, -3.2]    # Increased for quicker stopping
 
     deadband_velocity: [0.01, 0.0, 0.02] # Deadband for x, y, theta based on previous 'min_velocity_deadband'
 
