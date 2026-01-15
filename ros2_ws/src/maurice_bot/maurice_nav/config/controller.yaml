@@ -1,4 +1,4 @@
-controller_server:
+/**:
   ros__parameters:
     use_sim_time: false
     controller_frequency: 20.0
@@ -7,7 +7,7 @@ controller_server:
     min_theta_velocity_threshold: 0.001
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
-    controller_plugins: ["FollowPath"]
+    controller_plugins: ["InnateFollowPath"]
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
@@ -19,14 +19,14 @@ controller_server:
       stateful: True
 
     # MPPI controller parameters for the "FollowPath" plugin
-    FollowPath:
+    InnateFollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       
       # Motion model and basic parameters
       motion_model: "DiffDrive"
       time_steps: 50                    # 50 steps * 0.05s = 2.5s prediction horizon (matches old sim_time)
       model_dt: 0.05                    # 1/controller_frequency = 1/20 = 0.05s
-      batch_size: 1000                  # Number of trajectory samples
+      batch_size: 2000                  # Number of trajectory samples
       iteration_count: 1
       
       # Velocity limits (from existing DWB config)
@@ -35,12 +35,12 @@ controller_server:
       vy_max: 0.0                       # differential drive - no lateral motion
       wz_max: 0.8                       # matches max_vel_theta
       
-      # Acceleration limits (from existing DWB config)
-      ax_min: -0.3                      # matches decel_lim_x
-      ax_max: 0.3                       # matches acc_lim_x
+      # Acceleration limits (increased for more responsive behavior)
+      ax_min: -2.5                      # matches decel_lim_x from velocity_smoother
+      ax_max: 2.5                       # matches acc_lim_x from velocity_smoother
       ay_min: 0.0                       # differential drive - no lateral acceleration
       ay_max: 0.0                       # differential drive - no lateral acceleration
-      az_max: 0.5                       # matches acc_lim_theta (absolute value of decel_lim_theta)
+      az_max: 3.2                       # matches acc_lim_theta from velocity_smoother
       
       # Sampling standard deviations
       vx_std: 0.2                       # Forward velocity sampling std
@@ -55,7 +55,7 @@ controller_server:
       # Algorithm parameters
       temperature: 0.3                  # Trajectory selection temperature
       gamma: 0.015                      # Smoothness vs energy trade-off
-      visualize: true                   # Set to true for debugging (slows performance)
+      visualize: false                   # Set to true for debugging (slows performance)
       regenerate_noises: false
       
       # Goal tolerances
