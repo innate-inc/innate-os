@@ -12,8 +12,7 @@ class Nav2Controller:
         Initialize the Nav2Controller by creating a BasicNavigator instance
         """
         # Create a BasicNavigator instance to communicate with Nav2.
-        self.navigator = BasicNavigator(namespace = '')
-        self.mapfree_navigator = BasicNavigator(namespace = 'mapfree')
+        self.navigator = BasicNavigator(namespace='')
         self.logger = logger
         # Add a cancellation flag
         self._cancel_requested = threading.Event()
@@ -40,9 +39,12 @@ class Nav2Controller:
         Returns:
             TaskResult: The result status from the navigator.
         """
-        navigator = self.mapfree_navigator if local_frame else self.navigator
+        navigator = self.navigator
         # Reset cancellation flag
         self._cancel_requested.clear()
+
+        # Determine behavior tree based on navigation mode
+        behavior_tree = 'mapfree' if local_frame else 'navigation'
 
         # Create a PoseStamped goal.
         goal_pose = PoseStamped()
@@ -57,7 +59,7 @@ class Nav2Controller:
         goal_pose.pose.orientation.z = math.sin(theta / 2.0)
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
-        self.logger.debug("Sending goal pose ... local mapfree mode: {local_frame}")
+        self.logger.debug(f"Sending goal pose ... behavior_tree: {behavior_tree}")
         path = navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         # If the path is None, we can't navigate to the goal
@@ -65,7 +67,7 @@ class Nav2Controller:
             self.logger.error("Failed to get path to goal")
             return TaskResult.FAILED
 
-        navigator.goToPose(goal_pose)
+        navigator.goToPose(goal_pose, behavior_tree=behavior_tree)
 
         self.logger.debug("Waiting for navigation to complete ...")
 

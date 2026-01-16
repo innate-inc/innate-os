@@ -7,7 +7,7 @@ navigation:
         global_frame: map
         robot_base_frame: base_link
         use_sim_time: false
-        footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+        footprint: "[[0.25, 0.165], [0.25, -0.165], [-0.20, -0.165], [-0.20, 0.165]]"
         resolution: 0.05
         track_unknown_space: true        # Now unknown areas are treated as obstacles
         unknown_cost_value: 255          # Unknown cells set to a lethal cost
@@ -49,7 +49,7 @@ local_costmap:
       width: 6
       height: 6
       resolution: 0.05
-      footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+      footprint: "[[0.25, 0.165], [0.25, -0.165], [-0.20, -0.165], [-0.20, 0.165]]"
       track_unknown_space: false        # Ensure unknown space is considered as obstacles
       unknown_cost_value: 255          # Unknown cells get a lethal cost value
       plugins: ["obstacle_layer", "inflation_layer"]
@@ -80,7 +80,7 @@ mapfree:
         global_frame: odom
         robot_base_frame: base_link
         use_sim_time: false
-        footprint: "[[0.25, 0.10], [0.25, -0.10], [-0.20, -0.10], [-0.20, 0.10]]"
+        footprint: "[[0.25, 0.165], [0.25, -0.165], [-0.20, -0.165], [-0.20, 0.165]]"
         resolution: 0.05
         # track_unknown_space: false        # Now unknown areas are treated as obstacles
         # unknown_cost_value: 255          # Unknown cells set to a lethal cost
