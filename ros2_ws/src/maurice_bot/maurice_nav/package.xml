@@ -20,6 +20,7 @@
   <!-- Message dependencies -->
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
@@ -31,7 +32,7 @@
   <!-- Navigation dependencies -->
   <exec_depend>nav2_simple_commander</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>
-  <exec_depend>nav2_msgs</exec_depend>
+  <depend>behaviortree_cpp_v3</depend>
   <depend>tf2_ros</depend>
 
   <!-- Internal package dependencies -->

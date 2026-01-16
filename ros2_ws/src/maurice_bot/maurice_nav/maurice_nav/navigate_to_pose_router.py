@@ -46,18 +46,30 @@ class NavigateToPoseRouter(Node):
             latched_qos
         )
         
-        # Publisher for current navigation frame
-        self._current_frame_pub = self.create_publisher(
+        # Publisher for current planner selection
+        self._current_planner_pub = self.create_publisher(
             String,
-            '/nav/current_frame',
+            '/nav/current_planner',
             latched_qos
         )
         
-        # Publish initial frame at startup
-        initial_frame = String()
-        initial_frame.data = 'mapfree'
-        self._current_frame_pub.publish(initial_frame)
-        self.get_logger().info('Published initial current_frame: mapfree')
+        # Publisher for current goal checker selection
+        self._current_goal_checker_pub = self.create_publisher(
+            String,
+            '/nav/current_goal_checker',
+            latched_qos
+        )
+        
+        # Publish initial values at startup (mapfree mode)
+        initial_planner = String()
+        initial_planner.data = 'mapfree'
+        self._current_planner_pub.publish(initial_planner)
+        
+        initial_goal_checker = String()
+        initial_goal_checker.data = 'goal_checker_precise'
+        self._current_goal_checker_pub.publish(initial_goal_checker)
+        
+        self.get_logger().info('Published initial planner: mapfree, goal_checker: goal_checker_precise')
         
         # Create action client to forward requests to internal action
         self._action_client = ActionClient(
@@ -134,14 +146,28 @@ class NavigateToPoseRouter(Node):
             result = NavigateToPose.Result()
             return result
         
-        # Publish the frame to the current_frame topic
-        frame_msg = String()
-        frame_msg.data = requested_frame
-        self._current_frame_pub.publish(frame_msg)
-        self.get_logger().info(f'Published current_frame: {requested_frame}')
+        # Determine planner and goal checker based on frame
+        if requested_frame == 'navigation':
+            planner = 'navigation'
+            goal_checker = 'goal_checker'
+        else:  # mapfree or any other
+            planner = 'mapfree'
+            goal_checker = 'goal_checker_precise'
+        
+        # Publish the planner selection
+        planner_msg = String()
+        planner_msg.data = planner
+        self._current_planner_pub.publish(planner_msg)
+        
+        # Publish the goal checker selection
+        goal_checker_msg = String()
+        goal_checker_msg.data = goal_checker
+        self._current_goal_checker_pub.publish(goal_checker_msg)
+        
+        self.get_logger().info(f'Published planner: {planner}, goal_checker: {goal_checker}')
         
         self.get_logger().info(
-            f'Forwarding goal to /internal_navigate_to_pose: '
+            f'Forwarding goal to /nav/navigate_to_pose: '
             f'position=({goal_msg.pose.pose.position.x:.2f}, '
             f'{goal_msg.pose.pose.position.y:.2f}, '
             f'{goal_msg.pose.pose.position.z:.2f})'

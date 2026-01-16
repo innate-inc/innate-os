@@ -8,6 +8,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(tf2_ros REQUIRED)
 
 # Build C++ executable for null_map_node
@@ -20,6 +21,19 @@ ament_target_dependencies(null_map_node
   tf2_ros
 )
 install(TARGETS null_map_node DESTINATION lib/${PROJECT_NAME})
+
+# Build Switch BT control node plugin
+add_library(maurice_nav_bt_nodes SHARED
+  src/switch_bt_node.cpp
+)
+ament_target_dependencies(maurice_nav_bt_nodes
+  behaviortree_cpp_v3
+)
+install(TARGETS maurice_nav_bt_nodes
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
 
 # Install the launch files (so they can be found by ROS2)
 install(

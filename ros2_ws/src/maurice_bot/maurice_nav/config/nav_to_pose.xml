@@ -2,19 +2,22 @@
     <BehaviorTree ID="MainTree">
         <RecoveryNode number_of_retries="2" name="NavigateRecovery">
             <PipelineSequence name="NavigateWithReplanning">
-                <PlannerSelector selected_planner="{selected_frame}" default_controller="global_frame" topic_name="/nav/current_frame"/>
-                <Script code="planner_server_name := selected_frame + '/planner_server'"/>
+                <PlannerSelector selected_planner="{selected_planner}" default_planner="mapfree" topic_name="/nav/current_planner"/>
+                <GoalCheckerSelector selected_goal_checker="{selected_goal_checker}" default_goal_checker="general_goal_checker" topic_name="/nav/current_goal_checker"/>
                 <RateController hz="1.0">
                     <RecoveryNode number_of_retries="1" name="ComputePathToPose">
-                        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased" server_name="{planner_server_name}"/>
+                        <Switch variable="{selected_planner}">
+                            <ComputePathToPose name="mapfree" goal="{goal}" path="{path}" planner_id="GridBased" server_name="mapfree/compute_path_to_pose"/>
+                            <ComputePathToPose name="navigation" goal="{goal}" path="{path}" planner_id="GridBased" server_name="navigation/compute_path_to_pose"/>
+                        </Switch>
                         <ReactiveFallback name="ComputePathToPoseRecoveryFallback">
                             <GoalUpdated/>
-                            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+                            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="navigation/global_costmap/clear_entirely_global_costmap"/>
                         </ReactiveFallback>
                     </RecoveryNode>
                 </RateController>
                 <RecoveryNode number_of_retries="1" name="FollowPath">
-                    <FollowPath path="{path}" controller_id="InnateFollowPath" goal_checker_id="{selected_frame}"/>
+                    <FollowPath path="{path}" controller_id="InnateFollowPath" goal_checker_id="{selected_goal_checker}"/>
                     <ReactiveFallback name="FollowPathRecoveryFallback">
                         <GoalUpdated/>
                         <BackUp backup_dist="0.15" backup_speed="0.3"/>
@@ -27,7 +30,7 @@
                 <RoundRobin name="RecoveryActions">
                     <Sequence name="ClearingActions">
                         <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
-                        <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+                        <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="navigation/global_costmap/clear_entirely_global_costmap"/>
                     </Sequence>
                     <BackUp backup_dist="0.15" backup_speed="0.3"/>
                     <Wait wait_duration="2"/>
