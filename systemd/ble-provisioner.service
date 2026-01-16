@@ -1,9 +1,8 @@
 [Unit]
 Description=BLE WiFi Provisioning Service
 # Start after the network stack is ready, but doesn't require full network connection
-After=network.target bluetooth.service ble-agent.service
-Wants=bluetooth.service ble-agent.service
-Requires=ble-agent.service
+After=network.target bluetooth.service
+Wants=bluetooth.service
 
 [Service]
 # Run service manager as root, but execute command as jetson1 via sudo
