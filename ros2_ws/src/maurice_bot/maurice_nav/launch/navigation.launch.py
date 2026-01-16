@@ -92,6 +92,7 @@ def generate_launch_description():
         package='nav2_planner',
         executable='planner_server',
         name='planner_server',
+        namespace='navigation',
         output='screen',
         parameters=[planner_params_file, costmap_params_file]
     )

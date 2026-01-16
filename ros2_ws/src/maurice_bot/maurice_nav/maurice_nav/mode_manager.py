@@ -995,9 +995,14 @@ def main(args=None):
     
     mode_manager = ModeManager()
     
+    # Import and create NavigateToPoseRouter to run in the same process
+    from maurice_nav.navigate_to_pose_router import NavigateToPoseRouter
+    navigate_to_pose_router = NavigateToPoseRouter()
+    
     try:
-        executor = MultiThreadedExecutor(num_threads=2)
+        executor = MultiThreadedExecutor(num_threads=4)
         executor.add_node(mode_manager)
+        executor.add_node(navigate_to_pose_router)
         mode_manager._executor = executor
         executor.spin()
     except KeyboardInterrupt:
@@ -1014,11 +1019,13 @@ def main(args=None):
         try:
             if getattr(mode_manager, '_executor', None) is not None:
                 mode_manager._executor.remove_node(mode_manager)
+                mode_manager._executor.remove_node(navigate_to_pose_router)
                 mode_manager._executor.shutdown()
         except Exception:
             pass
 
         mode_manager.destroy_node()
+        navigate_to_pose_router.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':
