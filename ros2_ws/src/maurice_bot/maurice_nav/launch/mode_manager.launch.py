@@ -53,7 +53,7 @@ def generate_launch_description():
     behavior_params_file = os.path.join(share_dir, 'config', 'behavior.yaml')
     smoother_params_file = os.path.join(share_dir, 'config', 'velocity_smoother.yaml')
     planner_params_file = os.path.join(share_dir, 'config', 'planner.yaml')
-    mapfree_costmap_params_file = os.path.join(share_dir, 'config', 'mapfree_costmap.yaml')
+    costmap_params_file = os.path.join(share_dir, 'config', 'costmap.yaml')
     
     # BT XML paths
     nav_to_pose_bt_xml = os.path.join(share_dir, 'config', 'nav_to_pose.xml')
@@ -142,7 +142,7 @@ def generate_launch_description():
         name='planner_server',
         namespace='mapfree',
         output='screen',
-        parameters=[planner_params_file, mapfree_costmap_params_file],
+        parameters=[planner_params_file, costmap_params_file],
         remappings=[
         # TF remappings - critical for namespaced nodes
         ('tf', '/tf'),
