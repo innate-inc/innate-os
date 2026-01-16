@@ -16,9 +16,10 @@ Usage:
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration, PythonExpression, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -224,6 +225,23 @@ def generate_launch_description():
         description='Input stereo image topic for depth estimation'
     )
 
+    # Recorder parameters
+    launch_recorder_arg = DeclareLaunchArgument(
+        'launch_recorder',
+        default_value='true',
+        description='Launch the recorder node'
+    )
+    
+    recorder_config_file_arg = DeclareLaunchArgument(
+        'recorder_config_file',
+        default_value=PathJoinSubstitution([
+            FindPackageShare('manipulation'),
+            'config',
+            'recorder.yaml'
+        ]),
+        description='Path to recorder configuration file'
+    )
+
     # Arm camera parameters
     arm_camera_symlink_arg = DeclareLaunchArgument(
         'arm_camera_symlink',
@@ -354,6 +372,15 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
+    # Recorder node
+    recorder_node = ComposableNode(
+        package='manipulation',
+        plugin='manipulation::RecorderNode',
+        name='recorder_node',
+        parameters=[LaunchConfiguration('recorder_config_file')],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
     # Create the composable node container
     # All nodes run in the same process, enabling zero-copy intra-process communication
     container = ComposableNodeContainer(
@@ -366,6 +393,7 @@ def generate_launch_description():
             arm_camera_node,
             webrtc_node,
             # depth_estimator_node,  # Temporarily disabled for calibration
+            recorder_node,  # Recorder node added to camera container
         ],
         output='screen',
         emulate_tty=True,
@@ -376,6 +404,7 @@ def generate_launch_description():
         launch_main_camera_arg,
         launch_arm_camera_arg,
         launch_webrtc_arg,
+        launch_recorder_arg,
         use_sim_time_arg,
         # Main camera arguments
         main_camera_symlink_arg,
@@ -416,6 +445,8 @@ def generate_launch_description():
         arm_camera_pixel_format_arg,
         arm_camera_publish_compressed_arg,
         arm_camera_compressed_frame_interval_arg,
+        # Recorder arguments
+        recorder_config_file_arg,
         # Container with all nodes
         container,
     ])

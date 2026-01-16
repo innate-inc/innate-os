@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -35,6 +36,40 @@ include_directories(
   ${HDF5_INCLUDE_DIRS}
   ${MPI_C_INCLUDE_DIRS}
 )
+
+# =============================================================================
+# COMPONENT LIBRARY (for composition / intra-process communication)
+# =============================================================================
+
+# Recorder node component library
+add_library(recorder_node_component SHARED
+  src/recorder_node.cpp
+  src/episode_data.cpp
+  src/task_manager.cpp
+)
+target_compile_definitions(recorder_node_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_link_libraries(recorder_node_component
+  ${HDF5_LIBRARIES}
+  ${MPI_C_LIBRARIES}
+  nlohmann_json::nlohmann_json
+)
+ament_target_dependencies(recorder_node_component
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  geometry_msgs
+  nav_msgs
+  std_msgs
+  std_srvs
+  cv_bridge
+  OpenCV
+  brain_messages
+)
+rclcpp_components_register_nodes(recorder_node_component "manipulation::RecorderNode")
+
+# =============================================================================
+# STANDALONE EXECUTABLE (for running node individually)
+# =============================================================================
 
 # C++ Recorder Node executable
 add_executable(recorder_node_cpp
@@ -60,6 +95,14 @@ ament_target_dependencies(recorder_node_cpp
   cv_bridge
   OpenCV
   brain_messages
+)
+
+# Install component library
+install(TARGETS
+  recorder_node_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
 )
 
 # Install C++ executable

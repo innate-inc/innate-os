@@ -8,7 +8,7 @@ DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh"
 # ROS launch commands grouped into windows (pipe-delimited for 2 panes)
 ROS_COMMAND_GROUPS=(
     "ros2 launch maurice_control app.launch.py|ros2 launch maurice_bringup maurice_bringup.launch.py"
-    "ros2 launch maurice_arm arm.launch.py|ros2 launch manipulation recorder.launch.py"
+    "ros2 launch maurice_arm arm.launch.py"
     "ros2 launch brain_client brain_client.launch.py|sleep 5 && ros2 service call /calibrate std_srvs/srv/Trigger && sleep 5 && ros2 launch maurice_nav mode_manager.launch.py"
     "ros2 launch manipulation behavior.launch.py|ros2 launch brain_client input_manager.launch.py"
     "ros2 launch maurice_cam camera_composable.launch.py|ros2 launch maurice_control udp_leader_receiver.launch.py"
@@ -17,7 +17,7 @@ ROS_COMMAND_GROUPS=(
 
 WINDOW_NAMES=(
     "app-bringup"
-    "arm-recorder"
+    "arm"
     "brain-nav"
     "behaviors-inputs"
     "cam-leader"
