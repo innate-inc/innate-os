@@ -351,6 +351,13 @@ class BleProvisionerServer:
         logger.info(f"Client disconnected: {device.address}")
         self._ble_characteristic = None # Clear characteristic on disconnect
 
+        # Restart advertising so iOS can see us again
+        try:
+            logger.info("Restarting BLE advertising")
+            self.peripheral.publish()
+        except Exception as e:
+            logger.error(f"Failed to restart advertising: {e}")
+
     # --- Main Server Logic ---
     def start(self):
         """Initialize and run the BLE server."""
