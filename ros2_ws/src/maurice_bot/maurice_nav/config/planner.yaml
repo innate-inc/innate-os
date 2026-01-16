@@ -1,27 +1,29 @@
-planner_server:
-  ros__parameters:
-    expected_planner_frequency: 20.0
-    costmap_update_timeout: 1.0
-    service_introspection_mode: "disabled"
-    planner_plugins: ['GridBased']
-    use_sim_time: false
-
-    GridBased:
-      # pure grid search + spin-on-spot
-      plugin: "nav2_smac_planner/SmacPlanner2D"
-      tolerance: 0.6
-      downsample_costmap: false
-      downsampling_factor: 1
-      allow_unknown: false
-      max_iterations: 1000000
-      max_on_approach_iterations: 1000
-      terminal_checking_interval: 5000
-      max_planning_time: 2.0
-      cost_travel_multiplier: 2.0
-      use_final_approach_orientation: false
-      smoother:
-        max_iterations: 1000
-        w_smooth: 0.3
-        w_data: 0.2
-        tolerance: 1e-10
-      allow_parameter_qos_overrides: true
+/**:
+  planner_server:
+    ros__parameters:
+      expected_planner_frequency: 20.0
+      costmap_update_timeout: 1.0
+      service_introspection_mode: "disabled"
+      planner_plugins: ['GridBased']
+      use_sim_time: false
+  
+      GridBased:
+        # pure grid search + spin-on-spot
+        plugin: "nav2_smac_planner/SmacPlanner2D"
+        tolerance: 0.6
+        downsample_costmap: false
+        downsampling_factor: 1
+        allow_unknown: false
+        max_iterations: 1000000
+        max_on_approach_iterations: 1000
+        terminal_checking_interval: 5000
+        max_planning_time: 2.0
+        cost_travel_multiplier: 2.0
+        use_final_approach_orientation: false
+        smoother:
+          max_iterations: 1000
+          w_smooth: 0.3
+          w_data: 0.2
+          tolerance: 1e-10
+        allow_parameter_qos_overrides: true
+  

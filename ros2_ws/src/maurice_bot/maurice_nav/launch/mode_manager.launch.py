@@ -92,7 +92,10 @@ def generate_launch_description():
             bt_navigator_params_file,
             {'default_nav_to_pose_bt_xml': nav_to_pose_bt_xml},
             {'default_nav_through_poses_bt_xml': nav_through_poses_bt_xml}
-        ]
+        ],
+        remappings=expand_action_remappings([
+            ('navigate_to_pose', 'internal_navigate_to_pose'),
+        ])
     )
     
     # Shared behavior server node

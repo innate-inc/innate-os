@@ -37,7 +37,6 @@ def generate_launch_description():
     controller_params_file = os.path.join(share_dir, 'config', 'controller.yaml')
     costmap_params_file = os.path.join(share_dir, 'config', 'costmap.yaml')
     amcl_params_file = os.path.join(share_dir, 'config', 'amcl.yaml')
-    bt_navigator_params_file = os.path.join(share_dir, 'config', 'bt_navigator.yaml')
     behavior_params_file = os.path.join(share_dir, 'config', 'behavior.yaml')
     smoother_params_file = os.path.join(share_dir, 'config', 'velocity_smoother.yaml')
 
@@ -94,7 +93,12 @@ def generate_launch_description():
         name='planner_server',
         namespace='navigation',
         output='screen',
-        parameters=[planner_params_file, costmap_params_file]
+        parameters=[planner_params_file, costmap_params_file],
+        remappings=[
+            # TF remappings - critical for namespaced nodes
+            ('tf', '/tf'),
+            ('tf_static', '/tf_static'),
+        ]
     )
 
     # Create the controller node
@@ -104,7 +108,7 @@ def generate_launch_description():
         name='controller_server',
         output='screen',
         parameters=[controller_params_file, costmap_params_file],
-        remappings=[('cmd_vel', 'cmd_vel_raw')]
+        remappings=[('cmd_vel', 'cmd_vel_raw')],
     )
 
     return LaunchDescription([
