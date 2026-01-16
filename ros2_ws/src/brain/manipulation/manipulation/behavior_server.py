@@ -262,6 +262,7 @@ class BehaviorServer(Node):
             checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
             action_dim = behavior_config['execution'].get('action_dim', 8)
             duration = behavior_config['execution'].get('duration', 20.0)
+            progress_threshold = behavior_config['execution'].get('progress_threshold', 0.95)
             start_pose = behavior_config['execution'].get('start_pose')
             end_pose = behavior_config['execution'].get('end_pose')
             start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
@@ -283,9 +284,6 @@ class BehaviorServer(Node):
             # Set head to AI position for optimal camera angle
             self.get_logger().info("Setting head to AI position for optimal camera angle")
             self._set_head_ai_position()
-            
-            # Progress threshold for early termination
-            progress_threshold = 0.95
             
             # Move to start pose if specified
             if start_pose:
