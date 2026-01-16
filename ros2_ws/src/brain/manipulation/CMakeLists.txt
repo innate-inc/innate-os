@@ -5,11 +5,74 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Require C++17 for std::filesystem and structured bindings
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(brain_messages REQUIRED)
+find_package(nlohmann_json REQUIRED)
+
+# Find MPI for HDF5 OpenMPI support
+find_package(MPI REQUIRED)
+
+# Find HDF5 - use OpenMPI version
+set(HDF5_PREFER_PARALLEL TRUE)
+find_package(HDF5 REQUIRED COMPONENTS C)
+
+# Include directories
+include_directories(
+  include
+  ${HDF5_INCLUDE_DIRS}
+  ${MPI_C_INCLUDE_DIRS}
+)
+
+# C++ Recorder Node executable
+add_executable(recorder_node_cpp
+  src/recorder_main.cpp
+  src/recorder_node.cpp
+  src/episode_data.cpp
+  src/task_manager.cpp
+)
+
+target_link_libraries(recorder_node_cpp
+  ${HDF5_LIBRARIES}
+  ${MPI_C_LIBRARIES}
+  nlohmann_json::nlohmann_json
+)
+
+ament_target_dependencies(recorder_node_cpp
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  nav_msgs
+  std_msgs
+  std_srvs
+  cv_bridge
+  OpenCV
+  brain_messages
+)
+
+# Install C++ executable
+install(TARGETS
+  recorder_node_cpp
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install include directory
+install(
+  DIRECTORY include/
+  DESTINATION include
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -43,7 +106,6 @@ install(
 # Install Python scripts
 install(
   PROGRAMS
-    manipulation/recorder.py
     manipulation/TestPublisher.py
     manipulation/recorder_interface.py
     manipulation/visualizer.py

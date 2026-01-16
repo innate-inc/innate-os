@@ -1,8 +1,8 @@
 # File: brain/manipulation/config/recorder.yaml
 /**:
   ros__parameters:
-    data_directory: "~/innate-os/primitives"  # Base directory for primitives (each task stores episodes in {task}/data/)
-    data_frequency: 20                    # Frequency (e.g., Hz) at which data is recorded
+    data_directory: "~/innate-os/skills"  # Base directory for skills (each task stores episodes in {task}/data/)
+    data_frequency: 30                    # Frequency (e.g., Hz) at which data is recorded
     image_topics:                         # List of image topic names
       - "/mars/main_camera/image"
       - "/mars/arm/image_raw"
@@ -11,3 +11,4 @@
     velocity_topic: "/cmd_vel"             # Topic for velocity data
     odom_topic: "/odom"                    # Topic for odometry data (used to verify robot is alive)
     image_size: [640, 480]
+    max_timesteps: 1800                    # Maximum number of timesteps before automatically stopping episode

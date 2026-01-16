@@ -9,10 +9,10 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('manipulation')
     config_file = os.path.join(pkg_share, 'config', 'recorder.yaml')
 
-    # Define the recorder node with its parameters.
+    # Define the C++ recorder node with its parameters.
     recorder_node = Node(
         package='manipulation',
-        executable='recorder.py',
+        executable='recorder_node_cpp',
         name='recorder_node',
         output='screen',
         parameters=[config_file]
@@ -21,3 +21,4 @@ def generate_launch_description():
     return LaunchDescription([
         recorder_node
     ])
+
