@@ -36,6 +36,7 @@ class MicroInput(InputDevice):
     Config comes from self.proxy.config (set by InputManagerNode).
     
     Supports "ducking" - suppresses audio while robot is speaking.
+    Automatically reconnects if WebSocket connection is lost.
     """
 
     def __init__(self):
@@ -45,6 +46,10 @@ class MicroInput(InputDevice):
         self._stop_evt = threading.Event()
         self._audio_thread = None
         self._is_robot_talking = False  # For ducking (mic-specific)
+        self._reconnect_thread = None
+        self._is_connected = False
+        self._reconnect_delay = 1  # Start with 1 second
+        self._max_reconnect_delay = 30  # Max 30 seconds between retries
         # Initialize logger wrapper (will be updated when set_logger is called)
         self.logger = UniversalLogger(enabled=False)
     
@@ -176,8 +181,16 @@ class MicroInput(InputDevice):
         self.logger.error(f"[ws error] {error}")
     
     def _on_openai_close(self):
-        """Handle WebSocket close event."""
+        """Handle WebSocket close event - trigger reconnection."""
         self.logger.warning("WebSocket closed")
+        self._is_connected = False
+        
+        # Don't reconnect if we're shutting down
+        if self._stop_evt.is_set():
+            return
+        
+        # Start reconnection in background thread
+        self._schedule_reconnect()
 
     def _connect_via_proxy(self):
         """Connect to OpenAI Realtime API via proxy."""
@@ -199,7 +212,52 @@ class MicroInput(InputDevice):
         # Start audio streaming thread
         self._start_audio_thread()
         
+        self._is_connected = True
+        self._reconnect_delay = 1  # Reset delay on successful connection
         self.logger.info(f"✅ Connected to OpenAI Realtime (model: {model})")
+    
+    def _schedule_reconnect(self):
+        """Schedule a reconnection attempt in a background thread."""
+        if self._reconnect_thread and self._reconnect_thread.is_alive():
+            return  # Already reconnecting
+        
+        def reconnect_loop():
+            while not self._stop_evt.is_set() and not self._is_connected:
+                self.logger.info(f"🔄 Reconnecting to OpenAI in {self._reconnect_delay}s...")
+                
+                # Wait before reconnecting (interruptible)
+                if self._stop_evt.wait(timeout=self._reconnect_delay):
+                    break  # Stop event was set
+                
+                try:
+                    # Stop old client if exists
+                    if self.client:
+                        try:
+                            self.client.stop()
+                        except:
+                            pass
+                        self.client = None
+                    
+                    # Stop old audio thread
+                    self._stop_evt.set()
+                    if self._audio_thread and self._audio_thread.is_alive():
+                        self._audio_thread.join(timeout=1.0)
+                    self._stop_evt.clear()
+                    
+                    # Reconnect
+                    self._connect_via_proxy()
+                    
+                    if self._is_connected:
+                        self.logger.info("✅ Reconnection successful!")
+                        break
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ Reconnection failed: {e}")
+                    # Exponential backoff
+                    self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
+        
+        self._reconnect_thread = threading.Thread(target=reconnect_loop, daemon=True)
+        self._reconnect_thread.start()
 
     def _start_audio_thread(self):
         """Start the audio streaming thread."""
@@ -226,6 +284,10 @@ class MicroInput(InputDevice):
                     continue
                 
                 try:
+                    # Skip sending if not connected (reconnection in progress)
+                    if not self._is_connected:
+                        continue
+                    
                     # Skip sending while ducking (robot is speaking)
                     if self._is_robot_talking:
                         if not ducking_logged:
@@ -247,9 +309,9 @@ class MicroInput(InputDevice):
                     elif chunks_sent % 2500 == 0:
                         self.logger.info(f"🎧 Audio chunks sent: {chunks_sent}")
                 except Exception as e:
-                    self.logger.error(f"audio loop error: {e}")
-                    import traceback
-                    self.logger.error(traceback.format_exc())
+                    # Only log if we think we're connected (avoid spam during reconnect)
+                    if self._is_connected:
+                        self.logger.error(f"Send error: {e}")
         
         self._audio_thread = threading.Thread(target=audio_loop, daemon=True)
         self._audio_thread.start()
@@ -257,8 +319,13 @@ class MicroInput(InputDevice):
     def on_close(self):
         """Stop microphone and disconnect."""
         self._stop_evt.set()
+        self._is_connected = False  # Prevent reconnection attempts
+        
         if self._audio_thread:
             self._audio_thread.join(timeout=1.0)
+        
+        if self._reconnect_thread:
+            self._reconnect_thread.join(timeout=1.0)
         
         if self.mic:
             try:

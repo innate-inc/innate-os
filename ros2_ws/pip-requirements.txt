@@ -29,6 +29,9 @@ bluezero
 cartesia
 websocket-client
 
+# Other AI
+inspireface
+
 # Input handling
 pygame
 pynput

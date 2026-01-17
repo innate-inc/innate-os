@@ -43,12 +43,18 @@ class WSBridge:
     def _ws_callback(self, msg: String):
         """
         Callback for incoming JSON-string messages.
+        Optimized for low latency - minimal logging, fast path for common messages.
         """
         try:
-            self.node.get_logger().debug(f"WSBridge: Received message: {msg.data}")
             data = json.loads(msg.data)
-        except Exception as e:
+        except json.JSONDecodeError as e:
             self.node.get_logger().error(f"WSBridge: Failed to parse JSON: {e}")
+            return
+
+        # Fast path: check if we have a handler before full validation
+        msg_type_str = data.get("type")
+        if msg_type_str is None:
+            self.node.get_logger().error("WSBridge: Message missing 'type' field")
             return
 
         try:

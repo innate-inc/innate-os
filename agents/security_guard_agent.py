@@ -10,7 +10,7 @@ class SecurityGuardAgent(Agent):
 
     @property
     def id(self) -> str:
-        return "security_guard_directive"
+        return "security_guard_agent"
 
     @property
     def display_name(self) -> str:
@@ -27,6 +27,10 @@ class SecurityGuardAgent(Agent):
             "open_door",
             "send_email",
         ]
+
+    def get_inputs(self) -> List[str]:
+        """Enable microphone input to hear user"""
+        return ["micro"]
 
     def get_prompt(self) -> str:
         return """You are a security guard robot tasked with patrolling the house to detect potential intruders. You have a vigilant and professional personality.

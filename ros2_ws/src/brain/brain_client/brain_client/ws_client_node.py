@@ -37,31 +37,47 @@ class WSClient:
         self.loop = None
 
     async def connect(self):
-        self.node.get_logger().debug(f"[WSClient] Connecting to {self.uri} ...")
-        try:
-            # Set a longer timeout that works for all operations
-            async with websockets.connect(
-                self.uri,
-                ping_interval=30,  # Send a ping every 30 seconds
-                ping_timeout=60,  # Wait up to 60 seconds for a pong response
-            ) as websocket:
-                self.websocket = websocket
-                self.node.get_logger().info(f"[WSClient] Connected to {self.uri}")
+        """Connect to the WebSocket server with automatic reconnection."""
+        reconnect_delay = 1  # Start with 1 second delay
+        max_reconnect_delay = 30  # Max 30 seconds between retries
+        
+        while rclpy.ok() and not self.node.exit_event.is_set():
+            self.node.get_logger().info(f"[WSClient] Connecting to {self.uri} ...")
+            try:
+                # Set a longer timeout that works for all operations
+                async with websockets.connect(
+                    self.uri,
+                    ping_interval=30,  # Send a ping every 30 seconds
+                    ping_timeout=60,  # Wait up to 60 seconds for a pong response
+                ) as websocket:
+                    self.websocket = websocket
+                    self.node.get_logger().info(f"[WSClient] Connected to {self.uri}")
+                    reconnect_delay = 1  # Reset delay on successful connection
 
-                # Send auth message upon connection.
-                auth_payload = {"token": self.token}
-                if self.robot_version:
-                    auth_payload["client_version"] = self.robot_version
-                auth_msg = MessageIn(
-                    type=MessageInType.AUTH,
-                    payload=auth_payload,
-                )
-                await self.send(auth_msg)
-                self.node.get_logger().debug(f"[WSClient] Auth message sent with version: {self.robot_version}")
+                    # Send auth message upon connection.
+                    auth_payload = {"token": self.token}
+                    if self.robot_version:
+                        auth_payload["client_version"] = self.robot_version
+                    auth_msg = MessageIn(
+                        type=MessageInType.AUTH,
+                        payload=auth_payload,
+                    )
+                    await self.send(auth_msg)
+                    self.node.get_logger().debug(f"[WSClient] Auth message sent with version: {self.robot_version}")
 
-                await self.listen()
-        except Exception as e:
-            self.node.get_logger().error(f"[WSClient] Connection error: {e}")
+                    await self.listen()
+            except Exception as e:
+                self.node.get_logger().error(f"[WSClient] Connection error: {e}")
+            
+            self.websocket = None
+            
+            # Check if we should exit before attempting reconnection
+            if self.node.exit_event.is_set() or not rclpy.ok():
+                break
+                
+            self.node.get_logger().warn(f"[WSClient] Connection lost. Reconnecting in {reconnect_delay}s...")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)  # Exponential backoff
 
         self.node.get_logger().info("[WSClient] Stopping WSClient.")
         self.websocket = None
@@ -69,9 +85,10 @@ class WSClient:
     async def listen(self):
         while rclpy.ok() and not self.node.exit_event.is_set():
             try:
-                incoming = await asyncio.wait_for(self.websocket.recv(), timeout=0.1)
+                # Use longer timeout to reduce CPU spin; we'll wake immediately on message
+                incoming = await asyncio.wait_for(self.websocket.recv(), timeout=1.0)
             except asyncio.TimeoutError:
-                await asyncio.sleep(0.01)
+                # No message received, just continue the loop (no extra sleep needed)
                 continue
             except websockets.exceptions.ConnectionClosed:
                 self.node.get_logger().warn("WebSocket connection closed by server.")
@@ -93,7 +110,6 @@ class WSClient:
             ros_msg = String()
             ros_msg.data = incoming
             self.node.ws_pub.publish(ros_msg)
-            await asyncio.sleep(0.01)
 
     async def send(self, msg):
         if self.websocket is not None:

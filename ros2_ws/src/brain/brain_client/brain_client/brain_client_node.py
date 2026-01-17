@@ -3,7 +3,7 @@ import traceback
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 import threading
 import json
 import time
@@ -57,6 +57,19 @@ from std_srvs.srv import SetBool, Trigger
 from brain_client.ws_bridge import WSBridge
 from brain_client.initializers import initialize_skills, initialize_agents
 from brain_client.tts_handler import TTSHandler
+
+# Lazy import for gaze tracker (only loaded if agent uses gaze)
+ROSPersonTracker = None
+
+
+def _get_gaze_tracker_class():
+    """Lazy load ROSPersonTracker to avoid import overhead when not needed."""
+    global ROSPersonTracker
+    if ROSPersonTracker is None:
+        from brain_client.gaze import ROSPersonTracker as _ROSPersonTracker
+
+        ROSPersonTracker = _ROSPersonTracker
+    return ROSPersonTracker
 
 
 class BrainClientNode(Node):
@@ -352,10 +365,13 @@ class BrainClientNode(Node):
             )
 
         # Subscribe to AMCL pose topic
+        # NOTE: AMCL publishes with TRANSIENT_LOCAL durability, so we must match it
+        # to receive the latched pose even if we subscribe after AMCL starts
         amcl_pose_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.amcl_pose_sub = self.create_subscription(
             PoseWithCovarianceStamped,
@@ -539,6 +555,10 @@ class BrainClientNode(Node):
         if self.current_directive:
             self.activate_directive_inputs()
 
+        # Gaze tracker (initialized if directive uses gaze)
+        self._gaze_tracker = None
+        self._update_gaze_tracker()
+
         self.primitive_running = None
         # Add a variable to store the current goal handle
         self._goal_handle = None
@@ -661,18 +681,39 @@ class BrainClientNode(Node):
         self.get_logger().warning("⚠️ input_manager_node not found - continuing anyway")
         return False
 
+    def _encode_current_image(self) -> str | None:
+        """Encode the current camera image as base64 JPEG. Returns None on failure."""
+        if self.last_image is None:
+            return None
+        try:
+            success, encoded = cv2.imencode(".jpg", self.last_image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            return base64.b64encode(encoded.tobytes()).decode("utf-8") if success else None
+        except Exception:
+            return None
+
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
-        self.get_logger().info(f"\033[1;92mReceived brain/chat_in: {data}\033[0m")
+        self.get_logger().info(f"Received brain/chat_in: {data}")
+        
+        if not self.is_brain_active:
+            self.get_logger().warn(
+                "\033[93m[BrainClient] Brain is not active. Skipping chat_in message.\033[0m"
+            )
+            return
+        
         self.chat_history.append(data)
-        outgoing_msg = MessageIn(
-            type=MessageInType.CHAT_IN, payload={"text": data["text"]}
-        )
+        
+        payload = {"text": data["text"]}
+        if image_b64 := self._encode_current_image():
+            payload["image_b64"] = image_b64
+        
+        outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
         self.ws_bridge.send_message(outgoing_msg)
-        self.get_logger().info(f"\033[1;92mSent MessageIn: {outgoing_msg}\033[0m")
+        self.get_logger().info(f"Sent MessageIn: {outgoing_msg}")
 
     def tts_callback(self, msg: String):
         """Handle direct TTS requests from /brain/tts topic."""
+        
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
@@ -680,6 +721,12 @@ class BrainClientNode(Node):
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
+        if not self.is_brain_active:
+            self.get_logger().warn(
+                "\033[93m[BrainClient] Brain is not active. Skipping custom input.\033[0m"
+            )
+            return
+        
         try:
             data = json.loads(msg.data)
             self.get_logger().info(
@@ -714,6 +761,51 @@ class BrainClientNode(Node):
                 )
         except Exception as e:
             self.get_logger().error(f"Error activating directive inputs: {e}")
+
+    def _update_gaze_tracker(self):
+        """Start or stop gaze tracker based on brain active state and directive's uses_gaze() setting."""
+        wants_gaze = (
+            self.is_brain_active
+            and self.current_directive is not None
+            and hasattr(self.current_directive, "uses_gaze")
+            and self.current_directive.uses_gaze()
+        )
+
+        if wants_gaze and self._gaze_tracker is None:
+            try:
+                TrackerClass = _get_gaze_tracker_class()
+                self._gaze_tracker = TrackerClass(self)
+                self._gaze_tracker.start()
+                self.get_logger().info(
+                    f"👁️ Gaze tracker started for directive '{self.current_directive.id}'"
+                )
+            except Exception as e:
+                self.get_logger().error(f"Failed to start gaze tracker: {e}")
+                self._gaze_tracker = None
+        elif not wants_gaze and self._gaze_tracker is not None:
+            self._stop_gaze_tracker()
+
+    def _stop_gaze_tracker(self):
+        """Stop and clean up gaze tracker."""
+        if self._gaze_tracker is not None:
+            try:
+                self._gaze_tracker.stop()
+                self.get_logger().info("👁️ Gaze tracker stopped")
+            except Exception as e:
+                self.get_logger().error(f"Error stopping gaze tracker: {e}")
+            self._gaze_tracker = None
+
+    def _pause_gaze(self):
+        """Pause gaze tracking (during skill execution)."""
+        if self._gaze_tracker is not None and self._gaze_tracker.is_running:
+            self._gaze_tracker.stop()
+            self.get_logger().debug("👁️ Gaze paused for skill execution")
+
+    def _resume_gaze(self):
+        """Resume gaze tracking (after skill execution)."""
+        if self._gaze_tracker is not None and not self._gaze_tracker.is_running:
+            self._gaze_tracker.start()
+            self.get_logger().debug("👁️ Gaze resumed after skill execution")
 
     def handle_get_chat_history(self, request, response):
         self.get_logger().debug(
@@ -858,7 +950,7 @@ class BrainClientNode(Node):
             )
         except Exception as e:
             self.get_logger().error(
-                f"Error in fetch_transform_callback: {e}, " f"{traceback.format_exc()}"
+                f"Error in fetch_transform_callback: {e}, {traceback.format_exc()}"
             )
 
     def map_callback(self, msg: OccupancyGrid):
@@ -1118,6 +1210,7 @@ class BrainClientNode(Node):
             self.get_logger().info(f"Primitive task type: {payload.next_task.type}")
 
             if payload.next_task.type in self.primitives_dict:
+                self._pause_gaze()  # Pause gaze during skill execution
                 self.send_primitive_goal(
                     payload.next_task.type,
                     payload.next_task.inputs,
@@ -1358,12 +1451,8 @@ class BrainClientNode(Node):
                 }
 
                 # Optionally include depth data if enabled and available.
-                if self.send_depth and self.last_depth_image is None:
-                    self.get_logger().warn(
-                        "\033[93m[BrainClient] No depth image available.\033[0m"
-                    )
-                    return
-                elif self.send_depth and self.last_depth_image is not None:
+                # Non-blocking: if depth is not available, just skip it
+                if self.send_depth and self.last_depth_image is not None:
                     depth_frame = self.last_depth_image
                     depth_data = depth_frame.tobytes()
                     if depth_frame.dtype == np.uint16:
@@ -1475,6 +1564,7 @@ class BrainClientNode(Node):
                 payload["robot_coords"] = robot_coords_payload
 
                 # Optionally include arm camera image if enabled and available
+                # Non-blocking: if arm camera is not available, just skip it
                 if self.send_arm_camera_image and self.last_arm_camera is not None:
                     # Compress the arm camera image as JPEG (70% quality)
                     arm_encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
@@ -1490,15 +1580,6 @@ class BrainClientNode(Node):
                             "camera_type": "arm_wrist",
                         }
                         self.get_logger().debug("Including arm camera image in message")
-                    else:
-                        self.get_logger().error(
-                            "Failed to encode arm camera image for agent loop"
-                        )
-                elif self.send_arm_camera_image and self.last_arm_camera is None:
-                    self.get_logger().warn(
-                        "\033[93m[BrainClient] No arm camera image available (send_arm_camera_image is True).\\033[0m"
-                    )
-                    return
 
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
@@ -1626,6 +1707,7 @@ class BrainClientNode(Node):
             ]  # Use stored ID anyway?
 
         self.primitive_running = None  # Clear running state
+        self._resume_gaze()  # Resume gaze after skill execution
 
         # Determine the appropriate message type based on the result
         self.get_logger().info(f"Primitive result details: {result}")
@@ -1852,11 +1934,23 @@ class BrainClientNode(Node):
             self.current_directive = self.directives[directive_name]
             self.get_logger().info(f"Activated directive: {directive_name}")
 
+            # Clear local chat history when changing agent
+            self.chat_history = []
+
+            # Send reset message to server to clear server-side discussion history
+            reset_msg = MessageIn(
+                type=MessageInType.RESET, payload={"memory_state": "clear"}
+            )
+            self.ws_bridge.send_message(reset_msg)
+
             # Re-register primitives and directive with the server to update
             self.register_primitives_and_directive()
 
             # Activate input devices required by this directive
             self.activate_directive_inputs()
+
+            # Update gaze tracker for new directive
+            self._update_gaze_tracker()
 
             # Publish confirmation
             chat_entry = {
@@ -2110,6 +2204,13 @@ class BrainClientNode(Node):
         self.primitive_running = None
         self._pending_next_task = None  # Explicitly clear pending task on deactivation
 
+        # Stop gaze tracker
+        self._stop_gaze_tracker()
+
+        # Deactivate all input devices (stops transcription, saves resources)
+        self.active_inputs_pub.publish(String(data=json.dumps({"inputs": []})))
+        self.get_logger().info("🔌 Deactivated all inputs")
+
         # Stop robot motion
         stop_cmd = Twist()
         stop_cmd.linear.x = 0.0
@@ -2135,6 +2236,9 @@ class BrainClientNode(Node):
             f"\033[1;92m[BrainClient] Continuing with current directive: {self.current_directive.id}\033[0m"
         )
 
+        # Restart gaze tracker if directive uses it
+        self._update_gaze_tracker()
+
         # Restart the agent timer (which sends images based on ready_for_image)
         # The pose_image_timer will be started by _handle_ready_for_image or
         # _handle_primitives_and_directive_registered once the server is ready and primitives are registered.
@@ -2159,6 +2263,7 @@ class BrainClientNode(Node):
 
         self._unregister_primitives()
         self.register_primitives_and_directive()
+        self.activate_directive_inputs()
         self.ready_for_image = True
 
         self.get_logger().info(

@@ -80,3 +80,14 @@ class Agent(ABC):
             return ["micro", "camera"]
         """
         return []
+
+    def uses_gaze(self) -> bool:
+        """
+        Whether this agent uses person-tracking gaze.
+        When True, the robot will look at detected people during conversation
+        and pause gazing during skill execution.
+
+        Subclasses can override to enable gazing.
+        Default: False.
+        """
+        return False
