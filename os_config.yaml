@@ -1,4 +1,4 @@
 # Innate-OS system configuration
 # This file is git-tracked and applies to all robots
 
-minimum_app_version: "0.1.0"
+minimum_app_version: "1.0.1"
