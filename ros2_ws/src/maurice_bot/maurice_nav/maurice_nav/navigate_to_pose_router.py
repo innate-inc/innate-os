@@ -26,7 +26,7 @@ class NavigateToPoseRouter(Node):
         self._client_callback_group = MutuallyExclusiveCallbackGroup()
         
         # Track active goals for cancel forwarding
-        self._goal_handle_map = {}  # Maps server goal handle to client goal handle
+        self._goal_handle_map = {}  # Maps server goal_id (bytes) to client goal handle
         
         # Track current navigation mode
         self._current_mode = 'mapfree'  # Default mode
@@ -109,8 +109,9 @@ class NavigateToPoseRouter(Node):
         self.get_logger().info('Received cancel request')
         
         # Try to cancel the corresponding internal goal
-        if goal_handle in self._goal_handle_map:
-            client_goal_handle = self._goal_handle_map[goal_handle]
+        goal_id = bytes(goal_handle.goal_id.uuid)
+        if goal_id in self._goal_handle_map:
+            client_goal_handle = self._goal_handle_map[goal_id]
             if client_goal_handle is not None:
                 self.get_logger().info('Forwarding cancel to internal action')
                 client_goal_handle.cancel_goal_async()
@@ -191,7 +192,8 @@ class NavigateToPoseRouter(Node):
         self.get_logger().info('Internal goal accepted')
         
         # Store mapping for cancel handling
-        self._goal_handle_map[goal_handle] = client_goal_handle
+        goal_id = bytes(goal_handle.goal_id.uuid)
+        self._goal_handle_map[goal_id] = client_goal_handle
         
         # Wait for the result
         try:
@@ -218,8 +220,9 @@ class NavigateToPoseRouter(Node):
             return result
         finally:
             # Clean up goal handle mapping
-            if goal_handle in self._goal_handle_map:
-                del self._goal_handle_map[goal_handle]
+            goal_id = bytes(goal_handle.goal_id.uuid)
+            if goal_id in self._goal_handle_map:
+                del self._goal_handle_map[goal_id]
 
     def _feedback_callback(self, server_goal_handle, feedback_msg):
         """Forward feedback from internal action to the original client."""
