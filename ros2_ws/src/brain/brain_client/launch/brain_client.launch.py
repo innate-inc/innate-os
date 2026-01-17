@@ -102,7 +102,7 @@ def generate_launch_description():
     # These are service configs (not credentials) - credentials come from env vars
     cartesia_voice_id_arg = DeclareLaunchArgument(
         "cartesia_voice_id",
-        default_value="9fdaae0b-f885-4813-b589-3c07cf9d5fea",
+        default_value=get_env("CARTESIA_VOICE_ID", "9fdaae0b-f885-4813-b589-3c07cf9d5fea"),
         description="Cartesia Alfred voice id",
     )
     openai_realtime_model_arg = DeclareLaunchArgument(
