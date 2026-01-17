@@ -58,6 +58,7 @@ class BleProvisionerServer:
         self.adapter = adapter_obj
         self._ble_characteristic = None
         self.peripheral = None
+        self._connected_device = None  # Track connected device for disconnect
         self._current_ip_address = nmcli_get_active_ipv4_address() # Store initial IP
         logger.info(f"Initial IPv4 address: {self._current_ip_address}")
 
@@ -341,15 +342,25 @@ class BleProvisionerServer:
         if notifying:
             self._ble_characteristic = characteristic
         else:
-            self._ble_characteristic = None # Clear reference when client unsubscribes
+            self._ble_characteristic = None  # Clear reference when client unsubscribes
+            logger.info(f"Connected device: {self._connected_device}")
+            # Disconnect client when they stop notifications
+            if self._connected_device:
+                try:
+                    logger.info(f"Disconnecting client {self._connected_device.address} after notifications stopped")
+                    self._connected_device.disconnect()
+                except Exception as e:
+                    logger.warning(f"Failed to disconnect client: {e}")
 
     # --- Connection Callbacks ---
     def on_connect(self, device):
         logger.info(f"Client connected: {device.address}")
+        self._connected_device = device
     
     def on_disconnect(self, device):
         logger.info(f"Client disconnected: {device.address}")
-        self._ble_characteristic = None # Clear characteristic on disconnect
+        self._ble_characteristic = None  # Clear characteristic on disconnect
+        self._connected_device = None  # Clear device reference
 
     # --- Main Server Logic ---
     def start(self):
