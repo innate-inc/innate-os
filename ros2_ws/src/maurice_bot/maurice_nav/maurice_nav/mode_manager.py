@@ -36,6 +36,7 @@ modes_nodes = {
     'mapping': ['slam_toolbox'],
     'mapfree': [
             'null_map_node',
+            'navigation/planner_server', # unnecsessary but needed for BT, TODO, find a way to remove
             'mapfree/planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
             'controller_server',  # doesn't have to be deactivated, theoretically action should be cancelled by bt before it dies, and this won't receive a new path to follow - BUT IT HAS COSTMAP!!!
             'bt_navigator',              # could stay on but underlying actions r gonna fail and be in a weird state; 
