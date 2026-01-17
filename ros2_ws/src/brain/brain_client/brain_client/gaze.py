@@ -18,13 +18,19 @@ from typing import Optional, Callable, List, Tuple
 import cv2
 import numpy as np
 
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from sensor_msgs.msg import Image
+
+from brain_client.head_interface import HeadInterface
+from brain_client.mobility_interface import MobilityInterface
+
+import inspireface as isf
+
 
 class FaceDetector:
     """Face detector using InspireFace SDK."""
 
     def __init__(self, min_confidence: float = 0.5):
-        import inspireface as isf
-
         param = isf.SessionCustomParameter()
         self._session = isf.InspireFaceSession(
             param=param,
@@ -158,11 +164,6 @@ class ROSPersonTracker:
     """ROS2 person tracker - simple interface for agents."""
 
     def __init__(self, node, camera_topic: str = "/mars/main_camera/image"):
-        from brain_client.head_interface import HeadInterface
-        from brain_client.mobility_interface import MobilityInterface
-        from sensor_msgs.msg import Image
-        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-
         self._node = node
         self._frame = None
         self._frame_lock = threading.Lock()
