@@ -41,7 +41,7 @@ def generate_launch_description():
         "amcl_pose_topic", default_value="/amcl_pose", description="AMCL pose topic"
     )
     map_topic_arg = DeclareLaunchArgument(
-        "map_topic", default_value="/global_costmap/costmap", description="Map topic"
+        "map_topic", default_value="/navigation/global_costmap/costmap", description="Map topic"
     )
     send_depth_arg = DeclareLaunchArgument(
         "send_depth",

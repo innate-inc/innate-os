@@ -13,6 +13,8 @@ class Nav2Controller:
         """
         # Create a BasicNavigator instance to communicate with Nav2.
         self.navigator = BasicNavigator(namespace='')
+        self.navigator_mapfree = BasicNavigator(namespace='mapfree')
+        self.navigator_navigation = BasicNavigator(namespace='navigation')
         self.logger = logger
         # Add a cancellation flag
         self._cancel_requested = threading.Event()
@@ -60,7 +62,8 @@ class Nav2Controller:
         goal_pose.pose.orientation.w = math.cos(theta / 2.0)
 
         self.logger.debug(f"Sending goal pose ... behavior_tree: {behavior_tree}")
-        path = navigator.getPath(goal_pose, goal_pose, use_start=False)
+        path_navigator = self.navigator_mapfree if local_frame else self.navigator_navigation
+        path = path_navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         # If the path is None, we can't navigate to the goal
         if path is None:
