@@ -8,10 +8,12 @@
 
   <!-- Build tool dependency -->
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <!-- Core ROS dependencies -->
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>rclcpp_action</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
@@ -20,8 +22,9 @@
   <!-- Message dependencies -->
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
-  <exec_depend>nav2_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
+  <depend>std_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>lifecycle_msgs</depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
@@ -36,11 +39,12 @@
   <depend>tf2_ros</depend>
 
   <!-- Internal package dependencies -->
-  <exec_depend>brain_messages</exec_depend>
+  <depend>brain_messages</depend>
 
   <!-- Lint and testing dependencies -->
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -6,10 +6,18 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)  # for Python nodes
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
+find_package(brain_messages REQUIRED)
+
+# Include directories
+include_directories(include)
 
 # Build C++ executable for null_map_node
 add_executable(null_map_node src/null_map_node.cpp)
@@ -21,6 +29,43 @@ ament_target_dependencies(null_map_node
   tf2_ros
 )
 install(TARGETS null_map_node DESTINATION lib/${PROJECT_NAME})
+
+# Build lifecycle service utilities library
+add_library(lifecycle_service_utils SHARED
+  src/lifecycle_service_utils.cpp
+)
+ament_target_dependencies(lifecycle_service_utils
+  rclcpp
+  lifecycle_msgs
+  nav2_msgs
+)
+
+# Build mode_manager executable (includes mode_manager + navigate_to_pose_router)
+add_executable(mode_manager
+  src/mode_manager_main.cpp
+  src/mode_manager.cpp
+  src/navigate_to_pose_router.cpp
+)
+ament_target_dependencies(mode_manager
+  rclcpp
+  rclcpp_action
+  rclcpp_lifecycle
+  tf2_ros
+  geometry_msgs
+  nav_msgs
+  std_msgs
+  nav2_msgs
+  brain_messages
+  lifecycle_msgs
+)
+target_link_libraries(mode_manager lifecycle_service_utils)
+
+# Install C++ targets
+install(TARGETS
+  lifecycle_service_utils
+  mode_manager
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 # Build Switch BT control node plugin
 add_library(maurice_nav_bt_nodes SHARED
@@ -69,5 +114,42 @@ install(
   FILES package.xml
   DESTINATION share/ament_index/resource_index/packages
 )
+
+# ========== Testing ==========
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # Test for lifecycle service utilities
+  ament_add_gtest(test_lifecycle_service_utils
+    test/test_lifecycle_service_utils.cpp
+  )
+  target_link_libraries(test_lifecycle_service_utils
+    lifecycle_service_utils
+  )
+  ament_target_dependencies(test_lifecycle_service_utils
+    rclcpp
+    lifecycle_msgs
+  )
+
+  # Test for mode manager
+  ament_add_gtest(test_mode_manager
+    test/test_mode_manager.cpp
+    src/mode_manager.cpp
+  )
+  target_link_libraries(test_mode_manager
+    lifecycle_service_utils
+  )
+  ament_target_dependencies(test_mode_manager
+    rclcpp
+    rclcpp_lifecycle
+    tf2_ros
+    geometry_msgs
+    nav_msgs
+    std_msgs
+    nav2_msgs
+    brain_messages
+    lifecycle_msgs
+  )
+endif()
 
 ament_package()
