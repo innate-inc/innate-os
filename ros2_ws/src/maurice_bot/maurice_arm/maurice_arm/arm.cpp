@@ -929,11 +929,55 @@ private:
     }
     
     /**
+     * Compute a cubic (third-order) spline trajectory between start and goal.
+     * Uses smooth acceleration/deceleration profile: ratio = 3*(t/T)^2 - 2*(t/T)^3
+     * 
+     * @param start Starting joint positions in radians
+     * @param goal Goal joint positions in radians
+     * @param duration Total trajectory duration in seconds
+     * @param dt Time step between trajectory points (e.g., 1/30 for 30 Hz)
+     * @return Vector of trajectory points (each point is a vector of joint positions)
+     */
+    std::vector<std::vector<double>> computeCubicSplineTrajectory(
+        const std::vector<double>& start,
+        const std::vector<double>& goal,
+        double duration,
+        double dt) {
+        
+        std::vector<std::vector<double>> trajectory;
+        
+        if (start.size() != goal.size() || start.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid start/goal sizes for spline trajectory");
+            return trajectory;
+        }
+        
+        int num_steps = static_cast<int>(duration / dt);
+        if (num_steps < 1) num_steps = 1;
+        
+        for (int step = 0; step <= num_steps; ++step) {
+            double t = step * dt;
+            double t_ratio = t / duration;
+            // Cubic spline interpolation: smooth acceleration and deceleration
+            double ratio = 3.0 * t_ratio * t_ratio - 2.0 * t_ratio * t_ratio * t_ratio;
+            
+            std::vector<double> point(start.size());
+            for (size_t j = 0; j < start.size(); ++j) {
+                point[j] = start[j] + (goal[j] - start[j]) * ratio;
+            }
+            trajectory.push_back(point);
+        }
+        
+        return trajectory;
+    }
+    
+    /**
      * Internal function to plan and execute a trajectory to a target joint state.
      * This can be called from the service callback or any other part of the code.
+     * Uses simple cubic spline planning as primary method (fast, no collision checking).
+     * MoveIt planning code is retained but not used by default.
      * 
      * @param target_positions Target joint positions in radians (6 joints including gripper)
-     * @param trajectory_time Total time for trajectory execution in seconds (not used for MoveIt)
+     * @param trajectory_time Total time for trajectory execution in seconds
      * @return true if planning succeeded, false otherwise
      */
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time) {
@@ -964,36 +1008,18 @@ private:
             return false;
         }
         
-        // Plan with MoveIt (6 DOF arm including gripper)
-        RCLCPP_INFO(this->get_logger(), "Planning with MoveIt for 6-DOF arm (including gripper)...");
-        auto [waypoints, time_from_start] = planWithMoveIt(current_positions, target_positions, trajectory_time);
-        
-        if (waypoints.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "MoveIt planning failed");
-            return false;
-        }
-        
-        // Check if MoveIt provided timing info, if not, create our own
-        bool has_timing = !time_from_start.empty() && time_from_start.back() > 0.0;
-        
-        if (!has_timing) {
-            RCLCPP_WARN(this->get_logger(), "MoveIt didn't time-parameterize trajectory, doing it manually");
-            // Distribute waypoints evenly over the requested trajectory_time
-            time_from_start.clear();
-            for (size_t i = 0; i < waypoints.size(); ++i) {
-                double t = (static_cast<double>(i) / (waypoints.size() - 1)) * trajectory_time;
-                time_from_start.push_back(t);
-            }
-        }
-        
-        // Interpolate trajectory to 30 Hz
+        // Use simple cubic spline planning (fast, smooth trajectory)
+        RCLCPP_INFO(this->get_logger(), "Planning with cubic spline for 6-DOF arm (including gripper)...");
         const double dt = 1.0 / 30.0;
-        auto interpolated_trajectory = interpolateMoveItTrajectory(waypoints, time_from_start, dt);
+        auto interpolated_trajectory = computeCubicSplineTrajectory(current_positions, target_positions, trajectory_time, dt);
         
         if (interpolated_trajectory.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "Trajectory interpolation failed");
+            RCLCPP_ERROR(this->get_logger(), "Cubic spline trajectory computation failed");
             return false;
         }
+        
+        RCLCPP_INFO(this->get_logger(), "Computed cubic spline trajectory with %zu points over %.2fs",
+                    interpolated_trajectory.size(), trajectory_time);
         
         RCLCPP_INFO(this->get_logger(), "Executing trajectory with %zu waypoints over %.2f seconds", 
                     interpolated_trajectory.size(), trajectory_time);
