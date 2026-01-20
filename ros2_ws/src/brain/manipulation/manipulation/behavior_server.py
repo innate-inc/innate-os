@@ -102,6 +102,13 @@ class BehaviorServer(Node):
         self.image_size = (224, 224)  # Resize to match checkpoint expectations
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
+        # Log device info
+        self.get_logger().info(f"PyTorch device: {self.device}")
+        self.get_logger().info(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            self.get_logger().info(f"CUDA device: {torch.cuda.get_device_name(0)}")
+            self.get_logger().info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        
         # Current execution state
         self.execution_running = False
         self.current_goal_handle = None
@@ -268,6 +275,12 @@ class BehaviorServer(Node):
             start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
             end_pose_time = behavior_config['execution'].get('end_pose_time', 1)
             
+            # Treat empty lists as None
+            if start_pose is not None and len(start_pose) == 0:
+                start_pose = None
+            if end_pose is not None and len(end_pose) == 0:
+                end_pose = None
+            
             if not checkpoint_path or not os.path.exists(checkpoint_path):
                 self.get_logger().error(f"Checkpoint not found: {checkpoint_path}")
                 return "FAILURE", f"Checkpoint file not found: {checkpoint_path}"
@@ -299,11 +312,24 @@ class BehaviorServer(Node):
             period = 1.0 / inference_hz
             early_termination = False
             
-            self.get_logger().info(f"Starting policy inference for {duration} seconds (progress threshold: {progress_threshold})")
+            # Timing metrics for jitter analysis
+            loop_times = []
+            inference_times = []
+            last_loop_end = None
+            timing_log_interval = 10  # Log stats every N iterations
+            iteration_count = 0
+            
+            self.get_logger().info(f"Starting policy inference for {duration} seconds at {inference_hz} Hz (progress threshold: {progress_threshold})")
             
             while rclpy.ok():
                 loop_start = time.time()
                 elapsed_time = loop_start - start_time
+                iteration_count += 1
+                
+                # Track loop-to-loop timing (jitter measurement)
+                if last_loop_end is not None:
+                    loop_interval = loop_start - last_loop_end
+                    loop_times.append(loop_interval)
                 
                 # Check for cancellation
                 if self._cancel_requested.is_set():
@@ -319,7 +345,10 @@ class BehaviorServer(Node):
                     break
                 
                 # Run inference and get progress value
+                inference_start = time.time()
                 progress = self._run_inference_once()
+                inference_end = time.time()
+                inference_times.append(inference_end - inference_start)
                 
                 # Check if inference failed due to missing sensor data
                 if progress is None:
@@ -337,6 +366,23 @@ class BehaviorServer(Node):
                         self.get_logger().info(f"Early termination triggered! Progress: {progress:.4f} > {progress_threshold}")
                         break
                 
+                # Log timing stats periodically
+                if iteration_count % timing_log_interval == 0 and len(loop_times) > 0:
+                    avg_loop = np.mean(loop_times[-timing_log_interval:]) * 1000
+                    max_loop = np.max(loop_times[-timing_log_interval:]) * 1000
+                    min_loop = np.min(loop_times[-timing_log_interval:]) * 1000
+                    std_loop = np.std(loop_times[-timing_log_interval:]) * 1000
+                    avg_inference = np.mean(inference_times[-timing_log_interval:]) * 1000
+                    max_inference = np.max(inference_times[-timing_log_interval:]) * 1000
+                    actual_hz = 1000.0 / avg_loop if avg_loop > 0 else 0
+                    
+                    self.get_logger().info(
+                        f"[TIMING] iter={iteration_count} | "
+                        f"loop: avg={avg_loop:.1f}ms, min={min_loop:.1f}ms, max={max_loop:.1f}ms, jitter(std)={std_loop:.2f}ms | "
+                        f"inference: avg={avg_inference:.1f}ms, max={max_inference:.1f}ms | "
+                        f"actual_hz={actual_hz:.1f} (target={inference_hz})"
+                    )
+                
                 # Send feedback
                 remaining_time = max(0.0, duration - elapsed_time)
                 feedback_msg = ExecuteBehavior.Feedback()
@@ -349,6 +395,29 @@ class BehaviorServer(Node):
                 sleep_time = period - (time.time() - loop_start)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
+                
+                last_loop_end = time.time()
+            
+            # Log final timing summary
+            if len(loop_times) > 0:
+                overall_avg_loop = np.mean(loop_times) * 1000
+                overall_max_loop = np.max(loop_times) * 1000
+                overall_min_loop = np.min(loop_times) * 1000
+                overall_std_loop = np.std(loop_times) * 1000
+                overall_avg_inference = np.mean(inference_times) * 1000
+                overall_max_inference = np.max(inference_times) * 1000
+                overall_actual_hz = 1000.0 / overall_avg_loop if overall_avg_loop > 0 else 0
+                
+                # Calculate jitter as percentage of target period
+                jitter_percent = (overall_std_loop / (period * 1000)) * 100
+                
+                self.get_logger().info(
+                    f"[TIMING SUMMARY] total_iterations={iteration_count} | "
+                    f"loop: avg={overall_avg_loop:.1f}ms, min={overall_min_loop:.1f}ms, max={overall_max_loop:.1f}ms | "
+                    f"jitter(std)={overall_std_loop:.2f}ms ({jitter_percent:.1f}% of target period) | "
+                    f"inference: avg={overall_avg_inference:.1f}ms, max={overall_max_inference:.1f}ms | "
+                    f"actual_hz={overall_actual_hz:.1f} (target={inference_hz})"
+                )
             
             # Stop robot and move to end pose
             self._stop_robot()
@@ -537,9 +606,12 @@ class BehaviorServer(Node):
     def _load_policy_for_behavior(self, checkpoint_path, action_dim=8):
         """Load ACT policy for a specific behavior."""
         try:
+            load_start = time.time()
+            
             # Clean up previous policy
             if self.current_policy:
                 del self.current_policy
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
             
             # Expand user path
             checkpoint_path = os.path.expanduser(checkpoint_path)
@@ -556,9 +628,11 @@ class BehaviorServer(Node):
                 self.get_logger().warn(f"Could not load dataset stats: {e}")
             
             # Create and load policy with specified action dimension
+            self.get_logger().info(f"Creating ACTPolicy with action_dim={action_dim} on device={self.device}")
             policy_config = create_act_config(action_dim=action_dim)
             self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
             
+            self.get_logger().info(f"Loading checkpoint: {checkpoint_path}")
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             
             # Strip _orig_mod. prefix from keys if present (e.g., from torch.compile())
@@ -575,7 +649,26 @@ class BehaviorServer(Node):
             # Store the current action dimension
             self.current_action_dim = action_dim
             
-            self.get_logger().info(f"Policy loaded successfully from {checkpoint_path} with action_dim={action_dim}")
+            load_time = time.time() - load_start
+            self.get_logger().info(f"Policy loaded in {load_time:.2f}s from {checkpoint_path} with action_dim={action_dim}")
+            
+            # Log model info
+            param_count = sum(p.numel() for p in self.current_policy.parameters())
+            self.get_logger().info(f"Policy parameters: {param_count:,} ({param_count/1e6:.1f}M)")
+            
+            # Warm-up inference
+            self.get_logger().info("Running warm-up inference...")
+            warmup_start = time.time()
+            dummy_batch = {
+                "observation.image_camera_1": torch.zeros(1, 3, 224, 224, device=self.device),
+                "observation.image_camera_2": torch.zeros(1, 3, 224, 224, device=self.device),
+                "observation.state": torch.zeros(1, 6, device=self.device)
+            }
+            with torch.no_grad():
+                _ = self.current_policy.select_action(dummy_batch)
+            warmup_time = time.time() - warmup_start
+            self.get_logger().info(f"Warm-up inference completed in {warmup_time:.2f}s")
+            
             return True
             
         except Exception as e:
@@ -727,18 +820,23 @@ class BehaviorServer(Node):
         if not self.arm_goto_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().error("Arm goto service not available")
             return False
+        
+        # Ensure position is a list of floats (JSON parsing may produce other types)
+        if not position or len(position) == 0:
+            self.get_logger().warn("Empty position provided to arm goto service, skipping")
+            return True
             
         request = GotoJS.Request()
-        request.data.data = position
-        request.time = time_duration
+        request.data.data = [float(p) for p in position]
+        request.time = int(time_duration)
         
         try:
             future = self.arm_goto_client.call_async(request)
-            self.get_logger().info(f"Arm goto service called with position: {position}")
+            self.get_logger().info(f"Arm goto service called with position: {[float(p) for p in position]} (time: {time_duration}s)")
             return True
                 
         except Exception as e:
-            self.get_logger().error(f"Error calling arm goto service: {e}")
+            self.get_logger().error(f"Error calling arm goto service: {e}, position type: {type(position)}, position: {position}")
             return False
 
 
