@@ -355,15 +355,6 @@ else
             log "  Mediapipe not installed, skipping uninstall"
         fi
         
-        # Force reinstall PyTorch from Jetson AI Lab index to ensure correct wheels
-        # This ensures we get Jetson-optimized builds instead of generic PyPI wheels
-        # Pin to 2.8.0 which is compatible with JetPack 6 CUDA 12.6 libraries
-        log "  Reinstalling PyTorch from Jetson AI Lab index..."
-        sudo -u "$ACTUAL_USER" pip3 install --force-reinstall torch==2.8.0 torchvision \
-            --index-url https://pypi.jetson-ai-lab.io/jp6/cu126 2>&1 | tee -a "$LOG_FILE" || {
-            log "  WARNING: Failed to reinstall PyTorch from Jetson index, continuing..."
-        }
-        
         log "  Installing pip dependencies..."
         sudo -u "$ACTUAL_USER" pip3 install -r "$PIP_DEPS_FILE" --upgrade
         log "  Pip dependencies installed"

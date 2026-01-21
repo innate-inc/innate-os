@@ -19,8 +19,9 @@ websockets
 h5py
 einops
 # Pin torch 2.8.0 for JetPack 6 CUDA 12.6 compatibility (2.9.x requires cuDSS which isn't packaged)
+# Pin torchvision 0.23.0 for compatibility with PyTorch 2.8.0
 torch==2.8.0
-torchvision
+torchvision==0.23.0
 
 # ROS/Robot utilities
 urdf-parser-py

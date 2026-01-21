@@ -43,7 +43,7 @@ def create_act_config(action_dim=8):
         n_obs_steps=1,
         chunk_size=30,
         n_action_steps=3,
-        speed=2.5,
+        speed=1.0,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
         
