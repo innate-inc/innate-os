@@ -317,7 +317,8 @@ void RecorderNode::timer_callback() {
             // Only resize if dimensions don't match
             if (cv_ptr->image.cols != image_size_[0] || cv_ptr->image.rows != image_size_[1]) {
                 cv::Mat resized;
-                cv::resize(cv_ptr->image, resized, cv::Size(image_size_[0], image_size_[1]));
+                // Use INTER_AREA to match training preprocessing (webdataset.py uses INTER_AREA)
+                cv::resize(cv_ptr->image, resized, cv::Size(image_size_[0], image_size_[1]), cv::INTER_AREA);
                 images_converted.push_back(resized);
             } else {
                 // Already the correct size, use it directly

@@ -702,11 +702,10 @@ class BehaviorServer(Node):
 
         try:
             # Image preprocessing
-            img1_rgb = cv2.cvtColor(self.latest_image1, cv2.COLOR_BGR2RGB)
-            img2_rgb = cv2.cvtColor(self.latest_image2, cv2.COLOR_BGR2RGB)
-            
-            img1 = cv2.resize(img1_rgb, self.image_size)
-            img2 = cv2.resize(img2_rgb, self.image_size)
+            # Keep images in BGR format to match training pipeline (recorder → H5 → WebDataset → model all use BGR)
+            # Use INTER_AREA to match training preprocessing (webdataset.py uses INTER_AREA)
+            img1 = cv2.resize(self.latest_image1, self.image_size, interpolation=cv2.INTER_AREA)
+            img2 = cv2.resize(self.latest_image2, self.image_size, interpolation=cv2.INTER_AREA)
             img1 = img1.astype(np.float32) / 255.0
             img2 = img2.astype(np.float32) / 255.0
             img1 = np.transpose(img1, (2, 0, 1))
