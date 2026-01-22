@@ -58,11 +58,13 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 67mm x 40mm x 82mm -->
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="-0.005 0 0.018" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link1.STL" scale="1 1 1"/>
+        <box size="0.067 0.040 0.082"/>
       </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 
@@ -88,11 +90,11 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 20mm x 54mm x 138.5mm (length along link direction) -->
+    <!-- Simplified collision: Box 37mm x 54mm x 156mm -->
     <collision>
-      <origin xyz="0 0 0.06925" rpy="0 0 0"/>
+      <origin xyz="0 0 0.061" rpy="0 0 0"/>
       <geometry>
-        <box size="0.020 0.054 0.1385"/>
+        <box size="0.037 0.054 0.156"/>
       </geometry>
       <material name="collision_material"/>
     </collision>
@@ -120,12 +122,11 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Cylinder length 118mm, diameter 46mm -->
+    <!-- Simplified collision: Box 134mm x 54mm x 35mm -->
     <collision>
-    <!-- May need to update rpy here -->
-      <origin xyz="0.059 0 0" rpy="0 1.5708 0"/>
+      <origin xyz="0.050 0 0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.023" length="0.118"/>
+        <box size="0.134 0.054 0.035"/>
       </geometry>
       <material name="collision_material"/>
     </collision>
@@ -153,11 +154,13 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 32mm x 39mm x 20mm -->
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.006 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link4.STL" scale="1 1 1"/>
+        <box size="0.032 0.039 0.020"/>
       </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 
@@ -183,11 +186,13 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 54mm x 44mm x 93mm -->
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.027 0 0.031" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/link5.STL" scale="1 1 1"/>
+        <box size="0.054 0.044 0.093"/>
       </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 
@@ -314,11 +319,13 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
+    <!-- Simplified collision: Box 113mm x 121mm x 36mm -->
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0.007 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://maurice_sim/meshes/head.STL" scale="1 1 1"/>
+        <box size="0.113 0.121 0.036"/>
       </geometry>
+      <material name="collision_material"/>
     </collision>
   </link>
 
