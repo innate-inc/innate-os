@@ -108,6 +108,13 @@ def generate_launch_description():
         arguments=['--ros-args', '--log-level', 'warn'],
         remappings=[('cmd_vel', 'cmd_vel_raw')]
     )
+
+    description_subscriber_node = Node(
+        package='maurice_nav',
+        executable='description_subscriber',
+        name='description_subscriber',
+        output='screen',
+    )
     
     # Mapfree planner node (runs in mapfree namespace)
     mapfree_planner_node = Node(
@@ -118,10 +125,12 @@ def generate_launch_description():
         output='screen',
         parameters=[planner_params_file, costmap_params_file],
         remappings=[
-        # TF remappings - critical for namespaced nodes
-        ('tf', '/tf'),
-        ('tf_static', '/tf_static'),
-    ]
+            # TF remappings - critical for namespaced nodes
+            ('tf', '/tf'),
+            ('tf_static', '/tf_static'),
+            # Remap costmap footprint to global /footprint
+            ('/mapfree/global_costmap/footprint', '/footprint'),
+        ]
     )
     
     # Null map node for identity map->odom transform
@@ -137,6 +146,7 @@ def generate_launch_description():
         navigation_launch,
         # mapfree_launch,
         mapping_launch,
+        description_subscriber_node,
         velocity_smoother_node,
         bt_navigator_node,
         mapfree_planner_node,
