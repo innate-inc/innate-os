@@ -636,16 +636,59 @@ class BehaviorServer(Node):
             self.get_logger().info(f"Loading checkpoint: {checkpoint_path}")
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             
-            # Strip _orig_mod. prefix from keys if present (e.g., from torch.compile())
-            if any(key.startswith('_orig_mod.') for key in state_dict.keys()):
-                self.get_logger().info("Stripping '_orig_mod.' prefix from checkpoint keys")
-                state_dict = {key.replace('_orig_mod.', '', 1): value for key, value in state_dict.items()}
+            # Handle different checkpoint formats (direct state_dict or wrapped in dict)
+            if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+                state_dict = state_dict['model_state_dict']
+                self.get_logger().info("Extracted state_dict from checkpoint dict")
+            elif isinstance(state_dict, dict) and 'state_dict' in state_dict:
+                state_dict = state_dict['state_dict']
+                self.get_logger().info("Extracted state_dict from checkpoint dict")
             
-            self.current_policy.load_state_dict(state_dict)
+            # Strip prefixes from keys if present (from torch.compile() and/or DDP)
+            # Check for _orig_mod. prefix (from torch.compile())
+            has_orig_mod = any(key.startswith('_orig_mod.') for key in state_dict.keys())
+            # Check for module. prefix (from DDP, though train_dist.py uses policy.module so shouldn't have this)
+            has_module = any(key.startswith('module.') for key in state_dict.keys())
+            
+            if has_orig_mod or has_module:
+                self.get_logger().info(f"Stripping prefixes from checkpoint keys (orig_mod: {has_orig_mod}, module: {has_module})")
+                cleaned_state_dict = {}
+                for key, value in state_dict.items():
+                    # Remove both prefixes if present (handle nested cases like module._orig_mod.)
+                    cleaned_key = key
+                    if cleaned_key.startswith('module.'):
+                        cleaned_key = cleaned_key.replace('module.', '', 1)
+                    if cleaned_key.startswith('_orig_mod.'):
+                        cleaned_key = cleaned_key.replace('_orig_mod.', '', 1)
+                    cleaned_state_dict[cleaned_key] = value
+                state_dict = cleaned_state_dict
+            
+            # Load state dict with strict=False to handle potential mismatches gracefully
+            load_result = self.current_policy.load_state_dict(state_dict, strict=False)
+            
+            # Log any missing or unexpected keys for debugging
+            if load_result.missing_keys:
+                self.get_logger().warn(f"Missing keys in checkpoint: {load_result.missing_keys[:5]}..." 
+                                     if len(load_result.missing_keys) > 5 else f"Missing keys: {load_result.missing_keys}")
+            if load_result.unexpected_keys:
+                self.get_logger().warn(f"Unexpected keys in checkpoint: {load_result.unexpected_keys[:5]}..." 
+                                     if len(load_result.unexpected_keys) > 5 else f"Unexpected keys: {load_result.unexpected_keys}")
+            
+            if not load_result.missing_keys and not load_result.unexpected_keys:
+                self.get_logger().info("Checkpoint loaded successfully with all keys matching")
             self.current_policy.eval()
             
             # Reset policy to clear any cached states
             self.current_policy.reset()
+            
+            # Apply torch.compile() for optimized inference (matching training setup)
+            try:
+                self.get_logger().info("Compiling model with torch.compile() for optimized inference...")
+                self.current_policy = torch.compile(self.current_policy, mode='default')
+                self.get_logger().info("Model compilation setup completed")
+                self.get_logger().info("Note: First inference will trigger actual compilation")
+            except Exception as e:
+                self.get_logger().warn(f"Model compilation failed: {e}, falling back to uncompiled model")
             
             # Store the current action dimension
             self.current_action_dim = action_dim
@@ -666,7 +709,9 @@ class BehaviorServer(Node):
                 "observation.state": torch.zeros(1, 6, device=self.device)
             }
             with torch.no_grad():
-                _ = self.current_policy.select_action(dummy_batch)
+                # Use autocast for warm-up to trigger compilation
+                with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                    _ = self.current_policy.select_action(dummy_batch)
             warmup_time = time.time() - warmup_start
             self.get_logger().info(f"Warm-up inference completed in {warmup_time:.2f}s")
             
@@ -725,7 +770,9 @@ class BehaviorServer(Node):
 
             # Policy forward pass
             with torch.no_grad():
-                action = self.current_policy.select_action(batch)
+                # Use BF16 autocast for faster inference (matching training setup)
+                with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                    action = self.current_policy.select_action(batch)
                 action_np = action.cpu().numpy().squeeze(0)
 
                 # Check action dimensions match expected
@@ -741,8 +788,8 @@ class BehaviorServer(Node):
 
                 # Publish commands (using first 8 dimensions)
                 twist_msg = Twist()
-                twist_msg.linear.x = float(action_np[6]) / 2  # 7th element
-                twist_msg.angular.z = float(action_np[7]) / 2  # 8th element
+                twist_msg.linear.x = float(action_np[6])  # 7th element
+                twist_msg.angular.z = float(action_np[7])  # 8th element
                 self.cmd_vel_pub.publish(twist_msg)
 
                 arm_msg = Float64MultiArray()
