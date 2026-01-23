@@ -42,8 +42,8 @@ def create_act_config(action_dim=8):
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=30,
-        n_action_steps=5,
-        speed=1.0,
+        n_action_steps=10,
+        speed=1.5,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
         
