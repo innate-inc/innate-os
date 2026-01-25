@@ -8,6 +8,7 @@ from typing import Optional
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 import websockets
 
@@ -18,6 +19,9 @@ from brain_client.message_types import (
     MessageIn,
     MessageInType,
 )
+
+# Import env loader for reloading .env at runtime
+from maurice_bringup.env_loader import load_env_file, get_env
 
 
 ###############################################################################
@@ -154,6 +158,7 @@ class WSClientNode(Node):
         )
 
         self.exit_event = threading.Event()
+        self.reconnect_event = threading.Event()  # Event to trigger reconnection with new URI
 
         # Set up the WSClient (only if configured).
         if self._ws_configured:
@@ -163,6 +168,18 @@ class WSClientNode(Node):
 
         # Start the websocket event loop in a separate thread.
         self.ws_thread = None
+        
+        # Create service for reloading websocket URI from .env
+        self._reload_ws_srv = self.create_service(
+            Trigger, "/brain/reload_ws", self._handle_reload_ws
+        )
+        
+        # Publisher for current websocket URI (so apps can see what agent we're connected to)
+        self._ws_uri_pub = self.create_publisher(String, "/brain/websocket_uri", 10)
+        
+        # Timer to publish websocket URI periodically (every 5 seconds)
+        self._ws_uri_timer = self.create_timer(5.0, self._publish_ws_uri)
+        
         self.get_logger().info("WSClientNode initialized.")
 
     def _robot_info_callback(self, msg: String):
@@ -178,6 +195,12 @@ class WSClientNode(Node):
                     self.ws_client.robot_version = version
         except Exception as e:
             self.get_logger().debug(f"Error parsing robot info: {e}")
+
+    def _publish_ws_uri(self):
+        """Publish current websocket URI to /brain/websocket_uri topic."""
+        msg = String()
+        msg.data = self.ws_uri if self._ws_configured else ""
+        self._ws_uri_pub.publish(msg)
 
     def _speak_error(self, message: str):
         """Publish error message to TTS topic."""
@@ -202,6 +225,77 @@ class WSClientNode(Node):
         if not uri or not uri.strip():
             return False
         return uri.startswith("ws://") or uri.startswith("wss://")
+
+    def _handle_reload_ws(self, request, response):
+        """
+        Service handler for reloading websocket URI from .env file.
+        This allows changing BRAIN_WEBSOCKET_URI without restarting the robot.
+        """
+        try:
+            # Reload .env file to get updated values
+            load_env_file()
+            
+            new_uri = get_env("BRAIN_WEBSOCKET_URI", "")
+            new_token = get_env("INNATE_SERVICE_KEY", self.token)
+            
+            if not self._validate_ws_uri(new_uri):
+                response.success = False
+                response.message = f"Invalid BRAIN_WEBSOCKET_URI in .env: '{new_uri}'"
+                self.get_logger().error(response.message)
+                return response
+            
+            old_uri = self.ws_uri
+            
+            if new_uri == old_uri and new_token == self.token:
+                response.success = True
+                response.message = f"WebSocket URI unchanged: {new_uri}"
+                self.get_logger().info(response.message)
+                return response
+            
+            self.get_logger().info(f"🔄 Reloading WebSocket: {old_uri} → {new_uri}")
+            
+            # Update stored values
+            self.ws_uri = new_uri
+            self.token = new_token
+            self._ws_configured = True
+            
+            # Signal existing connection to stop (will trigger reconnect with new URI)
+            self.reconnect_event.set()
+            
+            # Close existing websocket if connected
+            if self.ws_client and self.ws_client.websocket:
+                try:
+                    # Schedule close on the event loop
+                    if self.ws_client.loop and self.ws_client.loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self.ws_client.websocket.close(),
+                            self.ws_client.loop
+                        )
+                except Exception as e:
+                    self.get_logger().warn(f"Error closing websocket: {e}")
+            
+            # Create new WSClient with updated URI
+            self.ws_client = WSClient(self.ws_uri, self.token, self, self._robot_version)
+            
+            # Clear reconnect event and start new connection thread
+            self.reconnect_event.clear()
+            
+            # Start new websocket thread if not running
+            if self.ws_thread is None or not self.ws_thread.is_alive():
+                self.ws_thread = threading.Thread(target=self.run_ws_loop)
+                self.ws_thread.start()
+            
+            response.success = True
+            response.message = f"WebSocket URI reloaded: {old_uri} → {new_uri}"
+            self.get_logger().info(f"✅ {response.message}")
+            
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to reload WebSocket URI: {e}"
+            self.get_logger().error(response.message)
+        
+        return response
+
 
     def ws_outgoing_callback(self, msg: String):
         """

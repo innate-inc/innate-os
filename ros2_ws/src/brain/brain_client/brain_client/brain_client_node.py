@@ -450,6 +450,9 @@ class BrainClientNode(Node):
         self._reload_primitives_client = self._service_call_node.create_client(
             Trigger, "/brain/reload_primitives"
         )
+        self._reload_ws_client = self._service_call_node.create_client(
+            Trigger, "/brain/reload_ws"
+        )
         self._get_primitives_client_sync = self._service_call_node.create_client(
             GetAvailablePrimitives, "/brain/get_available_primitives"
         )
@@ -2129,6 +2132,24 @@ class BrainClientNode(Node):
                 self.get_logger().warn(
                     "PEAS reload service not available, using local primitive loading"
                 )
+
+            # Call ws_client_node to reload websocket URI from .env
+            if self._reload_ws_client.wait_for_service(timeout_sec=5.0):
+                ws_request = Trigger.Request()
+                ws_future = self._reload_ws_client.call_async(ws_request)
+                rclpy.spin_until_future_complete(
+                    self._service_call_node, ws_future, timeout_sec=10.0
+                )
+                if ws_future.done():
+                    ws_result = ws_future.result()
+                    if ws_result.success:
+                        self.get_logger().info(f"WebSocket reload: {ws_result.message}")
+                    else:
+                        self.get_logger().warn(f"WebSocket reload failed: {ws_result.message}")
+                else:
+                    self.get_logger().warn("WebSocket reload timed out")
+            else:
+                self.get_logger().warn("WebSocket reload service (/brain/reload_ws) not available")
 
             # Re-query primitives from PEAS (or load locally if PEAS unavailable)
             self.primitives_dict = self._query_available_primitives()
