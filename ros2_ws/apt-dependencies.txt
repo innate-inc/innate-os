@@ -115,6 +115,7 @@ ros-humble-moveit-ros-move-group
 # ROS2 Humble packages - Middleware/Bridge
 ros-humble-rosbridge-suite
 ros-humble-rosbridge-server
+ros-humble-innate-rws
 ros-humble-rosbag2
 ros-humble-rosidl-default-generators
 ros-humble-rosidl-default-runtime

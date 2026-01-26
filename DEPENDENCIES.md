@@ -54,8 +54,7 @@ ros-humble-kdl-parser-py
 python3-pykdl
 
 # Rosbridge
-ros-humble-rosbridge-suite
-ros-humble-rosbridge-server
+ros-humble-innate-rws
 
 # Rosbag
 ros-humble-rosbag2
@@ -197,7 +196,8 @@ from cv_bridge import CvBridge
 
 | Package | Apt Package | Found In | Usage |
 |---------|-------------|----------|-------|
-| rosbridge_server | ros-humble-rosbridge-server | maurice_control, maurice_sim_bringup | WebSocket bridge |
+| rws | ros-humble-innate-rws | maurice_control | WebSocket bridge |
+| rosbridge_server | ros-humble-rosbridge-server | maurice_sim_bringup | Full rosbridge |
 | rosbridge_suite | ros-humble-rosbridge-suite | maurice_sim_bringup | Full rosbridge |
 | rosbag2_py | ros-humble-rosbag2 | maurice_bringup | Bag recording/playback |
 | rosidl_default_generators | ros-humble-rosidl-default-generators | maurice_msgs, brain_messages | IDL code generator |

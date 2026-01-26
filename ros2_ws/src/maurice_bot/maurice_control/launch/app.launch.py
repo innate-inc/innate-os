@@ -12,14 +12,10 @@ def generate_launch_description():
     
     # Create rosbridge websocket node
     rosbridge_node = Node(
-        package='rosbridge_server',
-        executable='rosbridge_websocket',
-        name='rosbridge_websocket',
-        parameters=[{
-            'address': '0.0.0.0',
-            'fragment_size': 10000000,  # 10MB - prevents fragmentation for large payloads
-            'max_message_size': 10000000,  # 10MB max message size
-        }],
+        package='rws',
+        executable='rws_server',
+        name='ros_websocket_server',
+        parameters=[{}],
         output='screen'
     )
 
