@@ -22,6 +22,7 @@ einops
 # Pin torchvision 0.23.0 for compatibility with PyTorch 2.8.0
 torch==2.8.0
 torchvision==0.23.0
+torchaudio
 
 # ROS/Robot utilities
 urdf-parser-py

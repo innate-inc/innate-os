@@ -355,6 +355,15 @@ else
             log "  Mediapipe not installed, skipping uninstall"
         fi
         
+        # Uninstall CPU-only PyTorch if installed (we need Jetson CUDA build)
+        # Check if torch is installed and whether it's the CPU version (+cpu suffix)
+        TORCH_VERSION=$(sudo -u "$ACTUAL_USER" pip3 show torch 2>/dev/null | grep "^Version:" | awk '{print $2}')
+        if [ -n "$TORCH_VERSION" ] && [[ "$TORCH_VERSION" == *"+cpu"* ]]; then
+            log "  Detected CPU-only PyTorch ($TORCH_VERSION), uninstalling..."
+            sudo -u "$ACTUAL_USER" pip3 uninstall -y torch torchvision torchaudio 2>/dev/null || true
+            log "  CPU-only PyTorch uninstalled (will reinstall Jetson CUDA version)"
+        fi
+        
         log "  Installing pip dependencies..."
         sudo -u "$ACTUAL_USER" pip3 install -r "$PIP_DEPS_FILE" --upgrade
         log "  Pip dependencies installed"
