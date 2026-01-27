@@ -34,7 +34,7 @@ jobs:
           ls -d */ 2>/dev/null || echo "No directories found"
           echo ""
           echo "Key files:"
-          for f in Dockerfile Dockerfile.build Dockerfile.prod docker-compose.yml; do
+          for f in Dockerfile Dockerfile.build Dockerfile.prod; do
             if [ -f "$f" ]; then
               echo "✓ $f exists"
             else
