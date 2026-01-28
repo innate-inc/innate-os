@@ -38,16 +38,16 @@ class ManipulationInterface:
         self.logger = logger
         
         # Publishers
-        self._ik_target_pub = self.node.create_publisher(Twist, 'ik_delta', 10)
+        self._ik_target_pub = self.node.create_publisher(Twist, '/ik_delta', 10)
         
         # Subscribers
         self._ik_solution = None
         self._fk_pose = None
         self._ik_solution_sub = self.node.create_subscription(
-            JointState, 'ik_solution', self._ik_solution_callback, 10
+            JointState, '/ik_solution', self._ik_solution_callback, 10
         )
         self._fk_pose_sub = self.node.create_subscription(
-            PoseStamped, 'fk_pose', self._fk_pose_callback, 10
+            PoseStamped, '/fk_pose', self._fk_pose_callback, 10
         )
         
         # Service client for joint space control. We create the client once
@@ -59,6 +59,8 @@ class ManipulationInterface:
     
     def _ik_solution_callback(self, msg: JointState):
         """Store the latest IK solution."""
+        # Log
+        self.logger.info(f"IK solution received: {msg}")
         self._ik_solution = msg
     
     def _fk_pose_callback(self, msg: PoseStamped):
@@ -121,10 +123,13 @@ class ManipulationInterface:
         
         self._ik_target_pub.publish(target)
         
-        # Wait for solution
+        # Wait for solution - use spin_once to process callbacks
         start_time = time.time()
         iteration = 0
         while time.time() - start_time < timeout:
+            # Spin once to allow callback to process incoming IK solution
+            rclpy.spin_once(self.node, timeout_sec=0.01)
+            
             if self._ik_solution is not None:
                 joint_positions = list(self._ik_solution.position)
                 
@@ -135,12 +140,7 @@ class ManipulationInterface:
                 
                 return joint_positions
 
-            time.sleep(0.01)
             iteration += 1
-            
-            # Log every 50 iterations (roughly every 0.5 seconds)
-            if iteration % 50 == 0:
-                pass
         
         self.logger.error(f"[ManipulationInterface] IK solution timeout after {timeout}s ({iteration} iterations)")
         return None

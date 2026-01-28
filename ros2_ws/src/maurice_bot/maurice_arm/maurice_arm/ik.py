@@ -94,10 +94,10 @@ class KDLIKNode(Node):
             self.initial_frame = None
 
         # 6) publisher and subscription
-        self.joint_pub = self.create_publisher(JointState, "ik_solution", 10)
-        self.fk_pub = self.create_publisher(PoseStamped, "fk_pose", 10)
+        self.joint_pub = self.create_publisher(JointState, "/ik_solution", 10)
+        self.fk_pub = self.create_publisher(PoseStamped, "/fk_pose", 10)
         # self.command_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
-        self.create_subscription(Twist, "ik_delta", self.on_delta, 10)
+        self.create_subscription(Twist, "/ik_delta", self.on_delta, 10)
         self.create_subscription(
             JointState, "/mars/arm/state", self.on_joint_states, 10
         )
