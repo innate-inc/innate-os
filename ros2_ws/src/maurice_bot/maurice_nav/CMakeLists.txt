@@ -10,6 +10,49 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(nav2_core REQUIRED)
+find_package(nav2_util REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(angles REQUIRED)
+
+# Include directories
+include_directories(include)
+
+# Build shared library for DynamicGoalChecker plugin
+add_library(dynamic_goal_checker SHARED
+  src/plugins/dynamic_goal_checker.cpp
+)
+ament_target_dependencies(dynamic_goal_checker
+  rclcpp
+  rclcpp_lifecycle
+  geometry_msgs
+  nav2_core
+  nav2_util
+  nav2_costmap_2d
+  pluginlib
+  tf2
+  tf2_ros
+  angles
+)
+target_compile_definitions(dynamic_goal_checker PUBLIC "PLUGINLIB__DISABLE_BOOST_FUNCTIONS")
+
+# Install the plugin library
+install(TARGETS dynamic_goal_checker
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+# Install headers
+install(
+  DIRECTORY include/
+  DESTINATION include
+)
+
+# Export plugin description file
+pluginlib_export_plugin_description_file(nav2_core plugins.xml)
 
 # Build C++ executable for null_map_node
 add_executable(null_map_node src/null_map_node.cpp)
@@ -68,6 +111,22 @@ install(
 install(
   FILES package.xml
   DESTINATION share/ament_index/resource_index/packages
+)
+
+# Export dependencies for downstream packages
+ament_export_include_directories(include)
+ament_export_libraries(dynamic_goal_checker)
+ament_export_dependencies(
+  rclcpp
+  rclcpp_lifecycle
+  geometry_msgs
+  nav2_core
+  nav2_util
+  nav2_costmap_2d
+  pluginlib
+  tf2
+  tf2_ros
+  angles
 )
 
 ament_package()
