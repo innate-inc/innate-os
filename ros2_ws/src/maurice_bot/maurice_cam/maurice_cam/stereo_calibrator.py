@@ -2,13 +2,23 @@
 """
 Stereo Camera Calibration Node using ChArUco Board.
 
+This launches an interactive calibration tool that:
+1. Subscribes to the stereo camera topic
+2. Allows user to capture images by pressing Enter
+3. Detects ChArUco board corners in both cameras
+4. Performs stereo calibration after collecting enough images
+5. Optionally saves the calibration to replace the existing one
+
+
 This node subscribes to a stereo image topic, allows the user to capture
 calibration images interactively, and performs OpenCV stereo calibration
 using the pinhole camera model.
 
 Usage:
-    ros2 launch maurice_cam stereo_calibrator.launch.py
-    
+    ros2 run maurice_cam stereo_calibrator
+    or
+    ros2 run maurice_cam stereo_calibrator --ros-args -p squares_x:=8 -p squares_y:=11 -p square_size:=0.016 -p marker_size:=0.012
+
     Then press Enter to capture images. After 30 images, calibration is computed.
 """
 
@@ -117,7 +127,9 @@ class StereoCalibrator(Node):
         self.get_logger().info(f'Images required: {self.num_images_required}')
         if self.use_legacy_pattern:
             self.get_logger().info('Legacy pattern enabled (for calib.io boards)')
+
         self.get_logger().info('=' * 60)
+        self.get_logger().warn('>>> Press ENTER to capture an image <<<')
 
         # Create subscription
         self.subscription = self.create_subscription(
@@ -204,7 +216,7 @@ class StereoCalibrator(Node):
         
         # If we get here, proceed with normal capture
         self.get_logger().info('')
-        self.get_logger().info('>>> Press ENTER to capture an image <<<')
+        self.get_logger().warn('>>> Press ENTER to capture an image <<<')
         self.get_logger().info('')
 
     def load_existing_images(self, left_image_paths, right_image_paths):
@@ -317,7 +329,7 @@ class StereoCalibrator(Node):
         while rclpy.ok() and not self.calibration_done:
             try:
                 # Wait for Enter key
-                input()
+                input('Slightly move the camera/robot and press Enter to capture the next image')
                 if not self.calibration_done:
                     self.capture_requested = True
             except EOFError:
@@ -636,7 +648,7 @@ class StereoCalibrator(Node):
         # Signal shutdown
         self.get_logger().info('Calibration complete. Shutting down...')
         try:
-            rclpy.shutdown()
+            self.destroy_node()
         except Exception as e:
             self.get_logger().warn(f'Error during shutdown: {e}')
         finally:
