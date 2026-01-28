@@ -1,4 +1,5 @@
 #include "maurice_cam/stereo_depth_estimator.hpp"
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -34,6 +35,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
   this->declare_parameter<bool>("publish_pointcloud", true);
   this->declare_parameter<std::string>("pointcloud_topic", "/mars/main_camera/points");
+  this->declare_parameter<std::string>("camera_info_topic", "/mars/main_camera/camera_info");
   this->declare_parameter<int>("pointcloud_decimation", 2);  // 2 = half resolution point cloud
   
   // Block Matching parameters (from Python script that worked best)
@@ -57,6 +59,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   if (process_every_n_frames_ < 1) process_every_n_frames_ = 1;
   publish_pointcloud_ = this->get_parameter("publish_pointcloud").as_bool();
   pointcloud_topic_ = this->get_parameter("pointcloud_topic").as_string();
+  camera_info_topic_ = this->get_parameter("camera_info_topic").as_string();
   pointcloud_decimation_ = this->get_parameter("pointcloud_decimation").as_int();
   if (pointcloud_decimation_ < 1) pointcloud_decimation_ = 1;
   
@@ -136,6 +139,13 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
                 pointcloud_topic_.c_str(), pointcloud_decimation_);
   }
 
+  // Always publish camera info for depth image consumers
+  camera_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+    camera_info_topic_,
+    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+  );
+  RCLCPP_INFO(this->get_logger(), "Camera info topic: %s", camera_info_topic_.c_str());
+
   // Create subscription with zero-copy intra-process communication
   stereo_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
     stereo_topic_,
@@ -178,7 +188,7 @@ std::filesystem::path StereoDepthEstimator::findCalibrationConfigDir()
     }
   }
 
-  // Look for calibration_config_* directories
+  // If no _debug directory found, look for calibration_config_* directories
   for (const auto& entry : std::filesystem::directory_iterator(data_path)) {
     if (entry.is_directory()) {
       std::string dirname = entry.path().filename().string();
@@ -646,6 +656,95 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
 
   // Publish depth
   depth_pub_->publish(std::move(depth_msg));
+
+  // Publish camera info (scaled to output resolution)
+  if (camera_info_pub_) {
+    auto info_msg = std::make_unique<sensor_msgs::msg::CameraInfo>();
+    info_msg->header.stamp = timestamp;
+    info_msg->header.frame_id = frame_id_;
+    info_msg->height = image_height_;
+    info_msg->width = image_width_;
+    info_msg->distortion_model = "plumb_bob";
+    
+    // Scale intrinsics from calibration to output resolution
+    const double scale_up = 1.0 / depth_scale_;
+    
+    // D - distortion coefficients (use zeros since image is rectified)
+    info_msg->d = {0.0, 0.0, 0.0, 0.0, 0.0};
+    
+    // K - intrinsic matrix (scaled)
+    info_msg->k = {
+      P1_.at<double>(0, 0) * scale_up, 0.0, P1_.at<double>(0, 2) * scale_up,
+      0.0, P1_.at<double>(1, 1) * scale_up, P1_.at<double>(1, 2) * scale_up,
+      0.0, 0.0, 1.0
+    };
+    
+    // R - rectification matrix (identity for rectified image)
+    info_msg->r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+    
+    // P - projection matrix (scaled)
+    info_msg->p = {
+      P1_.at<double>(0, 0) * scale_up, 0.0, P1_.at<double>(0, 2) * scale_up, 0.0,
+      0.0, P1_.at<double>(1, 1) * scale_up, P1_.at<double>(1, 2) * scale_up, 0.0,
+      0.0, 0.0, 1.0, 0.0
+    };
+    
+    info_msg->binning_x = 0;
+    info_msg->binning_y = 0;
+    
+    camera_info_pub_->publish(std::move(info_msg));
+  }
+
+  // Publish CameraInfo
+  if (camera_info_pub_) {
+    auto cam_info_msg = std::make_unique<sensor_msgs::msg::CameraInfo>();
+    cam_info_msg->header.stamp = timestamp;
+    cam_info_msg->header.frame_id = frame_id_;
+    cam_info_msg->height = image_height_;
+    cam_info_msg->width = image_width_;
+    cam_info_msg->distortion_model = "plumb_bob";
+    
+    // Scale intrinsics from calibration to output resolution
+    const double scale_up = 1.0 / depth_scale_;
+    
+    // D - distortion coefficients (use zeros for rectified image)
+    cam_info_msg->d = {0.0, 0.0, 0.0, 0.0, 0.0};
+    
+    // K - intrinsic matrix (scaled to output resolution)
+    cam_info_msg->k[0] = P1_.at<double>(0, 0) * scale_up;  // fx
+    cam_info_msg->k[1] = 0.0;
+    cam_info_msg->k[2] = P1_.at<double>(0, 2) * scale_up;  // cx
+    cam_info_msg->k[3] = 0.0;
+    cam_info_msg->k[4] = P1_.at<double>(1, 1) * scale_up;  // fy
+    cam_info_msg->k[5] = P1_.at<double>(1, 2) * scale_up;  // cy
+    cam_info_msg->k[6] = 0.0;
+    cam_info_msg->k[7] = 0.0;
+    cam_info_msg->k[8] = 1.0;
+    
+    // R - rectification matrix (identity for rectified image)
+    cam_info_msg->r[0] = 1.0; cam_info_msg->r[1] = 0.0; cam_info_msg->r[2] = 0.0;
+    cam_info_msg->r[3] = 0.0; cam_info_msg->r[4] = 1.0; cam_info_msg->r[5] = 0.0;
+    cam_info_msg->r[6] = 0.0; cam_info_msg->r[7] = 0.0; cam_info_msg->r[8] = 1.0;
+    
+    // P - projection matrix (scaled to output resolution)
+    cam_info_msg->p[0] = P1_.at<double>(0, 0) * scale_up;   // fx'
+    cam_info_msg->p[1] = 0.0;
+    cam_info_msg->p[2] = P1_.at<double>(0, 2) * scale_up;   // cx'
+    cam_info_msg->p[3] = 0.0;  // Tx (0 for left camera)
+    cam_info_msg->p[4] = 0.0;
+    cam_info_msg->p[5] = P1_.at<double>(1, 1) * scale_up;   // fy'
+    cam_info_msg->p[6] = P1_.at<double>(1, 2) * scale_up;   // cy'
+    cam_info_msg->p[7] = 0.0;  // Ty
+    cam_info_msg->p[8] = 0.0;
+    cam_info_msg->p[9] = 0.0;
+    cam_info_msg->p[10] = 1.0;
+    cam_info_msg->p[11] = 0.0;
+    
+    cam_info_msg->binning_x = 0;
+    cam_info_msg->binning_y = 0;
+    
+    camera_info_pub_->publish(std::move(cam_info_msg));
+  }
 
   // Publish disparity visualization if enabled
   if (publish_disparity_ && disparity_pub_ && !disp_vis_calib.empty()) {
