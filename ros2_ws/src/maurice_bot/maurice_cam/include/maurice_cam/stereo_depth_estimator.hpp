@@ -8,6 +8,7 @@
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 
 #include <opencv2/opencv.hpp>
@@ -91,6 +92,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rectified_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
 
   // Node parameters
   std::string data_directory_;
@@ -99,6 +101,7 @@ private:
   std::string disparity_topic_;
   std::string rectified_topic_;
   std::string pointcloud_topic_;
+  std::string camera_info_topic_;
   std::string frame_id_;
   int max_disparity_;
   bool publish_disparity_;
