@@ -1,0 +1,7 @@
+<class_libraries>
+  <library path="dynamic_goal_checker">
+    <class type="maurice_nav::DynamicGoalChecker" base_class_type="nav2_core::GoalChecker">
+      <description>A dynamic goal checker plugin that allows configurable goal tolerances</description>
+    </class>
+  </library>
+</class_libraries>
