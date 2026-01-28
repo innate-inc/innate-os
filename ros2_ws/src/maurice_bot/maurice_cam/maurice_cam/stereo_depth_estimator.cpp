@@ -540,13 +540,15 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
   // Extract depth (Z coordinate) and convert to uint16 millimeters
   cv::Mat depth_calib(calib_height_, calib_width_, CV_16UC1);
   const float MAX_DEPTH_M = 10.0f;  // Same as Python script
+  const float MIN_DEPTH_M = 0.05f; // Minimum valid depth (5cm)
   
   for (int y = 0; y < calib_height_; y++) {
     const cv::Vec3f* pt_row = points_3d.ptr<cv::Vec3f>(y);
     uint16_t* depth_row = depth_calib.ptr<uint16_t>(y);
     for (int x = 0; x < calib_width_; x++) {
-      float z = pt_row[x][2];  // Z coordinate is depth
-      if (z > 0 && z <= MAX_DEPTH_M && std::isfinite(z)) {
+      // Z can be negative depending on Q matrix sign convention - use absolute value
+      float z = std::abs(pt_row[x][2]);
+      if (z >= MIN_DEPTH_M && z <= MAX_DEPTH_M && std::isfinite(z)) {
         // Convert meters to millimeters
         depth_row[x] = static_cast<uint16_t>(std::clamp(z * 1000.0f, 1.0f, 65535.0f));
       } else {
