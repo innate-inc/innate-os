@@ -6,7 +6,6 @@ and provides a universal Logger class that works with ROS loggers and regular lo
 """
 
 import os
-from launch.actions import SetEnvironmentVariable
 
 
 class UniversalLogger:
@@ -85,6 +84,10 @@ def get_logging_env_vars():
     Returns:
         list: A list of SetEnvironmentVariable actions.
     """
+    # Import here to avoid requiring ROS2 dependencies at module load time
+    # This allows tests to run without ROS2 installed
+    from launch.actions import SetEnvironmentVariable
+
     return [
         # Format: [level] message
         # This removes timestamps and node names for more concise logs
