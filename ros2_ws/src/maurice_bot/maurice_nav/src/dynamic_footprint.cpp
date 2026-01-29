@@ -369,32 +369,38 @@ private:
           continue;
         }
 
-        // Get the collision origin in the link frame
-        double ox = collision->origin.position.x;
-        double oy = collision->origin.position.y;
-        double oz = collision->origin.position.z;
-        
-        // Get half dimensions
+        // Get half dimensions for local box corners
         double hx = box->dim.x / 2.0;
         double hy = box->dim.y / 2.0;
         double hz = box->dim.z / 2.0;
 
-        // Compute the 8 corners of the box in the link frame
-        std::array<geometry_msgs::msg::PointStamped, 8> corners;
-        for (auto & corner : corners) {
-          corner.header.frame_id = link_name;
-          corner.header.stamp = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
-        }
+        // Build collision origin transform (position + rotation)
+        tf2::Transform collision_tf;
+        collision_tf.setOrigin(tf2::Vector3(
+          collision->origin.position.x,
+          collision->origin.position.y,
+          collision->origin.position.z));
+        collision_tf.setRotation(tf2::Quaternion(
+          collision->origin.rotation.x,
+          collision->origin.rotation.y,
+          collision->origin.rotation.z,
+          collision->origin.rotation.w));
 
-        // All 8 corners: (ox±hx, oy±hy, oz±hz)
-        corners[0].point.x = ox - hx; corners[0].point.y = oy - hy; corners[0].point.z = oz - hz;
-        corners[1].point.x = ox + hx; corners[1].point.y = oy - hy; corners[1].point.z = oz - hz;
-        corners[2].point.x = ox - hx; corners[2].point.y = oy + hy; corners[2].point.z = oz - hz;
-        corners[3].point.x = ox + hx; corners[3].point.y = oy + hy; corners[3].point.z = oz - hz;
-        corners[4].point.x = ox - hx; corners[4].point.y = oy - hy; corners[4].point.z = oz + hz;
-        corners[5].point.x = ox + hx; corners[5].point.y = oy - hy; corners[5].point.z = oz + hz;
-        corners[6].point.x = ox - hx; corners[6].point.y = oy + hy; corners[6].point.z = oz + hz;
-        corners[7].point.x = ox + hx; corners[7].point.y = oy + hy; corners[7].point.z = oz + hz;
+        // Compute the 8 corners of the box in the link frame (with rotation applied)
+        std::array<geometry_msgs::msg::PointStamped, 8> corners;
+        const double local_corners[8][3] = {
+          {-hx, -hy, -hz}, {+hx, -hy, -hz}, {-hx, +hy, -hz}, {+hx, +hy, -hz},
+          {-hx, -hy, +hz}, {+hx, -hy, +hz}, {-hx, +hy, +hz}, {+hx, +hy, +hz}
+        };
+        for (size_t c = 0; c < 8; ++c) {
+          tf2::Vector3 local_pt(local_corners[c][0], local_corners[c][1], local_corners[c][2]);
+          tf2::Vector3 link_pt = collision_tf * local_pt;  // Apply collision origin transform
+          corners[c].header.frame_id = link_name;
+          corners[c].header.stamp = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
+          corners[c].point.x = link_pt.x();
+          corners[c].point.y = link_pt.y();
+          corners[c].point.z = link_pt.z();
+        }
 
         try {
           // Transform all corners to base_link
