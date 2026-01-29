@@ -30,6 +30,7 @@
   <!-- Internal package dependencies -->
   <depend>maurice_msgs</depend>
   <depend>maurice_arm</depend>
+  <exec_depend>rws</exec_depend>
 
   <!-- Python dependencies (installed via pip-requirements.txt) -->
 

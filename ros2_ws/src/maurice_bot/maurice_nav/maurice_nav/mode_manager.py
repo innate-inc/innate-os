@@ -32,6 +32,12 @@ from nav_msgs.msg import Odometry
 # TODO: move this into launch file?
 map_server_node = 'navigation_map_server'
 bt_node = 'bt_navigator'
+
+# Nodes that should only be configured (not activated) in specific modes
+configure_only_nodes = {
+    'mapfree': {'navigation/planner_server'},
+}
+
 modes_nodes = {
     'mapping': ['slam_toolbox'],
     'mapfree': [
@@ -524,11 +530,20 @@ class ModeManager(Node):
             # Phase 2: Activate nodes in forward order
             map_load_success = False
             
+            # Get nodes that should only be configured (not activated) for this mode
+            configure_only = configure_only_nodes.get(mode.value, set())
+            
             self.get_logger().info(f"Activating {len(node_names)} nodes for {mode.value} mode")
             for node_name in node_names:
                 if node_name in failures:
                     self.get_logger().warning(f"{node_name} failed configuration. Not proceeding further.")
                     break # don't process the rest of the nodes
+                
+                # Skip activation for configure-only nodes
+                if node_name in configure_only:
+                    self.get_logger().info(f"Skipping activation for {node_name} (configure-only)")
+                    continue
+                
                 success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_ACTIVE)
                 if not success:
                     failures.append(node_name)

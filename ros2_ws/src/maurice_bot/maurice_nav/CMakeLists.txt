@@ -10,6 +10,10 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_msgs REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(urdf REQUIRED)
 
 # Build C++ executable for null_map_node
 add_executable(null_map_node src/null_map_node.cpp)
@@ -21,6 +25,19 @@ ament_target_dependencies(null_map_node
   tf2_ros
 )
 install(TARGETS null_map_node DESTINATION lib/${PROJECT_NAME})
+
+# Build C++ executable for dynamic_footprint node
+add_executable(dynamic_footprint src/dynamic_footprint.cpp)
+ament_target_dependencies(dynamic_footprint
+  rclcpp
+  geometry_msgs
+  tf2_msgs
+  tf2_ros
+  tf2_geometry_msgs
+  visualization_msgs
+  urdf
+)
+install(TARGETS dynamic_footprint DESTINATION lib/${PROJECT_NAME})
 
 # Build Switch BT control node plugin
 add_library(maurice_nav_bt_nodes SHARED

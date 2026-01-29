@@ -90,10 +90,10 @@ public:
     map_msg->header.stamp = this->get_clock()->now();
     map_msg->header.frame_id = "map";
 
-    // Set empty map (0x0 size)
+    // Set minimal map (1x1 size)
     map_msg->info.resolution = 0.05;  // 5 cm per cell
-    map_msg->info.width = 0;
-    map_msg->info.height = 0;
+    map_msg->info.width = 1;
+    map_msg->info.height = 1;
     map_msg->info.origin.position.x = 0.0;
     map_msg->info.origin.position.y = 0.0;
     map_msg->info.origin.position.z = 0.0;
@@ -102,8 +102,8 @@ public:
     map_msg->info.origin.orientation.z = 0.0;
     map_msg->info.origin.orientation.w = 1.0;
 
-    // Empty data vector for 0x0 map
-    map_msg->data.clear();
+    // Single cell data for 1x1 map (0 = free space)
+    map_msg->data = {0};
 
     // Publish the empty map
     map_pub_->publish(std::move(map_msg));

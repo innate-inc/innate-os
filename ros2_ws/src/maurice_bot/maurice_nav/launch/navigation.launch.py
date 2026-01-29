@@ -98,6 +98,8 @@ def generate_launch_description():
             # TF remappings - critical for namespaced nodes
             ('tf', '/tf'),
             ('tf_static', '/tf_static'),
+            # Remap costmap footprint to global /footprint
+            ('/navigation/global_costmap/footprint', '/footprint'),
         ]
     )
 
@@ -108,7 +110,11 @@ def generate_launch_description():
         name='controller_server',
         output='screen',
         parameters=[controller_params_file, costmap_params_file],
-        remappings=[('cmd_vel', 'cmd_vel_raw')],
+        remappings=[
+            ('cmd_vel', 'cmd_vel_raw'),
+            # Remap costmap footprint to global /footprint
+            ('/local_costmap/footprint', '/footprint'),
+        ],
     )
 
     return LaunchDescription([

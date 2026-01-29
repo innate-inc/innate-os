@@ -19,6 +19,7 @@
   <exec_depend>kdl_parser_py</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>maurice_sim</exec_depend>
 
   <depend>rclcpp</depend>
   <depend>moveit_ros_planning_interface</depend>
