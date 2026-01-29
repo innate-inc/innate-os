@@ -83,7 +83,7 @@ def generate_launch_description():
     
     publish_disparity_arg = DeclareLaunchArgument(
         'publish_disparity',
-        default_value='false',
+        default_value='true',
         description='Publish disparity visualization image'
     )
     
@@ -95,7 +95,7 @@ def generate_launch_description():
     
     publish_rectified_arg = DeclareLaunchArgument(
         'publish_rectified',
-        default_value='false',
+        default_value='true',
         description='Publish rectified left image (overlaps with depth output)'
     )
     

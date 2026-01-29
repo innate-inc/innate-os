@@ -11,6 +11,10 @@
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+
 #include <opencv2/opencv.hpp>
 
 // VPI headers
@@ -92,7 +96,12 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rectified_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr filtered_pointcloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
+
+  // TF2 for transforming points to base_link
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
   // Node parameters
   std::string data_directory_;
@@ -101,14 +110,24 @@ private:
   std::string disparity_topic_;
   std::string rectified_topic_;
   std::string pointcloud_topic_;
+  std::string filtered_pointcloud_topic_;
   std::string camera_info_topic_;
   std::string frame_id_;
+  std::string base_frame_id_;  // base_link frame for filtering
   int max_disparity_;
   bool publish_disparity_;
   bool publish_rectified_;
   bool publish_pointcloud_;
+  bool publish_filtered_pointcloud_;
   int process_every_n_frames_;  // Process 1 out of every N frames
   int pointcloud_decimation_;   // Decimate point cloud (1=full, 2=half, 4=quarter)
+
+  // Filtered pointcloud parameters (relative to base_link)
+  // base_link frame: Z=up (height), X=forward, Y=left
+  double filter_max_obstacle_height_;  // Max Z in base_link (height above ground)
+  double filter_min_obstacle_height_;  // Min Z in base_link
+  double filter_max_range_;            // Max horizontal range (XY distance)
+  double filter_min_range_;            // Min horizontal range
 
   // Block Matching parameters (from Python script that worked best)
   int bm_window_size_;          // Block matching window size (default: 11)

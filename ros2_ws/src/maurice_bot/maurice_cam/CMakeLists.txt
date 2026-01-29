@@ -13,6 +13,8 @@ find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(image_transport REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
@@ -119,6 +121,8 @@ if(VPI_FOUND)
     rclcpp 
     rclcpp_components
     sensor_msgs
+    tf2_ros
+    geometry_msgs
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
 endif()
@@ -185,6 +189,8 @@ if(VPI_FOUND)
     rclcpp
     rclcpp_components
     sensor_msgs
+    tf2_ros
+    geometry_msgs
   )
 endif()
 
