@@ -313,7 +313,7 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg)
     "caps=video/x-raw,format=BGR,width=640,height=480,framerate=30/1 ! "
     "queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 ! "
     "videoconvert ! "
-    "vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! "
+    "vp8enc deadline=1 target-bitrate=2000000 cpu-used=4 error-resilient=partitions keyframe-max-dist=30 ! "
     "rtpvp8pay pt=96 ! "
     "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=96 ! "
     "webrtc.sink_0 "
@@ -322,7 +322,7 @@ void WebRTCStreamer::on_start(const std_msgs::msg::String::SharedPtr msg)
     "caps=video/x-raw,format=BGR,width=640,height=480,framerate=15/1 ! "
     "queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 ! "
     "videoconvert ! "
-    "vp8enc deadline=1 error-resilient=partitions keyframe-max-dist=30 ! "
+    "vp8enc deadline=1 target-bitrate=2000000 cpu-used=4 error-resilient=partitions keyframe-max-dist=30 ! "
     "rtpvp8pay pt=97 ! "
     "application/x-rtp,media=video,encoding-name=VP8,clock-rate=90000,payload=97 ! "
     "webrtc.sink_1";
