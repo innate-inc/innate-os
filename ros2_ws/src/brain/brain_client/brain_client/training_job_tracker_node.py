@@ -58,7 +58,7 @@ class TrainingJobTrackerNode(Node):
         # Get download directory from parameter or use default
         self.download_dir = Path(self.declare_parameter(
             'download_dir',
-            '/home/jetson1/innate-os/primitives'
+            '/home/jetson1/innate-os/skills'
         ).value)
         self.download_dir.mkdir(parents=True, exist_ok=True)
         

@@ -25,7 +25,7 @@ def generate_launch_description():
     # Declare launch arguments
     download_dir_arg = DeclareLaunchArgument(
         "download_dir",
-        default_value="/home/jetson1/innate-os/primitives",
+        default_value="/home/jetson1/innate-os/skills",
         description="Directory to download trained models to",
     )
     poll_interval_running_arg = DeclareLaunchArgument(
