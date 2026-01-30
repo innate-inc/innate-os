@@ -98,10 +98,14 @@ RUN . /opt/ros/humble/setup.sh && \
     fi
 
 # Generate static DDS configuration for host networking (127.0.0.1)
-RUN sed -e "s/DDS_SERVER_IP/127.0.0.1/g" \
-        -e "s/DDS_SERVER_PORT/11811/g" \
-        /root/innate-os/dds/super_client_template.xml \
-        > /root/innate-os/dds/super_client_configuration.xml
+RUN if [ -f /root/innate-os/dds/super_client_template.xml ]; then \
+        sed -e "s/DDS_SERVER_IP/127.0.0.1/g" \
+            -e "s/DDS_SERVER_PORT/11811/g" \
+            /root/innate-os/dds/super_client_template.xml \
+            > /root/innate-os/dds/super_client_configuration.xml; \
+    else \
+        echo "DDS template not found, skipping configuration"; \
+    fi
 
 # Create entrypoint script that sources ROS environment
 RUN echo '#!/bin/bash\n\
