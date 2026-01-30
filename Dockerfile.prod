@@ -50,6 +50,7 @@ RUN apt-get update && \
 COPY ros2_ws/pip-requirements.txt /tmp/pip-requirements.txt
 RUN if [ "$CI_BUILD" = "true" ]; then \
         echo "CI build: skipping Jetson PyPI index and CUDA packages..." && \
+        apt-get update && apt-get install -y libcairo2-dev && rm -rf /var/lib/apt/lists/* && \
         pip3 install --no-cache-dir meson ninja && \
         grep -v 'pypi.jetson-ai-lab.io' /tmp/pip-requirements.txt | \
         grep -v -E '^cupy' | \
