@@ -53,6 +53,7 @@ RUN if [ "$CI_BUILD" = "true" ]; then \
         apt-get update && apt-get install -y meson && rm -rf /var/lib/apt/lists/* && \
         grep -v 'pypi.jetson-ai-lab.io' /tmp/pip-requirements.txt | \
         grep -v -E '^cupy' | \
+        grep -v -E '^pynput' | \
         pip3 install --no-cache-dir -r /dev/stdin; \
     else \
         pip3 install --no-cache-dir -r /tmp/pip-requirements.txt; \
