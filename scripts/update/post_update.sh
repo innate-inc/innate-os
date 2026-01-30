@@ -22,6 +22,14 @@
 
 set -e  # Exit on error
 
+# Print a warning banner on non-zero exit
+SCRIPT_PATH=""
+if command -v realpath >/dev/null 2>&1; then
+    SCRIPT_PATH="$(realpath "$0")"
+else
+    SCRIPT_PATH="$0"
+fi
+
 # Parse arguments
 FIRST_INSTALL=false
 for arg in "$@"; do
@@ -54,6 +62,36 @@ mkdir -p "$(dirname "$LOG_FILE")"
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
+
+log_success() {
+    local ts
+    ts="$(date +'%Y-%m-%d %H:%M:%S')"
+    echo -e "[$ts] \033[1;32m$*\033[0m"
+    echo "[$ts] $*" >> "$LOG_FILE"
+}
+
+log_error() {
+    local ts
+    ts="$(date +'%Y-%m-%d %H:%M:%S')"
+    echo -e "[$ts] \033[1;31m$*\033[0m"
+    echo "[$ts] $*" >> "$LOG_FILE"
+}
+
+on_exit() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        log_error "============================================================"
+        log_error "============================================================"
+        log_error "UPDATE FAILED / PARTIALLY COMPLETED"
+        log_error "Please re-run: sudo $SCRIPT_PATH"
+        log_error "Or contact support for help."
+        log_error "============================================================"
+        log_error "============================================================"
+        echo ""
+    fi
+}
+trap on_exit EXIT
 
 # Ensure log file has correct ownership
 ensure_log_ownership() {
@@ -293,7 +331,7 @@ else
             exit 1
         }
         log "    Installing ROS 2 Humble base..."
-        apt-get install -y ros-humble-ros-base || {
+        apt-get -o DPkg::Lock::Timeout=45 install -y ros-humble-ros-base || {
             log "    ERROR: Failed to install ROS 2 Humble base"
             exit 1
         }
@@ -337,7 +375,7 @@ else
         fi
         log "  Installing apt dependencies..."
         apt-get update
-        grep -v '^#' "$APT_DEPS_FILE" | grep -v '^$' | xargs apt-get install -y
+        grep -v '^#' "$APT_DEPS_FILE" | grep -v '^$' | xargs apt-get -o DPkg::Lock::Timeout=45 install -y
         log "  Apt dependencies installed"
     fi
 
@@ -598,9 +636,9 @@ done
 # If not using systemd, you can manually launch:
 # sudo -u "$ACTUAL_USER" INNATE_OS_ROOT="$REPO_DIR" bash "$REPO_DIR/scripts/launch_ros_in_tmux.sh" &
 
-log "========================================"
-log "Post-update script completed successfully"
-log "========================================"
+log_success "========================================"
+log_success "Post-update script completed successfully"
+log_success "========================================"
 
 if [ "$HARDWARE_REBOOT_REQUIRED" != true ]; then
     log ""
