@@ -1,0 +1,61 @@
+/**:
+  ros__parameters:
+    # ============================================================================
+    # STEREO DEPTH ESTIMATOR PARAMETERS
+    # ============================================================================
+    
+    # Data and input/output topics
+    data_directory: "/home/jetson1/innate-os/data"
+    stereo_topic: "/mars/main_camera/stereo"
+    depth_topic: "/mars/main_camera/depth/image_rect_raw"
+    camera_info_topic: "/mars/main_camera/depth/camera_info"
+    disparity_topic: "/mars/main_camera/disparity"
+    rectified_topic: "/mars/main_camera/image_rect"
+    frame_id: "camera_optical_frame"
+    
+    # Output control
+    publish_disparity: false     # Disparity visualization (mono8)
+    publish_rectified: false     # Rectified left image (mono8)
+    
+    # Image dimensions
+    stereo_width: 1280   # Full stereo frame (left+right combined)
+    stereo_height: 480
+    
+    # Processing control
+    process_every_n_frames: 1  # 1=all frames, 5=6Hz from 30Hz
+    
+    # Stereo matching parameters
+    max_disparity: 80  # Higher = closer objects, more compute
+    
+    # Block Matching algorithm parameters
+    bm_window_size: 11        # Odd number, typically 5-15
+    bm_quality: 8             # 0-8, higher = better quality but slower
+    bm_conf_threshold: 16000  # 0-65535, lower = more details/noise
+
+# Separate namespace for point cloud generator (depth_image_proc)
+pointcloud_generator:
+  ros__parameters:
+    # Synchronization parameters
+    queue_size: 5         # Message synchronization queue size
+    exact_sync: false     # Use exact time synchronization (false=approximate)
+
+# Separate namespace for CropBox filter (pcl_ros)
+pointcloud_cropbox_filter:
+  ros__parameters:
+    # CropBox bounds in base_link frame (meters)
+    # Filter keeps points INSIDE the box (negative=false)
+    min_x: -2.5
+    max_x: 2.5
+    min_y: -2.5
+    max_y: 2.5
+    min_z: 0.01    # Minimum height above ground
+    max_z: 0.35    # Maximum height (table height)
+    
+    # Filter behavior
+    negative: false         # false=keep inside, true=keep outside
+    keep_organized: false   # false=remove points, true=set to NaN
+    
+    # Transform frames (applied before/after filtering)
+    input_frame: "base_link"   # Transform input to this frame
+    output_frame: "base_link"  # Transform output to this frame
+
