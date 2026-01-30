@@ -89,7 +89,13 @@ RUN cd /root/innate-os/ros2_ws/src && \
 WORKDIR /root/innate-os/ros2_ws
 RUN . /opt/ros/humble/setup.sh && \
     rosdep install --from-paths src --ignore-src -r -y || true && \
-    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+    if [ "$CI_BUILD" = "true" ]; then \
+        echo "CI build: skipping Jetson-dependent packages..." && \
+        colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release \
+            --packages-skip maurice_cam maurice_nav maurice_control; \
+    else \
+        colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release; \
+    fi
 
 # Generate static DDS configuration for host networking (127.0.0.1)
 RUN sed -e "s/DDS_SERVER_IP/127.0.0.1/g" \
