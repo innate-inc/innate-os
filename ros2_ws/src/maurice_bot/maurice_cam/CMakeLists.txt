@@ -121,8 +121,6 @@ if(VPI_FOUND)
     rclcpp 
     rclcpp_components
     sensor_msgs
-    tf2_ros
-    geometry_msgs
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
 endif()
@@ -189,11 +187,8 @@ if(VPI_FOUND)
     rclcpp
     rclcpp_components
     sensor_msgs
-    tf2_ros
-    geometry_msgs
   )
 endif()
-
 
 # =============================================================================
 # INSTALLATION

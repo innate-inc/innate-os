@@ -184,8 +184,8 @@ def generate_launch_description():
     
     depth_output_topic_arg = DeclareLaunchArgument(
         'depth_output_topic',
-        default_value='/mars/main_camera/depth',
-        description='Output depth image topic'
+        default_value='/mars/main_camera/depth/image_rect_raw',
+        description='Output depth image topic (ROS convention: depth/image_rect_raw)'
     )
     
     depth_disparity_topic_arg = DeclareLaunchArgument(
@@ -222,6 +222,112 @@ def generate_launch_description():
         'depth_stereo_topic',
         default_value='/mars/main_camera/stereo',
         description='Input stereo image topic for depth estimation'
+    )
+
+    # Point cloud generator parameters (using depth_image_proc::PointCloudXyzrgbNode)
+    launch_pointcloud_generator_arg = DeclareLaunchArgument(
+        'launch_pointcloud_generator',
+        default_value='true',
+        description='Launch the point cloud generator'
+    )
+    
+    pointcloud_depth_topic_arg = DeclareLaunchArgument(
+        'pointcloud_depth_topic',
+        default_value='/mars/main_camera/depth/image_rect_raw',
+        description='Input depth image topic for point cloud generation'
+    )
+    
+    pointcloud_rgb_topic_arg = DeclareLaunchArgument(
+        'pointcloud_rgb_topic',
+        default_value='/mars/main_camera/image',
+        description='Input RGB image topic for point cloud colorization'
+    )
+    
+    pointcloud_camera_info_topic_arg = DeclareLaunchArgument(
+        'pointcloud_camera_info_topic',
+        default_value='/mars/main_camera/depth/camera_info',
+        description='Camera info topic for point cloud generation'
+    )
+    
+    pointcloud_output_topic_arg = DeclareLaunchArgument(
+        'pointcloud_output_topic',
+        default_value='/mars/main_camera/depth/points',
+        description='Output point cloud topic'
+    )
+
+    # Point cloud CropBox filter parameters (using pcl_ros::CropBox)
+    launch_pointcloud_filter_arg = DeclareLaunchArgument(
+        'launch_pointcloud_filter',
+        default_value='true',
+        description='Launch the point cloud CropBox filter'
+    )
+    
+    pointcloud_filter_input_topic_arg = DeclareLaunchArgument(
+        'pointcloud_filter_input_topic',
+        default_value='/mars/main_camera/depth/points',
+        description='Input point cloud topic for filtering'
+    )
+    
+    pointcloud_filter_output_topic_arg = DeclareLaunchArgument(
+        'pointcloud_filter_output_topic',
+        default_value='/mars/main_camera/depth/points_filtered',
+        description='Output filtered point cloud topic'
+    )
+    
+    pointcloud_filter_input_frame_arg = DeclareLaunchArgument(
+        'pointcloud_filter_input_frame',
+        default_value='base_link',
+        description='Transform input to this frame before filtering'
+    )
+    
+    pointcloud_filter_output_frame_arg = DeclareLaunchArgument(
+        'pointcloud_filter_output_frame',
+        default_value='base_link',
+        description='Transform output to this frame after filtering'
+    )
+    
+    # CropBox bounds: filter points inside box defined by min/max x, y, z
+    # These are in the input_frame coordinate system (base_link)
+    pointcloud_filter_min_x_arg = DeclareLaunchArgument(
+        'pointcloud_filter_min_x',
+        default_value='-2.5',
+        description='Minimum X coordinate for CropBox (meters)'
+    )
+    
+    pointcloud_filter_max_x_arg = DeclareLaunchArgument(
+        'pointcloud_filter_max_x',
+        default_value='2.5',
+        description='Maximum X coordinate for CropBox (meters)'
+    )
+    
+    pointcloud_filter_min_y_arg = DeclareLaunchArgument(
+        'pointcloud_filter_min_y',
+        default_value='-2.5',
+        description='Minimum Y coordinate for CropBox (meters)'
+    )
+    
+    pointcloud_filter_max_y_arg = DeclareLaunchArgument(
+        'pointcloud_filter_max_y',
+        default_value='2.5',
+        description='Maximum Y coordinate for CropBox (meters)'
+    )
+    
+    pointcloud_filter_min_z_arg = DeclareLaunchArgument(
+        'pointcloud_filter_min_z',
+        default_value='0.01',
+        description='Minimum Z (height) coordinate for CropBox (meters)'
+    )
+    
+    pointcloud_filter_max_z_arg = DeclareLaunchArgument(
+        'pointcloud_filter_max_z',
+        default_value='0.35',
+        description='Maximum Z (height) coordinate for CropBox (meters)'
+    )
+    
+    pointcloud_filter_negative_arg = DeclareLaunchArgument(
+        'pointcloud_filter_negative',
+        default_value='false',
+        description='If true, return points outside the box instead of inside'
     )
 
     # Arm camera parameters
@@ -354,6 +460,48 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
+    # Point cloud generator node (using depth_image_proc for XYZRGB point cloud)
+    pointcloud_generator_node = ComposableNode(
+        package='depth_image_proc',
+        plugin='depth_image_proc::PointCloudXyzrgbNode',
+        name='pointcloud_generator',
+        remappings=[
+            ('depth_registered/image_rect', LaunchConfiguration('pointcloud_depth_topic')),
+            ('rgb/image_rect_color', LaunchConfiguration('pointcloud_rgb_topic')),
+            ('rgb/camera_info', LaunchConfiguration('pointcloud_camera_info_topic')),
+            ('points', LaunchConfiguration('pointcloud_output_topic')),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # Point cloud CropBox filter node (using pcl_ros::CropBox)
+    pointcloud_filter_node = ComposableNode(
+        package='pcl_ros',
+        plugin='pcl_ros::CropBox',
+        name='pointcloud_cropbox_filter',
+        remappings=[
+            ('input', LaunchConfiguration('pointcloud_filter_input_topic')),
+            ('output', LaunchConfiguration('pointcloud_filter_output_topic')),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'min_x': LaunchConfiguration('pointcloud_filter_min_x'),
+            'max_x': LaunchConfiguration('pointcloud_filter_max_x'),
+            'min_y': LaunchConfiguration('pointcloud_filter_min_y'),
+            'max_y': LaunchConfiguration('pointcloud_filter_max_y'),
+            'min_z': LaunchConfiguration('pointcloud_filter_min_z'),
+            'max_z': LaunchConfiguration('pointcloud_filter_max_z'),
+            'negative': LaunchConfiguration('pointcloud_filter_negative'),
+            'input_frame': LaunchConfiguration('pointcloud_filter_input_frame'),
+            'output_frame': LaunchConfiguration('pointcloud_filter_output_frame'),
+            'keep_organized': False,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
     # Create the composable node container
     # All nodes run in the same process, enabling zero-copy intra-process communication
     container = ComposableNodeContainer(
@@ -366,6 +514,8 @@ def generate_launch_description():
             arm_camera_node,
             webrtc_node,
             depth_estimator_node,
+            pointcloud_generator_node,
+            pointcloud_filter_node,
         ],
         output='screen',
         emulate_tty=True,
@@ -408,6 +558,25 @@ def generate_launch_description():
         depth_publish_disparity_arg,
         depth_stereo_width_arg,
         depth_stereo_height_arg,
+        # Point cloud generator arguments
+        launch_pointcloud_generator_arg,
+        pointcloud_depth_topic_arg,
+        pointcloud_rgb_topic_arg,
+        pointcloud_camera_info_topic_arg,
+        pointcloud_output_topic_arg,
+        # Point cloud filter arguments
+        launch_pointcloud_filter_arg,
+        pointcloud_filter_input_topic_arg,
+        pointcloud_filter_output_topic_arg,
+        pointcloud_filter_input_frame_arg,
+        pointcloud_filter_output_frame_arg,
+        pointcloud_filter_min_x_arg,
+        pointcloud_filter_max_x_arg,
+        pointcloud_filter_min_y_arg,
+        pointcloud_filter_max_y_arg,
+        pointcloud_filter_min_z_arg,
+        pointcloud_filter_max_z_arg,
+        pointcloud_filter_negative_arg,
         # Arm camera arguments
         arm_camera_symlink_arg,
         arm_camera_width_arg,

@@ -59,8 +59,8 @@ def generate_launch_description():
     
     depth_topic_arg = DeclareLaunchArgument(
         'depth_topic',
-        default_value='/mars/main_camera/depth',
-        description='Output depth image topic (16UC1 in millimeters)'
+        default_value='/mars/main_camera/depth/image_rect_raw',
+        description='Output depth image topic (16UC1 in millimeters, ROS convention)'
     )
     
     disparity_topic_arg = DeclareLaunchArgument(
