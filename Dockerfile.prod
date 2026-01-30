@@ -97,17 +97,7 @@ RUN . /opt/ros/humble/setup.sh && \
         colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release; \
     fi
 
-# Generate static DDS configuration for host networking (127.0.0.1)
-RUN if [ -f /root/innate-os/dds/super_client_template.xml ]; then \
-        sed -e "s/DDS_SERVER_IP/127.0.0.1/g" \
-            -e "s/DDS_SERVER_PORT/11811/g" \
-            /root/innate-os/dds/super_client_template.xml \
-            > /root/innate-os/dds/super_client_configuration.xml; \
-    else \
-        echo "DDS template not found, skipping configuration"; \
-    fi
-
-# Create entrypoint script that sources ROS environment
+# Create entrypoint script that sources ROS environment and sets up Zenoh
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
@@ -119,11 +109,12 @@ if [ -f /root/innate-os/ros2_ws/install/setup.bash ]; then\n\
     source /root/innate-os/ros2_ws/install/setup.bash\n\
 fi\n\
 \n\
-# Set DDS environment variables\n\
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n\
+# Set Zenoh RMW environment variables\n\
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp\n\
 export ROS_DOMAIN_ID=0\n\
-export ROS_DISCOVERY_SERVER=127.0.0.1:11811\n\
-export FASTRTPS_DEFAULT_PROFILES_FILE=/root/innate-os/dds/super_client_configuration.xml\n\
+export ZENOH_ROUTER_CHECK_ATTEMPTS=0\n\
+export ZENOH_SESSION_CONFIG_OVERRIDE="transport/shared_memory/enabled=true;transport/shared_memory/transport_optimization/pool_size=12582912;transport/link/tx/queue/congestion_control/drop/wait_before_drop=200000;transport/link/tx/queue/congestion_control/drop/max_wait_before_drop_fragments=300000"\n\
+export ZENOH_CONFIG_OVERRIDE="$ZENOH_SESSION_CONFIG_OVERRIDE"\n\
 export INNATE_OS_ROOT=/root/innate-os\n\
 \n\
 exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
