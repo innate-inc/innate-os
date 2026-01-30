@@ -13,6 +13,7 @@ ROS_COMMAND_GROUPS=(
     "ros2 launch manipulation behavior.launch.py|ros2 launch brain_client input_manager.launch.py"
     "ros2 launch maurice_cam camera_composable.launch.py|ros2 launch maurice_control udp_leader_receiver.launch.py"
     "ros2 launch maurice_arm ik.launch.py|ros2 launch maurice_log logger.launch.py"
+    "ros2 launch brain_client training_job_tracker.launch.py"
 )
 
 WINDOW_NAMES=(
@@ -22,6 +23,7 @@ WINDOW_NAMES=(
     "behaviors-inputs"
     "cam-leader"
     "ik-logger"
+    "training-"
 )
 
 DDS_SOURCE_CMD="source $DDS_SETUP_SCRIPT"
