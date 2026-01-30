@@ -48,7 +48,15 @@ RUN apt-get update && \
 
 # Copy and install Python dependencies
 COPY ros2_ws/pip-requirements.txt /tmp/pip-requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/pip-requirements.txt
+RUN if [ "$CI_BUILD" = "true" ]; then \
+        echo "CI build: skipping Jetson PyPI index and CUDA packages..." && \
+        apt-get update && apt-get install -y meson && rm -rf /var/lib/apt/lists/* && \
+        grep -v 'pypi.jetson-ai-lab.io' /tmp/pip-requirements.txt | \
+        grep -v -E '^cupy' | \
+        pip3 install --no-cache-dir -r /dev/stdin; \
+    else \
+        pip3 install --no-cache-dir -r /tmp/pip-requirements.txt; \
+    fi
 
 # Initialize rosdep
 RUN rosdep init || true && rosdep update
