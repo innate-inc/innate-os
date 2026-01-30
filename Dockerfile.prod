@@ -31,9 +31,19 @@ RUN add-apt-repository universe
 # Copy apt dependencies file first (for better layer caching)
 COPY ros2_ws/apt-dependencies.txt /tmp/apt-dependencies.txt
 
+# CI_BUILD=true skips Jetson-specific packages (nvidia-*, cuda-*, libcudnn*, ros-humble-innate-rws)
+ARG CI_BUILD=false
+
 # Install apt dependencies from file
 RUN apt-get update && \
-    grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | xargs apt-get install -y && \
+    if [ "$CI_BUILD" = "true" ]; then \
+        echo "CI build: skipping Jetson-specific packages..." && \
+        grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | \
+        grep -v -E '^(nvidia-|cuda-|libcudnn|ros-humble-innate-rws|ros-humble-slam-toolbox-humble-lifecycle)' | \
+        xargs apt-get install -y || true; \
+    else \
+        grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | xargs apt-get install -y; \
+    fi && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies
