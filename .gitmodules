@@ -1,0 +1,4 @@
+[submodule "ros2_ws/src/perception_pcl"]
+	path = ros2_ws/src/perception_pcl
+	url = https://github.com/moooeeeep/perception_pcl.git
+	branch = humble
