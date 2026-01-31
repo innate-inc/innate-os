@@ -1,0 +1,35 @@
+name: Test Build
+
+on:
+  push:
+    branches: [main, ci/*]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-build:
+    runs-on: selfhosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build test image
+        run: |
+          docker build -t innate-os-test -f Dockerfile.test .
+
+      - name: Run basic tests
+        run: |
+          docker run --rm innate-os-test bash -c "
+            source /opt/ros/humble/setup.bash
+            source /root/innate-os/ros2_ws/install/setup.bash
+            echo 'Listing available packages...'
+            ros2 pkg list | head -20
+            echo 'Build verification complete!'
+          "
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rmi innate-os-test || true
