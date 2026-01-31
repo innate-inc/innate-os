@@ -31,35 +31,14 @@ RUN add-apt-repository universe
 # Copy apt dependencies file first (for better layer caching)
 COPY ros2_ws/apt-dependencies.txt /tmp/apt-dependencies.txt
 
-# CI_BUILD=true skips Jetson-specific packages (nvidia-*, cuda-*, libcudnn*, ros-humble-innate-rws)
-ARG CI_BUILD=false
-
 # Install apt dependencies from file
 RUN apt-get update && \
-    if [ "$CI_BUILD" = "true" ]; then \
-        echo "CI build: skipping Jetson-specific packages..." && \
-        grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | \
-        grep -v -E '^(nvidia-|cuda-|libcudnn|ros-humble-innate-rws|ros-humble-slam-toolbox-humble-lifecycle)' | \
-        xargs apt-get install -y || true; \
-    else \
-        grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | xargs apt-get install -y; \
-    fi && \
+    grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | xargs apt-get install -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy and install Python dependencies
 COPY ros2_ws/pip-requirements.txt /tmp/pip-requirements.txt
-RUN if [ "$CI_BUILD" = "true" ]; then \
-        echo "CI build: skipping Jetson PyPI index and CUDA packages..." && \
-        apt-get update && apt-get install -y libcairo2-dev && rm -rf /var/lib/apt/lists/* && \
-        pip3 install --no-cache-dir meson ninja && \
-        grep -v 'pypi.jetson-ai-lab.io' /tmp/pip-requirements.txt | \
-        grep -v -E '^cupy' | \
-        grep -v -E '^pynput' | \
-        grep -v -E '^bluezero' | \
-        pip3 install --no-cache-dir -r /dev/stdin; \
-    else \
-        pip3 install --no-cache-dir -r /tmp/pip-requirements.txt; \
-    fi
+RUN pip3 install --no-cache-dir -r /tmp/pip-requirements.txt
 
 # Initialize rosdep
 RUN rosdep init || true && rosdep update
@@ -89,15 +68,15 @@ RUN cd /root/innate-os/ros2_ws/src && \
 WORKDIR /root/innate-os/ros2_ws
 RUN . /opt/ros/humble/setup.sh && \
     rosdep install --from-paths src --ignore-src -r -y || true && \
-    if [ "$CI_BUILD" = "true" ]; then \
-        echo "CI build: skipping Jetson-dependent packages..." && \
-        colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release \
-            --packages-skip maurice_cam maurice_nav maurice_control; \
-    else \
-        colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release; \
-    fi
+    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-# Create entrypoint script that sources ROS environment and sets up Zenoh
+# Generate static DDS configuration for host networking (127.0.0.1)
+RUN sed -e "s/DDS_SERVER_IP/127.0.0.1/g" \
+        -e "s/DDS_SERVER_PORT/11811/g" \
+        /root/innate-os/dds/super_client_template.xml \
+        > /root/innate-os/dds/super_client_configuration.xml
+
+# Create entrypoint script that sources ROS environment
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
@@ -109,12 +88,11 @@ if [ -f /root/innate-os/ros2_ws/install/setup.bash ]; then\n\
     source /root/innate-os/ros2_ws/install/setup.bash\n\
 fi\n\
 \n\
-# Set Zenoh RMW environment variables\n\
-export RMW_IMPLEMENTATION=rmw_zenoh_cpp\n\
+# Set DDS environment variables\n\
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp\n\
 export ROS_DOMAIN_ID=0\n\
-export ZENOH_ROUTER_CHECK_ATTEMPTS=0\n\
-export ZENOH_SESSION_CONFIG_OVERRIDE="transport/shared_memory/enabled=true;transport/shared_memory/transport_optimization/pool_size=12582912;transport/link/tx/queue/congestion_control/drop/wait_before_drop=200000;transport/link/tx/queue/congestion_control/drop/max_wait_before_drop_fragments=300000"\n\
-export ZENOH_CONFIG_OVERRIDE="$ZENOH_SESSION_CONFIG_OVERRIDE"\n\
+export ROS_DISCOVERY_SERVER=127.0.0.1:11811\n\
+export FASTRTPS_DEFAULT_PROFILES_FILE=/root/innate-os/dds/super_client_configuration.xml\n\
 export INNATE_OS_ROOT=/root/innate-os\n\
 \n\
 exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
