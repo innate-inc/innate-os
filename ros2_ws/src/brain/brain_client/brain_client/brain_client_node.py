@@ -709,7 +709,7 @@ class BrainClientNode(Node):
         
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
         self.ws_bridge.send_message(outgoing_msg)
-        self.get_logger().info(f"Sent MessageIn: {outgoing_msg}")
+        self.get_logger().info(f"Sent MessageIn: {outgoing_msg.payload['text']}")
 
     def tts_callback(self, msg: String):
         """Handle direct TTS requests from /brain/tts topic."""
