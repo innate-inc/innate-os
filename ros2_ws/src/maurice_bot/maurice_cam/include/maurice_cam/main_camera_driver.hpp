@@ -234,7 +234,8 @@ private:
   void applyAutoExposure(const cv::Mat& frame);
 
   // ROS 2 publishers
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_pub_;   // Left camera raw
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_pub_;  // Right camera raw
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr stereo_pub_;
 

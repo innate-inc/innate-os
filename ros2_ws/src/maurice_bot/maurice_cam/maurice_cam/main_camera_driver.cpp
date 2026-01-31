@@ -133,14 +133,19 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "JPEG Quality: %d", jpeg_quality_);
 
   // Initialize publishers
-  image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    "/mars/main_camera/image",
+  left_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+    "/mars/main_camera/left/image_raw",
+    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+  );
+
+  right_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+    "/mars/main_camera/right/image_raw",
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
   if (publish_compressed_) {
     compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-      "/mars/main_camera/image/compressed",
+      "/mars/main_camera/left/image_raw/compressed",
       rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
     );
   }
@@ -151,11 +156,12 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   );
 
   RCLCPP_INFO(this->get_logger(), "Publishers created:");
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (left camera, %dx%d)", publish_left_width_, publish_left_height_);
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/left/image_raw (%dx%d)", left_width_, left_height_);
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/right/image_raw (%dx%d)", left_width_, left_height_);
   if (publish_compressed_) {
-    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, %dx%d)", publish_left_width_, publish_left_height_);
+    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/left/image_raw/compressed (%dx%d)", left_width_, left_height_);
   }
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (stereo, %dx%d)", publish_stereo_width_, publish_stereo_height_);
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (%dx%d)", publish_stereo_width_, publish_stereo_height_);
 
   // Initialize TurboJPEG encoder
   jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
@@ -524,47 +530,46 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   }
   
   // -------------------------
-  // (A2) Left ROI view from frame (already at publish resolution)
+  // (A2) Left and Right ROI views from frame (already at publish resolution)
   // After 180° rotation in GStreamer, original right half appears on the left half.
   // -------------------------
   cv::Rect left_roi(0, 0, left_width_, left_height_);
-  cv::Mat left_view = stereo_out(left_roi);  // Use stereo_out which is guaranteed BGR
+  cv::Rect right_roi(left_width_, 0, left_width_, left_height_);
+  cv::Mat left_view = stereo_out(left_roi);   // Left half of stereo
+  cv::Mat right_view = stereo_out(right_roi); // Right half of stereo
+
+  // -------------------------
+  // (A2.5) Publish left/right raw images at native split resolution
+  // -------------------------
+  auto left_raw_msg = std::make_unique<sensor_msgs::msg::Image>();
+  left_raw_msg->header.stamp = current_time;
+  left_raw_msg->header.frame_id = frame_id_;
+  left_raw_msg->height = left_height_;
+  left_raw_msg->width = left_width_;
+  left_raw_msg->encoding = "bgr8";
+  left_raw_msg->is_bigendian = false;
+  left_raw_msg->step = left_width_ * 3;
+  left_raw_msg->data.resize(left_raw_msg->height * left_raw_msg->step);
+  memcpy(left_raw_msg->data.data(), left_view.data, left_raw_msg->data.size());
+
+  auto right_raw_msg = std::make_unique<sensor_msgs::msg::Image>();
+  right_raw_msg->header.stamp = current_time;
+  right_raw_msg->header.frame_id = frame_id_;
+  right_raw_msg->height = left_height_;
+  right_raw_msg->width = left_width_;
+  right_raw_msg->encoding = "bgr8";
+  right_raw_msg->is_bigendian = false;
+  right_raw_msg->step = left_width_ * 3;
+  right_raw_msg->data.resize(right_raw_msg->height * right_raw_msg->step);
+  memcpy(right_raw_msg->data.data(), right_view.data, right_raw_msg->data.size());
+
+  left_pub_->publish(std::move(left_raw_msg));
+  right_pub_->publish(std::move(right_raw_msg));
   
   // -------------------------
-  // (A3) Left msg: Use publish_left_width x publish_left_height, scale only if needed
-  // -------------------------
-  auto left_msg = std::make_unique<sensor_msgs::msg::Image>();
-  left_msg->header.stamp = current_time;
-  left_msg->header.frame_id = frame_id_;
-  left_msg->height = publish_left_height_;
-  left_msg->width = publish_left_width_;
-  left_msg->encoding = "bgr8";
-  left_msg->is_bigendian = false;
-  left_msg->step = publish_left_width_ * 3;
-  left_msg->data.resize(left_msg->height * left_msg->step);
-  
-  // Wrap left ROS message buffer as cv::Mat view
-  cv::Mat left_out(
-    publish_left_height_, publish_left_width_, CV_8UC3,
-    left_msg->data.data(),
-    left_msg->step
-  );
-  
-  // Only resize if the natural split size doesn't match the requested publish size
-  if (left_width_ == publish_left_width_ && left_height_ == publish_left_height_) {
-    // No scaling needed, copy directly
-    left_view.copyTo(left_out);
-  } else {
-    // Scale to requested size
-    cv::resize(left_view, left_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
-  }
-  
-  // -------------------------
-  // Publish with std::move() for zero-copy intra-process communication
-  // Inter-process subscribers (via DDS) still receive serialized copies automatically
+  // Publish stereo with std::move() for zero-copy intra-process communication
   // -------------------------
   stereo_pub_->publish(std::move(stereo_msg));
-  image_pub_->publish(std::move(left_msg));
   
   // Conditionally create and publish compressed image at specified interval
   if (publish_compressed_) {
@@ -577,16 +582,15 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
       left_compressed_msg->header.frame_id = frame_id_;
       left_compressed_msg->format = "jpeg";
       
-      // Encode from the left buffer using TurboJPEG for faster compression
-      // Ensure left_out is BGR format (CV_8UC3)
+      // Encode from the left view using TurboJPEG
       try {
-        if (left_out.type() == CV_8UC3 && left_out.channels() == 3) {
-          jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg->data);
+        if (left_view.type() == CV_8UC3 && left_view.channels() == 3) {
+          jpeg_encoder_->encodeBGR(left_view, jpeg_quality_, left_compressed_msg->data);
           compressed_pub_->publish(std::move(left_compressed_msg));
         } else {
           RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                                "Left image format invalid for JPEG encoding: type=%d, channels=%d",
-                               left_out.type(), left_out.channels());
+                               left_view.type(), left_view.channels());
         }
       } catch (const std::exception& e) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
