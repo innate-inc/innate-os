@@ -75,6 +75,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            CI_BUILD=true
             VERSION=${{ steps.version.outputs.version }}
             BUILD_DATE=${{ steps.version.outputs.date }}
             GIT_COMMIT=${{ steps.version.outputs.commit }}
