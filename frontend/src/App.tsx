@@ -3,10 +3,6 @@ import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
 import { Chat } from "./components/Chat";
-import { AuthGuard } from "./components/auth/AuthGuard";
-import { UserProfile } from "./components/auth/UserProfile";
-import { LogoutButton } from "./components/auth/LogoutButton";
-import { useAuth0 } from "@auth0/auth0-react";
 
 const Title = styled.h1`
   font-size: 22px;
@@ -48,42 +44,19 @@ const VersionBadge = styled.div`
   color: ${({ theme }) => theme.colors.muted};
 `;
 
-const UserContainer = styled.div`
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  z-index: 100;
-`;
-
-// The main application component
-function SimulatorApp() {
+export default function App() {
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("sideBySide");
-
-  const { isAuthenticated, getAccessTokenSilently } = useAuth0();
 
   async function handleResetRobot(memory_state?: string) {
     try {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
-      // Get the access token if authenticated
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-
-      if (isAuthenticated) {
-        try {
-          const token = await getAccessTokenSilently();
-          headers.Authorization = `Bearer ${token}`;
-        } catch (error) {
-          console.error("Error getting access token:", error);
-        }
-      }
 
       // Check if memory_state is a string - if it's an event object or other non-string, don't use it
       const isValidMemoryState = typeof memory_state === "string";
@@ -118,19 +91,9 @@ function SimulatorApp() {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
-      // Get the access token if authenticated
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-
-      if (isAuthenticated) {
-        try {
-          const token = await getAccessTokenSilently();
-          headers.Authorization = `Bearer ${token}`;
-        } catch (error) {
-          console.error("Error getting access token:", error);
-        }
-      }
 
       const response = await fetch(`${baseUrl}/set_directive`, {
         method: "POST",
@@ -147,13 +110,6 @@ function SimulatorApp() {
 
   return (
     <Container className="App">
-      {isAuthenticated && (
-        <UserContainer>
-          <UserProfile />
-          <LogoutButton />
-        </UserContainer>
-      )}
-
       <TopSection>
         <Title>Innate Simulator</Title>
         <ImageDisplay
@@ -170,14 +126,5 @@ function SimulatorApp() {
 
       <VersionBadge>v0.1.0</VersionBadge>
     </Container>
-  );
-}
-
-// Export the app wrapped with the AuthGuard
-export default function App() {
-  return (
-    <AuthGuard>
-      <SimulatorApp />
-    </AuthGuard>
   );
 }

@@ -27,13 +27,13 @@ ROSBRIDGE_URI = "ws://localhost:9090"  # Connects to Innate OS running locally i
 
 app = FastAPI()
 
-# Enable CORS with support for Authorization header
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*", "Authorization"],
+    allow_headers=["*"],
 )
 
 # Mount the React build directory
@@ -41,17 +41,8 @@ frontend_build_path = os.path.join(os.path.dirname(__file__), "frontend", "dist"
 app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
 
 # Include the routers
-# Note: We're not adding authentication to the video_api_router yet
-# to keep things simple
 app.include_router(video_api_router)
-
-# Add authentication to the chat_api_router
-# This will require a valid Auth0 token for all endpoints in this router
-# except for the WebSocket endpoint which handles authentication separately
-# The WebSocket endpoint will handle authentication on its own
 app.include_router(chat_api_router)
-
-# Add the config_api router with authentication
 app.include_router(config_api_router)
 
 # Initialize a placeholder on the application's state so that downstream
@@ -88,33 +79,12 @@ def main():
     parser.add_argument(
         "-v", "--vis", action="store_true", default=False, help="Enable visualization"
     )
-    # Add Auth0 configuration arguments
-    parser.add_argument(
-        "--auth0-domain",
-        type=str,
-        default="",
-        help="Auth0 domain (e.g., your-tenant.auth0.com)",
-    )
-    parser.add_argument(
-        "--auth0-audience",
-        type=str,
-        default="",
-        help="Auth0 API identifier",
-    )
     # Add logging flag argument
     parser.add_argument(
         "--log-everything",
         action="store_true",
         default=False,
         help="Enable logging of all model outputs",
-    )
-    # Add authentication control argument
-    parser.add_argument(
-        "--need-oauth",
-        type=str,
-        choices=["true", "false"],
-        default="true",
-        help="Require OAuth authentication for chat API (default: true)",
     )
     # Add no-web flag to skip starting the web server
     parser.add_argument(
@@ -124,15 +94,6 @@ def main():
         help="Run without the web server (headless mode)",
     )
     args = parser.parse_args()
-
-    # Set Auth0 environment variables
-    if args.auth0_domain:
-        os.environ["AUTH0_DOMAIN"] = args.auth0_domain
-    if args.auth0_audience:
-        os.environ["AUTH0_AUDIENCE"] = args.auth0_audience
-
-    # Set authentication requirement flag
-    os.environ["NEED_OAUTH"] = args.need_oauth
 
     # 1) Create shared queues
     global SHARED_QUEUES

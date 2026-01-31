@@ -10,21 +10,12 @@ import {
   IoHardwareChip,
   IoMic,
   IoMicOff,
-  IoBrush,
 } from "react-icons/io5";
 // Import directive icons
-import {
-  IoHappy,
-  IoFlag,
-  IoShield,
-  IoHeart,
-  IoSettings,
-} from "react-icons/io5";
+import { IoSettings } from "react-icons/io5";
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
-import { useAuth0 } from "@auth0/auth0-react";
-import { isAuthorized, fetchAndStoreUserInfo } from "../services/authService";
 import Groq from "groq-sdk";
 import { CartesiaClient } from "@cartesia/cartesia-js";
 
@@ -264,53 +255,22 @@ const IconWrapper = styled.div<{ $isActive: boolean }>`
   }
 `;
 
-// Define the directive type
-interface Directive {
+// Define the agent type (from robot)
+interface Agent {
   id: string;
-  title: string;
-  subtitle: string;
-  icon: React.ReactNode;
+  display_name: string;
+  display_icon: string | null;
+  prompt: string;
+  skills: string[];
 }
 
-// Define all available directives
-const DIRECTIVES: Directive[] = [
-  {
-    id: "default_directive",
-    title: "Default",
-    subtitle: "Obedient, no initiative",
-    icon: <IoSettings size={16} />,
-  },
-  {
-    id: "sassy_directive",
-    title: "Sassy",
-    subtitle: "Playful, witty behavior",
-    icon: <IoHappy size={16} />,
-  },
-  {
-    id: "friendly_guide_directive",
-    title: "Guide",
-    subtitle: "Guides you around",
-    icon: <IoFlag size={16} />,
-  },
-  {
-    id: "security_patrol_directive",
-    title: "Security",
-    subtitle: "Vigilant, protective",
-    icon: <IoShield size={16} />,
-  },
-  {
-    id: "elder_safety_directive",
-    title: "Elder Care",
-    subtitle: "Proactively cares for users",
-    icon: <IoHeart size={16} />,
-  },
-  {
-    id: "interior_designer_directive",
-    title: "Interior Designer",
-    subtitle: "Designs your home",
-    icon: <IoBrush size={16} />,
-  },
-];
+// Available agents response from the API
+interface AvailableAgentsResponse {
+  agents: Agent[];
+  current_agent_id: string | null;
+  startup_agent_id: string | null;
+  error?: string;
+}
 
 interface ChatProps {
   onSetDirective: (directive: string) => void;
@@ -323,15 +283,13 @@ export function Chat({ onSetDirective }: ChatProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
-  const [activeDirective, setActiveDirective] = useState("default_directive");
+  const [activeDirective, setActiveDirective] = useState<string | null>(null);
   const [expandedSystemMessages, setExpandedSystemMessages] = useState<{
     [key: number]: boolean;
   }>({});
   const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
     {}
   );
-  const { user, isAuthenticated, getAccessTokenSilently } = useAuth0();
-  const [userInfoStored, setUserInfoStored] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -344,48 +302,55 @@ export function Chat({ onSetDirective }: ChatProps) {
   const [audioQueue, setAudioQueue] = useState<Float32Array[]>([]);
   const isPlayingRef = useRef<boolean>(false);
 
+  // State for agents fetched from the robot
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
+  const hasAgentsRef = useRef(false);
+
+  // Fetch available agents from the robot on mount
+  useEffect(() => {
+    const fetchAgents = async () => {
+      try {
+        const baseUrl =
+          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+        const response = await fetch(`${baseUrl}/get_available_agents`);
+        const data: AvailableAgentsResponse = await response.json();
+
+        if (data.agents && data.agents.length > 0) {
+          setAgents(data.agents);
+          hasAgentsRef.current = true;
+          // Set active directive to current agent from robot, or first agent
+          if (data.current_agent_id) {
+            setActiveDirective(data.current_agent_id);
+          } else if (data.agents.length > 0) {
+            setActiveDirective(data.agents[0].id);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching agents:", error);
+      } finally {
+        setIsLoadingAgents(false);
+      }
+    };
+
+    fetchAgents();
+
+    // Poll for agents every 5 seconds until we have some
+    const intervalId = setInterval(async () => {
+      if (!hasAgentsRef.current) {
+        await fetchAgents();
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, []);
+
   const handleScroll = () => {
     if (containerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
       setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 10);
     }
   };
-
-  // Effect to store user info when authenticated
-  useEffect(() => {
-    if (isAuthenticated && user && !userInfoStored) {
-      const fetchUserInfo = async () => {
-        try {
-          const accessToken = await getAccessTokenSilently();
-          const data = await fetchAndStoreUserInfo(user, accessToken);
-
-          if (data) {
-            // Check if the user is authorized
-            if (data.is_authorized || data.email) {
-              setUserInfoStored(true);
-            } else {
-              // If we don't have an email, try again after a delay
-              setTimeout(() => {
-                setUserInfoStored(false); // Reset to trigger another attempt
-              }, 2000);
-            }
-          } else {
-            // If we couldn't store the user info, try again after a delay
-            setTimeout(() => {
-              setUserInfoStored(false); // Reset to trigger another attempt
-            }, 2000);
-          }
-        } catch {
-          // If there was an error, try again after a delay
-          setTimeout(() => {
-            setUserInfoStored(false); // Reset to trigger another attempt
-          }, 2000);
-        }
-      };
-
-      fetchUserInfo();
-    }
-  }, [isAuthenticated, user, userInfoStored, getAccessTokenSilently]);
 
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
@@ -397,49 +362,13 @@ export function Chat({ onSetDirective }: ChatProps) {
       return;
     }
 
-    // Check if the user is authorized to connect
-    if (!isAuthorized(user)) {
-      setMessages((prev) => {
-        // Check if we already have this message to avoid duplicates
-        const hasUnauthorizedMessage = prev.some(
-          (m) =>
-            m.sender === "system" &&
-            m.text.includes("not authorized") &&
-            m.isError
-        );
+    // Use anonymous user ID
+    const userId = "anonymous";
 
-        if (hasUnauthorizedMessage) {
-          return prev;
-        }
-
-        return [
-          ...prev,
-          {
-            sender: "system",
-            text: "You are not authorized to use the chat. Please subscribe or contact axel@innate.bot for access.",
-            timestamp: Date.now() / 1000,
-            isError: true,
-          },
-        ];
-      });
-      return;
-    }
-
-    // Make sure user info is stored before connecting to WebSocket
-    if (isAuthenticated && user && !userInfoStored) {
-      return;
-    }
-
-    // Get user ID and email from Auth0 if authenticated
-    const userId = isAuthenticated && user && user.sub ? user.sub : "anonymous";
-    const userEmail = isAuthenticated && user && user.email ? user.email : "";
-
-    // Add user ID and email as query parameters
+    // Add user ID as query parameter
     const wsUrl = `${
       import.meta.env.VITE_WS_BASE_URL
-    }/ws/chat?user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(
-      userEmail
-    )}`;
+    }/ws/chat?user_id=${encodeURIComponent(userId)}`;
 
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
@@ -530,7 +459,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         socket.close();
       }
     };
-  }, [isAuthenticated, user, userInfoStored]);
+  }, []);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -545,20 +474,6 @@ export function Chat({ onSetDirective }: ChatProps) {
     // Initialize AudioContext on user interaction
     await ensureAudioContext();
 
-    // Check if the user is authorized to send messages
-    if (!isAuthorized(user)) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "system",
-          text: "You are not authorized to send messages. Please subscribe or contact axel@innate.bot for access.",
-          timestamp: Date.now() / 1000,
-          isError: true,
-        },
-      ]);
-      return;
-    }
-
     // Check if WebSocket is open
     if (wsRef.current.readyState === WebSocket.OPEN) {
       // Send the draft message to the server via WebSocket
@@ -567,15 +482,6 @@ export function Chat({ onSetDirective }: ChatProps) {
       // Clear the input
       setDraft("");
     } else {
-      // Try to reconnect
-      if (
-        wsRef.current.readyState === WebSocket.CLOSED ||
-        wsRef.current.readyState === WebSocket.CLOSING
-      ) {
-        // Force a re-render to trigger the useEffect that establishes the WebSocket connection
-        setUserInfoStored(false);
-      }
-
       // Add a message to the UI
       setMessages((prev) => [
         ...prev,
@@ -1045,24 +951,51 @@ export function Chat({ onSetDirective }: ChatProps) {
         Enable Audio
       </button>
       <DirectivesContainer>
-        {DIRECTIVES.map((directive) => (
-          <DirectiveButton
-            key={directive.id}
-            $isActive={activeDirective === directive.id}
-            onClick={() => {
-              setActiveDirective(directive.id);
-              onSetDirective(directive.id);
-            }}
-          >
-            <IconWrapper $isActive={activeDirective === directive.id}>
-              {directive.icon}
-            </IconWrapper>
+        {isLoadingAgents ? (
+          <DirectiveButton $isActive={false} disabled>
             <DirectiveContent>
-              <DirectiveTitle>{directive.title}</DirectiveTitle>
-              <DirectiveSubtitle>{directive.subtitle}</DirectiveSubtitle>
+              <DirectiveTitle>Loading agents...</DirectiveTitle>
             </DirectiveContent>
           </DirectiveButton>
-        ))}
+        ) : agents.length === 0 ? (
+          <DirectiveButton $isActive={false} disabled>
+            <DirectiveContent>
+              <DirectiveTitle>No agents available</DirectiveTitle>
+              <DirectiveSubtitle>Waiting for robot connection</DirectiveSubtitle>
+            </DirectiveContent>
+          </DirectiveButton>
+        ) : (
+          agents.map((agent) => (
+            <DirectiveButton
+              key={agent.id}
+              $isActive={activeDirective === agent.id}
+              onClick={() => {
+                setActiveDirective(agent.id);
+                onSetDirective(agent.id);
+              }}
+            >
+              <IconWrapper $isActive={activeDirective === agent.id}>
+                {agent.display_icon ? (
+                  <img
+                    src={`data:image/png;base64,${agent.display_icon}`}
+                    alt={agent.display_name}
+                    style={{ width: 16, height: 16 }}
+                  />
+                ) : (
+                  <IoSettings size={16} />
+                )}
+              </IconWrapper>
+              <DirectiveContent>
+                <DirectiveTitle>{agent.display_name}</DirectiveTitle>
+                <DirectiveSubtitle>
+                  {agent.skills.length > 0
+                    ? `${agent.skills.length} skill${agent.skills.length > 1 ? "s" : ""}`
+                    : "Agent"}
+                </DirectiveSubtitle>
+              </DirectiveContent>
+            </DirectiveButton>
+          ))
+        )}
       </DirectivesContainer>
 
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>

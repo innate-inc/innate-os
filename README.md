@@ -100,16 +100,14 @@ From the project root directory:
 
 ```bash
 # Recommended for development
-python main.py --vis --log-everything --need-oauth false
+python main.py --vis --log-everything
 ```
 
 **Options:**
 
 - `--vis` — Enable the Genesis simulation visualization window
-- `--need-oauth false` — Disable authentication for local development
 - `--log-everything` — Verbose logging for agent inputs/outputs
 - `--no-web` — Run without the web server (headless mode)
-- `--auth0-domain` / `--auth0-audience` — Auth0 config (required if OAuth enabled)
 
 ### 2. Start the Frontend Development Server
 
@@ -176,16 +174,9 @@ Environment configurations are stored as JSON files in the `data/environments/` 
 *   **Fixed Entities:** An entity with only one pose in the `poses` list will be considered fixed at that position/orientation.
 *   **Moving Entities:** Entities with multiple poses will linearly interpolate (LERP for position, SLERP for orientation) between consecutive poses based on the current simulation time. The `loop` parameter determines if the trajectory restarts from the beginning after reaching the last pose's time.
 
-### Authentication (Auth0)
-
-This application uses Auth0 for handling user logins and securing API endpoints.
-
-*   **Setup:** See [AUTH0_SETUP.md](AUTH0_SETUP.md) for detailed instructions on configuring your Auth0 tenant, application, and API.
-*   **Development:** For local development without requiring login, start the backend with the `--need-oauth false` flag.
-
 ## API Endpoints
 
-The backend exposes several API endpoints for controlling the simulation and interacting with the agent. Most configuration endpoints require authentication (an Auth0 Bearer token).
+The backend exposes several API endpoints for controlling the simulation and interacting with the agent.
 
 **Base URL:** `http://localhost:8000` (unless configured differently)
 
@@ -193,7 +184,6 @@ The backend exposes several API endpoints for controlling the simulation and int
 
 *   **`POST /set_environment`**
     *   Sets the active environment by positioning pre-loaded entities.
-    *   **Requires Auth Token.**
     *   **Request Body:** JSON object containing *either*:
         *   `config_name`: (String) The name of a configuration file (without `.json`) in `data/environments/`.
         *   `config`: (Object) A full environment configuration dictionary (matching the structure described above).
@@ -201,7 +191,6 @@ The backend exposes several API endpoints for controlling the simulation and int
         ```bash
         curl -X POST http://localhost:8000/set_environment \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer YOUR_AUTH0_TOKEN" \
         -d '{
           "config_name": "lying_man_corner"
         }'
@@ -210,7 +199,6 @@ The backend exposes several API endpoints for controlling the simulation and int
         ```bash
         curl -X POST http://localhost:8000/set_environment \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer YOUR_AUTH0_TOKEN" \
         -d '{
           "config": {
             "environment_name": "Baked_sc0_staging_00",
@@ -230,7 +218,6 @@ The backend exposes several API endpoints for controlling the simulation and int
 
 *   **`POST /reset_robot`**
     *   Resets the robot's position and orientation.
-    *   **Requires Auth Token.**
     *   **Request Body (Optional):** JSON object
         ```json
         {
@@ -245,7 +232,6 @@ The backend exposes several API endpoints for controlling the simulation and int
 
 *   **`POST /shutdown`**
     *   Gracefully shuts down the simulation backend.
-    *   **Requires Auth Token.**
 
 ### Video & State (`/video_api`)
 
@@ -258,9 +244,8 @@ The backend exposes several API endpoints for controlling the simulation and int
 ### Chat (`/chat_api`)
 
 *   **`GET /`**: Serves the main React frontend (`index.html`).
-*   **`GET /auth/user-info`**: Gets authenticated user details (ID, email, authorization status). Requires Auth token.
-*   **`GET /is-connected/{user_id}`**: Checks if a user is connected via WebSocket. Requires Auth token.
-*   **`WS /ws/chat`**: WebSocket endpoint for real-time chat between frontend and agent. Handles its own authentication via query parameters during connection setup.
+*   **`GET /is-connected/{user_id}`**: Checks if a user is connected via WebSocket.
+*   **`WS /ws/chat`**: WebSocket endpoint for real-time chat between frontend and agent.
 
 ## Project Structure
 
@@ -275,13 +260,11 @@ The backend exposes several API endpoints for controlling the simulation and int
 │   └── ...                # Config files (package.json, vite.config.js, .env)
 ├── src/
 │   ├── agent/             # Agent communication types, WebSocket bridge
-│   ├── middleware/        # Authentication middleware
 │   ├── routes/            # FastAPI API route definitions (config, video, chat)
 │   ├── simulation/        # SimulationNode, utilities
 │   └── shared_queues.py   # Inter-process/thread communication queues
 ├── venv/                  # Virtual environment (ignored by git)
 ├── .gitignore
-├── AUTH0_SETUP.md         # Auth0 setup guide
 ├── main.py            # Main FastAPI application entry point
 ├── README.md              # This file
 ├── requirements.macos.txt # Python dependencies for macOS
@@ -302,7 +285,6 @@ The backend exposes several API endpoints for controlling the simulation and int
     *   Ensure the backend is running.
     *   Ensure the Innate OS is running in Docker.
     *   Check browser console logs for errors.
-*   **Authentication Errors:** Verify Auth0 configuration in `.env` (frontend) and command-line arguments or environment variables (backend). Ensure the audience and domain match.
 
 ## VM Deployment
 
