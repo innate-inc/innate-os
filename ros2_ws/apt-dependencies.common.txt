@@ -99,6 +99,7 @@ ros-humble-camera-calibration
 ros-humble-compressed-image-transport
 ros-humble-vision-msgs
 ros-humble-rplidar-ros
+ros-humble-pcl-ros
 
 # ROS2 Humble packages - Hardware/Manipulation
 ros-humble-dynamixel-sdk
@@ -123,3 +124,9 @@ ros-humble-joint-state-publisher-gui
 ros-humble-topic-tools
 ros-humble-xacro
 ros-humble-bondpy
+libhdf5-dev
+
+# ROS2 Humble packages - Simulation (optional)
+# ros-humble-stage-ros
+
+
