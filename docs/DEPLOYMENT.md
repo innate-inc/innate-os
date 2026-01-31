@@ -46,7 +46,6 @@ source venv/bin/activate
 
 # Start the simulation backend, connecting to the local agent bridge
 # Run without visualization (-v) typically for servers
-# Ensure Auth0 env vars or flags are set if needed
 python main_web.py --local 
 ```
 

@@ -17,6 +17,15 @@ class ChatSignal(NamedTuple):
     timestamp: float
 
 
+class AgentInfo(NamedTuple):
+    """Information about an available agent/directive."""
+    id: str
+    display_name: str
+    display_icon: Optional[str]  # Base64-encoded icon data or None
+    prompt: str
+    skills: List[str]
+
+
 class SharedQueues:
     """
     Minimal message broker:
@@ -48,6 +57,12 @@ class SharedQueues:
         self.latest_robot_orientation: List[float] = [0.0, 0.0, 0.0, 1.0]
         self.robot_position_timestamp: float = 0.0
         self.robot_position_lock = threading.Lock()  # For thread-safe updates
+
+        # Store available agents/directives from the robot
+        self.available_agents: List[AgentInfo] = []
+        self.current_agent_id: Optional[str] = None
+        self.startup_agent_id: Optional[str] = None
+        self.agents_lock = threading.Lock()  # For thread-safe updates
 
     def update_robot_position(
         self, x: float, y: float, z: float, timestamp: float = None
@@ -96,4 +111,27 @@ class SharedQueues:
                 self.latest_robot_position.copy(),
                 self.latest_robot_orientation.copy(),
                 self.robot_position_timestamp,
+            )
+
+    def update_available_agents(
+        self,
+        agents: List[AgentInfo],
+        current_agent_id: Optional[str] = None,
+        startup_agent_id: Optional[str] = None,
+    ):
+        """Thread-safe method to update available agents from the robot"""
+        with self.agents_lock:
+            self.available_agents = agents
+            self.current_agent_id = current_agent_id
+            self.startup_agent_id = startup_agent_id
+
+    def get_available_agents(
+        self,
+    ) -> Tuple[List[AgentInfo], Optional[str], Optional[str]]:
+        """Thread-safe method to get available agents, current agent, and startup agent"""
+        with self.agents_lock:
+            return (
+                self.available_agents.copy(),
+                self.current_agent_id,
+                self.startup_agent_id,
             )

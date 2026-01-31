@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@auth0/auth0-react": "^2.3.0",
     "@cartesia/cartesia-js": "^2.1.9",
     "@types/styled-components": "^5.1.34",
     "groq-sdk": "^0.15.0",

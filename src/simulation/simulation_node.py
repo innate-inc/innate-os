@@ -47,9 +47,9 @@ class SimulationNode:
         self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
         # Track dynamic entity positions for occupancy grid generation
-        self.active_entities: Dict[str, Dict[str, Any]] = (
-            {}
-        )  # entity_name -> {position: [x, y, z], hitbox_type: "manual"/"aabb"}
+        self.active_entities: Dict[
+            str, Dict[str, Any]
+        ] = {}  # entity_name -> {position: [x, y, z], hitbox_type: "manual"/"aabb"}
 
         # Add timing variables for real-time simulation
         self.last_render_time = 0
@@ -132,7 +132,7 @@ class SimulationNode:
     def _init_scene(self):
         """Initialize the main simulation scene"""
         self.scene = gs.Scene(
-            sim_options=gs.options.SimOptions(dt=0.1, substeps=10),
+            sim_options=gs.options.SimOptions(dt=0.02, substeps=10),
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(3.5, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
@@ -550,6 +550,7 @@ class SimulationNode:
                 file="data/urdf/maurice.urdf",
                 pos=ROBOT_INIT_POS,
                 quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
+                fixed=True,  # Disable physics dynamics - robot is moved kinematically via set_pos/set_quat
             )
         )
 
