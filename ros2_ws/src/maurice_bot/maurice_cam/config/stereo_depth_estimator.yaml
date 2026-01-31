@@ -1,9 +1,65 @@
+# ============================================================================
+# MAIN CAMERA DRIVER PARAMETERS
+# ============================================================================
+main_camera_driver:
+  ros__parameters:
+    # Device configuration
+    camera_symlink: "3D"  # Device symlink pattern (searches for symlinks containing this)
+    
+    # Capture dimensions (full FOV)
+    width: 2560
+    height: 720
+    
+    # Publish dimensions
+    publish_left_width: 640
+    publish_left_height: 480
+    publish_stereo_width: 1280
+    publish_stereo_height: 480
+    
+    # Camera settings
+    fps: 30.0
+    frame_id: "camera_optical_frame"
+    
+    # JPEG compression
+    jpeg_quality: 80  # 1-100
+    publish_compressed: true
+    compressed_frame_interval: 6  # Publish compressed every N frames
+    
+    # Exposure control
+    exposure: -1  # -1 = use current value, 1-10000
+    gain: -1  # -1 = use current value, 0-255
+    disable_auto_exposure: false
+    default_gain: 110  # Default gain for auto-exposure mode (0-255)
+    
+    # Custom auto-exposure algorithm
+    enable_auto_exposure: false
+    target_brightness: 128.0  # 0-255, 128 = 18% gray
+    ae_kp: 0.8  # Proportional gain (0.5-1.5, 0.8 recommended for robots)
+    auto_exposure_update_interval: 3  # Update every N frames (3 = 10Hz for 30Hz camera)
+
+# ============================================================================
+# ARM CAMERA DRIVER PARAMETERS
+# ============================================================================
+arm_camera_driver:
+  ros__parameters:
+    # Device configuration
+    camera_symlink: "Arducam"  # Device symlink pattern
+    
+    # Capture settings
+    width: 640
+    height: 480
+    fps: 30.0
+    pixel_format: "YUYV"
+    
+    # Compression
+    publish_compressed: true
+    compressed_frame_interval: 6  # Publish compressed every N frames
+
+# ============================================================================
+# STEREO DEPTH ESTIMATOR PARAMETERS
+# ============================================================================
 /**:
   ros__parameters:
-    # ============================================================================
-    # STEREO DEPTH ESTIMATOR PARAMETERS
-    # ============================================================================
-    
     # Data and input/output topics
     data_directory: "/home/jetson1/innate-os/data"
     stereo_topic: "/mars/main_camera/stereo"
@@ -25,21 +81,25 @@
     process_every_n_frames: 1  # 1=all frames, 5=6Hz from 30Hz
     
     # Stereo matching parameters
-    max_disparity: 80  # Higher = closer objects, more compute
+    max_disparity: 64  # Higher = closer objects, more compute (default: 64)
     
     # Block Matching algorithm parameters
     bm_window_size: 11        # Odd number, typically 5-15
     bm_quality: 8             # 0-8, higher = better quality but slower
     bm_conf_threshold: 16000  # 0-65535, lower = more details/noise
 
-# Separate namespace for point cloud generator (depth_image_proc)
+# ============================================================================
+# POINT CLOUD GENERATOR (depth_image_proc)
+# ============================================================================
 pointcloud_generator:
   ros__parameters:
     # Synchronization parameters
     queue_size: 5         # Message synchronization queue size
     exact_sync: false     # Use exact time synchronization (false=approximate)
 
-# Separate namespace for CropBox filter (pcl_ros)
+# ============================================================================
+# CROPBOX FILTER (pcl_ros)
+# ============================================================================
 pointcloud_cropbox_filter:
   ros__parameters:
     # CropBox bounds in base_link frame (meters)
@@ -58,4 +118,5 @@ pointcloud_cropbox_filter:
     # Transform frames (applied before/after filtering)
     input_frame: "base_link"   # Transform input to this frame
     output_frame: "base_link"  # Transform output to this frame
+
 

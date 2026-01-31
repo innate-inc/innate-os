@@ -538,23 +538,45 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
 
   // Extract depth (Z coordinate) and convert to uint16 millimeters
   cv::Mat depth_calib(calib_height_, calib_width_, CV_16UC1);
-  const float MAX_DEPTH_M = 10.0f;  // Same as Python script
-  const float MIN_DEPTH_M = 0.05f; // Minimum valid depth (5cm)
+  const float MAX_DEPTH_M = 4.0f;
+  const float MIN_DEPTH_M = 0.05f;
+  
+  // Depth distribution buckets: <-2, [-2,-1), [-1,0), [0,1), [1,2), [2,3), [3,4), >=4, nan
+  constexpr int NUM_BUCKETS = 9;
+  int buckets[NUM_BUCKETS] = {0};
+  int total_pixels = 0;
   
   for (int y = 0; y < calib_height_; y++) {
     const cv::Vec3f* pt_row = points_3d.ptr<cv::Vec3f>(y);
     uint16_t* depth_row = depth_calib.ptr<uint16_t>(y);
     for (int x = 0; x < calib_width_; x++) {
-      // Z can be negative depending on Q matrix sign convention - use absolute value
-      float z = std::abs(pt_row[x][2]);
-      if (z >= MIN_DEPTH_M && z <= MAX_DEPTH_M && std::isfinite(z)) {
-        // Convert meters to millimeters
-        depth_row[x] = static_cast<uint16_t>(std::clamp(z * 1000.0f, 1.0f, 65535.0f));
+      total_pixels++;
+      float z = -pt_row[x][2];
+      
+      if (!std::isfinite(z)) {
+        buckets[8]++;  // nan bucket
+        depth_row[x] = 0;
       } else {
-        depth_row[x] = 0;  // Invalid depth
+        // Bucket index: clamp z to [-2, 4] range, then map to bucket 0-7
+        int idx = std::clamp(static_cast<int>(std::floor(z)) + 2, 0, 7);
+        buckets[idx]++;
+        
+        // Set depth value
+        if (z >= MIN_DEPTH_M && z <= MAX_DEPTH_M) {
+          depth_row[x] = static_cast<uint16_t>(std::min(z * 1000.0f, 65535.0f));
+        } else {
+          depth_row[x] = 0;
+        }
       }
     }
   }
+  
+  // Log depth distribution
+  float s = 100.0f / total_pixels;
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+    "Depth: <-2:%.1f%% -2:-1:%.1f%% -1:0:%.1f%% 0:1:%.1f%% 1:2:%.1f%% 2:3:%.1f%% 3:4:%.1f%% >4:%.1f%% nan:%.1f%%",
+    buckets[0]*s, buckets[1]*s, buckets[2]*s, buckets[3]*s, 
+    buckets[4]*s, buckets[5]*s, buckets[6]*s, buckets[7]*s, buckets[8]*s);
 
   // Prepare disparity visualization if needed
   cv::Mat disp_vis_calib;

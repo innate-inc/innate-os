@@ -16,9 +16,10 @@ Usage:
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -47,363 +48,26 @@ def generate_launch_description():
         description='Use simulation time'
     )
 
-    # Main camera parameters
-    main_camera_symlink_arg = DeclareLaunchArgument(
-        'main_camera_symlink',
-        default_value='3D',
-        description='Main camera device symlink pattern (searches for symlinks containing this pattern)'
-    )
-    
-    main_camera_width_arg = DeclareLaunchArgument(
-        'main_camera_width',
-        default_value='2560',
-        description='Main camera capture width (full FOV)'
-    )
-    
-    main_camera_height_arg = DeclareLaunchArgument(
-        'main_camera_height',
-        default_value='720',
-        description='Main camera capture height (full FOV)'
-    )
-    
-    main_camera_publish_left_width_arg = DeclareLaunchArgument(
-        'main_camera_publish_left_width',
-        default_value='640',
-        description='Main camera publish left image width'
-    )
-    
-    main_camera_publish_left_height_arg = DeclareLaunchArgument(
-        'main_camera_publish_left_height',
-        default_value='480',
-        description='Main camera publish left image height'
-    )
-    
-    main_camera_publish_stereo_width_arg = DeclareLaunchArgument(
-        'main_camera_publish_stereo_width',
-        default_value='1280',
-        description='Main camera publish stereo image width'
-    )
-    
-    main_camera_publish_stereo_height_arg = DeclareLaunchArgument(
-        'main_camera_publish_stereo_height',
-        default_value='480',
-        description='Main camera publish stereo image height'
-    )
-    
-    main_camera_fps_arg = DeclareLaunchArgument(
-        'main_camera_fps',
-        default_value='30.0',
-        description='Main camera framerate'
-    )
-    
-    main_camera_frame_id_arg = DeclareLaunchArgument(
-        'main_camera_frame_id',
-        default_value='camera_optical_frame',
-        description='Main camera frame ID'
-    )
-    
-    main_camera_jpeg_quality_arg = DeclareLaunchArgument(
-        'main_camera_jpeg_quality',
-        default_value='80',
-        description='Main camera JPEG compression quality (1-100)'
-    )
-    
-    main_camera_publish_compressed_arg = DeclareLaunchArgument(
-        'main_camera_publish_compressed',
-        default_value='true',
-        description='Main camera publish compressed image topic'
-    )
-    
-    main_camera_compressed_frame_interval_arg = DeclareLaunchArgument(
-        'main_camera_compressed_frame_interval',
-        default_value='6',
-        description='Main camera publish compressed image every N frames'
-    )
-    
-    main_camera_exposure_arg = DeclareLaunchArgument(
-        'main_camera_exposure',
-        default_value='-1',
-        description='Main camera manual exposure time (-1 = use current value, 1-10000)'
-    )
-    
-    main_camera_gain_arg = DeclareLaunchArgument(
-        'main_camera_gain',
-        default_value='-1',
-        description='Main camera manual gain value (-1 = use current value, 0-255)'
-    )
-    
-    main_camera_disable_auto_exposure_arg = DeclareLaunchArgument(
-        'main_camera_disable_auto_exposure',
-        default_value='false',
-        description='Main camera disable automatic exposure (true/false)'
-    )
-    
-    main_camera_default_gain_arg = DeclareLaunchArgument(
-        'main_camera_default_gain',
-        default_value='110',
-        description='Main camera default gain value for auto-exposure mode (0-255)'
-    )
-    
-    main_camera_enable_auto_exposure_arg = DeclareLaunchArgument(
-        'main_camera_enable_auto_exposure',
-        default_value='false',
-        description='Main camera enable custom auto exposure algorithm (true/false)'
-    )
-    
-    main_camera_target_brightness_arg = DeclareLaunchArgument(
-        'main_camera_target_brightness',
-        default_value='128.0',
-        description='Main camera target brightness for auto exposure (0-255, 128 = 18% gray)'
-    )
-    
-    main_camera_ae_kp_arg = DeclareLaunchArgument(
-        'main_camera_ae_kp',
-        default_value='0.8',
-        description='Main camera auto exposure proportional gain (0.5-1.5, higher = faster response, 0.8 recommended for robots)'
-    )
-    
-    main_camera_auto_exposure_update_interval_arg = DeclareLaunchArgument(
-        'main_camera_auto_exposure_update_interval',
-        default_value='3',
-        description='Main camera auto exposure update interval (update every N frames, 3 = 10Hz for 30Hz camera)'
+    # Camera pipeline config file
+    camera_config_arg = DeclareLaunchArgument(
+        'camera_config',
+        default_value=PathJoinSubstitution([
+            FindPackageShare('maurice_cam'),
+            'config',
+            'stereo_depth_estimator.yaml'
+        ]),
+        description='Path to camera pipeline config file'
     )
 
-    # Stereo depth estimator parameters
-    launch_depth_estimator_arg = DeclareLaunchArgument(
-        'launch_depth_estimator',
-        default_value='true',
-        description='Launch the stereo depth estimator'
-    )
-    
-    depth_data_directory_arg = DeclareLaunchArgument(
-        'depth_data_directory',
-        default_value='/home/jetson1/innate-os/data',
-        description='Data directory containing calibration config'
-    )
-    
-    
-    depth_output_topic_arg = DeclareLaunchArgument(
-        'depth_output_topic',
-        default_value='/mars/main_camera/depth/image_rect_raw',
-        description='Output depth image topic (ROS convention: depth/image_rect_raw)'
-    )
-    
-    depth_disparity_topic_arg = DeclareLaunchArgument(
-        'depth_disparity_topic',
-        default_value='/mars/main_camera/disparity',
-        description='Output disparity image topic'
-    )
-    
-    depth_max_disparity_arg = DeclareLaunchArgument(
-        'depth_max_disparity',
-        default_value='64',
-        description='Maximum disparity for stereo matching'
-    )
-    
-    depth_publish_disparity_arg = DeclareLaunchArgument(
-        'depth_publish_disparity',
-        default_value='true',
-        description='Publish disparity visualization image'
-    )
-    
-    depth_stereo_width_arg = DeclareLaunchArgument(
-        'depth_stereo_width',
-        default_value='1280',
-        description='Expected stereo image width (full stereo, left+right)'
-    )
-    
-    depth_stereo_height_arg = DeclareLaunchArgument(
-        'depth_stereo_height',
-        default_value='480',
-        description='Expected stereo image height'
-    )
-    
-    depth_stereo_topic_arg = DeclareLaunchArgument(
-        'depth_stereo_topic',
-        default_value='/mars/main_camera/stereo',
-        description='Input stereo image topic for depth estimation'
-    )
-
-    # Point cloud generator parameters (using depth_image_proc::PointCloudXyzrgbNode)
-    launch_pointcloud_generator_arg = DeclareLaunchArgument(
-        'launch_pointcloud_generator',
-        default_value='true',
-        description='Launch the point cloud generator'
-    )
-    
-    pointcloud_depth_topic_arg = DeclareLaunchArgument(
-        'pointcloud_depth_topic',
-        default_value='/mars/main_camera/depth/image_rect_raw',
-        description='Input depth image topic for point cloud generation'
-    )
-    
-    pointcloud_rgb_topic_arg = DeclareLaunchArgument(
-        'pointcloud_rgb_topic',
-        default_value='/mars/main_camera/image',
-        description='Input RGB image topic for point cloud colorization'
-    )
-    
-    pointcloud_camera_info_topic_arg = DeclareLaunchArgument(
-        'pointcloud_camera_info_topic',
-        default_value='/mars/main_camera/depth/camera_info',
-        description='Camera info topic for point cloud generation'
-    )
-    
-    pointcloud_output_topic_arg = DeclareLaunchArgument(
-        'pointcloud_output_topic',
-        default_value='/mars/main_camera/depth/points',
-        description='Output point cloud topic'
-    )
-
-    # Point cloud CropBox filter parameters (using pcl_ros::CropBox)
-    launch_pointcloud_filter_arg = DeclareLaunchArgument(
-        'launch_pointcloud_filter',
-        default_value='true',
-        description='Launch the point cloud CropBox filter'
-    )
-    
-    pointcloud_filter_input_topic_arg = DeclareLaunchArgument(
-        'pointcloud_filter_input_topic',
-        default_value='/mars/main_camera/depth/points',
-        description='Input point cloud topic for filtering'
-    )
-    
-    pointcloud_filter_output_topic_arg = DeclareLaunchArgument(
-        'pointcloud_filter_output_topic',
-        default_value='/mars/main_camera/depth/points_filtered',
-        description='Output filtered point cloud topic'
-    )
-    
-    pointcloud_filter_input_frame_arg = DeclareLaunchArgument(
-        'pointcloud_filter_input_frame',
-        default_value='base_link',
-        description='Transform input to this frame before filtering'
-    )
-    
-    pointcloud_filter_output_frame_arg = DeclareLaunchArgument(
-        'pointcloud_filter_output_frame',
-        default_value='base_link',
-        description='Transform output to this frame after filtering'
-    )
-    
-    # CropBox bounds: filter points inside box defined by min/max x, y, z
-    # These are in the input_frame coordinate system (base_link)
-    pointcloud_filter_min_x_arg = DeclareLaunchArgument(
-        'pointcloud_filter_min_x',
-        default_value='-2.5',
-        description='Minimum X coordinate for CropBox (meters)'
-    )
-    
-    pointcloud_filter_max_x_arg = DeclareLaunchArgument(
-        'pointcloud_filter_max_x',
-        default_value='2.5',
-        description='Maximum X coordinate for CropBox (meters)'
-    )
-    
-    pointcloud_filter_min_y_arg = DeclareLaunchArgument(
-        'pointcloud_filter_min_y',
-        default_value='-2.5',
-        description='Minimum Y coordinate for CropBox (meters)'
-    )
-    
-    pointcloud_filter_max_y_arg = DeclareLaunchArgument(
-        'pointcloud_filter_max_y',
-        default_value='2.5',
-        description='Maximum Y coordinate for CropBox (meters)'
-    )
-    
-    pointcloud_filter_min_z_arg = DeclareLaunchArgument(
-        'pointcloud_filter_min_z',
-        default_value='0.01',
-        description='Minimum Z (height) coordinate for CropBox (meters)'
-    )
-    
-    pointcloud_filter_max_z_arg = DeclareLaunchArgument(
-        'pointcloud_filter_max_z',
-        default_value='0.35',
-        description='Maximum Z (height) coordinate for CropBox (meters)'
-    )
-    
-    pointcloud_filter_negative_arg = DeclareLaunchArgument(
-        'pointcloud_filter_negative',
-        default_value='false',
-        description='If true, return points outside the box instead of inside'
-    )
-
-    # Arm camera parameters
-    arm_camera_symlink_arg = DeclareLaunchArgument(
-        'arm_camera_symlink',
-        default_value='Arducam',
-        description='Arm camera device symlink pattern (searches for symlinks containing this pattern)'
-    )
-    
-    arm_camera_width_arg = DeclareLaunchArgument(
-        'arm_camera_width',
-        default_value='640',
-        description='Arm camera capture width'
-    )
-    
-    arm_camera_height_arg = DeclareLaunchArgument(
-        'arm_camera_height',
-        default_value='480',
-        description='Arm camera capture height'
-    )
-    
-    arm_camera_fps_arg = DeclareLaunchArgument(
-        'arm_camera_fps',
-        default_value='30.0',
-        description='Arm camera framerate'
-    )
-    
-    arm_camera_pixel_format_arg = DeclareLaunchArgument(
-        'arm_camera_pixel_format',
-        default_value='YUYV',
-        description='Arm camera pixel format'
-    )
-    
-    arm_camera_publish_compressed_arg = DeclareLaunchArgument(
-        'arm_camera_publish_compressed',
-        default_value='true',
-        description='Arm camera publish compressed image topic'
-    )
-    
-    arm_camera_compressed_frame_interval_arg = DeclareLaunchArgument(
-        'arm_camera_compressed_frame_interval',
-        default_value='6',
-        description='Arm camera publish compressed image every N frames'
-    )
-
-    # Build list of composable nodes based on launch arguments
-    composable_nodes = []
-    
     # Main camera driver node
     main_camera_node = ComposableNode(
         package='maurice_cam',
         plugin='maurice_cam::MainCameraDriver',
         name='main_camera_driver',
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'camera_symlink': LaunchConfiguration('main_camera_symlink'),
-            'width': LaunchConfiguration('main_camera_width'),
-            'height': LaunchConfiguration('main_camera_height'),
-            'publish_left_width': LaunchConfiguration('main_camera_publish_left_width'),
-            'publish_left_height': LaunchConfiguration('main_camera_publish_left_height'),
-            'publish_stereo_width': LaunchConfiguration('main_camera_publish_stereo_width'),
-            'publish_stereo_height': LaunchConfiguration('main_camera_publish_stereo_height'),
-            'fps': LaunchConfiguration('main_camera_fps'),
-            'frame_id': LaunchConfiguration('main_camera_frame_id'),
-            'jpeg_quality': LaunchConfiguration('main_camera_jpeg_quality'),
-            'publish_compressed': LaunchConfiguration('main_camera_publish_compressed'),
-            'compressed_frame_interval': LaunchConfiguration('main_camera_compressed_frame_interval'),
-            'exposure': LaunchConfiguration('main_camera_exposure'),
-            'gain': LaunchConfiguration('main_camera_gain'),
-            'disable_auto_exposure': LaunchConfiguration('main_camera_disable_auto_exposure'),
-            'default_gain': LaunchConfiguration('main_camera_default_gain'),
-            'enable_auto_exposure': LaunchConfiguration('main_camera_enable_auto_exposure'),
-            'target_brightness': LaunchConfiguration('main_camera_target_brightness'),
-            'ae_kp': LaunchConfiguration('main_camera_ae_kp'),
-            'auto_exposure_update_interval': LaunchConfiguration('main_camera_auto_exposure_update_interval'),
-        }],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
     
@@ -412,16 +76,10 @@ def generate_launch_description():
         package='maurice_cam',
         plugin='maurice_cam::ArmCameraDriver',
         name='arm_camera_driver',
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'camera_symlink': LaunchConfiguration('arm_camera_symlink'),
-            'width': LaunchConfiguration('arm_camera_width'),
-            'height': LaunchConfiguration('arm_camera_height'),
-            'fps': LaunchConfiguration('arm_camera_fps'),
-            'pixel_format': LaunchConfiguration('arm_camera_pixel_format'),
-            'publish_compressed': LaunchConfiguration('arm_camera_publish_compressed'),
-            'compressed_frame_interval': LaunchConfiguration('arm_camera_compressed_frame_interval'),
-        }],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
     
@@ -445,18 +103,10 @@ def generate_launch_description():
         package='maurice_cam',
         plugin='maurice_cam::StereoDepthEstimator',
         name='stereo_depth_estimator',
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'data_directory': LaunchConfiguration('depth_data_directory'),
-            'stereo_topic': LaunchConfiguration('depth_stereo_topic'),
-            'depth_topic': LaunchConfiguration('depth_output_topic'),
-            'disparity_topic': LaunchConfiguration('depth_disparity_topic'),
-            'frame_id': LaunchConfiguration('main_camera_frame_id'),
-            'max_disparity': LaunchConfiguration('depth_max_disparity'),
-            'publish_disparity': LaunchConfiguration('depth_publish_disparity'),
-            'stereo_width': LaunchConfiguration('depth_stereo_width'),
-            'stereo_height': LaunchConfiguration('depth_stereo_height'),
-        }],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
@@ -466,14 +116,15 @@ def generate_launch_description():
         plugin='depth_image_proc::PointCloudXyzrgbNode',
         name='pointcloud_generator',
         remappings=[
-            ('depth_registered/image_rect', LaunchConfiguration('pointcloud_depth_topic')),
-            ('rgb/image_rect_color', LaunchConfiguration('pointcloud_rgb_topic')),
-            ('rgb/camera_info', LaunchConfiguration('pointcloud_camera_info_topic')),
-            ('points', LaunchConfiguration('pointcloud_output_topic')),
+            ('depth_registered/image_rect', '/mars/main_camera/depth/image_rect_raw'),
+            ('rgb/image_rect_color', '/mars/main_camera/image'),
+            ('rgb/camera_info', '/mars/main_camera/depth/camera_info'),
+            ('points', '/mars/main_camera/depth/points'),
         ],
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-        }],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
@@ -483,22 +134,13 @@ def generate_launch_description():
         plugin='pcl_ros::CropBox',
         name='pointcloud_cropbox_filter',
         remappings=[
-            ('input', LaunchConfiguration('pointcloud_filter_input_topic')),
-            ('output', LaunchConfiguration('pointcloud_filter_output_topic')),
+            ('input', '/mars/main_camera/depth/points'),
+            ('output', '/mars/main_camera/depth/points_filtered'),
         ],
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'min_x': LaunchConfiguration('pointcloud_filter_min_x'),
-            'max_x': LaunchConfiguration('pointcloud_filter_max_x'),
-            'min_y': LaunchConfiguration('pointcloud_filter_min_y'),
-            'max_y': LaunchConfiguration('pointcloud_filter_max_y'),
-            'min_z': LaunchConfiguration('pointcloud_filter_min_z'),
-            'max_z': LaunchConfiguration('pointcloud_filter_max_z'),
-            'negative': LaunchConfiguration('pointcloud_filter_negative'),
-            'input_frame': LaunchConfiguration('pointcloud_filter_input_frame'),
-            'output_frame': LaunchConfiguration('pointcloud_filter_output_frame'),
-            'keep_organized': False,
-        }],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
@@ -527,64 +169,8 @@ def generate_launch_description():
         launch_arm_camera_arg,
         launch_webrtc_arg,
         use_sim_time_arg,
-        # Main camera arguments
-        main_camera_symlink_arg,
-        main_camera_width_arg,
-        main_camera_height_arg,
-        main_camera_publish_left_width_arg,
-        main_camera_publish_left_height_arg,
-        main_camera_publish_stereo_width_arg,
-        main_camera_publish_stereo_height_arg,
-        main_camera_fps_arg,
-        main_camera_frame_id_arg,
-        main_camera_jpeg_quality_arg,
-        main_camera_publish_compressed_arg,
-        main_camera_compressed_frame_interval_arg,
-        main_camera_exposure_arg,
-        main_camera_gain_arg,
-        main_camera_disable_auto_exposure_arg,
-        main_camera_default_gain_arg,
-        main_camera_enable_auto_exposure_arg,
-        main_camera_target_brightness_arg,
-        main_camera_ae_kp_arg,
-        main_camera_auto_exposure_update_interval_arg,
-        # Stereo depth estimator arguments
-        launch_depth_estimator_arg,
-        depth_data_directory_arg,
-        depth_stereo_topic_arg,
-        depth_output_topic_arg,
-        depth_disparity_topic_arg,
-        depth_max_disparity_arg,
-        depth_publish_disparity_arg,
-        depth_stereo_width_arg,
-        depth_stereo_height_arg,
-        # Point cloud generator arguments
-        launch_pointcloud_generator_arg,
-        pointcloud_depth_topic_arg,
-        pointcloud_rgb_topic_arg,
-        pointcloud_camera_info_topic_arg,
-        pointcloud_output_topic_arg,
-        # Point cloud filter arguments
-        launch_pointcloud_filter_arg,
-        pointcloud_filter_input_topic_arg,
-        pointcloud_filter_output_topic_arg,
-        pointcloud_filter_input_frame_arg,
-        pointcloud_filter_output_frame_arg,
-        pointcloud_filter_min_x_arg,
-        pointcloud_filter_max_x_arg,
-        pointcloud_filter_min_y_arg,
-        pointcloud_filter_max_y_arg,
-        pointcloud_filter_min_z_arg,
-        pointcloud_filter_max_z_arg,
-        pointcloud_filter_negative_arg,
-        # Arm camera arguments
-        arm_camera_symlink_arg,
-        arm_camera_width_arg,
-        arm_camera_height_arg,
-        arm_camera_fps_arg,
-        arm_camera_pixel_format_arg,
-        arm_camera_publish_compressed_arg,
-        arm_camera_compressed_frame_interval_arg,
+        # Camera pipeline config
+        camera_config_arg,
         # Container with all nodes
         container,
     ])
