@@ -691,6 +691,173 @@ class BrainClientNode(Node):
         except Exception:
             return None
 
+    def _get_pose_source(self, log_prefix: str = "") -> tuple[bool, tuple | None]:
+        """
+        Determine the pose source based on navigation mode.
+        Returns (use_mapfree, pose_source) where pose_source is ("tf"|"odom", pose_msg) or None.
+        """
+        use_mapfree = self.cur_nav_mode == "mapfree"
+        pose_source = None
+
+        if not use_mapfree:
+            # Prefer TF for pose
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    target_frame="map",
+                    source_frame="base_link",
+                    time=rclpy.time.Time(),
+                    timeout=rclpy.time.Duration(seconds=0.5),
+                )
+                pose_with_cov = PoseWithCovariance()
+                pose_with_cov.pose.position.x = transform.transform.translation.x
+                pose_with_cov.pose.position.y = transform.transform.translation.y
+                pose_with_cov.pose.position.z = transform.transform.translation.z
+                pose_with_cov.pose.orientation = transform.transform.rotation
+
+                if self.last_amcl_pose is not None:
+                    pose_with_cov.covariance = self.last_amcl_pose.pose.covariance
+
+                pose_source = ("tf", pose_with_cov)
+            except Exception as tf_err:
+                self.get_logger().debug(f"{log_prefix}TF map→base_link not available: {tf_err}")
+                return use_mapfree, None
+        elif use_mapfree and self.last_odom is not None:
+            # Inflate covariance in mapfree mode
+            try:
+                cov = getattr(self.last_odom.pose, "covariance", None)
+                needs_set = cov is None
+                if not needs_set and hasattr(cov, "__len__"):
+                    needs_set = len(cov) < 36
+                if needs_set:
+                    self.last_odom.pose.covariance = [1e4] * 36
+            except Exception:
+                pass
+            pose_source = ("odom", self.last_odom.pose)
+        else:
+            return use_mapfree, None
+
+        return use_mapfree, pose_source
+
+    def _build_navigation_payload(self, use_mapfree: bool = None, pose_source: tuple = None) -> dict | None:
+        """
+        Build the navigation payload with depth, map, camera_info, and robot_coords.
+        Returns None if required data is not available.
+        If use_mapfree/pose_source not provided, they are determined automatically.
+        """
+        # Determine pose source if not provided
+        if pose_source is None:
+            use_mapfree, pose_source = self._get_pose_source("nav_payload: ")
+            if pose_source is None:
+                return None
+
+        payload = {}
+
+        # Add camera_info
+        payload["camera_info"] = {
+            "horizontal_fov": self.horizontal_fov,
+            "vertical_fov": self.vertical_fov,
+            "pitch_deg": self.current_head_pitch,
+            "x_cam": self.x_cam,
+            "height_cam": self.height_cam,
+        }
+        
+        # Add depth data if available
+        if self.send_depth and self.last_depth_image is not None:
+            depth_frame = self.last_depth_image
+            depth_data = depth_frame.tobytes()
+            if depth_frame.dtype == np.uint16:
+                encoding = "16UC1"
+                bytes_per_pixel = 2
+            elif depth_frame.dtype == np.float32:
+                encoding = "32FC1"
+                bytes_per_pixel = 4
+            else:
+                encoding = "8UC1"
+                bytes_per_pixel = 1
+            payload["depth"] = {
+                "height": int(depth_frame.shape[0]),
+                "width": int(depth_frame.shape[1]),
+                "encoding": encoding,
+                "is_bigendian": 0,
+                "step": int(depth_frame.shape[1] * bytes_per_pixel),
+                "data": base64.b64encode(depth_data).decode("utf-8"),
+            }
+        
+        # Add map data
+        if use_mapfree:
+            dummy_map_data = np.array([0], dtype=np.int8)
+            payload["map"] = {
+                "resolution": 100.0,
+                "width": 1,
+                "height": 1,
+                "origin_x": 0.0,
+                "origin_y": 0.0,
+                "origin_z": 0.0,
+                "origin_yaw": 0.0,
+                "frame_id": "odom",
+                "data": base64.b64encode(dummy_map_data.tobytes()).decode("utf-8"),
+            }
+        elif self.last_map is not None:
+            map_data = self.last_map.data
+            ori = self.last_map.info.origin.orientation
+            siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+            cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            
+            payload["map"] = {
+                "resolution": self.last_map.info.resolution,
+                "width": self.last_map.info.width,
+                "height": self.last_map.info.height,
+                "origin_x": self.last_map.info.origin.position.x,
+                "origin_y": self.last_map.info.origin.position.y,
+                "origin_z": self.last_map.info.origin.position.z,
+                "origin_yaw": yaw,
+                "frame_id": self.last_map.header.frame_id,
+                "data": base64.b64encode(np.array(map_data).tobytes()).decode("utf-8"),
+            }
+        else:
+            # No map available in non-mapfree mode
+            return None
+        
+        # Add robot_coords
+        pose_msg = pose_source[1]
+        pos = pose_msg.pose.position
+        ori = pose_msg.pose.orientation
+        siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+        cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+        theta = math.atan2(siny_cosp, cosy_cosp)
+        
+        robot_coords_payload = {
+            "x": pos.x,
+            "y": pos.y,
+            "z": pos.z,
+            "theta": theta,
+            "frame_id": (
+                "map"
+                if pose_source[0] == "tf"
+                else (
+                    self.last_odom.header.frame_id
+                    if getattr(self.last_odom, "header", None) is not None
+                    and self.last_odom.header.frame_id
+                    else "odom"
+                )
+            ),
+        }
+        
+        # Add covariance if available
+        cov = getattr(pose_msg, "covariance", None)
+        if cov is not None:
+            try:
+                if not hasattr(cov, "__len__") or len(cov) >= 36:
+                    robot_coords_payload["cov_x"] = cov[0]
+                    robot_coords_payload["cov_y"] = cov[7]
+                    robot_coords_payload["cov_yaw"] = cov[35]
+            except Exception:
+                pass
+        
+        payload["robot_coords"] = robot_coords_payload
+        return payload
+
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
         self.get_logger().info(f"Received brain/chat_in: {data}")
@@ -706,6 +873,18 @@ class BrainClientNode(Node):
         payload = {"text": data["text"]}
         if image_b64 := self._encode_current_image():
             payload["image_b64"] = image_b64
+        
+        # Include navigation payload for immediate processing of navigation primitives.
+        # Without this, navigation primitives are deferred until the next image message.
+        # Exception: turn_and_move only needs robot_coords and can work with partial data.
+        if nav_payload := self._build_navigation_payload():
+            payload["depth"] = nav_payload.get("depth")
+            payload["map"] = nav_payload.get("map")
+            payload["camera_info"] = nav_payload.get("camera_info")
+            payload["robot_coords"] = nav_payload.get("robot_coords")
+            self.get_logger().debug("chat_in includes full navigation payload for immediate processing")
+        else:
+            self.get_logger().debug("chat_in without full navigation payload - navigation will be deferred")
         
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
         self.ws_bridge.send_message(outgoing_msg)
@@ -1263,56 +1442,10 @@ class BrainClientNode(Node):
             )
             try:
                 # Select pose source based on navigation mode
-                use_mapfree = self.cur_nav_mode == "mapfree"
-                pose_source = None  # Either TF (preferred), AMCL covariance (optional), or ODOM (mapfree)
-
-                if not use_mapfree:
-                    # Prefer TF for pose so we don't depend on /amcl_pose publishing.
-                    # Covariance (if available) still comes from /amcl_pose.
-                    try:
-                        transform = self.tf_buffer.lookup_transform(
-                            target_frame="map",
-                            source_frame="base_link",
-                            time=rclpy.time.Time(),
-                            timeout=rclpy.time.Duration(seconds=0.5),
-                        )
-                        pose_with_cov = PoseWithCovariance()
-                        pose_with_cov.pose.position.x = (
-                            transform.transform.translation.x
-                        )
-                        pose_with_cov.pose.position.y = (
-                            transform.transform.translation.y
-                        )
-                        pose_with_cov.pose.position.z = (
-                            transform.transform.translation.z
-                        )
-                        pose_with_cov.pose.orientation = transform.transform.rotation
-
-                        if self.last_amcl_pose is not None:
-                            pose_with_cov.covariance = self.last_amcl_pose.pose.covariance
-
-                        pose_source = ("tf", pose_with_cov)
-                    except Exception as tf_err:
-                        self.get_logger().warn(
-                            f"\033[93m[BrainClient] TF map→base_link not available; skipping image callback: {tf_err}\033[0m"
-                        )
-                        return
-                elif use_mapfree and self.last_odom is not None:
-                    # Inflate covariance in mapfree mode to communicate uncertainty
-                    try:
-                        cov = getattr(self.last_odom.pose, "covariance", None)
-                        needs_set = cov is None
-                        if not needs_set and hasattr(cov, "__len__"):
-                            needs_set = len(cov) < 36
-                        if needs_set:
-                            self.last_odom.pose.covariance = [1e4] * 36
-                    except Exception:
-                        # If anything goes wrong, still attempt to proceed
-                        pass
-                    pose_source = ("odom", self.last_odom.pose)
-                else:
+                use_mapfree, pose_source = self._get_pose_source("image_callback: ")
+                if pose_source is None:
                     self.get_logger().warn(
-                        "\033[93m[BrainClient] No suitable pose source (amcl/odom). Skipping image callback.\033[0m"
+                        "\033[93m[BrainClient] No suitable pose source. Skipping image callback.\033[0m"
                     )
                     return
 
@@ -1440,128 +1573,14 @@ class BrainClientNode(Node):
                                 "Video creation failed or resulted in no data. Sending only single image."
                             )
 
-                # --- Add other payload components (FOV, depth, map, robot_coords, arm_camera) ---
-                # Include the horizontal and vertical FOV of the camera
-                payload["camera_info"] = {
-                    "horizontal_fov": self.horizontal_fov,
-                    "vertical_fov": self.vertical_fov,
-                    "pitch_deg": self.current_head_pitch,
-                    "x_cam": self.x_cam,
-                    "height_cam": self.height_cam,
-                }
-
-                # Optionally include depth data if enabled and available.
-                # Non-blocking: if depth is not available, just skip it
-                if self.send_depth and self.last_depth_image is not None:
-                    depth_frame = self.last_depth_image
-                    depth_data = depth_frame.tobytes()
-                    if depth_frame.dtype == np.uint16:
-                        encoding = "16UC1"
-                        bytes_per_pixel = 2
-                    elif depth_frame.dtype == np.float32:
-                        encoding = "32FC1"
-                        bytes_per_pixel = 4
-                    else:
-                        encoding = "8UC1"
-                        bytes_per_pixel = 1
-                    depth_payload = {
-                        "height": int(depth_frame.shape[0]),
-                        "width": int(depth_frame.shape[1]),
-                        "encoding": encoding,
-                        "is_bigendian": 0,
-                        "step": int(depth_frame.shape[1] * bytes_per_pixel),
-                        "data": base64.b64encode(depth_data).decode("utf-8"),
-                    }
-                    payload["depth"] = depth_payload
-
-                # Include map data if available; in mapfree mode use dummy map
-                if use_mapfree:
-                    # In mapfree mode, send a dummy 1x1 map
-                    dummy_map_data = np.array([0], dtype=np.int8)  # 1 byte, value 0 (free space)
-                    map_payload = {
-                        "resolution": 100.0,  # 1 meter resolution
-                        "width": 1,
-                        "height": 1,
-                        "origin_x": 0.0,
-                        "origin_y": 0.0,
-                        "origin_z": 0.0,
-                        "origin_yaw": 0.0,
-                        "frame_id": "odom",
-                        "data": base64.b64encode(dummy_map_data.tobytes()).decode("utf-8"),
-                    }
-                    payload["map"] = map_payload
-                    self.get_logger().debug("Including dummy map data for mapfree mode")
-                elif self.last_map is not None:
-                    # Create a simplified map payload with only the necessary information
-                    map_data = self.last_map.data
-
-                    # Convert quaternion to yaw
-                    ori = self.last_map.info.origin.orientation
-                    siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                    cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                    yaw = math.atan2(siny_cosp, cosy_cosp)
-
-                    map_payload = {
-                        "resolution": self.last_map.info.resolution,
-                        "width": self.last_map.info.width,
-                        "height": self.last_map.info.height,
-                        "origin_x": self.last_map.info.origin.position.x,
-                        "origin_y": self.last_map.info.origin.position.y,
-                        "origin_z": self.last_map.info.origin.position.z,
-                        "origin_yaw": yaw,
-                        "frame_id": self.last_map.header.frame_id,
-                        "data": base64.b64encode(np.array(map_data).tobytes()).decode(
-                            "utf-8"
-                        ),
-                    }
-                    payload["map"] = map_payload
-                    self.get_logger().debug("Including map data in image message")
-                else:
-                    # Not in mapfree and no map available
+                # --- Add navigation payload (FOV, depth, map, robot_coords) ---
+                nav_payload = self._build_navigation_payload(use_mapfree, pose_source)
+                if nav_payload is None:
                     self.get_logger().warn(
-                        "\033[93m[BrainClient] No map data available. Skipping image callback.\033[0m"
+                        "\033[93m[BrainClient] Failed to build navigation payload. Skipping image callback.\033[0m"
                     )
                     return
-
-                # Include robot coordinates (use selected pose source)
-                self.get_logger().debug(
-                    f"\033[93m[BrainClient] using pose from {pose_source}.\033[0m"
-                )
-                pose_msg = pose_source[1]  # PoseWithCovariance or Odometry.pose
-                pos = pose_msg.pose.position
-                ori = pose_msg.pose.orientation
-                siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
-                cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
-                theta = math.atan2(siny_cosp, cosy_cosp)
-                robot_coords_payload = {
-                    "x": pos.x,
-                    "y": pos.y,
-                    "z": pos.z,
-                    "theta": theta,
-                    # Frame depends on pose source
-                    "frame_id": (
-                        "map"
-                        if pose_source[0] == "tf"
-                        else (
-                            self.last_odom.header.frame_id
-                            if getattr(self.last_odom, "header", None) is not None
-                            and self.last_odom.header.frame_id
-                            else "odom"
-                        )
-                    ),
-                }
-                # Add covariance if available
-                cov = getattr(pose_msg, "covariance", None)
-                if cov is not None:
-                    try:
-                        # Ensure we can index expected positions
-                        if not hasattr(cov, "__len__") or len(cov) >= 36:
-                            robot_coords_payload["cov_x"] = cov[0]
-                            robot_coords_payload["cov_y"] = cov[7]
-                            robot_coords_payload["cov_yaw"] = cov[35]
-                    except Exception:
-                        pass
-                payload["robot_coords"] = robot_coords_payload
+                payload.update(nav_payload)
 
                 # Optionally include arm camera image if enabled and available
                 # Non-blocking: if arm camera is not available, just skip it

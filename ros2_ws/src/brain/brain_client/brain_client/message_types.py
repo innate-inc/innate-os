@@ -37,7 +37,7 @@ class MessageInType(str, Enum):
 class MessageOutType(str, Enum):
     READY_FOR_IMAGE = "ready_for_image"
     VISION_AGENT_OUTPUT = "vision_agent_output"
-    CHAT_OUT = "brain/chat_out"
+    CHAT_OUT = "chat_out"
     THOUGHTS = "thoughts"
     ERROR = "error"
     STOP_AND_GO_BACK = "stop_and_go_back"
