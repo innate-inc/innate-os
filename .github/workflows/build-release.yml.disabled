@@ -42,7 +42,7 @@ jobs:
 
     - name: Build ROS2 workspace in Docker
       run: |
-        docker build -t ros2-builder -f Dockerfile.build .
+        docker build -t ros2-builder -f Dockerfile.build --build-arg CI_BUILD=true .
 
     - name: Extract built artifacts from Docker
       run: |
