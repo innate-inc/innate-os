@@ -29,7 +29,7 @@ from src.agent.types import (
     NavigationStatusMsg,
     NavigationFeedbackMsg,
 )
-from src.shared_queues import ChatMessage, ChatSignal
+from src.shared_queues import ChatMessage, ChatSignal, AgentInfo
 from src.agent.navigation_controller import NavigationController
 
 
@@ -297,6 +297,58 @@ async def inbound_loop(ws, shared_queues):
                     except Exception as e:
                         print(f"[ROSBridge] Error processing chat history entry: {e}")
 
+            elif service_name == "/brain/get_available_directives":
+                # Check if the service call was successful
+                if not inbound_data.get("result", False):
+                    print("[ROSBridge] get_available_directives service call failed or brain not ready")
+                    continue
+
+                values = inbound_data.get("values", {})
+                directives_raw = values.get("directives", "[]")
+                current_directive = values.get("current_directive", "")
+                startup_directive = values.get("startup_directive", "")
+
+                # The service returns a list with one element: a JSON string containing all agents
+                # e.g., ['[{"id": "agent1", ...}, {"id": "agent2", ...}]']
+                agents = []
+                
+                try:
+                    # Get the JSON string (first element of the list)
+                    if isinstance(directives_raw, list) and len(directives_raw) > 0:
+                        json_string = directives_raw[0]
+                    elif isinstance(directives_raw, str):
+                        json_string = directives_raw
+                    else:
+                        json_string = "[]"
+                    
+                    # Parse the JSON string to get list of agent dicts
+                    agents_list = json.loads(json_string)
+                    
+                    # Convert each dict to AgentInfo
+                    for directive in agents_list:
+                        if isinstance(directive, dict):
+                            agent = AgentInfo(
+                                id=directive.get("id", ""),
+                                display_name=directive.get("display_name", directive.get("id", "")),
+                                display_icon=directive.get("display_icon"),
+                                prompt=directive.get("prompt", ""),
+                                skills=directive.get("skills", []),
+                            )
+                            agents.append(agent)
+                            print(f"[ROSBridge] Parsed agent: {agent.id} - {agent.display_name}")
+                except json.JSONDecodeError as e:
+                    print(f"[ROSBridge] Failed to parse directives JSON: {e}")
+                except Exception as e:
+                    print(f"[ROSBridge] Error processing directives: {e}")
+
+                # Update shared_queues with available agents
+                shared_queues.update_available_agents(
+                    agents=agents,
+                    current_agent_id=current_directive,
+                    startup_agent_id=startup_directive,
+                )
+                print(f"[ROSBridge] Loaded {len(agents)} available agents from brain")
+
         await asyncio.sleep(0.0001)
 
     print("[ROSBridge] inbound_loop stopped.")
@@ -412,6 +464,13 @@ async def outbound_loop(ws, shared_queues):
         print(
             f"[ROSBridge] Set logging configuration: log_everything={shared_queues.log_everything}"
         )
+
+    # Request available agents/directives from the brain
+    srv_get_agents = rosbridge_call_service(
+        "/brain/get_available_directives", "brain_messages/srv/GetAvailableDirectives"
+    )
+    await ws.send(json.dumps(srv_get_agents))
+    print("[ROSBridge] Requested available agents from brain")
 
     while not shared_queues.exit_event.is_set():
         # a) Check if there's a message from the sim

@@ -1,12 +1,10 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, root_validator
 import time  # Add time import for timestamp
 import os  # Need os for path joining
 import json  # Need json for loading file
-
-from src.middleware.auth import get_current_user
 
 # ResetRobotCmd is used by the /reset_robot route
 # SetEnvironmentCmd is used to send the config to the simulation node
@@ -37,7 +35,7 @@ class SetEnvironmentRequest(BaseModel):
         return values
 
 
-@router.post("/set_environment", dependencies=[Depends(get_current_user)])
+@router.post("/set_environment")
 # Update signature to use the new request model
 async def set_environment(request: Request, body: SetEnvironmentRequest):
     """
@@ -128,7 +126,7 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
 # --- Moved Routes ---
 
 
-@router.post("/reset_robot", dependencies=[Depends(get_current_user)])
+@router.post("/reset_robot")
 async def reset_robot(
     request: Request, reset_request: Optional[ResetRobotRequest] = None
 ):
@@ -185,7 +183,7 @@ async def reset_robot(
         )
 
 
-@router.post("/shutdown", dependencies=[Depends(get_current_user)])
+@router.post("/shutdown")
 def shutdown_simulator(request: Request):
     """
     Endpoint to gracefully shut down the simulator.

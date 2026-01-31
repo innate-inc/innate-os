@@ -99,7 +99,6 @@ notebook-shim==0.2.4
 numba==0.63.1
 numpy==2.3.5
 numpy-stl==3.2.0
-ompl==1.7.0
 opencv-python==4.11.0.86
 openexr==3.4.4
 overrides==7.7.0
