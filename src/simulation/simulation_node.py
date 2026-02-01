@@ -47,13 +47,13 @@ class SimulationNode:
         self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
         # Track dynamic entity positions for occupancy grid generation
-        self.active_entities: Dict[
-            str, Dict[str, Any]
-        ] = {}  # entity_name -> {position: [x, y, z], hitbox_type: "manual"/"aabb"}
+        self.active_entities: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # entity_name -> {position: [x, y, z], hitbox_type: "manual"/"aabb"}
 
         # Add timing variables for real-time simulation
         self.last_render_time = 0
-        self.render_interval = 0.5  # Render every 0.5 seconds
+        self.render_interval = 1 / 10  # Render at 15 FPS
 
         # Store commanded velocities for odometry
         self.commanded_lin_vel = np.zeros(3)  # [vx, vy, vz]
