@@ -40,7 +40,7 @@ class WSClient:
         """Connect to the WebSocket server with automatic reconnection."""
         reconnect_delay = 1  # Start with 1 second delay
         max_reconnect_delay = 30  # Max 30 seconds between retries
-        
+
         while rclpy.ok() and not self.node.exit_event.is_set():
             self.node.get_logger().info(f"[WSClient] Connecting to {self.uri} ...")
             try:
@@ -68,13 +68,13 @@ class WSClient:
                     await self.listen()
             except Exception as e:
                 self.node.get_logger().error(f"[WSClient] Connection error: {e}")
-            
+
             self.websocket = None
-            
+
             # Check if we should exit before attempting reconnection
             if self.node.exit_event.is_set() or not rclpy.ok():
                 break
-                
+
             self.node.get_logger().warn(f"[WSClient] Connection lost. Reconnecting in {reconnect_delay}s...")
             await asyncio.sleep(reconnect_delay)
             reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)  # Exponential backoff
@@ -126,21 +126,19 @@ class WSClientNode(Node):
         # Declare parameters for websocket configuration.
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
-        self.ws_uri = (
-            self.get_parameter("websocket_uri").get_parameter_value().string_value
-        )
+        self.ws_uri = self.get_parameter("websocket_uri").get_parameter_value().string_value
         self.token = self.get_parameter("token").get_parameter_value().string_value
 
         # Validate websocket URI early
         self._ws_configured = self._validate_ws_uri(self.ws_uri)
         if not self._ws_configured:
-            self.get_logger().error("❌ WebSocket URI not configured or invalid. Set 'websocket_uri' parameter (must start with ws:// or wss://).")
+            self.get_logger().error(
+                "❌ WebSocket URI not configured or invalid. Set 'websocket_uri' parameter (must start with ws:// or wss://)."
+            )
 
         # Robot version from /robot/info
         self._robot_version: Optional[str] = None
-        self._robot_info_sub = self.create_subscription(
-            String, "/robot/info", self._robot_info_callback, 10
-        )
+        self._robot_info_sub = self.create_subscription(String, "/robot/info", self._robot_info_callback, 10)
 
         # Publisher for TTS messages
         self._tts_pub = self.create_publisher(String, "/brain/tts", 10)
@@ -149,9 +147,7 @@ class WSClientNode(Node):
         self.ws_pub = self.create_publisher(String, "ws_messages", 10)
 
         # Subscribe to the generic outgoing topic—any message published on this topic will be sent.
-        self.outgoing_sub = self.create_subscription(
-            String, "ws_outgoing", self.ws_outgoing_callback, 10
-        )
+        self.outgoing_sub = self.create_subscription(String, "ws_outgoing", self.ws_outgoing_callback, 10)
 
         self.exit_event = threading.Event()
 
@@ -239,15 +235,11 @@ class WSClientNode(Node):
                 # Check if the loop exists and is running before trying to send
                 if self.ws_client and self.ws_client.loop and self.ws_client.loop.is_running():
                     try:
-                        asyncio.run_coroutine_threadsafe(
-                            self.ws_client.send(outgoing_message), self.ws_client.loop
-                        )
+                        asyncio.run_coroutine_threadsafe(self.ws_client.send(outgoing_message), self.ws_client.loop)
                     except RuntimeError as e:
                         self.get_logger().error(f"Error sending message: {e}")
                 else:
-                    self.get_logger().warn(
-                        "Cannot send message: WebSocket or event loop not available"
-                    )
+                    self.get_logger().warn("Cannot send message: WebSocket or event loop not available")
             else:
                 self.get_logger().error(f"Unknown message type: {message_type}")
 

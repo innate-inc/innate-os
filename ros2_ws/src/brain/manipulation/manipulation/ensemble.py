@@ -2,6 +2,8 @@
 
 import torch
 from torch import Tensor
+
+
 class ACTTemporalEnsembler:
     def __init__(self, temporal_ensemble_coeff: float, chunk_size: int) -> None:
         """Temporal ensembling as described in Algorithm 2 of https://arxiv.org/abs/2304.13705.
@@ -92,21 +94,22 @@ class ACTTemporalEnsembler:
         )
         return action
 
+
 def main():
     # Initialize the ACTTemporalEnsembler with temporal_ensemble_coeff=0.01 and chunk_size=30
     ensembler = ACTTemporalEnsembler(temporal_ensemble_coeff=0, chunk_size=30)
-    
+
     # Loop 50 times
     for i in range(50):
         # Create a tensor of shape [1, 30, 8] filled with the value i
         actions = torch.full((1, 30, 8), float(i), dtype=torch.float32)
-        
+
         # Call update and get the result
         result = ensembler.update(actions)
-        
+
         # Print the result
         print(f"Iteration {i}, Result shape: {result.shape}, First value: {result[0, 0]}")
 
+
 if __name__ == "__main__":
     main()
-    

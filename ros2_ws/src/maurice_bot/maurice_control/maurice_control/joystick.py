@@ -12,7 +12,16 @@ import numpy as np
 
 
 class JoystickAxis:
-    def __init__(self, deadzone: float, exponent: float, max_val: float, time_constant: float, dt: float, max_acceleration: float, slow_mode_factor: float):
+    def __init__(
+        self,
+        deadzone: float,
+        exponent: float,
+        max_val: float,
+        time_constant: float,
+        dt: float,
+        max_acceleration: float,
+        slow_mode_factor: float,
+    ):
         self.deadzone = deadzone
         self.exponent = exponent
         self.max_val = max_val
@@ -22,6 +31,7 @@ class JoystickAxis:
         self.slow_mode_factor = slow_mode_factor
         self.current_val = 0.0
         self.current_acceleration = 0.0
+
     def shape_input(self, x, slow_mode: bool):
         # Apply deadzone and basic scaling
         direction = 1 if x >= 0 else -1
@@ -31,127 +41,130 @@ class JoystickAxis:
         if x < 0:
             return 0.0
         else:
-            return direction * max_val * ((x/(1-self.deadzone)) ** self.exponent)
-        
+            return direction * max_val * ((x / (1 - self.deadzone)) ** self.exponent)
+
     def update(self, value: float, slow_mode: bool):
         shaped_value = self.shape_input(value, slow_mode)
         self.current_val = self.current_val + self.current_acceleration * self.dt
-        self.current_acceleration = min(max((shaped_value - self.current_val) / self.time_constant, -self.max_acceleration), self.max_acceleration)
-        
+        self.current_acceleration = min(
+            max((shaped_value - self.current_val) / self.time_constant, -self.max_acceleration), self.max_acceleration
+        )
+
         return self.current_val
+
 
 class JoystickController(Node):
     def __init__(self, debug=False):
-        super().__init__('joystick_controller')
-        
+        super().__init__("joystick_controller")
+
         # Initialize pygame and joystick
         pygame.init()
         pygame.joystick.init()
-        
+
         # Initialize joystick
         self.joystick = None
         self.check_for_joystick()
-        
+
         # Load parameters and initialize JoystickAxis controllers
         self._load_parameters()
-        
+
         self.speed_axis = JoystickAxis(
-            deadzone=self.joystick_control['speed_deadzone'],
-            exponent=self.joystick_control['speed_exponent'],
-            max_val=self.motion_control['max_speed'],
-            time_constant=self.motion_control['speed_time_constant'],
-            dt=self.motion_control['dt'],
-            max_acceleration=self.motion_control['max_acceleration'],
-            slow_mode_factor=self.joystick_control['slow_mode_factor']
+            deadzone=self.joystick_control["speed_deadzone"],
+            exponent=self.joystick_control["speed_exponent"],
+            max_val=self.motion_control["max_speed"],
+            time_constant=self.motion_control["speed_time_constant"],
+            dt=self.motion_control["dt"],
+            max_acceleration=self.motion_control["max_acceleration"],
+            slow_mode_factor=self.joystick_control["slow_mode_factor"],
         )
         self.angular_speed_axis = JoystickAxis(
-            deadzone=self.joystick_control['angular_speed_deadzone'],
-            exponent=self.joystick_control['angular_speed_exponent'],
-            max_val=self.motion_control['max_angular_speed'],
-            time_constant=self.motion_control['angular_speed_time_constant'],
-            dt=self.motion_control['dt'],
-            max_acceleration=self.motion_control['max_angular_acceleration'],
-            slow_mode_factor=self.joystick_control['slow_mode_factor']
+            deadzone=self.joystick_control["angular_speed_deadzone"],
+            exponent=self.joystick_control["angular_speed_exponent"],
+            max_val=self.motion_control["max_angular_speed"],
+            time_constant=self.motion_control["angular_speed_time_constant"],
+            dt=self.motion_control["dt"],
+            max_acceleration=self.motion_control["max_angular_acceleration"],
+            slow_mode_factor=self.joystick_control["slow_mode_factor"],
         )
-        
+
         # Publisher for velocity commands
-        self.twist_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        
+        self.twist_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+
         # Create timer for reading joystick input (use dt from parameters)
-        self.create_timer(self.motion_control['dt'], self.timer_callback)
-        
+        self.create_timer(self.motion_control["dt"], self.timer_callback)
+
         # Add slow mode state
         self.slow_mode = False
         self.button_5_previous = False
-        self.slow_mode_button = self.joystick_control['slow_mode_button']
-        self.slow_mode_factor = self.joystick_control['slow_mode_factor']
-        
+        self.slow_mode_button = self.joystick_control["slow_mode_button"]
+        self.slow_mode_factor = self.joystick_control["slow_mode_factor"]
+
         # Add publishing control state
         self.publishing_enabled = True
         self.button_4_previous = False
-        self.publish_toggle_button = self.joystick_control['light_mode_button']  # Reuse the same button parameter
-        
+        self.publish_toggle_button = self.joystick_control["light_mode_button"]  # Reuse the same button parameter
+
         # Add debug mode
         self.debug = debug
         if self.debug:
             self._setup_debug_plotting()
-        
-        self.get_logger().info('Joystick Controller initialized')
-    
+
+        self.get_logger().info("Joystick Controller initialized")
+
     def check_for_joystick(self):
         if pygame.joystick.get_count() > 0:
             self.joystick = pygame.joystick.Joystick(0)
             self.joystick.init()
-            self.get_logger().info('Joystick found and initialized!')
+            self.get_logger().info("Joystick found and initialized!")
         else:
-            self.get_logger().warn('No joystick found!')
-    
+            self.get_logger().warn("No joystick found!")
+
     def timer_callback(self):
         if self.joystick is None:
             return
-            
+
         pygame.event.pump()
-        
+
         # Check button 5 state for slow mode
         button_slow = self.joystick.get_button(self.slow_mode_button)
         if button_slow and not self.button_slow_previous:
             self.slow_mode = not self.slow_mode
-            self.get_logger().info('Slow mode: {}'.format(self.slow_mode))
+            self.get_logger().info("Slow mode: {}".format(self.slow_mode))
         self.button_slow_previous = button_slow
-        
+
         # Check button 4 state for publishing toggle
         button_4 = self.joystick.get_button(self.publish_toggle_button)
         if button_4 and not self.button_4_previous:
             self.publishing_enabled = not self.publishing_enabled
-            self.get_logger().info(f'Publishing {"enabled" if self.publishing_enabled else "disabled"}')
+            self.get_logger().info(f"Publishing {'enabled' if self.publishing_enabled else 'disabled'}")
         self.button_4_previous = button_4
-        
+
         # Read joystick values
-        forward = -self.joystick.get_axis(self.joystick_control['speed_axis'])
-        turn = -self.joystick.get_axis(self.joystick_control['angular_speed_axis'])
-        
+        forward = -self.joystick.get_axis(self.joystick_control["speed_axis"])
+        turn = -self.joystick.get_axis(self.joystick_control["angular_speed_axis"])
+
         # Update axis controllers and get new values
         linear_speed = self.speed_axis.update(forward, self.slow_mode)
         angular_speed = self.angular_speed_axis.update(turn, self.slow_mode)
-        
+
         # Update debug plots if enabled
         if self.debug:
             current_time = (self.get_clock().now().nanoseconds / 1e9) - self.time_start
             self.time_data.append(current_time)
             self.speed_data.append(linear_speed)
             self.angular_speed_data.append(angular_speed)
-            
+
             # Update plots
             self.speed_line.set_data(list(self.time_data), list(self.speed_data))
             self.angular_speed_line.set_data(list(self.time_data), list(self.angular_speed_data))
-            
+
             # Adjust x-axis limits to show last N seconds
             for ax in [self.ax1, self.ax2]:
                 ax.set_xlim(current_time - 5, current_time)
-            
+
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
-        
+
         # Create and publish Twist message only if publishing is enabled
         if self.publishing_enabled:
             msg = Twist()
@@ -163,80 +176,81 @@ class JoystickController(Node):
         """Declare and load all parameters from the config file."""
         # Declare motion control parameters
         self.motion_params = {
-            'max_speed': 2.0,
-            'max_angular_speed': 2.5,
-            'max_acceleration': 0.8,
-            'max_angular_acceleration': 2.0,
-            'speed_time_constant': 0.2,
-            'angular_speed_time_constant': 0.2,
-            'dt': 0.02
+            "max_speed": 2.0,
+            "max_angular_speed": 2.5,
+            "max_acceleration": 0.8,
+            "max_angular_acceleration": 2.0,
+            "speed_time_constant": 0.2,
+            "angular_speed_time_constant": 0.2,
+            "dt": 0.02,
         }
-        
+
         # Declare joystick parameters
         self.joystick_params = {
-            'speed_deadzone': 0.3,
-            'angular_speed_deadzone': 0.3,
-            'speed_exponent': 2.0,
-            'angular_speed_exponent': 2.0,
-            'speed_axis': 1,
-            'angular_speed_axis': 0,
-            'slow_mode_button': 5,
-            'light_mode_button': 4,
-            'slow_mode_factor': 0.25,
-            'light_control.blink_interval_ms': 300
+            "speed_deadzone": 0.3,
+            "angular_speed_deadzone": 0.3,
+            "speed_exponent": 2.0,
+            "angular_speed_exponent": 2.0,
+            "speed_axis": 1,
+            "angular_speed_axis": 0,
+            "slow_mode_button": 5,
+            "light_mode_button": 4,
+            "slow_mode_factor": 0.25,
+            "light_control.blink_interval_ms": 300,
         }
-        
+
         # Declare all parameters with their default values
         for param, default in self.motion_params.items():
-            self.declare_parameter(f'motion_control.{param}', default)
-        
+            self.declare_parameter(f"motion_control.{param}", default)
+
         for param, default in self.joystick_params.items():
-            if param == 'light_control.blink_interval_ms':
-                self.declare_parameter('joystick.light_control.blink_interval_ms', default)
+            if param == "light_control.blink_interval_ms":
+                self.declare_parameter("joystick.light_control.blink_interval_ms", default)
             else:
-                self.declare_parameter(f'joystick.{param}', default)
-        
+                self.declare_parameter(f"joystick.{param}", default)
+
         # Store parameters in dictionaries
         self.motion_control = {}
         for param in self.motion_params:
-            self.motion_control[param] = self.get_parameter(f'motion_control.{param}').value
-        
+            self.motion_control[param] = self.get_parameter(f"motion_control.{param}").value
+
         self.joystick_control = {}
         for param in self.joystick_params:
-            if param == 'light_control.blink_interval_ms':
-                if 'light_control' not in self.joystick_control:
-                    self.joystick_control['light_control'] = {}
-                self.joystick_control['light_control']['blink_interval_ms'] = \
-                    self.get_parameter('joystick.light_control.blink_interval_ms').value
+            if param == "light_control.blink_interval_ms":
+                if "light_control" not in self.joystick_control:
+                    self.joystick_control["light_control"] = {}
+                self.joystick_control["light_control"]["blink_interval_ms"] = self.get_parameter(
+                    "joystick.light_control.blink_interval_ms"
+                ).value
             else:
-                self.joystick_control[param] = self.get_parameter(f'joystick.{param}').value
+                self.joystick_control[param] = self.get_parameter(f"joystick.{param}").value
 
     def _setup_debug_plotting(self):
         """Initialize debug plotting setup."""
         # Initialize plotting
         plt.ion()  # Enable interactive mode
         self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(8, 8))
-        
+
         # Initialize data storage
         self.history_length = 200
         self.time_data = deque(maxlen=self.history_length)
         self.speed_data = deque(maxlen=self.history_length)
         self.angular_speed_data = deque(maxlen=self.history_length)
         self.time_start = self.get_clock().now().nanoseconds / 1e9
-        
+
         # Setup plots
-        self.speed_line, = self.ax1.plot([], [], 'b-', label='Linear Speed')
-        self.ax1.set_title('Linear Speed')
-        self.ax1.set_ylim(-self.motion_control['max_speed'], self.motion_control['max_speed'])
+        (self.speed_line,) = self.ax1.plot([], [], "b-", label="Linear Speed")
+        self.ax1.set_title("Linear Speed")
+        self.ax1.set_ylim(-self.motion_control["max_speed"], self.motion_control["max_speed"])
         self.ax1.grid(True)
         self.ax1.legend()
-        
-        self.angular_speed_line, = self.ax2.plot([], [], 'r-', label='Angular Speed')
-        self.ax2.set_title('Angular Speed')
-        self.ax2.set_ylim(-self.motion_control['max_angular_speed'], self.motion_control['max_angular_speed'])
+
+        (self.angular_speed_line,) = self.ax2.plot([], [], "r-", label="Angular Speed")
+        self.ax2.set_title("Angular Speed")
+        self.ax2.set_ylim(-self.motion_control["max_angular_speed"], self.motion_control["max_angular_speed"])
         self.ax2.grid(True)
         self.ax2.legend()
-        
+
         plt.tight_layout()
         plt.show()
 
@@ -246,12 +260,12 @@ class JoystickController(Node):
         r = random.randint(0, 255)
         g = random.randint(0, 255)
         b = random.randint(0, 255)
-        
+
         request = LightCommand.Request()
         request.r = r
         request.g = g
         request.b = b
-        
+
         # Map current light mode to the service request
         if self.light_mode == 0:
             request.mode = LightCommand.Request.OFF
@@ -265,9 +279,10 @@ class JoystickController(Node):
         elif self.light_mode == 3:
             request.mode = LightCommand.Request.RING
             request.interval = self.blink_interval_ms
-        
+
         self.light_client.call_async(request)
-        self.get_logger().info(f'Sent light command: mode={self.light_mode}, RGB=({r},{g},{b})')
+        self.get_logger().info(f"Sent light command: mode={self.light_mode}, RGB=({r},{g},{b})")
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -276,5 +291,6 @@ def main(args=None):
     node.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

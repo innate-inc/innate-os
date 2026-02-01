@@ -5,22 +5,21 @@ from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
 import os
 
+
 def generate_launch_description():
     # Get the package share directory
-    pkg_dir = get_package_share_directory('maurice_control')
-    
+    pkg_dir = get_package_share_directory("maurice_control")
+
     # Path to the config file
-    config_file = os.path.join(pkg_dir, 'config', 'motion_control.yaml')
-    
+    config_file = os.path.join(pkg_dir, "config", "motion_control.yaml")
+
     # Create the joystick node
     joystick_node = Node(
-        package='maurice_control',
-        executable='joystick.py',
-        name='joystick_controller',
+        package="maurice_control",
+        executable="joystick.py",
+        name="joystick_controller",
         parameters=[config_file],
-        output='screen'
+        output="screen",
     )
-    
-    return LaunchDescription([
-        joystick_node
-    ])
+
+    return LaunchDescription([joystick_node])

@@ -13,6 +13,4 @@ def generate_launch_description():
         "rosbridge_websocket_launch.xml",
     )
 
-    return LaunchDescription(
-        [IncludeLaunchDescription(FrontendLaunchDescriptionSource(rosbridge_xml))]
-    )
+    return LaunchDescription([IncludeLaunchDescription(FrontendLaunchDescriptionSource(rosbridge_xml))])

@@ -24,13 +24,9 @@ class HeadInterface:
         self.head_position_topic = head_position_topic
 
         # Publisher for head position commands
-        self._head_position_pub = self.node.create_publisher(
-            Int32, self.head_position_topic, 10
-        )
+        self._head_position_pub = self.node.create_publisher(Int32, self.head_position_topic, 10)
 
-        self.logger.info(
-            f"HeadInterface initialized with position topic: {self.head_position_topic}"
-        )
+        self.logger.info(f"HeadInterface initialized with position topic: {self.head_position_topic}")
 
     def set_position(self, angle_degrees: int) -> None:
         """Set the head tilt position.
@@ -43,12 +39,10 @@ class HeadInterface:
         """
         if not isinstance(angle_degrees, int):
             angle_degrees = int(angle_degrees)
-        
+
         msg = Int32()
         msg.data = angle_degrees
 
         self._head_position_pub.publish(msg)
 
-        self.logger.debug(
-            f"HeadInterface: set head position to {angle_degrees} degrees"
-        )
+        self.logger.debug(f"HeadInterface: set head position to {angle_degrees} degrees")

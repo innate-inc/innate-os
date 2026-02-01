@@ -25,9 +25,7 @@ class WSBridge:
         self.handlers = {}  # Map from MessageOutType to handler callback
 
         # Subscription for incoming messages from the WSClient node.
-        self.incoming_sub = self.node.create_subscription(
-            String, self.incoming_topic, self._ws_callback, 10
-        )
+        self.incoming_sub = self.node.create_subscription(String, self.incoming_topic, self._ws_callback, 10)
         # Publisher for outgoing messages to the WSClient node.
         self.outgoing_pub = self.node.create_publisher(String, self.outgoing_topic, 10)
         self.node.get_logger().info(
@@ -69,13 +67,9 @@ class WSBridge:
             try:
                 handler(ws_msg)
             except Exception as e:
-                self.node.get_logger().error(
-                    f"WSBridge: Handler for {ws_msg.type} raised error: {e}"
-                )
+                self.node.get_logger().error(f"WSBridge: Handler for {ws_msg.type} raised error: {e}")
         else:
-            self.node.get_logger().warn(
-                f"WSBridge: No handler registered for message type: {ws_msg.type}"
-            )
+            self.node.get_logger().warn(f"WSBridge: No handler registered for message type: {ws_msg.type}")
 
     def send_message(self, message):
         """
@@ -85,9 +79,7 @@ class WSBridge:
         try:
             json_str = message.model_dump_json()
         except Exception as e:
-            self.node.get_logger().error(
-                f"WSBridge: Failed to dump message to JSON: {e}"
-            )
+            self.node.get_logger().error(f"WSBridge: Failed to dump message to JSON: {e}")
             return
         outgoing_msg = String(data=json_str)
         self.outgoing_pub.publish(outgoing_msg)

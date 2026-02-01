@@ -33,9 +33,7 @@ class Skill(ABC):
     def __init__(self, logger):
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.node: Node | None = None
-        self.manipulation = (
-            None  # Will be injected by primitive_execution_action_server
-        )
+        self.manipulation = None  # Will be injected by primitive_execution_action_server
         self.mobility = None  # Will be injected by primitive_execution_action_server
         self.head = None  # Will be injected by primitive_execution_action_server
         self._feedback_callback = None
@@ -114,9 +112,7 @@ class Skill(ABC):
             try:
                 self._feedback_callback(message)
             except Exception as e:
-                self.logger.error(
-                    f"Error sending feedback for primitive {self.name}: {e}"
-                )
+                self.logger.error(f"Error sending feedback for primitive {self.name}: {e}")
 
 
 class PhysicalSkill(Skill):
@@ -161,19 +157,13 @@ class PhysicalSkill(Skill):
                    PrimitiveResult enum value
         """
         if not self.node:
-            self.logger.error(
-                f"{self.display_name} primitive is not functional due to missing ROS node."
-            )
+            self.logger.error(f"{self.display_name} primitive is not functional due to missing ROS node.")
             return "Skill not initialized correctly (no ROS node)", SkillResult.FAILURE
 
         if not self._action_client:
-            self._action_client = ActionClient(
-                self.node, ExecuteBehavior, "/behavior/execute"
-            )
+            self._action_client = ActionClient(self.node, ExecuteBehavior, "/behavior/execute")
             if not self._action_client:
-                self.logger.error(
-                    f"{self.display_name} primitive could not create ExecuteBehavior action client."
-                )
+                self.logger.error(f"{self.display_name} primitive could not create ExecuteBehavior action client.")
                 return "Skill could not create action client", SkillResult.FAILURE
 
         self.logger.info(
@@ -188,9 +178,7 @@ class PhysicalSkill(Skill):
         goal_msg.behavior_name = self.behavior_name
 
         self.logger.info("Sending goal to ExecuteBehavior action server...")
-        goal_future = self._action_client.send_goal_async(
-            goal_msg, feedback_callback=self.feedback_callback
-        )
+        goal_future = self._action_client.send_goal_async(goal_msg, feedback_callback=self.feedback_callback)
 
         try:
             rclpy.spin_until_future_complete(self.node, goal_future, timeout_sec=10.0)
@@ -215,9 +203,7 @@ class PhysicalSkill(Skill):
         except Exception as e:
             self.logger.error(f"Exception while spinning for result future: {e}")
             if self._goal_handle:
-                self.logger.info(
-                    "Attempting to cancel goal due to exception during result wait."
-                )
+                self.logger.info("Attempting to cancel goal due to exception during result wait.")
                 self._goal_handle.cancel_goal_async()
             return f"Failed to get result: {e}", SkillResult.FAILURE
 
@@ -255,9 +241,7 @@ class PhysicalSkill(Skill):
             skill_status = SkillResult.CANCELLED
         else:
             self.logger.info(f"Goal failed with unknown status: {status}")
-            action_result_message = (
-                f"{self.display_name} failed with unknown status: {status}"
-            )
+            action_result_message = f"{self.display_name} failed with unknown status: {status}"
 
         self._goal_handle = None
         return action_result_message, skill_status
@@ -268,9 +252,7 @@ class PhysicalSkill(Skill):
         This is a best-effort cancellation.
         """
         if self._goal_handle:
-            self.logger.info(
-                f"\033[91m[BrainClient] Canceling {self.display_name.lower()} operation \033[0m"
-            )
+            self.logger.info(f"\033[91m[BrainClient] Canceling {self.display_name.lower()} operation \033[0m")
             self._goal_handle.cancel_goal_async()
             return f"\033[92m[BrainClient] Cancellation request sent for {self.display_name.lower()}. \033[0m"
         else:

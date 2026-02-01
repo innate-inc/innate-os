@@ -11,20 +11,19 @@ from std_srvs.srv import Trigger
 # Import status message type.
 from brain_messages.msg import RecorderStatus
 
+
 class TerminalInterface(Node):
     def __init__(self):
-        super().__init__('terminal_interface')
+        super().__init__("terminal_interface")
         # Create service clients.
-        self.new_task_client = self.create_client(ManipulationTask, 'new_task')
-        self.new_episode_client = self.create_client(Trigger, 'new_episode')
-        self.save_episode_client = self.create_client(Trigger, 'save_episode')
-        self.cancel_episode_client = self.create_client(Trigger, 'cancel_episode')
-        self.end_task_client = self.create_client(Trigger, 'end_task')
+        self.new_task_client = self.create_client(ManipulationTask, "new_task")
+        self.new_episode_client = self.create_client(Trigger, "new_episode")
+        self.save_episode_client = self.create_client(Trigger, "save_episode")
+        self.cancel_episode_client = self.create_client(Trigger, "cancel_episode")
+        self.end_task_client = self.create_client(Trigger, "end_task")
 
         # Create subscription for recorder status.
-        self.create_subscription(
-            RecorderStatus, '/recorder_status', self.status_callback, 10
-        )
+        self.create_subscription(RecorderStatus, "/recorder_status", self.status_callback, 10)
 
         # Start a thread for reading terminal input.
         thread = threading.Thread(target=self.run_interface, daemon=True)
@@ -38,23 +37,23 @@ class TerminalInterface(Node):
                 command = input("Enter command: ").strip().lower()
             except EOFError:
                 break  # End of input
-            if command == 'nt':
+            if command == "nt":
                 task_name = input("Enter task name: ")
                 task_description = input("Enter task description: ")
                 mobile_flag_str = input("Is this a mobile task? (y/n): ").strip().lower()
-                mobile_flag = True if mobile_flag_str == 'y' else False
+                mobile_flag = True if mobile_flag_str == "y" else False
                 self.call_new_task(task_name, task_description, mobile_flag)
-            elif command == 'ne':
+            elif command == "ne":
                 self.call_new_episode()
-            elif command == 'se':
+            elif command == "se":
                 self.call_save_episode()
-            elif command == 'ce':
+            elif command == "ce":
                 self.call_cancel_episode()
-            elif command == 'et':
+            elif command == "et":
                 self.call_end_task()
-            elif command == 'm':
+            elif command == "m":
                 self.print_menu()
-            elif command == 'q':
+            elif command == "q":
                 self.get_logger().info("Quitting terminal interface.")
                 rclpy.shutdown()
                 break
@@ -165,7 +164,8 @@ class TerminalInterface(Node):
         print(f"Episode Number: {msg.episode_number}")
         print(f"Status: {msg.status}")
         print("------------------------------\n")
-        print("Enter command (or 'm' for menu): ", end='', flush=True)
+        print("Enter command (or 'm' for menu): ", end="", flush=True)
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -179,5 +179,6 @@ def main(args=None):
         rclpy.shutdown()
         sys.exit(0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

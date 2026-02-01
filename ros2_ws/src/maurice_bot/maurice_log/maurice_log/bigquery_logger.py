@@ -60,6 +60,9 @@ class RobotTelemetryLogger:
 
     def log_directive(self, directive: str):
         """Log directive change event."""
-        self._post("/log/directive", {
-            "directive": directive,
-        })
+        self._post(
+            "/log/directive",
+            {
+                "directive": directive,
+            },
+        )

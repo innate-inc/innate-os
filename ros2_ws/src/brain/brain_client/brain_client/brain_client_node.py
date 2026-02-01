@@ -91,9 +91,7 @@ class BrainClientNode(Node):
         self.declare_parameter("map_topic", "/map")
 
         # New parameters for arm camera
-        self.declare_parameter(
-            "arm_camera_image_topic", "/mars/arm/image_raw/compressed"
-        )
+        self.declare_parameter("arm_camera_image_topic", "/mars/arm/image_raw/compressed")
         self.declare_parameter("send_arm_camera_image", True)
 
         # Set to True if you wish to receive and forward depth images as well
@@ -118,18 +116,12 @@ class BrainClientNode(Node):
         self.declare_parameter("log_everything", False)  # Default to False
 
         # --- New: Video buffering parameters ---
-        self.declare_parameter(
-            "video_buffer_duration_seconds", 2.0
-        )  # Duration of video to send
+        self.declare_parameter("video_buffer_duration_seconds", 2.0)  # Duration of video to send
         self.declare_parameter("video_fps", 10.0)  # FPS for the created video clip
-        self.declare_parameter(
-            "image_buffer_max_size", 60
-        )  # Max images to store (e.g., 2s @ 30fps for a 30fps camera)
+        self.declare_parameter("image_buffer_max_size", 60)  # Max images to store (e.g., 2s @ 30fps for a 30fps camera)
 
         # --- New: Flag to switch between image and video feed ---
-        self.declare_parameter(
-            "send_video_feed", False
-        )  # Default to sending single image
+        self.declare_parameter("send_video_feed", False)  # Default to sending single image
 
         # --- New: Brain active state flag ---
         self.is_brain_active = False  # Brain starts active
@@ -141,29 +133,17 @@ class BrainClientNode(Node):
         # --- Proxy service configuration ---
         # Credentials (INNATE_PROXY_URL, INNATE_SERVICE_KEY) come from env vars
         # These are service configs that can be overridden at launch
-        self.declare_parameter(
-            "cartesia_voice_id", "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
-        )
+        self.declare_parameter("cartesia_voice_id", "9fdaae0b-f885-4813-b589-3c07cf9d5fea")
         self.declare_parameter("openai_realtime_model", "gpt-4o-realtime-preview")
-        self.declare_parameter(
-            "openai_realtime_url", "wss://api.openai.com/v1/realtime"
-        )
+        self.declare_parameter("openai_realtime_url", "wss://api.openai.com/v1/realtime")
         self.declare_parameter("openai_transcribe_model", "gpt-4o-mini-transcribe")
 
         # Build proxy config from params
         proxy_config = {
-            "cartesia_voice_id": self.get_parameter("cartesia_voice_id")
-            .get_parameter_value()
-            .string_value,
-            "openai_realtime_model": self.get_parameter("openai_realtime_model")
-            .get_parameter_value()
-            .string_value,
-            "openai_realtime_url": self.get_parameter("openai_realtime_url")
-            .get_parameter_value()
-            .string_value,
-            "openai_transcribe_model": self.get_parameter("openai_transcribe_model")
-            .get_parameter_value()
-            .string_value,
+            "cartesia_voice_id": self.get_parameter("cartesia_voice_id").get_parameter_value().string_value,
+            "openai_realtime_model": self.get_parameter("openai_realtime_model").get_parameter_value().string_value,
+            "openai_realtime_url": self.get_parameter("openai_realtime_url").get_parameter_value().string_value,
+            "openai_transcribe_model": self.get_parameter("openai_transcribe_model").get_parameter_value().string_value,
         }
 
         # Initialize unified proxy client (credentials from env, config from params)
@@ -174,137 +154,73 @@ class BrainClientNode(Node):
             if self.proxy.is_available():
                 self.get_logger().info(f"✅ Proxy client initialized")
             else:
-                self.get_logger().warning(
-                    "⚠️ Proxy not configured (check INNATE_PROXY_URL, INNATE_SERVICE_KEY)"
-                )
+                self.get_logger().warning("⚠️ Proxy not configured (check INNATE_PROXY_URL, INNATE_SERVICE_KEY)")
                 self.proxy = None
         except Exception as e:
             self.get_logger().warning(f"⚠️ Could not initialize proxy: {e}")
             self.proxy = None
 
-        self.get_logger().info(
-            f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode"
-        )
+        self.get_logger().info(f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode")
 
-        self.ws_uri = (
-            self.get_parameter("websocket_uri").get_parameter_value().string_value
-        )
+        self.ws_uri = self.get_parameter("websocket_uri").get_parameter_value().string_value
         self.token = self.get_parameter("token").get_parameter_value().string_value
-        self.image_topic = (
-            self.get_parameter("image_topic").get_parameter_value().string_value
-        )
-        self.cmd_vel_topic = (
-            self.get_parameter("cmd_vel_topic").get_parameter_value().string_value
-        )
-        self.depth_image_topic = (
-            self.get_parameter("depth_image_topic").get_parameter_value().string_value
-        )
-        self.map_topic = (
-            self.get_parameter("map_topic").get_parameter_value().string_value
-        )
-        self.amcl_pose_topic = (
-            self.get_parameter("amcl_pose_topic").get_parameter_value().string_value
-        )
-        self.send_depth = (
-            self.get_parameter("send_depth").get_parameter_value().bool_value
-        )
-        self.arm_camera_image_topic = (
-            self.get_parameter("arm_camera_image_topic")
-            .get_parameter_value()
-            .string_value
-        )
-        self.send_arm_camera_image = (
-            self.get_parameter("send_arm_camera_image").get_parameter_value().bool_value
-        )
-        self.odom_topic = (
-            self.get_parameter("odom_topic").get_parameter_value().string_value
-        )
-        self.use_odom_as_amcl_pose = (
-            self.get_parameter("use_odom_as_amcl_pose").get_parameter_value().bool_value
-        )
+        self.image_topic = self.get_parameter("image_topic").get_parameter_value().string_value
+        self.cmd_vel_topic = self.get_parameter("cmd_vel_topic").get_parameter_value().string_value
+        self.depth_image_topic = self.get_parameter("depth_image_topic").get_parameter_value().string_value
+        self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
+        self.amcl_pose_topic = self.get_parameter("amcl_pose_topic").get_parameter_value().string_value
+        self.send_depth = self.get_parameter("send_depth").get_parameter_value().bool_value
+        self.arm_camera_image_topic = self.get_parameter("arm_camera_image_topic").get_parameter_value().string_value
+        self.send_arm_camera_image = self.get_parameter("send_arm_camera_image").get_parameter_value().bool_value
+        self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
+        self.use_odom_as_amcl_pose = self.get_parameter("use_odom_as_amcl_pose").get_parameter_value().bool_value
         self.last_odom = None
         self.last_amcl_pose = None
         self.cur_nav_mode = None
 
         self.last_arm_camera = None  # Store the latest arm camera image
-        self.odom_sub = self.create_subscription(
-            Odometry, self.odom_topic, self.odom_callback, 10
-        )
-        self.current_nav_mode_topic = (
-            self.get_parameter("current_nav_mode_topic")
-            .get_parameter_value()
-            .string_value
-        )
+        self.odom_sub = self.create_subscription(Odometry, self.odom_topic, self.odom_callback, 10)
+        self.current_nav_mode_topic = self.get_parameter("current_nav_mode_topic").get_parameter_value().string_value
         self.current_nav_mode_sub = self.create_subscription(
             String, self.current_nav_mode_topic, self.nav_mode_callback, 10
         )
         # self.map_agnostic_odom_pub = self.create_publisher(Odometry, '/map_agnost_odom', 10)
 
         # Create a timer to fetch the transform at 30 Hz
-        self.transform_timer = self.create_timer(
-            1.0 / 30.0, self.fetch_transform_callback
-        )
+        self.transform_timer = self.create_timer(1.0 / 30.0, self.fetch_transform_callback)
 
-        self.vertical_fov = (
-            self.get_parameter("vertical_fov").get_parameter_value().double_value
-        )
-        self.horizontal_resolution = (
-            self.get_parameter("horizontal_resolution")
-            .get_parameter_value()
-            .integer_value
-        )
-        self.vertical_resolution = (
-            self.get_parameter("vertical_resolution")
-            .get_parameter_value()
-            .integer_value
-        )
+        self.vertical_fov = self.get_parameter("vertical_fov").get_parameter_value().double_value
+        self.horizontal_resolution = self.get_parameter("horizontal_resolution").get_parameter_value().integer_value
+        self.vertical_resolution = self.get_parameter("vertical_resolution").get_parameter_value().integer_value
         self.horizontal_fov = math.degrees(
             2
             * math.atan(
-                math.tan(math.radians(self.vertical_fov) / 2)
-                * self.horizontal_resolution
-                / self.vertical_resolution
+                math.tan(math.radians(self.vertical_fov) / 2) * self.horizontal_resolution / self.vertical_resolution
             )
         )
 
         # Get camera position parameters
         self.x_cam = self.get_parameter("x_cam").get_parameter_value().double_value
-        self.height_cam = (
-            self.get_parameter("height_cam").get_parameter_value().double_value
-        )
+        self.height_cam = self.get_parameter("height_cam").get_parameter_value().double_value
 
         # Initialize head position storage
         self.current_head_pitch = 0.0  # Default to horizontal (0 degrees)
 
         # Get pose image interval parameter
-        self.pose_image_interval = (
-            self.get_parameter("pose_image_interval").get_parameter_value().double_value
-        )
+        self.pose_image_interval = self.get_parameter("pose_image_interval").get_parameter_value().double_value
 
         # Flag for logging complete vision agent output
-        self.log_everything = (
-            self.get_parameter("log_everything").get_parameter_value().bool_value
-        )
+        self.log_everything = self.get_parameter("log_everything").get_parameter_value().bool_value
 
         # --- Get video buffering parameters ---
         self.video_buffer_duration_seconds = (
-            self.get_parameter("video_buffer_duration_seconds")
-            .get_parameter_value()
-            .double_value
+            self.get_parameter("video_buffer_duration_seconds").get_parameter_value().double_value
         )
-        self.video_fps = (
-            self.get_parameter("video_fps").get_parameter_value().double_value
-        )
-        self.image_buffer_max_size = (
-            self.get_parameter("image_buffer_max_size")
-            .get_parameter_value()
-            .integer_value
-        )
+        self.video_fps = self.get_parameter("video_fps").get_parameter_value().double_value
+        self.image_buffer_max_size = self.get_parameter("image_buffer_max_size").get_parameter_value().integer_value
 
         # --- Get video feed flag ---
-        self.send_video_feed_enabled = (
-            self.get_parameter("send_video_feed").get_parameter_value().bool_value
-        )
+        self.send_video_feed_enabled = self.get_parameter("send_video_feed").get_parameter_value().bool_value
 
         # image_buffer stores (timestamp_sec, image_numpy_array)
         self.image_buffer = deque(maxlen=self.image_buffer_max_size)
@@ -314,9 +230,7 @@ class BrainClientNode(Node):
         self.get_logger().info(f"Log everything mode: {self.log_everything}")
 
         # Directive on startup persistence file
-        maurice_root = os.environ.get(
-            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-        )
+        maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
         self.directive_file = os.path.join(maurice_root, ".directive_on_startup")
 
         # Initialize TF2 buffer and listener
@@ -337,23 +251,17 @@ class BrainClientNode(Node):
         )
 
         # RGB image subscription remains unchanged.
-        self.image_sub = self.create_subscription(
-            CompressedImage, self.image_topic, self.image_callback, image_qos
-        )
+        self.image_sub = self.create_subscription(CompressedImage, self.image_topic, self.image_callback, image_qos)
 
         # Subscribe to the map topic
-        self.map_sub = self.create_subscription(
-            OccupancyGrid, self.map_topic, self.map_callback, 1
-        )
+        self.map_sub = self.create_subscription(OccupancyGrid, self.map_topic, self.map_callback, 1)
 
         # Optionally subscribe to the depth image topic if required.
         if self.send_depth:
             # Assuming that the depth image is published as a sensor_msgs/Image
             # (which contains: header, height, width, encoding, is_bigendian, step, data)
 
-            self.depth_image_sub = self.create_subscription(
-                Image, self.depth_image_topic, self.depth_image_callback, 1
-            )
+            self.depth_image_sub = self.create_subscription(Image, self.depth_image_topic, self.depth_image_callback, 1)
 
         # Optionally subscribe to the arm camera image topic if required.
         if self.send_arm_camera_image:
@@ -395,40 +303,28 @@ class BrainClientNode(Node):
         # Wait for input_manager to be ready (optional but recommended)
         self._wait_for_input_manager()
 
-        self.chat_in_sub = self.create_subscription(
-            String, "/brain/chat_in", self.chat_in_callback, 10
-        )
+        self.chat_in_sub = self.create_subscription(String, "/brain/chat_in", self.chat_in_callback, 10)
         # Subscribe to custom input from input_manager
         self.custom_input_sub = self.create_subscription(
             String, "/input_manager/custom", self.custom_input_callback, 10
         )
         # Publisher to tell input_manager which inputs should be active
-        self.active_inputs_pub = self.create_publisher(
-            String, "/input_manager/active_inputs", 10
-        )
+        self.active_inputs_pub = self.create_publisher(String, "/input_manager/active_inputs", 10)
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         # Publisher for memory positions from the cloud agent's posegraph
-        self.memory_positions_pub = self.create_publisher(
-            String, "/brain/memory_positions", 10
-        )
+        self.memory_positions_pub = self.create_publisher(String, "/brain/memory_positions", 10)
         # Subscriber for direct TTS requests
-        self.tts_sub = self.create_subscription(
-            String, "/brain/tts", self.tts_callback, 10
-        )
+        self.tts_sub = self.create_subscription(String, "/brain/tts", self.tts_callback, 10)
         self.get_chat_history_srv = self.create_service(
             GetChatHistory, "/brain/get_chat_history", self.handle_get_chat_history
         )
 
         # Create service for setting logging configuration
-        self.set_logging_srv = self.create_service(
-            SetBool, "/brain/set_logging_config", self.handle_set_logging_config
-        )
+        self.set_logging_srv = self.create_service(SetBool, "/brain/set_logging_config", self.handle_set_logging_config)
 
         # Create service for resetting the brain
-        self.reset_srv = self.create_service(
-            ResetBrain, "/brain/reset_brain", self.handle_reset_brain
-        )
+        self.reset_srv = self.create_service(ResetBrain, "/brain/reset_brain", self.handle_reset_brain)
 
         # --- New: Service for activating/deactivating the brain ---
         self.set_brain_active_srv = self.create_service(
@@ -447,17 +343,13 @@ class BrainClientNode(Node):
         self._service_call_node = rclpy.create_node("brain_client_service_caller")
 
         # --- Service clients on helper node (for synchronous calls) ---
-        self._reload_primitives_client = self._service_call_node.create_client(
-            Trigger, "/brain/reload_primitives"
-        )
+        self._reload_primitives_client = self._service_call_node.create_client(Trigger, "/brain/reload_primitives")
         self._get_primitives_client_sync = self._service_call_node.create_client(
             GetAvailablePrimitives, "/brain/get_available_primitives"
         )
 
         # --- Service for reloading primitives and directives ---
-        self._reload_srv = self.create_service(
-            Trigger, "/brain/reload", self.handle_reload
-        )
+        self._reload_srv = self.create_service(Trigger, "/brain/reload", self.handle_reload)
 
         # Initialize TTS handler with proxy (voice_id comes from proxy.config)
         if self.proxy is not None:
@@ -467,13 +359,9 @@ class BrainClientNode(Node):
                 tts_status_pub=self.tts_status_pub,
             )
             if self.tts_handler.is_available():
-                self.get_logger().info(
-                    f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})"
-                )
+                self.get_logger().info(f"🗣️ Text-to-speech enabled (voice: {self.tts_handler.voice_id})")
             else:
-                self.get_logger().warning(
-                    "⚠️ TTS handler created but Cartesia client unavailable"
-                )
+                self.get_logger().warning("⚠️ TTS handler created but Cartesia client unavailable")
         else:
             self.tts_handler = None
             self.get_logger().info("🔇 Text-to-speech disabled (proxy not available)")
@@ -491,33 +379,21 @@ class BrainClientNode(Node):
 
         self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
 
-        self.ws_bridge = WSBridge(
-            self, incoming_topic="ws_messages", outgoing_topic="ws_outgoing"
-        )
-        self.ws_bridge.register_handler(
-            MessageOutType.READY_FOR_IMAGE, self._handle_ready_for_image
-        )
-        self.ws_bridge.register_handler(
-            MessageOutType.VISION_AGENT_OUTPUT, self._handle_vision_agent_output
-        )
+        self.ws_bridge = WSBridge(self, incoming_topic="ws_messages", outgoing_topic="ws_outgoing")
+        self.ws_bridge.register_handler(MessageOutType.READY_FOR_IMAGE, self._handle_ready_for_image)
+        self.ws_bridge.register_handler(MessageOutType.VISION_AGENT_OUTPUT, self._handle_vision_agent_output)
         self.ws_bridge.register_handler(MessageOutType.CHAT_OUT, self._handle_chat_out)
         self.ws_bridge.register_handler(
             MessageOutType.PRIMITIVES_AND_DIRECTIVE_REGISTERED,
             self._handle_primitives_and_directive_registered,
         )
-        self.ws_bridge.register_handler(
-            MessageOutType.MEMORY_POSITIONS, self._handle_memory_positions
-        )
+        self.ws_bridge.register_handler(MessageOutType.MEMORY_POSITIONS, self._handle_memory_positions)
 
         # Timer for regular memory positions publishing (1Hz)
-        self.memory_positions_timer = self.create_timer(
-            1.0, self._publish_memory_positions
-        )
+        self.memory_positions_timer = self.create_timer(1.0, self._publish_memory_positions)
 
         for _ in range(10):
-            self.ws_bridge.send_message(
-                InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
-            )
+            self.ws_bridge.send_message(InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION))
             time.sleep(1.0)
 
         # Initialize primitives - query from primitive_execution_action_server
@@ -526,13 +402,9 @@ class BrainClientNode(Node):
             self.get_logger().warn(
                 "No primitives available from primitive_execution_action_server, using fallback local loading"
             )
-            self.primitives_dict = initialize_skills(
-                self.get_logger(), self.simulator_mode
-            )
+            self.primitives_dict = initialize_skills(self.get_logger(), self.simulator_mode)
 
-        self.directives, self.current_directive = initialize_agents(
-            self.get_logger(), self.primitives_dict
-        )
+        self.directives, self.current_directive = initialize_agents(self.get_logger(), self.primitives_dict)
 
         # Load startup directive from file
         startup_directive = self.load_startup_directive()
@@ -564,9 +436,7 @@ class BrainClientNode(Node):
         self._goal_handle = None
 
         # Add a subscription to change directive
-        self.directive_sub = self.create_subscription(
-            String, "/brain/set_directive", self.set_directive_callback, 10
-        )
+        self.directive_sub = self.create_subscription(String, "/brain/set_directive", self.set_directive_callback, 10)
 
         # Create service to get available directives
         self.get_directives_srv = self.create_service(
@@ -576,17 +446,13 @@ class BrainClientNode(Node):
         )
 
         # Create the primitive execution action client once in the init.
-        self.primitive_action_client = ActionClient(
-            self, ExecutePrimitive, "execute_primitive"
-        )
+        self.primitive_action_client = ActionClient(self, ExecutePrimitive, "execute_primitive")
 
         # After initializing the primitive_action_client
         # Register the primitives with the server
         self.register_primitives_and_directive()
 
-        self.get_logger().info(
-            "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
-        )
+        self.get_logger().info("\033[1;92m[BrainClient] BrainClientNode initialized\033[0m")
 
     def _query_available_primitives(self):
         """
@@ -599,17 +465,13 @@ class BrainClientNode(Node):
         # Wait for service to be available
         self.get_logger().info("Waiting for /brain/get_available_primitives service...")
         if not client.wait_for_service(timeout_sec=10.0):
-            self.get_logger().error(
-                "Timeout waiting for /brain/get_available_primitives service"
-            )
+            self.get_logger().error("Timeout waiting for /brain/get_available_primitives service")
             return {}
 
         # Call service via helper node (not registered with any executor)
         request = GetAvailablePrimitives.Request()
         future = client.call_async(request)
-        rclpy.spin_until_future_complete(
-            self._service_call_node, future, timeout_sec=10.0
-        )
+        rclpy.spin_until_future_complete(self._service_call_node, future, timeout_sec=10.0)
 
         if not future.done():
             self.get_logger().error("Service call timeout")
@@ -639,15 +501,9 @@ class BrainClientNode(Node):
                 primitives_dict[prim["name"]] = MockPrimitive(prim)
 
             # Log validation status
-            learned_count = sum(
-                1 for prim in primitives_list if prim.get("type") == "learned"
-            )
-            replay_count = sum(
-                1 for prim in primitives_list if prim.get("type") == "replay"
-            )
-            code_count = sum(
-                1 for prim in primitives_list if prim.get("type") == "code"
-            )
+            learned_count = sum(1 for prim in primitives_list if prim.get("type") == "learned")
+            replay_count = sum(1 for prim in primitives_list if prim.get("type") == "replay")
+            code_count = sum(1 for prim in primitives_list if prim.get("type") == "code")
 
             self.get_logger().info(
                 f"Loaded {len(primitives_dict)} validated primitives from service: {list(primitives_dict.keys())}"
@@ -760,7 +616,7 @@ class BrainClientNode(Node):
             "x_cam": self.x_cam,
             "height_cam": self.height_cam,
         }
-        
+
         # Add depth data if available
         if self.send_depth and self.last_depth_image is not None:
             depth_frame = self.last_depth_image
@@ -782,7 +638,7 @@ class BrainClientNode(Node):
                 "step": int(depth_frame.shape[1] * bytes_per_pixel),
                 "data": base64.b64encode(depth_data).decode("utf-8"),
             }
-        
+
         # Add map data
         if use_mapfree:
             dummy_map_data = np.array([0], dtype=np.int8)
@@ -803,7 +659,7 @@ class BrainClientNode(Node):
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
             cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
             yaw = math.atan2(siny_cosp, cosy_cosp)
-            
+
             payload["map"] = {
                 "resolution": self.last_map.info.resolution,
                 "width": self.last_map.info.width,
@@ -818,7 +674,7 @@ class BrainClientNode(Node):
         else:
             # No map available in non-mapfree mode
             return None
-        
+
         # Add robot_coords
         pose_msg = pose_source[1]
         pos = pose_msg.pose.position
@@ -826,7 +682,7 @@ class BrainClientNode(Node):
         siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
         cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
         theta = math.atan2(siny_cosp, cosy_cosp)
-        
+
         robot_coords_payload = {
             "x": pos.x,
             "y": pos.y,
@@ -837,13 +693,12 @@ class BrainClientNode(Node):
                 if pose_source[0] == "tf"
                 else (
                     self.last_odom.header.frame_id
-                    if getattr(self.last_odom, "header", None) is not None
-                    and self.last_odom.header.frame_id
+                    if getattr(self.last_odom, "header", None) is not None and self.last_odom.header.frame_id
                     else "odom"
                 )
             ),
         }
-        
+
         # Add covariance if available
         cov = getattr(pose_msg, "covariance", None)
         if cov is not None:
@@ -854,26 +709,24 @@ class BrainClientNode(Node):
                     robot_coords_payload["cov_yaw"] = cov[35]
             except Exception:
                 pass
-        
+
         payload["robot_coords"] = robot_coords_payload
         return payload
 
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
         self.get_logger().info(f"Received brain/chat_in: {data}")
-        
+
         if not self.is_brain_active:
-            self.get_logger().warn(
-                "\033[93m[BrainClient] Brain is not active. Skipping chat_in message.\033[0m"
-            )
+            self.get_logger().warn("\033[93m[BrainClient] Brain is not active. Skipping chat_in message.\033[0m")
             return
-        
+
         self.chat_history.append(data)
-        
+
         payload = {"text": data["text"]}
         if image_b64 := self._encode_current_image():
             payload["image_b64"] = image_b64
-        
+
         # Include navigation payload for immediate processing of navigation primitives.
         # Without this, navigation primitives are deferred until the next image message.
         # Exception: turn_and_move only needs robot_coords and can work with partial data.
@@ -885,14 +738,14 @@ class BrainClientNode(Node):
             self.get_logger().debug("chat_in includes full navigation payload for immediate processing")
         else:
             self.get_logger().debug("chat_in without full navigation payload - navigation will be deferred")
-        
+
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
         self.ws_bridge.send_message(outgoing_msg)
         self.get_logger().info(f"Sent MessageIn: {outgoing_msg.payload['text']}")
 
     def tts_callback(self, msg: String):
         """Handle direct TTS requests from /brain/tts topic."""
-        
+
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
@@ -901,16 +754,12 @@ class BrainClientNode(Node):
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
         if not self.is_brain_active:
-            self.get_logger().warn(
-                "\033[93m[BrainClient] Brain is not active. Skipping custom input.\033[0m"
-            )
+            self.get_logger().warn("\033[93m[BrainClient] Brain is not active. Skipping custom input.\033[0m")
             return
-        
+
         try:
             data = json.loads(msg.data)
-            self.get_logger().info(
-                f"\033[1;94mReceived custom input from {data.get('input_device', 'unknown')}\033[0m"
-            )
+            self.get_logger().info(f"\033[1;94mReceived custom input from {data.get('input_device', 'unknown')}\033[0m")
             outgoing_msg = MessageIn(type=MessageInType.CUSTOM_INPUT, payload=data)
             self.ws_bridge.send_message(outgoing_msg)
         except Exception as e:
@@ -935,9 +784,7 @@ class BrainClientNode(Node):
                     f"🔌 Activated inputs for directive '{self.current_directive.id}': {required_inputs}"
                 )
             else:
-                self.get_logger().debug(
-                    f"No inputs required for directive '{self.current_directive.id}'"
-                )
+                self.get_logger().debug(f"No inputs required for directive '{self.current_directive.id}'")
         except Exception as e:
             self.get_logger().error(f"Error activating directive inputs: {e}")
 
@@ -955,9 +802,7 @@ class BrainClientNode(Node):
                 TrackerClass = _get_gaze_tracker_class()
                 self._gaze_tracker = TrackerClass(self)
                 self._gaze_tracker.start()
-                self.get_logger().info(
-                    f"👁️ Gaze tracker started for directive '{self.current_directive.id}'"
-                )
+                self.get_logger().info(f"👁️ Gaze tracker started for directive '{self.current_directive.id}'")
             except Exception as e:
                 self.get_logger().error(f"Failed to start gaze tracker: {e}")
                 self._gaze_tracker = None
@@ -987,9 +832,7 @@ class BrainClientNode(Node):
             self.get_logger().debug("👁️ Gaze resumed after skill execution")
 
     def handle_get_chat_history(self, request, response):
-        self.get_logger().debug(
-            f"\033[1;94mReceived get_chat_history request. History: {self.chat_history}\033[0m"
-        )
+        self.get_logger().debug(f"\033[1;94mReceived get_chat_history request. History: {self.chat_history}\033[0m")
         response.history = json.dumps(self.chat_history)
         return response
 
@@ -1000,13 +843,10 @@ class BrainClientNode(Node):
         """
         self.log_everything = request.data
         self.get_logger().info(
-            f"\033[1;92m[BrainClient] Set logging configuration: "
-            f"log_everything={self.log_everything}\033[0m"
+            f"\033[1;92m[BrainClient] Set logging configuration: log_everything={self.log_everything}\033[0m"
         )
         response.success = True
-        response.message = (
-            f"Logging configuration set: log_everything={self.log_everything}"
-        )
+        response.message = f"Logging configuration set: log_everything={self.log_everything}"
         return response
 
     def image_callback(self, msg: CompressedImage):
@@ -1020,13 +860,9 @@ class BrainClientNode(Node):
                 current_time_sec = self.get_clock().now().nanoseconds / 1e9
                 self.image_buffer.append((current_time_sec, decoded_image))
             else:
-                self.get_logger().warn(
-                    "Failed to decode image in image_callback, decoded_image is None."
-                )
+                self.get_logger().warn("Failed to decode image in image_callback, decoded_image is None.")
         except Exception as e:
-            self.get_logger().error(
-                f"Failed to decode compressed image or add to buffer: {e}"
-            )
+            self.get_logger().error(f"Failed to decode compressed image or add to buffer: {e}")
 
     def arm_camera_image_callback(self, msg: CompressedImage):
         try:
@@ -1034,9 +870,7 @@ class BrainClientNode(Node):
             self.last_arm_camera = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             # self.get_logger().info(f"\033[1;92m[BrainClient] Received arm_camera_image_callback\033[0m")
         except Exception as e:
-            self.get_logger().error(
-                f"Failed to decode compressed arm camera image: {e}"
-            )
+            self.get_logger().error(f"Failed to decode compressed arm camera image: {e}")
 
     def depth_image_callback(self, msg):
         try:
@@ -1048,10 +882,7 @@ class BrainClientNode(Node):
                 dtype = np.float32
             else:
                 # Fallback to uint8 if the encoding is unexpected.
-                self.get_logger().warn(
-                    f"Unexpected depth image encoding: {msg.encoding}, "
-                    f"defaulting to uint8"
-                )
+                self.get_logger().warn(f"Unexpected depth image encoding: {msg.encoding}, defaulting to uint8")
                 dtype = np.uint8
             depth_array = np.frombuffer(msg.data, dtype=dtype)
             depth_array = depth_array.reshape((msg.height, msg.width))
@@ -1078,9 +909,7 @@ class BrainClientNode(Node):
                     map_frame,  # Target frame ("map")
                     robot_base_frame,  # Source frame ("base_link")
                     when,
-                    timeout=Duration(
-                        seconds=0.1
-                    ),  # Shorter timeout as can_transform likely passed
+                    timeout=Duration(seconds=0.1),  # Shorter timeout as can_transform likely passed
                 )
 
                 # Create an Odometry message to store the pose (or a simpler structure if preferred)
@@ -1088,21 +917,13 @@ class BrainClientNode(Node):
                 # but using the transform directly.
                 # This part might need adjustment based on how self.last_odom is used elsewhere.
                 odom_msg = Odometry()
-                odom_msg.header.stamp = (
-                    self.get_clock().now().to_msg()
-                )  # Use current time for the header
+                odom_msg.header.stamp = self.get_clock().now().to_msg()  # Use current time for the header
                 odom_msg.header.frame_id = map_frame  # "map"
                 odom_msg.child_frame_id = robot_base_frame  # "base_link"
 
-                odom_msg.pose.pose.position.x = (
-                    transform_stamped.transform.translation.x
-                )
-                odom_msg.pose.pose.position.y = (
-                    transform_stamped.transform.translation.y
-                )
-                odom_msg.pose.pose.position.z = (
-                    transform_stamped.transform.translation.z
-                )
+                odom_msg.pose.pose.position.x = transform_stamped.transform.translation.x
+                odom_msg.pose.pose.position.y = transform_stamped.transform.translation.y
+                odom_msg.pose.pose.position.z = transform_stamped.transform.translation.z
                 odom_msg.pose.pose.orientation = transform_stamped.transform.rotation
                 # Covariance and Twist are not directly available from lookup_transform
                 # and might need to be handled differently or zeroed out if not critical.
@@ -1124,13 +945,10 @@ class BrainClientNode(Node):
         except TransformException as ex:
             # Adjusted error message to reflect the intended transformation
             self.get_logger().error(
-                f"TransformException looking up transform from "
-                f"'{robot_base_frame}' to '{map_frame}': {ex}"
+                f"TransformException looking up transform from '{robot_base_frame}' to '{map_frame}': {ex}"
             )
         except Exception as e:
-            self.get_logger().error(
-                f"Error in fetch_transform_callback: {e}, {traceback.format_exc()}"
-            )
+            self.get_logger().error(f"Error in fetch_transform_callback: {e}, {traceback.format_exc()}")
 
     def map_callback(self, msg: OccupancyGrid):
         """Store the latest map data."""
@@ -1139,16 +957,12 @@ class BrainClientNode(Node):
     def amcl_pose_callback(self, msg: PoseWithCovarianceStamped):
         """Store the latest AMCL pose data."""
         self.last_amcl_pose = msg
-        self.get_logger().debug(
-            f"Received amcl_pose at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}"
-        )
+        self.get_logger().debug(f"Received amcl_pose at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
 
     def odom_callback(self, msg: Odometry):
         """Store the latest odometry data."""
         self.last_odom = msg
-        self.get_logger().debug(
-            f"Received odom at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}"
-        )
+        self.get_logger().debug(f"Received odom at X: {msg.pose.pose.position.x}, Y: {msg.pose.pose.position.y}")
 
         # If we're in the SIM, we can use the odom pose as the amcl pose.
         if self.use_odom_as_amcl_pose:
@@ -1170,9 +984,7 @@ class BrainClientNode(Node):
         try:
             position_data = json.loads(msg.data)
             self.current_head_pitch = position_data.get("current_position", 0.0)
-            self.get_logger().debug(
-                f"Received head pitch: {self.current_head_pitch} degrees"
-            )
+            self.get_logger().debug(f"Received head pitch: {self.current_head_pitch} degrees")
         except (json.JSONDecodeError, KeyError) as e:
             self.get_logger().error(f"Failed to parse head position data: {e}")
             self.current_head_pitch = 0.0  # Default to horizontal
@@ -1185,9 +997,7 @@ class BrainClientNode(Node):
         if not self.pose_image_started and self.primitives_registered:
             self.get_logger().info("Starting regular pose image transmission")
             self.pose_image_started = True
-            self.pose_image_timer = self.create_timer(
-                self.pose_image_interval, self.pose_image_callback
-            )
+            self.pose_image_timer = self.create_timer(self.pose_image_interval, self.pose_image_callback)
 
     def pose_image_callback(self):
         """Send pose images regularly with the robot's current position.
@@ -1204,12 +1014,8 @@ class BrainClientNode(Node):
                 return
 
             # In simulator mode, allow pose_image_callback even if nav_mode is None
-            if (
-                self.cur_nav_mode is None or self.cur_nav_mode == "mapping"
-            ) and not self.simulator_mode:
-                self.get_logger().debug(
-                    f"Skipping pose_image_callback as navigation mode is {self.cur_nav_mode}"
-                )
+            if (self.cur_nav_mode is None or self.cur_nav_mode == "mapping") and not self.simulator_mode:
+                self.get_logger().debug(f"Skipping pose_image_callback as navigation mode is {self.cur_nav_mode}")
                 return
 
             # Use TF to get robot pose in map frame (composes map→odom and odom→base_link)
@@ -1277,9 +1083,7 @@ class BrainClientNode(Node):
             self.get_logger().info("[BrainClient] Received VisionAgentOutput")
 
             if not self.is_brain_active:
-                self.get_logger().warn(
-                    "\033[93m[BrainClient] Brain is not active. Skipping VisionAgentOutput.\033[0m"
-                )
+                self.get_logger().warn("\033[93m[BrainClient] Brain is not active. Skipping VisionAgentOutput.\033[0m")
                 return
 
             if not self.primitives_registered:
@@ -1311,9 +1115,7 @@ class BrainClientNode(Node):
 
             self.handle_vision_agent_output(payload)
         except Exception as e:
-            self.get_logger().error(
-                f"Error processing vision output: {e}. Traceback: {traceback.format_exc()}"
-            )
+            self.get_logger().error(f"Error processing vision output: {e}. Traceback: {traceback.format_exc()}")
 
     def _handle_chat_out(self, msg, sender="robot"):
         text = msg.payload.get("text", "")
@@ -1337,15 +1139,11 @@ class BrainClientNode(Node):
 
             # Cancel the current goal if it exists
             if self._goal_handle is not None:
-                self.get_logger().info(
-                    "\033[91m[BrainClient] Canceling current goal.\033[0m"
-                )
+                self.get_logger().info("\033[91m[BrainClient] Canceling current goal.\033[0m")
 
                 # Store the next task if it exists, prevent immediate execution
                 if payload.next_task is not None:
-                    self.get_logger().info(
-                        f"Storing pending task: {payload.next_task.type}"
-                    )
+                    self.get_logger().info(f"Storing pending task: {payload.next_task.type}")
                     self._pending_next_task = payload.next_task
                     execute_next_task_immediately = False  # Don't execute now
 
@@ -1353,9 +1151,7 @@ class BrainClientNode(Node):
                 cancel_future = self._goal_handle.cancel_goal_async()
                 cancel_future.add_done_callback(self.cancel_response_callback)
             else:
-                self.get_logger().info(
-                    "\033[93m[BrainClient] Stop received but no goal handle active.\033[0m"
-                )
+                self.get_logger().info("\033[93m[BrainClient] Stop received but no goal handle active.\033[0m")
 
         if payload.thoughts:
             chat_entry = MessageOut(
@@ -1383,9 +1179,7 @@ class BrainClientNode(Node):
             # Ensure any previously pending task is cleared if we are executing a new one directly
             self._pending_next_task = None
 
-            self.get_logger().info(
-                f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m"
-            )
+            self.get_logger().info(f"\033[92m[BrainClient] Next task: {payload.next_task}\033[0m")
             self.get_logger().info(f"Primitive task type: {payload.next_task.type}")
 
             if payload.next_task.type in self.primitives_dict:
@@ -1407,9 +1201,7 @@ class BrainClientNode(Node):
                     "primitive_id": payload.next_task.primitive_id,
                 }
             else:
-                self.get_logger().warn(
-                    f"Unknown primitive type: {payload.next_task.type}"
-                )
+                self.get_logger().warn(f"Unknown primitive type: {payload.next_task.type}")
         elif not execute_next_task_immediately and payload.next_task is not None:
             self.get_logger().info(
                 "\033[94m[BrainClient] Next task stored, waiting for cancellation to complete.\033[0m"
@@ -1417,29 +1209,21 @@ class BrainClientNode(Node):
         else:
             # Ensure pending task is cleared if no next task is given
             self._pending_next_task = None
-            self.get_logger().info(
-                "\033[94m[BrainClient] No next task provided or task is pending.\033[0m"
-            )
+            self.get_logger().info("\033[94m[BrainClient] No next task provided or task is pending.\033[0m")
 
     def agent_loop_callback(self):
         # This callback will send the RGB image and, if allowed, the depth image
         if not self.is_brain_active:
-            self.get_logger().debug(
-                "\033[93m[BrainClient] Brain not active. Skipping agent_loop_callback.\033[0m"
-            )
+            self.get_logger().debug("\033[93m[BrainClient] Brain not active. Skipping agent_loop_callback.\033[0m")
             return
 
         if not self.primitives_registered:
             # If primitives are not yet registered, don't send images
-            self.get_logger().info(
-                "\033[93m[BrainClient] Primitives not registered. Skipping image callback.\033[0m"
-            )
+            self.get_logger().info("\033[93m[BrainClient] Primitives not registered. Skipping image callback.\033[0m")
             return
 
         if self.ready_for_image and self.last_image is not None:
-            self.get_logger().info(
-                "\033[93m[BrainClient] Sending image callback.\033[0m"
-            )
+            self.get_logger().info("\033[93m[BrainClient] Sending image callback.\033[0m")
             try:
                 # Select pose source based on navigation mode
                 use_mapfree, pose_source = self._get_pose_source("image_callback: ")
@@ -1451,9 +1235,7 @@ class BrainClientNode(Node):
 
                 # Compress the RGB image as JPEG (70% quality) - User's addition
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-                success, encoded_img = cv2.imencode(
-                    ".jpg", self.last_image, encode_params
-                )
+                success, encoded_img = cv2.imencode(".jpg", self.last_image, encode_params)
                 if not success:
                     self.get_logger().error("Failed to encode RGB image")
                     self.ready_for_image = False
@@ -1489,25 +1271,17 @@ class BrainClientNode(Node):
                             height, width, _ = first_image.shape
 
                             if height == 0 or width == 0:
-                                self.get_logger().error(
-                                    f"Invalid image dimensions for video: {width}x{height}"
-                                )
+                                self.get_logger().error(f"Invalid image dimensions for video: {width}x{height}")
                                 # Don't return, will send single image instead
                             else:
-                                with tempfile.NamedTemporaryFile(
-                                    suffix=".avi", delete=False
-                                ) as tmpfile_obj:
+                                with tempfile.NamedTemporaryFile(suffix=".avi", delete=False) as tmpfile_obj:
                                     temp_video_path = tmpfile_obj.name
 
                                 if not temp_video_path:
-                                    self.get_logger().error(
-                                        "Failed to create temporary file path for video."
-                                    )
+                                    self.get_logger().error("Failed to create temporary file path for video.")
                                     # Don't return, will send single image instead
                                 else:
-                                    fourcc = cv2.VideoWriter_fourcc(
-                                        *"MJPG"
-                                    )  # Motion JPEG
+                                    fourcc = cv2.VideoWriter_fourcc(*"MJPG")  # Motion JPEG
                                     video_writer = cv2.VideoWriter(
                                         temp_video_path,
                                         fourcc,
@@ -1532,9 +1306,7 @@ class BrainClientNode(Node):
                                             ):
                                                 video_writer.write(frame_img)
                                             elif frame_img is None:
-                                                self.get_logger().warn(
-                                                    "Skipping None frame in video creation."
-                                                )
+                                                self.get_logger().warn("Skipping None frame in video creation.")
                                             else:
                                                 self.get_logger().warn(
                                                     f"Skipping frame with mismatched dimensions: {frame_img.shape} vs {height}x{width}"
@@ -1542,15 +1314,10 @@ class BrainClientNode(Node):
 
                                         video_writer.release()
 
-                                        if (
-                                            os.path.exists(temp_video_path)
-                                            and os.path.getsize(temp_video_path) > 0
-                                        ):
+                                        if os.path.exists(temp_video_path) and os.path.getsize(temp_video_path) > 0:
                                             with open(temp_video_path, "rb") as f:
                                                 video_bytes = f.read()
-                                            video_b64 = base64.b64encode(
-                                                video_bytes
-                                            ).decode("utf-8")
+                                            video_b64 = base64.b64encode(video_bytes).decode("utf-8")
                                         else:
                                             self.get_logger().error(
                                                 f"Temporary video file is empty or does not exist after writing: {temp_video_path}"
@@ -1587,13 +1354,9 @@ class BrainClientNode(Node):
                 if self.send_arm_camera_image and self.last_arm_camera is not None:
                     # Compress the arm camera image as JPEG (70% quality)
                     arm_encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-                    arm_success, arm_encoded_img = cv2.imencode(
-                        ".jpg", self.last_arm_camera, arm_encode_params
-                    )
+                    arm_success, arm_encoded_img = cv2.imencode(".jpg", self.last_arm_camera, arm_encode_params)
                     if arm_success:
-                        arm_rgb_b64 = base64.b64encode(
-                            arm_encoded_img.tobytes()
-                        ).decode("utf-8")
+                        arm_rgb_b64 = base64.b64encode(arm_encoded_img.tobytes()).decode("utf-8")
                         payload["additional_camera"] = {
                             "image_b64": arm_rgb_b64,
                             "camera_type": "arm_wrist",
@@ -1628,9 +1391,7 @@ class BrainClientNode(Node):
         # Robot state injection is handled by the PrimitiveExecutionActionServer.
         goal_msg.inputs = json.dumps(inputs if inputs is not None else {})
 
-        self.get_logger().info(
-            f"Sending goal for primitive: {goal_msg.primitive_type} with inputs: {goal_msg.inputs}"
-        )
+        self.get_logger().info(f"Sending goal for primitive: {goal_msg.primitive_type} with inputs: {goal_msg.inputs}")
         if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().error("Primitive execution action server not available!")
             return
@@ -1681,10 +1442,7 @@ class BrainClientNode(Node):
         self.get_logger().info("\033[92m[BrainClient] Cancel response received.\033[0m")
 
         # Check if any goals were canceled, following the ROS2 example
-        if (
-            hasattr(cancel_response, "goals_canceling")
-            and len(cancel_response.goals_canceling) > 0
-        ):
+        if hasattr(cancel_response, "goals_canceling") and len(cancel_response.goals_canceling) > 0:
             self.get_logger().info("Goal cancellation accepted.")
         else:
             self.get_logger().error("Goal cancellation rejected.")
@@ -1712,18 +1470,13 @@ class BrainClientNode(Node):
         # Get primitive info from the primitive_running dictionary
         primitive_id = None
         primitive_name = result.primitive_type  # Use name from result
-        if (
-            self.primitive_running
-            and self.primitive_running["primitive_name"] == primitive_name
-        ):
+        if self.primitive_running and self.primitive_running["primitive_name"] == primitive_name:
             primitive_id = self.primitive_running["primitive_id"]
         elif self.primitive_running:
             self.get_logger().warn(
                 f"Primitive name mismatch in result ({primitive_name}) and running ({self.primitive_running['primitive_name']})"
             )
-            primitive_id = self.primitive_running[
-                "primitive_id"
-            ]  # Use stored ID anyway?
+            primitive_id = self.primitive_running["primitive_id"]  # Use stored ID anyway?
 
         self.primitive_running = None  # Clear running state
         self._resume_gaze()  # Resume gaze after skill execution
@@ -1765,14 +1518,11 @@ class BrainClientNode(Node):
         # Send the determined status message
         if outgoing_msg:
             self.ws_bridge.send_message(outgoing_msg)
-            self.get_logger().info(
-                f"Sent primitive status message: {outgoing_msg.type.name}"
-            )
+            self.get_logger().info(f"Sent primitive status message: {outgoing_msg.type.name}")
 
         # --- THEN, check and execute pending task if previous was cancelled OR succeeded in the meantime ---
         if (
-            result.success_type
-            in [SkillResult.CANCELLED.value, SkillResult.SUCCESS.value]
+            result.success_type in [SkillResult.CANCELLED.value, SkillResult.SUCCESS.value]
             and self._pending_next_task is not None
         ):
             self.get_logger().info(
@@ -1816,24 +1566,16 @@ class BrainClientNode(Node):
 
             # Auto-activate brain in simulator mode
             if self.simulator_mode and not self.is_brain_active:
-                self.get_logger().info(
-                    "\033[1;92m[BrainClient] Auto-activating brain in simulator mode\033[0m"
-                )
+                self.get_logger().info("\033[1;92m[BrainClient] Auto-activating brain in simulator mode\033[0m")
                 self.is_brain_active = True
 
             # Start the pose image timer if we've already received a ready_for_image message
             if self.ready_for_image and not self.pose_image_started:
-                self.get_logger().info(
-                    "Starting regular pose image transmission after registration"
-                )
+                self.get_logger().info("Starting regular pose image transmission after registration")
                 self.pose_image_started = True
-                self.pose_image_timer = self.create_timer(
-                    self.pose_image_interval, self.pose_image_callback
-                )
+                self.pose_image_timer = self.create_timer(self.pose_image_interval, self.pose_image_callback)
         else:
-            self.get_logger().error(
-                "Failed to register primitives and/or directive with server"
-            )
+            self.get_logger().error("Failed to register primitives and/or directive with server")
 
     def _handle_memory_positions(self, msg):
         """
@@ -1843,9 +1585,7 @@ class BrainClientNode(Node):
         try:
             positions = msg.payload.get("positions", [])
             self.memory_positions = positions
-            self.get_logger().debug(
-                f"Received {len(positions)} memory positions from cloud agent"
-            )
+            self.get_logger().debug(f"Received {len(positions)} memory positions from cloud agent")
             # Publish immediately when we receive an update
             self._publish_memory_positions()
         except Exception as e:
@@ -1866,18 +1606,14 @@ class BrainClientNode(Node):
         Collects information about available primitives and directive and sends it to the server
         for registration.
         """
-        self.get_logger().info(
-            "Collecting primitive and directive definitions for registration..."
-        )
+        self.get_logger().info("Collecting primitive and directive definitions for registration...")
 
         # Use primitives metadata from service if available
         if hasattr(self, "primitives_metadata_list") and self.primitives_metadata_list:
             primitives = self.primitives_metadata_list
             self.get_logger().info(f"Using {len(primitives)} primitives from service")
         else:
-            self.get_logger().warn(
-                "No primitives metadata available, falling back to local introspection"
-            )
+            self.get_logger().warn("No primitives metadata available, falling back to local introspection")
             primitives = []
             if self.primitives_dict:
                 for primitive_name, primitive in self.primitives_dict.items():
@@ -1900,8 +1636,7 @@ class BrainClientNode(Node):
                                         (types.UnionType, types.GenericAlias),
                                     )
                                     or hasattr(param.annotation, "_name")
-                                    and param.annotation._name
-                                    in ["List", "Optional", "Dict", "Tuple", "Union"]
+                                    and param.annotation._name in ["List", "Optional", "Dict", "Tuple", "Union"]
                                 ):  # Covers typing.List, typing.Optional etc.
                                     param_type = str(param.annotation)
                                 elif hasattr(param.annotation, "__name__"):
@@ -1923,9 +1658,7 @@ class BrainClientNode(Node):
                         }
                     )
 
-        included_primitives = [
-            p for p in primitives if p["name"] in self.current_directive.get_skills()
-        ]
+        included_primitives = [p for p in primitives if p["name"] in self.current_directive.get_skills()]
 
         # Create and send the registration message
         reg_msg = MessageIn(
@@ -1957,9 +1690,7 @@ class BrainClientNode(Node):
             self.chat_history = []
 
             # Send reset message to server to clear server-side discussion history
-            reset_msg = MessageIn(
-                type=MessageInType.RESET, payload={"memory_state": "clear"}
-            )
+            reset_msg = MessageIn(type=MessageInType.RESET, payload={"memory_state": "clear"})
             self.ws_bridge.send_message(reset_msg)
 
             # Re-register primitives and directive with the server to update
@@ -2022,9 +1753,7 @@ class BrainClientNode(Node):
 
     def _unregister_primitives(self):
         """Internal method to unregister primitives."""
-        self.get_logger().info(
-            f"\033[1;92m[BrainClient] Unregistering primitives\033[0m"
-        )
+        self.get_logger().info(f"\033[1;92m[BrainClient] Unregistering primitives\033[0m")
 
         # As long as we don't have
         # confirmation that the new primitives have been registered, we should not
@@ -2033,9 +1762,7 @@ class BrainClientNode(Node):
 
         # Stop any running primitive
         if self.primitive_running:
-            self.get_logger().info(
-                "\033[1;92m[BrainClient] Stopping running primitive\033[0m"
-            )
+            self.get_logger().info("\033[1;92m[BrainClient] Stopping running primitive\033[0m")
             if self._goal_handle:  # Check if goal_handle exists before trying to cancel
                 cancel_future = self._goal_handle.cancel_goal_async()
                 self._goal_handle = None  # Clear handle after requesting cancel
@@ -2059,9 +1786,7 @@ class BrainClientNode(Node):
         self.chat_history = []
 
         # Send a reset message to the server
-        reset_msg = MessageIn(
-            type=MessageInType.RESET, payload={"memory_state": memory_state}
-        )
+        reset_msg = MessageIn(type=MessageInType.RESET, payload={"memory_state": memory_state})
         self.ws_bridge.send_message(reset_msg)
 
         # Publish a system message to the chat
@@ -2083,9 +1808,7 @@ class BrainClientNode(Node):
         Service handler for resetting the brain.
         Uses the internal _perform_brain_reset method.
         """
-        self.get_logger().info(
-            "\033[1;92m[BrainClient] Received /brain/reset_brain request\033[0m"
-        )
+        self.get_logger().info("\033[1;92m[BrainClient] Received /brain/reset_brain request\033[0m")
         if not self.is_brain_active:
             self.get_logger().warn(
                 "\033[93m[BrainClient] Brain is currently inactive. Reset request will proceed but brain remains inactive until /set_brain_active is called.\033[0m"
@@ -2102,9 +1825,7 @@ class BrainClientNode(Node):
         Service handler for reloading primitives and directives.
         Requires MultiThreadedExecutor so service responses can be processed while we wait.
         """
-        self.get_logger().info(
-            "\033[1;92m[BrainClient] Received /brain/reload request\033[0m"
-        )
+        self.get_logger().info("\033[1;92m[BrainClient] Received /brain/reload request\033[0m")
 
         try:
             self._perform_reload()
@@ -2130,39 +1851,27 @@ class BrainClientNode(Node):
             if self._reload_primitives_client.wait_for_service(timeout_sec=10.0):
                 peas_request = Trigger.Request()
                 future = self._reload_primitives_client.call_async(peas_request)
-                rclpy.spin_until_future_complete(
-                    self._service_call_node, future, timeout_sec=30.0
-                )
+                rclpy.spin_until_future_complete(self._service_call_node, future, timeout_sec=30.0)
 
                 if future.done():
                     peas_result = future.result()
                     if peas_result.success:
                         self.get_logger().info(f"PEAS reload: {peas_result.message}")
                     else:
-                        self.get_logger().warn(
-                            f"PEAS reload failed: {peas_result.message}"
-                        )
+                        self.get_logger().warn(f"PEAS reload failed: {peas_result.message}")
                 else:
                     self.get_logger().warn("PEAS reload timed out")
             else:
-                self.get_logger().warn(
-                    "PEAS reload service not available, using local primitive loading"
-                )
+                self.get_logger().warn("PEAS reload service not available, using local primitive loading")
 
             # Re-query primitives from PEAS (or load locally if PEAS unavailable)
             self.primitives_dict = self._query_available_primitives()
             if not self.primitives_dict:
-                self.get_logger().warn(
-                    "No primitives from PEAS, using fallback local loading"
-                )
-                self.primitives_dict = initialize_skills(
-                    self.get_logger(), self.simulator_mode
-                )
+                self.get_logger().warn("No primitives from PEAS, using fallback local loading")
+                self.primitives_dict = initialize_skills(self.get_logger(), self.simulator_mode)
 
             # Reload directives locally
-            self.directives, self.current_directive = initialize_agents(
-                self.get_logger(), self.primitives_dict
-            )
+            self.directives, self.current_directive = initialize_agents(self.get_logger(), self.primitives_dict)
 
             # Re-register with server
             self.register_primitives_and_directive()
@@ -2192,15 +1901,11 @@ class BrainClientNode(Node):
             self.get_logger().info("Agent timer cancelled.")
 
         self.ready_for_image = False
-        self.primitives_registered = (
-            False  # Mark primitives as not registered during deactivation
-        )
+        self.primitives_registered = False  # Mark primitives as not registered during deactivation
 
         # Stop any running primitive
         if self.primitive_running and self._goal_handle:
-            self.get_logger().info(
-                "\033[91m[BrainClient] Deactivating: Canceling current goal.\033[0m"
-            )
+            self.get_logger().info("\033[91m[BrainClient] Deactivating: Canceling current goal.\033[0m")
             # Store the next task if it exists, prevent immediate execution
             # For a full deactivation, we probably don't want to store a pending task.
             # self._pending_next_task = None # Ensure it's cleared.
@@ -2262,18 +1967,14 @@ class BrainClientNode(Node):
         # The pose_image_timer will be started by _handle_ready_for_image or
         # _handle_primitives_and_directive_registered once the server is ready and primitives are registered.
         if self.agent_timer and self.agent_timer.is_canceled():
-            self.agent_timer = self.create_timer(
-                0.1, self.agent_loop_callback
-            )  # Re-create timer
+            self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)  # Re-create timer
             self.get_logger().info("Agent timer restarted.")
         elif not self.agent_timer:  # If it was never created or somehow None
             self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
             self.get_logger().info("Agent timer created and started.")
 
         # Send a READY_FOR_CONNECTION message to the server
-        self.get_logger().info(
-            "\033[1;92m[BrainClient] Sending READY_FOR_CONNECTION to server.\033[0m"
-        )
+        self.get_logger().info("\033[1;92m[BrainClient] Sending READY_FOR_CONNECTION to server.\033[0m")
         ready_msg = InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
         self.ws_bridge.send_message(ready_msg)
 
@@ -2285,9 +1986,7 @@ class BrainClientNode(Node):
         self.activate_directive_inputs()
         self.ready_for_image = True
 
-        self.get_logger().info(
-            "\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m"
-        )
+        self.get_logger().info("\033[1;92m[BrainClient] Brain reactivated and reset initiated.\033[0m")
 
     def handle_set_brain_active(self, request, response):
         """Service handler for activating or deactivating the brain."""
@@ -2344,9 +2043,7 @@ class BrainClientNode(Node):
             self.chat_out_pub.publish(out_msg)
 
             response.success = True
-            response.message = (
-                "Startup directive cleared. Will use default on next startup."
-            )
+            response.message = "Startup directive cleared. Will use default on next startup."
 
         elif directive_name in self.directives:
             # Save directive to file
@@ -2354,9 +2051,7 @@ class BrainClientNode(Node):
 
             # Also immediately switch to it if brain is active
             self.current_directive = self.directives[directive_name]
-            self.get_logger().info(
-                f"\033[1;92m[BrainClient] Startup directive set to: {directive_name}\033[0m"
-            )
+            self.get_logger().info(f"\033[1;92m[BrainClient] Startup directive set to: {directive_name}\033[0m")
 
             # Re-register primitives and directive with the server to update immediately
             if self.is_brain_active and self.primitives_registered:
@@ -2376,12 +2071,12 @@ class BrainClientNode(Node):
             self.chat_out_pub.publish(out_msg)
 
             response.success = True
-            response.message = f"Startup directive set to: {directive_name}. Active now and will be used on next startup."
+            response.message = (
+                f"Startup directive set to: {directive_name}. Active now and will be used on next startup."
+            )
 
         else:
-            self.get_logger().error(
-                f"\033[91m[BrainClient] Unknown directive: {directive_name}\033[0m"
-            )
+            self.get_logger().error(f"\033[91m[BrainClient] Unknown directive: {directive_name}\033[0m")
             available_directives = list(self.directives.keys())
             error_msg = {
                 "sender": "system",
@@ -2404,13 +2099,9 @@ class BrainClientNode(Node):
                 with open(self.directive_file, "r") as f:
                     saved_directive = f.read().strip()
                     if saved_directive:
-                        self.get_logger().info(
-                            f"Loaded startup directive: {saved_directive}"
-                        )
+                        self.get_logger().info(f"Loaded startup directive: {saved_directive}")
                         return saved_directive
-            self.get_logger().info(
-                "No startup directive configured, using default from initialize_agents()"
-            )
+            self.get_logger().info("No startup directive configured, using default from initialize_agents()")
             return None
         except Exception as e:
             self.get_logger().error(f"Error loading startup directive: {e}")

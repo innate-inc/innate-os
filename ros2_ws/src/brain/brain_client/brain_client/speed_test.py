@@ -11,9 +11,7 @@ class MoveForwardNode(Node):
     def __init__(self):
         super().__init__("move_forward_node")
         self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.odom_sub = self.create_subscription(
-            Odometry, "/odom", self.odom_callback, 10
-        )
+        self.odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
 
         self.initial_position = None
         self.start_time = None
@@ -47,9 +45,7 @@ class MoveForwardNode(Node):
             end_time = self.get_clock().now()
             time_taken = end_time - self.start_time
 
-            self.get_logger().info(
-                f"Reached x=1.0. Time taken: {time_taken.nanoseconds / 1e9:.2f} seconds."
-            )
+            self.get_logger().info(f"Reached x=1.0. Time taken: {time_taken.nanoseconds / 1e9:.2f} seconds.")
 
             # Stop the robot
             twist = Twist()

@@ -28,9 +28,7 @@ class MobilityInterface:
         self._cmd_vel_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
         self._stop_timer: Optional[object] = None
 
-        self.logger.info(
-            f"MobilityInterface initialized with cmd_vel topic: {self.cmd_vel_topic}"
-        )
+        self.logger.info(f"MobilityInterface initialized with cmd_vel topic: {self.cmd_vel_topic}")
 
     def _schedule_stop(self, duration: float):
         if duration is None or duration <= 0.0:

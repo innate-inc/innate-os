@@ -11,7 +11,10 @@ class OdomTfBroadcaster(Node):
         super().__init__("odom_tf_broadcaster")
         self.br = TransformBroadcaster(self)
         self.subscription = self.create_subscription(
-            Odometry, "/odom", self.odom_callback, 10  # your odometry topic
+            Odometry,
+            "/odom",
+            self.odom_callback,
+            10,  # your odometry topic
         )
         self.get_logger().info("Odom TF Broadcaster initialized")
 

@@ -28,9 +28,7 @@ class SkillLoader:
     def __init__(self, logger):
         self.logger = logger
 
-    def discover_skills_in_directory(
-        self, directory_path: str
-    ) -> Dict[str, Type[Skill]]:
+    def discover_skills_in_directory(self, directory_path: str) -> Dict[str, Type[Skill]]:
         skills = {}
         directory = Path(directory_path)
 
@@ -45,11 +43,7 @@ class SkillLoader:
         self.logger.info(f"Scanning for skills in: {directory_path}")
 
         # Look for Python files (excluding __init__.py and __pycache__)
-        python_files = [
-            f
-            for f in directory.glob("*.py")
-            if f.name != "__init__.py" and not f.name.startswith("_")
-        ]
+        python_files = [f for f in directory.glob("*.py") if f.name != "__init__.py" and not f.name.startswith("_")]
 
         for py_file in python_files:
             try:
@@ -74,9 +68,7 @@ class SkillLoader:
         module = importlib.util.module_from_spec(spec)
 
         # Add the root directory to sys.path for imports to work
-        maurice_prod_dir = os.environ.get(
-            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-        )
+        maurice_prod_dir = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
         if maurice_prod_dir not in sys.path:
             sys.path.insert(0, maurice_prod_dir)
 
@@ -92,12 +84,7 @@ class SkillLoader:
 
         # Find all classes in the module that inherit from Skill
         for name, obj in inspect.getmembers(module, inspect.isclass):
-            if (
-                obj != Skill
-                and issubclass(obj, Skill)
-                and obj.__module__ == module.__name__
-            ):
-
+            if obj != Skill and issubclass(obj, Skill) and obj.__module__ == module.__name__:
                 # Validate the skill class
                 if self._validate_skill_class(obj):
                     skill_name = self._get_skill_name(obj)
@@ -113,15 +100,11 @@ class SkillLoader:
         required_methods = ["name", "execute", "cancel"]
         for method_name in required_methods:
             if not hasattr(skill_class, method_name):
-                self.logger.error(
-                    f"Skill {skill_class.__name__} missing required method: {method_name}"
-                )
+                self.logger.error(f"Skill {skill_class.__name__} missing required method: {method_name}")
                 return False
 
         # Check that name is a property
-        if not hasattr(skill_class, "name") or not isinstance(
-            skill_class.name, property
-        ):
+        if not hasattr(skill_class, "name") or not isinstance(skill_class.name, property):
             self.logger.error(f"Skill {skill_class.__name__} name must be a property")
             return False
 
@@ -136,9 +119,7 @@ class SkillLoader:
             temp_instance = skill_class(temp_logger)
             return temp_instance.name
         except Exception as e:
-            self.logger.debug(
-                f"Could not get name from skill {skill_class.__name__}: {e}"
-            )
+            self.logger.debug(f"Could not get name from skill {skill_class.__name__}: {e}")
             # Fallback to class name converted to snake_case
             fallback_name = self._class_name_to_snake_case(skill_class.__name__)
             self.logger.debug(f"Using fallback name: {fallback_name}")
@@ -149,9 +130,7 @@ class SkillLoader:
         s1 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", class_name)
         return s1.lower()
 
-    def load_skills_from_directories(
-        self, directories: List[str]
-    ) -> Dict[str, Type[Skill]]:
+    def load_skills_from_directories(self, directories: List[str]) -> Dict[str, Type[Skill]]:
         all_skills = {}
 
         for directory in directories:
@@ -186,9 +165,7 @@ class SkillLoader:
         execution = metadata.get("execution", {})
 
         if skill_type == "learned":
-            is_valid, is_in_training = self._validate_learned_skill(
-                skill_dir, execution
-            )
+            is_valid, is_in_training = self._validate_learned_skill(skill_dir, execution)
             episode_count = self._get_episode_count(skill_dir)
             return (is_valid, is_in_training, episode_count)
         elif skill_type == "replay":
@@ -211,25 +188,19 @@ class SkillLoader:
         checkpoint_file = execution.get("checkpoint")
         # If no checkpoint specified, it's in training
         if not checkpoint_file:
-            self.logger.info(
-                f"Learned skill in {skill_dir} has no checkpoint - marked as in_training"
-            )
+            self.logger.info(f"Learned skill in {skill_dir} has no checkpoint - marked as in_training")
             return (True, True)  # Valid but in training
 
         checkpoint_path = os.path.join(skill_dir, checkpoint_file)
         if not os.path.exists(checkpoint_path):
-            self.logger.info(
-                f"Learned skill checkpoint not found: {checkpoint_path} - marked as in_training"
-            )
+            self.logger.info(f"Learned skill checkpoint not found: {checkpoint_path} - marked as in_training")
             return (True, True)  # Valid but in training
 
         # Check for stats file (optional but commonly needed)
         stats_file = execution.get("stats_file", "dataset_stats.pt")
         stats_path = os.path.join(skill_dir, stats_file)
         if not os.path.exists(stats_path):
-            self.logger.warning(
-                f"Learned skill stats file not found: {stats_path} (optional)"
-            )
+            self.logger.warning(f"Learned skill stats file not found: {stats_path} (optional)")
 
         self.logger.info(f"Learned skill validation passed: {skill_dir}")
         return (True, False)  # Valid and ready
@@ -255,18 +226,14 @@ class SkillLoader:
                 dataset_metadata = json.load(f)
                 return dataset_metadata.get("number_of_episodes", 0)
         except Exception as e:
-            self.logger.warning(
-                f"Error reading dataset metadata from {dataset_metadata_path}: {e}"
-            )
+            self.logger.warning(f"Error reading dataset metadata from {dataset_metadata_path}: {e}")
             return 0
 
     def _validate_replay_skill_internal(self, skill_dir: str, execution: dict) -> bool:
         """Internal validation for replay skills. Returns bool for validity."""
         replay_file = execution.get("replay_file")
         if not replay_file:
-            self.logger.error(
-                f"Replay skill in {skill_dir} missing replay_file in execution config"
-            )
+            self.logger.error(f"Replay skill in {skill_dir} missing replay_file in execution config")
             return False
 
         replay_path = os.path.join(skill_dir, replay_file)
@@ -278,9 +245,7 @@ class SkillLoader:
         try:
             with h5py.File(replay_path, "r") as h5file:
                 if "action" not in h5file:
-                    self.logger.error(
-                        f"Replay file {replay_path} missing required 'action' dataset"
-                    )
+                    self.logger.error(f"Replay file {replay_path} missing required 'action' dataset")
                     return False
 
                 actions = h5file["action"][:]

@@ -9,7 +9,7 @@ import websocket  # websocket-client library (sync, fast)
 import websockets  # For async connect() method
 
 # Configure logging to output to console
-logging.basicConfig(level=logging.INFO, format='[openai_adapter] %(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format="[openai_adapter] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -17,10 +17,10 @@ logger.setLevel(logging.INFO)
 class SyncRealtimeConnection:
     """
     Synchronous WebSocket connection for OpenAI Realtime API via proxy.
-    
+
     Uses websocket-client (sync library) for low-latency audio streaming.
     """
-    
+
     def __init__(
         self,
         proxy_url: str,
@@ -38,29 +38,29 @@ class SyncRealtimeConnection:
         self._on_open_callback = on_open
         self._on_error_callback = on_error
         self._on_close_callback = on_close
-        
+
         self._ws: Optional[websocket.WebSocketApp] = None
         self._stop_event = threading.Event()
         self._connected_event = threading.Event()
         self._send_lock = threading.Lock()
         self._audio_chunk_count = 0
-    
+
     def start(self):
         """Start the WebSocket connection in a background thread."""
         self._stop_event.clear()
         self._connected_event.clear()
-        
+
         # Build WebSocket URL for proxy
         ws_url = self._proxy_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}&token={self._innate_service_key}"
-        
+
         logger.info(f"Connecting to WebSocket: {ws_url[:80]}...")
-        
+
         headers = {
             "X-Innate-Token": self._innate_service_key,
             "OpenAI-Beta": "realtime=v1",
         }
-        
+
         self._ws = websocket.WebSocketApp(
             ws_url,
             header=[f"{k}: {v}" for k, v in headers.items()],
@@ -69,14 +69,14 @@ class SyncRealtimeConnection:
             on_error=self._on_error,
             on_close=self._on_close,
         )
-        
+
         thread = threading.Thread(
             target=self._ws.run_forever,
             kwargs={"ping_interval": 30, "ping_timeout": 10},
             daemon=True,
         )
         thread.start()
-    
+
     def stop(self):
         """Stop the WebSocket connection."""
         self._stop_event.set()
@@ -86,15 +86,15 @@ class SyncRealtimeConnection:
             except Exception:
                 pass
         self._connected_event.clear()
-    
+
     def wait_until_connected(self, timeout: float = 10.0) -> bool:
         """Wait until the connection is established."""
         return self._connected_event.wait(timeout=timeout)
-    
+
     def send_json(self, data: Dict[str, Any]):
         """Send JSON data over the WebSocket (non-blocking)."""
         msg_type = data.get("type", "unknown")
-        
+
         # Minimal logging for audio chunks
         if msg_type == "input_audio_buffer.append":
             self._audio_chunk_count += 1
@@ -105,7 +105,7 @@ class SyncRealtimeConnection:
             # Skip logging for other audio chunks
         else:
             logger.info(f"📤 send_json: {msg_type}")
-        
+
         msg = json.dumps(data)
         with self._send_lock:
             if self._ws and self._connected_event.is_set():
@@ -113,7 +113,7 @@ class SyncRealtimeConnection:
                     self._ws.send(msg)
                 except Exception as e:
                     logger.error(f"Send error: {e}")
-    
+
     # --- WebSocket callbacks ---
     def _on_open(self, ws):
         """Called when WebSocket connects."""
@@ -121,7 +121,7 @@ class SyncRealtimeConnection:
         self._connected_event.set()
         if self._on_open_callback:
             self._on_open_callback()
-    
+
     def _on_message(self, ws, message: str):
         """Called when message received."""
         # Log important events only
@@ -130,26 +130,29 @@ class SyncRealtimeConnection:
             msg_type = msg_data.get("type", "unknown")
             if msg_type in ("session.created", "session.updated"):
                 logger.info(f"📨 {msg_type}")
-            elif msg_type in ("input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped",
-                              "conversation.item.input_audio_transcription.completed"):
+            elif msg_type in (
+                "input_audio_buffer.speech_started",
+                "input_audio_buffer.speech_stopped",
+                "conversation.item.input_audio_transcription.completed",
+            ):
                 logger.info(f"📨 {msg_type}")
             elif msg_type == "error":
                 logger.error(f"📨 OpenAI error: {msg_data}")
         except Exception:
             pass
-        
+
         if self._on_message_callback:
             try:
                 self._on_message_callback(ws, message)
             except Exception as e:
                 logger.error(f"Message handler error: {e}")
-    
+
     def _on_error(self, ws, error):
         """Called on WebSocket error."""
         logger.error(f"WebSocket error: {error}")
         if self._on_error_callback:
             self._on_error_callback(str(error))
-    
+
     def _on_close(self, ws, status_code, msg):
         """Called when WebSocket closes."""
         logger.info("WebSocket closed")
@@ -161,26 +164,26 @@ class SyncRealtimeConnection:
 class ProxyOpenAIClient:
     """
     OpenAI client that proxies through the innate service proxy.
-    
+
     Supports both HTTP (Chat Completions) and WebSocket (Realtime) APIs.
     """
-    
+
     def __init__(self, parent):
         """
         Initialize OpenAI proxy client.
-        
+
         Args:
             parent: Parent ProxyClient instance
         """
         self._parent = parent
-    
+
     class Chat:
         """Chat Completions API."""
-        
+
         def __init__(self, parent):
             """Initialize Chat API with reference to parent ProxyClient."""
             self._parent = parent
-        
+
         async def completions(
             self,
             model: str,
@@ -190,13 +193,13 @@ class ProxyOpenAIClient:
         ) -> Dict[str, Any] | AsyncIterator[Dict[str, Any]]:
             """
             Create chat completion.
-            
+
             Args:
                 model: Model name (e.g., 'gpt-4')
                 messages: List of messages
                 stream: Whether to stream the response
                 **kwargs: Additional OpenAI API parameters
-                
+
             Returns:
                 Response dict or async iterator for streaming
             """
@@ -208,14 +211,14 @@ class ProxyOpenAIClient:
             # Only include stream field if True (some APIs reject stream: false)
             if stream:
                 body["stream"] = True
-            
+
             response = await self._parent.request(
                 service_name="openai",
                 endpoint="/v1/chat/completions",
                 method="POST",
                 json=body,
             )
-            
+
             if stream:
                 # Return async iterator for SSE streaming
                 async def stream_response():
@@ -228,18 +231,18 @@ class ProxyOpenAIClient:
                                 yield json.loads(data)
                             except json.JSONDecodeError:
                                 continue
-                
+
                 return stream_response()
             else:
                 return response.json()
-    
+
     class Realtime:
         """Realtime API (WebSocket)."""
-        
+
         def __init__(self, parent):
             """Initialize Realtime API with reference to parent ProxyClient."""
             self._parent = parent
-        
+
         def connect_sync(
             self,
             model: str = "gpt-4o-realtime-preview",
@@ -250,7 +253,7 @@ class ProxyOpenAIClient:
         ) -> "SyncRealtimeConnection":
             """
             Create a synchronous WebSocket connection to OpenAI Realtime API via proxy.
-            
+
             Returns a SyncRealtimeConnection object with start(), stop(), send_json() methods.
             """
             return SyncRealtimeConnection(
@@ -262,7 +265,7 @@ class ProxyOpenAIClient:
                 on_error=on_error,
                 on_close=on_close,
             )
-        
+
         async def connect(
             self,
             model: str = "gpt-4o-realtime-preview",
@@ -270,11 +273,11 @@ class ProxyOpenAIClient:
         ) -> websockets.WebSocketServerProtocol:
             """
             Connect to OpenAI Realtime API via proxy.
-            
+
             Args:
                 model: Model name
                 on_message: Callback for received messages
-                
+
             Returns:
                 WebSocket connection
             """
@@ -283,43 +286,43 @@ class ProxyOpenAIClient:
             innate_service_key = self._parent.innate_service_key
             ws_url = proxy_url.replace("https://", "wss://").replace("http://", "ws://")
             ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={model}&token={innate_service_key}"
-            
+
             # Connect to proxy WebSocket
             headers = {"Authorization": f"Bearer {innate_service_key}"}
             try:
                 ws = await websockets.connect(ws_url, additional_headers=headers)
             except TypeError:
                 ws = await websockets.connect(ws_url, extra_headers=headers)
-            
+
             # Set up message handler
             if on_message:
+
                 async def message_handler():
                     async for message in ws:
                         await on_message(ws, message)
-                
+
                 asyncio.create_task(message_handler())
-            
+
             return ws
-    
+
     @property
     def chat(self) -> Chat:
         """Get Chat API."""
         return self.Chat(self._parent)
-    
+
     @property
     def realtime(self) -> Realtime:
         """Get Realtime API."""
         return self.Realtime(self._parent)
-    
+
     async def close(self):
         """Close the client."""
         await self._parent.close()
-    
+
     async def __aenter__(self):
         """Async context manager entry."""
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         await self.close()
-
