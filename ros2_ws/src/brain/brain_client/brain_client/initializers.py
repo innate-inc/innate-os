@@ -7,15 +7,13 @@ to keep the main brain_client_node.py clean and focused.
 """
 
 import os
-import sys
-import importlib.util
-from typing import Dict, Any, Optional, Tuple
+from typing import Any
 
-from brain_client.skill_loader import SkillLoader
 from brain_client.agent_loader import AgentLoader
+from brain_client.skill_loader import SkillLoader
 
 
-def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
+def initialize_skills(logger, simulator_mode: bool = False) -> dict[str, Any]:
     """
     Initialize all skills using dynamic loading.
 
@@ -70,7 +68,7 @@ def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
     return skills_dict
 
 
-def initialize_agents(logger, skills_dict: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Optional[Any]]:
+def initialize_agents(logger, skills_dict: dict[str, Any] | None = None) -> tuple[dict[str, Any], Any | None]:
     """
     Initialize all agents using dynamic loading.
 

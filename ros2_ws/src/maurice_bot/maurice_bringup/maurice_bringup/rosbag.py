@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 
-import rosbag2_py
-from rosidl_runtime_py.utilities import get_message
-from rclpy.serialization import deserialize_message
 import argparse
 import os
+import tkinter as tk
 from datetime import datetime
+from tkinter import filedialog
+
 import cv2
 import numpy as np
+import rosbag2_py
 from cv_bridge import CvBridge
-import tkinter as tk
-from tkinter import filedialog
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
 
 
 def nanoseconds_to_datetime(nanoseconds):
@@ -134,7 +135,7 @@ def extract_video(bag_path, output_file, fps=30):
 
     print(f"Found compressed image topics: {list(image_topics.keys())}")
 
-    bridge = CvBridge()
+    CvBridge()
     video_writer = None
     frame_count = 0
 
@@ -220,7 +221,7 @@ def select_and_process_bag():
 
     if bag_path:
         print(f"\n📁 Selected bag directory: {bag_path}")
-        print(f"🔍 Processing ROS bag...\n")
+        print("🔍 Processing ROS bag...\n")
 
         # Generate output filenames in the same directory
         bag_name = os.path.basename(bag_path)

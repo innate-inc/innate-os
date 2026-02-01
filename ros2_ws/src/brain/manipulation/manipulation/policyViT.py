@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
+import json
+import os
+import pickle
 import time
+
+import cv2
+import numpy as np
 import rclpy
+import torch
+import torch.amp
+from cv_bridge import CvBridge
+from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray
-from cv_bridge import CvBridge
-import numpy as np
-import torch
-import pickle
-import os
-import cv2
-from geometry_msgs.msg import Twist
-import json
-import torch.amp
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 # Import ViTPolicy directly from InnateACT
-from InnateACT.policy import ViTPolicy
+from InnateACT.policy import ViTPolicy  # noqa: E402
 
 # Define the policy configuration
 policy_config = {
@@ -40,7 +41,7 @@ TEMPORAL_ENSEMBLE_COEFF = 0.3
 CHUNK_SIZE = 30
 
 # Add after the ViTPolicy import:
-from manipulation.ensemble import ACTTemporalEnsembler
+from manipulation.ensemble import ACTTemporalEnsembler  # noqa: E402
 
 
 class InferenceNode(Node):
@@ -70,7 +71,7 @@ class InferenceNode(Node):
             self.norm_stats = None
 
         try:
-            with open(metadata_path, "r") as f:
+            with open(metadata_path) as f:
                 self.metadata = json.load(f)
             self.get_logger().info("Metadata loaded successfully.")
         except Exception as e:
@@ -204,7 +205,7 @@ class InferenceNode(Node):
                 return None
 
     def inference_loop(self):
-        start_time = time.time()
+        time.time()
         # If the action buffer is empty, run inference to get a new sequence of actions.
         if not self.action_buffer:
             actions = self.run_inference()

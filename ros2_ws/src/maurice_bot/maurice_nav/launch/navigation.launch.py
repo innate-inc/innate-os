@@ -23,7 +23,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -38,12 +38,12 @@ def generate_launch_description():
     controller_params_file = os.path.join(share_dir, "config", "controller.yaml")
     costmap_params_file = os.path.join(share_dir, "config", "costmap.yaml")
     amcl_params_file = os.path.join(share_dir, "config", "amcl.yaml")
-    behavior_params_file = os.path.join(share_dir, "config", "behavior.yaml")
-    smoother_params_file = os.path.join(share_dir, "config", "velocity_smoother.yaml")
+    os.path.join(share_dir, "config", "behavior.yaml")
+    os.path.join(share_dir, "config", "velocity_smoother.yaml")
 
     # Use the map file - construct path from environment variable or HOME
     maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
-    default_map_path = os.path.join(maurice_root, "maps", "home.yaml")
+    os.path.join(maurice_root, "maps", "home.yaml")
 
     # Declare launch arguments so that these paths can be overridden if needed
 

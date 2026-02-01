@@ -6,18 +6,18 @@ and the node visualizes one episode at a time (showing images at ~30 Hz with ove
 arm positions and velocities). Left/right arrow keys switch episodes and 'q' quits.
 """
 
-import os
 import json
+import os
+import time
+
+import cv2
 import h5py
 import numpy as np
-import cv2
 import rclpy
+from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
-import time
 from tf2_ros import TransformBroadcaster
-from geometry_msgs.msg import TransformStamped
 
 # Key codes for Linux (if your tests show left arrow=81 and right arrow=83, use these)
 LEFT_ARROW = 81
@@ -60,7 +60,7 @@ class DataViewerNode(Node):
             return
 
         try:
-            with open(metadata_path, "r") as f:
+            with open(metadata_path) as f:
                 self.metadata = json.load(f)
             self.episodes = self.metadata.get("episodes", [])
             if not self.episodes:

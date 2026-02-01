@@ -2,7 +2,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from maurice_bringup.env_loader import load_env_file, get_env
+from maurice_bringup.env_loader import get_env, load_env_file
 
 
 def generate_launch_description():

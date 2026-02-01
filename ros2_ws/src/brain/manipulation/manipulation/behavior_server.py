@@ -1,31 +1,32 @@
 #!/usr/bin/env python3
-import time
+import json
+import os
 import threading
+import time
+
+import cv2
+import h5py
+import numpy as np
 import rclpy
+import torch
+from brain_messages.action import ExecuteBehavior
+from cv_bridge import CvBridge
+from geometry_msgs.msg import Twist
+from maurice_msgs.srv import GotoJS
+from rclpy.action import ActionServer, CancelResponse
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
-from maurice_msgs.srv import GotoJS
-from brain_messages.action import ExecuteBehavior
-from rclpy.action import ActionServer, CancelResponse
-from cv_bridge import CvBridge
-import numpy as np
-import torch
-import os
-import cv2
-from geometry_msgs.msg import Twist
-import json
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from rclpy.executors import MultiThreadedExecutor
-import h5py
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 # Import your policy class and trajectory generator
-from manipulation.ACT import ACTPolicy, ACTConfig
+from manipulation.ACT import ACTConfig, ACTPolicy  # noqa: E402
 
 
 def create_act_config(action_dim=8):
@@ -776,7 +777,7 @@ class BehaviorServer(Node):
             }
             # Run multiple warmup iterations to ensure compilation completes
             num_warmup = 5
-            for i in range(num_warmup):
+            for _i in range(num_warmup):
                 with torch.no_grad():
                     _ = self.current_policy.select_action(dummy_batch)
                 if self.device.type == "cuda":
@@ -1008,7 +1009,7 @@ class BehaviorServer(Node):
             # Check result
             result = future.result()
             if result is not None:
-                self.get_logger().info(f"Arm goto service completed successfully")
+                self.get_logger().info("Arm goto service completed successfully")
                 return True
             else:
                 self.get_logger().error("Arm goto service returned None result")

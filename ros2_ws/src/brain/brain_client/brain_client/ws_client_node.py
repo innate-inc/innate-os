@@ -3,13 +3,11 @@ import asyncio
 import json
 import threading
 import time
-from typing import Optional
 
 import rclpy
+import websockets
 from rclpy.node import Node
 from std_msgs.msg import String
-
-import websockets
 
 # Import your message definitions
 from brain_client.message_types import (
@@ -24,7 +22,7 @@ from brain_client.message_types import (
 # WSClient class – largely unchanged, but now it relies on its node to publish.
 ###############################################################################
 class WSClient:
-    def __init__(self, uri, token, node, robot_version: Optional[str] = None):
+    def __init__(self, uri, token, node, robot_version: str | None = None):
         """
         :param node: A reference to the ROS node, used for logging and publishing.
         :param robot_version: Version string from /robot/info to send with auth.
@@ -137,7 +135,7 @@ class WSClientNode(Node):
             )
 
         # Robot version from /robot/info
-        self._robot_version: Optional[str] = None
+        self._robot_version: str | None = None
         self._robot_info_sub = self.create_subscription(String, "/robot/info", self._robot_info_callback, 10)
 
         # Publisher for TTS messages

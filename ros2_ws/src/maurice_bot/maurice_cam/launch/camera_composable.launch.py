@@ -15,8 +15,7 @@ Usage:
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 
@@ -215,7 +214,6 @@ def generate_launch_description():
     )
 
     # Build list of composable nodes based on launch arguments
-    composable_nodes = []
 
     # Main camera driver node
     main_camera_node = ComposableNode(
@@ -288,7 +286,7 @@ def generate_launch_description():
     )
 
     # Stereo depth estimator node
-    depth_estimator_node = ComposableNode(
+    ComposableNode(
         package="maurice_cam",
         plugin="maurice_cam::StereoDepthEstimator",
         name="stereo_depth_estimator",

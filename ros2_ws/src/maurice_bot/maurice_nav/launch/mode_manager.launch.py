@@ -3,7 +3,6 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
-
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -58,7 +57,7 @@ def generate_launch_description():
     # BT XML paths
     nav_to_pose_bt_xml = os.path.join(share_dir, "config", "nav_to_pose.xml")
     nav_through_poses_bt_xml = os.path.join(share_dir, "config", "nav_through_poses.xml")
-    nav_to_pose_mapfree_bt_xml = os.path.join(share_dir, "config", "nav_to_pose_mapfree.xml")
+    os.path.join(share_dir, "config", "nav_to_pose_mapfree.xml")
 
     navigation_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([maurice_nav_launch_dir, "/navigation.launch.py"])

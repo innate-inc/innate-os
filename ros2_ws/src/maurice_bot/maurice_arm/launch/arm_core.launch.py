@@ -1,10 +1,11 @@
-from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.substitutions import PathJoinSubstitution
-from launch_ros.substitutions import FindPackageShare
 import os
+
 import yaml
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.substitutions import PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def load_yaml(package_name, file_path):
@@ -13,7 +14,7 @@ def load_yaml(package_name, file_path):
     absolute_file_path = os.path.join(package_path, file_path)
 
     try:
-        with open(absolute_file_path, "r") as f:
+        with open(absolute_file_path) as f:
             return yaml.safe_load(f)
     except Exception as e:
         print(f"Error loading {absolute_file_path}: {e}")
@@ -22,7 +23,7 @@ def load_yaml(package_name, file_path):
 
 def generate_launch_description():
     # Get package directories
-    maurice_arm_share = get_package_share_directory("maurice_arm")
+    get_package_share_directory("maurice_arm")
     maurice_sim_share = get_package_share_directory("maurice_sim")
 
     # Get the path to the arm config file (ROS 2 param format)
@@ -30,12 +31,12 @@ def generate_launch_description():
 
     # Load URDF file
     urdf_file = os.path.join(maurice_sim_share, "urdf", "maurice.urdf")
-    with open(urdf_file, "r") as f:
+    with open(urdf_file) as f:
         robot_description = f.read()
 
     # Load SRDF file
     srdf_file = os.path.join(maurice_sim_share, "urdf", "arm.srdf")
-    with open(srdf_file, "r") as f:
+    with open(srdf_file) as f:
         robot_description_semantic = f.read()
 
     # Load MoveIt config (MoveIt format, will be added as dict)

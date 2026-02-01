@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+
 import rclpy
-from rclpy.action import ActionClient
-from rclpy.node import Node
 from action_msgs.msg import GoalStatus
 from brain_messages.action import ExecuteBehavior
+from rclpy.action import ActionClient
+from rclpy.node import Node
+
 from brain_client.logging_config import UniversalLogger
 
 
@@ -71,7 +73,7 @@ class Skill(ABC):
         """
         pass
 
-    def update_robot_state(self, **kwargs):
+    def update_robot_state(self, **kwargs):  # noqa: B027
         """
         Update the primitive with the latest robot state.
         Subclasses can override this to store relevant data.

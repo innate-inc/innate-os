@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-import rclpy
-import serial
 import struct
-import time
 import threading
+import time
 
-from rclpy.node import Node
+import serial
 from geometry_msgs.msg import TransformStamped
+from rclpy.node import Node
 
 # CRC-8/MAXIM constants
 CRC8_POLY = 0x8C

@@ -6,12 +6,13 @@ Starts only the MoveIt planning components:
 """
 
 import os
+
 import yaml
-from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.substitutions import Command
-from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.substitutions import Command
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def load_yaml(package_name, file_path):
@@ -20,7 +21,7 @@ def load_yaml(package_name, file_path):
     absolute_file_path = os.path.join(package_path, file_path)
 
     try:
-        with open(absolute_file_path, "r") as file:
+        with open(absolute_file_path) as file:
             return yaml.safe_load(file)
     except Exception as e:
         print(f"Error loading {absolute_file_path}: {e}")
@@ -36,8 +37,8 @@ def generate_launch_description():
 
     # Robot description (URDF)
     urdf_file = os.path.join(maurice_sim_share, "urdf", "maurice.urdf")
-    with open(urdf_file, "r") as f:
-        robot_description_content = f.read()
+    with open(urdf_file) as f:
+        f.read()
 
     robot_description = {"robot_description": ParameterValue(Command(["cat ", urdf_file]), value_type=str)}
 
@@ -49,7 +50,7 @@ def generate_launch_description():
 
     # Load kinematics config
     kin_path = os.path.join(maurice_arm_share, "config", "kinematics.yaml")
-    kin_full = yaml.safe_load(open(kin_path, "r"))
+    kin_full = yaml.safe_load(open(kin_path))
     kin_params = kin_full.get("ros__parameters", kin_full)
 
     # Load MoveIt config

@@ -1,33 +1,30 @@
 #!/usr/bin/env python3
 
-import rclpy
-from rclpy.node import Node
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
-from std_msgs.msg import String
-from brain_messages.srv import ChangeMap, ChangeNavigationMode, SaveMap, DeleteMap
-from nav2_msgs.srv import LoadMap
-from lifecycle_msgs.msg import Transition, State
-from lifecycle_msgs.srv import GetState, ChangeState
-import subprocess
-import signal
-import os
-import time
 import glob
 import json
+import os
+import subprocess
+import time
 import traceback
 from enum import Enum
-from typing import Tuple
-from nav2_simple_commander.robot_navigator import BasicNavigator
 
-from maurice_nav.service_utils import call_service, get_node_state, send_lifecycle_transition, transition_node
+import rclpy
 
 # TF2 imports for transform lookup
 import tf2_ros
-from geometry_msgs.msg import Pose
+from brain_messages.srv import ChangeMap, ChangeNavigationMode, DeleteMap, SaveMap
 from geometry_msgs.msg import TransformStamped
+from lifecycle_msgs.msg import State
+from lifecycle_msgs.srv import ChangeState, GetState
+from nav2_msgs.srv import LoadMap
+from nav2_simple_commander.robot_navigator import BasicNavigator
 from nav_msgs.msg import Odometry
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from std_msgs.msg import String
 
+from maurice_nav.service_utils import call_service, get_node_state, transition_node
 
 # TODO: move this into launch file?
 map_server_node = "navigation_map_server"
@@ -226,7 +223,7 @@ class ModeManager(Node):
         """Load the last used mode from file, default to navigation"""
         try:
             if os.path.exists(self.mode_file):
-                with open(self.mode_file, "r") as f:
+                with open(self.mode_file) as f:
                     saved_mode = f.read().strip()
                     if saved_mode in ["navigation", "mapping", "mapfree"]:
                         self.get_logger().info(f"Loaded last mode: {saved_mode}")
@@ -242,7 +239,7 @@ class ModeManager(Node):
         """Load the last used map from file, default to home.yaml"""
         try:
             if os.path.exists(self.map_file):
-                with open(self.map_file, "r") as f:
+                with open(self.map_file) as f:
                     saved_map = f.read().strip()
                     # Validate that the saved map exists
                     if saved_map and saved_map in self.available_maps:
@@ -457,7 +454,7 @@ class ModeManager(Node):
             except Exception as e:
                 self.get_logger().debug(f"Error shutting down {node_name}: {e}")
 
-    def request_mode_startup(self, mode: NavigationMode) -> Tuple[bool, str]:
+    def request_mode_startup(self, mode: NavigationMode) -> tuple[bool, str]:
         """
         Request startup of navigation nodes for the given mode.
         First configures all nodes in forward order, then activates them one by one.
@@ -476,7 +473,7 @@ class ModeManager(Node):
             # self.get_logger().info(f"Shut down other nodes")
 
             all_nodes_except_target = []
-            for mode_name, nodes in modes_nodes.items():
+            for _mode_name, nodes in modes_nodes.items():
                 all_nodes_except_target.extend(nodes)
             for node in modes_nodes[mode.value]:
                 # implement this: remove `node` from all_nodes_except_target
@@ -511,7 +508,7 @@ class ModeManager(Node):
                 if not success:
                     failures.append(node_name)
                     self.get_logger().warning(f"Failed to configure {node_name}, continuing...")
-            self.get_logger().info(f"Configured nodes")
+            self.get_logger().info("Configured nodes")
 
             # Phase 2: Activate nodes in forward order
             map_load_success = False
@@ -544,7 +541,7 @@ class ModeManager(Node):
                     if not map_load_success:
                         failures.append(f"{node_name}_map_load")
 
-            self.get_logger().info(f"Activated nodes")
+            self.get_logger().info("Activated nodes")
 
             if failures:
                 message = f"{mode.value} mode started with {len(failures)} activation failures: {failures}"
@@ -597,7 +594,7 @@ class ModeManager(Node):
         self.get_logger().error(f"Failed to load map after {max_retries} attempts")
         return False
 
-    def _efficient_map_switch(self) -> Tuple[bool, str]:
+    def _efficient_map_switch(self) -> tuple[bool, str]:
         """
         Efficiently switch maps by transitioning bt_navigator down, loading map, then bringing all nodes up.
 
@@ -617,7 +614,7 @@ class ModeManager(Node):
         success = transition_node(self._service_clients, self.get_logger(), bt_node, State.PRIMARY_STATE_INACTIVE)
         if not success:
             failures.append("bt_navigator")
-            self.get_logger().warning(f"Failed to transition bt_navigator down")
+            self.get_logger().warning("Failed to transition bt_navigator down")
 
         # Step 2: Load new map
         self.get_logger().info("Step 2: Loading new map")
@@ -656,7 +653,6 @@ class ModeManager(Node):
                 return response
 
             # Update the current map
-            old_map = self.current_map
             self.current_map = requested_map
 
             # Save the new map choice for persistence
@@ -994,7 +990,7 @@ class ModeManager(Node):
 
     def __del__(self):
         """Cleanup when node is destroyed"""
-        self.get_logger().info(f"Using __del__ to delete mode manager")
+        self.get_logger().info("Using __del__ to delete mode manager")
         try:
             for mode in NavigationMode:
                 self.shutdown_mode(mode.value)

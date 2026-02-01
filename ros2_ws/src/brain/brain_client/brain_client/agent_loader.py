@@ -8,11 +8,10 @@ and can automatically register them with the brain client.
 """
 
 import base64
-import os
-import sys
 import importlib.util
 import inspect
-from typing import Dict, List, Type, Optional
+import os
+import sys
 from pathlib import Path
 
 from brain_client.agent_types import Agent
@@ -25,9 +24,9 @@ class AgentLoader:
 
     def __init__(self, logger):
         self.logger = logger
-        self._loaded_agents: Dict[str, Type[Agent]] = {}
+        self._loaded_agents: dict[str, type[Agent]] = {}
 
-    def discover_agents_in_directory(self, directory_path: str) -> Dict[str, Type[Agent]]:
+    def discover_agents_in_directory(self, directory_path: str) -> dict[str, type[Agent]]:
         """
         Scans a directory for Python files and attempts to load agent classes.
 
@@ -67,7 +66,7 @@ class AgentLoader:
         self.logger.info(f"Discovered {len(agents)} agents in {directory_path}")
         return agents
 
-    def _load_agents_from_file(self, file_path: Path) -> Dict[str, Type[Agent]]:
+    def _load_agents_from_file(self, file_path: Path) -> dict[str, type[Agent]]:
         """
         Loads agent classes from a single Python file.
 
@@ -116,7 +115,7 @@ class AgentLoader:
 
         return agents
 
-    def _validate_agent_class(self, agent_class: Type[Agent]) -> bool:
+    def _validate_agent_class(self, agent_class: type[Agent]) -> bool:
         """
         Validates that an agent class is properly implemented.
 
@@ -150,7 +149,7 @@ class AgentLoader:
             self.logger.error(f"Error validating agent {agent_class.__name__}: {e}")
             return False
 
-    def _get_agent_name(self, agent_class: Type[Agent]) -> str:
+    def _get_agent_name(self, agent_class: type[Agent]) -> str:
         """
         Gets the agent name by creating a temporary instance.
         This is needed because the name is a property that requires instantiation.
@@ -186,7 +185,7 @@ class AgentLoader:
         s1 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", class_name)
         return s1.lower()
 
-    def load_agents_from_directories(self, directories: List[str]) -> Dict[str, Type[Agent]]:
+    def load_agents_from_directories(self, directories: list[str]) -> dict[str, type[Agent]]:
         """
         Load agents from multiple directories.
 
@@ -219,10 +218,10 @@ class AgentLoader:
 
     def create_agent_instances(
         self,
-        agent_classes: Dict[str, Type[Agent]],
-        available_skills: Optional[Dict[str, any]] = None,
-        agents_directory: Optional[str] = None,
-    ) -> Dict[str, Agent]:
+        agent_classes: dict[str, type[Agent]],
+        available_skills: dict[str, any] | None = None,
+        agents_directory: str | None = None,
+    ) -> dict[str, Agent]:
         """
         Create instances of agent classes.
 
@@ -254,7 +253,7 @@ class AgentLoader:
 
         return agent_instances
 
-    def _load_display_icon(self, agent_instance: Agent, agents_directory: Optional[str]) -> None:
+    def _load_display_icon(self, agent_instance: Agent, agents_directory: str | None) -> None:
         """
         Load and encode the agent's display icon as base64.
 
@@ -278,7 +277,7 @@ class AgentLoader:
             except Exception as e:
                 self.logger.warning(f"Failed to load icon for agent '{agent_instance.id}': {e}")
 
-    def _validate_agent_skills(self, agent_instance: Agent, available_skills: Dict[str, any]) -> None:
+    def _validate_agent_skills(self, agent_instance: Agent, available_skills: dict[str, any]) -> None:
         """
         Validates that all skills referenced by an agent have corresponding
         skill files available.

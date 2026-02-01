@@ -1,9 +1,10 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-import os
 
 
 def generate_launch_description():
@@ -13,7 +14,7 @@ def generate_launch_description():
 
     # Read URDF file for robot_state_publisher
     urdf_file = os.path.join(sim_pkg_dir, "urdf", "maurice.urdf")
-    with open(urdf_file, "r") as f:
+    with open(urdf_file) as f:
         robot_description = f.read()
 
     # Robot state publisher node (publishes TF tree from joint_states + URDF)

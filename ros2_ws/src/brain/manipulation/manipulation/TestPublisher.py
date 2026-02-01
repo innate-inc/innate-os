@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
 import cv2
+import rclpy
 from cv_bridge import CvBridge
-import numpy as np
+from geometry_msgs.msg import Twist
+from rclpy.node import Node
 
 # Message types for image and sensor data
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray
-from geometry_msgs.msg import Twist
 
 
 class TestPublisher(Node):

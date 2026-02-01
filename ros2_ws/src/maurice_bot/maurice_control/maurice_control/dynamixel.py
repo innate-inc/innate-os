@@ -1,10 +1,16 @@
 from __future__ import annotations
+
+import enum
 import math
 import os
-from dynamixel_sdk import *  # Uses Dynamixel SDK library
+import time
 from dataclasses import dataclass
-import enum
-from dynamixel_sdk import COMM_SUCCESS
+
+from dynamixel_sdk import (
+    COMM_SUCCESS,
+    PacketHandler,
+    PortHandler,
+)
 
 
 class ReadAttribute(enum.Enum):
@@ -154,9 +160,6 @@ class Dynamixel:
     def read_hardware_error_status(self, motor_id: int):
         return self._read_value(motor_id, ReadAttribute.HARDWARE_ERROR_STATUS, 1)
 
-    def disconnect(self):
-        self.portHandler.closePort()
-
     def set_id(self, old_id, new_id, use_broadcast_id: bool = False):
         """
         sets the id of the dynamixel servo
@@ -233,8 +236,10 @@ class Dynamixel:
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(self.portHandler, motor_id, self.POSITION_P, P)
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
-    def set_I(self, motor_id: int, I: int):
-        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(self.portHandler, motor_id, self.POSITION_I, I)
+    def set_I(self, motor_id: int, i_gain: int):
+        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
+            self.portHandler, motor_id, self.POSITION_I, i_gain
+        )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
     def set_D(self, motor_id: int, D: int):
@@ -293,9 +298,9 @@ class Dynamixel:
                 value, dxl_comm_result, dxl_error = self.packetHandler.read4ByteTxRx(
                     self.portHandler, motor_id, attribute.value
                 )
-        except Exception:
+        except Exception as err:
             if tries == 0:
-                raise Exception
+                raise Exception from err
             else:
                 return self._read_value(motor_id, attribute, num_bytes, tries=tries - 1)
         if dxl_comm_result != COMM_SUCCESS:

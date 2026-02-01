@@ -1,7 +1,8 @@
 # message_types.py
 
 from enum import Enum
-from typing import Dict, Optional, List, Any
+from typing import Any
+
 from pydantic import BaseModel, field_serializer
 
 
@@ -12,7 +13,7 @@ class NavigationToPosition(BaseModel):
 
 class Task(BaseModel):
     type: str
-    inputs: Dict[str, Any]
+    inputs: dict[str, Any]
     primitive_id: str
 
 
@@ -47,12 +48,12 @@ class MessageOutType(str, Enum):
 
 class MessageIn(BaseModel):
     type: MessageInType
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
 
 
 class MessageOut(BaseModel):
     type: MessageOutType
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
 
     @field_serializer("type")
     def serialize_message_out_type(self, value: MessageOutType) -> str:
@@ -75,7 +76,7 @@ class VisionAgentOutput(BaseModel):
     stop_current_task: bool
     observation: str
     thoughts: str
-    new_goal: Optional[str]
-    next_task: Optional[Task] = None
-    anticipation: Optional[str]
-    to_tell_user: Optional[str]
+    new_goal: str | None
+    next_task: Task | None = None
+    anticipation: str | None
+    to_tell_user: str | None

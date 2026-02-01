@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
-import time
 import threading
-import numpy as np
+import time
+
 import cv2  # Used for resizing images
-
-import rclpy
-from rclpy.node import Node
-
-from geometry_msgs.msg import Twist, TransformStamped
-from nav_msgs.msg import Odometry
-from sensor_msgs.msg import JointState, Image
-from std_msgs.msg import Float64MultiArray
-
-import tf2_ros
-
 import mujoco
+import numpy as np
+import rclpy
+import tf2_ros
+from geometry_msgs.msg import TransformStamped, Twist
 from mujoco import viewer
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from sensor_msgs.msg import Image, JointState
+from std_msgs.msg import Float64MultiArray
 
 
 class MauriceBotNode(Node):
@@ -129,7 +126,7 @@ class MauriceBotNode(Node):
         offscreen_ctx.make_current()
 
         # Log GPU information for debugging
-        from OpenGL.GL import glGetString, GL_VENDOR, GL_RENDERER, GL_VERSION
+        from OpenGL.GL import GL_RENDERER, GL_VENDOR, GL_VERSION, glGetString
 
         vendor = glGetString(GL_VENDOR).decode("utf-8")
         renderer = glGetString(GL_RENDERER).decode("utf-8")

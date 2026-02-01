@@ -6,10 +6,9 @@ Loads .env file and provides access to environment variables.
 
 import os
 from pathlib import Path
-from typing import Optional
 
 
-def load_env_file(env_path: Optional[Path] = None) -> None:
+def load_env_file(env_path: Path | None = None) -> None:
     """
     Load environment variables from .env file.
 

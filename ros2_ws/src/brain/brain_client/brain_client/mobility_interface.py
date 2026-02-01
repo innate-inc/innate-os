@@ -7,10 +7,9 @@ This interface allows primitives to:
 2. Schedule automatic stop after a specified duration
 """
 
-from typing import Optional
-
-from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from rclpy.node import Node
+
 from brain_client.logging_config import UniversalLogger
 
 
@@ -26,7 +25,7 @@ class MobilityInterface:
         self.cmd_vel_topic = cmd_vel_topic
 
         self._cmd_vel_pub = self.node.create_publisher(Twist, self.cmd_vel_topic, 10)
-        self._stop_timer: Optional[object] = None
+        self._stop_timer: object | None = None
 
         self.logger.info(f"MobilityInterface initialized with cmd_vel topic: {self.cmd_vel_topic}")
 
@@ -61,7 +60,7 @@ class MobilityInterface:
         self,
         linear_x: float = 0.0,
         angular_z: float = 0.0,
-        duration: Optional[float] = None,
+        duration: float | None = None,
     ) -> None:
         """Publish a Twist on the cmd_vel topic.
 

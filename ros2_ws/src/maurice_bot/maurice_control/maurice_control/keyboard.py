@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
+
 import rclpy
-from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from pynput import keyboard
-import threading
+from rclpy.node import Node
 
 
 class KeyboardController(Node):

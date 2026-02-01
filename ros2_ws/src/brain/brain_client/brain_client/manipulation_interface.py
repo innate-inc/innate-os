@@ -8,14 +8,14 @@ This interface allows primitives to:
 3. Get current end-effector pose (forward kinematics)
 """
 
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Twist, PoseStamped
-from sensor_msgs.msg import JointState
-from maurice_msgs.srv import GotoJS
-from std_msgs.msg import Float64MultiArray
 import time
-from typing import Optional, Tuple, List
+
+import rclpy
+from geometry_msgs.msg import PoseStamped, Twist
+from maurice_msgs.srv import GotoJS
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
 
 
 class ManipulationInterface:
@@ -65,7 +65,7 @@ class ManipulationInterface:
         """Store the latest FK pose."""
         self._fk_pose = msg
 
-    def get_current_end_effector_pose(self) -> Optional[dict]:
+    def get_current_end_effector_pose(self) -> dict | None:
         """
         Get the current end-effector pose in Cartesian space.
 
@@ -98,7 +98,7 @@ class ManipulationInterface:
         pitch: float = 0.0,
         yaw: float = 0.0,
         timeout: float = 2.0,
-    ) -> Optional[List[float]]:
+    ) -> list[float] | None:
         """
         Solve inverse kinematics for a target Cartesian pose.
 
@@ -136,7 +136,7 @@ class ManipulationInterface:
 
                 # Validate that we received a non-empty solution
                 if len(joint_positions) == 0:
-                    self.logger.error(f"[ManipulationInterface] IK solver returned empty solution (IK failed)")
+                    self.logger.error("[ManipulationInterface] IK solver returned empty solution (IK failed)")
                     return None
 
                 return joint_positions
@@ -147,7 +147,7 @@ class ManipulationInterface:
         return None
 
     def move_to_joint_positions(
-        self, joint_positions: List[float], duration: int = 3, wait_for_completion: bool = True
+        self, joint_positions: list[float], duration: int = 3, wait_for_completion: bool = True
     ) -> bool:
         """
         Move the arm to specified joint positions using smooth trajectory.

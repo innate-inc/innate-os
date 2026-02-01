@@ -38,7 +38,7 @@ def _run_nmcli(command_list, timeout=10, check=True, capture_output=True, use_su
         nm_logger.error(f"  Return Code: {e.returncode}")
         nm_logger.error(f"  Stderr: {e.stderr.strip() if e.stderr else 'N/A'}")
         return False, e.stdout, e.stderr  # Failed execution
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         nm_logger.error(f"nmcli command timed out: {' '.join(command_list)}")
         return False, None, "Command timed out."  # Timeout
     except FileNotFoundError:

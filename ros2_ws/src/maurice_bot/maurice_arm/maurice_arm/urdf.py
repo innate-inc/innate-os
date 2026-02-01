@@ -1,8 +1,5 @@
-from __future__ import print_function
-
-import urdf_parser_py.urdf as urdf
-
 import PyKDL as kdl
+import urdf_parser_py.urdf as urdf
 
 
 def treeFromFile(filename):
@@ -55,9 +52,14 @@ def _toKdlInertia(i):
 
 def _toKdlJoint(jnt):
     # Define lambda functions for creating KDL joints based on URDF joint types
-    fixed = lambda j, F: kdl.Joint(j.name, kdl.Joint.Fixed)
-    rotational = lambda j, F: kdl.Joint(j.name, F.p, F.M * kdl.Vector(*j.axis), kdl.Joint.RotAxis)
-    translational = lambda j, F: kdl.Joint(j.name, F.p, F.M * kdl.Vector(*j.axis), kdl.Joint.TransAxis)
+    def fixed(j, F):
+        return kdl.Joint(j.name, kdl.Joint.Fixed)
+
+    def rotational(j, F):
+        return kdl.Joint(j.name, F.p, F.M * kdl.Vector(*j.axis), kdl.Joint.RotAxis)
+
+    def translational(j, F):
+        return kdl.Joint(j.name, F.p, F.M * kdl.Vector(*j.axis), kdl.Joint.TransAxis)
 
     # Map URDF joint types to corresponding KDL joint creation functions
     type_map = {
@@ -93,7 +95,7 @@ def _add_children_to_tree(robot_model, root, tree):
     if root.name not in robot_model.child_map:
         return True
 
-    children = [robot_model.link_map[l] for (j, l) in robot_model.child_map[root.name]]
+    children = [robot_model.link_map[link] for (_j, link) in robot_model.child_map[root.name]]
 
     # recurslively add all children
     for child in children:
@@ -115,15 +117,14 @@ def treeFromUrdfModel(robot_model, quiet=False):
 
     if root.inertial and not quiet:
         print(
-            "The root link %s has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF."
-            % root.name
+            f"The root link {root.name} has an inertia specified in the URDF, but KDL does not support a root link with an inertia.  As a workaround, you can add an extra dummy link to your URDF."
         )
 
     ok = True
     tree = kdl.Tree(root.name)
 
     #  add all children
-    for joint, child in robot_model.child_map[root.name]:
+    for _joint, child in robot_model.child_map[root.name]:
         if not _add_children_to_tree(robot_model, robot_model.link_map[child], tree):
             ok = False
             break

@@ -6,11 +6,10 @@ This module provides functionality to dynamically discover and load input device
 from specified directories. Similar to primitive_loader.py and directive_loader.py.
 """
 
-import os
-import sys
 import importlib.util
 import inspect
-from typing import Dict, List, Type, Optional
+import os
+import sys
 from pathlib import Path
 
 from brain_client.input_types import InputDevice
@@ -34,9 +33,9 @@ class InputLoader:
         """
         self.logger = logger
         self._proxy = proxy
-        self._loaded_inputs: Dict[str, Type[InputDevice]] = {}
+        self._loaded_inputs: dict[str, type[InputDevice]] = {}
 
-    def discover_inputs_in_directory(self, directory_path: str) -> Dict[str, Type[InputDevice]]:
+    def discover_inputs_in_directory(self, directory_path: str) -> dict[str, type[InputDevice]]:
         """
         Scans a directory for Python files and attempts to load input device classes.
 
@@ -76,7 +75,7 @@ class InputLoader:
         self.logger.info(f"Discovered {len(inputs)} input devices in {directory_path}")
         return inputs
 
-    def _load_inputs_from_file(self, file_path: Path) -> Dict[str, Type[InputDevice]]:
+    def _load_inputs_from_file(self, file_path: Path) -> dict[str, type[InputDevice]]:
         """
         Loads input device classes from a single Python file.
 
@@ -125,7 +124,7 @@ class InputLoader:
 
         return inputs
 
-    def _validate_input_class(self, input_class: Type[InputDevice]) -> bool:
+    def _validate_input_class(self, input_class: type[InputDevice]) -> bool:
         """
         Validates that an input device class is properly implemented.
 
@@ -154,7 +153,7 @@ class InputLoader:
             self.logger.error(f"Error validating input device {input_class.__name__}: {e}")
             return False
 
-    def _get_input_name(self, input_class: Type[InputDevice]) -> str:
+    def _get_input_name(self, input_class: type[InputDevice]) -> str:
         """
         Gets the input device name by creating a temporary instance.
 
@@ -187,7 +186,7 @@ class InputLoader:
         s1 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", class_name)
         return s1.lower()
 
-    def load_inputs_from_directories(self, directories: List[str]) -> Dict[str, Type[InputDevice]]:
+    def load_inputs_from_directories(self, directories: list[str]) -> dict[str, type[InputDevice]]:
         """
         Load input devices from multiple directories.
 
@@ -218,7 +217,7 @@ class InputLoader:
 
         return all_inputs
 
-    def create_input_instances(self, input_classes: Dict[str, Type[InputDevice]], logger) -> Dict[str, InputDevice]:
+    def create_input_instances(self, input_classes: dict[str, type[InputDevice]], logger) -> dict[str, InputDevice]:
         """
         Create instances of input device classes and set logger/proxy.
 

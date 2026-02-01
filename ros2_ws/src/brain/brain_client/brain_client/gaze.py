@@ -11,20 +11,18 @@ Hardware: MARS robot
 """
 
 import math
-import time
 import threading
-from typing import Optional, Callable, List, Tuple
+import time
+from collections.abc import Callable
 
 import cv2
+import inspireface as isf
 import numpy as np
-
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
 from brain_client.head_interface import HeadInterface
 from brain_client.mobility_interface import MobilityInterface
-
-import inspireface as isf
 
 
 class FaceDetector:
@@ -39,7 +37,7 @@ class FaceDetector:
         )
         self._session.set_detection_confidence_threshold(min_confidence)
 
-    def detect(self, frame) -> List[dict]:
+    def detect(self, frame) -> list[dict]:
         """Detect faces, return list of {center_x, center_y, width, height}."""
         h, w = frame.shape[:2]
         faces = []
@@ -75,7 +73,7 @@ class GazeController:
     def __init__(
         self,
         head_command_fn: Callable[[int], None],
-        wheel_rotate_fn: Optional[Callable[[float, float], None]] = None,
+        wheel_rotate_fn: Callable[[float, float], None] | None = None,
     ):
         self._head_command = head_command_fn
         self._wheel_rotate = wheel_rotate_fn
@@ -85,7 +83,7 @@ class GazeController:
         self._last_commanded_tilt = 0
 
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
         self._last_pan_time = 0.0
@@ -103,7 +101,7 @@ class GazeController:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-    def track_face(self, face: dict, frame_shape: Tuple[int, int]):
+    def track_face(self, face: dict, frame_shape: tuple[int, int]):
         """Track a detected face by pointing at its center."""
         # Pan error (positive = face is on right = turn right)
         pan_error = (face["center_x"] - 0.5) * self.CAMERA_HFOV
@@ -179,10 +177,10 @@ class ROSPersonTracker:
             head_command_fn=self._head.set_position,
             wheel_rotate_fn=self._mobility.rotate_in_place,
         )
-        self._detector: Optional[FaceDetector] = None
+        self._detector: FaceDetector | None = None
 
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
         # Face tracking state
         self._last_face_time = 0.0

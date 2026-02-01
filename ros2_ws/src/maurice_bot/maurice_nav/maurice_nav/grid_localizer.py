@@ -27,34 +27,27 @@ Publishes status to /localization/status ('localized' or 'timeout').
 Service remains available for manual triggers after auto-localize completes.
 """
 
-from typing import Optional
-
+import cupy as cp
 import numpy as np
 import rclpy
-from rclpy.executors import ExternalShutdownException
-from rclpy.executors import SingleThreadedExecutor
-from rclpy.lifecycle import Node
-from rclpy.lifecycle import Publisher
-from rclpy.lifecycle import State
-from rclpy.lifecycle import TransitionCallbackReturn
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from std_srvs.srv import Trigger
+from nav_msgs.msg import OccupancyGrid
+from rclpy.executors import ExternalShutdownException
+from rclpy.lifecycle import Node, Publisher, State, TransitionCallbackReturn
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
-
-import cupy as cp
+from std_srvs.srv import Trigger
 
 
 class GridLocalizer(Node):
     """GPU-accelerated grid localization lifecycle node."""
 
     # Subscriptions and publishers (created in on_configure)
-    scan_sub: Optional[rclpy.subscription.Subscription] = None
-    map_sub: Optional[rclpy.subscription.Subscription] = None
-    pose_pub: Optional[Publisher] = None
-    status_pub: Optional[Publisher] = None
+    scan_sub: rclpy.subscription.Subscription | None = None
+    map_sub: rclpy.subscription.Subscription | None = None
+    pose_pub: Publisher | None = None
+    status_pub: Publisher | None = None
     srv = None
     _auto_timer = None
     _map_check_timer = None
@@ -436,7 +429,7 @@ class GridLocalizer(Node):
         angle_offsets = np.linspace(0, 2 * np.pi, n_ang, endpoint=False, dtype=np.float32)
 
         # Compute which positions and angles this batch covers
-        batch_size = end_idx - start_idx
+        end_idx - start_idx
         batch_indices = np.arange(start_idx, end_idx, dtype=np.int32)
 
         # Decode position and angle indices

@@ -5,16 +5,14 @@ Generates speech audio and plays it through the robot's audio system.
 """
 
 import os
+import subprocess
 import tempfile
 import threading
 import time
-from typing import Optional, Dict, Any
+from typing import Any
 
-import rclpy
-import subprocess
-
-from brain_client.client.proxy_client import ProxyClient
 from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
+from brain_client.client.proxy_client import ProxyClient
 from brain_client.logging_config import UniversalLogger
 
 
@@ -47,7 +45,7 @@ class TTSHandler:
         self._proxy: ProxyClient = proxy
         # Get voice ID from proxy config, fall back to default
         self.voice_id: str = proxy.config.get("cartesia_voice_id", self.DEFAULT_VOICE_ID)
-        self._cartesia_client: Optional[ProxyCartesiaClient] = None
+        self._cartesia_client: ProxyCartesiaClient | None = None
         self.is_playing: bool = False
         self.play_lock = threading.Lock()
         self.tts_status_pub = tts_status_pub
@@ -81,7 +79,7 @@ class TTSHandler:
             except Exception as e:
                 self.logger.debug(f"Failed to publish TTS status: {e}")
 
-    def speak_text(self, text: str, voice_config: Optional[Dict[str, Any]] = None) -> bool:
+    def speak_text(self, text: str, voice_config: dict[str, Any] | None = None) -> bool:
         """
         Convert text to speech and play it.
 
@@ -218,7 +216,7 @@ class TTSHandler:
 
         return success
 
-    def speak_text_async(self, text: str, voice_config: Optional[Dict[str, Any]] = None) -> None:
+    def speak_text_async(self, text: str, voice_config: dict[str, Any] | None = None) -> None:
         """
         Convert text to speech and play it asynchronously in a separate thread.
         Retries once with 1 second gap on failure.

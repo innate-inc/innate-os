@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
-import threading
 import sys
+import threading
 
-# Import service types.
-from brain_messages.srv import ManipulationTask
-from std_srvs.srv import Trigger
+import rclpy
 
 # Import status message type.
 from brain_messages.msg import RecorderStatus
+
+# Import service types.
+from brain_messages.srv import ManipulationTask
+from rclpy.node import Node
+from std_srvs.srv import Trigger
 
 
 class TerminalInterface(Node):

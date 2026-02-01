@@ -7,15 +7,15 @@ from specified directories. It validates that skills inherit from the Skill base
 and can automatically register them with the execution server.
 """
 
-import os
-import sys
 import importlib.util
 import inspect
 import json
-import h5py
+import os
 import re
-from typing import Dict, List, Type, Optional
+import sys
 from pathlib import Path
+
+import h5py
 
 from brain_client.skill_types import Skill
 
@@ -28,7 +28,7 @@ class SkillLoader:
     def __init__(self, logger):
         self.logger = logger
 
-    def discover_skills_in_directory(self, directory_path: str) -> Dict[str, Type[Skill]]:
+    def discover_skills_in_directory(self, directory_path: str) -> dict[str, type[Skill]]:
         skills = {}
         directory = Path(directory_path)
 
@@ -55,7 +55,7 @@ class SkillLoader:
         self.logger.info(f"Discovered {len(skills)} skills in {directory_path}")
         return skills
 
-    def _load_skills_from_file(self, file_path: Path) -> Dict[str, Type[Skill]]:
+    def _load_skills_from_file(self, file_path: Path) -> dict[str, type[Skill]]:
         skills = {}
         module_name = file_path.stem
 
@@ -95,7 +95,7 @@ class SkillLoader:
 
         return skills
 
-    def _validate_skill_class(self, skill_class: Type[Skill]) -> bool:
+    def _validate_skill_class(self, skill_class: type[Skill]) -> bool:
         # Check that required abstract methods are implemented
         required_methods = ["name", "execute", "cancel"]
         for method_name in required_methods:
@@ -110,7 +110,7 @@ class SkillLoader:
 
         return True
 
-    def _get_skill_name(self, skill_class: Type[Skill]) -> str:
+    def _get_skill_name(self, skill_class: type[Skill]) -> str:
         try:
             # Create a temporary logger for this purpose
             import logging
@@ -130,7 +130,7 @@ class SkillLoader:
         s1 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", class_name)
         return s1.lower()
 
-    def load_skills_from_directories(self, directories: List[str]) -> Dict[str, Type[Skill]]:
+    def load_skills_from_directories(self, directories: list[str]) -> dict[str, type[Skill]]:
         all_skills = {}
 
         for directory in directories:
@@ -222,7 +222,7 @@ class SkillLoader:
             return 0
 
         try:
-            with open(dataset_metadata_path, "r") as f:
+            with open(dataset_metadata_path) as f:
                 dataset_metadata = json.load(f)
                 return dataset_metadata.get("number_of_episodes", 0)
         except Exception as e:

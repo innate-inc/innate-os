@@ -1,32 +1,30 @@
 #!/usr/bin/env python3
-import time
+import os
 import threading
+import time
+
+import cv2
+import numpy as np
 import rclpy
+import torch
+import torch.amp
+from brain_messages.action import ExecutePolicy  # Add this import for action
+from cv_bridge import CvBridge
+from geometry_msgs.msg import Twist
+from maurice_msgs.srv import GotoJS  # Add this import for arm service
+from rclpy.action import ActionServer, CancelResponse
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64MultiArray  # For arm commands
-from std_srvs.srv import Trigger  # Simple service
-from maurice_msgs.srv import GotoJS  # Add this import for arm service
-from brain_messages.action import ExecutePolicy  # Add this import for action
-from rclpy.action import ActionServer, CancelResponse
-from cv_bridge import CvBridge
-import numpy as np
-import torch
-import os
-import cv2
-from geometry_msgs.msg import Twist
-import time
-import threading
-import torch.amp
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from rclpy.executors import MultiThreadedExecutor
 
 # Enable CUDNN for better performance
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 # Import your policy class and trajectory generator.
-from manipulation.ACT import ACTPolicy, ACTConfig
+from manipulation.ACT import ACTConfig, ACTPolicy  # noqa: E402
 
 
 # Convert old policy_config to new ACTConfig format
@@ -174,17 +172,17 @@ class InferenceNode(Node):
 
     def cancel_policy_callback(self, goal_handle_to_cancel):
         """Handle action cancel requests."""
-        self.get_logger().info(f"Received cancel request...")
+        self.get_logger().info("Received cancel request...")
 
         # Check if this is the currently active goal
         if not self.inference_running or not self.current_goal_handle:
-            self.get_logger().warn(f"Rejecting cancel request. Policy not running. ")
+            self.get_logger().warn("Rejecting cancel request. Policy not running. ")
             return CancelResponse.REJECT
 
         # If it is the active goal, accept the cancellation.
         # The execution loop (_execute_complete_policy) will see _cancel_requested
         # and handle the cleanup and state transition.
-        self.get_logger().info(f"Accepting cancel request.")
+        self.get_logger().info("Accepting cancel request.")
         self._cancel_requested.set()
         return CancelResponse.ACCEPT
 
@@ -331,7 +329,7 @@ class InferenceNode(Node):
         request.time = time_duration
 
         try:
-            future = self.arm_goto_client.call_async(request)
+            self.arm_goto_client.call_async(request)
             self.get_logger().info(f"Arm goto service called with position: {position}")
             return True
 

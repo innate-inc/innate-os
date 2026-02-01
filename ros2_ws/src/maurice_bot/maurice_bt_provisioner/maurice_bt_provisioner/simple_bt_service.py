@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-import logging
 import json
-import signal
-import sys
-import subprocess
-import time
+import logging
 import os
+import signal
+import subprocess
+import sys
+import time
 
-from bluezero import adapter
-from bluezero import peripheral
+from bluezero import adapter, peripheral
 
 # Import NetworkManager utilities
 from nmcli_utils import (
-    nmcli_get_wifi_connections,
     nmcli_add_or_modify_connection,
-    nmcli_delete_connection,
-    nmcli_scan_for_ssid,
     nmcli_connect,
-    nmcli_get_active_wifi_ssid,
+    nmcli_delete_connection,
     nmcli_get_active_ipv4_address,
+    nmcli_get_active_wifi_ssid,
+    nmcli_get_wifi_connections,
+    nmcli_scan_for_ssid,
     nmcli_scan_for_visible_ssids,
 )
 
@@ -46,7 +45,7 @@ def load_robot_name():
     maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
     robot_info_path = os.path.join(maurice_root, "data", "robot_info.json")
 
-    with open(robot_info_path, "r") as f:
+    with open(robot_info_path) as f:
         data = json.load(f)
         return data.get("robot_name", "MARS")
 

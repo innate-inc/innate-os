@@ -5,13 +5,13 @@ Enhanced I2C Motor Control Script for Jetson Orin Nano
 Commands: WASD for movement, space to stop, additional controls for LEDs/status
 """
 
-import smbus2 as smbus
-import time
 import struct
 import threading
+import time
 
-from rclpy.node import Node
+import smbus2 as smbus
 from geometry_msgs.msg import TransformStamped
+from rclpy.node import Node
 
 # CRC-8/MAXIM constants
 CRC8_POLY = 0x8C

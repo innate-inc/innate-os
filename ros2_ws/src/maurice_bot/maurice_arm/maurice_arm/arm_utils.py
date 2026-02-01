@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64MultiArray
-from maurice_msgs.srv import GotoJS
 import time
 from threading import Lock
-from moveit_msgs.srv import GetMotionPlan, GetPlanningScene
+
+import rclpy
+from geometry_msgs.msg import Pose
+from maurice_msgs.srv import GotoJS
 from moveit_msgs.msg import (
-    MotionPlanRequest,
-    PlanningScene,
     CollisionObject,
-    RobotState,
     Constraints,
     JointConstraint,
-    PositionIKRequest,
+    RobotState,
     WorkspaceParameters,
 )
+from moveit_msgs.srv import GetMotionPlan, GetPlanningScene
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
-from geometry_msgs.msg import Pose, PoseStamped
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from std_msgs.msg import Float64MultiArray
 
 
 class ArmCommanderNode(Node):
@@ -99,7 +96,7 @@ class ArmCommanderNode(Node):
         self.get_logger().info(f"  Planning group: {self.planning_group}")
         self.get_logger().info(f"  Planner ID: {self.planner_id}")
         self.get_logger().info(f"  Joint names: {self.joint_names}")
-        self.get_logger().info(f"  Using service: /plan_kinematic_path")
+        self.get_logger().info("  Using service: /plan_kinematic_path")
 
         # Add ground plane collision object
         self.add_ground_plane()
@@ -225,7 +222,7 @@ class ArmCommanderNode(Node):
 
             # Set goal constraints (joint space goal)
             goal_constraint = Constraints()
-            for i, (joint_name, joint_value) in enumerate(zip(self.joint_names, goal)):
+            for _i, (joint_name, joint_value) in enumerate(zip(self.joint_names, goal, strict=False)):
                 jc = JointConstraint()
                 jc.joint_name = joint_name
                 jc.position = joint_value
@@ -298,7 +295,7 @@ class ArmCommanderNode(Node):
 
         try:
             # Create goal for MoveGroup action
-            goal_msg = MoveGroup.Goal()
+            goal_msg = MoveGroup.Goal()  # noqa: F821
 
             # Set planning group
             goal_msg.request.group_name = self.planning_group
@@ -311,7 +308,7 @@ class ArmCommanderNode(Node):
 
             # Set start state
             start_state = RobotState()
-            start_js = SensorJointState()
+            start_js = SensorJointState()  # noqa: F821
             start_js.name = self.joint_names
             start_js.position = start
             start_state.joint_state = start_js
@@ -319,7 +316,7 @@ class ArmCommanderNode(Node):
 
             # Set goal constraints (joint target)
             goal_constraints = Constraints()
-            for i, (joint_name, joint_value) in enumerate(zip(self.joint_names, goal)):
+            for _i, (joint_name, joint_value) in enumerate(zip(self.joint_names, goal, strict=False)):
                 jc = JointConstraint()
                 jc.joint_name = joint_name
                 jc.position = joint_value
@@ -407,7 +404,7 @@ class ArmCommanderNode(Node):
         for step in range(num_steps):
             t = step * dt
             ratio = 3 * (t / T) ** 2 - 2 * (t / T) ** 3
-            point = [s + (g - s) * ratio for s, g in zip(start, goal)]
+            point = [s + (g - s) * ratio for s, g in zip(start, goal, strict=False)]
             trajectory.append(point)
         return trajectory
 
@@ -507,7 +504,7 @@ class ArmCommanderNode(Node):
                     alpha = (current_time - t1) / (t2 - t1)
                     wp1 = waypoints[wp_idx]
                     wp2 = waypoints[wp_idx + 1]
-                    interpolated = [w1 + alpha * (w2 - w1) for w1, w2 in zip(wp1, wp2)]
+                    interpolated = [w1 + alpha * (w2 - w1) for w1, w2 in zip(wp1, wp2, strict=False)]
                     trajectory.append(interpolated)
                 else:
                     trajectory.append(waypoints[wp_idx])

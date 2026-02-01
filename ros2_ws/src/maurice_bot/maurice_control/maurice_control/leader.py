@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+import numpy as np
 import rclpy
 from rclpy.node import Node
-from maurice_control.dynamixel import Dynamixel
-from maurice_control.robot import Robot
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
-import numpy as np
+
+from maurice_control.dynamixel import Dynamixel
+from maurice_control.robot import Robot
 
 
 class LeaderArmNode(Node):

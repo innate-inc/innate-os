@@ -1,14 +1,15 @@
 """Training service client adapter for robots."""
 
-import logging
 import asyncio
-import tempfile
+import logging
 import subprocess
-from typing import Optional, Dict, Any, List
-import httpx
-from pathlib import Path
-import traceback
+import tempfile
 import time
+import traceback
+from pathlib import Path
+from typing import Any
+
+import httpx
 
 # Fallback logger for when no ROS logger is provided
 _fallback_logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class TrainingClient:
         self._parent = parent
         self.proxy_url = parent.proxy_url
         self._innate_service_key = parent.innate_service_key
-        self._async_client: Optional[httpx.AsyncClient] = None
+        self._async_client: httpx.AsyncClient | None = None
 
         # Set up logger - use ROS logger with child name if provided, else fallback
         if logger is not None:
@@ -84,7 +85,7 @@ class TrainingClient:
 
         return token
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Get authentication headers."""
         token = self._get_token()
         headers = {"X-Innate-Token": token}
@@ -111,9 +112,9 @@ class TrainingClient:
         self,
         filename: str,
         content_type: str = "application/octet-stream",
-        training_params: Optional[Dict[str, Any]] = None,
-        primitive_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        training_params: dict[str, Any] | None = None,
+        primitive_name: str | None = None,
+    ) -> dict[str, Any]:
         """
         Request permission to upload training data and get presigned URL.
 
@@ -143,7 +144,7 @@ class TrainingClient:
         headers = self._get_headers()
 
         call_stack = "".join(traceback.format_stack()[-4:-1])  # Get caller info
-        self.logger.info(f"🔐 Requesting upload permission (auth handshake)")
+        self.logger.info("🔐 Requesting upload permission (auth handshake)")
         self.logger.info(f"  URL: {url}")
         self.logger.info(f"  Filename: {filename}")
         self.logger.info(f"  Content-Type: {content_type}")
@@ -152,7 +153,7 @@ class TrainingClient:
         self.logger.debug(f"  Headers: X-Innate-Token present={bool(headers.get('X-Innate-Token'))}")
 
         try:
-            self.logger.info(f"  Sending POST request to proxy...")
+            self.logger.info("  Sending POST request to proxy...")
             response = await client.post(url, json=payload, headers=headers)
             self.logger.info(f"  ✓ Received response: {response.status_code}")
             response.raise_for_status()
@@ -161,7 +162,7 @@ class TrainingClient:
             job_id = result.get("job_id")
             upload_url = result.get("upload_url")
 
-            self.logger.info(f"✅ Upload permission granted!")
+            self.logger.info("✅ Upload permission granted!")
             self.logger.info(f"  Job ID: {job_id}")
             self.logger.info(f"  Presigned URL received: {upload_url[:80]}...")
             self.logger.info(f"  Content-Type: {result.get('content_type', 'N/A')}")
@@ -195,12 +196,12 @@ class TrainingClient:
         Returns:
             Session URI from Location header (use this for chunked uploads)
         """
-        self.logger.info(f"📤 Initiating resumable upload session")
+        self.logger.info("📤 Initiating resumable upload session")
         self.logger.info(f"  POST to presigned URL: {upload_url[:80]}...")
         self.logger.info(f"  Headers: x-goog-resumable=start, Content-Type={content_type}")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            self.logger.debug(f"  Sending POST request with empty body...")
+            self.logger.debug("  Sending POST request with empty body...")
             response = await client.post(
                 upload_url,
                 headers={
@@ -217,7 +218,7 @@ class TrainingClient:
             if not session_uri:
                 raise ValueError("No Location header in response - resumable upload session not started")
 
-            self.logger.info(f"✅ Resumable upload session initiated!")
+            self.logger.info("✅ Resumable upload session initiated!")
             self.logger.info(f"  Session URI: {session_uri[:80]}...")
 
             return session_uri
@@ -227,8 +228,8 @@ class TrainingClient:
         session_uri: str,
         data: bytes,
         start_byte: int,
-        total_size: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        total_size: int | None = None,
+    ) -> dict[str, Any]:
         """
         Upload a chunk of data to the resumable upload session.
 
@@ -262,7 +263,7 @@ class TrainingClient:
                 self.logger.error(f"    ✗ Unexpected status code: {status_code}")
                 response.raise_for_status()
             elif status_code == 308:
-                self.logger.debug(f"    ✓ Chunk uploaded (308 Resume Incomplete - normal)")
+                self.logger.debug("    ✓ Chunk uploaded (308 Resume Incomplete - normal)")
             else:
                 self.logger.info(f"    ✅ Upload complete! (Status: {status_code})")
 
@@ -273,11 +274,11 @@ class TrainingClient:
         file_path: str,
         job_id: str,
         upload_url: str,
-        filename: Optional[str] = None,
+        filename: str | None = None,
         content_type: str = "application/octet-stream",
         chunk_size: int = 32 * 1024 * 1024,  # 32MB chunks (increased for faster uploads)
-        training_params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        training_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Upload a file using resumable upload protocol.
 
@@ -309,7 +310,7 @@ class TrainingClient:
         file_size = path.stat().st_size
 
         file_size_mb = file_size / (1024 * 1024)
-        self.logger.info(f"📤 Starting resumable upload")
+        self.logger.info("📤 Starting resumable upload")
         self.logger.info(f"  File: {filename}")
         self.logger.info(f"  Job ID: {job_id}")
         self.logger.info(f"  Size: {file_size:,} bytes ({file_size_mb:.2f} MB)")
@@ -323,7 +324,7 @@ class TrainingClient:
 
         # Step 3: Upload file in chunks (streaming from disk to avoid RAM issues)
         self.logger.info(f"🚀 Starting chunked upload: {file_size:,} bytes in chunks of {chunk_size:,} bytes")
-        self.logger.info(f"  📝 Streaming from disk (not loading entire file into memory)")
+        self.logger.info("  📝 Streaming from disk (not loading entire file into memory)")
         uploaded_bytes = 0
 
         try:
@@ -392,13 +393,15 @@ class TrainingClient:
             except Exception:
                 pass
 
-            raise Exception(f"Upload failed at {uploaded_bytes}/{file_size} bytes. Resume from byte {uploaded_bytes}")
+            raise Exception(
+                f"Upload failed at {uploaded_bytes}/{file_size} bytes. Resume from byte {uploaded_bytes}"
+            ) from None
 
     async def notify_upload_complete(
         self,
         job_id: str,
-        training_params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        training_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Notify proxy that upload is complete and submit training job.
 
@@ -413,7 +416,7 @@ class TrainingClient:
         if training_params:
             payload["training_params"] = training_params
 
-        self.logger.info(f"📨 Notifying proxy that upload is complete")
+        self.logger.info("📨 Notifying proxy that upload is complete")
         self.logger.info(f"  Job ID: {job_id}")
         self.logger.info(f"  Training params: {training_params}")
 
@@ -422,16 +425,16 @@ class TrainingClient:
         url = self._build_training_url(f"/jobs/{job_id}/upload-complete")
 
         self.logger.info(f"  POST to: {url}")
-        self.logger.info(f"  Timeout: 300 seconds (5 minutes)")
+        self.logger.info("  Timeout: 300 seconds (5 minutes)")
 
         try:
-            self.logger.info(f"  Sending upload-complete notification...")
+            self.logger.info("  Sending upload-complete notification...")
             response = await client.post(url, json=payload, headers=self._get_headers())
             self.logger.info(f"  ✓ Response: {response.status_code} {response.reason_phrase}")
             response.raise_for_status()
 
             result = response.json()
-            self.logger.info(f"✅ Upload complete notification sent successfully!")
+            self.logger.info("✅ Upload complete notification sent successfully!")
             self.logger.info(f"  Job status: {result.get('status', 'N/A')}")
             self.logger.info(f"  Message: {result.get('message', 'N/A')}")
 
@@ -444,7 +447,7 @@ class TrainingClient:
             )
             raise
 
-    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
+    async def get_job_status(self, job_id: str) -> dict[str, Any]:
         """
         Get current status of a training job.
 
@@ -462,7 +465,7 @@ class TrainingClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_job_status_by_name(self, primitive_name: str) -> Dict[str, Any]:
+    async def get_job_status_by_name(self, primitive_name: str) -> dict[str, Any]:
         """
         Get current status of a training job by primitive name.
 
@@ -496,9 +499,9 @@ class TrainingClient:
 
     async def list_jobs(
         self,
-        status_filter: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        status_filter: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         """
         List training jobs for the current user.
 
@@ -550,14 +553,14 @@ class TrainingClient:
                 self.logger.error("⚠️  Token may be expired or invalid. Check INNATE_SERVICE_KEY environment variable.")
                 self.logger.error("⚠️  Server response: 'Invalid or expired authentication token'")
                 self.logger.error("⚠️  Action: Verify INNATE_SERVICE_KEY is correct and not expired")
-                self.logger.error(f"⚠️  Note: Training endpoints use /v1/training/... (not /v1/services/...)")
-                self.logger.error(f"⚠️  Make sure the token has permission for training endpoints")
+                self.logger.error("⚠️  Note: Training endpoints use /v1/training/... (not /v1/services/...)")
+                self.logger.error("⚠️  Make sure the token has permission for training endpoints")
             raise
 
         response.raise_for_status()
         return response.json()
 
-    async def get_incomplete_jobs(self) -> List[Dict[str, Any]]:
+    async def get_incomplete_jobs(self) -> list[dict[str, Any]]:
         """
         Get all incomplete jobs for the current user.
 
@@ -578,7 +581,7 @@ class TrainingClient:
         self,
         job_id: str,
         filename: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get presigned URL for downloading trained model files.
 
@@ -606,7 +609,7 @@ class TrainingClient:
                     error_json = e.response.json()
                     if "detail" in error_json:
                         error_detail = f" Server error: {error_json['detail']}"
-                except:
+                except Exception:
                     pass
             except Exception:
                 pass
@@ -687,9 +690,9 @@ class TrainingClient:
         self,
         job_id: str,
         poll_interval: int = 60,
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
         adaptive_polling: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Poll job status until completion or failure.
 
@@ -746,10 +749,10 @@ class TrainingClient:
         primitive_path: str,
         job_id: str,
         upload_url: str,
-        primitive_name: Optional[str] = None,
+        primitive_name: str | None = None,
         chunk_size: int = 32 * 1024 * 1024,  # 32MB chunks
-        training_params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        training_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Upload an entire primitive folder (all episodes + metadata) as a tarball.
 
@@ -785,7 +788,7 @@ class TrainingClient:
         if not dataset_metadata.exists():
             raise ValueError(f"Primitive folder must contain 'data/dataset_metadata.json': {primitive_path}")
 
-        self.logger.info(f"📦 Packaging primitive folder into tarball")
+        self.logger.info("📦 Packaging primitive folder into tarball")
         self.logger.info(f"  Source: {primitive_path}")
         self.logger.info(f"  Primitive name: {primitive_name}")
 
@@ -807,7 +810,7 @@ class TrainingClient:
             self.logger.info(f"  Total data size: {total_data_size:,} bytes ({total_data_size / (1024**2):.2f} MB)")
         except Exception as e:
             self.logger.warning(f"  Warning: Could not count files (non-critical): {e}")
-            self.logger.info(f"  Proceeding with tarball creation...")
+            self.logger.info("  Proceeding with tarball creation...")
 
         # Create tarball in temporary directory using tar command (more memory efficient)
         with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_file:
@@ -815,7 +818,7 @@ class TrainingClient:
 
         try:
             self.logger.info(f"  Creating tarball: {tar_path}")
-            self.logger.info(f"  Using tar command for efficient compression...")
+            self.logger.info("  Using tar command for efficient compression...")
 
             # Use tar command instead of Python tarfile for better memory efficiency
             tar_cmd = ["tar", "czf", tar_path, "-C", str(primitive_dir)]
@@ -846,7 +849,7 @@ class TrainingClient:
             tar_size_mb = tar_size / (1024**2)
             compression_ratio = (1 - tar_size / total_data_size) * 100 if total_data_size > 0 else 0
 
-            self.logger.info(f"✅ Tarball created successfully!")
+            self.logger.info("✅ Tarball created successfully!")
             self.logger.info(f"  Size: {tar_size:,} bytes ({tar_size_mb:.2f} MB)")
             self.logger.info(f"  Compression ratio: {compression_ratio:.1f}%")
             self.logger.info(f"  Files included: {file_count}")

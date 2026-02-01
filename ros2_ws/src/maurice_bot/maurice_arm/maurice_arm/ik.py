@@ -4,15 +4,17 @@ KDL-based IK node loading URDF directly from maurice_sim and using the package-l
 """
 
 import os
+import time
+
+import PyKDL as kdl
 import rclpy
+from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import JointState
 from urdf_parser_py.urdf import URDF
+
 from maurice_arm.urdf import treeFromUrdfModel  # local parser in urdf.py
-import PyKDL as kdl
-from ament_index_python.packages import get_package_share_directory
-import time
 
 
 class KDLIKNode(Node):
@@ -78,7 +80,7 @@ class KDLIKNode(Node):
         if fk_result >= 0:
             pos = self.initial_frame.p
             rot = self.initial_frame.M.GetRPY()
-            self.get_logger().info(f"Initial FK pose (ee_link relative to base_link):")  # Updated message
+            self.get_logger().info("Initial FK pose (ee_link relative to base_link):")  # Updated message
             self.get_logger().info(f"  Position (x,y,z): ({pos.x():.4f}, {pos.y():.4f}, {pos.z():.4f})")
             self.get_logger().info(f"  Orientation (r,p,y): ({rot[0]:.4f}, {rot[1]:.4f}, {rot[2]:.4f})")
         else:

@@ -6,7 +6,6 @@ Base class and types for robot agents.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 
 class Agent(ABC):
@@ -37,7 +36,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def get_skills(self) -> List[str]:
+    def get_skills(self) -> list[str]:
         """
         Returns a list of skill names that should be available
         when this agent is active.
@@ -47,7 +46,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def get_prompt(self) -> Optional[str]:
+    def get_prompt(self) -> str | None:
         """
         Returns the prompt/description for this directive.
         This defines the robot's personality and behavior guidelines.
@@ -57,7 +56,7 @@ class Agent(ABC):
         pass
 
     @property
-    def display_icon(self) -> Optional[str]:
+    def display_icon(self) -> str | None:
         """
         Optional path to a 32x32 pixel icon asset for this directive.
 
@@ -69,7 +68,7 @@ class Agent(ABC):
         """
         return None
 
-    def get_inputs(self) -> List[str]:
+    def get_inputs(self) -> list[str]:
         """
         Returns a list of input device names that should be active
         when this directive is running.

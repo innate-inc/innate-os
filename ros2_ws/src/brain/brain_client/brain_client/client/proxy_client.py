@@ -5,9 +5,9 @@ Provides access to all proxy services (Cartesia, OpenAI, etc.) with a consistent
 Used by both brain_client_node (TTS) and input_manager_node (STT/inputs).
 """
 
-import os
 import logging
-from typing import Optional, Dict, Any
+import os
+from typing import Any
 
 import httpx
 
@@ -37,9 +37,9 @@ class ProxyClient:
 
     def __init__(
         self,
-        proxy_url: Optional[str] = None,
-        innate_service_key: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
+        proxy_url: str | None = None,
+        innate_service_key: str | None = None,
+        config: dict[str, Any] | None = None,
         logger=None,
     ):
         """
@@ -62,8 +62,8 @@ class ProxyClient:
         self._training = None
 
         # HTTP client (shared, lazy-initialized)
-        self._http_client: Optional[httpx.Client] = None
-        self._async_http_client: Optional[httpx.AsyncClient] = None
+        self._http_client: httpx.Client | None = None
+        self._async_http_client: httpx.AsyncClient | None = None
 
     @property
     def proxy_url(self) -> str:
@@ -76,7 +76,7 @@ class ProxyClient:
         return self._innate_service_key
 
     @property
-    def config(self) -> Dict[str, Any]:
+    def config(self) -> dict[str, Any]:
         """
         Service configuration (models, voice IDs, etc.)
 
@@ -132,7 +132,7 @@ class ProxyClient:
             self._training = TrainingClient(self, logger=self._logger)
         return self._training
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Build authentication headers."""
         return {
             "X-Innate-Token": self._innate_service_key,
@@ -161,9 +161,9 @@ class ProxyClient:
         service_name: str,
         endpoint: str,
         method: str = "POST",
-        json: Optional[Dict[str, Any]] = None,
-        data: Optional[bytes] = None,
-        params: Optional[Dict[str, Any]] = None,
+        json: dict[str, Any] | None = None,
+        data: bytes | None = None,
+        params: dict[str, Any] | None = None,
         stream: bool = False,
     ) -> httpx.Response:
         """
@@ -213,9 +213,9 @@ class ProxyClient:
         service_name: str,
         endpoint: str,
         method: str = "POST",
-        json: Optional[Dict[str, Any]] = None,
-        data: Optional[bytes] = None,
-        params: Optional[Dict[str, Any]] = None,
+        json: dict[str, Any] | None = None,
+        data: bytes | None = None,
+        params: dict[str, Any] | None = None,
         stream: bool = False,
     ) -> httpx.Response:
         """

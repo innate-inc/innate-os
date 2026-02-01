@@ -10,26 +10,25 @@ This node survives robot restarts - it queries the proxy service
 for all incomplete jobs on startup and continues monitoring them.
 """
 
-import rclpy
-from rclpy.node import Node
 import asyncio
-import threading
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime
 import json
 import os
 import shutil
-import uuid
+import threading
 import traceback
+import uuid
+from datetime import datetime
+from pathlib import Path
 
+import rclpy
 from brain_messages.srv import (
-    SubmitTrainingJob,
+    DownloadTrainingModel,
     GetTrainingJobStatus,
     GetTrainingJobStatusByName,
     ListTrainingJobs,
-    DownloadTrainingModel,
+    SubmitTrainingJob,
 )
+from rclpy.node import Node
 
 from brain_client.client.proxy_client import ProxyClient
 from brain_client.logging_config import UniversalLogger
@@ -117,7 +116,7 @@ class TrainingJobTrackerNode(Node):
 
         # Tracker state
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self.exit_event = threading.Event()
 
         # Start async event loop in separate thread
@@ -220,14 +219,14 @@ class TrainingJobTrackerNode(Node):
                 self.logger.warning(f"  dataset_metadata.json not found at {dataset_metadata_path}")
                 return 0
 
-            with open(dataset_metadata_path, "r") as f:
+            with open(dataset_metadata_path) as f:
                 dataset_metadata = json.load(f)
 
             data_frequency = dataset_metadata.get("data_frequency", 20)  # Default to 20 Hz
             episodes = dataset_metadata.get("episodes", [])
 
             if not episodes:
-                self.logger.warning(f"  No episodes found in dataset_metadata.json")
+                self.logger.warning("  No episodes found in dataset_metadata.json")
                 return 0
 
             total_samples = 0
@@ -280,7 +279,7 @@ class TrainingJobTrackerNode(Node):
             self.logger.error(f"  Error calculating number of samples: {e}")
             return 0
 
-    def _calculate_batch_size(self, num_samples: int) -> Tuple[int, int]:
+    def _calculate_batch_size(self, num_samples: int) -> tuple[int, int]:
         """
         Calculate optimal batch size and world size based on number of samples.
 
@@ -319,7 +318,7 @@ class TrainingJobTrackerNode(Node):
         self.logger.info("  ✓ Batch size calculated: 1, world_size=1 (samples too few)")
         return 1, 1
 
-    def _extract_primitive_name(self, job_status: Dict, job_id: str = None) -> str:
+    def _extract_primitive_name(self, job_status: dict, job_id: str = None) -> str:
         """
         Extract primitive name from job status.
 
@@ -343,7 +342,7 @@ class TrainingJobTrackerNode(Node):
             self.logger.warning(f"⚠ Server did not provide primitive_name for job {job_id}")
         return "unknown"
 
-    def _is_job_downloaded(self, job_id: str, job_status: Dict) -> bool:
+    def _is_job_downloaded(self, job_id: str, job_status: dict) -> bool:
         """
         Check if a job's model files have been downloaded locally.
 
@@ -385,10 +384,10 @@ class TrainingJobTrackerNode(Node):
 
         return True
 
-    async def _download_model(self, job_id: str, job_status: Dict):
+    async def _download_model(self, job_id: str, job_status: dict):
         """Download model files for a completed job."""
         # Log available fields for debugging
-        self.logger.info(f"📋 Extracting primitive name from job_status (source: get_job_status API response)")
+        self.logger.info("📋 Extracting primitive name from job_status (source: get_job_status API response)")
         self.logger.info(f"  Job status fields: {list(job_status.keys())}")
         if "metadata" in job_status:
             self.logger.info(f"  Metadata fields: {list(job_status.get('metadata', {}).keys())}")
@@ -453,7 +452,7 @@ class TrainingJobTrackerNode(Node):
                             except Exception as e:
                                 self.logger.warning(f"⚠ Failed to delete data folder: {e}")
                     else:
-                        self.logger.info(f"⚠ Not deleting data folder - some files failed to download")
+                        self.logger.info("⚠ Not deleting data folder - some files failed to download")
                 else:
                     self.logger.error(f"❌ No model files downloaded for job {job_id}")
                     self.logger.error(f"  Tried: {', '.join(required_files)}")
@@ -466,10 +465,10 @@ class TrainingJobTrackerNode(Node):
         self.logger.info("Starting training job polling loop")
 
         # Track last poll time per job to implement adaptive intervals
-        last_poll_times: Dict[str, datetime] = {}
+        last_poll_times: dict[str, datetime] = {}
 
         # Track when we last checked for completed-but-not-downloaded jobs
-        last_completed_check: Optional[datetime] = None
+        last_completed_check: datetime | None = None
         completed_check_interval = 300  # Check every 5 minutes for completed jobs
 
         while self._running:
@@ -787,23 +786,21 @@ class TrainingJobTrackerNode(Node):
                     )
                     if "batch_size" not in training_params:
                         training_params["batch_size"] = 96  # Default fallback
-                        self.logger.info(f"  Using default batch_size=96")
+                        self.logger.info("  Using default batch_size=96")
                     if "world_size" not in training_params:
                         training_params["world_size"] = 8  # Default fallback
-                        self.logger.info(f"  Using default world_size=8")
+                        self.logger.info("  Using default world_size=8")
             else:
                 # For single file uploads, we can't read dataset_metadata.json
                 # Use provided batch_size/world_size or defaults
                 if "batch_size" not in training_params:
                     training_params["batch_size"] = 96  # Default fallback
                     self.logger.info(
-                        f"  Using default batch_size=96 (single file upload, cannot calculate from dataset)"
+                        "  Using default batch_size=96 (single file upload, cannot calculate from dataset)"
                     )
                 if "world_size" not in training_params:
                     training_params["world_size"] = 8  # Default fallback
-                    self.logger.info(
-                        f"  Using default world_size=8 (single file upload, cannot calculate from dataset)"
-                    )
+                    self.logger.info("  Using default world_size=8 (single file upload, cannot calculate from dataset)")
 
             # Get job_id and upload_url immediately by requesting upload permission (non-blocking)
             # This allows us to return quickly and let the upload continue in background
@@ -883,7 +880,7 @@ class TrainingJobTrackerNode(Node):
                     self.logger.error(f"  Traceback: {traceback.format_exc()}")
 
             self.logger.info(f"  Starting background upload for job {job_id}...")
-            self.logger.info(f"  Note: Large uploads may take >10 minutes. Upload continues in background.")
+            self.logger.info("  Note: Large uploads may take >10 minutes. Upload continues in background.")
             threading.Thread(target=run_upload, daemon=True).start()
 
             # Return immediately with job_id - upload continues in background
@@ -1038,7 +1035,7 @@ class TrainingJobTrackerNode(Node):
                     self.logger.debug(f"  Getting job status for {request.job_id}...")
                     job_status = await client.get_job_status(request.job_id)
                     self.logger.info(f"  Job status: {job_status.get('status')}")
-                    self.logger.info(f"  Starting model download...")
+                    self.logger.info("  Starting model download...")
                     await self._download_model(request.job_id, job_status)
                     return job_status
 

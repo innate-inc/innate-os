@@ -12,19 +12,15 @@ Usage:
     Then press Enter to capture images. After 30 images, calibration is computed.
 """
 
-import sys
-import select
-import termios
-import tty
 import threading
 from pathlib import Path
 
 import cv2
 import numpy as np
 import rclpy
+from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
 
 
 class StereoCalibrator(Node):
@@ -206,7 +202,7 @@ class StereoCalibrator(Node):
         """Load and process existing calibration images."""
         self.get_logger().info(f"Processing {len(left_image_paths)} existing images...")
 
-        for idx, (left_path, right_path) in enumerate(zip(left_image_paths, right_image_paths), 1):
+        for idx, (left_path, right_path) in enumerate(zip(left_image_paths, right_image_paths, strict=False), 1):
             try:
                 # Load images
                 left_img = cv2.imread(str(left_path))
@@ -249,7 +245,7 @@ class StereoCalibrator(Node):
                         continue
 
                     # Filter to keep only common corners
-                    common_ids_sorted = sorted(common_ids)
+                    sorted(common_ids)
                     left_mask = [i for i, id_val in enumerate(charuco_ids_left.flatten()) if id_val in common_ids]
                     right_mask = [i for i, id_val in enumerate(charuco_ids_right.flatten()) if id_val in common_ids]
 
@@ -444,7 +440,7 @@ class StereoCalibrator(Node):
                 return
 
             # Filter to keep only common corners (in same order)
-            common_ids_sorted = sorted(common_ids)
+            sorted(common_ids)
 
             # Create filtered arrays
             left_mask = [i for i, id_val in enumerate(charuco_ids_left.flatten()) if id_val in common_ids]

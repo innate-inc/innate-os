@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-import os, re, math, tempfile, numpy as np, xml.etree.ElementTree as ET
+import math
+import os
+import re
+import tempfile
+
+import fcl
+import numpy as np
+import PyKDL as kdl
 import rclpy
+import trimesh
+from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from ament_index_python.packages import get_package_share_directory
-from urdf_parser_py.urdf import URDF, Mesh as URDFMesh
+from urdf_parser_py.urdf import URDF
+from urdf_parser_py.urdf import Mesh as URDFMesh
+
 from maurice_arm.urdf import treeFromUrdfModel  # your local URDF→KDL parser
-import PyKDL as kdl
-import trimesh
-import fcl
 
 # ------------------ CONFIG ------------------
 URDF_PATH = "/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/urdf/maurice.urdf"
@@ -64,7 +71,7 @@ class KDLFCLDistanceNode(Node):
         super().__init__("kdl_fcl_distance_node")
 
         # -------- Load URDF (resolved paths) --------
-        with open(URDF_PATH, "r") as f:
+        with open(URDF_PATH) as f:
             resolved = resolve_package_uris(f.read())
         tmp_dir = tempfile.mkdtemp(prefix="urdf_resolved_")
         self.urdf_resolved_path = os.path.join(tmp_dir, "robot_resolved.urdf")
@@ -122,8 +129,8 @@ class KDLFCLDistanceNode(Node):
             return None  # identity
         try:
             return self.kdl_tree.getChain(base, tip)
-        except Exception:
-            raise ValueError(f"KDL chain not found: {base} -> {tip}")
+        except Exception as err:
+            raise ValueError(f"KDL chain not found: {base} -> {tip}") from err
 
     @staticmethod
     def _chain_joint_names(chain: kdl.Chain | None):
@@ -141,7 +148,7 @@ class KDLFCLDistanceNode(Node):
         qa = kdl.JntArray(len(chain_names))
         if not chain_names:
             return qa  # size 0 for identity
-        name_to_pos = dict(zip(joint_msg.name, joint_msg.position))
+        name_to_pos = dict(zip(joint_msg.name, joint_msg.position, strict=False))
         for i, name in enumerate(chain_names):
             qa[i] = float(name_to_pos.get(name, 0.0))
         return qa
@@ -163,7 +170,7 @@ class KDLFCLDistanceNode(Node):
         # Extract vertices and faces from FCL BVH models
         for name in [LINK_A_NAME, LINK_B_NAME, "link2"]:
             try:
-                link = next((l for l in self.robot_model.links if l.name == name), None)
+                link = next((lnk for lnk in self.robot_model.links if lnk.name == name), None)
                 if link and link.collisions:
                     for i, col in enumerate(link.collisions):
                         if isinstance(col.geometry, URDFMesh):
@@ -219,7 +226,7 @@ class KDLFCLDistanceNode(Node):
 
         for name, T in transforms.items():
             try:
-                link = next((l for l in self.robot_model.links if l.name == name), None)
+                link = next((lnk for lnk in self.robot_model.links if lnk.name == name), None)
                 if link and link.collisions:
                     for i, col in enumerate(link.collisions):
                         if isinstance(col.geometry, URDFMesh):
@@ -251,7 +258,7 @@ class KDLFCLDistanceNode(Node):
     def _build_link_bvh(self, link_name: str):
         print(f"\n--- Building BVH for {link_name} ---")
         # find link
-        link = next((l for l in self.robot_model.links if l.name == link_name), None)
+        link = next((lnk for lnk in self.robot_model.links if lnk.name == link_name), None)
         if link is None:
             self.get_logger().warn(f"Link '{link_name}' not in URDF; creating empty BVH.")
             bvh = fcl.BVHModel()
@@ -316,7 +323,7 @@ class KDLFCLDistanceNode(Node):
     # ---------- URDF mesh → FCL ----------
     def _build_link_fcl(self, link_name: str):
         # find link
-        link = next((l for l in self.robot_model.links if l.name == link_name), None)
+        link = next((lnk for lnk in self.robot_model.links if lnk.name == link_name), None)
         if link is None:
             self.get_logger().warn(f"Link '{link_name}' not in URDF; creating empty FCL object.")
             bvh = fcl.BVHModel()
@@ -502,7 +509,7 @@ class KDLFCLDistanceNode(Node):
                 print(f"  {LINK_A_NAME} surface: {np.array2string(pa, precision=4)}")
                 print(f"  {LINK_B_NAME} surface: {np.array2string(pb, precision=4)}")
         else:
-            print(f"[ERROR] Failed to compute distance")
+            print("[ERROR] Failed to compute distance")
 
         print("---")
 

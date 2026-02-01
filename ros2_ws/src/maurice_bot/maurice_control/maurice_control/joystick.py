@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 
-import rclpy
-from rclpy.node import Node
+import random
+from collections import deque
+
+import matplotlib.pyplot as plt
 import pygame
+import rclpy
 from geometry_msgs.msg import Twist
 from maurice_msgs.srv import LightCommand
-import random
-import matplotlib.pyplot as plt
-from collections import deque
-import numpy as np
+from rclpy.node import Node
 
 
 class JoystickAxis:
@@ -129,7 +129,7 @@ class JoystickController(Node):
         button_slow = self.joystick.get_button(self.slow_mode_button)
         if button_slow and not self.button_slow_previous:
             self.slow_mode = not self.slow_mode
-            self.get_logger().info("Slow mode: {}".format(self.slow_mode))
+            self.get_logger().info(f"Slow mode: {self.slow_mode}")
         self.button_slow_previous = button_slow
 
         # Check button 4 state for publishing toggle

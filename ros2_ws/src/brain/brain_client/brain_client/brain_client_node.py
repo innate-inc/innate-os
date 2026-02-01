@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
-import traceback
-import rclpy
-from rclpy.node import Node
-from rclpy.duration import Duration
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
-import threading
-import json
-import time
-import cv2
 import base64
-import numpy as np
-from rclpy.action import ActionClient
-import math
 import inspect
-import types
-import typing
-from collections import deque
-import tempfile
+import json
+import math
 import os
+import tempfile
+import threading
+import time
+import traceback
+import types
+from collections import deque
+
+import cv2
+import numpy as np
+import rclpy
+from brain_messages.action import ExecutePrimitive
+from brain_messages.srv import (
+    GetAvailableDirectives,
+    GetAvailablePrimitives,
+    GetChatHistory,
+    ResetBrain,
+    SetDirectiveOnStartup,
+)
+from geometry_msgs.msg import PoseWithCovariance, PoseWithCovarianceStamped, Twist
+from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.action import ActionClient
+from rclpy.duration import Duration
+from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from sensor_msgs.msg import CompressedImage, Image
+from std_msgs.msg import String
+from std_srvs.srv import SetBool, Trigger
 
 # TF2 imports
 # import tf2_ros # Reverted by user, then identified as unused by linter
@@ -25,38 +38,23 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
-# from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
+from brain_client.initializers import initialize_agents, initialize_skills
 
+# from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 # from tf2_geometry_msgs import do_transform_pose # Reverted by user, then identified as unused by linter
 # from geometry_msgs.msg import PoseStamped # Reverted by user, then identified as unused by linter
-
 from brain_client.message_types import (
     InternalMessage,
     InternalMessageType,
     MessageIn,
     MessageInType,
-    MessageOutType,
     MessageOut,
+    MessageOutType,
     VisionAgentOutput,
 )
 from brain_client.skill_types import SkillResult
-from sensor_msgs.msg import CompressedImage
-from geometry_msgs.msg import Twist
-from std_msgs.msg import String
-from sensor_msgs.msg import Image
-from nav_msgs.msg import Odometry, OccupancyGrid
-from geometry_msgs.msg import PoseWithCovariance, PoseWithCovarianceStamped
-from brain_messages.srv import GetChatHistory
-from brain_messages.action import ExecutePrimitive
-from brain_messages.srv import GetAvailableDirectives
-from brain_messages.srv import ResetBrain
-from brain_messages.srv import SetDirectiveOnStartup
-from brain_messages.srv import GetAvailablePrimitives
-from std_srvs.srv import SetBool, Trigger
-
-from brain_client.ws_bridge import WSBridge
-from brain_client.initializers import initialize_skills, initialize_agents
 from brain_client.tts_handler import TTSHandler
+from brain_client.ws_bridge import WSBridge
 
 # Lazy import for gaze tracker (only loaded if agent uses gaze)
 ROSPersonTracker = None
@@ -152,7 +150,7 @@ class BrainClientNode(Node):
         try:
             self.proxy = ProxyClient(config=proxy_config)
             if self.proxy.is_available():
-                self.get_logger().info(f"✅ Proxy client initialized")
+                self.get_logger().info("✅ Proxy client initialized")
             else:
                 self.get_logger().warning("⚠️ Proxy not configured (check INNATE_PROXY_URL, INNATE_SERVICE_KEY)")
                 self.proxy = None
@@ -936,7 +934,7 @@ class BrainClientNode(Node):
                 siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
                 cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
                 theta_radians = math.atan2(siny_cosp, cosy_cosp)
-                theta_degrees = math.degrees(theta_radians)
+                math.degrees(theta_radians)
             else:
                 self.get_logger().warn(
                     f"Could not get transform from '{robot_base_frame}' to "
@@ -1731,7 +1729,7 @@ class BrainClientNode(Node):
 
         # Build detailed directive information as JSON
         directive_details = []
-        for directive_name, directive in self.directives.items():
+        for _directive_name, directive in self.directives.items():
             directive_info = {
                 "id": directive.id,
                 "display_name": directive.display_name,
@@ -1753,7 +1751,7 @@ class BrainClientNode(Node):
 
     def _unregister_primitives(self):
         """Internal method to unregister primitives."""
-        self.get_logger().info(f"\033[1;92m[BrainClient] Unregistering primitives\033[0m")
+        self.get_logger().info("\033[1;92m[BrainClient] Unregistering primitives\033[0m")
 
         # As long as we don't have
         # confirmation that the new primitives have been registered, we should not
@@ -1764,7 +1762,7 @@ class BrainClientNode(Node):
         if self.primitive_running:
             self.get_logger().info("\033[1;92m[BrainClient] Stopping running primitive\033[0m")
             if self._goal_handle:  # Check if goal_handle exists before trying to cancel
-                cancel_future = self._goal_handle.cancel_goal_async()
+                self._goal_handle.cancel_goal_async()
                 self._goal_handle = None  # Clear handle after requesting cancel
             self.primitive_running = None
 
@@ -1910,7 +1908,7 @@ class BrainClientNode(Node):
             # For a full deactivation, we probably don't want to store a pending task.
             # self._pending_next_task = None # Ensure it's cleared.
 
-            cancel_future = self._goal_handle.cancel_goal_async()
+            self._goal_handle.cancel_goal_async()
             # We might want to add a callback to confirm or log, but for deactivation, just sending is key.
             # cancel_future.add_done_callback(self.cancel_response_callback)
             # Also notify the server that the primitive has been cancelled
@@ -2096,7 +2094,7 @@ class BrainClientNode(Node):
         """Load the startup directive from file, returns None if not configured"""
         try:
             if os.path.exists(self.directive_file):
-                with open(self.directive_file, "r") as f:
+                with open(self.directive_file) as f:
                     saved_directive = f.read().strip()
                     if saved_directive:
                         self.get_logger().info(f"Loaded startup directive: {saved_directive}")

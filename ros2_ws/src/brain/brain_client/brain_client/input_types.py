@@ -7,8 +7,9 @@ with no ROS dependencies - they process data and send results via callbacks.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Callable
+from collections.abc import Callable
 from enum import Enum
+from typing import Any
 
 from brain_client.client.proxy_client import ProxyClient
 from brain_client.logging_config import UniversalLogger
@@ -46,10 +47,10 @@ class InputDevice(ABC):
     def __init__(self):
         """Initialize the input device with default attributes."""
         self.logger = UniversalLogger(enabled=False)
-        self._proxy: Optional[ProxyClient] = None
-        self._data_callback: Optional[Callable] = None
+        self._proxy: ProxyClient | None = None
+        self._data_callback: Callable | None = None
         self._active = False  # Start inactive
-        self._config: Dict[str, Any] = {}
+        self._config: dict[str, Any] = {}
 
     @property
     @abstractmethod
@@ -105,7 +106,7 @@ class InputDevice(ABC):
         """
         return True
 
-    def shutdown(self):
+    def shutdown(self):  # noqa: B027
         """
         Final cleanup when InputManagerNode shuts down (optional).
 
@@ -114,7 +115,7 @@ class InputDevice(ABC):
         """
         pass
 
-    def set_data_callback(self, callback: Callable[[str, Dict[str, Any], str], None]):
+    def set_data_callback(self, callback: Callable[[str, dict[str, Any], str], None]):
         """
         Set the callback function for sending data to the agent.
 
@@ -126,7 +127,7 @@ class InputDevice(ABC):
         self._data_callback = callback
         self.logger.debug(f"Data callback set for input device '{self.name}'")
 
-    def send_data(self, data: Dict[str, Any], data_type: str = "custom"):
+    def send_data(self, data: dict[str, Any], data_type: str = "custom"):
         """
         Send processed data to the agent.
 
@@ -179,7 +180,7 @@ class InputDevice(ABC):
         return self._active
 
     @property
-    def proxy(self) -> Optional[ProxyClient]:
+    def proxy(self) -> ProxyClient | None:
         """
         Access to proxy services (Cartesia, OpenAI, etc.)
 
@@ -206,7 +207,7 @@ class InputDevice(ABC):
         """
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
 
-    def set_config(self, config: Dict[str, Any]):
+    def set_config(self, config: dict[str, Any]):
         """
         Set configuration parameters for this input device.
 
@@ -217,7 +218,7 @@ class InputDevice(ABC):
         """
         self._config = config
 
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """
         Get configuration/metadata for this input device.
 

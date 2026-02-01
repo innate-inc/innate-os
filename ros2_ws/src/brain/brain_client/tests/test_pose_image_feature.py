@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-import pytest
-import sys
 import os
-import numpy as np
-import cv2
+import sys
 from unittest.mock import MagicMock
+
+import cv2
+import numpy as np
+import pytest
 
 
 # Create mocks for all the ROS2 dependencies
@@ -224,13 +225,12 @@ sys.modules["brain_client.ws_bridge"].WSBridge = MockWSBridge
 # Add the parent directory to the path so we can import the brain_client module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from brain_client.brain_client_node import BrainClientNode
-from brain_client.message_types import (
+from brain_client.brain_client_node import BrainClientNode  # noqa: E402
+from brain_client.message_types import (  # noqa: E402
     MessageInType,
     MessageOut,
     MessageOutType,
 )
-
 
 # Now we can import the BrainClientNode
 

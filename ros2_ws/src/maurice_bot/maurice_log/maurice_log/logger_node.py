@@ -2,11 +2,12 @@
 
 import json
 import subprocess
+
 import psutil
 import rclpy
+from diagnostic_msgs.msg import DiagnosticArray
 from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
-from diagnostic_msgs.msg import DiagnosticArray
 from std_msgs.msg import String
 
 from maurice_log.bigquery_logger import RobotTelemetryLogger

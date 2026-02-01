@@ -1,10 +1,12 @@
 """OpenAI adapter for proxy client."""
 
 import asyncio
-import logging
 import json
+import logging
 import threading
-from typing import Optional, Dict, Any, AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable
+from typing import Any
+
 import websocket  # websocket-client library (sync, fast)
 import websockets  # For async connect() method
 
@@ -26,10 +28,10 @@ class SyncRealtimeConnection:
         proxy_url: str,
         innate_service_key: str,
         model: str = "gpt-4o-realtime-preview",
-        on_message: Optional[Callable] = None,
-        on_open: Optional[Callable] = None,
-        on_error: Optional[Callable] = None,
-        on_close: Optional[Callable] = None,
+        on_message: Callable | None = None,
+        on_open: Callable | None = None,
+        on_error: Callable | None = None,
+        on_close: Callable | None = None,
     ):
         self._proxy_url = proxy_url.rstrip("/")
         self._innate_service_key = innate_service_key
@@ -39,7 +41,7 @@ class SyncRealtimeConnection:
         self._on_error_callback = on_error
         self._on_close_callback = on_close
 
-        self._ws: Optional[websocket.WebSocketApp] = None
+        self._ws: websocket.WebSocketApp | None = None
         self._stop_event = threading.Event()
         self._connected_event = threading.Event()
         self._send_lock = threading.Lock()
@@ -91,7 +93,7 @@ class SyncRealtimeConnection:
         """Wait until the connection is established."""
         return self._connected_event.wait(timeout=timeout)
 
-    def send_json(self, data: Dict[str, Any]):
+    def send_json(self, data: dict[str, Any]):
         """Send JSON data over the WebSocket (non-blocking)."""
         msg_type = data.get("type", "unknown")
 
@@ -187,10 +189,10 @@ class ProxyOpenAIClient:
         async def completions(
             self,
             model: str,
-            messages: list[Dict[str, str]],
+            messages: list[dict[str, str]],
             stream: bool = False,
             **kwargs: Any,
-        ) -> Dict[str, Any] | AsyncIterator[Dict[str, Any]]:
+        ) -> dict[str, Any] | AsyncIterator[dict[str, Any]]:
             """
             Create chat completion.
 
@@ -246,10 +248,10 @@ class ProxyOpenAIClient:
         def connect_sync(
             self,
             model: str = "gpt-4o-realtime-preview",
-            on_message: Optional[callable] = None,
-            on_open: Optional[callable] = None,
-            on_error: Optional[callable] = None,
-            on_close: Optional[callable] = None,
+            on_message: callable | None = None,
+            on_open: callable | None = None,
+            on_error: callable | None = None,
+            on_close: callable | None = None,
         ) -> "SyncRealtimeConnection":
             """
             Create a synchronous WebSocket connection to OpenAI Realtime API via proxy.
@@ -269,7 +271,7 @@ class ProxyOpenAIClient:
         async def connect(
             self,
             model: str = "gpt-4o-realtime-preview",
-            on_message: Optional[callable] = None,
+            on_message: callable | None = None,
         ) -> websockets.WebSocketServerProtocol:
             """
             Connect to OpenAI Realtime API via proxy.

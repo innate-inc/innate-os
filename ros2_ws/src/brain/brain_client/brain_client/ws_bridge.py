@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import json
-import rclpy
+
 from std_msgs.msg import String
 
 from brain_client.message_types import MessageOut, MessageOutType

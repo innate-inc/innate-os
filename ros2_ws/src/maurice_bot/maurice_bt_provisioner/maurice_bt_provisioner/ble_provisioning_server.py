@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import logging
 import json
-import subprocess
-import time
+import logging
 import os
-import sys
 import signal
+import subprocess
+import sys
+import time
 
 import dbus
 import dbus.exceptions
@@ -15,13 +15,13 @@ from gi.repository import GLib
 
 # Import NetworkManager utilities
 from nmcli_utils import (
-    nmcli_get_wifi_connections,
     nmcli_add_or_modify_connection,
-    nmcli_delete_connection,
-    nmcli_scan_for_ssid,
     nmcli_connect,
-    nmcli_get_active_wifi_ssid,
+    nmcli_delete_connection,
     nmcli_get_active_ipv4_address,
+    nmcli_get_active_wifi_ssid,
+    nmcli_get_wifi_connections,
+    nmcli_scan_for_ssid,
     nmcli_scan_for_visible_ssids,
 )
 
@@ -59,7 +59,7 @@ def load_robot_name():
     )
     info_path = os.path.join(root, "data", "robot_info.json")
     try:
-        with open(info_path, "r") as f:
+        with open(info_path) as f:
             data = json.load(f)
         return data.get("robot_name", "MARS")
     except Exception as e:

@@ -7,41 +7,41 @@ When a goal is received (with a primitive type and its parameters encoded
 as JSON), the corresponding primitive is executed.
 """
 
-import os
-import json
-import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionServer, ActionClient, GoalResponse, CancelResponse
-import cv2  # For image processing
 import base64  # For encoding
-import numpy as np  # For map data
-import math  # For yaw calculation
 import inspect
-import types
+import json
+import math  # For yaw calculation
+import os
 import threading
+import types
 
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-
+import cv2  # For image processing
+import numpy as np  # For map data
+import rclpy
 
 # Import the action definition – ensure that it is built and available.
-from brain_messages.action import ExecutePrimitive, ExecuteBehavior
+from brain_messages.action import ExecuteBehavior, ExecutePrimitive
 from brain_messages.srv import GetAvailablePrimitives
+from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.node import Node
+from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+
+# Import ROS message types for subscriptions
+from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
+
+from brain_client.head_interface import HeadInterface
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.mobility_interface import MobilityInterface
 
 # Import primitive loader and types
 from brain_client.skill_loader import SkillLoader
 from brain_client.skill_types import (
-    SkillResult,
     RobotStateType,
+    SkillResult,
 )
-from brain_client.manipulation_interface import ManipulationInterface
-from brain_client.mobility_interface import MobilityInterface
-from brain_client.head_interface import HeadInterface
-
-# Import ROS message types for subscriptions
-from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
-from nav_msgs.msg import Odometry, OccupancyGrid
-from std_msgs.msg import String
-from std_srvs.srv import Trigger
 
 
 class PrimitiveExecutionActionServer(Node):
@@ -248,7 +248,7 @@ class PrimitiveExecutionActionServer(Node):
             if os.path.isdir(item_path):
                 metadata_path = os.path.join(item_path, "metadata.json")
                 if os.path.exists(metadata_path):
-                    with open(metadata_path, "r") as f:
+                    with open(metadata_path) as f:
                         metadata = json.load(f)
                         primitive_name = metadata.get("name", item)
 

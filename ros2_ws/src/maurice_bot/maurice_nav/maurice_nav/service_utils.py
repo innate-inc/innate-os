@@ -1,8 +1,9 @@
 """Utilities for calling ROS2 services with timeout handling."""
 
 import time
+
 from lifecycle_msgs.msg import Transition
-from lifecycle_msgs.srv import GetState, ChangeState
+from lifecycle_msgs.srv import ChangeState, GetState
 
 
 def call_service(service_clients: dict, logger, service_name: str, request, timeout_sec: float = 2.0):

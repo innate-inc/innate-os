@@ -12,18 +12,19 @@ A separate ROS node that manages input devices. This node:
 This keeps ROS complexity separate from the input device implementations.
 """
 
+import json
 import os
 import time
+from typing import Any
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
-import json
-from typing import Dict, Any
 
+from brain_client.client.proxy_client import ProxyClient
 from brain_client.input_loader import InputLoader
 from brain_client.input_types import InputDevice
-from brain_client.client.proxy_client import ProxyClient
 from brain_client.logging_config import UniversalLogger
 
 
@@ -83,7 +84,7 @@ class InputManagerNode(Node):
         # Pass proxy to loader - it will inject into each input device
         self.input_loader = InputLoader(ros_logger, proxy=self.proxy)
         input_classes = self.input_loader.load_inputs_from_directories(input_directories)
-        self.input_devices: Dict[str, InputDevice] = self.input_loader.create_input_instances(input_classes, ros_logger)
+        self.input_devices: dict[str, InputDevice] = self.input_loader.create_input_instances(input_classes, ros_logger)
 
         if not self.input_devices:
             self.logger.warning("⚠️ No input devices found!")
@@ -126,7 +127,7 @@ class InputManagerNode(Node):
 
         self.logger.info("✅ Input Manager Node started successfully")
 
-    def _handle_device_data(self, device_name: str, data: Dict[str, Any], data_type: str):
+    def _handle_device_data(self, device_name: str, data: dict[str, Any], data_type: str):
         """
         Callback when an input device wants to send data to the agent.
 

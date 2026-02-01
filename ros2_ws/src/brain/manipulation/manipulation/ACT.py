@@ -1,9 +1,12 @@
 import math
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Tuple, Dict, List
 from enum import Enum
+from itertools import chain  # For _reset_parameters
 
+import einops
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,9 +14,6 @@ import torchvision
 from torch import Tensor
 from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
-import numpy as np
-import einops
-from itertools import chain  # For _reset_parameters
 
 # --- Start of Normalization Utility Classes and Functions ---
 
@@ -34,7 +34,7 @@ class FeatureType(Enum):
 @dataclass
 class PolicyFeature:
     name: str
-    shape: List[int]
+    shape: list[int]
     type: FeatureType
 
 
@@ -46,10 +46,10 @@ def _no_stats_error_str(name: str) -> str:
 
 
 def create_stats_buffers(
-    features: Dict[str, PolicyFeature],
-    norm_map: Dict[str, NormalizationMode],
-    stats: Optional[Dict[str, Dict[str, Tensor]]] = None,
-) -> Dict[str, nn.ParameterDict]:
+    features: dict[str, PolicyFeature],
+    norm_map: dict[str, NormalizationMode],
+    stats: dict[str, dict[str, Tensor]] | None = None,
+) -> dict[str, nn.ParameterDict]:
     stats_buffers = {}
 
     for key, ft in features.items():
@@ -106,9 +106,9 @@ def create_stats_buffers(
 class Normalize(nn.Module):
     def __init__(
         self,
-        features: Dict[str, PolicyFeature],
-        norm_map: Dict[str, NormalizationMode],  # Dict[FeatureType_str, NormalizationMode_str]
-        stats: Optional[Dict[str, Dict[str, Tensor]]] = None,
+        features: dict[str, PolicyFeature],
+        norm_map: dict[str, NormalizationMode],  # Dict[FeatureType_str, NormalizationMode_str]
+        stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         super().__init__()
         self.features = features
@@ -123,7 +123,7 @@ class Normalize(nn.Module):
             self.add_module("buffer_" + key.replace(".", "_"), buffer_param_dict)
 
     @torch.no_grad()
-    def forward(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         # Create a shallow copy to avoid modifying the original batch in place if it's passed around
         processed_batch = dict(batch)
         for key, ft in self.features.items():
@@ -171,9 +171,9 @@ class Normalize(nn.Module):
 class Unnormalize(nn.Module):
     def __init__(
         self,
-        features: Dict[str, PolicyFeature],
-        norm_map: Dict[str, NormalizationMode],  # Dict[FeatureType_str, NormalizationMode_str]
-        stats: Optional[Dict[str, Dict[str, Tensor]]] = None,
+        features: dict[str, PolicyFeature],
+        norm_map: dict[str, NormalizationMode],  # Dict[FeatureType_str, NormalizationMode_str]
+        stats: dict[str, dict[str, Tensor]] | None = None,
     ):
         super().__init__()
         self.features = features
@@ -186,7 +186,7 @@ class Unnormalize(nn.Module):
             self.add_module("buffer_" + key.replace(".", "_"), buffer_param_dict)
 
     @torch.no_grad()
-    def forward(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         processed_batch = dict(batch)
         for key, ft in self.features.items():
             if key not in processed_batch:
@@ -240,12 +240,12 @@ class ACTConfig:
     chunk_size: int = 100
     n_action_steps: int = 100
     speed: float = 1.0
-    input_shapes: Dict[str, List[int]] = field(default_factory=dict)
-    output_shapes: Dict[str, List[int]] = field(default_factory=dict)
+    input_shapes: dict[str, list[int]] = field(default_factory=dict)
+    output_shapes: dict[str, list[int]] = field(default_factory=dict)
     # Example: input_shapes = {"observation.image_rgb": [3, 224, 224], "observation.state": [7]}
     #          output_shapes = {"action": [7]}
 
-    normalization_mapping: Dict[str, str] = field(
+    normalization_mapping: dict[str, str] = field(
         default_factory=lambda: {
             FeatureType.VISUAL.value: NormalizationMode.MEAN_STD.value,
             FeatureType.STATE.value: NormalizationMode.MEAN_STD.value,
@@ -256,7 +256,7 @@ class ACTConfig:
 
     # Architecture
     vision_backbone: str = "resnet18"
-    pretrained_backbone_weights: Optional[str] = "ResNet18_Weights.IMAGENET1K_V1"
+    pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
     replace_final_stride_with_dilation: bool = False
 
     # Transformer parameters
@@ -274,7 +274,7 @@ class ACTConfig:
     n_vae_encoder_layers: int = 4
 
     # Inference
-    temporal_ensemble_coeff: Optional[float] = None
+    temporal_ensemble_coeff: float | None = None
 
     # Training
     dropout: float = 0.1
@@ -286,11 +286,11 @@ class ACTConfig:
     optimizer_lr_backbone: float = 1e-5
 
     @property
-    def image_input_keys(self) -> List[str]:
+    def image_input_keys(self) -> list[str]:
         """Returns a sorted list of keys for image observations."""
         return sorted([k for k in self.input_shapes if k.startswith("observation.image")])
 
-    def _get_policy_features(self, shapes_dict: Dict[str, List[int]]) -> Dict[str, PolicyFeature]:
+    def _get_policy_features(self, shapes_dict: dict[str, list[int]]) -> dict[str, PolicyFeature]:
         features = {}
         for key, shape in shapes_dict.items():
             ftype = None
@@ -315,11 +315,11 @@ class ACTConfig:
         return features
 
     @property
-    def input_features(self) -> Dict[str, PolicyFeature]:
+    def input_features(self) -> dict[str, PolicyFeature]:
         return self._get_policy_features(self.input_shapes)
 
     @property
-    def output_features(self) -> Dict[str, PolicyFeature]:
+    def output_features(self) -> dict[str, PolicyFeature]:
         # Typically, output_features for normalization refers to "action"
         return self._get_policy_features(self.output_shapes)
 
@@ -333,7 +333,7 @@ class ACTConfig:
 
 
 class ACTPolicy(nn.Module):
-    def __init__(self, config: ACTConfig, dataset_stats: Optional[Dict[str, Dict[str, Tensor]]] = None):
+    def __init__(self, config: ACTConfig, dataset_stats: dict[str, dict[str, Tensor]] | None = None):
         super().__init__()
         self.config = config
 
@@ -353,7 +353,7 @@ class ACTPolicy(nn.Module):
 
         self.reset()
 
-    def get_optim_params(self) -> Dict:
+    def get_optim_params(self) -> dict:
         return [
             {
                 "params": [
@@ -372,7 +372,7 @@ class ACTPolicy(nn.Module):
         else:
             self._action_queue = deque([], maxlen=self.config.n_action_steps)
 
-    def _prepare_batch_for_model(self, batch: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def _prepare_batch_for_model(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         # Create a shallow copy to avoid modifying the original batch
         processed_batch = dict(batch)
         if self.config.image_input_keys:
@@ -406,7 +406,7 @@ class ACTPolicy(nn.Module):
         return processed_batch
 
     @torch.no_grad()
-    def select_action(self, batch: Dict[str, Tensor]) -> Tensor:
+    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         self.eval()
         # Create a working copy of the batch to avoid in-place modification of external batch
         working_batch = {k: v.clone() if isinstance(v, Tensor) else v for k, v in batch.items()}
@@ -471,7 +471,7 @@ class ACTPolicy(nn.Module):
         # Transpose back: (batch, action_dim, new_seq_len) -> (batch, new_seq_len, action_dim)
         return resampled.transpose(1, 2)
 
-    def forward(self, batch: Dict[str, Tensor]) -> Tuple[Tensor, Dict]:
+    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         # Create a working copy of the batch to avoid in-place modification
         working_batch = {k: v.clone() if isinstance(v, Tensor) else v for k, v in batch.items()}
 
@@ -515,9 +515,7 @@ class ACTEncoder(nn.Module):
         self.layers = nn.ModuleList([ACTEncoderLayer(config) for _ in range(num_layers)])
         self.norm = nn.LayerNorm(config.dim_model) if config.pre_norm else nn.Identity()
 
-    def forward(
-        self, x: Tensor, pos_embed: Optional[Tensor] = None, key_padding_mask: Optional[Tensor] = None
-    ) -> Tensor:
+    def forward(self, x: Tensor, pos_embed: Tensor | None = None, key_padding_mask: Tensor | None = None) -> Tensor:
         for layer in self.layers:
             x = layer(x, pos_embed=pos_embed, key_padding_mask=key_padding_mask)
         x = self.norm(x)
@@ -542,9 +540,7 @@ class ACTEncoderLayer(nn.Module):
         self.activation = get_activation_fn(config.feedforward_activation)
         self.pre_norm = config.pre_norm
 
-    def forward(
-        self, x: Tensor, pos_embed: Optional[Tensor] = None, key_padding_mask: Optional[Tensor] = None
-    ) -> Tensor:
+    def forward(self, x: Tensor, pos_embed: Tensor | None = None, key_padding_mask: Tensor | None = None) -> Tensor:
         skip = x
         if self.pre_norm:
             x = self.norm1(x)
@@ -577,8 +573,8 @@ class ACTDecoder(nn.Module):
         self,
         x: Tensor,
         encoder_out: Tensor,
-        decoder_pos_embed: Optional[Tensor] = None,
-        encoder_pos_embed: Optional[Tensor] = None,
+        decoder_pos_embed: Tensor | None = None,
+        encoder_pos_embed: Tensor | None = None,
     ) -> Tensor:
         for layer in self.layers:
             x = layer(x, encoder_out, decoder_pos_embed=decoder_pos_embed, encoder_pos_embed=encoder_pos_embed)
@@ -608,15 +604,15 @@ class ACTDecoderLayer(nn.Module):
         self.activation = get_activation_fn(config.feedforward_activation)
         self.pre_norm = config.pre_norm
 
-    def maybe_add_pos_embed(self, tensor: Tensor, pos_embed: Optional[Tensor]) -> Tensor:
+    def maybe_add_pos_embed(self, tensor: Tensor, pos_embed: Tensor | None) -> Tensor:
         return tensor if pos_embed is None else tensor + pos_embed
 
     def forward(
         self,
         x: Tensor,
         encoder_out: Tensor,
-        decoder_pos_embed: Optional[Tensor] = None,
-        encoder_pos_embed: Optional[Tensor] = None,
+        decoder_pos_embed: Tensor | None = None,
+        encoder_pos_embed: Tensor | None = None,
     ) -> Tensor:
         skip = x
         if self.pre_norm:
@@ -864,7 +860,7 @@ class ACT(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, batch: Dict[str, Tensor]) -> Tuple[Tensor, Tuple[Optional[Tensor], Optional[Tensor]]]:
+    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor | None, Tensor | None]]:
         # Determine batch_size from one of the input tensors
         if self.config.image_input_keys and "observation.images" in batch and batch["observation.images"]:
             batch_size = batch["observation.images"][0].shape[0]
@@ -882,8 +878,8 @@ class ACT(nn.Module):
                 if "action" in batch:
                     batch_size = batch["action"].shape[0]  # override
 
-        mu: Optional[Tensor] = None
-        log_sigma_x2: Optional[Tensor] = None
+        mu: Tensor | None = None
+        log_sigma_x2: Tensor | None = None
         latent_sample: Tensor
 
         # VAE Encoder Path (if training with VAE and actions are provided)
@@ -976,7 +972,7 @@ class ACT(nn.Module):
             and batch["observation.images"]
         ):
             # print(f"[ACT.forward] Processing {len(batch['observation.images'])} image tensors.") # Removed
-            for i, img_tensor in enumerate(batch["observation.images"]):  # list of (B, C, H, W)
+            for _i, img_tensor in enumerate(batch["observation.images"]):  # list of (B, C, H, W)
                 # print(f"[ACT.forward] Image tensor {i} input shape: {img_tensor.shape}") # Removed
                 if img_tensor.shape[0] != batch_size:
                     raise ValueError(
@@ -1026,7 +1022,7 @@ class ACT(nn.Module):
         # Concatenate 1D and 2D (image) features for the main encoder
         # --- Start Logging before torch.cat for positional embeddings ---
         # print(f"[ACT.forward] Shape of encoder_1d_pos_embed_sequence: {encoder_1d_pos_embed_sequence.shape}") # Removed
-        for idx, tensor in enumerate(all_cam_pos_embeds_processed):
+        for _idx, _tensor in enumerate(all_cam_pos_embeds_processed):
             # print(f"[ACT.forward] Shape of all_cam_pos_embeds_processed[{idx}]: {tensor.shape}") # Removed
             pass
         # --- End Logging ---

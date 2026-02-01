@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 
-import numpy as np
-from maurice_control.dynamixel import Dynamixel, OperatingMode, ReadAttribute
 import time
+from enum import Enum, auto
+
+import numpy as np
 from dynamixel_sdk import (
+    COMM_SUCCESS,
+    DXL_HIBYTE,
+    DXL_HIWORD,
+    DXL_LOBYTE,
+    DXL_LOWORD,
     GroupSyncRead,
     GroupSyncWrite,
-    DXL_LOBYTE,
-    DXL_HIBYTE,
-    DXL_LOWORD,
-    DXL_HIWORD,
-    COMM_SUCCESS,
 )
-from enum import Enum, auto
-from typing import Union
+
+from maurice_control.dynamixel import OperatingMode, ReadAttribute
 
 
 class MotorControlType(Enum):
@@ -25,7 +26,9 @@ class MotorControlType(Enum):
 
 class Robot:
     # def __init__(self, device_name: str, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
-    def __init__(self, dynamixel, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
+    def __init__(self, dynamixel, baudrate=1_000_000, servo_ids=None):
+        if servo_ids is None:
+            servo_ids = [1, 2, 3, 4, 5]
         self.servo_ids = servo_ids
         self.dynamixel = dynamixel
         # self.dynamixel = Dynamixel.Config(baudrate=baudrate, device_name=device_name).instantiate()
@@ -78,7 +81,7 @@ class Robot:
             if tries > 0:
                 return self.read_position(tries=tries - 1)
             else:
-                print(f"failed to read position!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                print("failed to read position!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         positions = []
         for id in self.servo_ids:
             position = self.position_reader.getData(id, ReadAttribute.POSITION.value, 4)
@@ -106,7 +109,7 @@ class Robot:
 
         :param action: list or numpy array of target joint positions in range [0, 4096]
         """
-        if not self.motor_control_state is MotorControlType.POSITION_CONTROL:
+        if self.motor_control_state is not MotorControlType.POSITION_CONTROL:
             self._set_position_control()
         for i, motor_id in enumerate(self.servo_ids):
             data_write = [
@@ -124,7 +127,7 @@ class Robot:
         Sets the pwm values for the servos.
         :param action: list or numpy array of pwm values in range [0, 885]
         """
-        if not self.motor_control_state is MotorControlType.PWM:
+        if self.motor_control_state is not MotorControlType.PWM:
             self._set_pwm_control()
         for i, motor_id in enumerate(self.servo_ids):
             data_write = [
@@ -142,7 +145,7 @@ class Robot:
         self.dynamixel._enable_torque(self.servo_ids[-1])
         self.dynamixel.set_pwm_value(self.servo_ids[-1], 200)
 
-    def limit_pwm(self, limit: Union[int, list, np.ndarray]):
+    def limit_pwm(self, limit: int | list | np.ndarray):
         """
         Limits the pwm values for the servos in for position control
         @param limit: 0 ~ 885
@@ -155,7 +158,7 @@ class Robot:
         else:
             limits = limit
         self._disable_torque()
-        for motor_id, limit in zip(self.servo_ids, limits):
+        for motor_id, limit in zip(self.servo_ids, limits, strict=False):
             self.dynamixel.set_pwm_limit(motor_id, limit)
         self._enable_torque()
 

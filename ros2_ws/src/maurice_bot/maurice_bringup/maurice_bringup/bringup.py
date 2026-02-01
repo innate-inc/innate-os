@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 
+
 import rclpy
-from rclpy.node import Node
-from maurice_bringup.i2c import I2CManager
-from maurice_bringup.battery import BatteryManager
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from maurice_msgs.srv import LightCommand
-from tf2_ros import TransformBroadcaster
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
 from sensor_msgs.msg import BatteryState
 from std_srvs.srv import Trigger
-import time
+from tf2_ros import TransformBroadcaster
+
+from maurice_bringup.battery import BatteryManager
+from maurice_bringup.i2c import I2CManager
 
 
 class Bringup(Node):

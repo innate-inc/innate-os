@@ -1,7 +1,8 @@
 """Cartesia TTS adapter for proxy client."""
 
 import logging
-from typing import Dict, Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,8 @@ class ProxyCartesiaClient:
             self,
             model_id: str,
             transcript: str,
-            voice: Dict[str, Any],
-            output_format: Dict[str, Any],
+            voice: dict[str, Any],
+            output_format: dict[str, Any],
         ) -> bytes | Iterator[bytes]:
             """
             Generate speech audio bytes.

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 import os
-import yaml
 
+import yaml
 from launch import LaunchDescription
+from launch.substitutions import Command
 from launch_ros.actions import Node
-from launch.substitutions import Command, FindExecutable
-from launch_ros.substitutions import FindPackageShare
 from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -23,7 +23,7 @@ def generate_launch_description():
     # ———————— 2) Load & parse kinematics.yaml ————————
     arm_pkg = FindPackageShare("maurice_arm").find("maurice_arm")
     kin_path = os.path.join(arm_pkg, "config", "kinematics.yaml")
-    kin_full = yaml.safe_load(open(kin_path, "r"))
+    kin_full = yaml.safe_load(open(kin_path))
 
     # If you left a ros__parameters: wrapper in your src file, unwrap it here;
     # otherwise kin_full already is the map you want.
