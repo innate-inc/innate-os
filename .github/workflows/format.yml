@@ -1,0 +1,36 @@
+name: Format Check
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Check Python formatting
+        run: ruff format --check ros2_ws/src/
+
+      - name: Check Python linting
+        run: ruff check ros2_ws/src/
+
+      - name: Install clang-format
+        run: sudo apt-get install -y clang-format
+
+      - name: Check C++ formatting
+        run: |
+          find ros2_ws/src -type f \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) | while read file; do
+            clang-format --dry-run --Werror "$file"
+          done
