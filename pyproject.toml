@@ -1,0 +1,25 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["ros2_ws/src"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["maurice_nav", "maurice_control", "maurice_cam", "maurice_arm", "brain_client", "manipulation"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
