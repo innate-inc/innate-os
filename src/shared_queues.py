@@ -19,6 +19,7 @@ class ChatSignal(NamedTuple):
 
 class AgentInfo(NamedTuple):
     """Information about an available agent/directive."""
+
     id: str
     display_name: str
     display_icon: Optional[str]  # Base64-encoded icon data or None
@@ -35,13 +36,17 @@ class SharedQueues:
     """
 
     def __init__(self, log_everything=False):
-        self.sim_to_agent = queue.Queue(maxsize=100)
+        self.sim_to_agent = queue.Queue(maxsize=100)  # Commands, nav status, etc.
         self.agent_to_sim = queue.Queue(maxsize=100)
         self.sim_to_web = queue.Queue(
             maxsize=100
         )  # Will now contain dicts of named images
         self.latest_frames = {}
         self.exit_event = threading.Event()
+
+        # Separate size-1 queue for camera/sensor data - always keeps only latest frame
+        # This prevents image data from backing up and causing latency
+        self.sensor_to_agent = queue.Queue(maxsize=1)
 
         # Flag to indicate if all model outputs should be logged
         self.log_everything = log_everything
