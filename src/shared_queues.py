@@ -17,6 +17,16 @@ class ChatSignal(NamedTuple):
     timestamp: float
 
 
+class AgentInfo(NamedTuple):
+    """Information about an available agent/directive."""
+
+    id: str
+    display_name: str
+    display_icon: Optional[str]  # Base64-encoded icon data or None
+    prompt: str
+    skills: List[str]
+
+
 class SharedQueues:
     """
     Minimal message broker:
@@ -26,13 +36,17 @@ class SharedQueues:
     """
 
     def __init__(self, log_everything=False):
-        self.sim_to_agent = queue.Queue(maxsize=100)
+        self.sim_to_agent = queue.Queue(maxsize=100)  # Commands, nav status, etc.
         self.agent_to_sim = queue.Queue(maxsize=100)
         self.sim_to_web = queue.Queue(
             maxsize=100
         )  # Will now contain dicts of named images
         self.latest_frames = {}
         self.exit_event = threading.Event()
+
+        # Separate size-1 queue for camera/sensor data - always keeps only latest frame
+        # This prevents image data from backing up and causing latency
+        self.sensor_to_agent = queue.Queue(maxsize=1)
 
         # Flag to indicate if all model outputs should be logged
         self.log_everything = log_everything
@@ -48,6 +62,12 @@ class SharedQueues:
         self.latest_robot_orientation: List[float] = [0.0, 0.0, 0.0, 1.0]
         self.robot_position_timestamp: float = 0.0
         self.robot_position_lock = threading.Lock()  # For thread-safe updates
+
+        # Store available agents/directives from the robot
+        self.available_agents: List[AgentInfo] = []
+        self.current_agent_id: Optional[str] = None
+        self.startup_agent_id: Optional[str] = None
+        self.agents_lock = threading.Lock()  # For thread-safe updates
 
     def update_robot_position(
         self, x: float, y: float, z: float, timestamp: float = None
@@ -96,4 +116,27 @@ class SharedQueues:
                 self.latest_robot_position.copy(),
                 self.latest_robot_orientation.copy(),
                 self.robot_position_timestamp,
+            )
+
+    def update_available_agents(
+        self,
+        agents: List[AgentInfo],
+        current_agent_id: Optional[str] = None,
+        startup_agent_id: Optional[str] = None,
+    ):
+        """Thread-safe method to update available agents from the robot"""
+        with self.agents_lock:
+            self.available_agents = agents
+            self.current_agent_id = current_agent_id
+            self.startup_agent_id = startup_agent_id
+
+    def get_available_agents(
+        self,
+    ) -> Tuple[List[AgentInfo], Optional[str], Optional[str]]:
+        """Thread-safe method to get available agents, current agent, and startup agent"""
+        with self.agents_lock:
+            return (
+                self.available_agents.copy(),
+                self.current_agent_id,
+                self.startup_agent_id,
             )

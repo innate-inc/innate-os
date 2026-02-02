@@ -1,94 +1,630 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { IoMic, IoMicOff } from "react-icons/io5";
 import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
 import { Chat } from "./components/Chat";
-import { AuthGuard } from "./components/auth/AuthGuard";
-import { UserProfile } from "./components/auth/UserProfile";
-import { LogoutButton } from "./components/auth/LogoutButton";
-import { useAuth0 } from "@auth0/auth0-react";
 
-const Title = styled.h1`
-  font-size: 22px;
-  font-weight: ${({ theme }) => theme.fontWeights.bold};
-  margin-bottom: 1.5rem;
+// Main App Container
+const AppContainer = styled.div`
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  margin: 20px;
+  max-width: 1600px;
+  align-self: center;
+  width: calc(100% - 40px);
 `;
 
-const Container = styled.div`
-  height: calc(100vh - 2rem);
+// Header
+const Header = styled.header`
+  display: grid;
+  grid-template-columns: 250px 1fr auto;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+  height: 60px;
+  align-items: center;
+`;
+
+const Logo = styled.div`
+  font-family: ${({ theme }) => theme.fonts.display};
+  font-size: 24px;
+  font-weight: 800;
+  padding: 0 16px;
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  border-right: 1px solid ${({ theme }) => theme.colors.foreground};
+`;
+
+const StatusBadge = styled.div`
+  margin-right: 16px;
+  background: ${({ theme }) => theme.colors.primary};
+  color: white;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const StatusDot = styled.div`
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+`;
+
+// Workspace
+const Workspace = styled.div`
+  display: grid;
+  grid-template-columns: 300px 1fr 450px;
+  overflow: hidden;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 250px 1fr 390px;
+  }
+
+  @media (max-width: 1024px) {
+    grid-template-columns: 200px 1fr;
+  }
+`;
+
+// Left Sidebar
+const Sidebar = styled.aside`
+  border-right: 1px solid ${({ theme }) => theme.colors.foreground};
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  overflow: hidden;
-  text-align: center;
-  padding: 1rem;
-  background-color: ${({ theme }) => theme.colors.background};
-  color: ${({ theme }) => theme.colors.foreground};
+  overflow-y: auto;
+  background: ${({ theme }) => theme.colors.background};
 `;
 
-const TopSection = styled.div`
-  flex-shrink: 0;
-  margin-top: 1rem;
+const PanelSection = styled.div`
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
 `;
 
-const ChatSection = styled.div`
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-`;
-
-const VersionBadge = styled.div`
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  margin: 8px;
-  font-size: 12px;
+const PanelHeader = styled.div`
+  padding: 12px 16px;
+  font-size: 11px;
+  text-transform: uppercase;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+  font-weight: 700;
   opacity: 0.7;
-  color: ${({ theme }) => theme.colors.muted};
 `;
 
-const UserContainer = styled.div`
-  position: absolute;
-  top: 20px;
-  right: 20px;
+const BigStat = styled.div`
+  padding: 16px;
+`;
+
+const StatValue = styled.div`
+  font-family: ${({ theme }) => theme.fonts.display};
+  font-size: 48px;
+  line-height: 0.9;
+  font-weight: 400;
+  letter-spacing: -0.05em;
+`;
+
+const StatLabel = styled.div`
+  font-size: 12px;
+  margin-top: 8px;
+  opacity: 0.6;
+`;
+
+const AgentItem = styled.div<{ $isActive: boolean }>`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+  cursor: pointer;
+  transition: background 0.2s;
+  background: ${({ $isActive, theme }) =>
+    $isActive ? theme.colors.foreground : "transparent"};
+  color: ${({ $isActive, theme }) =>
+    $isActive ? theme.colors.background : theme.colors.foreground};
+
+  &:hover {
+    background: ${({ $isActive, theme }) =>
+      $isActive ? theme.colors.foreground : "rgba(255, 255, 255, 0.1)"};
+  }
+`;
+
+const AgentName = styled.span`
+  font-size: 13px;
+  font-weight: 500;
+`;
+
+const AgentCheck = styled.div<{ $isActive: boolean }>`
+  width: 16px;
+  height: 16px;
+  border: 1px solid
+    ${({ $isActive, theme }) =>
+      $isActive ? theme.colors.background : "currentColor"};
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: ${({ $isActive, theme }) =>
+    $isActive ? theme.colors.primary : "transparent"};
+  color: ${({ $isActive }) => ($isActive ? "white" : "transparent")};
+  font-size: 10px;
+`;
+
+// Main Content - centers the 4:3 viewport
+const MainContent = styled.main`
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: #0a0a0a;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+`;
+
+// Chat Column
+const ChatColumn = styled.aside`
+  border-left: 1px solid ${({ theme }) => theme.colors.foreground};
+  display: flex;
+  flex-direction: column;
+  background: ${({ theme }) => theme.colors.background};
+  overflow: hidden;
+
+  @media (max-width: 1024px) {
+    display: none;
+  }
+`;
+
+// Footer
+const Footer = styled.footer`
+  border-top: 1px solid ${({ theme }) => theme.colors.foreground};
+  height: 100px;
+  display: grid;
+  grid-template-columns: 1fr 450px;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr 390px;
+  }
+
+  @media (max-width: 1024px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const ControlPanel = styled.div`
+  padding: 16px;
+  display: flex;
+  gap: 20px;
+  align-items: center;
+`;
+
+const ActionButton = styled.button<{ $isDanger?: boolean }>`
+  height: 50px;
+  padding: 0 24px;
+  font-family: ${({ theme }) => theme.fonts.mono};
+  font-size: 12px;
+  text-transform: uppercase;
+  font-weight: 700;
+  background: ${({ theme }) => theme.colors.background};
+  color: ${({ $isDanger, theme }) =>
+    $isDanger ? theme.colors.error : theme.colors.foreground};
+  border: 1px solid
+    ${({ $isDanger, theme }) =>
+      $isDanger ? theme.colors.error : theme.colors.foreground};
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 10px;
-  z-index: 100;
+  transition: all 0.1s;
+
+  &:hover {
+    background: ${({ $isDanger, theme }) =>
+      $isDanger ? theme.colors.error : theme.colors.foreground};
+    color: ${({ $isDanger, theme }) =>
+      $isDanger ? "white" : theme.colors.background};
+  }
 `;
 
-// The main application component
-function SimulatorApp() {
+const WaveformViz = styled.div`
+  border-left: 1px solid ${({ theme }) => theme.colors.foreground};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: row;
+  padding: 10px 20px;
+  position: relative;
+  gap: 16px;
+
+  @media (max-width: 1024px) {
+    display: none;
+  }
+`;
+
+const WaveBars = styled.div`
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 40px;
+`;
+
+const Bar = styled.div<{ $duration: number }>`
+  width: 3px;
+  background: ${({ theme }) => theme.colors.foreground};
+  animation: wave ${({ $duration }) => $duration}s ease-in-out infinite;
+`;
+
+const VizLabel = styled.div`
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  opacity: 0.8;
+`;
+
+const VoiceToggleButton = styled.button<{ $isActive: boolean }>`
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 2px solid
+    ${({ $isActive, theme }) =>
+      $isActive ? theme.colors.primary : theme.colors.foreground};
+  background: ${({ $isActive, theme }) =>
+    $isActive ? theme.colors.primary : "transparent"};
+  color: ${({ $isActive, theme }) =>
+    $isActive ? "white" : theme.colors.foreground};
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  font-size: 20px;
+
+  &:hover {
+    background: ${({ $isActive, theme }) =>
+      $isActive ? theme.colors.primary : "rgba(255, 255, 255, 0.1)"};
+  }
+
+  ${({ $isActive }) =>
+    $isActive &&
+    `
+    animation: pulse-glow 1.5s ease-in-out infinite;
+  `}
+`;
+
+const VoiceStatusContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+`;
+
+const SensitivitySlider = styled.input`
+  width: 60px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: ${({ theme }) => theme.colors.foreground}30;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+
+  &::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px;
+    height: 10px;
+    background: ${({ theme }) => theme.colors.primary};
+    border-radius: 50%;
+    cursor: pointer;
+  }
+`;
+
+const SensitivityContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+`;
+
+const SensitivityLabel = styled.div`
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.5;
+`;
+
+// Agent types
+interface Agent {
+  id: string;
+  display_name: string;
+  display_icon: string | null;
+  prompt: string;
+  skills: string[];
+}
+
+interface AvailableAgentsResponse {
+  agents: Agent[];
+  current_agent_id: string | null;
+  startup_agent_id: string | null;
+  error?: string;
+}
+
+export default function App() {
+  const [activeAgent, setActiveAgent] = useState<string | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
+  const hasAgentsRef = useRef(false);
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
-  >("sideBySide");
+  >("frontFocus");
 
-  const { isAuthenticated, getAccessTokenSilently } = useAuth0();
+  // Voice recognition state
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<string>("Voice Input");
+  const [sensitivity, setSensitivity] = useState(0.02);
+  const sensitivityRef = useRef(0.02);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const silenceCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isRecordingRef = useRef<boolean>(false);
+  const hasSpeechRef = useRef<boolean>(false);
+
+  // Keep sensitivity ref in sync
+  useEffect(() => {
+    sensitivityRef.current = sensitivity;
+  }, [sensitivity]);
+
+  // Fetch available agents from the robot on mount
+  useEffect(() => {
+    const fetchAgents = async () => {
+      try {
+        const baseUrl =
+          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+        const response = await fetch(`${baseUrl}/get_available_agents`);
+        const data: AvailableAgentsResponse = await response.json();
+
+        if (data.agents && data.agents.length > 0) {
+          setAgents(data.agents);
+          hasAgentsRef.current = true;
+          // Set active agent to current agent from robot, or first agent
+          if (data.current_agent_id) {
+            setActiveAgent(data.current_agent_id);
+          } else if (data.agents.length > 0) {
+            setActiveAgent(data.agents[0].id);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching agents:", error);
+      } finally {
+        setIsLoadingAgents(false);
+      }
+    };
+
+    fetchAgents();
+
+    // Poll for agents every 5 seconds until we have some
+    const intervalId = setInterval(async () => {
+      if (!hasAgentsRef.current) {
+        await fetchAgents();
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, []);
+
+  // Voice recognition functions
+  const SILENCE_DURATION = 1500; // ms of silence before processing speech
+
+  const processAudioBlob = useCallback(async (audioBlob: Blob) => {
+    // Don't block - process in background while continuing to listen
+    try {
+      setVoiceStatus("Sending...");
+
+      const file = new File([audioBlob], "recording.webm", {
+        type: "audio/webm",
+      });
+
+      // Use dynamic import for Groq to avoid issues
+      const { default: Groq } = await import("groq-sdk");
+      const groq = new Groq({
+        apiKey: import.meta.env.VITE_GROQ_API_KEY || "",
+        dangerouslyAllowBrowser: true,
+      });
+
+      const transcription = await groq.audio.transcriptions.create({
+        file: file,
+        model: "whisper-large-v3-turbo",
+      });
+
+      if (transcription && transcription.text && transcription.text.trim()) {
+        const text = transcription.text.trim();
+        console.log("Transcribed:", text);
+
+        // Dispatch custom event for Chat component to send the message
+        // This avoids creating a separate WebSocket that would conflict
+        window.dispatchEvent(
+          new CustomEvent("voice-transcription", { detail: { text } }),
+        );
+
+        setVoiceStatus("✓ Sent");
+        setTimeout(() => setVoiceStatus("Listening..."), 800);
+      } else {
+        // No speech detected, go back to listening
+        setVoiceStatus("Listening...");
+      }
+    } catch (error) {
+      console.error("Error processing audio:", error);
+      setVoiceStatus("Listening...");
+    }
+  }, []);
+
+  const startRecording = useCallback(() => {
+    if (!streamRef.current || isRecordingRef.current) return;
+
+    audioChunksRef.current = [];
+    const mediaRecorder = new MediaRecorder(streamRef.current, {
+      mimeType: "audio/webm",
+    });
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      if (audioChunksRef.current.length > 0 && hasSpeechRef.current) {
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+        processAudioBlob(audioBlob);
+      }
+      hasSpeechRef.current = false;
+    };
+
+    mediaRecorder.start(100); // Collect data every 100ms
+    mediaRecorderRef.current = mediaRecorder;
+    isRecordingRef.current = true;
+  }, [processAudioBlob]);
+
+  const stopRecording = useCallback(() => {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    isRecordingRef.current = false;
+  }, []);
+
+  const checkAudioLevel = useCallback(() => {
+    if (!analyserRef.current) return;
+
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(dataArray);
+
+    // Calculate average volume (0-1 range)
+    const average =
+      dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
+
+    if (average > sensitivityRef.current) {
+      // Sound detected
+      hasSpeechRef.current = true;
+
+      if (!isRecordingRef.current) {
+        setVoiceStatus("● Recording");
+        startRecording();
+      }
+
+      // Clear silence timeout - user is still speaking
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+        silenceTimeoutRef.current = null;
+      }
+    } else {
+      // Silence detected - wait before finalizing
+      if (
+        isRecordingRef.current &&
+        hasSpeechRef.current &&
+        !silenceTimeoutRef.current
+      ) {
+        silenceTimeoutRef.current = setTimeout(() => {
+          stopRecording();
+          silenceTimeoutRef.current = null;
+        }, SILENCE_DURATION);
+      }
+    }
+  }, [startRecording, stopRecording]);
+
+  const startVoiceRecognition = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Create audio context and analyser for silence detection
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      audioContextRef.current = new AudioContextClass();
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      analyserRef.current.fftSize = 256;
+
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      source.connect(analyserRef.current);
+
+      // Start checking audio levels
+      silenceCheckIntervalRef.current = setInterval(checkAudioLevel, 100);
+
+      setIsVoiceActive(true);
+      setVoiceStatus("Listening...");
+    } catch (error) {
+      console.error("Error starting voice recognition:", error);
+      setVoiceStatus("Mic Error");
+    }
+  }, [checkAudioLevel]);
+
+  const stopVoiceRecognition = useCallback(() => {
+    // Stop recording if active
+    stopRecording();
+
+    // Clear intervals and timeouts
+    if (silenceCheckIntervalRef.current) {
+      clearInterval(silenceCheckIntervalRef.current);
+      silenceCheckIntervalRef.current = null;
+    }
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
+
+    // Stop media stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    // Close audio context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    setIsVoiceActive(false);
+    setVoiceStatus("Voice Input");
+  }, [stopRecording]);
+
+  const toggleVoiceRecognition = useCallback(() => {
+    if (isVoiceActive) {
+      stopVoiceRecognition();
+    } else {
+      startVoiceRecognition();
+    }
+  }, [isVoiceActive, startVoiceRecognition, stopVoiceRecognition]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopVoiceRecognition();
+    };
+  }, [stopVoiceRecognition]);
 
   async function handleResetRobot(memory_state?: string) {
     try {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
-      // Get the access token if authenticated
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
 
-      if (isAuthenticated) {
-        try {
-          const token = await getAccessTokenSilently();
-          headers.Authorization = `Bearer ${token}`;
-        } catch (error) {
-          console.error("Error getting access token:", error);
-        }
-      }
-
-      // Check if memory_state is a string - if it's an event object or other non-string, don't use it
       const isValidMemoryState = typeof memory_state === "string";
-
-      // Prepare the request body - always send a JSON object
       const body = isValidMemoryState
         ? JSON.stringify({ memory_state })
         : JSON.stringify({});
@@ -118,19 +654,9 @@ function SimulatorApp() {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
-      // Get the access token if authenticated
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-
-      if (isAuthenticated) {
-        try {
-          const token = await getAccessTokenSilently();
-          headers.Authorization = `Bearer ${token}`;
-        } catch (error) {
-          console.error("Error getting access token:", error);
-        }
-      }
 
       const response = await fetch(`${baseUrl}/set_directive`, {
         method: "POST",
@@ -146,38 +672,116 @@ function SimulatorApp() {
   }
 
   return (
-    <Container className="App">
-      {isAuthenticated && (
-        <UserContainer>
-          <UserProfile />
-          <LogoutButton />
-        </UserContainer>
-      )}
+    <AppContainer>
+      <Header>
+        <Logo>INNATE SIM</Logo>
+        <div></div>
+        <StatusBadge>
+          <StatusDot />
+          System Active
+        </StatusBadge>
+      </Header>
 
-      <TopSection>
-        <Title>Innate Simulator</Title>
-        <ImageDisplay
-          viewMode={viewMode}
-          setViewMode={setViewMode}
-          onResetRobot={handleResetRobot}
-          onSetDirective={handleSetDirective}
-        />
-      </TopSection>
+      <Workspace className="workspace">
+        <Sidebar>
+          <PanelSection>
+            <PanelHeader>Unit Identifier</PanelHeader>
+            <BigStat>
+              <StatValue>MARS</StatValue>
+              <StatLabel>Model Type: R7</StatLabel>
+            </BigStat>
+          </PanelSection>
 
-      <ChatSection>
-        <Chat onSetDirective={handleSetDirective} />
-      </ChatSection>
+          <PanelSection style={{ flex: 1 }}>
+            <PanelHeader>Behavior Agents</PanelHeader>
+            <div>
+              {isLoadingAgents ? (
+                <AgentItem $isActive={false}>
+                  <AgentName>Loading agents...</AgentName>
+                </AgentItem>
+              ) : agents.length === 0 ? (
+                <AgentItem $isActive={false}>
+                  <AgentName>Waiting for robot connection</AgentName>
+                </AgentItem>
+              ) : (
+                agents.map((agent) => (
+                  <AgentItem
+                    key={agent.id}
+                    $isActive={agent.id === activeAgent}
+                    onClick={() => {
+                      setActiveAgent(agent.id);
+                      handleSetDirective(agent.id);
+                    }}
+                  >
+                    <AgentName>{agent.display_name}</AgentName>
+                    <AgentCheck $isActive={agent.id === activeAgent}>
+                      {agent.id === activeAgent && "✓"}
+                    </AgentCheck>
+                  </AgentItem>
+                ))
+              )}
+            </div>
+          </PanelSection>
+        </Sidebar>
 
-      <VersionBadge>v0.1.0</VersionBadge>
-    </Container>
-  );
-}
+        <MainContent>
+          <ImageDisplay
+            viewMode={viewMode}
+            setViewMode={setViewMode}
+            onResetRobot={handleResetRobot}
+            onSetDirective={handleSetDirective}
+          />
+        </MainContent>
 
-// Export the app wrapped with the AuthGuard
-export default function App() {
-  return (
-    <AuthGuard>
-      <SimulatorApp />
-    </AuthGuard>
+        <ChatColumn className="col-chat">
+          <PanelHeader>Interaction Log</PanelHeader>
+          <Chat onSetDirective={handleSetDirective} />
+        </ChatColumn>
+      </Workspace>
+
+      <Footer className="footer">
+        <ControlPanel>
+          <div style={{ flex: 1 }}></div>
+          <ActionButton $isDanger onClick={() => handleResetRobot()}>
+            Reset Systems
+          </ActionButton>
+        </ControlPanel>
+
+        <WaveformViz>
+          <VoiceToggleButton
+            $isActive={isVoiceActive}
+            onClick={toggleVoiceRecognition}
+            title={isVoiceActive ? "Stop listening" : "Start listening"}
+          >
+            {isVoiceActive ? <IoMic size={24} /> : <IoMicOff size={24} />}
+          </VoiceToggleButton>
+          <VoiceStatusContainer>
+            <WaveBars style={{ opacity: isVoiceActive ? 1 : 0.3 }}>
+              <Bar $duration={0.5} />
+              <Bar $duration={0.7} />
+              <Bar $duration={0.4} />
+              <Bar $duration={0.8} />
+              <Bar $duration={0.6} />
+              <Bar $duration={0.5} />
+              <Bar $duration={0.7} />
+              <Bar $duration={0.4} />
+            </WaveBars>
+            <VizLabel>{voiceStatus}</VizLabel>
+          </VoiceStatusContainer>
+          <SensitivityContainer>
+            <SensitivitySlider
+              type="range"
+              min="0.005"
+              max="0.08"
+              step="0.005"
+              value={sensitivity}
+              onChange={(e) => setSensitivity(parseFloat(e.target.value))}
+              title={`Mic sensitivity`}
+            />
+            <SensitivityLabel>Sensitivity</SensitivityLabel>
+          </SensitivityContainer>
+        </WaveformViz>
+      </Footer>
+    </AppContainer>
   );
 }
