@@ -1,52 +1,76 @@
 import { createGlobalStyle } from "styled-components";
 
-// Theme definition
+// Theme definition - Robotics Control Panel Design
 export const theme = {
   colors: {
-    background: "#0f172a",
-    foreground: "rgba(255, 255, 255, 0.87)",
-    primary: "#646cff",
-    primaryHover: "#535bf2",
-    secondary: "#1e293b",
-    muted: "#a1a1aa",
-    error: "#ef4444",
+    background: "#000000",
+    foreground: "#FFFFFF",
+    primary: "#401FFB",
+    primaryHover: "#5a3dfc",
+    secondary: "#111111",
+    muted: "rgba(255, 255, 255, 0.6)",
+    error: "#ff3b3b",
     success: "#10b981",
-    border: "#334155",
-    cardBackground: "#1e293b",
-    inputBackground: "#1a1a1a",
-    buttonBackground: "#1a1a1a",
+    border: "#FFFFFF",
+    cardBackground: "#111111",
+    inputBackground: "#111111",
+    buttonBackground: "#000000",
+    panelBg: "#111111",
   },
   fonts: {
-    body: "'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
-    heading:
-      "'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    body: "'DM Mono', monospace",
+    heading: "'Space Grotesk', sans-serif",
+    display: "'Space Grotesk', sans-serif",
+    mono: "'DM Mono', monospace",
   },
   fontWeights: {
+    light: 300,
     normal: 400,
     medium: 500,
     semibold: 600,
     bold: 700,
+    extraBold: 800,
   },
-  borderRadius: "8px",
+  borderRadius: "0px",
+  borderWidth: "1px",
+  spacing: {
+    unit: "16px",
+  },
   shadows: {
-    small: "0 1px 2px rgba(0, 0, 0, 0.05)",
-    medium:
-      "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
-    large:
-      "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)",
+    small: "4px 4px 0 rgba(255,255,255,0.05)",
+    medium: "10px 10px 0 rgba(255,255,255,0.05)",
+    large: "10px 10px 0 rgba(255,255,255,0.05)",
   },
 };
 
 // Global styles
 export const GlobalStyle = createGlobalStyle`
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
   body {
     font-family: ${theme.fonts.body};
     background-color: ${theme.colors.background};
     color: ${theme.colors.foreground};
-    margin: 0;
-    padding: 0;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    font-size: 14px;
+    line-height: 1.4;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #root {
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -55,22 +79,22 @@ export const GlobalStyle = createGlobalStyle`
   }
 
   button {
-    font-family: ${theme.fonts.body};
+    font-family: ${theme.fonts.mono};
     background-color: ${theme.colors.buttonBackground};
     color: ${theme.colors.foreground};
-    border: 1px solid transparent;
-    border-radius: ${theme.borderRadius};
+    border: 1px solid ${theme.colors.foreground};
     cursor: pointer;
-    transition: border-color 0.25s, background-color 0.25s;
+    transition: all 0.2s;
   }
 
   button:hover {
-    border-color: ${theme.colors.primary};
+    background: ${theme.colors.foreground};
+    color: ${theme.colors.background};
   }
 
   button:focus,
   button:focus-visible {
-    outline: 4px auto -webkit-focus-ring-color;
+    outline: none;
   }
 
   a {
@@ -83,11 +107,46 @@ export const GlobalStyle = createGlobalStyle`
   }
 
   input, textarea, select {
-    font-family: ${theme.fonts.body};
+    font-family: ${theme.fonts.mono};
     background-color: ${theme.colors.inputBackground};
     color: ${theme.colors.foreground};
-    border: 1px solid ${theme.colors.border};
-    border-radius: ${theme.borderRadius};
+    border: none;
+    outline: none;
+  }
+
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.4; }
+    100% { opacity: 1; }
+  }
+
+  @keyframes wave {
+    0%, 100% { height: 10px; }
+    50% { height: 35px; }
+  }
+
+  @keyframes gridMove {
+    0% { background-position: 0 0; }
+    100% { background-position: 50px 50px; }
+  }
+
+  @media (max-width: 1024px) {
+    .workspace {
+      grid-template-columns: 250px 1fr !important;
+    }
+    .col-chat {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 300px;
+      transform: translateX(100%);
+      z-index: 10;
+      border-left: 1px solid ${theme.colors.foreground};
+      transition: transform 0.3s;
+    }
+    .col-chat.open { transform: translateX(0); }
+    .footer { grid-template-columns: 1fr auto !important; }
   }
 `;
 
