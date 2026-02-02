@@ -365,8 +365,14 @@ async def outbound_loop(ws, shared_queues):
     Continuously process messages from sim_to_agent and publish them
     to rosbridge (camera images, odometry, map, etc.).
     Also advertise relevant topics/services once at start.
+
+    IMPORTANT: Chat messages are processed FIRST to avoid latency from heavy sensor data.
     """
     print("[ROSBridge] outbound_loop started.")
+
+    # Queue monitoring - log periodically if queues are backing up
+    last_queue_log_time = time.time()
+    QUEUE_LOG_INTERVAL = 5.0  # Log every 5 seconds if there's a problem
 
     # First, advertise standard topics once
     adv_color = rosbridge_advertise(
@@ -480,14 +486,77 @@ async def outbound_loop(ws, shared_queues):
     print("[ROSBridge] Requested available agents from brain")
 
     while not shared_queues.exit_event.is_set():
-        # a) Check if there's a message from the sim
+        # Monitor queue sizes periodically
+        now = time.time()
+        if now - last_queue_log_time > QUEUE_LOG_INTERVAL:
+            chat_qsize = shared_queues.chat_to_bridge.qsize()
+            sim_qsize = shared_queues.sim_to_agent.qsize()
+            if chat_qsize > 5 or sim_qsize > 50:
+                print(
+                    f"[ROSBridge] Queue status: chat={chat_qsize}, sim_to_agent={sim_qsize}"
+                )
+            last_queue_log_time = now
+
+        # PRIORITY 1: Process ALL pending chat messages first (low latency path)
+        # This ensures chat doesn't wait behind heavy sensor data
+        chat_processed = 0
+        while chat_processed < 10:  # Process up to 10 chat messages per iteration
+            try:
+                msg = shared_queues.chat_to_bridge.get_nowait()
+
+                if isinstance(msg, ChatMessage):
+                    latency = (
+                        time.time() - msg.timestamp_put_in_queue
+                        if hasattr(msg, "timestamp_put_in_queue")
+                        else 0
+                    )
+                    if latency > 0.5:
+                        print(f"[ROSBridge] Chat message latency: {latency:.2f}s")
+                    print(f"[ROSBridge] Publishing chat message: {msg.text}")
+                    chat_payload = json.dumps(
+                        {
+                            "text": msg.text,
+                            "sender": msg.sender,
+                            "timestamp": msg.timestamp,
+                        }
+                    )
+                    outbound_text = {"data": chat_payload}
+                    outbound = rosbridge_publish("/brain/chat_in", outbound_text)
+                    await ws.send(json.dumps(outbound))
+
+                    # Echo back to UI
+                    try:
+                        shared_queues.chat_from_bridge.put_nowait(msg)
+                    except queue.Full:
+                        pass
+
+                elif isinstance(msg, ChatSignal):
+                    print(f"[ROSBridge] Publishing chat signal: {msg.signal}")
+                    if msg.signal == "ready":
+                        srv_chat_history = rosbridge_call_service(
+                            "/brain/get_chat_history",
+                            "brain_messages/srv/GetChatHistory",
+                        )
+                        await ws.send(json.dumps(srv_chat_history))
+
+                chat_processed += 1
+            except queue.Empty:
+                break
+
+        # PRIORITY 2: Process sensor data from dedicated size-1 queue (camera frames)
+        # This queue only ever has 0 or 1 item - old frames are dropped at the source
+        try:
+            sensor_msg = shared_queues.sensor_to_agent.get_nowait()
+            if isinstance(sensor_msg, RobotStateMsg):
+                await publish_robot_state(ws, sensor_msg, shared_queues)
+        except queue.Empty:
+            pass
+
+        # PRIORITY 3: Process sim_to_agent messages (commands, map, arm state, etc.)
         try:
             msg = shared_queues.sim_to_agent.get_nowait()
 
-            # We have a message
-            if isinstance(msg, RobotStateMsg):
-                await publish_robot_state(ws, msg, shared_queues)
-            elif isinstance(msg, OccupancyGridMsg):
+            if isinstance(msg, OccupancyGridMsg):
                 await publish_occupancy_grid(ws, msg, shared_queues)
             elif isinstance(msg, ArmStateMsg):
                 await publish_arm_state(ws, msg)
@@ -544,38 +613,6 @@ async def outbound_loop(ws, shared_queues):
                 outbound = rosbridge_publish("/sim_navigation/feedback", feedback_msg)
                 await ws.send(json.dumps(outbound))
 
-        except queue.Empty:
-            # no messages to publish right now
-            pass
-
-        try:
-            msg = shared_queues.chat_to_bridge.get_nowait()
-
-            if isinstance(msg, ChatMessage):
-                print(f"[ROSBridge] Publishing chat message: {msg.text}")
-                # Brain expects JSON object with text, sender, timestamp fields
-                chat_payload = json.dumps(
-                    {"text": msg.text, "sender": msg.sender, "timestamp": msg.timestamp}
-                )
-                outbound_text = {"data": chat_payload}
-                outbound = rosbridge_publish("/brain/chat_in", outbound_text)
-                await ws.send(json.dumps(outbound))
-
-                # Also, add the chat message to the simulation queue as confirmation
-                try:
-                    shared_queues.chat_from_bridge.put_nowait(msg)
-                except queue.Full:
-                    pass
-
-            elif isinstance(msg, ChatSignal):
-                print(f"[ROSBridge] Publishing chat signal: {msg.signal}")
-                # Check what the signal is
-                if msg.signal == "ready":
-                    # Use the service to get the chat history
-                    srv_chat_history = rosbridge_call_service(
-                        "/brain/get_chat_history", "brain_messages/srv/GetChatHistory"
-                    )
-                    await ws.send(json.dumps(srv_chat_history))
         except queue.Empty:
             # no messages to publish right now
             pass
