@@ -8,7 +8,8 @@ import json  # Need json for loading file
 
 # ResetRobotCmd is used by the /reset_robot route
 # SetEnvironmentCmd is used to send the config to the simulation node
-from src.agent.types import ResetRobotCmd, SetEnvironmentCmd
+# BrainActiveCmd is used to activate/deactivate the brain via rosbridge
+from src.agent.types import ResetRobotCmd, SetEnvironmentCmd, BrainActiveCmd
 
 router = APIRouter()
 
@@ -181,6 +182,42 @@ async def reset_robot(
             {"status": "error", "message": "Simulation not initialized"},
             status_code=500,
         )
+
+
+@router.post("/stop_agent")
+def stop_agent(request: Request):
+    """
+    Endpoint to stop the current agent action (e.g., navigation).
+    Cancels any ongoing navigation and deactivates the brain via rosbridge.
+
+    Returns:
+        JSON response confirming the agent has been stopped
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    # Check if we have valid shared_queues
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    # Cancel navigation if active
+    if hasattr(shared_queues, "nav_controller") and shared_queues.nav_controller:
+        shared_queues.nav_controller.cancel_navigation()
+
+    # Deactivate brain via rosbridge (calls /brain/set_brain_active with data=False)
+    try:
+        shared_queues.sim_to_agent.put_nowait(BrainActiveCmd(active=False))
+        print("[ConfigAPI] Agent stopped via API endpoint (brain deactivated)")
+    except Exception as e:
+        print(f"[ConfigAPI] Error sending brain deactivate command: {e}")
+        return JSONResponse(
+            {"status": "error", "message": f"Failed to stop agent: {e}"},
+            status_code=500,
+        )
+
+    return JSONResponse({"status": "success", "message": "Agent stopped"})
 
 
 @router.post("/shutdown")
