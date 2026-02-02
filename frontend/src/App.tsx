@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { IoMic, IoMicOff } from "react-icons/io5";
 import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
@@ -183,7 +184,11 @@ const Footer = styled.footer`
   border-top: 1px solid ${({ theme }) => theme.colors.foreground};
   height: 100px;
   display: grid;
-  grid-template-columns: 1fr 350px;
+  grid-template-columns: 1fr 450px;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: 1fr 390px;
+  }
 
   @media (max-width: 1024px) {
     grid-template-columns: 1fr;
@@ -229,9 +234,10 @@ const WaveformViz = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-direction: column;
-  padding: 10px;
+  flex-direction: row;
+  padding: 10px 20px;
   position: relative;
+  gap: 16px;
 
   @media (max-width: 1024px) {
     display: none;
@@ -252,11 +258,47 @@ const Bar = styled.div<{ $duration: number }>`
 `;
 
 const VizLabel = styled.div`
-  margin-top: 8px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   opacity: 0.8;
+`;
+
+const VoiceToggleButton = styled.button<{ $isActive: boolean }>`
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 2px solid
+    ${({ $isActive, theme }) =>
+      $isActive ? theme.colors.primary : theme.colors.foreground};
+  background: ${({ $isActive, theme }) =>
+    $isActive ? theme.colors.primary : "transparent"};
+  color: ${({ $isActive, theme }) =>
+    $isActive ? "white" : theme.colors.foreground};
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  font-size: 20px;
+
+  &:hover {
+    background: ${({ $isActive, theme }) =>
+      $isActive ? theme.colors.primary : "rgba(255, 255, 255, 0.1)"};
+  }
+
+  ${({ $isActive }) =>
+    $isActive &&
+    `
+    animation: pulse-glow 1.5s ease-in-out infinite;
+  `}
+`;
+
+const VoiceStatusContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 `;
 
 // Agent types
@@ -283,6 +325,20 @@ export default function App() {
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("frontFocus");
+
+  // Voice recognition state
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<string>("Voice Input");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chatWsRef = useRef<WebSocket | null>(null);
+  const silenceCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isRecordingRef = useRef<boolean>(false);
+  const hasSpeechRef = useRef<boolean>(false);
 
   // Fetch available agents from the robot on mount
   useEffect(() => {
@@ -321,6 +377,217 @@ export default function App() {
 
     return () => clearInterval(intervalId);
   }, []);
+
+  // Voice recognition functions
+  const SILENCE_THRESHOLD = 0.01; // Audio level threshold for silence detection
+  const SILENCE_DURATION = 1500; // ms of silence before processing speech
+
+  const processAudioBlob = useCallback(async (audioBlob: Blob) => {
+    // Don't block - process in background while continuing to listen
+    try {
+      setVoiceStatus("Sending...");
+
+      const file = new File([audioBlob], "recording.webm", {
+        type: "audio/webm",
+      });
+
+      // Use dynamic import for Groq to avoid issues
+      const { default: Groq } = await import("groq-sdk");
+      const groq = new Groq({
+        apiKey: import.meta.env.VITE_GROQ_API_KEY || "",
+        dangerouslyAllowBrowser: true,
+      });
+
+      const transcription = await groq.audio.transcriptions.create({
+        file: file,
+        model: "whisper-large-v3-turbo",
+      });
+
+      if (transcription && transcription.text && transcription.text.trim()) {
+        const text = transcription.text.trim();
+        console.log("Transcribed:", text);
+
+        // Send to chat WebSocket
+        const wsUrl = `${import.meta.env.VITE_WS_BASE_URL}/ws/chat?user_id=anonymous`;
+
+        const sendMessage = (ws: WebSocket) => {
+          ws.send(text);
+          setVoiceStatus("✓ Sent");
+          setTimeout(() => setVoiceStatus("Listening..."), 800);
+        };
+
+        if (
+          !chatWsRef.current ||
+          chatWsRef.current.readyState !== WebSocket.OPEN
+        ) {
+          chatWsRef.current = new WebSocket(wsUrl);
+          chatWsRef.current.onopen = () => sendMessage(chatWsRef.current!);
+        } else {
+          sendMessage(chatWsRef.current);
+        }
+      } else {
+        // No speech detected, go back to listening
+        setVoiceStatus("Listening...");
+      }
+    } catch (error) {
+      console.error("Error processing audio:", error);
+      setVoiceStatus("Listening...");
+    }
+  }, []);
+
+  const startRecording = useCallback(() => {
+    if (!streamRef.current || isRecordingRef.current) return;
+
+    audioChunksRef.current = [];
+    const mediaRecorder = new MediaRecorder(streamRef.current, {
+      mimeType: "audio/webm",
+    });
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      if (audioChunksRef.current.length > 0 && hasSpeechRef.current) {
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+        processAudioBlob(audioBlob);
+      }
+      hasSpeechRef.current = false;
+    };
+
+    mediaRecorder.start(100); // Collect data every 100ms
+    mediaRecorderRef.current = mediaRecorder;
+    isRecordingRef.current = true;
+  }, [processAudioBlob]);
+
+  const stopRecording = useCallback(() => {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+    isRecordingRef.current = false;
+  }, []);
+
+  const checkAudioLevel = useCallback(() => {
+    if (!analyserRef.current) return;
+
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(dataArray);
+
+    // Calculate average volume
+    const average =
+      dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
+
+    if (average > SILENCE_THRESHOLD) {
+      // Sound detected
+      hasSpeechRef.current = true;
+
+      if (!isRecordingRef.current) {
+        setVoiceStatus("● Recording");
+        startRecording();
+      }
+
+      // Clear silence timeout - user is still speaking
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+        silenceTimeoutRef.current = null;
+      }
+    } else {
+      // Silence detected - wait before finalizing
+      if (
+        isRecordingRef.current &&
+        hasSpeechRef.current &&
+        !silenceTimeoutRef.current
+      ) {
+        silenceTimeoutRef.current = setTimeout(() => {
+          stopRecording();
+          silenceTimeoutRef.current = null;
+        }, SILENCE_DURATION);
+      }
+    }
+  }, [startRecording, stopRecording]);
+
+  const startVoiceRecognition = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Create audio context and analyser for silence detection
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      audioContextRef.current = new AudioContextClass();
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      analyserRef.current.fftSize = 256;
+
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      source.connect(analyserRef.current);
+
+      // Start checking audio levels
+      silenceCheckIntervalRef.current = setInterval(checkAudioLevel, 100);
+
+      setIsVoiceActive(true);
+      setVoiceStatus("Listening...");
+    } catch (error) {
+      console.error("Error starting voice recognition:", error);
+      setVoiceStatus("Mic Error");
+    }
+  }, [checkAudioLevel]);
+
+  const stopVoiceRecognition = useCallback(() => {
+    // Stop recording if active
+    stopRecording();
+
+    // Clear intervals and timeouts
+    if (silenceCheckIntervalRef.current) {
+      clearInterval(silenceCheckIntervalRef.current);
+      silenceCheckIntervalRef.current = null;
+    }
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
+
+    // Stop media stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    // Close audio context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    setIsVoiceActive(false);
+    setVoiceStatus("Voice Input");
+  }, [stopRecording]);
+
+  const toggleVoiceRecognition = useCallback(() => {
+    if (isVoiceActive) {
+      stopVoiceRecognition();
+    } else {
+      startVoiceRecognition();
+    }
+  }, [isVoiceActive, startVoiceRecognition, stopVoiceRecognition]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopVoiceRecognition();
+      if (chatWsRef.current) {
+        chatWsRef.current.close();
+      }
+    };
+  }, [stopVoiceRecognition]);
 
   async function handleResetRobot(memory_state?: string) {
     try {
@@ -455,17 +722,26 @@ export default function App() {
         </ControlPanel>
 
         <WaveformViz>
-          <WaveBars>
-            <Bar $duration={0.5} />
-            <Bar $duration={0.7} />
-            <Bar $duration={0.4} />
-            <Bar $duration={0.8} />
-            <Bar $duration={0.6} />
-            <Bar $duration={0.5} />
-            <Bar $duration={0.7} />
-            <Bar $duration={0.4} />
-          </WaveBars>
-          <VizLabel>Voice Input Active</VizLabel>
+          <VoiceToggleButton
+            $isActive={isVoiceActive}
+            onClick={toggleVoiceRecognition}
+            title={isVoiceActive ? "Stop listening" : "Start listening"}
+          >
+            {isVoiceActive ? <IoMic size={24} /> : <IoMicOff size={24} />}
+          </VoiceToggleButton>
+          <VoiceStatusContainer>
+            <WaveBars style={{ opacity: isVoiceActive ? 1 : 0.3 }}>
+              <Bar $duration={0.5} />
+              <Bar $duration={0.7} />
+              <Bar $duration={0.4} />
+              <Bar $duration={0.8} />
+              <Bar $duration={0.6} />
+              <Bar $duration={0.5} />
+              <Bar $duration={0.7} />
+              <Bar $duration={0.4} />
+            </WaveBars>
+            <VizLabel>{voiceStatus}</VizLabel>
+          </VoiceStatusContainer>
         </WaveformViz>
       </Footer>
     </AppContainer>

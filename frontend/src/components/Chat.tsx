@@ -3,16 +3,7 @@
  */
 import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
-// Example icon from react-icons (feel free to use your own icon or an SVG):
-import {
-  IoSend,
-  IoPerson,
-  IoHardwareChip,
-  IoMic,
-  IoMicOff,
-} from "react-icons/io5";
-// Import directive icons
-import { IoSettings } from "react-icons/io5";
+import { IoSend, IoPerson, IoHardwareChip, IoStop } from "react-icons/io5";
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
@@ -125,7 +116,7 @@ const SendButton = styled.button`
   }
 `;
 
-const MicButton = styled.button<{ $isListening: boolean }>`
+const StopButton = styled.button`
   width: 40px;
   height: 40px;
   display: flex;
@@ -134,19 +125,14 @@ const MicButton = styled.button<{ $isListening: boolean }>`
   cursor: pointer;
   border-radius: 50%;
   transition: all 0.2s;
-  border: 1px solid
-    ${({ $isListening, theme }) =>
-      $isListening ? theme.colors.primary : theme.colors.foreground};
-  background: ${({ $isListening, theme }) =>
-    $isListening ? theme.colors.primary : "transparent"};
-  color: ${({ $isListening, theme }) =>
-    $isListening ? "white" : theme.colors.foreground};
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  background: transparent;
+  color: ${({ theme }) => theme.colors.foreground};
 
   &:hover {
-    background: ${({ $isListening, theme }) =>
-      $isListening ? theme.colors.primaryHover : theme.colors.foreground};
-    color: ${({ $isListening, theme }) =>
-      $isListening ? "white" : theme.colors.background};
+    background: #dc2626;
+    border-color: #dc2626;
+    color: white;
   }
 `;
 
@@ -532,6 +518,37 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   };
 
+  const stopAgent = async () => {
+    try {
+      const baseUrl =
+        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+      const response = await fetch(`${baseUrl}/stop_agent`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      console.log("Agent stopped:", data);
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "Agent stopped.",
+          timestamp: Date.now() / 1000,
+        },
+      ]);
+    } catch (error) {
+      console.error("Error stopping agent:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "Error stopping agent.",
+          timestamp: Date.now() / 1000,
+          isError: true,
+        },
+      ]);
+    }
+  };
+
   const processAudio = async (audioBlob: Blob) => {
     try {
       // Convert blob to base64
@@ -558,7 +575,7 @@ export function Chat({ onSetDirective }: ChatProps) {
           // Create FormData to send the file
           const formData = new FormData();
           formData.append("file", file);
-          formData.append("model", "distil-whisper-large-v3-en");
+          formData.append("model", "whisper-large-v3-turbo");
 
           console.log("Key", import.meta.env.VITE_GROQ_API_KEY);
 
@@ -569,7 +586,7 @@ export function Chat({ onSetDirective }: ChatProps) {
           });
           const transcription = await groq.audio.transcriptions.create({
             file: file,
-            model: "distil-whisper-large-v3-en",
+            model: "whisper-large-v3-turbo",
           });
 
           if (transcription && transcription.text) {
@@ -1016,16 +1033,12 @@ export function Chat({ onSetDirective }: ChatProps) {
       )}
 
       <InputArea>
-        <MicButton
-          onClick={toggleListening}
-          $isListening={isListening}
-          title={isListening ? "Stop recording" : "Start voice input"}
-        >
-          {isListening ? <IoMicOff size={20} /> : <IoMic size={20} />}
-        </MicButton>
+        <StopButton onClick={stopAgent} title="Stop current agent action">
+          <IoStop size={20} />
+        </StopButton>
         <TextInput
           type="text"
-          placeholder={isListening ? "Listening..." : "Type your message..."}
+          placeholder="Type your message..."
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
