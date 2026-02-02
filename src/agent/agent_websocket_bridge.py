@@ -300,7 +300,9 @@ async def inbound_loop(ws, shared_queues):
             elif service_name == "/brain/get_available_directives":
                 # Check if the service call was successful
                 if not inbound_data.get("result", False):
-                    print("[ROSBridge] get_available_directives service call failed or brain not ready")
+                    print(
+                        "[ROSBridge] get_available_directives service call failed or brain not ready"
+                    )
                     continue
 
                 values = inbound_data.get("values", {})
@@ -311,7 +313,7 @@ async def inbound_loop(ws, shared_queues):
                 # The service returns a list with one element: a JSON string containing all agents
                 # e.g., ['[{"id": "agent1", ...}, {"id": "agent2", ...}]']
                 agents = []
-                
+
                 try:
                     # Get the JSON string (first element of the list)
                     if isinstance(directives_raw, list) and len(directives_raw) > 0:
@@ -320,22 +322,26 @@ async def inbound_loop(ws, shared_queues):
                         json_string = directives_raw
                     else:
                         json_string = "[]"
-                    
+
                     # Parse the JSON string to get list of agent dicts
                     agents_list = json.loads(json_string)
-                    
+
                     # Convert each dict to AgentInfo
                     for directive in agents_list:
                         if isinstance(directive, dict):
                             agent = AgentInfo(
                                 id=directive.get("id", ""),
-                                display_name=directive.get("display_name", directive.get("id", "")),
+                                display_name=directive.get(
+                                    "display_name", directive.get("id", "")
+                                ),
                                 display_icon=directive.get("display_icon"),
                                 prompt=directive.get("prompt", ""),
                                 skills=directive.get("skills", []),
                             )
                             agents.append(agent)
-                            print(f"[ROSBridge] Parsed agent: {agent.id} - {agent.display_name}")
+                            print(
+                                f"[ROSBridge] Parsed agent: {agent.id} - {agent.display_name}"
+                            )
                 except json.JSONDecodeError as e:
                     print(f"[ROSBridge] Failed to parse directives JSON: {e}")
                 except Exception as e:
@@ -411,6 +417,7 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_nav_feedback))
     await ws.send(json.dumps(adv_nav_mode))
     await ws.send(json.dumps(adv_arm_state))
+    await ws.send(json.dumps(adv_arm_camera))
     await ws.send(json.dumps(adv_arm_goto_service))
     print(
         "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, navigation topics, and arm interfaces"
