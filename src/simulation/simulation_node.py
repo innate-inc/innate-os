@@ -27,7 +27,7 @@ from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
-ROBOT_INIT_POS = (2, -5, 0.8)
+ROBOT_INIT_POS = (2, -5, 0.05)
 ROBOT_INIT_QUAT = (0, 0, 0, 1)
 
 
@@ -1241,7 +1241,9 @@ class SimulationNode:
                 offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
                 rotated_offset = rotate_vector(offset, robot_quat)
                 chase_pos = robot_pos + rotated_offset
-                self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
+                self.chase_camera.set_pose(
+                    pos=chase_pos, lookat=robot_pos, up=(0, 0, 1)
+                )
 
                 # Render all cameras
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
