@@ -15,18 +15,27 @@ declare module "styled-components" {
       cardBackground: string;
       inputBackground: string;
       buttonBackground: string;
+      panelBg: string;
     };
     fonts: {
       body: string;
       heading: string;
+      display: string;
+      mono: string;
     };
     fontWeights: {
+      light: number;
       normal: number;
       medium: number;
       semibold: number;
       bold: number;
+      extraBold: number;
     };
     borderRadius: string;
+    borderWidth: string;
+    spacing: {
+      unit: string;
+    };
     shadows: {
       small: string;
       medium: string;

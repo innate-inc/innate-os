@@ -11,60 +11,51 @@ const pulseAnimation = keyframes`
 const RobotExtrasBubble = styled.div`
   max-width: 90%;
   font-size: 13px;
-  padding: 1px;
   align-self: flex-start;
-  background: transparent;
-  border-radius: 10px;
   position: relative;
-  margin-bottom: 4px;
-
-  @media (prefers-color-scheme: dark) {
-    color: #94a3b8;
-  }
 `;
 
 const ToggleDiv = styled.div`
   cursor: pointer;
   display: flex;
-  flex-direction: row;
-  justify-content: flex-start;
-  align-items: center;
+  flex-direction: column;
   position: relative;
   padding: 8px 12px;
-  background-color: rgba(79, 70, 229, 0.1);
-  border-radius: 12px;
-  border: 1px solid rgba(79, 70, 229, 0.2);
+  background: ${({ theme }) => theme.colors.secondary};
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 4px;
+  box-shadow: 4px 4px 0 rgba(255, 255, 255, 0.05);
   transition: background-color 0.2s ease;
 
   &:hover {
-    background-color: rgba(79, 70, 229, 0.15);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    background-color: rgba(79, 70, 229, 0.2);
-    border: 1px solid rgba(79, 70, 229, 0.3);
-
-    &:hover {
-      background-color: rgba(79, 70, 229, 0.25);
-    }
+    background: rgba(255, 255, 255, 0.05);
   }
 `;
 
 const ArrowSpan = styled.span`
-  margin-right: 6px;
+  margin-left: 6px;
   font-size: 10px;
-  color: #4f46e5;
+  opacity: 0.5;
+`;
 
-  @media (prefers-color-scheme: dark) {
-    color: #818cf8;
-  }
+const StatusLabel = styled.div`
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+  opacity: 0.5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 `;
 
 const StatusSpan = styled.span<{ $isLast?: boolean }>`
   position: relative;
   display: inline-block;
-  color: ${({ $isLast }) => ($isLast ? "#4f46e5" : "#6366f1")};
-  font-weight: 500;
+  color: ${({ theme }) => theme.colors.foreground};
+  font-size: 13px;
+  line-height: 1.5;
 
   ${({ $isLast }) =>
     $isLast &&
@@ -76,22 +67,10 @@ const StatusSpan = styled.span<{ $isLast?: boolean }>`
         height: 6px;
         margin-left: 6px;
         border-radius: 50%;
-        background-color: #4f46e5;
+        background-color: ${({ theme }) => theme.colors.primary};
         animation: ${pulseAnimation} 1.5s infinite ease-in-out;
       }
     `}
-
-  @media (prefers-color-scheme: dark) {
-    color: ${({ $isLast }) => ($isLast ? "#818cf8" : "#6366f1")};
-
-    ${({ $isLast }) =>
-      $isLast &&
-      css`
-        &::after {
-          background-color: #818cf8;
-        }
-      `}
-  }
 `;
 
 const ContentDiv = styled.div<{
@@ -103,23 +82,20 @@ const ContentDiv = styled.div<{
   max-height: ${({ $isOpen, $contentHeight }) =>
     $isOpen ? `${$contentHeight}px` : "0px"};
   margin-top: ${({ $isOpen }) => ($isOpen ? "8px" : "0")};
-  transition: max-height 0.3s ease, margin-top 0.3s ease;
+  transition:
+    max-height 0.3s ease,
+    margin-top 0.3s ease;
   cursor: pointer;
 `;
 
 const InnerContent = styled.div`
-  background-color: rgba(79, 70, 229, 0.05);
-  border-radius: 12px;
+  background: ${({ theme }) => theme.colors.secondary};
   padding: 12px;
-  border: 1px solid rgba(79, 70, 229, 0.1);
-  color: #4b5563;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: ${({ theme }) => theme.colors.foreground};
+  font-size: 13px;
+  line-height: 1.5;
   cursor: pointer;
-
-  @media (prefers-color-scheme: dark) {
-    background-color: rgba(79, 70, 229, 0.1);
-    border: 1px solid rgba(79, 70, 229, 0.2);
-    color: #94a3b8;
-  }
 `;
 
 const ExtraItem = styled.div`
@@ -132,7 +108,7 @@ const ExtraItem = styled.div`
     content: "•";
     position: absolute;
     left: 0;
-    color: #6366f1;
+    opacity: 0.5;
   }
 
   &:last-child {
@@ -143,13 +119,9 @@ const ExtraItem = styled.div`
 const ProcessTime = styled.div`
   font-size: 11px;
   text-align: right;
-  color: #6366f1;
+  opacity: 0.5;
   margin-top: 8px;
   font-weight: 500;
-
-  @media (prefers-color-scheme: dark) {
-    color: #818cf8;
-  }
 `;
 
 interface RobotGroupedBubbleProps {
@@ -185,7 +157,10 @@ export const RobotGroupedBubble = ({
   return (
     <RobotExtrasBubble>
       <ToggleDiv onClick={toggleOpen}>
-        <ArrowSpan>{isOpen ? "▲" : "▼"}</ArrowSpan>
+        <StatusLabel>
+          Thoughts
+          <ArrowSpan>{isOpen ? "▲" : "▼"}</ArrowSpan>
+        </StatusLabel>
         <StatusSpan $isLast={isLast}>{statusText}</StatusSpan>
       </ToggleDiv>
       <ContentDiv

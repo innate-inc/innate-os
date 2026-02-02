@@ -20,18 +20,12 @@ import Groq from "groq-sdk";
 import { CartesiaClient } from "@cartesia/cartesia-js";
 
 const ChatContainer = styled.div`
-  /* Default desktop width */
-  width: 800px;
+  width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
-  align-self: center;
-  font-family: ${({ theme }) => theme.fonts.body};
-
-  /* On screens below 768px, take the full width */
-  @media (max-width: 768px) {
-    width: 100%;
-  }
+  font-family: ${({ theme }) => theme.fonts.mono};
+  background: ${({ theme }) => theme.colors.background};
 `;
 
 const MessagesWrapper = styled.div`
@@ -40,7 +34,7 @@ const MessagesWrapper = styled.div`
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 `;
 
 interface MessageBubbleProps {
@@ -48,59 +42,44 @@ interface MessageBubbleProps {
 }
 
 const MessageBubble = styled.div<MessageBubbleProps>`
-  max-width: 80%;
-  background: ${({ $isUser, theme }) =>
-    $isUser
-      ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-      : theme.colors.secondary};
-  color: ${({ $isUser, theme }) =>
-    $isUser ? "#ffffff" : theme.colors.foreground};
-  border: ${({ $isUser, theme }) =>
-    $isUser ? "none" : `1px solid ${theme.colors.border}`};
-  border-radius: 18px;
-  border-bottom-left-radius: ${({ $isUser }) => ($isUser ? "18px" : "0")};
-  border-bottom-right-radius: ${({ $isUser }) => ($isUser ? "0" : "18px")};
-  padding: 12px 16px;
-  margin-bottom: 8px;
+  max-width: 90%;
+  padding: 8px 12px;
   align-self: ${({ $isUser }) => ($isUser ? "flex-end" : "flex-start")};
   text-align: ${({ $isUser }) => ($isUser ? "right" : "left")};
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.5;
-  box-shadow: ${({ theme }) => theme.shadows.small};
-
-  @media (prefers-color-scheme: dark) {
-    background: ${({ $isUser }) =>
-      $isUser
-        ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-        : "#1e293b"};
-    color: ${({ $isUser }) => ($isUser ? "#ffffff" : "#e5e7eb")};
-    border: ${({ $isUser }) => ($isUser ? "none" : "1px solid #374151")};
-  }
+  display: inline-block;
+  background: ${({ $isUser, theme }) =>
+    $isUser ? "rgba(64, 31, 251, 0.1)" : theme.colors.secondary};
+  color: ${({ $isUser, theme }) =>
+    $isUser ? theme.colors.primary : theme.colors.foreground};
+  border: 1px solid
+    ${({ $isUser, theme }) =>
+      $isUser ? theme.colors.primary : theme.colors.foreground};
+  border-bottom-left-radius: ${({ $isUser }) => ($isUser ? "4px" : "0")};
+  border-bottom-right-radius: ${({ $isUser }) => ($isUser ? "0" : "4px")};
+  box-shadow: ${({ $isUser }) =>
+    $isUser ? "none" : "4px 4px 0 rgba(255,255,255,0.05)"};
 `;
 
 const MessageSender = styled.div<{ $isUser: boolean }>`
-  font-size: 13px;
-  font-weight: ${({ theme }) => theme.fontWeights.semibold};
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
   margin-bottom: 4px;
-  color: ${({ $isUser, theme }) => ($isUser ? "#f0f4ff" : theme.colors.muted)};
+  opacity: 0.5;
   display: flex;
   align-items: center;
   gap: 6px;
-
-  @media (prefers-color-scheme: dark) {
-    color: ${({ $isUser }) => ($isUser ? "#f0f4ff" : "#9ca3af")};
-  }
 `;
 
 const InputArea = styled.div`
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: 12px 16px;
-  background: ${({ theme }) => theme.colors.secondary};
-  border-radius: 20px;
-  margin: 12px;
-  box-shadow: ${({ theme }) => theme.shadows.small};
+  padding: 16px;
+  gap: 8px;
+  border-top: 1px solid ${({ theme }) => theme.colors.foreground};
 `;
 
 interface TextInputProps {
@@ -110,63 +89,64 @@ interface TextInputProps {
 const TextInput = styled.input<TextInputProps>`
   flex: 1;
   border: none;
-  border-radius: 16px;
-  padding: 12px;
+  padding: 10px;
   outline: none;
-  background: ${({ $isListening }) =>
-    $isListening ? "#f0f4ff20" : "transparent"};
-  font-size: 15px;
-  font-family: ${({ theme }) => theme.fonts.body};
+  background: ${({ theme }) => theme.colors.secondary};
+  font-size: 13px;
+  font-family: ${({ theme }) => theme.fonts.mono};
   color: ${({ theme }) => theme.colors.foreground};
+  border-bottom: 2px solid transparent;
+
+  &:focus {
+    border-bottom-color: ${({ theme }) => theme.colors.primary};
+  }
+
   ::placeholder {
     color: ${({ theme }) => theme.colors.muted};
   }
 `;
 
 const SendButton = styled.button`
-  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
-  border: none;
-  border-radius: 50%;
   width: 40px;
   height: 40px;
   display: flex;
   align-items: center;
-  padding: 0;
   justify-content: center;
   cursor: pointer;
-  margin-left: 8px;
-  color: white;
-  transition: transform 0.2s ease;
+  color: ${({ theme }) => theme.colors.foreground};
+  background: transparent;
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  border-radius: 50%;
+  transition: all 0.2s;
 
   &:hover {
-    transform: scale(1.05);
+    background: ${({ theme }) => theme.colors.foreground};
+    color: ${({ theme }) => theme.colors.background};
   }
 `;
 
 const MicButton = styled.button<{ $isListening: boolean }>`
-  background: ${({ $isListening }) =>
-    $isListening
-      ? "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"
-      : "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)"};
-  border: none;
-  border-radius: 50%;
   width: 40px;
   height: 40px;
   display: flex;
   align-items: center;
-  padding: 0;
   justify-content: center;
   cursor: pointer;
-  margin-right: 8px;
-  color: white;
-  transition: all 0.2s ease;
+  border-radius: 50%;
+  transition: all 0.2s;
+  border: 1px solid
+    ${({ $isListening, theme }) =>
+      $isListening ? theme.colors.primary : theme.colors.foreground};
+  background: ${({ $isListening, theme }) =>
+    $isListening ? theme.colors.primary : "transparent"};
+  color: ${({ $isListening, theme }) =>
+    $isListening ? "white" : theme.colors.foreground};
 
   &:hover {
-    transform: scale(1.05);
-    background: ${({ $isListening }) =>
-      $isListening
-        ? "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)"
-        : "linear-gradient(135deg, #4b5563 0%, #374151 100%)"};
+    background: ${({ $isListening, theme }) =>
+      $isListening ? theme.colors.primaryHover : theme.colors.foreground};
+    color: ${({ $isListening, theme }) =>
+      $isListening ? "white" : theme.colors.background};
   }
 `;
 
@@ -175,8 +155,8 @@ const DirectivesContainer = styled.div`
   overflow-x: auto;
   padding: 8px 12px;
   gap: 8px;
-  background: ${({ theme }) => theme.colors.secondary};
-  border-bottom: 1px solid ${({ theme }) => theme.colors.border};
+  background: ${({ theme }) => theme.colors.background};
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
 `;
 
 interface DirectiveButtonProps {
@@ -288,7 +268,7 @@ export function Chat({ onSetDirective }: ChatProps) {
     [key: number]: boolean;
   }>({});
   const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
-    {}
+    {},
   );
   const [isListening, setIsListening] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -405,7 +385,7 @@ export function Chat({ onSetDirective }: ChatProps) {
                   (m) =>
                     m.sender === data.sender &&
                     m.text === data.text &&
-                    m.timestamp === data.timestamp
+                    m.timestamp === data.timestamp,
                 );
                 if (duplicateExists) {
                   return prev;
@@ -603,8 +583,8 @@ export function Chat({ onSetDirective }: ChatProps) {
                   !(
                     msg.sender === "system" &&
                     msg.text === "Processing your speech..."
-                  )
-              )
+                  ),
+              ),
             );
           } else {
             throw new Error("No transcription returned");
@@ -619,7 +599,7 @@ export function Chat({ onSetDirective }: ChatProps) {
                 !(
                   msg.sender === "system" &&
                   msg.text === "Processing your speech..."
-                )
+                ),
             );
 
             return [
@@ -649,7 +629,7 @@ export function Chat({ onSetDirective }: ChatProps) {
   };
 
   const filteredMessages = messages.filter(
-    (msg) => msg.sender !== "vision_agent_output"
+    (msg) => msg.sender !== "vision_agent_output",
   );
 
   // Use the grouping utility to prepare messages for display.
@@ -695,8 +675,9 @@ export function Chat({ onSetDirective }: ChatProps) {
   const ensureAudioContext = async () => {
     // Create AudioContext if it doesn't exist
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext ||
-        (window as any).webkitAudioContext)();
+      audioContextRef.current = new (
+        window.AudioContext || (window as any).webkitAudioContext
+      )();
     }
 
     // Resume the AudioContext if it's suspended
@@ -803,7 +784,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         // Handle completion
         if (parsedMessage.type === "chunk" && parsedMessage.done) {
           console.log(
-            `Finished receiving ${isUser ? "user" : "robot"} message audio`
+            `Finished receiving ${isUser ? "user" : "robot"} message audio`,
           );
         }
       });
@@ -841,7 +822,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         const audioBuffer = audioContextRef.current.createBuffer(
           1, // mono
           nextChunk.length,
-          44100 // sample rate
+          44100, // sample rate
         );
 
         // Fill the buffer with our audio data
@@ -935,69 +916,6 @@ export function Chat({ onSetDirective }: ChatProps) {
 
   return (
     <ChatContainer>
-      <button
-        onClick={enableAudio}
-        style={{
-          background: "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)",
-          color: "white",
-          border: "none",
-          borderRadius: "8px",
-          padding: "8px 16px",
-          margin: "8px",
-          cursor: "pointer",
-          alignSelf: "center",
-        }}
-      >
-        Enable Audio
-      </button>
-      <DirectivesContainer>
-        {isLoadingAgents ? (
-          <DirectiveButton $isActive={false} disabled>
-            <DirectiveContent>
-              <DirectiveTitle>Loading agents...</DirectiveTitle>
-            </DirectiveContent>
-          </DirectiveButton>
-        ) : agents.length === 0 ? (
-          <DirectiveButton $isActive={false} disabled>
-            <DirectiveContent>
-              <DirectiveTitle>No agents available</DirectiveTitle>
-              <DirectiveSubtitle>Waiting for robot connection</DirectiveSubtitle>
-            </DirectiveContent>
-          </DirectiveButton>
-        ) : (
-          agents.map((agent) => (
-            <DirectiveButton
-              key={agent.id}
-              $isActive={activeDirective === agent.id}
-              onClick={() => {
-                setActiveDirective(agent.id);
-                onSetDirective(agent.id);
-              }}
-            >
-              <IconWrapper $isActive={activeDirective === agent.id}>
-                {agent.display_icon ? (
-                  <img
-                    src={`data:image/png;base64,${agent.display_icon}`}
-                    alt={agent.display_name}
-                    style={{ width: 16, height: 16 }}
-                  />
-                ) : (
-                  <IoSettings size={16} />
-                )}
-              </IconWrapper>
-              <DirectiveContent>
-                <DirectiveTitle>{agent.display_name}</DirectiveTitle>
-                <DirectiveSubtitle>
-                  {agent.skills.length > 0
-                    ? `${agent.skills.length} skill${agent.skills.length > 1 ? "s" : ""}`
-                    : "Agent"}
-                </DirectiveSubtitle>
-              </DirectiveContent>
-            </DirectiveButton>
-          ))
-        )}
-      </DirectivesContainer>
-
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
         {groupedMessages.map((message, index) => {
           if (message.sender === "user") {

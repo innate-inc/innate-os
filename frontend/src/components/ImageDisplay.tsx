@@ -1,6 +1,5 @@
 import styled from "styled-components";
 import { isMobile } from "react-device-detect";
-import { MdRefresh, MdSend } from "react-icons/md";
 import { useState, useEffect } from "react";
 import {
   PreviewContainer,
@@ -13,55 +12,132 @@ type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus";
 type ImageDisplayProps = {
   viewMode: ViewMode;
   setViewMode: React.Dispatch<React.SetStateAction<ViewMode>>;
-  onResetRobot: () => void;
+  onResetRobot?: () => void;
   onSetDirective: (directive: string) => void;
 };
 
-// Styled components for the slider, adapted from ToggleViewMode
-const ToggleWrapper = styled.div`
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 100;
-  width: 350px;
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 25px;
-  overflow: hidden;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+// Feed Toolbar with view tabs
+const FeedToolbar = styled.div`
+  display: flex;
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+  background: ${({ theme }) => theme.colors.background};
 `;
 
-const ControlButton = styled.button`
-  z-index: 100;
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  padding: 6px 10px;
-  color: white;
-  font-size: 14px;
+const ViewBtn = styled.div<{ $isActive: boolean }>`
+  flex: 1;
+  padding: 12px;
+  text-align: center;
+  font-size: 11px;
+  text-transform: uppercase;
   cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  border-right: 1px solid ${({ theme }) => theme.colors.foreground};
+  background: ${({ $isActive, theme }) =>
+    $isActive ? theme.colors.foreground : theme.colors.background};
+  transition: all 0.2s;
+  color: ${({ $isActive, theme }) =>
+    $isActive ? theme.colors.background : theme.colors.foreground};
+
+  &:last-child {
+    border-right: none;
+  }
 
   &:hover {
-    background: rgba(0, 0, 0, 0.8);
-  }
-
-  &:focus {
-    outline: none;
+    background: ${({ $isActive, theme }) =>
+      $isActive ? theme.colors.foreground : "rgba(255, 255, 255, 0.1)"};
   }
 `;
 
-const ButtonGroup = styled.div`
-  position: absolute;
-  top: 10px;
-  left: 10px;
+// Camera Viewport - fills available space in the 4:3 container
+const CameraViewport = styled.div`
+  flex: 1;
+  position: relative;
+  background: #111;
   display: flex;
-  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  width: 100%;
+`;
+
+// Simulation Grid Background
+const SimGrid = styled.div`
+  position: absolute;
+  width: 200%;
+  height: 200%;
+  background-image:
+    linear-gradient(
+      ${({ theme }) => theme.colors.foreground} 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      ${({ theme }) => theme.colors.foreground} 1px,
+      transparent 1px
+    );
+  background-size: 50px 50px;
+  opacity: 0.1;
+  transform: perspective(500px) rotateX(60deg) translateY(-100px)
+    translateZ(-100px);
+  animation: gridMove 20s linear infinite;
+`;
+
+// Overlay UI
+const OverlayUI = styled.div`
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  right: 20px;
+  bottom: 20px;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+`;
+
+const CamLabel = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: ${({ theme }) => theme.colors.foreground};
+  color: ${({ theme }) => theme.colors.background};
+  padding: 4px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+`;
+
+const Crosshair = styled.div`
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+`;
+
+const CrosshairH = styled.div`
+  position: absolute;
+  top: 19px;
+  left: 0;
+  width: 40px;
+  height: 2px;
+  background: ${({ theme }) => theme.colors.primary};
+`;
+
+const CrosshairV = styled.div`
+  position: absolute;
+  left: 19px;
+  top: 0;
+  height: 40px;
+  width: 2px;
+  background: ${({ theme }) => theme.colors.primary};
+`;
+
+const Coords = styled.div`
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  background: ${({ theme }) => theme.colors.foreground};
+  color: ${({ theme }) => theme.colors.background};
+  padding: 4px 8px;
+  font-size: 10px;
 `;
 
 const ModalOverlay = styled.div`
@@ -78,33 +154,34 @@ const ModalOverlay = styled.div`
 `;
 
 const ModalContent = styled.div`
-  background: #1e293b;
-  border-radius: 8px;
+  background: #111;
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
   padding: 24px;
   width: 400px;
   max-width: 90%;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 `;
 
 const ModalTitle = styled.h3`
   color: white;
   margin: 0 0 16px 0;
-  font-size: 18px;
+  font-size: 16px;
+  font-family: ${({ theme }) => theme.fonts.display};
+  text-transform: uppercase;
 `;
 
 const ModalInput = styled.input`
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.3);
-  color: white;
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  background: ${({ theme }) => theme.colors.background};
+  color: ${({ theme }) => theme.colors.foreground};
   font-size: 14px;
+  font-family: ${({ theme }) => theme.fonts.mono};
   box-sizing: border-box;
 
   &:focus {
     outline: none;
-    border-color: #4f46e5;
+    border-color: ${({ theme }) => theme.colors.primary};
   }
 
   &::placeholder {
@@ -121,67 +198,31 @@ const ModalButtons = styled.div`
 
 const ModalButton = styled.button<{ $primary?: boolean }>`
   padding: 8px 16px;
-  border-radius: 4px;
-  font-size: 14px;
+  font-size: 12px;
+  text-transform: uppercase;
   cursor: pointer;
-  transition: background-color 0.2s;
-  border: none;
+  transition: all 0.2s;
+  font-family: ${({ theme }) => theme.fonts.mono};
 
-  ${({ $primary }) =>
+  ${({ $primary, theme }) =>
     $primary
       ? `
-    background: #4f46e5;
+    background: ${theme.colors.primary};
     color: white;
+    border: 1px solid ${theme.colors.primary};
     &:hover {
-      background: #4338ca;
+      background: ${theme.colors.primaryHover};
     }
   `
       : `
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
+    background: transparent;
+    color: ${theme.colors.foreground};
+    border: 1px solid ${theme.colors.foreground};
     &:hover {
-      background: rgba(255, 255, 255, 0.2);
+      background: ${theme.colors.foreground};
+      color: ${theme.colors.background};
     }
   `}
-`;
-
-const Indicator = styled.div<{ index: number; $maxIndex: number }>`
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / ${({ $maxIndex }) => $maxIndex});
-  height: calc(100% - 4px);
-  transform: translateX(${(props) => props.index * 100}%);
-  background: rgba(79, 70, 229, 0.6);
-  border-radius: 23px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  transition: transform 0.3s ease;
-`;
-
-const ButtonRow = styled.div`
-  display: flex;
-  width: 100%;
-`;
-
-const ModeButton = styled.button<{ $active?: boolean }>`
-  flex: 1;
-  position: relative;
-  z-index: 1;
-  background: transparent;
-  border: none;
-  color: ${(props) => (props.$active ? "#ffffff" : "rgba(255, 255, 255, 0.7)")};
-  font-size: 14px;
-  padding: 6px 0;
-  cursor: pointer;
-  border-radius: 25px;
-
-  &:hover {
-    opacity: 0.8;
-  }
-
-  &:focus {
-    outline: none;
-  }
 `;
 
 // Loading indicator styled component
@@ -260,7 +301,6 @@ interface SimulationReadyResponse {
 export function ImageDisplay({
   viewMode,
   setViewMode,
-  onResetRobot,
   onSetDirective,
 }: ImageDisplayProps) {
   // State to track if we should show the loading screen
@@ -347,10 +387,6 @@ export function ImageDisplay({
   const mobileModes: ViewMode[] = ["frontFocus", "chaseFocus"];
   const modes: ViewMode[] = isMobile ? mobileModes : desktopModes;
 
-  // Convert the current mode into an index, default to 0 if not found
-  const currentIndex =
-    modes.indexOf(viewMode) >= 0 ? modes.indexOf(viewMode) : 0;
-
   // Ensure that if a user is on mobile and currently has "sideBySide",
   // we switch them to a mobile-supported mode (e.g. "frontFocus").
   if (isMobile && viewMode === "sideBySide") {
@@ -372,104 +408,110 @@ export function ImageDisplay({
 
   return (
     <PreviewContainer>
-      {/* Main feed */}
-      <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
+      {/* View Mode Toolbar */}
+      <FeedToolbar>
+        {modes.map((mode) => (
+          <ViewBtn
+            key={mode}
+            $isActive={viewMode === mode}
+            onClick={() => handleViewModeChange(mode)}
+          >
+            {labels[mode]}
+          </ViewBtn>
+        ))}
+      </FeedToolbar>
 
-      {/* Secondary feed */}
-      <SecondaryImage
-        $viewMode={viewMode}
-        src={subSrc}
-        alt="Secondary Camera"
-      />
+      {/* Camera Viewport */}
+      <CameraViewport>
+        {/* Background Grid */}
+        <SimGrid />
 
-      {/* Loading indicator */}
-      {showLoading && (
-        <LoadingContainer>
-          {connectionFailed ? (
-            <>
-              <ErrorText>{errorMessage}</ErrorText>
-              <LoadingText>
-                Please check if the simulation is running and try again.
-              </LoadingText>
-              <RetryButton onClick={checkSimulationReady} disabled={isChecking}>
-                {isChecking ? "Checking..." : "Retry Connection"}
-              </RetryButton>
-            </>
-          ) : (
-            <>
-              <Spinner />
-              <LoadingText>Loading camera feed...</LoadingText>
-            </>
-          )}
-        </LoadingContainer>
-      )}
+        {/* Main feed */}
+        <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
 
-      {/* Only show controls when not in loading state */}
-      {!showLoading && (
-        <>
-          <ButtonGroup>
-            <ControlButton onClick={() => onResetRobot()}>
-              <MdRefresh size={16} /> Reset Robot
-            </ControlButton>
-            <ControlButton onClick={() => setShowDirectiveModal(true)}>
-              <MdSend size={16} /> Set Directive
-            </ControlButton>
-          </ButtonGroup>
+        {/* Secondary feed */}
+        <SecondaryImage
+          $viewMode={viewMode}
+          src={subSrc}
+          alt="Secondary Camera"
+        />
 
-          {showDirectiveModal && (
-            <ModalOverlay onClick={() => setShowDirectiveModal(false)}>
-              <ModalContent onClick={(e) => e.stopPropagation()}>
-                <ModalTitle>Set Directive</ModalTitle>
-                <ModalInput
-                  type="text"
-                  placeholder="Enter directive..."
-                  value={directiveText}
-                  onChange={(e) => setDirectiveText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && directiveText.trim()) {
-                      onSetDirective(directiveText.trim());
-                      setDirectiveText("");
-                      setShowDirectiveModal(false);
-                    }
-                  }}
-                  autoFocus
-                />
-                <ModalButtons>
-                  <ModalButton onClick={() => setShowDirectiveModal(false)}>
-                    Cancel
-                  </ModalButton>
-                  <ModalButton
-                    $primary
-                    onClick={() => {
-                      if (directiveText.trim()) {
-                        onSetDirective(directiveText.trim());
-                        setDirectiveText("");
-                        setShowDirectiveModal(false);
-                      }
-                    }}
-                  >
-                    Send
-                  </ModalButton>
-                </ModalButtons>
-              </ModalContent>
-            </ModalOverlay>
-          )}
-
-          <ToggleWrapper>
-            <Indicator index={currentIndex} $maxIndex={modes.length} />
-            <ButtonRow>
-              {modes.map((mode) => (
-                <ModeButton
-                  key={mode}
-                  $active={viewMode === mode}
-                  onClick={() => handleViewModeChange(mode)}
+        {/* Loading indicator */}
+        {showLoading && (
+          <LoadingContainer>
+            {connectionFailed ? (
+              <>
+                <ErrorText>{errorMessage}</ErrorText>
+                <LoadingText>
+                  Please check if the simulation is running and try again.
+                </LoadingText>
+                <RetryButton
+                  onClick={checkSimulationReady}
+                  disabled={isChecking}
                 >
-                  {labels[mode]}
-                </ModeButton>
-              ))}
-            </ButtonRow>
-          </ToggleWrapper>
-        </>
+                  {isChecking ? "Checking..." : "Retry Connection"}
+                </RetryButton>
+              </>
+            ) : (
+              <>
+                <Spinner />
+                <LoadingText>Loading camera feed...</LoadingText>
+              </>
+            )}
+          </LoadingContainer>
+        )}
+
+        {/* Overlay UI */}
+        {!showLoading && (
+          <OverlayUI>
+            <CamLabel>LIVE FEED</CamLabel>
+            <Crosshair>
+              <CrosshairH />
+              <CrosshairV />
+            </Crosshair>
+            <Coords>X: 45.2 Y: 12.0 Z: 0.4</Coords>
+          </OverlayUI>
+        )}
+      </CameraViewport>
+
+      {/* Directive Modal */}
+      {showDirectiveModal && (
+        <ModalOverlay onClick={() => setShowDirectiveModal(false)}>
+          <ModalContent onClick={(e) => e.stopPropagation()}>
+            <ModalTitle>Set Directive</ModalTitle>
+            <ModalInput
+              type="text"
+              placeholder="Enter directive..."
+              value={directiveText}
+              onChange={(e) => setDirectiveText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && directiveText.trim()) {
+                  onSetDirective(directiveText.trim());
+                  setDirectiveText("");
+                  setShowDirectiveModal(false);
+                }
+              }}
+              autoFocus
+            />
+            <ModalButtons>
+              <ModalButton onClick={() => setShowDirectiveModal(false)}>
+                Cancel
+              </ModalButton>
+              <ModalButton
+                $primary
+                onClick={() => {
+                  if (directiveText.trim()) {
+                    onSetDirective(directiveText.trim());
+                    setDirectiveText("");
+                    setShowDirectiveModal(false);
+                  }
+                }}
+              >
+                Send
+              </ModalButton>
+            </ModalButtons>
+          </ModalContent>
+        </ModalOverlay>
       )}
     </PreviewContainer>
   );
