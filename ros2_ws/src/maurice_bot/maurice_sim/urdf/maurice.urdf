@@ -379,5 +379,10 @@
       <material name="matt_black"/>
     </visual>
   </link>
-
+<joint name="fixed_right_camera_optical_frame" type="fixed">
+  <parent link="head_camera_right"/>
+  <child link="right_camera_optical_frame"/>
+  <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+</joint>
+<link name="right_camera_optical_frame"/>
 </robot>

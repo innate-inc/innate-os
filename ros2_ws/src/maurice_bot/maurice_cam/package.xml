@@ -21,6 +21,10 @@
   <depend>geometry_msgs</depend>
   <depend>depth_image_proc</depend>
   <depend>pcl_ros</depend>
+  <depend>image_proc</depend>
+  <depend>stereo_image_proc</depend>
+  <depend>stereo_msgs</depend>
+  <depend>message_filters</depend>
   <depend>OpenCV</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

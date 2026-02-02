@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(message_filters REQUIRED)
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
@@ -121,9 +122,26 @@ if(VPI_FOUND)
     rclcpp 
     rclcpp_components
     sensor_msgs
+    message_filters
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
 endif()
+
+# Main camera info component library
+add_library(main_camera_info_component SHARED maurice_cam/main_camera_info.cpp)
+target_compile_definitions(main_camera_info_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_link_libraries(main_camera_info_component ${OpenCV_LIBS})
+if(nlohmann_json_FOUND)
+  target_link_libraries(main_camera_info_component nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(main_camera_info_component PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
+ament_target_dependencies(main_camera_info_component 
+  rclcpp 
+  rclcpp_components
+  sensor_msgs
+)
+rclcpp_components_register_nodes(main_camera_info_component "maurice_cam::MainCameraInfo")
 
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
@@ -187,8 +205,23 @@ if(VPI_FOUND)
     rclcpp
     rclcpp_components
     sensor_msgs
+    message_filters
   )
 endif()
+
+# Create main camera info executable
+add_executable(main_camera_info maurice_cam/main_camera_info.cpp)
+target_link_libraries(main_camera_info ${OpenCV_LIBS})
+if(nlohmann_json_FOUND)
+  target_link_libraries(main_camera_info nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(main_camera_info PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
+ament_target_dependencies(main_camera_info
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+)
 
 # =============================================================================
 # INSTALLATION
@@ -199,6 +232,7 @@ set(COMPONENT_LIBRARIES
   main_camera_driver_component
   arm_camera_driver_component
   webrtc_streamer_component
+  main_camera_info_component
 )
 if(VPI_FOUND)
   list(APPEND COMPONENT_LIBRARIES stereo_depth_estimator_component)
@@ -215,6 +249,7 @@ set(EXECUTABLE_TARGETS
   main_camera_driver
   arm_camera_driver
   webrtc_streamer_node
+  main_camera_info
 )
 if(VPI_FOUND)
   list(APPEND EXECUTABLE_TARGETS stereo_depth_estimator)

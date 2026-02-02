@@ -35,6 +35,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
+import message_filters
 
 
 class StereoCalibrator(Node):
@@ -44,9 +45,10 @@ class StereoCalibrator(Node):
         super().__init__('stereo_calibrator')
 
         # Declare parameters
-        self.declare_parameter('stereo_topic', '/mars/main_camera/stereo')
-        self.declare_parameter('stereo_width', 1280)  # Calibrate at 1280x480 (640x480 per camera)
-        self.declare_parameter('stereo_height', 480)
+        self.declare_parameter('left_topic', '/mars/main_camera/left/image_raw')
+        self.declare_parameter('right_topic', '/mars/main_camera/right/image_raw')
+        self.declare_parameter('image_width', 640)
+        self.declare_parameter('image_height', 480)
         self.declare_parameter('data_directory', '/home/jetson1/innate-os/data')
         
         # ChArUco board parameters
@@ -62,9 +64,10 @@ class StereoCalibrator(Node):
         self.declare_parameter('use_legacy_pattern', True)  # Enable for calib.io boards (OpenCV 4.6.0+)
 
         # Get parameters
-        self.stereo_topic = self.get_parameter('stereo_topic').value
-        self.stereo_width = self.get_parameter('stereo_width').value
-        self.stereo_height = self.get_parameter('stereo_height').value
+        self.left_topic = self.get_parameter('left_topic').value
+        self.right_topic = self.get_parameter('right_topic').value
+        self.image_width = self.get_parameter('image_width').value
+        self.image_height = self.get_parameter('image_height').value
         self.data_directory = Path(self.get_parameter('data_directory').value)
         
         self.squares_x = self.get_parameter('squares_x').value
@@ -76,10 +79,6 @@ class StereoCalibrator(Node):
         self.num_images_required = self.get_parameter('num_images').value
         self.min_corners = self.get_parameter('min_corners').value
         self.use_legacy_pattern = self.get_parameter('use_legacy_pattern').value
-
-        # Calculate single image dimensions
-        self.image_width = self.stereo_width // 2
-        self.image_height = self.stereo_height
 
         # Create ChArUco board
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
@@ -103,7 +102,8 @@ class StereoCalibrator(Node):
 
         # State
         self.bridge = CvBridge()
-        self.latest_frame = None
+        self.latest_left_frame = None
+        self.latest_right_frame = None
         self.frame_lock = threading.Lock()
         self.capture_requested = False
         self.images_captured = 0
@@ -120,7 +120,8 @@ class StereoCalibrator(Node):
         self.get_logger().info('=' * 60)
         self.get_logger().info('Stereo Camera Calibrator')
         self.get_logger().info('=' * 60)
-        self.get_logger().info(f'Stereo topic: {self.stereo_topic}')
+        self.get_logger().info(f'Left topic: {self.left_topic}')
+        self.get_logger().info(f'Right topic: {self.right_topic}')
         self.get_logger().info(f'Image size: {self.image_width}x{self.image_height} per camera')
         self.get_logger().info(f'ChArUco board: {self.squares_x}x{self.squares_y}')
         self.get_logger().info(f'Square size: {self.square_size*1000:.1f}mm, Marker size: {self.marker_size*1000:.1f}mm')
@@ -131,13 +132,17 @@ class StereoCalibrator(Node):
         self.get_logger().info('=' * 60)
         self.get_logger().warn('>>> Press ENTER to capture an image <<<')
 
-        # Create subscription
-        self.subscription = self.create_subscription(
-            Image,
-            self.stereo_topic,
-            self.image_callback,
-            10
+        # Create synchronized subscriptions for left and right images
+        self.left_sub = message_filters.Subscriber(self, Image, self.left_topic)
+        self.right_sub = message_filters.Subscriber(self, Image, self.right_topic)
+        
+        # Use ApproximateTimeSynchronizer since timestamps may differ slightly
+        self.sync = message_filters.ApproximateTimeSynchronizer(
+            [self.left_sub, self.right_sub],
+            queue_size=10,
+            slop=0.1  # 100ms tolerance
         )
+        self.sync.registerCallback(self.image_callback)
 
         # Start keyboard input thread
         self.input_thread = threading.Thread(target=self.keyboard_input_loop, daemon=True)
@@ -146,45 +151,42 @@ class StereoCalibrator(Node):
         # Create timer to process captures
         self.timer = self.create_timer(0.1, self.process_capture)
 
-    def image_callback(self, msg):
-        """Store latest stereo frame."""
+    def image_callback(self, left_msg, right_msg):
+        """Store latest left and right frames."""
         try:
-            if msg.encoding == 'bgr8':
-                frame = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-            elif msg.encoding == 'rgb8':
-                frame = self.bridge.imgmsg_to_cv2(msg, 'rgb8')
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            # Convert left image
+            if left_msg.encoding == 'bgr8':
+                left_frame = self.bridge.imgmsg_to_cv2(left_msg, 'bgr8')
+            elif left_msg.encoding == 'rgb8':
+                left_frame = self.bridge.imgmsg_to_cv2(left_msg, 'rgb8')
+                left_frame = cv2.cvtColor(left_frame, cv2.COLOR_RGB2BGR)
             else:
-                frame = self.bridge.imgmsg_to_cv2(msg, 'mono8')
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                left_frame = self.bridge.imgmsg_to_cv2(left_msg, 'mono8')
+                left_frame = cv2.cvtColor(left_frame, cv2.COLOR_GRAY2BGR)
             
-            # Debug: log frame info on first frame and check dimensions
-            if self.latest_frame is None:
-                actual_width = frame.shape[1]
-                actual_height = frame.shape[0]
+            # Convert right image
+            if right_msg.encoding == 'bgr8':
+                right_frame = self.bridge.imgmsg_to_cv2(right_msg, 'bgr8')
+            elif right_msg.encoding == 'rgb8':
+                right_frame = self.bridge.imgmsg_to_cv2(right_msg, 'rgb8')
+                right_frame = cv2.cvtColor(right_frame, cv2.COLOR_RGB2BGR)
+            else:
+                right_frame = self.bridge.imgmsg_to_cv2(right_msg, 'mono8')
+                right_frame = cv2.cvtColor(right_frame, cv2.COLOR_GRAY2BGR)
+            
+            # Debug: log frame info on first frame
+            if self.latest_left_frame is None:
                 self.get_logger().info(
-                    f'Received first frame: {actual_width}x{actual_height}, '
-                    f'encoding={msg.encoding}, expected={self.stereo_width}x{self.stereo_height}'
+                    f'Received first frames: left={left_frame.shape[1]}x{left_frame.shape[0]}, '
+                    f'right={right_frame.shape[1]}x{right_frame.shape[0]}, '
+                    f'expected={self.image_width}x{self.image_height}'
                 )
-                if actual_width != self.stereo_width or actual_height != self.stereo_height:
-                    self.get_logger().warn(
-                        f'Dimension mismatch! Got {actual_width}x{actual_height}, '
-                        f'expected {self.stereo_width}x{self.stereo_height}. '
-                        f'This may cause issues. Check the stereo_topic parameter or camera settings.'
-                    )
             
-            # Only store frame if dimensions match (or are close enough)
-            actual_width = frame.shape[1]
-            actual_height = frame.shape[0]
-            if actual_width == self.stereo_width and actual_height == self.stereo_height:
-                with self.frame_lock:
-                    self.latest_frame = frame
-            else:
-                self.get_logger().warn_throttle(
-                    5.0,  # Warn every 5 seconds
-                    f'Skipping frame with wrong dimensions: {actual_width}x{actual_height} '
-                    f'(expected {self.stereo_width}x{self.stereo_height})'
-                )
+            # Store frames
+            with self.frame_lock:
+                self.latest_left_frame = left_frame
+                self.latest_right_frame = right_frame
+                
         except Exception as e:
             self.get_logger().error(f'Failed to convert image: {e}')
 
@@ -346,23 +348,11 @@ class StereoCalibrator(Node):
         self.capture_requested = False
 
         with self.frame_lock:
-            if self.latest_frame is None:
-                self.get_logger().warn('No frame available yet. Make sure the camera is running.')
+            if self.latest_left_frame is None or self.latest_right_frame is None:
+                self.get_logger().warn('No frames available yet. Make sure the camera is running.')
                 return
-            frame = self.latest_frame.copy()
-
-        # Split stereo frame
-        # Note: Camera driver rotates 180°, so left/right are swapped after rotation
-        # After 180° rotation: first half = original RIGHT camera, second half = original LEFT camera
-        # So we need to swap them to get correct left/right
-        right_img = frame[:, :self.image_width]  # First half is actually right camera after rotation
-        left_img = frame[:, self.image_width:]    # Second half is actually left camera after rotation
-        
-        # Debug: log actual frame dimensions
-        self.get_logger().debug(
-            f'Frame shape: {frame.shape}, splitting at x={self.image_width}, '
-            f'left={left_img.shape}, right={right_img.shape}'
-        )
+            left_img = self.latest_left_frame.copy()
+            right_img = self.latest_right_frame.copy()
 
         # Convert to grayscale for detection
         left_gray = cv2.cvtColor(left_img, cv2.COLOR_BGR2GRAY)
@@ -564,6 +554,13 @@ class StereoCalibrator(Node):
             flags=flags,
             criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
         )
+        
+        # Ensure T[0] is positive (left camera physically left of right camera)
+        # If negative, cameras are physically swapped - negate to fix depth sign
+        if T[0, 0] < 0:
+            self.get_logger().warn(f'T[0] = {T[0,0]:.4f}m is negative - cameras may be physically swapped')
+            self.get_logger().warn('Negating T to ensure positive depth output')
+            T = -T
         
         self.get_logger().info(f'Stereo RMS error: {ret_stereo:.4f}')
 

@@ -19,9 +19,11 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("publish_stereo_height", 480);
   this->declare_parameter<double>("fps", 30.0);
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
+  this->declare_parameter<std::string>("right_frame_id", "right_camera_optical_frame");
   this->declare_parameter<int>("jpeg_quality", 80);
   this->declare_parameter<bool>("publish_compressed", true);
   this->declare_parameter<int>("compressed_frame_interval", 3);
+  this->declare_parameter<bool>("publish_stereo", false);  // Combined stereo image for legacy compatibility
   this->declare_parameter<int>("exposure", -1);  // -1 means use current value
   this->declare_parameter<int>("gain", -1);      // -1 means use current value
   this->declare_parameter<bool>("disable_auto_exposure", false);
@@ -43,9 +45,11 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   publish_stereo_height_ = this->get_parameter("publish_stereo_height").as_int();
   fps_ = this->get_parameter("fps").as_double();
   frame_id_ = this->get_parameter("frame_id").as_string();
+  right_frame_id_ = this->get_parameter("right_frame_id").as_string();
   jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
   publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
   compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
+  publish_stereo_ = this->get_parameter("publish_stereo").as_bool();
   
   // Get V4L2 control parameters
   exposure_setting_ = this->get_parameter("exposure").as_int();
@@ -150,10 +154,12 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
     );
   }
 
-  stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    "/mars/main_camera/stereo",
-    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-  );
+  if (publish_stereo_) {
+    stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+      "/mars/main_camera/stereo",
+      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+    );
+  }
 
   RCLCPP_INFO(this->get_logger(), "Publishers created:");
   RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/left/image_raw (%dx%d)", left_width_, left_height_);
@@ -161,7 +167,9 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   if (publish_compressed_) {
     RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/left/image_raw/compressed (%dx%d)", left_width_, left_height_);
   }
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (%dx%d)", publish_stereo_width_, publish_stereo_height_);
+  if (publish_stereo_) {
+    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (%dx%d)", publish_stereo_width_, publish_stereo_height_);
+  }
 
   // Initialize TurboJPEG encoder
   jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
@@ -530,46 +538,78 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   }
   
   // -------------------------
-  // (A2) Left and Right ROI views from frame (already at publish resolution)
+  // (A2) Left ROI view from frame (already at publish resolution)
   // After 180° rotation in GStreamer, original right half appears on the left half.
   // -------------------------
   cv::Rect left_roi(0, 0, left_width_, left_height_);
-  cv::Rect right_roi(left_width_, 0, left_width_, left_height_);
-  cv::Mat left_view = stereo_out(left_roi);   // Left half of stereo
-  cv::Mat right_view = stereo_out(right_roi); // Right half of stereo
-
-  // -------------------------
-  // (A2.5) Publish left/right raw images at native split resolution
-  // -------------------------
-  auto left_raw_msg = std::make_unique<sensor_msgs::msg::Image>();
-  left_raw_msg->header.stamp = current_time;
-  left_raw_msg->header.frame_id = frame_id_;
-  left_raw_msg->height = left_height_;
-  left_raw_msg->width = left_width_;
-  left_raw_msg->encoding = "bgr8";
-  left_raw_msg->is_bigendian = false;
-  left_raw_msg->step = left_width_ * 3;
-  left_raw_msg->data.resize(left_raw_msg->height * left_raw_msg->step);
-  memcpy(left_raw_msg->data.data(), left_view.data, left_raw_msg->data.size());
-
-  auto right_raw_msg = std::make_unique<sensor_msgs::msg::Image>();
-  right_raw_msg->header.stamp = current_time;
-  right_raw_msg->header.frame_id = frame_id_;
-  right_raw_msg->height = left_height_;
-  right_raw_msg->width = left_width_;
-  right_raw_msg->encoding = "bgr8";
-  right_raw_msg->is_bigendian = false;
-  right_raw_msg->step = left_width_ * 3;
-  right_raw_msg->data.resize(right_raw_msg->height * right_raw_msg->step);
-  memcpy(right_raw_msg->data.data(), right_view.data, right_raw_msg->data.size());
-
-  left_pub_->publish(std::move(left_raw_msg));
-  right_pub_->publish(std::move(right_raw_msg));
+  cv::Mat left_view = stereo_out(left_roi);  // Use stereo_out which is guaranteed BGR
   
   // -------------------------
-  // Publish stereo with std::move() for zero-copy intra-process communication
+  // (A3) Left msg: Use publish_left_width x publish_left_height, scale only if needed
   // -------------------------
-  stereo_pub_->publish(std::move(stereo_msg));
+  auto left_msg = std::make_unique<sensor_msgs::msg::Image>();
+  left_msg->header.stamp = current_time;
+  left_msg->header.frame_id = frame_id_;
+  left_msg->height = publish_left_height_;
+  left_msg->width = publish_left_width_;
+  left_msg->encoding = "bgr8";
+  left_msg->is_bigendian = false;
+  left_msg->step = publish_left_width_ * 3;
+  left_msg->data.resize(left_msg->height * left_msg->step);
+  
+  // Wrap left ROS message buffer as cv::Mat view
+  cv::Mat left_out(
+    publish_left_height_, publish_left_width_, CV_8UC3,
+    left_msg->data.data(),
+    left_msg->step
+  );
+  
+  // Only resize if the natural split size doesn't match the requested publish size
+  if (left_width_ == publish_left_width_ && left_height_ == publish_left_height_) {
+    // No scaling needed, copy directly
+    left_view.copyTo(left_out);
+  } else {
+    // Scale to requested size
+    cv::resize(left_view, left_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
+  }
+
+  // -------------------------
+  // (A4) Right ROI view and msg
+  // -------------------------
+  cv::Rect right_roi(left_width_, 0, left_width_, left_height_);
+  cv::Mat right_view = stereo_out(right_roi);
+  
+  auto right_msg = std::make_unique<sensor_msgs::msg::Image>();
+  right_msg->header.stamp = current_time;
+  right_msg->header.frame_id = right_frame_id_;
+  right_msg->height = publish_left_height_;
+  right_msg->width = publish_left_width_;
+  right_msg->encoding = "bgr8";
+  right_msg->is_bigendian = false;
+  right_msg->step = publish_left_width_ * 3;
+  right_msg->data.resize(right_msg->height * right_msg->step);
+  
+  cv::Mat right_out(
+    publish_left_height_, publish_left_width_, CV_8UC3,
+    right_msg->data.data(),
+    right_msg->step
+  );
+  
+  if (left_width_ == publish_left_width_ && left_height_ == publish_left_height_) {
+    right_view.copyTo(right_out);
+  } else {
+    cv::resize(right_view, right_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
+  }
+  
+  // -------------------------
+  // Publish with std::move() for zero-copy intra-process communication
+  // Inter-process subscribers (via DDS) still receive serialized copies automatically
+  // -------------------------
+  if (publish_stereo_) {
+    stereo_pub_->publish(std::move(stereo_msg));
+  }
+  left_pub_->publish(std::move(left_msg));
+  right_pub_->publish(std::move(right_msg));
   
   // Conditionally create and publish compressed image at specified interval
   if (publish_compressed_) {

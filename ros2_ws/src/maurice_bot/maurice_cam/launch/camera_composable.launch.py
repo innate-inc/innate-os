@@ -110,17 +110,11 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
-    # Point cloud generator node (using depth_image_proc for XYZRGB point cloud)
-    pointcloud_generator_node = ComposableNode(
-        package='depth_image_proc',
-        plugin='depth_image_proc::PointCloudXyzrgbNode',
-        name='pointcloud_generator',
-        remappings=[
-            ('depth_registered/image_rect', '/mars/main_camera/depth/image_rect_raw'),
-            ('rgb/image_rect_color', '/mars/main_camera/image'),
-            ('rgb/camera_info', '/mars/main_camera/depth/camera_info'),
-            ('points', '/mars/main_camera/depth/points'),
-        ],
+    # Main camera info publisher node (publishes left/right CameraInfo + set_camera_info services)
+    main_camera_info_node = ComposableNode(
+        package='maurice_cam',
+        plugin='maurice_cam::MainCameraInfo',
+        name='main_camera_info',
         parameters=[
             LaunchConfiguration('camera_config'),
             {'use_sim_time': LaunchConfiguration('use_sim_time')}
@@ -128,14 +122,163 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
-    # Point cloud CropBox filter node (using pcl_ros::CropBox)
-    pointcloud_filter_node = ComposableNode(
+    # ==========================================================================
+    # stereo_image_proc pipeline (for side-by-side comparison with VPI depth)
+    # Outputs in /mars/main_camera/stereo_image_proc namespace
+    # ==========================================================================
+
+    # Left camera rectify for color (for point cloud)
+    sip_rectify_color_left = ComposableNode(
+        package='image_proc',
+        plugin='image_proc::RectifyNode',
+        name='rectify_color_left',
+        namespace='/mars/main_camera/stereo_image_proc',
+        remappings=[
+            ('image', '/mars/main_camera/left/image_raw'),
+            ('camera_info', '/mars/main_camera/left/camera_info'),
+            ('image_rect', 'left/image_rect_color'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'image_transport': 'raw',
+            'publish_compressed': False,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # Left camera rectify for mono (for disparity)
+    sip_rectify_mono_left = ComposableNode(
+        package='image_proc',
+        plugin='image_proc::RectifyNode',
+        name='rectify_mono_left',
+        namespace='/mars/main_camera/stereo_image_proc',
+        remappings=[
+            ('image', '/mars/main_camera/left/image_raw'),
+            ('camera_info', '/mars/main_camera/left/camera_info'),
+            ('image_rect', 'left/image_rect'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'image_transport': 'raw',
+            'publish_compressed': False,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # Left camera rectify for mono (for disparity)
+    sip = ComposableNode(
+        package='stereo_image_proc',
+        plugin='stereo_image_proc',
+        name='rectify_mono_left',
+        namespace='/mars/main_camera/stereo_image_proc',
+        remappings=[
+            ('image', '/mars/main_camera/left/image_raw'),
+            ('camera_info', '/mars/main_camera/left/camera_info'),
+            ('image_rect', 'left/image_rect'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'image_transport': 'raw',
+            'publish_compressed': False,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+
+
+    # Right camera rectify for color (for point cloud)
+    sip_rectify_color_right = ComposableNode(
+        package='image_proc',
+        plugin='image_proc::RectifyNode',
+        name='rectify_color_right',
+        namespace='/mars/main_camera/stereo_image_proc',
+        remappings=[
+            ('image', '/mars/main_camera/right/image_raw'),
+            ('camera_info', '/mars/main_camera/right/camera_info'),
+            ('image_rect', 'right/image_rect_color'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'image_transport': 'raw',
+            'publish_compressed': False,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # Right camera rectify for mono (for disparity)
+    sip_rectify_mono_right = ComposableNode(
+        package='image_proc',
+        plugin='image_proc::RectifyNode',
+        name='rectify_mono_right',
+        namespace='/mars/main_camera/stereo_image_proc',
+        remappings=[
+            ('image', '/mars/main_camera/right/image_raw'),
+            ('camera_info', '/mars/main_camera/right/camera_info'),
+            ('image_rect', 'right/image_rect'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'image_transport': 'raw',
+            'publish_compressed': False,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # Disparity node (stereo matching)
+    sip_disparity_node = ComposableNode(
+        package='stereo_image_proc',
+        plugin='stereo_image_proc::DisparityNode',
+        name='disparity_node',
+        namespace='/mars/main_camera/stereo_image_proc',
+        remappings=[
+            ('left/image_rect', 'left/image_rect'),
+            ('left/camera_info', '/mars/main_camera/left/camera_info'),
+            ('right/image_rect', 'right/image_rect'),
+            ('right/camera_info', '/mars/main_camera/right/camera_info'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'approximate_sync': True,  # Our cameras are synced but timestamps may differ slightly
+            'sgbm_mode': 2,  # SGBM_3WAY - good balance of quality and speed
+            'min_disparity': 0,
+            'disparity_range': 64,
+            'correlation_window_size': 15,
+            'uniqueness_ratio': 15.0,
+            'speckle_size': 100,
+            'speckle_range': 4,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # Point cloud node (from disparity + color image)
+    sip_pointcloud_node = ComposableNode(
+        package='stereo_image_proc',
+        plugin='stereo_image_proc::PointCloudNode',
+        name='point_cloud_node',
+        namespace='/mars/main_camera/stereo_image_proc',
+        remappings=[
+            ('left/image_rect_color', 'left/image_rect_color'),
+            ('left/camera_info', '/mars/main_camera/left/camera_info'),
+            ('right/camera_info', '/mars/main_camera/right/camera_info'),
+            # disparity is in same namespace, no remap needed
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'approximate_sync': True,
+            'use_color': True,
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # CropBox filter for stereo_image_proc point cloud
+    sip_pointcloud_filter = ComposableNode(
         package='pcl_ros',
         plugin='pcl_ros::CropBox',
         name='pointcloud_cropbox_filter',
+        namespace='/mars/main_camera/stereo_image_proc',
         remappings=[
-            ('input', '/mars/main_camera/depth/points'),
-            ('output', '/mars/main_camera/depth/points_filtered'),
+            ('input', 'points'),
+            ('output', 'points_filtered'),
         ],
         parameters=[
             LaunchConfiguration('camera_config'),
@@ -156,8 +299,15 @@ def generate_launch_description():
             arm_camera_node,
             webrtc_node,
             depth_estimator_node,
-            pointcloud_generator_node,
-            pointcloud_filter_node,
+            main_camera_info_node,
+            # stereo_image_proc pipeline (for comparison testing)
+            sip_rectify_color_left,
+            sip_rectify_mono_left,
+            sip_rectify_color_right,
+            sip_rectify_mono_right,
+            sip_disparity_node,
+            sip_pointcloud_node,
+            sip_pointcloud_filter,
         ],
         output='screen',
         emulate_tty=True,

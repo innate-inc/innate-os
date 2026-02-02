@@ -1,5 +1,4 @@
 #include "maurice_cam/stereo_depth_estimator.hpp"
-#include <sensor_msgs/msg/camera_info.hpp>
 #include <nlohmann/json.hpp>
 #include <fstream>
 
@@ -21,24 +20,22 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 : Node("stereo_depth_estimator", options)
 {
   // Declare parameters with defaults
-  // Topic naming follows ROS camera namespace conventions:
-  //   depth/image_rect_raw - rectified depth image (16UC1 millimeters)
-  //   depth/camera_info    - camera info for depth image
-  //   image_rect           - rectified monochrome image
-  //   disparity            - disparity visualization
   this->declare_parameter<std::string>("data_directory", "/home/jetson1/innate-os/data");
-  this->declare_parameter<std::string>("stereo_topic", "/mars/main_camera/stereo");
-  this->declare_parameter<std::string>("depth_topic", "/mars/main_camera/depth/image_rect_raw");
+  this->declare_parameter<std::string>("left_topic", "/mars/main_camera/left/image_raw");
+  this->declare_parameter<std::string>("right_topic", "/mars/main_camera/right/image_raw");
+  this->declare_parameter<std::string>("depth_topic", "/mars/main_camera/depth");
   this->declare_parameter<std::string>("disparity_topic", "/mars/main_camera/disparity");
-  this->declare_parameter<std::string>("rectified_topic", "/mars/main_camera/image_rect");
+  this->declare_parameter<std::string>("rectified_topic", "/mars/main_camera/stereo_rectified");
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
   this->declare_parameter<int>("max_disparity", 80);
   this->declare_parameter<bool>("publish_disparity", false);
   this->declare_parameter<bool>("publish_rectified", false);
-  this->declare_parameter<int>("stereo_width", 1280);  // Input at 1280x480 (640x480 per camera)
-  this->declare_parameter<int>("stereo_height", 480);
+  this->declare_parameter<int>("image_width", 640);   // Single camera image width
+  this->declare_parameter<int>("image_height", 480);  // Single camera image height
   this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
-  this->declare_parameter<std::string>("camera_info_topic", "/mars/main_camera/depth/camera_info");
+  this->declare_parameter<bool>("publish_pointcloud", true);
+  this->declare_parameter<std::string>("pointcloud_topic", "/mars/main_camera/points");
+  this->declare_parameter<int>("pointcloud_decimation", 2);  // 2 = half resolution point cloud
   
   // Block Matching parameters (from Python script that worked best)
   this->declare_parameter<int>("bm_window_size", 11);       // Match Python script
@@ -47,7 +44,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 
   // Get parameter values
   data_directory_ = this->get_parameter("data_directory").as_string();
-  stereo_topic_ = this->get_parameter("stereo_topic").as_string();
+  left_topic_ = this->get_parameter("left_topic").as_string();
+  right_topic_ = this->get_parameter("right_topic").as_string();
   depth_topic_ = this->get_parameter("depth_topic").as_string();
   disparity_topic_ = this->get_parameter("disparity_topic").as_string();
   rectified_topic_ = this->get_parameter("rectified_topic").as_string();
@@ -55,26 +53,25 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   max_disparity_ = this->get_parameter("max_disparity").as_int();
   publish_disparity_ = this->get_parameter("publish_disparity").as_bool();
   publish_rectified_ = this->get_parameter("publish_rectified").as_bool();
-  stereo_width_ = this->get_parameter("stereo_width").as_int();
-  stereo_height_ = this->get_parameter("stereo_height").as_int();
+  image_width_ = this->get_parameter("image_width").as_int();
+  image_height_ = this->get_parameter("image_height").as_int();
   process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
   if (process_every_n_frames_ < 1) process_every_n_frames_ = 1;
-  camera_info_topic_ = this->get_parameter("camera_info_topic").as_string();
+  publish_pointcloud_ = this->get_parameter("publish_pointcloud").as_bool();
+  pointcloud_topic_ = this->get_parameter("pointcloud_topic").as_string();
+  pointcloud_decimation_ = this->get_parameter("pointcloud_decimation").as_int();
+  if (pointcloud_decimation_ < 1) pointcloud_decimation_ = 1;
   
   bm_window_size_ = this->get_parameter("bm_window_size").as_int();
   bm_quality_ = this->get_parameter("bm_quality").as_int();
   bm_conf_threshold_ = this->get_parameter("bm_conf_threshold").as_int();
 
-  // Calculate single image dimensions (input resolution)
-  image_width_ = stereo_width_ / 2;
-  image_height_ = stereo_height_;
-
   RCLCPP_INFO(this->get_logger(), "=== Maurice Stereo Depth Estimator (Block Matching) ===");
   RCLCPP_INFO(this->get_logger(), "Data directory: %s", data_directory_.c_str());
-  RCLCPP_INFO(this->get_logger(), "Stereo topic: %s", stereo_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Left topic: %s", left_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Right topic: %s", right_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "Depth topic: %s", depth_topic_.c_str());
-  RCLCPP_INFO(this->get_logger(), "Input stereo dimensions: %dx%d", stereo_width_, stereo_height_);
-  RCLCPP_INFO(this->get_logger(), "Input single image: %dx%d", image_width_, image_height_);
+  RCLCPP_INFO(this->get_logger(), "Input image dimensions: %dx%d", image_width_, image_height_);
   RCLCPP_INFO(this->get_logger(), "Max disparity: %d", max_disparity_);
   RCLCPP_INFO(this->get_logger(), "Block Matching: window=%d, quality=%d, confThreshold=%d", 
               bm_window_size_, bm_quality_, bm_conf_threshold_);
@@ -128,21 +125,27 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(this->get_logger(), "Rectified images enabled: %s", rectified_topic_.c_str());
   }
 
-  // Always publish camera info for depth image consumers (and point cloud generator)
-  camera_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
-    camera_info_topic_,
-    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-  );
-  RCLCPP_INFO(this->get_logger(), "Camera info topic: %s", camera_info_topic_.c_str());
+  if (publish_pointcloud_) {
+    pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      pointcloud_topic_,
+      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+    );
+    RCLCPP_INFO(this->get_logger(), "Point cloud enabled: %s (decimation: %d)",
+                pointcloud_topic_.c_str(), pointcloud_decimation_);
+  }
 
-  // Create subscription with zero-copy intra-process communication
-  stereo_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-    stereo_topic_,
-    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort),
-    [this](sensor_msgs::msg::Image::UniquePtr msg) {
-      this->stereoImageCallback(std::move(msg));
-    }
-  );
+  // Create synchronized subscriptions for left and right images
+  auto qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+  
+  left_sub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(
+    this, left_topic_, qos.get_rmw_qos_profile());
+  right_sub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(
+    this, right_topic_, qos.get_rmw_qos_profile());
+  
+  // Use ApproximateTime sync with queue size 5
+  sync_ = std::make_shared<Synchronizer>(SyncPolicy(5), *left_sub_, *right_sub_);
+  sync_->registerCallback(std::bind(&StereoDepthEstimator::syncCallback, this,
+    std::placeholders::_1, std::placeholders::_2));
 
   last_stats_time_ = this->now();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator initialized successfully");
@@ -177,7 +180,7 @@ std::filesystem::path StereoDepthEstimator::findCalibrationConfigDir()
     }
   }
 
-  // If no _debug directory found, look for calibration_config_* directories
+  // Look for calibration_config_* directories
   for (const auto& entry : std::filesystem::directory_iterator(data_path)) {
     if (entry.is_directory()) {
       std::string dirname = entry.path().filename().string();
@@ -342,7 +345,9 @@ void StereoDepthEstimator::cleanupVPI()
   vpi_confidence_ = nullptr;
 }
 
-void StereoDepthEstimator::stereoImageCallback(sensor_msgs::msg::Image::UniquePtr msg)
+void StereoDepthEstimator::syncCallback(
+    const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
+    const sensor_msgs::msg::Image::ConstSharedPtr& right_msg)
 {
   if (!vpi_initialized_ || !calibration_loaded_) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
@@ -357,32 +362,62 @@ void StereoDepthEstimator::stereoImageCallback(sensor_msgs::msg::Image::UniquePt
   }
 
   // Validate image dimensions
-  if (static_cast<int>(msg->width) != stereo_width_ || 
-      static_cast<int>(msg->height) != stereo_height_) {
+  if (static_cast<int>(left_msg->width) != image_width_ || 
+      static_cast<int>(left_msg->height) != image_height_) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                         "Image size mismatch: got %dx%d, expected %dx%d",
-                         msg->width, msg->height, stereo_width_, stereo_height_);
+                         "Left image size mismatch: got %dx%d, expected %dx%d",
+                         left_msg->width, left_msg->height, image_width_, image_height_);
     return;
   }
 
-  // Wrap ROS message data as cv::Mat (zero-copy)
-  cv::Mat stereo_frame;
-  if (msg->encoding == "bgr8") {
-    stereo_frame = cv::Mat(msg->height, msg->width, CV_8UC3, msg->data.data(), msg->step);
-  } else if (msg->encoding == "rgb8") {
-    cv::Mat rgb(msg->height, msg->width, CV_8UC3, msg->data.data(), msg->step);
-    cv::cvtColor(rgb, stereo_frame, cv::COLOR_RGB2BGR);
-  } else if (msg->encoding == "mono8") {
-    stereo_frame = cv::Mat(msg->height, msg->width, CV_8UC1, msg->data.data(), msg->step);
+  if (static_cast<int>(right_msg->width) != image_width_ || 
+      static_cast<int>(right_msg->height) != image_height_) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                         "Right image size mismatch: got %dx%d, expected %dx%d",
+                         right_msg->width, right_msg->height, image_width_, image_height_);
+    return;
+  }
+
+  // Wrap ROS message data as cv::Mat
+  cv::Mat left_frame, right_frame;
+  
+  // Process left image
+  if (left_msg->encoding == "bgr8") {
+    left_frame = cv::Mat(left_msg->height, left_msg->width, CV_8UC3, 
+                         const_cast<uint8_t*>(left_msg->data.data()), left_msg->step).clone();
+  } else if (left_msg->encoding == "rgb8") {
+    cv::Mat rgb(left_msg->height, left_msg->width, CV_8UC3, 
+                const_cast<uint8_t*>(left_msg->data.data()), left_msg->step);
+    cv::cvtColor(rgb, left_frame, cv::COLOR_RGB2BGR);
+  } else if (left_msg->encoding == "mono8") {
+    left_frame = cv::Mat(left_msg->height, left_msg->width, CV_8UC1, 
+                         const_cast<uint8_t*>(left_msg->data.data()), left_msg->step).clone();
   } else {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                         "Unsupported encoding: %s", msg->encoding.c_str());
+                         "Unsupported left encoding: %s", left_msg->encoding.c_str());
+    return;
+  }
+
+  // Process right image
+  if (right_msg->encoding == "bgr8") {
+    right_frame = cv::Mat(right_msg->height, right_msg->width, CV_8UC3, 
+                          const_cast<uint8_t*>(right_msg->data.data()), right_msg->step).clone();
+  } else if (right_msg->encoding == "rgb8") {
+    cv::Mat rgb(right_msg->height, right_msg->width, CV_8UC3, 
+                const_cast<uint8_t*>(right_msg->data.data()), right_msg->step);
+    cv::cvtColor(rgb, right_frame, cv::COLOR_RGB2BGR);
+  } else if (right_msg->encoding == "mono8") {
+    right_frame = cv::Mat(right_msg->height, right_msg->width, CV_8UC1, 
+                          const_cast<uint8_t*>(right_msg->data.data()), right_msg->step).clone();
+  } else {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                         "Unsupported right encoding: %s", right_msg->encoding.c_str());
     return;
   }
 
   // Process the frame
   try {
-    processFrame(stereo_frame, rclcpp::Time(msg->header.stamp));
+    processFrame(left_frame, right_frame, rclcpp::Time(left_msg->header.stamp));
     frame_count_++;
 
     // Print stats every 100 frames
@@ -400,29 +435,42 @@ void StereoDepthEstimator::stereoImageCallback(sensor_msgs::msg::Image::UniquePt
   }
 }
 
-void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcpp::Time& timestamp)
+void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat& right_input, const rclcpp::Time& timestamp)
 {
-  // ===== STEP 0: Unrotate entire stereo frame to match calibration coordinate system =====
-  // Calibration was done on unrotated images, but camera driver rotates 180° (camera mounted upside down).
-  // We unrotate for rectification, then rotate back to get the correct view.
-  cv::Mat stereo_unrotated;
-  cv::rotate(stereo_frame, stereo_unrotated, cv::ROTATE_180);
+  // ===== STEP 0: Unrotate images to match calibration coordinate system =====
+  // The camera driver rotates 180° (camera mounted upside down) before publishing.
+  // We unrotate to get images in calibration coordinate system (unrotated).
+  // Note: The driver publishes left topic = left camera after rotation (which was right sensor)
+  //       and right topic = right camera after rotation (which was left sensor)
+  // After 180° unrotation here, we get original sensor orientation.
+  cv::Mat left_unrotated, right_unrotated;
+  cv::rotate(left_input, left_unrotated, cv::ROTATE_180);
+  cv::rotate(right_input, right_unrotated, cv::ROTATE_180);
 
-  // ===== STEP 1: Split stereo frame into left and right images =====
-  // After unrotation, first half = original LEFT camera, second half = original RIGHT camera
-  cv::Mat left_img = stereo_unrotated(cv::Rect(0, 0, image_width_, image_height_));
-  cv::Mat right_img = stereo_unrotated(cv::Rect(image_width_, 0, image_width_, image_height_));
+  // ===== STEP 1: Map driver topics to physical sensors =====
+  // After 180° rotation in driver:
+  //   - "left" topic contains what was originally the RIGHT sensor (after rotation appears on left)
+  //   - "right" topic contains what was originally the LEFT sensor (after rotation appears on right)
+  // After unrotation here, we need to swap them to match calibration:
+  //   - left_unrotated came from "left" topic = original RIGHT sensor -> use as right_img
+  //   - right_unrotated came from "right" topic = original LEFT sensor -> use as left_img
+  cv::Mat left_img = right_unrotated;   // "right" topic = original LEFT sensor
+  cv::Mat right_img = left_unrotated;   // "left" topic = original RIGHT sensor
 
   // ===== STEP 2: Downscale to calibration resolution =====
   cv::Mat left_scaled, right_scaled;
   cv::resize(left_img, left_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
   cv::resize(right_img, right_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
 
-  // ===== STEP 3: Convert to grayscale =====
+  // ===== STEP 3: Convert to grayscale (keep color for point cloud) =====
   cv::Mat left_gray, right_gray;
-  if (stereo_frame.channels() == 3) {
+  cv::Mat left_color_for_pc;  // Color image at input resolution for point cloud
+  if (left_input.channels() == 3) {
     cv::cvtColor(left_scaled, left_gray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(right_scaled, right_gray, cv::COLOR_BGR2GRAY);
+    // Keep color image for point cloud (upscale to input resolution and rotate)
+    cv::resize(left_scaled, left_color_for_pc, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
+    cv::rotate(left_color_for_pc, left_color_for_pc, cv::ROTATE_180);
   } else {
     left_gray = left_scaled;
     right_gray = right_scaled;
@@ -537,46 +585,22 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
   cv::reprojectImageTo3D(disparity_float, points_3d, Q_, true);  // handleMissingValues=true
 
   // Extract depth (Z coordinate) and convert to uint16 millimeters
-  cv::Mat depth_calib(calib_height_, calib_width_, CV_16UC1);
-  const float MAX_DEPTH_M = 4.0f;
-  const float MIN_DEPTH_M = 0.05f;
-  
-  // Depth distribution buckets: <-2, [-2,-1), [-1,0), [0,1), [1,2), [2,3), [3,4), >=4, nan
-  constexpr int NUM_BUCKETS = 9;
-  int buckets[NUM_BUCKETS] = {0};
-  int total_pixels = 0;
+  cv::Mat depth_calib(calib_height_, calib_width_, CV_16SC1);
+  const float MAX_DEPTH_M = 10.0f;  // Same as Python script
   
   for (int y = 0; y < calib_height_; y++) {
     const cv::Vec3f* pt_row = points_3d.ptr<cv::Vec3f>(y);
-    uint16_t* depth_row = depth_calib.ptr<uint16_t>(y);
+    int16_t* depth_row = depth_calib.ptr<int16_t>(y);
     for (int x = 0; x < calib_width_; x++) {
-      total_pixels++;
-      float z = -pt_row[x][2];
-      
-      if (!std::isfinite(z)) {
-        buckets[8]++;  // nan bucket
-        depth_row[x] = 0;
+      float z = pt_row[x][2];  // Z coordinate is depth
+      if (std::fabs(z) <= MAX_DEPTH_M && std::isfinite(z)) {
+        // Convert meters to millimeters
+        depth_row[x] = static_cast<int16_t>(std::clamp(z * 1000.0f, -32768.0f, 32767.0f));
       } else {
-        // Bucket index: clamp z to [-2, 4] range, then map to bucket 0-7
-        int idx = std::clamp(static_cast<int>(std::floor(z)) + 2, 0, 7);
-        buckets[idx]++;
-        
-        // Set depth value
-        if (z >= MIN_DEPTH_M && z <= MAX_DEPTH_M) {
-          depth_row[x] = static_cast<uint16_t>(std::min(z * 1000.0f, 65535.0f));
-        } else {
-          depth_row[x] = 0;
-        }
+        depth_row[x] = 0;  // Invalid depth
       }
     }
   }
-  
-  // Log depth distribution
-  float s = 100.0f / total_pixels;
-  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-    "Depth: <-2:%.1f%% -2:-1:%.1f%% -1:0:%.1f%% 0:1:%.1f%% 1:2:%.1f%% 2:3:%.1f%% 3:4:%.1f%% >4:%.1f%% nan:%.1f%%",
-    buckets[0]*s, buckets[1]*s, buckets[2]*s, buckets[3]*s, 
-    buckets[4]*s, buckets[5]*s, buckets[6]*s, buckets[7]*s, buckets[8]*s);
 
   // Prepare disparity visualization if needed
   cv::Mat disp_vis_calib;
@@ -606,52 +630,84 @@ void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcp
   depth_msg->header.frame_id = frame_id_;
   depth_msg->height = image_height_;
   depth_msg->width = image_width_;
-  depth_msg->encoding = "16UC1";
+  depth_msg->encoding = "16SC1";
   depth_msg->is_bigendian = false;
-  depth_msg->step = image_width_ * sizeof(uint16_t);
+  depth_msg->step = image_width_ * sizeof(int16_t);
   depth_msg->data.resize(depth_msg->height * depth_msg->step);
   memcpy(depth_msg->data.data(), depth_full.data, depth_msg->data.size());
 
+  // Generate colored point cloud if enabled (before moving depth_msg)
+  if (publish_pointcloud_ && pointcloud_pub_) {
+    // Scale camera intrinsics from calibration to input resolution
+    const float scale_up = 1.0f / static_cast<float>(depth_scale_);
+    const float fx = static_cast<float>(P1_.at<double>(0, 0)) * scale_up;
+    const float fy = static_cast<float>(P1_.at<double>(1, 1)) * scale_up;
+    const float cx = static_cast<float>(P1_.at<double>(0, 2)) * scale_up;
+    const float cy = static_cast<float>(P1_.at<double>(1, 2)) * scale_up;
+
+    const int pc_width = image_width_ / pointcloud_decimation_;
+    const int pc_height = image_height_ / pointcloud_decimation_;
+    const int step = pointcloud_decimation_;
+
+    auto cloud_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
+    cloud_msg->header.stamp = timestamp;
+    cloud_msg->header.frame_id = frame_id_;
+    cloud_msg->height = pc_height;
+    cloud_msg->width = pc_width;
+    cloud_msg->is_dense = false;
+    cloud_msg->is_bigendian = false;
+
+    sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
+    modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
+    modifier.resize(pc_width * pc_height);
+
+    sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
+    sensor_msgs::PointCloud2Iterator<float> iter_rgb(*cloud_msg, "rgb");
+
+    const int16_t* depth_data = reinterpret_cast<const int16_t*>(depth_full.data);
+    const bool has_color = !left_color_for_pc.empty() && left_color_for_pc.channels() == 3;
+
+    for (int v = 0; v < pc_height; ++v) {
+      for (int u = 0; u < pc_width; ++u, ++iter_x, ++iter_y, ++iter_z, ++iter_rgb) {
+        int img_u = u * step;
+        int img_v = v * step;
+        int16_t depth_mm = depth_data[img_v * image_width_ + img_u];
+
+        if (true) {
+          float z = static_cast<float>(depth_mm) * 0.001f;
+          *iter_x = (static_cast<float>(img_u) - cx) * z / fx;
+          *iter_y = (static_cast<float>(img_v) - cy) * z / fy;
+          *iter_z = z;
+
+          // Get color from the color image (BGR format) and pack as float
+          if (has_color) {
+            const cv::Vec3b& bgr = left_color_for_pc.at<cv::Vec3b>(img_v, img_u);
+            // Pack RGB into float (ROS convention: RGB packed as 0x00RRGGBB)
+            uint32_t rgb_packed = (static_cast<uint32_t>(bgr[2]) << 16) |  // R
+                                  (static_cast<uint32_t>(bgr[1]) << 8) |   // G
+                                  (static_cast<uint32_t>(bgr[0]));         // B
+            *iter_rgb = *reinterpret_cast<float*>(&rgb_packed);
+          } else {
+            uint32_t rgb_packed = 0x00808080;  // Gray fallback
+            *iter_rgb = *reinterpret_cast<float*>(&rgb_packed);
+          }
+        } else {
+          *iter_x = std::numeric_limits<float>::quiet_NaN();
+          *iter_y = std::numeric_limits<float>::quiet_NaN();
+          *iter_z = std::numeric_limits<float>::quiet_NaN();
+          uint32_t rgb_packed = 0x00000000;
+          *iter_rgb = *reinterpret_cast<float*>(&rgb_packed);
+        }
+      }
+    }
+
+    pointcloud_pub_->publish(std::move(cloud_msg));
+  }
+
   // Publish depth
   depth_pub_->publish(std::move(depth_msg));
-
-  // Publish camera info (scaled to output resolution)
-  if (camera_info_pub_) {
-    auto info_msg = std::make_unique<sensor_msgs::msg::CameraInfo>();
-    info_msg->header.stamp = timestamp;
-    info_msg->header.frame_id = frame_id_;
-    info_msg->height = image_height_;
-    info_msg->width = image_width_;
-    info_msg->distortion_model = "plumb_bob";
-    
-    // Scale intrinsics from calibration to output resolution
-    const double scale_up = 1.0 / depth_scale_;
-    
-    // D - distortion coefficients (use zeros since image is rectified)
-    info_msg->d = {0.0, 0.0, 0.0, 0.0, 0.0};
-    
-    // K - intrinsic matrix (scaled)
-    info_msg->k = {
-      P1_.at<double>(0, 0) * scale_up, 0.0, P1_.at<double>(0, 2) * scale_up,
-      0.0, P1_.at<double>(1, 1) * scale_up, P1_.at<double>(1, 2) * scale_up,
-      0.0, 0.0, 1.0
-    };
-    
-    // R - rectification matrix (identity for rectified image)
-    info_msg->r = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-    
-    // P - projection matrix (scaled)
-    info_msg->p = {
-      P1_.at<double>(0, 0) * scale_up, 0.0, P1_.at<double>(0, 2) * scale_up, 0.0,
-      0.0, P1_.at<double>(1, 1) * scale_up, P1_.at<double>(1, 2) * scale_up, 0.0,
-      0.0, 0.0, 1.0, 0.0
-    };
-    
-    info_msg->binning_x = 0;
-    info_msg->binning_y = 0;
-    
-    camera_info_pub_->publish(std::move(info_msg));
-  }
 
   // Publish disparity visualization if enabled
   if (publish_disparity_ && disparity_pub_ && !disp_vis_calib.empty()) {
