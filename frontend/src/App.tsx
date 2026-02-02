@@ -246,7 +246,7 @@ const WaveformViz = styled.div`
 
 const WaveBars = styled.div`
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 3px;
   height: 40px;
 `;
@@ -302,9 +302,10 @@ const VoiceStatusContainer = styled.div`
 `;
 
 const SensitivitySlider = styled.input`
-  width: 80px;
+  width: 60px;
   height: 4px;
   -webkit-appearance: none;
+  appearance: none;
   background: ${({ theme }) => theme.colors.foreground}30;
   border-radius: 2px;
   outline: none;
@@ -312,27 +313,26 @@ const SensitivitySlider = styled.input`
 
   &::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     background: ${({ theme }) => theme.colors.primary};
     border-radius: 50%;
     cursor: pointer;
   }
 `;
 
-const SensitivityLabel = styled.div`
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  opacity: 0.6;
+const SensitivityContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
 `;
 
-const DynamicBar = styled.div<{ $height: number }>`
-  width: 3px;
-  background: ${({ theme }) => theme.colors.foreground};
-  height: ${({ $height }) => Math.max(4, $height)}px;
-  transition: height 0.05s ease-out;
-  border-radius: 1px;
+const SensitivityLabel = styled.div`
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.5;
 `;
 
 // Agent types
@@ -363,8 +363,8 @@ export default function App() {
   // Voice recognition state
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string>("Voice Input");
-  const [sensitivity, setSensitivity] = useState(0.02); // Adjustable threshold
-  const [audioLevel, setAudioLevel] = useState(0); // Current audio level for visualization
+  const [sensitivity, setSensitivity] = useState(0.02);
+  const sensitivityRef = useRef(0.02);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -374,7 +374,11 @@ export default function App() {
   const silenceCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isRecordingRef = useRef<boolean>(false);
   const hasSpeechRef = useRef<boolean>(false);
-  const sensitivityRef = useRef(sensitivity); // Ref for use in callbacks
+
+  // Keep sensitivity ref in sync
+  useEffect(() => {
+    sensitivityRef.current = sensitivity;
+  }, [sensitivity]);
 
   // Fetch available agents from the robot on mount
   useEffect(() => {
@@ -413,11 +417,6 @@ export default function App() {
 
     return () => clearInterval(intervalId);
   }, []);
-
-  // Keep sensitivity ref in sync
-  useEffect(() => {
-    sensitivityRef.current = sensitivity;
-  }, [sensitivity]);
 
   // Voice recognition functions
   const SILENCE_DURATION = 1500; // ms of silence before processing speech
@@ -513,9 +512,6 @@ export default function App() {
     // Calculate average volume (0-1 range)
     const average =
       dataArray.reduce((a, b) => a + b, 0) / dataArray.length / 255;
-
-    // Update audio level for visualization (amplify for better visual feedback)
-    setAudioLevel(Math.min(1, average * 5));
 
     if (average > sensitivityRef.current) {
       // Sound detected
@@ -761,55 +757,29 @@ export default function App() {
           </VoiceToggleButton>
           <VoiceStatusContainer>
             <WaveBars style={{ opacity: isVoiceActive ? 1 : 0.3 }}>
-              {isVoiceActive ? (
-                // Dynamic bars based on audio level
-                <>
-                  <DynamicBar $height={4 + audioLevel * 30 * 0.6} />
-                  <DynamicBar $height={4 + audioLevel * 30 * 0.9} />
-                  <DynamicBar $height={4 + audioLevel * 30 * 0.5} />
-                  <DynamicBar $height={4 + audioLevel * 30 * 1.0} />
-                  <DynamicBar $height={4 + audioLevel * 30 * 0.7} />
-                  <DynamicBar $height={4 + audioLevel * 30 * 0.8} />
-                  <DynamicBar $height={4 + audioLevel * 30 * 0.5} />
-                  <DynamicBar $height={4 + audioLevel * 30 * 0.6} />
-                </>
-              ) : (
-                // Static animated bars when inactive
-                <>
-                  <Bar $duration={0.5} />
-                  <Bar $duration={0.7} />
-                  <Bar $duration={0.4} />
-                  <Bar $duration={0.8} />
-                  <Bar $duration={0.6} />
-                  <Bar $duration={0.5} />
-                  <Bar $duration={0.7} />
-                  <Bar $duration={0.4} />
-                </>
-              )}
+              <Bar $duration={0.5} />
+              <Bar $duration={0.7} />
+              <Bar $duration={0.4} />
+              <Bar $duration={0.8} />
+              <Bar $duration={0.6} />
+              <Bar $duration={0.5} />
+              <Bar $duration={0.7} />
+              <Bar $duration={0.4} />
             </WaveBars>
             <VizLabel>{voiceStatus}</VizLabel>
           </VoiceStatusContainer>
-          {isVoiceActive && (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                gap: "2px",
-              }}
-            >
-              <SensitivitySlider
-                type="range"
-                min="0.005"
-                max="0.1"
-                step="0.005"
-                value={sensitivity}
-                onChange={(e) => setSensitivity(parseFloat(e.target.value))}
-                title={`Sensitivity: ${Math.round((1 - sensitivity / 0.1) * 100)}%`}
-              />
-              <SensitivityLabel>Sensitivity</SensitivityLabel>
-            </div>
-          )}
+          <SensitivityContainer>
+            <SensitivitySlider
+              type="range"
+              min="0.005"
+              max="0.08"
+              step="0.005"
+              value={sensitivity}
+              onChange={(e) => setSensitivity(parseFloat(e.target.value))}
+              title={`Mic sensitivity`}
+            />
+            <SensitivityLabel>Sensitivity</SensitivityLabel>
+          </SensitivityContainer>
         </WaveformViz>
       </Footer>
     </AppContainer>
