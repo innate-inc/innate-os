@@ -7,7 +7,12 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
-#include "sensor_msgs/msg/camera_info.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "sensor_msgs/point_cloud2_iterator.hpp"
+
+#include <message_filters/subscriber.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/synchronizer.h>
 
 #include <opencv2/opencv.hpp>
 
@@ -22,19 +27,15 @@ namespace maurice_cam
 /**
  * @brief Stereo Depth Estimator component node using NVIDIA VPI
  * 
- * This node subscribes to stereo image topic using zero-copy intra-process
- * communication, performs GPU-accelerated stereo matching using VPI Block
- * Matching algorithm, and publishes the depth image.
+ * This node subscribes to separate left and right image topics using
+ * message_filters for time synchronization, performs GPU-accelerated stereo
+ * matching using VPI Block Matching algorithm, and publishes the depth image.
  * 
  * Key features:
  * - Scales input to calibration resolution for processing
  * - Uses VPI Block Matching (faster than SGM, good quality)
  * - No post-filtering (cleanest results per testing)
  * - Scales depth back to input resolution for publishing
- * 
- * Point cloud generation has been moved to separate nodes:
- * - PointCloudGenerator: generates point cloud from depth image
- * - PointCloudFilter: filters point cloud by height and range
  */
 class StereoDepthEstimator : public rclcpp::Node
 {
@@ -76,37 +77,51 @@ private:
   void cleanupVPI();
 
   /**
-   * @brief Callback for stereo image subscription
-   * @param msg Incoming stereo image message (zero-copy unique_ptr)
+   * @brief Callback for synchronized left/right image subscription
+   * @param left_msg Left camera image
+   * @param right_msg Right camera image
    */
-  void stereoImageCallback(sensor_msgs::msg::Image::UniquePtr msg);
+  void syncCallback(
+    const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
+    const sensor_msgs::msg::Image::ConstSharedPtr& right_msg);
 
   /**
-   * @brief Process stereo frame: rectify, compute disparity, compute depth
-   * @param stereo_frame Input stereo frame (side-by-side left and right)
+   * @brief Process left and right images: rectify, compute disparity, compute depth
+   * @param left_img Input left image
+   * @param right_img Input right image
    * @param timestamp Timestamp for the output message
    */
-  void processFrame(const cv::Mat& stereo_frame, const rclcpp::Time& timestamp);
+  void processFrame(const cv::Mat& left_img, const cv::Mat& right_img, const rclcpp::Time& timestamp);
 
   // ROS 2 publishers and subscribers
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr stereo_sub_;
+  using SyncPolicy = message_filters::sync_policies::ApproximateTime<
+    sensor_msgs::msg::Image, sensor_msgs::msg::Image>;
+  using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
+  
+  std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> left_sub_;
+  std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> right_sub_;
+  std::shared_ptr<Synchronizer> sync_;
+  
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rectified_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
 
   // Node parameters
   std::string data_directory_;
-  std::string stereo_topic_;
+  std::string left_topic_;
+  std::string right_topic_;
   std::string depth_topic_;
   std::string disparity_topic_;
   std::string rectified_topic_;
-  std::string camera_info_topic_;
+  std::string pointcloud_topic_;
   std::string frame_id_;
   int max_disparity_;
   bool publish_disparity_;
   bool publish_rectified_;
+  bool publish_pointcloud_;
   int process_every_n_frames_;  // Process 1 out of every N frames
+  int pointcloud_decimation_;   // Decimate point cloud (1=full, 2=half, 4=quarter)
 
   // Block Matching parameters (from Python script that worked best)
   int bm_window_size_;          // Block matching window size (default: 11)
@@ -114,9 +129,7 @@ private:
   int bm_conf_threshold_;       // Confidence threshold (default: 16000, lower = more details)
 
   // Image dimensions - input (from camera)
-  int stereo_width_;   // Full stereo image width (left + right) from camera
-  int stereo_height_;  // Full stereo image height from camera
-  int image_width_;    // Single camera image width (stereo_width / 2)
+  int image_width_;    // Single camera image width
   int image_height_;   // Single camera image height
 
   // Image dimensions - calibration (processing resolution)

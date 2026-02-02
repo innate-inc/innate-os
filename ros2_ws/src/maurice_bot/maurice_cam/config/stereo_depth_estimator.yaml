@@ -25,6 +25,9 @@ main_camera_driver:
     publish_compressed: true
     compressed_frame_interval: 6  # Publish compressed every N frames
     
+    # Stereo image publishing (combined left+right, disabled by default)
+    publish_stereo: false
+    
     # Exposure control
     exposure: -1  # -1 = use current value, 1-10000
     gain: -1  # -1 = use current value, 0-255
@@ -62,7 +65,8 @@ arm_camera_driver:
   ros__parameters:
     # Data and input/output topics
     data_directory: "/home/jetson1/innate-os/data"
-    stereo_topic: "/mars/main_camera/stereo"
+    left_topic: "/mars/main_camera/left/image_raw"
+    right_topic: "/mars/main_camera/right/image_raw"
     depth_topic: "/mars/main_camera/depth/image_rect_raw"
     camera_info_topic: "/mars/main_camera/depth/camera_info"
     disparity_topic: "/mars/main_camera/disparity"
@@ -70,12 +74,12 @@ arm_camera_driver:
     frame_id: "camera_optical_frame"
     
     # Output control
-    publish_disparity: false     # Disparity visualization (mono8)
-    publish_rectified: false     # Rectified left image (mono8)
+    publish_disparity: true     # Disparity visualization (mono8)
+    publish_rectified: true     # Rectified left image (mono8)
     
-    # Image dimensions
-    stereo_width: 1280   # Full stereo frame (left+right combined)
-    stereo_height: 480
+    # Image dimensions (single camera, not combined stereo)
+    image_width: 640
+    image_height: 480
     
     # Processing control
     process_every_n_frames: 1  # 1=all frames, 5=6Hz from 30Hz

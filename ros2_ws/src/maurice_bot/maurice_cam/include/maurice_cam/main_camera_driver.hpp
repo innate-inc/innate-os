@@ -255,12 +255,16 @@ private:
   int publish_stereo_height_;
   double fps_;
   std::string frame_id_;
+  std::string right_frame_id_;
   int jpeg_quality_;
 
   // Compressed image publishing settings
   bool publish_compressed_{true};
   int compressed_frame_interval_{3};  // Publish compressed every N frames
   int compressed_frame_counter_{0};
+
+  // Stereo image publishing (combined left+right for legacy compatibility)
+  bool publish_stereo_{false};
 
   // V4L2 control interface
   int camera_fd_{-1};
