@@ -1388,11 +1388,20 @@ class SimulationNode:
                 pos[0], pos[1], pos[2], quat[1], quat[2], quat[3], quat[0], sim_time
             )
 
-            # Publish the unified RobotStateMsg to the bridge
+            # Publish the unified RobotStateMsg to the sensor queue (size-1, latest only)
+            # If queue is full, discard old frame and put new one
             try:
-                self.shared_queues.sim_to_agent.put_nowait(state_msg)
+                self.shared_queues.sensor_to_agent.put_nowait(state_msg)
             except queue.Full:
-                pass
+                # Discard old frame and put new one
+                try:
+                    self.shared_queues.sensor_to_agent.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.shared_queues.sensor_to_agent.put_nowait(state_msg)
+                except queue.Full:
+                    pass
 
             # --- (G) Publish the map when changed or periodically
             should_publish_map = (
