@@ -59,15 +59,23 @@ class SimulationNode:
         self.commanded_lin_vel = np.zeros(3)  # [vx, vy, vz]
         self.commanded_ang_vel = np.zeros(3)  # [wx, wy, wz]
 
-        # Navigation control parameters
-        self.max_linear_velocity = 0.5  # m/s
-        self.max_angular_velocity = 1.0  # rad/s
+        # Navigation control parameters - differential drive kinematics
+        # Physical constraints:
+        self.wheel_base = 0.18  # m - distance between wheels (from URDF collision box)
+        self.max_wheel_speed = 0.6  # m/s - max individual wheel speed
+        # Derived limits: max_linear = max_wheel_speed, max_angular = 2*max_wheel_speed/wheel_base
+        # Software caps (for smoother motion, can be at or below physical limits):
+        self.linear_velocity_cap = 0.5  # m/s - software cap on forward speed
+        self.angular_velocity_cap = 1.0  # rad/s - software cap on rotation speed
+        # Tolerances:
         self.position_tolerance = (
             0.02  # m - how close to target before considering reached
         )
         self.angle_tolerance = (
             0.02  # rad - how close to target angle before considering reached
         )
+        # Heading must be within this angle of movement direction before moving forward
+        self.heading_alignment_threshold = 0.15  # rad (~8.6 degrees)
 
         # Current navigation target (None if no active target)
         self.nav_target_pos = None
@@ -132,7 +140,7 @@ class SimulationNode:
     def _init_scene(self):
         """Initialize the main simulation scene"""
         self.scene = gs.Scene(
-            sim_options=gs.options.SimOptions(dt=0.02, substeps=10),
+            sim_options=gs.options.SimOptions(dt=0.05, substeps=4),
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(3.5, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
@@ -660,88 +668,133 @@ class SimulationNode:
         """Initialize robot movement - no-op for Maurice"""
         pass
 
-    def _update_navigation_movement(self, dt):
-        """Smoothly move robot towards navigation target with velocity limits."""
+    def _update_navigation_movement(self, dt, sim_time=0.0):
+        """
+        Differential drive navigation: robot heading must be tangent to trajectory.
+
+        Key constraints:
+        1. Robot can only move forward/backward in the direction it's facing
+        2. Must rotate to face target before moving forward
+        3. Speed is limited by differential drive kinematics:
+           - v_left = v - ω * L/2
+           - v_right = v + ω * L/2
+           - Both wheel speeds must be <= max_wheel_speed
+        """
         # Get current robot state
         current_pos = self.robot.get_pos().cpu().numpy()
         current_quat = self.robot.get_quat().cpu().numpy()  # [w, x, y, z]
 
         # Convert current quaternion to yaw angle
-        current_yaw = 2 * np.arctan2(
-            current_quat[3], current_quat[0]
-        )  # z, w components
+        current_yaw = 2 * np.arctan2(current_quat[3], current_quat[0])
 
         # Calculate position error
         pos_error = self.nav_target_pos - current_pos
         distance_to_target = np.linalg.norm(pos_error[:2])  # Only X,Y distance
 
-        # Calculate angle error (normalize to [-pi, pi])
-        angle_error = self.nav_target_yaw - current_yaw
-        while angle_error > np.pi:
-            angle_error -= 2 * np.pi
-        while angle_error < -np.pi:
-            angle_error += 2 * np.pi
+        # Calculate the angle TO the target position (direction we need to move)
+        angle_to_target = np.arctan2(pos_error[1], pos_error[0])
 
-        # Check if we've reached the target
+        # Calculate heading error: difference between current heading and direction to target
+        heading_error = angle_to_target - current_yaw
+        # Normalize to [-pi, pi]
+        while heading_error > np.pi:
+            heading_error -= 2 * np.pi
+        while heading_error < -np.pi:
+            heading_error += 2 * np.pi
+
+        # Calculate final orientation error (for when we reach position)
+        final_angle_error = self.nav_target_yaw - current_yaw
+        while final_angle_error > np.pi:
+            final_angle_error -= 2 * np.pi
+        while final_angle_error < -np.pi:
+            final_angle_error += 2 * np.pi
+
+        # Check if we've reached the target position
         position_reached = distance_to_target < self.position_tolerance
-        angle_reached = abs(angle_error) < self.angle_tolerance
+        final_angle_reached = abs(final_angle_error) < self.angle_tolerance
 
-        if position_reached and angle_reached:
-            # Target reached, clear navigation target
+        if position_reached and final_angle_reached:
+            # Target fully reached, clear navigation target
             self.nav_target_pos = None
             self.nav_target_yaw = None
             self.commanded_lin_vel = np.zeros(3)
             self.commanded_ang_vel = np.zeros(3)
             return
 
-        # Calculate desired velocities
-        if distance_to_target > self.position_tolerance:
-            # Calculate direction to target (in world frame)
-            direction = pos_error[:2] / distance_to_target
+        # Determine what to do based on state
+        linear_vel = 0.0
+        angular_vel = 0.0
 
-            # Apply velocity limit
-            desired_speed = min(self.max_linear_velocity, distance_to_target / dt)
+        if not position_reached:
+            # We need to move toward the target
+            # Check if heading is aligned with movement direction
+            heading_aligned = abs(heading_error) < self.heading_alignment_threshold
 
-            # Calculate velocity in world frame
-            linear_velocity = direction * desired_speed
+            if heading_aligned:
+                # Heading is aligned - move forward while making small corrections
+                # Calculate desired angular velocity for path correction
+                angular_vel = np.clip(
+                    heading_error / dt,
+                    -self.angular_velocity_cap,
+                    self.angular_velocity_cap,
+                )
 
-            # Move robot position
-            new_pos = current_pos + np.array(
-                [linear_velocity[0] * dt, linear_velocity[1] * dt, 0]
-            )
-            self.robot.set_pos(new_pos)
+                # Calculate max linear velocity given angular velocity (differential drive constraint)
+                # |v| + |ω| * L/2 <= max_wheel_speed
+                max_linear_for_turn = (
+                    self.max_wheel_speed - abs(angular_vel) * self.wheel_base / 2
+                )
+                max_linear_for_turn = max(0.0, max_linear_for_turn)  # Can't be negative
 
-            # Store commanded velocities for odometry
-            self.commanded_lin_vel = np.array(
-                [linear_velocity[0], linear_velocity[1], 0]
-            )
+                # Also limit by software cap and distance (don't overshoot)
+                desired_linear = min(
+                    self.linear_velocity_cap,
+                    max_linear_for_turn,
+                    distance_to_target / dt,
+                )
+
+                linear_vel = desired_linear
+            else:
+                # Heading not aligned - rotate in place to face target
+                angular_vel = np.sign(heading_error) * min(
+                    self.angular_velocity_cap,
+                    abs(heading_error) / dt,
+                )
+                linear_vel = 0.0  # Don't move forward while rotating significantly
         else:
-            self.commanded_lin_vel = np.zeros(3)
-
-        # Handle rotation
-        if abs(angle_error) > self.angle_tolerance:
-            # Apply angular velocity limit
-            desired_angular_vel = np.sign(angle_error) * min(
-                self.max_angular_velocity, abs(angle_error) / dt
+            # Position reached, rotate to final orientation
+            angular_vel = np.sign(final_angle_error) * min(
+                self.angular_velocity_cap,
+                abs(final_angle_error) / dt,
             )
+            linear_vel = 0.0
 
-            # Update orientation
-            new_yaw = current_yaw + desired_angular_vel * dt
+        # Apply movement using differential drive model
+        # Robot moves in the direction it's facing
+        cos_yaw = np.cos(current_yaw)
+        sin_yaw = np.sin(current_yaw)
 
-            # Convert yaw to quaternion [w, x, y, z]
-            new_quat = [
-                np.cos(new_yaw / 2.0),  # w
-                0.0,  # x
-                0.0,  # y
-                np.sin(new_yaw / 2.0),  # z
-            ]
+        # Update position (forward motion in heading direction)
+        new_pos = current_pos + np.array(
+            [cos_yaw * linear_vel * dt, sin_yaw * linear_vel * dt, 0.0]
+        )
+        self.robot.set_pos(new_pos)
 
-            self.robot.set_quat(new_quat)
+        # Update orientation
+        new_yaw = current_yaw + angular_vel * dt
+        new_quat = [
+            np.cos(new_yaw / 2.0),  # w
+            0.0,  # x
+            0.0,  # y
+            np.sin(new_yaw / 2.0),  # z
+        ]
+        self.robot.set_quat(new_quat)
 
-            # Store commanded angular velocity for odometry
-            self.commanded_ang_vel = np.array([0, 0, desired_angular_vel])
-        else:
-            self.commanded_ang_vel = np.zeros(3)
+        # Store commanded velocities for odometry (in world frame)
+        self.commanded_lin_vel = np.array(
+            [cos_yaw * linear_vel, sin_yaw * linear_vel, 0]
+        )
+        self.commanded_ang_vel = np.array([0, 0, angular_vel])
 
     def _apply_environment_config(self, config: Dict[str, Any]):
         """Activates and positions managed entities based on config, hides others."""
@@ -1190,7 +1243,7 @@ class SimulationNode:
 
             # --- (B) Handle smooth navigation movement ---
             if self.nav_target_pos is not None and self.nav_target_yaw is not None:
-                self._update_navigation_movement(dt)
+                self._update_navigation_movement(dt, sim_time)
 
             # --- (C) Update moving entities ---
             self._update_entity_poses(sim_time)
