@@ -8,8 +8,6 @@ from nav2_simple_commander.robot_navigator import BasicNavigator
 from brain_client.skill_types import Skill, SkillResult
 import rclpy
 from rclpy.node import Node
-import tf2_ros
-from tf2_geometry_msgs import do_transform_pose_stamped
 
 
 class SimPathPlanningController:
@@ -21,8 +19,10 @@ class SimPathPlanningController:
         self.logger = logger
         self._send_feedback = primitive._send_feedback
 
-        # Create Nav2 navigator for path planning only
-        self.navigator = BasicNavigator()
+        # Create Nav2 navigators with namespaces (matching real navigate_to_position.py)
+        self.navigator = BasicNavigator(namespace="")
+        self.navigator_mapfree = BasicNavigator(namespace="mapfree")
+        self.navigator_navigation = BasicNavigator(namespace="navigation")
 
         # Create a minimal ROS2 node for publishing
         if not rclpy.ok():
@@ -46,10 +46,6 @@ class SimPathPlanningController:
         self._navigation_status = "IDLE"  # IDLE, ACTIVE, SUCCEEDED, FAILED, CANCELED
         self._cancel_requested = threading.Event()
         self._navigation_complete = threading.Event()
-
-        # TF2 for coordinate transformations
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self.node)
 
         self.logger.info("Simulator path planning controller created")
 
@@ -99,55 +95,17 @@ class SimPathPlanningController:
             f"[NavSim] Planning path to: x={x}, y={y}, theta={theta}, frame={goal_pose.header.frame_id}, local_frame={local_frame}"
         )
 
-        # If local_frame, transform goal from base_link to odom frame
-        if local_frame:
-            try:
-                # Spin multiple times to allow TF buffer to populate
-                for _ in range(10):
-                    rclpy.spin_once(self.node, timeout_sec=0.1)
-
-                # Check if odom frame exists, try map as fallback
-                target_frame = "odom"
-                if not self.tf_buffer.can_transform(
-                    "odom", "base_link", rclpy.time.Time()
-                ):
-                    if self.tf_buffer.can_transform(
-                        "map", "base_link", rclpy.time.Time()
-                    ):
-                        target_frame = "map"
-                    else:
-                        self.logger.warning(
-                            "[NavSim] No TF available, using goal as-is in base_link frame"
-                        )
-                        # Skip transformation, Nav2 should handle base_link frame
-                        goal_pose.header.frame_id = "base_link"
-                        target_frame = None
-
-                if target_frame:
-                    transform = self.tf_buffer.lookup_transform(
-                        target_frame,
-                        "base_link",
-                        rclpy.time.Time(),
-                        timeout=rclpy.duration.Duration(seconds=2.0),
-                    )
-
-                    # Transform the goal pose
-                    goal_pose_transformed = do_transform_pose_stamped(
-                        goal_pose, transform
-                    )
-                    self.logger.info(
-                        f"[NavSim] Transformed goal from base_link to {target_frame}: ({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}) -> ({goal_pose_transformed.pose.position.x:.2f}, {goal_pose_transformed.pose.position.y:.2f})"
-                    )
-                    goal_pose = goal_pose_transformed
-            except Exception as e:
-                self.logger.error(f"[NavSim] Failed to transform goal: {e}")
-                return "FAILED"
+        # Use the correct navigator based on local_frame (matching real navigate_to_position.py)
+        path_navigator = (
+            self.navigator_mapfree if local_frame else self.navigator_navigation
+        )
 
         # Get the global path from Nav2
         self.logger.info(
-            f"[NavSim] Requesting path from Nav2 with goal_pose: pos=({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}), frame={goal_pose.header.frame_id}"
+            f"[NavSim] Requesting path from Nav2 (namespace={'mapfree' if local_frame else 'navigation'}) "
+            f"with goal_pose: pos=({goal_pose.pose.position.x:.2f}, {goal_pose.pose.position.y:.2f}), frame={goal_pose.header.frame_id}"
         )
-        path = self.navigator.getPath(goal_pose, goal_pose, use_start=False)
+        path = path_navigator.getPath(goal_pose, goal_pose, use_start=False)
 
         if path is None:
             self.logger.error("[NavSim] Failed to get path to goal")

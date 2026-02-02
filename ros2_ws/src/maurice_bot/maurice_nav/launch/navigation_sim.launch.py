@@ -26,26 +26,22 @@ def generate_launch_description():
         arguments=["0", "0", "0", "0", "0", "0", "map", "odom"],
     )
 
-    # Static transform publisher: odom -> base_link
-    # This connects the map->odom tree with the base_link tree.
-    # Note: When running with full MuJoCo sim, the sim publishes this dynamically.
-    # For standalone nav testing, this static transform is needed.
-    static_tf_odom_to_base = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="static_odom_to_base_link",
+    # Dynamic odom -> base_footprint transform from /odom topic
+    # MuJoCo sim publishes /odom topic but not TF, so we convert it here
+    odom_to_tf_node = Node(
+        package="maurice_nav",
+        executable="odom_to_tf_node.py",
+        name="odom_to_tf_node",
         output="screen",
-        arguments=["0", "0", "0", "0", "0", "0", "odom", "base_link"],
     )
 
-    # Static transform publisher: base_link -> base_footprint
-    # This matches what the real robot has in bringup_core.launch.py
-    static_tf_base_to_footprint = Node(
+    # Static transform: base_footprint -> base_link (identity, they're the same)
+    static_tf_footprint_to_base = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
-        name="base_to_footprint_publisher",
+        name="static_footprint_to_base_link",
         output="screen",
-        arguments=["0", "0", "0", "0", "0", "0", "base_link", "base_footprint"],
+        arguments=["0", "0", "0", "0", "0", "0", "base_footprint", "base_link"],
     )
 
     # Create the planner node
@@ -107,8 +103,8 @@ def generate_launch_description():
     return LaunchDescription(
         [
             static_tf_map_to_odom,
-            static_tf_odom_to_base,
-            static_tf_base_to_footprint,
+            odom_to_tf_node,
+            static_tf_footprint_to_base,
             planner_node,
             controller_node,
             bt_navigator_node,
