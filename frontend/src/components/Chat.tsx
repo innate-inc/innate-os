@@ -433,6 +433,32 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   }, [messages, isScrolledToBottom]);
 
+  // Listen for voice transcription events from App.tsx
+  useEffect(() => {
+    const handleVoiceTranscription = (event: CustomEvent<{ text: string }>) => {
+      const text = event.detail.text;
+      if (
+        text &&
+        wsRef.current &&
+        wsRef.current.readyState === WebSocket.OPEN
+      ) {
+        wsRef.current.send(text);
+        console.log("Sent voice transcription to chat:", text);
+      }
+    };
+
+    window.addEventListener(
+      "voice-transcription",
+      handleVoiceTranscription as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        "voice-transcription",
+        handleVoiceTranscription as EventListener,
+      );
+    };
+  }, []);
+
   const handleSend = async () => {
     const cleanDraft = draft.trim();
     if (!cleanDraft || !wsRef.current) return;
