@@ -23,7 +23,8 @@ class ArmCircleMotion(Skill):
         return (
             "Move the arm in a circular motion pattern. The circle is traced in the YZ plane "
             "(vertical) while maintaining a constant X position. You can specify the center position, "
-            "radius, number of loops, and speed. Default center is roughly in front of the robot."
+            "radius, number of loops, and speed. A good default center position is x=0.2, y=-0.05, z=0.2 "
+            "(roughly in front of the robot with arm extended)."
         )
     
     def execute(
