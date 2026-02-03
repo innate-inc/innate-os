@@ -967,7 +967,7 @@ class BehaviorServer(Node):
             
         request = GotoJS.Request()
         request.data.data = [float(p) for p in position]
-        request.time = int(time_duration)
+        request.time = float(time_duration)
         
         try:
             future = self.arm_goto_client.call_async(request)
