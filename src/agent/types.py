@@ -198,3 +198,23 @@ class NavigationFeedbackMsg(NamedTuple):
     distance_to_goal: float  # x field
     unused_y: float = 0.0  # y field
     unused_z: float = 0.0  # z field
+
+
+class DrawTrajectoryCmd(NamedTuple):
+    """
+    Command to draw a trajectory path on the floor in the simulator.
+    The path will be rendered as a smooth Bezier curve interpolated through the waypoints.
+    """
+
+    waypoints: List[NavigationWaypoint]  # List of waypoints to draw
+    color: tuple = (0.0, 0.8, 1.0, 0.7)  # RGBA color (cyan by default)
+    line_radius: float = 0.015  # Radius of the line segments
+    floor_height: float = 0.02  # Height above floor to draw the path
+
+
+class ClearTrajectoryCmd(NamedTuple):
+    """
+    Command to clear any drawn trajectory from the simulator.
+    """
+
+    pass
