@@ -20,6 +20,7 @@ class BasicAgent(Agent):
         """Return the list of primitives this directive can use"""
         return [
             "navigate_to_position",
+            "arm_circle_motion",
         ]
 
     def get_inputs(self) -> List[str]:
