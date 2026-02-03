@@ -1606,11 +1606,8 @@ class SimulationNode:
                     self.shared_queues.exit_event.set()
                     break
 
-        # Cleanup - only stop viewer if we're not on macOS (where main thread manages it)
-        import platform
-
-        is_macos = platform.system() == "Darwin"
-        if self.enable_vis and not is_macos:
+        # Cleanup
+        if self.enable_vis:
             try:
                 self.scene.viewer.stop()
             except Exception:
