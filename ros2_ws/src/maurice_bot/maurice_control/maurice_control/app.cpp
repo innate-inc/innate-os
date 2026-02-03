@@ -45,8 +45,7 @@ bool is_running_in_docker() {
     if (cgroup.is_open()) {
         std::string line;
         while (std::getline(cgroup, line)) {
-            if (line.find("docker") != std::string::npos ||
-                line.find("kubepods") != std::string::npos ||
+            if (line.find("docker") != std::string::npos || line.find("kubepods") != std::string::npos ||
                 line.find("containerd") != std::string::npos) {
                 return true;
             }
@@ -82,7 +81,8 @@ std::string exec_command(const std::string& cmd) {
 std::string get_bluetooth_device_id() {
     try {
         // Use bluetoothctl to get the default adapter address
-        std::string result = exec_command("bluetoothctl show 2>/dev/null | grep 'Controller' | head -1 | awk '{print $2}'");
+        std::string result =
+            exec_command("bluetoothctl show 2>/dev/null | grep 'Controller' | head -1 | awk '{print $2}'");
 
         // Validate MAC address format
         std::regex mac_regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
@@ -102,19 +102,19 @@ std::string get_bluetooth_device_id() {
  */
 std::string get_hostname() {
     std::string result;
-    
+
     // Skip avahi-resolve in Docker (not available)
     if (!is_running_in_docker()) {
         result = exec_command("avahi-resolve -a $(hostname -I | awk '{print $1}') | awk '{print $2}' 2>/dev/null");
     }
-    
+
     if (result.empty()) {
         // Fallback to hostname command
         result = exec_command("hostname 2>/dev/null") + ".local";
     }
     // Ensure hostname ends with .local
     const std::string suffix = ".local";
-    if (result.length() < suffix.length() || 
+    if (result.length() < suffix.length() ||
         result.compare(result.length() - suffix.length(), suffix.length(), suffix) != 0) {
         result += suffix;
     }
@@ -127,15 +127,17 @@ std::string get_hostname() {
  */
 std::string get_tag_subject(const std::string& maurice_root) {
     // Get latest tag
-    std::string tags_cmd = "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
+    std::string tags_cmd =
+        "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
     std::string latest_tag = exec_command(tags_cmd);
-    
+
     if (latest_tag.empty()) {
         return "";
     }
-    
+
     // Get the tag message subject (first line only)
-    std::string subject_cmd = "cd \"" + maurice_root + "\" && git tag -l --format='%(contents:subject)' \"" + latest_tag + "\" 2>/dev/null";
+    std::string subject_cmd =
+        "cd \"" + maurice_root + "\" && git tag -l --format='%(contents:subject)' \"" + latest_tag + "\" 2>/dev/null";
     return exec_command(subject_cmd);
 }
 
@@ -145,15 +147,17 @@ std::string get_tag_subject(const std::string& maurice_root) {
  */
 std::string get_tag_body(const std::string& maurice_root) {
     // Get latest tag
-    std::string tags_cmd = "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
+    std::string tags_cmd =
+        "cd \"" + maurice_root + "\" && git tag --list --sort=-version:refname 2>/dev/null | head -1";
     std::string latest_tag = exec_command(tags_cmd);
-    
+
     if (latest_tag.empty()) {
         return "";
     }
-    
+
     // Get the tag message body (everything after subject line)
-    std::string body_cmd = "cd \"" + maurice_root + "\" && git tag -l --format='%(contents:body)' \"" + latest_tag + "\" 2>/dev/null";
+    std::string body_cmd =
+        "cd \"" + maurice_root + "\" && git tag -l --format='%(contents:body)' \"" + latest_tag + "\" 2>/dev/null";
     return exec_command(body_cmd);
 }
 
@@ -224,11 +228,12 @@ std::string nmcli_get_active_wifi_ssid() {
  * - Max 63 characters
  */
 std::string sanitize_hostname(const std::string& hostname) {
-    if (hostname.empty()) return "mars";
-    
+    if (hostname.empty())
+        return "mars";
+
     std::string result;
     result.reserve(hostname.length());
-    
+
     // Convert to lowercase and replace invalid chars with hyphens
     for (char c : hostname) {
         if (std::isalnum(c)) {
@@ -237,19 +242,21 @@ std::string sanitize_hostname(const std::string& hostname) {
             result += '-';
         }
     }
-    
+
     // Remove consecutive hyphens
-    result.erase(std::unique(result.begin(), result.end(), 
-        [](char a, char b) { return a == '-' && b == '-'; }), result.end());
-    
+    result.erase(std::unique(result.begin(), result.end(), [](char a, char b) { return a == '-' && b == '-'; }),
+                 result.end());
+
     // Trim leading/trailing hyphens
     size_t start = result.find_first_not_of('-');
     size_t end = result.find_last_not_of('-');
-    if (start == std::string::npos) return "mars";
-    
+    if (start == std::string::npos)
+        return "mars";
+
     result = result.substr(start, std::min(end - start + 1, size_t(63)));
-    if (result.back() == '-') result.pop_back();
-    
+    if (result.back() == '-')
+        result.pop_back();
+
     return result.empty() ? "mars" : result;
 }
 
@@ -277,20 +284,20 @@ bool set_system_hostname(const std::string& sanitized_hostname, std::string& err
     if (is_running_in_docker()) {
         return true;  // Silently succeed - hostname sync not applicable in containers
     }
-    
+
     // Use sudo hostnamectl to set the hostname
     std::string cmd = "sudo hostnamectl hostname --static \"" + sanitized_hostname + "\" 2>&1";
-    
+
     // Execute the command
     int exit_code = std::system(cmd.c_str());
     if (WEXITSTATUS(exit_code) != 0) {
         error_msg = "Failed to set hostname via hostnamectl";
         return false;
     }
-    
+
     // Restart avahi-daemon to apply hostname changes to mDNS
     std::system("sudo systemctl restart avahi-daemon.service 2>/dev/null");
-    
+
     return true;
 }
 
@@ -315,12 +322,12 @@ bool check_update_running() {
     if (!lock_file.is_open()) {
         return false;
     }
-    
+
     std::string pid_str;
     if (!std::getline(lock_file, pid_str)) {
         return true;  // Malformed lock, assume running to be safe
     }
-    
+
     try {
         pid_t pid = std::stoi(pid_str);
         // Check if process is alive (kill with signal 0 just checks existence)
@@ -336,7 +343,7 @@ bool check_update_running() {
 }
 
 class AppControl : public rclcpp::Node {
-public:
+   public:
     AppControl() : Node("app_control_node") {
         // Load app configuration
         _load_app_config();
@@ -356,7 +363,7 @@ public:
         this->declare_parameter("data_directory", maurice_root + "/data");
         this->declare_parameter("robot_name", "");
         this->declare_parameter("default_hardware_revision", "R6");
-        
+
         // Log if running in Docker (system hostname operations will be skipped)
         if (is_running_in_docker()) {
             RCLCPP_INFO(this->get_logger(), "Running in Docker - system hostname operations disabled");
@@ -364,13 +371,11 @@ public:
 
         // Subscribe to joystick messages (Vector3)
         joystick_sub_ = this->create_subscription<geometry_msgs::msg::Vector3>(
-            "/joystick", 10,
-            std::bind(&AppControl::joystick_callback, this, std::placeholders::_1));
+            "/joystick", 10, std::bind(&AppControl::joystick_callback, this, std::placeholders::_1));
 
         // Subscribe to leader positions messages (Int32MultiArray)
         leader_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
-            "/leader_positions", 10,
-            std::bind(&AppControl::leader_positions_callback, this, std::placeholders::_1));
+            "/leader_positions", 10, std::bind(&AppControl::leader_positions_callback, this, std::placeholders::_1));
 
         // Publisher for velocity commands (Twist) on /cmd_vel
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
@@ -382,35 +387,29 @@ public:
         robot_info_pub_ = this->create_publisher<std_msgs::msg::String>("/robot/info", 10);
 
         // Timer for publishing robot info
-        robot_info_timer_ = this->create_wall_timer(
-            1000ms, std::bind(&AppControl::publish_robot_info_callback, this));
+        robot_info_timer_ = this->create_wall_timer(1000ms, std::bind(&AppControl::publish_robot_info_callback, this));
 
         // Timer for syncing system hostname to robot name
-        hostname_sync_timer_ = this->create_wall_timer(
-            30000ms, std::bind(&AppControl::sync_hostname_callback, this));
+        hostname_sync_timer_ = this->create_wall_timer(30000ms, std::bind(&AppControl::sync_hostname_callback, this));
 
         // Service for setting robot name
         set_robot_name_srv_ = this->create_service<maurice_msgs::srv::SetRobotName>(
             "/set_robot_name",
-            std::bind(&AppControl::set_robot_name_callback, this,
-                      std::placeholders::_1, std::placeholders::_2));
+            std::bind(&AppControl::set_robot_name_callback, this, std::placeholders::_1, std::placeholders::_2));
 
         // Service for triggering system update
         trigger_update_srv_ = this->create_service<maurice_msgs::srv::TriggerUpdate>(
             "/trigger_update",
-            std::bind(&AppControl::trigger_update_callback, this,
-                      std::placeholders::_1, std::placeholders::_2));
+            std::bind(&AppControl::trigger_update_callback, this, std::placeholders::_1, std::placeholders::_2));
 
         // Service for system shutdown
         shutdown_srv_ = this->create_service<maurice_msgs::srv::Shutdown>(
-            "/shutdown",
-            std::bind(&AppControl::shutdown_callback, this,
-                      std::placeholders::_1, std::placeholders::_2));
+            "/shutdown", std::bind(&AppControl::shutdown_callback, this, std::placeholders::_1, std::placeholders::_2));
 
         RCLCPP_INFO(this->get_logger(), "AppControl node started. [C++]");
     }
 
-private:
+   private:
     std::string get_maurice_root() {
         const char* env_root = std::getenv("INNATE_OS_ROOT");
         if (env_root) {
@@ -466,19 +465,17 @@ private:
      */
     json get_robot_info() {
         std::string robot_info_file_path = get_robot_info_path();
-        
+
         // Ensure data directory exists
         std::filesystem::path file_path(robot_info_file_path);
         std::filesystem::create_directories(file_path.parent_path());
 
         // Define default robot info values
         std::string default_hw_rev = this->get_parameter("default_hardware_revision").as_string();
-        json default_robot_info = {
-            {"robot_name", "MARS"},
-            {"robot_id", nullptr},
-            {"hardware_revision", default_hw_rev},
-            {"color_variant", "black"}
-        };
+        json default_robot_info = {{"robot_name", "MARS"},
+                                   {"robot_id", nullptr},
+                                   {"hardware_revision", default_hw_rev},
+                                   {"color_variant", "black"}};
 
         json robot_info;
 
@@ -545,20 +542,18 @@ private:
      * Only checks for new SSID if the configured interval has passed.
      */
     std::string get_cached_wifi_ssid() {
-        double current_time = std::chrono::duration<double>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+        double current_time =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
         // If we haven't checked recently or don't have a cached value, check now
-        if (_cached_wifi_ssid.empty() ||
-            (current_time - _last_wifi_check_time) > _wifi_check_interval) {
-
+        if (_cached_wifi_ssid.empty() || (current_time - _last_wifi_check_time) > _wifi_check_interval) {
             std::string new_ssid = nmcli_get_active_wifi_ssid();
 
             // Only log if the SSID actually changed or this is the first check
             if (new_ssid != _cached_wifi_ssid) {
                 if (!new_ssid.empty()) {
-                    RCLCPP_INFO(this->get_logger(), "WiFi SSID updated: %s -> %s",
-                                _cached_wifi_ssid.c_str(), new_ssid.c_str());
+                    RCLCPP_INFO(this->get_logger(), "WiFi SSID updated: %s -> %s", _cached_wifi_ssid.c_str(),
+                                new_ssid.c_str());
                 } else {
                     RCLCPP_WARN(this->get_logger(), "Could not retrieve WiFi SSID");
                 }
@@ -577,13 +572,11 @@ private:
      * Uses innate-update --quick-check which itself uses a 1-hour cache.
      */
     bool get_cached_update_available() {
-        double current_time = std::chrono::duration<double>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+        double current_time =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
         // Check if we need to refresh the cache
-        if (_last_update_check_time == 0.0 ||
-            (current_time - _last_update_check_time) > _update_check_interval) {
-
+        if (_last_update_check_time == 0.0 || (current_time - _last_update_check_time) > _update_check_interval) {
             bool new_update_available = check_update_available(get_maurice_root());
 
             // Only log if the status changed
@@ -635,8 +628,8 @@ private:
         double y = apply_curve(msg->y, 0.15);
 
         geometry_msgs::msg::Twist twist_msg;
-        twist_msg.linear.x = y * 0.5;   // Max forward speed: 0.5 m/s
-        twist_msg.angular.z = -x * 1.0; // Max angular speed: 1.0 rad/s
+        twist_msg.linear.x = y * 0.5;    // Max forward speed: 0.5 m/s
+        twist_msg.angular.z = -x * 1.0;  // Max angular speed: 1.0 rad/s
 
         // Set other components to zero.
         twist_msg.linear.y = 0.0;
@@ -645,9 +638,8 @@ private:
         twist_msg.angular.y = 0.0;
 
         cmd_vel_pub_->publish(twist_msg);
-        RCLCPP_INFO(this->get_logger(),
-            "Joystick: x=%.2f, y=%.2f -> cmd_vel: linear.x=%.2f, angular.z=%.2f",
-            msg->x, msg->y, twist_msg.linear.x, twist_msg.angular.z);
+        RCLCPP_INFO(this->get_logger(), "Joystick: x=%.2f, y=%.2f -> cmd_vel: linear.x=%.2f, angular.z=%.2f", msg->x,
+                    msg->y, twist_msg.linear.x, twist_msg.angular.z);
     }
 
     /**
@@ -662,8 +654,8 @@ private:
         const size_t expected_length = 6;  // Adjust if your leader arm has a different number of joints
 
         if (msg->data.size() != expected_length) {
-            RCLCPP_ERROR(this->get_logger(), "Received %zu positions; expected %zu.",
-                         msg->data.size(), expected_length);
+            RCLCPP_ERROR(this->get_logger(), "Received %zu positions; expected %zu.", msg->data.size(),
+                         expected_length);
             return;
         }
 
@@ -732,13 +724,13 @@ private:
                 std::string maurice_root = get_maurice_root();
                 std::string robot_version = get_robot_version(maurice_root);
                 data_to_publish_dict["version"] = robot_version;
-                
+
                 // Include tag subject and body for the latest version
                 std::string tag_subject = get_tag_subject(maurice_root);
                 if (!tag_subject.empty()) {
                     data_to_publish_dict["tag_subject"] = tag_subject;
                 }
-                
+
                 std::string tag_body = get_tag_body(maurice_root);
                 if (!tag_body.empty()) {
                     data_to_publish_dict["tag_body"] = tag_body;
@@ -761,7 +753,7 @@ private:
 
             // Include update availability status
             data_to_publish_dict["update_available"] = get_cached_update_available();
-            
+
             // Include update running status
             data_to_publish_dict["update_running"] = check_update_running();
 
@@ -802,11 +794,10 @@ private:
             if (current_hostname != sanitized_robot_name) {
                 std::string error_msg;
                 if (set_system_hostname(sanitized_robot_name, error_msg)) {
-                    RCLCPP_INFO(this->get_logger(), 
-                        "Successfully synced hostname to '%s'", sanitized_robot_name.c_str());
+                    RCLCPP_INFO(this->get_logger(), "Successfully synced hostname to '%s'",
+                                sanitized_robot_name.c_str());
                 } else {
-                    RCLCPP_WARN(this->get_logger(), 
-                        "Failed to sync hostname: %s", error_msg.c_str());
+                    RCLCPP_WARN(this->get_logger(), "Failed to sync hostname: %s", error_msg.c_str());
                 }
             }
 
@@ -818,10 +809,8 @@ private:
     /**
      * Service callback to change the robot name in robot_info.json.
      */
-    void set_robot_name_callback(
-        const std::shared_ptr<maurice_msgs::srv::SetRobotName::Request> request,
-        std::shared_ptr<maurice_msgs::srv::SetRobotName::Response> response) {
-
+    void set_robot_name_callback(const std::shared_ptr<maurice_msgs::srv::SetRobotName::Request> request,
+                                 std::shared_ptr<maurice_msgs::srv::SetRobotName::Response> response) {
         try {
             // Load current robot_info
             json robot_info = get_robot_info();
@@ -839,7 +828,7 @@ private:
 
             response->success = true;
             response->message = "Robot name changed from '" + old_name + "' to '" + request->robot_name + "'";
-            
+
             RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
 
         } catch (const std::exception& e) {
@@ -853,14 +842,12 @@ private:
      * Service callback to trigger a system update.
      * Currently disabled - users should SSH into the robot and run innate-update manually.
      */
-    void trigger_update_callback(
-        const std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Request> request,
-        std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Response> response) {
-
+    void trigger_update_callback(const std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Request> request,
+                                 std::shared_ptr<maurice_msgs::srv::TriggerUpdate::Response> response) {
         (void)request;  // Unused for now
-        
+
         RCLCPP_WARN(this->get_logger(), "Update trigger via service not implemented");
-        
+
         response->success = false;
         response->message = "Not implemented. SSH into the robot and run: innate-update apply";
     }
@@ -869,10 +856,8 @@ private:
      * Service callback to shutdown the Jetson.
      * Uses 'sudo shutdown' command with optional delay.
      */
-    void shutdown_callback(
-        const std::shared_ptr<maurice_msgs::srv::Shutdown::Request> request,
-        std::shared_ptr<maurice_msgs::srv::Shutdown::Response> response) {
-
+    void shutdown_callback(const std::shared_ptr<maurice_msgs::srv::Shutdown::Request> request,
+                           std::shared_ptr<maurice_msgs::srv::Shutdown::Response> response) {
         try {
             int delay = request->delay_seconds;
             if (delay < 0) {
@@ -886,8 +871,8 @@ private:
                 shutdown_cmd = "sudo shutdown +" + std::to_string(delay / 60 + 1);  // shutdown uses minutes
             }
 
-            RCLCPP_WARN(this->get_logger(), "Shutdown requested with delay: %d seconds. Executing: %s",
-                        delay, shutdown_cmd.c_str());
+            RCLCPP_WARN(this->get_logger(), "Shutdown requested with delay: %d seconds. Executing: %s", delay,
+                        shutdown_cmd.c_str());
 
             // Execute shutdown command in background so we can respond first
             std::string bg_cmd = shutdown_cmd + " &";
@@ -895,7 +880,8 @@ private:
 
             if (result == 0) {
                 response->success = true;
-                response->message = "Shutdown initiated" + (delay > 0 ? " with delay of " + std::to_string(delay) + " seconds" : "");
+                response->message =
+                    "Shutdown initiated" + (delay > 0 ? " with delay of " + std::to_string(delay) + " seconds" : "");
                 RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
             } else {
                 response->success = false;
@@ -942,7 +928,7 @@ private:
     rclcpp::Service<maurice_msgs::srv::Shutdown>::SharedPtr shutdown_srv_;
 };
 
-} // namespace maurice_control
+}  // namespace maurice_control
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);

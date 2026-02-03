@@ -170,10 +170,13 @@ RecorderNode::RecorderNode()
     timer_ = this->create_wall_timer(timer_period, std::bind(&RecorderNode::timer_callback, this));
 
     // ========== REPLAY FUNCTIONALITY ==========
+    // Use best_effort QoS to match WebRTC streamer's subscriber QoS
+    rclcpp::QoS replay_qos(10);
+    replay_qos.best_effort();
     replay_main_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-        "/brain/recorder/replay/main_camera/image", 10);
+        "/brain/recorder/replay/main_camera/image", replay_qos);
     replay_arm_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-        "/brain/recorder/replay/arm_camera/image_raw", 10);
+        "/brain/recorder/replay/arm_camera/image_raw", replay_qos);
     replay_status_pub_ = this->create_publisher<brain_messages::msg::ReplayStatus>(
         "/brain/recorder/replay_status", 10);
 
