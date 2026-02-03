@@ -1,7 +1,6 @@
 import argparse
 import time
 import threading
-import platform
 import os
 from dotenv import load_dotenv
 import genesis as gs
@@ -79,14 +78,12 @@ def main():
     parser.add_argument(
         "-v", "--vis", action="store_true", default=False, help="Enable visualization"
     )
-    # Add logging flag argument
     parser.add_argument(
         "--log-everything",
         action="store_true",
         default=False,
         help="Enable logging of all model outputs",
     )
-    # Add no-web flag to skip starting the web server
     parser.add_argument(
         "--no-web",
         action="store_true",
@@ -128,31 +125,20 @@ def main():
         uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
         uvicorn_thread.start()
 
-    # 5) Launch simulation run() in its own thread (macOS) or directly
-    # (other platforms)
-    sim_node.run()
-
-    # 6) If visualization is requested, drive the viewer in the main thread
+    # 5) Run simulation on main thread (keeps viewer + camera rendering in same OpenGL context)
     if args.vis:
-        try:
-            # Keep the simulation running and responsive
-            while not SHARED_QUEUES.exit_event.is_set():
-                time.sleep(0.1)
-        except KeyboardInterrupt:
-            pass
-        print("[Main] Viewer closed or keyboard interrupt. Shutting down...")
+        print("[Main] Visualization enabled. Close viewer window or press Q to stop.")
     else:
         print("[Main] No viewer requested. Press Ctrl+C to stop.")
-        try:
-            while not SHARED_QUEUES.exit_event.is_set():
-                time.sleep(1.0)
-        except KeyboardInterrupt:
-            pass
 
-    # 7) On exit, signal all threads to stop
+    # Run simulation - this blocks until exit_event is set or viewer closes
+    sim_node.run()
+    print("[Main] Simulation ended.")
+
+    # 6) Cleanup and exit
     SHARED_QUEUES.exit_event.set()
-    agent_thread.join()
     print("[Main] All threads finished. Goodbye.")
+    os._exit(0)  # Force exit to avoid hanging on stubborn threads
 
 
 if __name__ == "__main__":
