@@ -497,6 +497,7 @@ class BrainClientNode(Node):
         # Pose stamping for local navigation compensation
         # Stores (x, y, theta) when an image is sent to the agent
         self.pose_at_image_send = None
+        self.image_at_send = None  # Store image for debug visualization
 
         self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
 
@@ -816,6 +817,61 @@ class BrainClientNode(Node):
         )
 
         return adjusted_inputs
+
+    def _save_pose_compensation_debug(
+        self,
+        original_inputs: dict,
+        adjusted_inputs: dict,
+        delta: tuple[float, float, float],
+    ):
+        """Save debug images and info when pose compensation is applied."""
+        try:
+            import datetime
+
+            debug_dir = "/Users/axelpeytavin/Projects/innate-repos/innate-os/pose_debug"
+            os.makedirs(debug_dir, exist_ok=True)
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            delta_forward, delta_lateral, delta_theta = delta
+
+            # Save image from when command was sent
+            if self.image_at_send is not None:
+                cv2.imwrite(
+                    f"{debug_dir}/{timestamp}_1_image_at_send.jpg", self.image_at_send
+                )
+
+            # Save current image
+            if self.last_image is not None:
+                cv2.imwrite(f"{debug_dir}/{timestamp}_2_image_now.jpg", self.last_image)
+
+            # Save compensation info to text file
+            with open(f"{debug_dir}/{timestamp}_info.txt", "w") as f:
+                f.write(f"Pose Compensation Debug - {timestamp}\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(f"Pose at image send: {self.pose_at_image_send}\n")
+                f.write(f"Pose now: {self._get_current_pose_xyt()}\n\n")
+                f.write(f"Delta (robot motion since image):\n")
+                f.write(f"  Forward: {delta_forward:.3f} m\n")
+                f.write(f"  Lateral: {delta_lateral:.3f} m\n")
+                f.write(f"  Rotation: {math.degrees(delta_theta):.1f} deg\n\n")
+                f.write(f"Original command:\n")
+                f.write(f"  x: {original_inputs.get('x', 0):.3f} m\n")
+                f.write(f"  y: {original_inputs.get('y', 0):.3f} m\n")
+                f.write(
+                    f"  theta: {math.degrees(original_inputs.get('theta', 0)):.1f} deg\n\n"
+                )
+                f.write(f"Adjusted command:\n")
+                f.write(f"  x: {adjusted_inputs.get('x', 0):.3f} m\n")
+                f.write(f"  y: {adjusted_inputs.get('y', 0):.3f} m\n")
+                f.write(
+                    f"  theta: {math.degrees(adjusted_inputs.get('theta', 0)):.1f} deg\n"
+                )
+
+            self.get_logger().info(
+                f"[PoseCompensation] Debug saved to {debug_dir}/{timestamp}_*"
+            )
+        except Exception as e:
+            self.get_logger().warn(f"[PoseCompensation] Failed to save debug: {e}")
 
     def _get_pose_source(self, log_prefix: str = "") -> tuple[bool, tuple | None]:
         """
@@ -1542,7 +1598,12 @@ class BrainClientNode(Node):
                         delta = self._compute_pose_delta(
                             self.pose_at_image_send, current_pose
                         )
+                        original_inputs = task_inputs.copy()
                         task_inputs = self._adjust_local_nav_command(task_inputs, delta)
+                        # Save debug images for pose compensation visualization
+                        self._save_pose_compensation_debug(
+                            original_inputs, task_inputs, delta
+                        )
                     else:
                         self.get_logger().warn(
                             "[PoseCompensation] Could not get current pose for compensation"
@@ -1758,8 +1819,11 @@ class BrainClientNode(Node):
                         }
                         self.get_logger().debug("Including arm camera image in message")
 
-                # Store pose at image send time for local nav compensation
+                # Store pose and image at send time for local nav compensation
                 self.pose_at_image_send = self._get_current_pose_xyt()
+                self.image_at_send = (
+                    self.last_image.copy() if self.last_image is not None else None
+                )
 
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
