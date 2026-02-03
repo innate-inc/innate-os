@@ -177,7 +177,7 @@ class ManipulationInterface:
         request = GotoJS.Request()
         request.data = Float64MultiArray()
         request.data.data = joint_positions
-        request.time = duration
+        request.time = float(duration)
 
         try:
             # Fire-and-forget: do not wait on the future here to avoid

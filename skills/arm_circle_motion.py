@@ -21,15 +21,15 @@ class ArmCircleMotion(Skill):
     
     def guidelines(self):
         return (
-            "Move the arm in a circular motion pattern. The circle is traced in the XY plane "
-            "(horizontal) while maintaining a constant Z height. You can specify the center position, "
+            "Move the arm in a circular motion pattern. The circle is traced in the YZ plane "
+            "(vertical) while maintaining a constant X position. You can specify the center position, "
             "radius, number of loops, and speed. Default center is roughly in front of the robot."
         )
     
     def execute(
         self,
         center_x: float = 0.2,
-        center_y: float = -0.5,
+        center_y: float = -0.05,
         center_z: float = 0.2,
         radius: float = 0.1,
         num_loops: int = 1,
@@ -59,13 +59,13 @@ class ArmCircleMotion(Skill):
             f"radius={radius}m, loops={num_loops}, points={total_points}"
         )
         
-        # First move to starting position (top of circle: center_x, center_y + radius)
-        start_x = center_x
-        start_y = center_y + radius
+        # First move to starting position (top of circle: center_y, center_z + radius)
+        start_y = center_y
+        start_z = center_z + radius
         
-        self.logger.info(f"Moving to start position: ({start_x}, {start_y}, {center_z})")
+        self.logger.info(f"Moving to start position: ({center_x}, {start_y}, {start_z})")
         success = self.manipulation.move_to_cartesian_pose(
-            x=start_x, y=start_y, z=center_z,
+            x=center_x, y=start_y, z=start_z,
             roll=0.0, pitch=0.0, yaw=0.0,
             duration=1.0
         )
@@ -91,18 +91,18 @@ class ArmCircleMotion(Skill):
                 # Angle 0 = top (positive Y direction from center)
                 angle = (2 * math.pi * i) / points_per_loop
                 
-                # Calculate XY position on circle
+                # Calculate YZ position on circle (X stays constant)
                 # Using standard circle parametrization, rotated so 0 starts at top
-                target_x = center_x + radius * math.sin(angle)
-                target_y = center_y + radius * math.cos(angle)
+                target_y = center_y + radius * math.sin(angle)
+                target_z = center_z + radius * math.cos(angle)
                 
                 self.logger.debug(
                     f"Point {i + 1}/{points_per_loop}: angle={math.degrees(angle):.1f}°, "
-                    f"pos=({target_x:.3f}, {target_y:.3f}, {center_z:.3f})"
+                    f"pos=({center_x:.3f}, {target_y:.3f}, {target_z:.3f})"
                 )
                 
                 success = self.manipulation.move_to_cartesian_pose(
-                    x=target_x, y=target_y, z=center_z,
+                    x=center_x, y=target_y, z=target_z,
                     roll=0.0, pitch=0.0, yaw=0.0,
                     duration=duration_per_point
                 )
