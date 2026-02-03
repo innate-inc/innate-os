@@ -12,6 +12,8 @@ from src.agent.types import (
     NavigationFeedbackMsg,
     NavigationWaypoint,
     PositionCmd,
+    DrawTrajectoryCmd,
+    ClearTrajectoryCmd,
 )
 
 
@@ -85,6 +87,14 @@ class NavigationController:
         print(
             f"[NavController] Starting path following with {len(path.waypoints)} waypoints"
         )
+
+        # Send trajectory drawing command to simulator
+        draw_cmd = DrawTrajectoryCmd(waypoints=path.waypoints)
+        try:
+            self.shared_queues.agent_to_sim.put_nowait(draw_cmd)
+            print("[NavController] Sent trajectory visualization command")
+        except:
+            pass  # Queue full
 
         # Start navigation thread
         self.nav_thread_stop.clear()
@@ -244,6 +254,14 @@ class NavigationController:
 
         self.is_navigating = False
         self._publish_status()
+
+        # Clear trajectory visualization when navigation ends
+        try:
+            self.shared_queues.agent_to_sim.put_nowait(ClearTrajectoryCmd())
+            print("[NavController] Cleared trajectory visualization")
+        except:
+            pass
+
         print(f"[NavController] Navigation ended with status: {self.current_status}")
 
     def _send_position_command(
