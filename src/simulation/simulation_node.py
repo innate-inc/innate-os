@@ -22,6 +22,8 @@ from src.agent.types import (
     PositionCmd,
     ResetRobotCmd,
     SetEnvironmentCmd,
+    DrawTrajectoryCmd,
+    ClearTrajectoryCmd,
 )
 from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
@@ -80,6 +82,11 @@ class SimulationNode:
         # Current navigation target (None if no active target)
         self.nav_target_pos = None
         self.nav_target_yaw = None
+
+        # Trajectory visualization state
+        self.trajectory_debug_objects = (
+            []
+        )  # Store references to debug objects for clearing
 
         # Arm control state
         self.arm_joint_names = [
@@ -796,6 +803,139 @@ class SimulationNode:
         )
         self.commanded_ang_vel = np.array([0, 0, angular_vel])
 
+    def _clear_trajectory_visualization(self):
+        """Remove all previously drawn trajectory debug objects from the scene."""
+        if not self.trajectory_debug_objects:
+            return
+
+        print(
+            f"[SimulationNode] Clearing {len(self.trajectory_debug_objects)} trajectory objects"
+        )
+        for obj in self.trajectory_debug_objects:
+            try:
+                if obj is not None:
+                    self.scene.clear_debug_object(obj)
+            except Exception as e:
+                print(
+                    f"[SimulationNode] Warning: Failed to remove trajectory object: {e}"
+                )
+        self.trajectory_debug_objects.clear()
+
+    def _catmull_rom_spline(self, points, num_segments=10):
+        """
+        Generate a smooth Catmull-Rom spline through the given points.
+        Returns interpolated points along the curve.
+
+        Args:
+            points: List of (x, y) tuples representing waypoints
+            num_segments: Number of interpolated segments between each pair of points
+        """
+        if len(points) < 2:
+            return points
+
+        result = []
+
+        # Pad the points for Catmull-Rom (duplicate first and last points)
+        padded = [points[0]] + points + [points[-1]]
+
+        for i in range(1, len(padded) - 2):
+            p0 = np.array(padded[i - 1])
+            p1 = np.array(padded[i])
+            p2 = np.array(padded[i + 1])
+            p3 = np.array(padded[i + 2])
+
+            for t in np.linspace(0, 1, num_segments, endpoint=False):
+                # Catmull-Rom spline formula
+                t2 = t * t
+                t3 = t2 * t
+
+                point = 0.5 * (
+                    (2 * p1)
+                    + (-p0 + p2) * t
+                    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+                    + (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+                )
+                result.append(tuple(point))
+
+        # Add the last point
+        result.append(points[-1])
+
+        return result
+
+    def _draw_trajectory(self, cmd: DrawTrajectoryCmd):
+        """
+        Draw a navigation trajectory on the floor as a smooth curve.
+
+        Args:
+            cmd: DrawTrajectoryCmd containing waypoints and visualization parameters
+        """
+        if not cmd.waypoints or len(cmd.waypoints) < 2:
+            print("[SimulationNode] Cannot draw trajectory: need at least 2 waypoints")
+            return
+
+        # Clear any existing trajectory
+        self._clear_trajectory_visualization()
+
+        # Extract (x, y) points from waypoints
+        points_2d = [(wp.x, wp.y) for wp in cmd.waypoints]
+
+        # Interpolate using Catmull-Rom spline for smooth curve
+        # Use more segments for longer paths
+        segments_per_waypoint = max(5, min(20, 50 // len(points_2d)))
+        interpolated_points = self._catmull_rom_spline(
+            points_2d, num_segments=segments_per_waypoint
+        )
+
+        print(
+            f"[SimulationNode] Drawing trajectory: {len(cmd.waypoints)} waypoints -> "
+            f"{len(interpolated_points)} interpolated points"
+        )
+
+        # Draw line segments between interpolated points
+        floor_z = cmd.floor_height
+        for i in range(len(interpolated_points) - 1):
+            start = (interpolated_points[i][0], interpolated_points[i][1], floor_z)
+            end = (
+                interpolated_points[i + 1][0],
+                interpolated_points[i + 1][1],
+                floor_z,
+            )
+
+            try:
+                obj = self.scene.draw_debug_line(
+                    start=start,
+                    end=end,
+                    radius=cmd.line_radius,
+                    color=cmd.color,
+                )
+                if obj is not None:
+                    self.trajectory_debug_objects.append(obj)
+            except Exception as e:
+                print(f"[SimulationNode] Error drawing trajectory segment: {e}")
+                break
+
+        # Draw small spheres at original waypoints for visibility
+        waypoint_color = (1.0, 0.5, 0.0, 0.9)  # Orange for waypoints
+        for i, wp in enumerate(cmd.waypoints):
+            try:
+                # Slightly larger sphere for start/end
+                radius = 0.04 if (i == 0 or i == len(cmd.waypoints) - 1) else 0.025
+                obj = self.scene.draw_debug_sphere(
+                    pos=(wp.x, wp.y, floor_z + 0.01),
+                    radius=radius,
+                    color=(
+                        waypoint_color if i > 0 else (0.0, 1.0, 0.0, 0.9)
+                    ),  # Green for start
+                )
+                if obj is not None:
+                    self.trajectory_debug_objects.append(obj)
+            except Exception as e:
+                print(f"[SimulationNode] Error drawing waypoint sphere: {e}")
+
+        print(
+            f"[SimulationNode] Trajectory visualization complete: {len(self.trajectory_debug_objects)} objects"
+        )
+
     def _apply_environment_config(self, config: Dict[str, Any]):
         """Activates and positions managed entities based on config, hides others."""
         print(
@@ -1107,6 +1247,10 @@ class SimulationNode:
                             cmd, SetEnvironmentCmd
                         ):  # Check for new command
                             latest_set_env_cmd = cmd
+                        elif isinstance(cmd, DrawTrajectoryCmd):
+                            self._draw_trajectory(cmd)
+                        elif isinstance(cmd, ClearTrajectoryCmd):
+                            self._clear_trajectory_visualization()
                     except queue.Empty:
                         break
 
@@ -1464,5 +1608,8 @@ class SimulationNode:
 
         # Cleanup
         if self.enable_vis:
-            self.scene.viewer.stop()
+            try:
+                self.scene.viewer.stop()
+            except Exception:
+                pass  # Viewer may already be closed
         print("SimulationNode stopped.")
