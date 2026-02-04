@@ -17,7 +17,7 @@ using the pinhole camera model.
 Usage:
     ros2 run maurice_cam stereo_calibrator
     or
-    ros2 run maurice_cam stereo_calibrator --ros-args -p squares_x:=8 -p squares_y:=11 -p square_size:=0.016 -p marker_size:=0.012
+    ros2 run maurice_cam stereo_calibrator --ros-args -p squares_y:=11 -p squares_x:=8 -p square_size:=0.016 -p marker_size:=0.012
 
     Then press Enter to capture images. After 30 images, calibration is computed.
 """
