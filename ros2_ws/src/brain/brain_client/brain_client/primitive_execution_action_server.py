@@ -657,7 +657,9 @@ class PrimitiveExecutionActionServer(Node):
                     try:
                         self._update_primitive_robot_state(self._current_primitive)
                     except Exception as e:
-                        self.get_logger().error(f"Error in continuous state update: {e}")
+                        self.get_logger().error(
+                            f"Error in continuous state update: {e}"
+                        )
             # Sleep for ~50Hz updates (20ms)
             self._state_update_stop_event.wait(0.02)
 
