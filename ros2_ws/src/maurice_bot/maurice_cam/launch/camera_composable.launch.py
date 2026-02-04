@@ -59,6 +59,25 @@ def generate_launch_description():
         description='Path to camera pipeline config file'
     )
 
+    # ==========================================================================
+    # Bi3D Freespace Segmentation launch arguments
+    # ==========================================================================
+    bi3d_featnet_engine_arg = DeclareLaunchArgument(
+        'bi3d_featnet_engine',
+        default_value='/home/jetson1/innate-os/ISAAC_ROS_WS/isaac_ros_assets/models/bi3d/bi3d_featnet.engine',
+        description='Path to Bi3D Featnet TensorRT engine'
+    )
+    bi3d_segnet_engine_arg = DeclareLaunchArgument(
+        'bi3d_segnet_engine',
+        default_value='/home/jetson1/innate-os/ISAAC_ROS_WS/isaac_ros_assets/models/bi3d/bi3d_segnet.engine',
+        description='Path to Bi3D Segnet TensorRT engine'
+    )
+    bi3d_max_disparity_arg = DeclareLaunchArgument(
+        'bi3d_max_disparity',
+        default_value='64',
+        description='Maximum disparity values for Bi3D inference'
+    )
+
     # Main camera driver node
     main_camera_node = ComposableNode(
         package='maurice_cam',
@@ -287,31 +306,390 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
-    # Create the composable node container
-    # All nodes run in the same process, enabling zero-copy intra-process communication
-    container = ComposableNodeContainer(
-        name='camera_container',
-        namespace='',
-        package='rclcpp_components',
-        executable='component_container_mt',  # Multi-threaded container for parallel callbacks
-        composable_node_descriptions=[
-            main_camera_node,
-            arm_camera_node,
-            webrtc_node,
-            depth_estimator_node,
-            main_camera_info_node,
-            # stereo_image_proc pipeline (for comparison testing)
-            sip_rectify_color_left,
-            sip_rectify_mono_left,
-            sip_rectify_color_right,
-            sip_rectify_mono_right,
-            sip_disparity_node,
-            sip_pointcloud_node,
-            sip_pointcloud_filter,
+    # ==========================================================================
+    # Isaac ROS stereo_image_proc pipeline (GPU-accelerated SGM via NITROS)
+    # Outputs in /mars/main_camera/isaac_image_proc namespace
+    # ==========================================================================
+    
+    ISAAC_NS = '/mars/main_camera/isaac_image_proc'
+    
+    # ==========================================================================
+    # Rectify + Scale pipeline for ESS (preserve aspect ratio)
+    # 640x480 -> 480x360 (rectify with resize) -> 480x288 (center crop)
+    # RectifyNode has built-in resize, reducing NITROS hops
+    # ==========================================================================
+    
+    # Isaac ROS Rectify+Resize Left: 640x480 -> 480x360 (uniform 0.75x scale)
+    isaac_rectify_left = ComposableNode(
+        package='isaac_ros_image_proc',
+        plugin='nvidia::isaac_ros::image_proc::RectifyNode',
+        name='rectify_left',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('image_raw', '/mars/main_camera/left/image_raw'),
+            ('camera_info', '/mars/main_camera/left/camera_info'),
+            ('image_rect', 'left/image_rect_color'),
+            ('camera_info_rect', 'left/camera_info_rect'),
         ],
-        output='screen',
-        emulate_tty=True,
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'output_width': 480,   # Resize during rectify (uniform 0.75x)
+            'output_height': 360,  # Preserves 4:3 aspect ratio
+            'type_negotiation_duration_s': 5,  # Longer NITROS negotiation timeout
+        }],
     )
+    
+    # Isaac ROS Rectify+Resize Right: 640x480 -> 480x360 (uniform 0.75x scale)
+    isaac_rectify_right = ComposableNode(
+        package='isaac_ros_image_proc',
+        plugin='nvidia::isaac_ros::image_proc::RectifyNode',
+        name='rectify_right',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('image_raw', '/mars/main_camera/right/image_raw'),
+            ('camera_info', '/mars/main_camera/right/camera_info'),
+            ('image_rect', 'right/image_rect_color'),
+            ('camera_info_rect', 'right/camera_info_rect'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'output_width': 480,
+            'output_height': 360,
+            'type_negotiation_duration_s': 5,
+        }],
+    )
+    
+    # Crop left: 480x360 -> 480x288 (bottom crop, removes 72px from top)
+    isaac_crop_left = ComposableNode(
+        package='isaac_ros_image_proc',
+        plugin='nvidia::isaac_ros::image_proc::CropNode',
+        name='crop_left',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('image', 'left/image_rect_color'),
+            ('camera_info', 'left/camera_info_rect'),
+            ('crop/image', 'left/image_cropped'),
+            ('crop/camera_info', 'left/camera_info_cropped'),
+        ],
+        parameters=[{
+            'input_width': 480,
+            'input_height': 360,
+            'crop_width': 480,
+            'crop_height': 288,
+            'crop_mode': 'CENTER',  # Keep bottom of frame (removes 72px from top)
+            'type_negotiation_duration_s': 5,
+        }],
+    )
+    
+    # Crop right: 480x360 -> 480x288 (bottom crop, removes 72px from top)
+    isaac_crop_right = ComposableNode(
+        package='isaac_ros_image_proc',
+        plugin='nvidia::isaac_ros::image_proc::CropNode',
+        name='crop_right',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('image', 'right/image_rect_color'),
+            ('camera_info', 'right/camera_info_rect'),
+            ('crop/image', 'right/image_cropped'),
+            ('crop/camera_info', 'right/camera_info_cropped'),
+        ],
+        parameters=[{
+            'input_width': 480,
+            'input_height': 360,
+            'crop_width': 480,
+            'crop_height': 288,
+            'crop_mode': 'CENTER',  # Keep bottom of frame (removes 72px from top)
+            'type_negotiation_duration_s': 5,
+        }],
+    )
+
+    # Isaac ROS Format Converter Left (RGB8 -> MONO8 for disparity)
+    isaac_format_left = ComposableNode(
+        package='isaac_ros_image_proc',
+        plugin='nvidia::isaac_ros::image_proc::ImageFormatConverterNode',
+        name='format_converter_left',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('image_raw', 'left/image_rect_color'),
+            ('image', 'left/image_rect'),
+        ],
+        parameters=[{
+            'encoding_desired': 'mono8',
+            'image_width': 640,
+            'image_height': 480,
+        }],
+    )
+
+    # Isaac ROS Format Converter Right (RGB8 -> MONO8 for disparity)
+    isaac_format_right = ComposableNode(
+        package='isaac_ros_image_proc',
+        plugin='nvidia::isaac_ros::image_proc::ImageFormatConverterNode',
+        name='format_converter_right',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('image_raw', 'right/image_rect_color'),
+            ('image', 'right/image_rect'),
+        ],
+        parameters=[{
+            'encoding_desired': 'mono8',
+            'image_width': 640,
+            'image_height': 480,
+        }],
+    )
+    
+    # Isaac ROS Disparity Node (GPU SGM via VPI)
+    # Uses CUDA backend by default, can use ORIN for hardware acceleration
+    # NOTE: SGM requires MONO8 images - use left/right/image_rect (from format converters)
+    isaac_disparity = ComposableNode(
+        package='isaac_ros_stereo_image_proc',
+        plugin='nvidia::isaac_ros::stereo_image_proc::DisparityNode',
+        name='disparity_node',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('left/image_rect', 'left/image_rect'),
+            ('left/camera_info', 'left/camera_info_rect'),
+            ('right/image_rect', 'right/image_rect'),
+            ('right/camera_info', 'right/camera_info_rect'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'backend': 'CUDA',  # Options: CUDA, XAVIER, ORIN
+            'max_disparity': 128.0,  # Must be 128 or 256 for ORIN backend
+            'window_size': 7,
+            'num_passes': 2,
+            'p1': 8,  # Penalty for disparity changes of +/- 1
+            'p2': 120,  # Penalty for disparity changes > 1
+            'p2_alpha': 1,
+            'quality': 1,
+            'confidence_threshold': 60000,
+        }],
+    )
+
+    # ==========================================================================
+    # ESS DNN Stereo Disparity (uses cropped 480x288 images)
+    # Input: 480x288 from crop nodes (proper aspect ratio preserved)
+    # Output: 480x288 disparity (no internal resize needed)
+    # ==========================================================================
+
+    # Isaac ROS ESS DNN Disparity Node (Deep Learning based)
+    # Uses cropped 480x288 images - proper aspect ratio, no distortion
+    isaac_dnn_disparity = ComposableNode(
+        package='isaac_ros_ess',
+        plugin='nvidia::isaac_ros::dnn_stereo_depth::ESSDisparityNode',
+        name='ess_disparity_node',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('left/image_rect', 'left/image_cropped'),
+            ('left/camera_info', 'left/camera_info_cropped'),
+            ('right/image_rect', 'right/image_cropped'),
+            ('right/camera_info', 'right/camera_info_cropped'),
+        ],
+        parameters=[{
+            'engine_file_path': "/home/jetson1/innate-os/ISAAC_ROS_WS/isaac_ros_assets/models/dnn_stereo_disparity/dnn_stereo_disparity_v4.1.0_onnx/light_ess.engine",
+            'image_type': 'BGR_U8',  # Match camera output format (bgr8)
+            'threshold': 0.4,  # Confidence threshold (0.0 = fully dense)
+            'type_negotiation_duration_s': 5,
+        }],
+    )
+
+    # Isaac ROS Disparity to Depth (using ESS disparity at 480x288)
+    isaac_disparity_to_depth = ComposableNode(
+        package='isaac_ros_stereo_image_proc',
+        plugin='nvidia::isaac_ros::stereo_image_proc::DisparityToDepthNode',
+        name='disparity_to_depth',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('disparity', 'bi3d_mask'),
+            ('depth', 'depth'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'type_negotiation_duration_s': 5,
+        }],
+    )
+    
+    # Isaac ROS Point Cloud from disparity + cropped color (480x288)
+    # Uses cropped left image which matches ESS disparity resolution exactly
+    isaac_pointcloud = ComposableNode(
+        package='isaac_ros_stereo_image_proc',
+        plugin='nvidia::isaac_ros::stereo_image_proc::PointCloudNode',
+        name='point_cloud_node',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('left/image_rect_color', 'left/image_cropped'),
+            ('left/camera_info', 'left/camera_info_cropped'),
+            ('right/camera_info', 'right/camera_info_cropped'),
+            ('disparity', 'disparity'),
+            ('points2', 'points'),
+        ],
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'use_color': True,
+            'unit_scaling': 1.0,
+            'type_negotiation_duration_s': 5,
+        }],
+    )
+
+    # CropBox filter - crops to navigation-relevant region
+    isaac_pc_filter = ComposableNode(
+        package='pcl_ros',
+        plugin='pcl_ros::CropBox',
+        name='pointcloud_cropbox_filter',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('input', 'points'),
+            ('output', 'points_cropped'),
+        ],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+    
+    # Statistical Outlier Removal - removes noise after cropping
+    isaac_sor_filter = ComposableNode(
+        package='pcl_ros',
+        plugin='pcl_ros::StatisticalOutlierRemoval',
+        name='pointcloud_sor_filter',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('input', 'points_cropped'),
+            ('output', 'points_filtered'),
+        ],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')}
+        ],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # ==========================================================================
+    # Bi3D Freespace Segmentation (uses cropped stereo images)
+    # Outputs occupancy grid for navigation - better at detecting low obstacles
+    # ==========================================================================
+    
+    # Bi3D Node - neural network stereo matching for freespace detection
+    # Uses cropped 480x288 images from crop nodes
+    isaac_bi3d = ComposableNode(
+        package='isaac_ros_bi3d',
+        plugin='nvidia::isaac_ros::bi3d::Bi3DNode',
+        name='bi3d_node',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('left_image_bi3d', 'left/image_cropped'),
+            ('right_image_bi3d', 'right/image_cropped'),
+            ('left_camera_info_bi3d', 'left/camera_info_cropped'),
+            ('right_camera_info_bi3d', 'right/camera_info_cropped'),
+            ('bi3d_node/bi3d_output', 'bi3d_mask'),
+        ],
+        parameters=[{
+            'featnet_engine_file_path': LaunchConfiguration('bi3d_featnet_engine'),
+            'segnet_engine_file_path': LaunchConfiguration('bi3d_segnet_engine'),
+            'max_disparity_values': LaunchConfiguration('bi3d_max_disparity'),
+            'image_width': 480,
+            'image_height': 288,
+            'type_negotiation_duration_s': 5,
+        }],
+        extra_arguments=[{'use_intra_process_comms': False}],
+    )
+    
+    # Freespace Segmentation Node - converts Bi3D mask to occupancy grid
+    # Focal length scaled: 273.58 * 0.75 = 205.2 px (after 640->480 resize)
+    isaac_freespace = ComposableNode(
+        package='isaac_ros_bi3d_freespace',
+        plugin='nvidia::isaac_ros::bi3d_freespace::FreespaceSegmentationNode',
+        name='freespace_segmentation_node',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('bi3d_mask', 'bi3d_mask'),
+            ('freespace_segmentation/occupancy_grid', 'freespace_occupancy_grid'),
+        ],
+        parameters=[{
+            'base_link_frame': 'base_link',
+            'camera_frame': 'fixed_camera_optical_frame',
+            'f_x': 205.2,  # Scaled focal length (273.58 * 0.75)
+            'f_y': 205.2,
+            'grid_height': 200,   # 2m x 2m grid at 1cm resolution
+            'grid_width': 200,
+            'grid_resolution': 0.01,  # 1cm per cell
+            'type_negotiation_duration_s': 5,
+        }],
+        extra_arguments=[{'use_intra_process_comms': False}],
+    )
+
+    # ==========================================================================
+    # Container setup - separate containers for CPU profiling or single for perf
+    # ==========================================================================
+    
+    # All nodes to include in the container(s)
+    all_nodes = [
+        main_camera_node,
+        arm_camera_node,
+        webrtc_node,
+        # depth_estimator_node,
+        main_camera_info_node,
+        # stereo_image_proc pipeline (OpenCV CPU)
+        # sip_rectify_color_left,
+        # sip_rectify_mono_left,
+        # sip_rectify_color_right,
+        # sip_rectify_mono_right,
+        # sip_disparity_node,
+        # sip_pointcloud_node,
+        # sip_pointcloud_filter,
+        # Isaac ROS pipeline (GPU NITROS)
+        # Rectify+Resize: 640x480 -> 480x360 (uniform 0.75x scale during rectify)
+        isaac_rectify_left,
+        isaac_rectify_right,
+        # Crop: 480x360 -> 480x288 (center crop, preserves aspect ratio)
+        isaac_crop_left,
+        isaac_crop_right,
+        # isaac_format_left,    # Only needed for SGM (mono8)
+        # isaac_format_right,   # Only needed for SGM (mono8)
+        # isaac_disparity,      # SGM - uses mono8
+
+        isaac_dnn_disparity,    # ESS DNN - uses cropped 480x288 images
+        # isaac_disparity_to_depth,
+        isaac_pointcloud,
+        isaac_pc_filter,
+        isaac_sor_filter,
+        
+        # Bi3D Freespace Segmentation (better at detecting low obstacles like socks)
+        # isaac_bi3d,
+        # isaac_freespace,
+    ]
+
+    # Toggle: True = separate containers per node (for CPU profiling)
+    #         False = single container (for zero-copy intra-process perf)
+    SEPARATE_CONTAINERS = False
+
+    if SEPARATE_CONTAINERS:
+        # Create one container per node for individual CPU monitoring
+        containers = [
+            ComposableNodeContainer(
+                name=f'{node.node_name[0].text}_container',
+                namespace='',
+                package='rclcpp_components',
+                executable='component_container_mt',
+                composable_node_descriptions=[node],
+                output='screen',
+                emulate_tty=True,
+            )
+            for node in all_nodes
+        ]
+    else:
+        # Single container with all nodes (zero-copy intra-process comms)
+        containers = [
+            ComposableNodeContainer(
+                name='camera_container',
+                namespace='',
+                package='rclcpp_components',
+                executable='component_container_mt',
+                composable_node_descriptions=all_nodes,
+                output='screen',
+                emulate_tty=True,
+            )
+        ]
 
     return LaunchDescription([
         # Launch arguments
@@ -321,6 +699,10 @@ def generate_launch_description():
         use_sim_time_arg,
         # Camera pipeline config
         camera_config_arg,
-        # Container with all nodes
-        container,
+        # Bi3D Freespace args
+        bi3d_featnet_engine_arg,
+        bi3d_segnet_engine_arg,
+        bi3d_max_disparity_arg,
+        # Container(s)
+        *containers,
     ])
