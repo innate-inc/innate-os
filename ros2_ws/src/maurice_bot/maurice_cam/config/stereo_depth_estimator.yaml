@@ -17,7 +17,7 @@ main_camera_driver:
     publish_stereo_height: 480
     
     # Camera settings
-    fps: 30.0
+    fps: 15.0
     frame_id: "camera_optical_frame"
     
     # JPEG compression
@@ -59,7 +59,10 @@ arm_camera_driver:
     compressed_frame_interval: 6  # Publish compressed every N frames
 
 # ============================================================================
-# STEREO DEPTH ESTIMATOR PARAMETERS
+# STEREO DEPTH ESTIMATOR PARAMETERS (VPI SGM - Semi-Global Matching on CUDA)
+# 
+# Uses VPI's Semi-Global Matching algorithm on the CUDA backend.
+# CUDA uses a 9x7 census transform window internally.
 # ============================================================================
 /**:
   ros__parameters:
@@ -68,14 +71,13 @@ arm_camera_driver:
     left_topic: "/mars/main_camera/left/image_raw"
     right_topic: "/mars/main_camera/right/image_raw"
     depth_topic: "/mars/main_camera/depth/image_rect_raw"
-    camera_info_topic: "/mars/main_camera/depth/camera_info"
     disparity_topic: "/mars/main_camera/disparity"
-    rectified_topic: "/mars/main_camera/image_rect"
+    left_rectified_topic: "/mars/main_camera/left/image_rect"
+    right_rectified_topic: "/mars/main_camera/right/image_rect"
+    pointcloud_topic: "/mars/main_camera/points"
     frame_id: "camera_optical_frame"
     
-    # Output control
-    publish_disparity: true     # Disparity visualization (mono8)
-    publish_rectified: true     # Rectified left image (mono8)
+    # All outputs use lazy publishing - only published when subscribed
     
     # Image dimensions (single camera, not combined stereo)
     image_width: 640
@@ -84,18 +86,68 @@ arm_camera_driver:
     # Processing control
     process_every_n_frames: 1  # 1=all frames, 5=6Hz from 30Hz
     
-    # Stereo matching parameters
-    max_disparity: 64  # Higher = closer objects, more compute (default: 64)
+    # =========================================================================
+    # VPI STEREO DISPARITY ESTIMATOR - CREATION PARAMETERS (CUDA)
+    # These are set at payload creation and cannot be changed at runtime.
+    # =========================================================================
     
-    # Block Matching algorithm parameters
-    bm_window_size: 11        # Odd number, typically 5-15
-    bm_quality: 8             # 0-8, higher = better quality but slower
-    bm_conf_threshold: 16000  # 0-65535, lower = more details/noise
+    # Maximum disparity for matching search. 
+    # Higher values detect closer objects but increase compute.
+    # CUDA: Must be >= 1 and <= 256. Internally clamped to 64, 128, or 256.
+    # Default: 64 (matching stereo_image_proc disparity_range)
+    max_disparity: 256
+    
+    # Include diagonal (oblique) paths in SGM computation.
+    # 0 = horizontal + vertical paths only (faster)
+    # 1 = include diagonal paths (slower but higher quality, more memory)
+    # Default: 1
+    include_diagonals: 1
+    
+    # =========================================================================
+    # VPI STEREO DISPARITY ESTIMATOR - RUNTIME PARAMETERS (CUDA)
+    # These can be tuned without recreating the payload.
+    # =========================================================================
+    
+    # Confidence threshold for disparity validity.
+    # Disparity values with confidence below this are marked invalid.
+    # Lower = more details but more noise. Higher = cleaner but may miss edges.
+    # Range: 0-65535 (U16), Default: 32767
+    confidence_threshold: 0
+    
+    # Minimum possible disparity value.
+    # Normally 0, but can be adjusted depending on scene.
+    # Reduces search range for slight speed improvement.
+    # Range: 0 to max_disparity, Default: 0
+    min_disparity: 0
+    
+    # P1: Penalty on disparity changes of +/- 1 pixel between neighbors.
+    # Small value that penalizes small disparity changes.
+    # Lower P1 = better adaptation to slanted/curved surfaces.
+    # Must be <= P2. Range: 1-255, Default: 3
+    p1: 3
+    
+    # P2: Penalty on disparity changes of more than 1 pixel between neighbors.
+    # Large value that penalizes big disparity jumps (discontinuities).
+    # Higher P2 = smoother surfaces, fewer abrupt changes.
+    # Must be >= P1 and < 256. Default: 48
+    p2: 48
+    
+    # Uniqueness ratio: margin by which best cost should win over second best.
+    # 1.0 = full cost considered (less pixels invalid)
+    # 0.0 = only +/-1 disparity changes considered (more pixels invalid)
+    # -1 = disable uniqueness check
+    # Range: 0.0-1.0 or -1, Default: 0.15 (15% margin)
+    uniqueness: -1.0
+    
+    # Disparity border margin: zero out N pixels from all edges to remove
+    # edge artifacts from stereo matching. Set to 0 to disable.
+    # Default: 10 pixels
+    disparity_border_margin: 20
 
 # ============================================================================
 # POINT CLOUD GENERATOR (depth_image_proc)
 # ============================================================================
-pointcloud_generator:
+/**/pointcloud_generator:
   ros__parameters:
     # Synchronization parameters
     queue_size: 5         # Message synchronization queue size
@@ -104,23 +156,38 @@ pointcloud_generator:
 # ============================================================================
 # CROPBOX FILTER (pcl_ros)
 # ============================================================================
-pointcloud_cropbox_filter:
+/**/pointcloud_cropbox_filter:
   ros__parameters:
     # CropBox bounds in base_link frame (meters)
     # Filter keeps points INSIDE the box (negative=false)
-    min_x: -2.5
-    max_x: 2.5
-    min_y: -2.5
-    max_y: 2.5
-    min_z: 0.01    # Minimum height above ground
-    max_z: 0.35    # Maximum height (table height)
-    
+    min_x: 0.0 
+    max_x: 4.25 
+    min_y: -2.125 # roughly more than diag of 3
+    max_y: 2.125 
+    min_z: 0.02    # Minimum height above ground
+    max_z: 0.45    # Maximum height (table height)
+
     # Filter behavior
     negative: false         # false=keep inside, true=keep outside
     keep_organized: false   # false=remove points, true=set to NaN
-    
+
     # Transform frames (applied before/after filtering)
     input_frame: "base_link"   # Transform input to this frame
     output_frame: "base_link"  # Transform output to this frame
 
-
+# ============================================================================
+# STATISTICAL OUTLIER REMOVAL (pcl_ros) - Removes noise/outliers
+# ============================================================================
+/**/pointcloud_sor_filter:
+  ros__parameters:
+    # Number of neighbors (k) to analyze for each point
+    # Higher = more accurate but slower. Range: 2-100
+    mean_k: 10
+    
+    # Standard deviation multiplier threshold
+    # Points outside mean +- stddev * stddev_mul are outliers
+    # Lower = more aggressive filtering. Range: 0.0-5.0
+    stddev: .8 
+    
+    # Return outliers instead of inliers (false = keep inliers)
+    negative: false
