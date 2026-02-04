@@ -84,6 +84,7 @@ ros-humble-nav2-velocity-smoother
 ros-humble-nav2-bt-navigator
 ros-humble-nav2-behaviors
 ros-humble-nav2-lifecycle-manager
+ros-humble-spatio-temporal-voxel-layer
 
 # ROS2 Humble packages - SLAM
 ros-humble-slam-toolbox-humble-lifecycle
@@ -128,5 +129,4 @@ libhdf5-dev
 
 # ROS2 Humble packages - Simulation (optional)
 # ros-humble-stage-ros
-
 
