@@ -7,42 +7,42 @@ When a goal is received (with a primitive type and its parameters encoded
 as JSON), the corresponding primitive is executed.
 """
 
-import os
-import json
-import rclpy
-from rclpy.node import Node
-from rclpy.action import ActionServer, ActionClient, GoalResponse, CancelResponse
-import cv2  # For image processing
 import base64  # For encoding
-import numpy as np  # For map data
-import math  # For yaw calculation
 import inspect
-import types
+import json
+import math  # For yaw calculation
+import os
 import threading
+import types
 
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-
+import cv2  # For image processing
+import numpy as np  # For map data
+import rclpy
 
 # Import the action definition – ensure that it is built and available.
-from brain_messages.action import ExecutePrimitive, ExecuteBehavior
+from brain_messages.action import ExecuteBehavior, ExecutePrimitive
 from brain_messages.srv import GetAvailablePrimitives
+from nav_msgs.msg import OccupancyGrid, Odometry
+from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
+from rclpy.node import Node
+from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+
+# Import ROS message types for subscriptions
+from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
+
+from brain_client.head_interface import HeadInterface
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.mobility_interface import MobilityInterface
 
 # Import primitive loader and types
 from brain_client.skill_loader import SkillLoader
 from brain_client.skill_types import (
-    SkillResult,
-    RobotStateType,
     InterfaceType,
+    RobotStateType,
+    SkillResult,
 )
-from brain_client.manipulation_interface import ManipulationInterface
-from brain_client.mobility_interface import MobilityInterface
-from brain_client.head_interface import HeadInterface
-
-# Import ROS message types for subscriptions
-from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
-from nav_msgs.msg import Odometry, OccupancyGrid
-from std_msgs.msg import String
-from std_srvs.srv import Trigger
 
 
 class PrimitiveExecutionActionServer(Node):
@@ -77,12 +77,8 @@ class PrimitiveExecutionActionServer(Node):
         # Topics for head control
         self.declare_parameter("head_position_topic", "/mars/head/set_position")
         self.head_position_topic = self.get_parameter("head_position_topic").value
-        self.declare_parameter(
-            "head_current_position_topic", "/mars/head/current_position"
-        )
-        self.head_current_position_topic = self.get_parameter(
-            "head_current_position_topic"
-        ).value
+        self.declare_parameter("head_current_position_topic", "/mars/head/current_position")
+        self.head_current_position_topic = self.get_parameter("head_current_position_topic").value
 
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
@@ -95,9 +91,7 @@ class PrimitiveExecutionActionServer(Node):
             self.main_camera_image_callback,
             image_qos,
         )
-        self.odom_sub = self.create_subscription(
-            Odometry, "/odom", self.odom_callback, 10
-        )
+        self.odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
         self.map_sub = self.create_subscription(
             OccupancyGrid,
             "/map",
@@ -120,37 +114,23 @@ class PrimitiveExecutionActionServer(Node):
 
         # Define directory to scan for skills
         # Using the unified skills directory at the root
-        maurice_root = os.environ.get(
-            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-        )
+        maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
         primitives_directory = os.path.join(maurice_root, "skills")
 
         if not os.path.exists(primitives_directory):
-            self.get_logger().fatal(
-                f"Primitives directory not found: {primitives_directory}"
-            )
-            raise FileNotFoundError(
-                f"Primitives directory must exist at {primitives_directory}"
-            )
+            self.get_logger().fatal(f"Primitives directory not found: {primitives_directory}")
+            raise FileNotFoundError(f"Primitives directory must exist at {primitives_directory}")
 
         # Load all primitives dynamically
-        discovered_primitives = self.primitive_loader.discover_skills_in_directory(
-            primitives_directory
-        )
+        discovered_primitives = self.primitive_loader.discover_skills_in_directory(primitives_directory)
 
-        self.get_logger().info(
-            f"Discovered primitives: {list(discovered_primitives.keys())} in {primitives_directory}"
-        )
+        self.get_logger().info(f"Discovered primitives: {list(discovered_primitives.keys())} in {primitives_directory}")
 
         # Handle special case for navigation primitive based on simulator mode
         if self.simulator_mode and "navigate_to_position_sim" in discovered_primitives:
             # In simulator mode, use the sim version for navigate_to_position
-            self.get_logger().info(
-                "Simulator mode: using NavigateToPositionSim for navigate_to_position"
-            )
-            discovered_primitives["navigate_to_position"] = discovered_primitives[
-                "navigate_to_position_sim"
-            ]
+            self.get_logger().info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
+            discovered_primitives["navigate_to_position"] = discovered_primitives["navigate_to_position_sim"]
             # Remove the _sim variant so it doesn't appear as a separate primitive
             del discovered_primitives["navigate_to_position_sim"]
         elif "navigate_to_position_sim" in discovered_primitives:
@@ -168,24 +148,14 @@ class PrimitiveExecutionActionServer(Node):
                 self._code_primitives[primitive_name] = primitive_instance
                 self.get_logger().info(f"Loaded code primitive: {primitive_name}")
             except Exception as e:
-                self.get_logger().error(
-                    f"Error instantiating primitive {primitive_name}: {e}"
-                )
+                self.get_logger().error(f"Error instantiating primitive {primitive_name}: {e}")
 
-        self.get_logger().info(
-            f"Successfully loaded {len(self._code_primitives)} code primitives"
-        )
+        self.get_logger().info(f"Successfully loaded {len(self._code_primitives)} code primitives")
 
         # Load physical primitives from metadata.json files
-        self._physical_primitives, self._in_training_primitives = (
-            self._load_physical_primitives(primitives_directory)
-        )
-        self.get_logger().info(
-            f"Successfully loaded {len(self._physical_primitives)} physical primitives"
-        )
-        self.get_logger().info(
-            f"Found {len(self._in_training_primitives)} in-training primitives"
-        )
+        self._physical_primitives, self._in_training_primitives = self._load_physical_primitives(primitives_directory)
+        self.get_logger().info(f"Successfully loaded {len(self._physical_primitives)} physical primitives")
+        self.get_logger().info(f"Found {len(self._in_training_primitives)} in-training primitives")
 
         # Create action client to delegate physical primitives to behavior_server
         self._behavior_client = ActionClient(self, ExecuteBehavior, "/behavior/execute")
@@ -207,9 +177,7 @@ class PrimitiveExecutionActionServer(Node):
         )
 
         # Create service for reloading primitives
-        self._reload_srv = self.create_service(
-            Trigger, "/brain/reload_primitives", self._handle_reload_primitives
-        )
+        self._reload_srv = self.create_service(Trigger, "/brain/reload_primitives", self._handle_reload_primitives)
 
         self.get_logger().debug("Primitive Execution Action Server has started.")
         self.get_logger().info(
@@ -220,21 +188,15 @@ class PrimitiveExecutionActionServer(Node):
         """Reload all primitives from disk."""
         self.get_logger().info("Reloading primitives...")
 
-        maurice_root = os.environ.get(
-            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-        )
+        maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
         primitives_directory = os.path.join(maurice_root, "skills")
 
         # Reload code primitives
-        discovered_primitives = self.primitive_loader.discover_skills_in_directory(
-            primitives_directory
-        )
+        discovered_primitives = self.primitive_loader.discover_skills_in_directory(primitives_directory)
 
         # Handle simulator mode nav swap
         if self.simulator_mode and "navigate_to_position_sim" in discovered_primitives:
-            discovered_primitives["navigate_to_position"] = discovered_primitives[
-                "navigate_to_position_sim"
-            ]
+            discovered_primitives["navigate_to_position"] = discovered_primitives["navigate_to_position_sim"]
             del discovered_primitives["navigate_to_position_sim"]
         elif "navigate_to_position_sim" in discovered_primitives:
             del discovered_primitives["navigate_to_position_sim"]
@@ -251,9 +213,7 @@ class PrimitiveExecutionActionServer(Node):
                 self.get_logger().error(f"Error instantiating {name}: {e}")
 
         # Reload physical primitives
-        self._physical_primitives, self._in_training_primitives = (
-            self._load_physical_primitives(primitives_directory)
-        )
+        self._physical_primitives, self._in_training_primitives = self._load_physical_primitives(primitives_directory)
 
         self.get_logger().info(
             f"Reloaded {len(self._code_primitives)} code + {len(self._physical_primitives)} physical primitives"
@@ -264,7 +224,9 @@ class PrimitiveExecutionActionServer(Node):
         try:
             self._reload_primitives()
             response.success = True
-            response.message = f"Reloaded {len(self._code_primitives)} code, {len(self._physical_primitives)} physical primitives"
+            response.message = (
+                f"Reloaded {len(self._code_primitives)} code, {len(self._physical_primitives)} physical primitives"
+            )
         except Exception as e:
             response.success = False
             response.message = f"Failed to reload primitives: {e}"
@@ -286,15 +248,13 @@ class PrimitiveExecutionActionServer(Node):
             if os.path.isdir(item_path):
                 metadata_path = os.path.join(item_path, "metadata.json")
                 if os.path.exists(metadata_path):
-                    with open(metadata_path, "r") as f:
+                    with open(metadata_path) as f:
                         metadata = json.load(f)
                         primitive_name = metadata.get("name", item)
 
                         # Validate primitive before loading
-                        is_valid, is_in_training, episode_count = (
-                            self.primitive_loader.validate_physical_skill(
-                                item_path, metadata
-                            )
+                        is_valid, is_in_training, episode_count = self.primitive_loader.validate_physical_skill(
+                            item_path, metadata
                         )
 
                         if is_valid:
@@ -316,9 +276,7 @@ class PrimitiveExecutionActionServer(Node):
                                     f"Loaded physical primitive: {primitive_name} (type: {metadata.get('type', 'unknown')})"
                                 )
                         else:
-                            self.get_logger().warn(
-                                f"Skipped invalid physical primitive: {primitive_name}"
-                            )
+                            self.get_logger().warn(f"Skipped invalid physical primitive: {primitive_name}")
 
         return physical_primitives, in_training_primitives
 
@@ -342,12 +300,9 @@ class PrimitiveExecutionActionServer(Node):
                     if param.annotation != inspect.Parameter.empty:
                         # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
                         if (
-                            isinstance(
-                                param.annotation, (types.UnionType, types.GenericAlias)
-                            )
+                            isinstance(param.annotation, (types.UnionType, types.GenericAlias))
                             or hasattr(param.annotation, "_name")
-                            and param.annotation._name
-                            in ["List", "Optional", "Dict", "Tuple", "Union"]
+                            and param.annotation._name in ["List", "Optional", "Dict", "Tuple", "Union"]
                         ):  # Covers typing.List, typing.Optional etc.
                             param_type = str(param.annotation)
                         elif hasattr(param.annotation, "__name__"):
@@ -363,11 +318,7 @@ class PrimitiveExecutionActionServer(Node):
             primitive_info = {
                 "name": name,
                 "type": "code",
-                "guidelines": (
-                    primitive_instance.guidelines()
-                    if hasattr(primitive_instance, "guidelines")
-                    else ""
-                ),
+                "guidelines": (primitive_instance.guidelines() if hasattr(primitive_instance, "guidelines") else ""),
                 "guidelines_when_running": (
                     primitive_instance.guidelines_when_running()
                     if hasattr(primitive_instance, "guidelines_when_running")
@@ -382,9 +333,7 @@ class PrimitiveExecutionActionServer(Node):
         for name, physical_data in self._physical_primitives.items():
             metadata = physical_data["metadata"]
             # Fetch episode count dynamically (not cached)
-            episode_count = self.primitive_loader._get_episode_count(
-                physical_data["directory"]
-            )
+            episode_count = self.primitive_loader._get_episode_count(physical_data["directory"])
             primitive_info = {
                 "name": metadata.get("name", name),
                 "type": metadata.get("type", "physical"),
@@ -404,16 +353,12 @@ class PrimitiveExecutionActionServer(Node):
             for name, physical_data in self._in_training_primitives.items():
                 metadata = physical_data["metadata"]
                 # Fetch episode count dynamically (not cached)
-                episode_count = self.primitive_loader._get_episode_count(
-                    physical_data["directory"]
-                )
+                episode_count = self.primitive_loader._get_episode_count(physical_data["directory"])
                 primitive_info = {
                     "name": metadata.get("name", name),
                     "type": metadata.get("type", "physical"),
                     "guidelines": metadata.get("guidelines", ""),
-                    "guidelines_when_running": metadata.get(
-                        "guidelines_when_running", ""
-                    ),
+                    "guidelines_when_running": metadata.get("guidelines_when_running", ""),
                     "inputs": metadata.get("inputs", {}),
                     "in_training": True,
                     "episode_count": episode_count,
@@ -424,15 +369,11 @@ class PrimitiveExecutionActionServer(Node):
                 all_primitives.append(primitive_info)
 
         response.primitives_json = json.dumps(all_primitives)
-        self.get_logger().info(
-            f"Returned {len(all_primitives)} primitives to service caller"
-        )
+        self.get_logger().info(f"Returned {len(all_primitives)} primitives to service caller")
         return response
 
     def goal_callback(self, goal_request):
-        self.get_logger().debug(
-            f"Received goal for primitive: '{goal_request.primitive_type}'"
-        )
+        self.get_logger().debug(f"Received goal for primitive: '{goal_request.primitive_type}'")
         return GoalResponse.ACCEPT
 
     def cancel_callback(self, goal_handle):
@@ -448,9 +389,7 @@ class PrimitiveExecutionActionServer(Node):
             elif primitive_type in self._physical_primitives:
                 # Physical primitives are handled by behavior_server
                 # Cancellation will be forwarded by the action client
-                self.get_logger().debug(
-                    f"Canceling physical primitive: {primitive_type}"
-                )
+                self.get_logger().debug(f"Canceling physical primitive: {primitive_type}")
             else:
                 self.get_logger().warning(f"Unknown primitive type: {primitive_type}")
         except Exception as e:
@@ -469,9 +408,7 @@ class PrimitiveExecutionActionServer(Node):
 
     def execute_callback(self, goal_handle):
         # Trace entry into the execute callback for debugging
-        self.get_logger().debug(
-            f"[PEAS] execute_callback ENTER for primitive: '{goal_handle.request.primitive_type}'"
-        )
+        self.get_logger().debug(f"[PEAS] execute_callback ENTER for primitive: '{goal_handle.request.primitive_type}'")
         # Decode the inputs (assumed to be JSON)
         try:
             inputs = json.loads(goal_handle.request.inputs)
@@ -496,9 +433,7 @@ class PrimitiveExecutionActionServer(Node):
 
         # Primitive not found
         else:
-            all_primitives = list(self._code_primitives.keys()) + list(
-                self._physical_primitives.keys()
-            )
+            all_primitives = list(self._code_primitives.keys()) + list(self._physical_primitives.keys())
             self.get_logger().error(f"Primitive '{primitive_type}' not available")
             self.get_logger().error(f"Available primitives: {all_primitives}")
             goal_handle.abort()
@@ -521,28 +456,17 @@ class PrimitiveExecutionActionServer(Node):
             if self.last_main_camera_image is not None:
                 try:
                     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-                    success, encoded_img_bytes = cv2.imencode(
-                        ".jpg", self.last_main_camera_image, encode_params
-                    )
+                    success, encoded_img_bytes = cv2.imencode(".jpg", self.last_main_camera_image, encode_params)
                     if success:
-                        robot_state_to_inject[
-                            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value
-                        ] = base64.b64encode(encoded_img_bytes.tobytes()).decode(
-                            "utf-8"
-                        )
+                        robot_state_to_inject[RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value] = base64.b64encode(
+                            encoded_img_bytes.tobytes()
+                        ).decode("utf-8")
                     else:
-                        self.get_logger().error(
-                            "Failed to encode last_main_camera_image for primitive state"
-                        )
+                        self.get_logger().error("Failed to encode last_main_camera_image for primitive state")
                 except Exception as e_img:
-                    self.get_logger().error(
-                        f"Error encoding last_main_camera_image for primitive: {e_img}"
-                    )
+                    self.get_logger().error(f"Error encoding last_main_camera_image for primitive: {e_img}")
             else:
-                self.get_logger().warn(
-                    "Primitive requires "
-                    "LAST_MAIN_CAMERA_IMAGE_B64 but none available."
-                )
+                self.get_logger().warn("Primitive requires LAST_MAIN_CAMERA_IMAGE_B64 but none available.")
 
         if RobotStateType.LAST_ODOM in required_states:
             if self.last_odom is not None:
@@ -574,18 +498,14 @@ class PrimitiveExecutionActionServer(Node):
                     "theta_degrees": math.degrees(theta),
                 }
             else:
-                self.get_logger().warn(
-                    "Primitive requires LAST_ODOM " "but none available."
-                )
+                self.get_logger().warn("Primitive requires LAST_ODOM but none available.")
 
         if RobotStateType.LAST_MAP in required_states:
             if self.last_map is not None:
                 map_data_bytes = np.array(self.last_map.data, dtype=np.int8).tobytes()
                 ori_map = self.last_map.info.origin.orientation
                 siny_cosp_map = 2.0 * (ori_map.w * ori_map.z + ori_map.x * ori_map.y)
-                cosy_cosp_map = 1.0 - 2.0 * (
-                    ori_map.y * ori_map.y + ori_map.z * ori_map.z
-                )
+                cosy_cosp_map = 1.0 - 2.0 * (ori_map.y * ori_map.y + ori_map.z * ori_map.z)
                 yaw_map = math.atan2(siny_cosp_map, cosy_cosp_map)
                 robot_state_to_inject[RobotStateType.LAST_MAP.value] = {
                     "header": {
@@ -621,19 +541,13 @@ class PrimitiveExecutionActionServer(Node):
                     "data_b64": base64.b64encode(map_data_bytes).decode("utf-8"),
                 }
             else:
-                self.get_logger().warn(
-                    "Primitive requires LAST_MAP but " "none available."
-                )
+                self.get_logger().warn("Primitive requires LAST_MAP but none available.")
 
         if RobotStateType.LAST_HEAD_POSITION in required_states:
             if self.last_head_position is not None:
-                robot_state_to_inject[RobotStateType.LAST_HEAD_POSITION.value] = (
-                    self.last_head_position
-                )
+                robot_state_to_inject[RobotStateType.LAST_HEAD_POSITION.value] = self.last_head_position
             else:
-                self.get_logger().warn(
-                    "Primitive requires LAST_HEAD_POSITION but " "none available."
-                )
+                self.get_logger().warn("Primitive requires LAST_HEAD_POSITION but none available.")
 
         if robot_state_to_inject:  # Only call if there is state to update
             primitive.update_robot_state(**robot_state_to_inject)
@@ -657,9 +571,7 @@ class PrimitiveExecutionActionServer(Node):
                     try:
                         self._update_primitive_robot_state(self._current_primitive)
                     except Exception as e:
-                        self.get_logger().error(
-                            f"Error in continuous state update: {e}"
-                        )
+                        self.get_logger().error(f"Error in continuous state update: {e}")
             # Sleep for ~50Hz updates (20ms)
             self._state_update_stop_event.wait(0.02)
 
@@ -671,9 +583,7 @@ class PrimitiveExecutionActionServer(Node):
             feedback_msg = ExecutePrimitive.Feedback()
             feedback_msg.feedback = update_message
             goal_handle.publish_feedback(feedback_msg)
-            self.get_logger().debug(
-                f"Published feedback for '{primitive_type}': {update_message}"
-            )
+            self.get_logger().debug(f"Published feedback for '{primitive_type}': {update_message}")
 
         # Pass the feedback callback to the primitive if it supports it
         primitive.set_feedback_callback(_publish_feedback)
@@ -689,13 +599,9 @@ class PrimitiveExecutionActionServer(Node):
                     self._current_primitive = primitive
                 # Start background thread for state updates (runs independently of executor)
                 self._state_update_stop_event.clear()
-                self._state_update_thread = threading.Thread(
-                    target=self._state_update_thread_func, daemon=True
-                )
+                self._state_update_thread = threading.Thread(target=self._state_update_thread_func, daemon=True)
                 self._state_update_thread.start()
-                self.get_logger().info(
-                    f"Started continuous state updates for '{primitive_type}' at 50Hz"
-                )
+                self.get_logger().info(f"Started continuous state updates for '{primitive_type}' at 50Hz")
 
             # Execute the primitive with its direct inputs
             result_message, result_status = primitive.execute(**inputs)
@@ -710,9 +616,7 @@ class PrimitiveExecutionActionServer(Node):
 
             # Handle the result based on the SkillResult enum
             if result_status == SkillResult.SUCCESS:
-                self.get_logger().info(
-                    f"Primitive '{primitive_type}' succeeded: {result_message}"
-                )
+                self.get_logger().info(f"Primitive '{primitive_type}' succeeded: {result_message}")
                 goal_handle.succeed()
                 return ExecutePrimitive.Result(
                     success=True,
@@ -721,9 +625,7 @@ class PrimitiveExecutionActionServer(Node):
                     success_type=SkillResult.SUCCESS.value,
                 )
             elif result_status == SkillResult.CANCELLED:
-                self.get_logger().info(
-                    f"Primitive '{primitive_type}' cancelled: {result_message}"
-                )
+                self.get_logger().info(f"Primitive '{primitive_type}' cancelled: {result_message}")
                 goal_handle.succeed()
                 return ExecutePrimitive.Result(
                     success=True,
@@ -732,9 +634,7 @@ class PrimitiveExecutionActionServer(Node):
                     success_type=SkillResult.CANCELLED.value,
                 )
             else:  # SkillResult.FAILURE
-                self.get_logger().info(
-                    f"Primitive '{primitive_type}' failed: {result_message}"
-                )
+                self.get_logger().info(f"Primitive '{primitive_type}' failed: {result_message}")
                 goal_handle.abort()
                 return ExecutePrimitive.Result(
                     success=False,
@@ -754,9 +654,7 @@ class PrimitiveExecutionActionServer(Node):
             )
 
     def _execute_physical_primitive(self, goal_handle, primitive_type, inputs):
-        self.get_logger().info(
-            f"Delegating physical primitive '{primitive_type}' to behavior_server"
-        )
+        self.get_logger().info(f"Delegating physical primitive '{primitive_type}' to behavior_server")
 
         # Get the physical primitive metadata
         physical_data = self._physical_primitives[primitive_type]
@@ -776,14 +674,10 @@ class PrimitiveExecutionActionServer(Node):
         # Create behavior goal with config from metadata
         behavior_goal = ExecuteBehavior.Goal()
         behavior_goal.behavior_name = primitive_type
-        behavior_goal.behavior_config = json.dumps(
-            metadata
-        )  # Pass entire metadata as config
+        behavior_goal.behavior_config = json.dumps(metadata)  # Pass entire metadata as config
 
         # Send goal and wait for result
-        self.get_logger().info(
-            f"Sending behavior goal to behavior_server: {primitive_type}"
-        )
+        self.get_logger().info(f"Sending behavior goal to behavior_server: {primitive_type}")
         send_goal_future = self._behavior_client.send_goal_async(behavior_goal)
 
         # Wait for goal acceptance
@@ -822,9 +716,7 @@ class PrimitiveExecutionActionServer(Node):
 
         # Convert behavior result to primitive result
         if behavior_result.success:
-            self.get_logger().info(
-                f"Physical primitive '{primitive_type}' succeeded: {behavior_result.message}"
-            )
+            self.get_logger().info(f"Physical primitive '{primitive_type}' succeeded: {behavior_result.message}")
             goal_handle.succeed()
             return ExecutePrimitive.Result(
                 success=True,
@@ -835,9 +727,7 @@ class PrimitiveExecutionActionServer(Node):
         else:
             # Check if it was cancelled
             if "cancel" in behavior_result.message.lower():
-                self.get_logger().info(
-                    f"Physical primitive '{primitive_type}' cancelled: {behavior_result.message}"
-                )
+                self.get_logger().info(f"Physical primitive '{primitive_type}' cancelled: {behavior_result.message}")
                 goal_handle.succeed()
                 return ExecutePrimitive.Result(
                     success=True,
@@ -846,9 +736,7 @@ class PrimitiveExecutionActionServer(Node):
                     success_type=SkillResult.CANCELLED.value,
                 )
             else:
-                self.get_logger().error(
-                    f"Physical primitive '{primitive_type}' failed: {behavior_result.message}"
-                )
+                self.get_logger().error(f"Physical primitive '{primitive_type}' failed: {behavior_result.message}")
                 goal_handle.abort()
                 return ExecutePrimitive.Result(
                     success=False,
@@ -868,9 +756,7 @@ class PrimitiveExecutionActionServer(Node):
             self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             self.get_logger().debug("Received and decoded new image for primitives.")
         except Exception as e:
-            self.get_logger().error(
-                f"Failed to decode compressed image for primitive state: {e}"
-            )
+            self.get_logger().error(f"Failed to decode compressed image for primitive state: {e}")
 
     def odom_callback(self, msg: Odometry):
         self.last_odom = msg
