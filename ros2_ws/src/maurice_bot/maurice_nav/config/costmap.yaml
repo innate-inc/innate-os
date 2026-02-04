@@ -35,7 +35,7 @@ navigation:
           plugin: "nav2_costmap_2d::InflationLayer"
           cost_scaling_factor: 10.0
           inflation_radius: 0.3
-        always_send_full_costmap: True
+        always_send_full_costmap: False
 
 local_costmap:
   local_costmap:
@@ -52,7 +52,11 @@ local_costmap:
       footprint: "[[0.25, 0.165], [0.25, -0.165], [-0.20, -0.165], [-0.20, 0.165]]"
       track_unknown_space: false        # Ensure unknown space is considered as obstacles
       unknown_cost_value: 255          # Unknown cells get a lethal cost value
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: [
+        "voxel_layer",
+        "obstacle_layer",
+         "inflation_layer"
+         ]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -71,6 +75,80 @@ local_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
         inflation_radius: 0.25
+      # voxel_layer:
+      #   plugin: "nav2_costmap_2d::VoxelLayer"
+      #   enabled: True
+      #   footprint_clearing_enabled: true
+      #   publish_voxel_map: True
+      #   origin_z: 0.0
+      #   z_resolution: 0.03
+      #   z_voxels: 12
+      #   max_obstacle_height: 0.36
+      #   unknown_threshold: 5
+      #   mark_threshold: 1
+      #   observation_sources: pointcloud
+      #   combination_method: 0
+      #   pointcloud:  # no frame set, uses frame from message
+      #     topic: /mars/main_camera/isaac_image_proc/points_filtered
+      #     max_obstacle_height: 0.36 # TODO height based on arm? # right now just above head
+      #     min_obstacle_height: 0.02
+      #     obstacle_max_range: 1.5
+      #     obstacle_min_range: 0.05
+      #     raytrace_max_range: 3.0 
+      #     raytrace_min_range: 0.05
+      #     clearing: True
+      #     marking: True
+      #     data_type: "PointCloud2"
+      #     transport_type: "raw"  # raw or/ with compression (zlib, draco, zstd)
+      voxel_layer:
+        plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+        enabled:               true
+        voxel_decay:           2.0     #seconds if linear, e^n if exponential
+        decay_model:           0      #0=linear, 1=exponential, -1=persistent
+        voxel_size:            0.05   #meters
+        track_unknown_space:   true   #default space is unknown
+        observation_persistence: 0.0  #seconds
+        max_obstacle_height:   0.36    #meters
+        mark_threshold:        0      #voxel height
+        update_footprint_enabled: true
+        combination_method:    1      #1=max, 0=override
+        obstacle_range:        3.0    #meters
+        origin_z:              0.0    #meters
+        publish_voxel_map:     true   # default off
+        transform_tolerance:   0.2    # seconds
+        observation_sources:   rgbd1_clear rgbd1_mark
+        rgbd1_mark:
+          data_type: PointCloud2
+          topic: /mars/main_camera/isaac_image_proc/points
+          marking: true
+          clearing: false
+          obstacle_range: 2.5
+          min_obstacle_height: 0.02     #default 0, meters
+          max_obstacle_height: 0.36     #defaule 3, meters
+          expected_update_rate: 0.0    #default 0, if not updating at this rate at least, remove from buffer
+          observation_persistence: 0.0 #default 0, use all measurements taken during now-value, 0=latest 
+          inf_is_valid: false          #default false, for laser scans
+          clear_after_reading: false    #default false, clear the buffer after the layer gets readings from it
+          filter: "voxel"              #default passthrough, apply "voxel", "passthrough", or no filter to sensor data, recommended to have at one filter on
+          voxel_min_points: 0          #default 0, minimum points per voxel for voxel filter
+        rgbd1_clear:
+          enabled: false                #default true, can be toggled on/off with associated service call
+          data_type: PointCloud2
+          topic: /mars/main_camera/isaac_image_proc/points
+          marking: false
+          clearing: false
+          min_z: 0.0                   #default 0, meters
+          max_z: 7.0                   #default 10, meters
+          vertical_fov_angle: 0.7      #default 0.7, radians
+          horizontal_fov_angle: 1.04   #default 1.04, radians
+          decay_acceleration: 1.       #default 0, 1/s^2. If laser scanner MUST be 0
+          model_type: 0                #default 0 (depth camera). Use 1 for 3D Lidar
+
+ 
+
+
+
+
 mapfree:
   global_costmap:
     global_costmap:
@@ -87,7 +165,7 @@ mapfree:
         rolling_window: true
         width: 10
         height: 10
-        plugins: [ #"obstacle_layer", 
+        plugins: [ "obstacle_layer", 
           "voxel_layer",
           "inflation_layer",
           ]
@@ -105,35 +183,78 @@ mapfree:
             raytrace_min_range: 0.2
             obstacle_max_range: 2.5
             obstacle_min_range: 0.2
-        voxel_layer:
-          plugin: "nav2_costmap_2d::VoxelLayer"
-          enabled: True
-          footprint_clearing_enabled: true
-          max_obstacle_height: 2.0
-          publish_voxel_map: False
-          origin_z: 0.0
-          z_resolution: 0.05
-          z_voxels: 10
-          max_obstacle_height: 2.0
-          unknown_threshold: 9 
-          mark_threshold: 2
-          observation_sources: pointcloud
-          combination_method: 1
-          pointcloud:  # no frame set, uses frame from message
-            topic: /mars/main_camera/points
-            max_obstacle_height: 0.35 # TODO height based on arm? # right now just above head
-            min_obstacle_height: 0.01
-            obstacle_max_range: 2.5
-            obstacle_min_range: 0.05
-            raytrace_max_range: 2.5
-            raytrace_min_range: 0.05
-            clearing: True
-            marking: True
-            data_type: "PointCloud2"
-            transport_type: "raw"  # raw or/ with compression (zlib, draco, zstd)
         inflation_layer:
           plugin: "nav2_costmap_2d::InflationLayer"
           cost_scaling_factor: 10.0
           inflation_radius: 0.3
-        always_send_full_costmap: True
+        always_send_full_costmap: False
+        # voxel_layer:
+        #   plugin: "nav2_costmap_2d::VoxelLayer"
+        #   enabled: True
+        #   footprint_clearing_enabled: true
+        #   publish_voxel_map: True
+        #   origin_z: 0.0
+        #   z_resolution: 0.03
+        #   z_voxels: 12
+        #   max_obstacle_height: 0.36
+        #   unknown_threshold: 5
+        #   mark_threshold: 1
+        #   observation_sources: pointcloud
+        #   combination_method: 0
+        #   pointcloud:  # no frame set, uses frame from message
+        #     topic: /mars/main_camera/isaac_image_proc/points
+        #     max_obstacle_height: 0.36 # TODO height based on arm? # right now just above head
+        #     min_obstacle_height: 0.02
+        #     obstacle_max_range: 1.5
+        #     obstacle_min_range: 0.05
+        #     raytrace_max_range: 3.0 
+        #     raytrace_min_range: 0.05
+        #     clearing: True
+        #     marking: True
+        #     data_type: "PointCloud2"
+        #     transport_type: "raw"  # raw or/ with compression (zlib, draco, zstd)
+        voxel_layer:
+          plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+          enabled:               true
+          voxel_decay:           7.0     #seconds if linear, e^n if exponential
+          decay_model:           0      #0=linear, 1=exponential, -1=persistent
+          voxel_size:            0.05   #meters
+          track_unknown_space:   true   #default space is unknown
+          observation_persistence: 0.0  #seconds
+          max_obstacle_height:   0.36    #meters
+          mark_threshold:        0      #voxel height
+          update_footprint_enabled: true
+          combination_method:    1      #1=max, 0=override
+          obstacle_range:        3.0    #meters
+          origin_z:              0.0    #meters
+          publish_voxel_map:     true   # default off
+          transform_tolerance:   0.2    # seconds
+          observation_sources:   rgbd1_clear rgbd1_mark
+          rgbd1_mark:
+            data_type: PointCloud2
+            topic: /mars/main_camera/isaac_image_proc/points
+            marking: true
+            clearing: false
+            obstacle_range: 2.5
+            min_obstacle_height: 0.02     #default 0, meters
+            max_obstacle_height: 0.36     #defaule 3, meters
+            expected_update_rate: 0.0    #default 0, if not updating at this rate at least, remove from buffer
+            observation_persistence: 0.0 #default 0, use all measurements taken during now-value, 0=latest 
+            inf_is_valid: false          #default false, for laser scans
+            clear_after_reading: false    #default false, clear the buffer after the layer gets readings from it
+            filter: "voxel"              #default passthrough, apply "voxel", "passthrough", or no filter to sensor data, recommended to have at one filter on
+            voxel_min_points: 0          #default 0, minimum points per voxel for voxel filter
+          rgbd1_clear:
+            enabled: false                #default true, can be toggled on/off with associated service call
+            data_type: PointCloud2
+            topic: /mars/main_camera/isaac_image_proc/points
+            marking: false
+            clearing: false
+            min_z: 0.0                   #default 0, meters
+            max_z: 7.0                   #default 10, meters
+            vertical_fov_angle: 0.7      #default 0.7, radians
+            horizontal_fov_angle: 1.04   #default 1.04, radians
+            decay_acceleration: 1.       #default 0, 1/s^2. If laser scanner MUST be 0
+            model_type: 0                #default 0 (depth camera). Use 1 for 3D Lidar
+
  
