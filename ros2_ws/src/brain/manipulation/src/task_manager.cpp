@@ -1,5 +1,6 @@
 #include "manipulation/task_manager.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -11,6 +12,14 @@ namespace manipulation {
 
 TaskManager::TaskManager(const std::string& base_data_directory)
     : base_data_directory_(base_data_directory) {}
+
+void TaskManager::add_skill_directory(const std::string& directory) {
+    // Avoid duplicates
+    if (directory != base_data_directory_ && 
+        std::find(additional_skill_directories_.begin(), additional_skill_directories_.end(), directory) == additional_skill_directories_.end()) {
+        additional_skill_directories_.push_back(directory);
+    }
+}
 
 void TaskManager::start_new_task(const std::string& task_name, double data_frequency,
                                   const std::string& primitive_type) {
@@ -232,22 +241,31 @@ std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const 
 std::vector<nlohmann::json> TaskManager::get_all_tasks_summary() {
     std::vector<nlohmann::json> all_tasks_summary;
     
-    if (!fs::exists(base_data_directory_) || !fs::is_directory(base_data_directory_)) {
-        std::cerr << "Base data directory " << base_data_directory_ << " does not exist or is not a directory." << std::endl;
-        return all_tasks_summary;
+    // Collect all directories to scan
+    std::vector<std::string> directories_to_scan;
+    directories_to_scan.push_back(base_data_directory_);
+    for (const auto& dir : additional_skill_directories_) {
+        directories_to_scan.push_back(dir);
     }
 
-    for (const auto& entry : fs::directory_iterator(base_data_directory_)) {
-        if (!entry.is_directory()) continue;
+    for (const auto& scan_dir : directories_to_scan) {
+        if (!fs::exists(scan_dir) || !fs::is_directory(scan_dir)) {
+            std::cerr << "Skill directory " << scan_dir << " does not exist or is not a directory." << std::endl;
+            continue;
+        }
 
-        std::string error_msg;
-        auto metadata_opt = get_enriched_metadata_for_task(entry.path().string(), error_msg);
+        for (const auto& entry : fs::directory_iterator(scan_dir)) {
+            if (!entry.is_directory()) continue;
 
-        if (metadata_opt) {
-            all_tasks_summary.push_back(*metadata_opt);
-        } else if (!error_msg.empty()) {
-            std::cerr << "Skipping task directory " << entry.path().filename().string() 
-                      << " due to error: " << error_msg << std::endl;
+            std::string error_msg;
+            auto metadata_opt = get_enriched_metadata_for_task(entry.path().string(), error_msg);
+
+            if (metadata_opt) {
+                all_tasks_summary.push_back(*metadata_opt);
+            } else if (!error_msg.empty()) {
+                std::cerr << "Skipping task directory " << entry.path().filename().string() 
+                          << " due to error: " << error_msg << std::endl;
+            }
         }
     }
 

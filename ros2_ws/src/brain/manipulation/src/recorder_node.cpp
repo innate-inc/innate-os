@@ -60,6 +60,14 @@ RecorderNode::RecorderNode()
     // Initialize TaskManager
     task_manager_ = std::make_unique<TaskManager>(data_directory_);
 
+    // Add innate-os/skills as an additional skill directory to scan
+    const char* home = std::getenv("HOME");
+    if (home) {
+        std::string innate_os_skills = std::string(home) + "/innate-os/skills";
+        task_manager_->add_skill_directory(innate_os_skills);
+        RCLCPP_INFO(this->get_logger(), "Added additional skill directory: %s", innate_os_skills.c_str());
+    }
+
     // Initialize latest image storage
     for (const auto& topic : image_topics_) {
         latest_images_[topic] = nullptr;
