@@ -173,6 +173,7 @@ private:
 
     // Service clients
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr head_ai_position_client_;
+    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr reload_skills_client_;
 
     // Timer
     rclcpp::TimerBase::SharedPtr timer_;

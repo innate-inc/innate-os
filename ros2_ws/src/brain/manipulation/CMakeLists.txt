@@ -107,7 +107,6 @@ install(
 install(
   PROGRAMS
     manipulation/TestPublisher.py
-    manipulation/recorder_interface.py
     manipulation/visualizer.py
     manipulation/test.py
     manipulation/policy.py

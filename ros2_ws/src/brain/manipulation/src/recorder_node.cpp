@@ -119,8 +119,9 @@ RecorderNode::RecorderNode()
     RCLCPP_INFO(this->get_logger(), "Subscribing to velocity topic: %s", velocity_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "Subscribing to odom topic: %s", odom_topic_.c_str());
 
-    // Create service client
+    // Create service clients
     head_ai_position_client_ = this->create_client<std_srvs::srv::Trigger>("/mars/head/set_ai_position");
+    reload_skills_client_ = this->create_client<std_srvs::srv::Trigger>("/brain/reload_primitives");
 
     // Create service servers
     new_physical_primitive_srv_ = this->create_service<brain_messages::srv::ManipulationTask>(
@@ -467,6 +468,22 @@ void RecorderNode::handle_new_physical_primitive(
     RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' (type: learned) started.", request->task_name.c_str());
     publish_status("active", "", current_task_name_);
     response->success = true;
+
+    // Trigger skills reload so new skill appears in skills_action_server immediately
+    if (reload_skills_client_->service_is_ready()) {
+        auto reload_request = std::make_shared<std_srvs::srv::Trigger::Request>();
+        reload_skills_client_->async_send_request(reload_request,
+            [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+                auto result = future.get();
+                if (result->success) {
+                    RCLCPP_INFO(this->get_logger(), "Skills reloaded after new primitive creation.");
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "Failed to reload skills: %s", result->message.c_str());
+                }
+            });
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Reload skills service not available; new skill may not appear until manual reload.");
+    }
 }
 
 void RecorderNode::handle_new_episode(
@@ -638,6 +655,22 @@ void RecorderNode::handle_end_task(
     episode_count_ = 0;
     response->success = true;
     response->message = "Task ended.";
+
+    // Trigger skills reload so new skill appears in skills_action_server
+    if (reload_skills_client_->service_is_ready()) {
+        auto reload_request = std::make_shared<std_srvs::srv::Trigger::Request>();
+        reload_skills_client_->async_send_request(reload_request,
+            [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+                auto result = future.get();
+                if (result->success) {
+                    RCLCPP_INFO(this->get_logger(), "Skills reloaded successfully.");
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "Failed to reload skills: %s", result->message.c_str());
+                }
+            });
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Reload skills service not available; skills may need manual reload.");
+    }
 }
 
 void RecorderNode::handle_get_task_metadata_list(
