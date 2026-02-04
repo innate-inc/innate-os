@@ -104,7 +104,8 @@ private:
   
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rectified_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_rectified_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
 
   // Node parameters
@@ -113,20 +114,24 @@ private:
   std::string right_topic_;
   std::string depth_topic_;
   std::string disparity_topic_;
-  std::string rectified_topic_;
+  std::string left_rectified_topic_;
+  std::string right_rectified_topic_;
   std::string pointcloud_topic_;
   std::string frame_id_;
   int max_disparity_;
-  bool publish_disparity_;
-  bool publish_rectified_;
-  bool publish_pointcloud_;
   int process_every_n_frames_;  // Process 1 out of every N frames
   int pointcloud_decimation_;   // Decimate point cloud (1=full, 2=half, 4=quarter)
 
-  // Block Matching parameters (from Python script that worked best)
-  int bm_window_size_;          // Block matching window size (default: 11)
-  int bm_quality_;              // Quality level 0-8 (default: 8 = max quality)
-  int bm_conf_threshold_;       // Confidence threshold (default: 16000, lower = more details)
+  // VPI SGM creation parameters (set at payload creation)
+  int include_diagonals_;       // Include diagonal paths in SGM (0=no, 1=yes)
+  
+  // VPI SGM runtime parameters (CUDA backend)
+  int confidence_threshold_;    // Confidence threshold (0-65535)
+  int min_disparity_;           // Minimum disparity (0 to max_disparity)
+  int p1_;                      // Penalty for +/-1 disparity change
+  int p2_;                      // Penalty for >1 disparity change (must be < 256)
+  double uniqueness_;           // Uniqueness ratio (-1 to disable, 0-1)
+  int disparity_border_margin_; // Zero out N pixels from border of disparity
 
   // Image dimensions - input (from camera)
   int image_width_;    // Single camera image width
