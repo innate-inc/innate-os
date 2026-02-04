@@ -3,7 +3,12 @@ import traceback
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
+from rclpy.qos import (
+    QoSProfile,
+    QoSReliabilityPolicy,
+    QoSHistoryPolicy,
+    QoSDurabilityPolicy,
+)
 import threading
 import json
 import time
@@ -489,6 +494,11 @@ class BrainClientNode(Node):
         self.primitives_registered = False
         self._pending_next_task = None
 
+        # Pose stamping for local navigation compensation
+        # Stores (x, y, theta) when an image is sent to the agent
+        self.pose_at_image_send = None
+        self.image_at_send = None  # Store image for debug visualization
+
         self.agent_timer = self.create_timer(0.1, self.agent_loop_callback)
 
         self.ws_bridge = WSBridge(
@@ -686,10 +696,182 @@ class BrainClientNode(Node):
         if self.last_image is None:
             return None
         try:
-            success, encoded = cv2.imencode(".jpg", self.last_image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            return base64.b64encode(encoded.tobytes()).decode("utf-8") if success else None
+            success, encoded = cv2.imencode(
+                ".jpg", self.last_image, [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+            )
+            return (
+                base64.b64encode(encoded.tobytes()).decode("utf-8") if success else None
+            )
         except Exception:
             return None
+
+    def _get_current_pose_xyt(self) -> tuple[float, float, float] | None:
+        """Get current robot pose as (x, y, theta) tuple. Returns None if unavailable."""
+        try:
+            if self.cur_nav_mode == "mapfree" and self.last_odom is not None:
+                pos = self.last_odom.pose.pose.position
+                ori = self.last_odom.pose.pose.orientation
+            else:
+                transform = self.tf_buffer.lookup_transform(
+                    target_frame="map",
+                    source_frame="base_link",
+                    time=rclpy.time.Time(),
+                    timeout=rclpy.time.Duration(seconds=0.5),
+                )
+                pos = transform.transform.translation
+                ori = transform.transform.rotation
+
+            siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
+            cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
+            theta = math.atan2(siny_cosp, cosy_cosp)
+            return (pos.x, pos.y, theta)
+        except Exception:
+            return None
+
+    def _compute_pose_delta(
+        self, old_pose: tuple[float, float, float], new_pose: tuple[float, float, float]
+    ) -> tuple[float, float, float]:
+        """
+        Compute the delta between two poses in the robot's local frame at old_pose.
+        Returns (delta_forward, delta_lateral, delta_theta) where:
+        - delta_forward: how far the robot moved forward (in its original heading direction)
+        - delta_lateral: how far the robot moved sideways (positive = left)
+        - delta_theta: how much the robot rotated (radians, positive = counter-clockwise)
+        """
+        old_x, old_y, old_theta = old_pose
+        new_x, new_y, new_theta = new_pose
+
+        # Global displacement
+        dx = new_x - old_x
+        dy = new_y - old_y
+
+        # Transform to robot-local frame at old pose
+        cos_t = math.cos(-old_theta)
+        sin_t = math.sin(-old_theta)
+        delta_forward = dx * cos_t - dy * sin_t
+        delta_lateral = dx * sin_t + dy * cos_t
+
+        # Angular displacement (normalized to [-pi, pi])
+        delta_theta = math.atan2(
+            math.sin(new_theta - old_theta), math.cos(new_theta - old_theta)
+        )
+
+        return (delta_forward, delta_lateral, delta_theta)
+
+    def _adjust_local_nav_command(
+        self, inputs: dict, delta: tuple[float, float, float]
+    ) -> dict:
+        """
+        Adjust local navigation command inputs to compensate for robot motion
+        that occurred since the image was captured.
+
+        For navigate_to_position with local_frame=True:
+        - The original (x, y) is in the frame where the robot was at image capture
+        - We need to transform it to the robot's current frame
+
+        Args:
+            inputs: Original command inputs dict with x, y, theta, local_frame
+            delta: (delta_forward, delta_lateral, delta_theta) motion since image
+
+        Returns:
+            Adjusted inputs dict
+        """
+        if not inputs.get("local_frame", False):
+            # Global navigation doesn't need adjustment
+            return inputs
+
+        delta_forward, delta_lateral, delta_theta = delta
+
+        # Original target in old robot frame
+        orig_x = inputs.get("x", 0.0)
+        orig_y = inputs.get("y", 0.0)
+        orig_theta = inputs.get("theta", 0.0)
+
+        # Transform target from old frame to new frame:
+        # 1. Translate by negative of robot's displacement
+        # 2. Rotate by negative of robot's rotation
+        translated_x = orig_x - delta_forward
+        translated_y = orig_y - delta_lateral
+
+        # Rotate to new frame
+        cos_dt = math.cos(-delta_theta)
+        sin_dt = math.sin(-delta_theta)
+        new_x = translated_x * cos_dt - translated_y * sin_dt
+        new_y = translated_x * sin_dt + translated_y * cos_dt
+
+        # Adjust target orientation
+        new_theta = math.atan2(
+            math.sin(orig_theta - delta_theta), math.cos(orig_theta - delta_theta)
+        )
+
+        adjusted_inputs = inputs.copy()
+        adjusted_inputs["x"] = new_x
+        adjusted_inputs["y"] = new_y
+        adjusted_inputs["theta"] = new_theta
+
+        self.get_logger().info(
+            f"[PoseCompensation] Adjusted local nav: "
+            f"({orig_x:.2f}, {orig_y:.2f}, {math.degrees(orig_theta):.1f}°) → "
+            f"({new_x:.2f}, {new_y:.2f}, {math.degrees(new_theta):.1f}°) "
+            f"[delta: fwd={delta_forward:.2f}m, lat={delta_lateral:.2f}m, rot={math.degrees(delta_theta):.1f}°]"
+        )
+
+        return adjusted_inputs
+
+    def _save_pose_compensation_debug(
+        self,
+        original_inputs: dict,
+        adjusted_inputs: dict,
+        delta: tuple[float, float, float],
+    ):
+        """Save debug images and info when pose compensation is applied."""
+        try:
+            import datetime
+
+            debug_dir = "/Users/axelpeytavin/Projects/innate-repos/innate-os/pose_debug"
+            os.makedirs(debug_dir, exist_ok=True)
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            delta_forward, delta_lateral, delta_theta = delta
+
+            # Save image from when command was sent
+            if self.image_at_send is not None:
+                cv2.imwrite(
+                    f"{debug_dir}/{timestamp}_1_image_at_send.jpg", self.image_at_send
+                )
+
+            # Save current image
+            if self.last_image is not None:
+                cv2.imwrite(f"{debug_dir}/{timestamp}_2_image_now.jpg", self.last_image)
+
+            # Save compensation info to text file
+            with open(f"{debug_dir}/{timestamp}_info.txt", "w") as f:
+                f.write(f"Pose Compensation Debug - {timestamp}\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(f"Pose at image send: {self.pose_at_image_send}\n")
+                f.write(f"Pose now: {self._get_current_pose_xyt()}\n\n")
+                f.write(f"Delta (robot motion since image):\n")
+                f.write(f"  Forward: {delta_forward:.3f} m\n")
+                f.write(f"  Lateral: {delta_lateral:.3f} m\n")
+                f.write(f"  Rotation: {math.degrees(delta_theta):.1f} deg\n\n")
+                f.write(f"Original command:\n")
+                f.write(f"  x: {original_inputs.get('x', 0):.3f} m\n")
+                f.write(f"  y: {original_inputs.get('y', 0):.3f} m\n")
+                f.write(
+                    f"  theta: {math.degrees(original_inputs.get('theta', 0)):.1f} deg\n\n"
+                )
+                f.write(f"Adjusted command:\n")
+                f.write(f"  x: {adjusted_inputs.get('x', 0):.3f} m\n")
+                f.write(f"  y: {adjusted_inputs.get('y', 0):.3f} m\n")
+                f.write(
+                    f"  theta: {math.degrees(adjusted_inputs.get('theta', 0)):.1f} deg\n"
+                )
+
+            self.get_logger().info(
+                f"[PoseCompensation] Debug saved to {debug_dir}/{timestamp}_*"
+            )
+        except Exception as e:
+            self.get_logger().warn(f"[PoseCompensation] Failed to save debug: {e}")
 
     def _get_pose_source(self, log_prefix: str = "") -> tuple[bool, tuple | None]:
         """
@@ -719,7 +901,9 @@ class BrainClientNode(Node):
 
                 pose_source = ("tf", pose_with_cov)
             except Exception as tf_err:
-                self.get_logger().debug(f"{log_prefix}TF map→base_link not available: {tf_err}")
+                self.get_logger().debug(
+                    f"{log_prefix}TF map→base_link not available: {tf_err}"
+                )
                 return use_mapfree, None
         elif use_mapfree and self.last_odom is not None:
             # Inflate covariance in mapfree mode
@@ -738,7 +922,9 @@ class BrainClientNode(Node):
 
         return use_mapfree, pose_source
 
-    def _build_navigation_payload(self, use_mapfree: bool = None, pose_source: tuple = None) -> dict | None:
+    def _build_navigation_payload(
+        self, use_mapfree: bool = None, pose_source: tuple = None
+    ) -> dict | None:
         """
         Build the navigation payload with depth, map, camera_info, and robot_coords.
         Returns None if required data is not available.
@@ -760,7 +946,7 @@ class BrainClientNode(Node):
             "x_cam": self.x_cam,
             "height_cam": self.height_cam,
         }
-        
+
         # Add depth data if available
         if self.send_depth and self.last_depth_image is not None:
             depth_frame = self.last_depth_image
@@ -782,7 +968,7 @@ class BrainClientNode(Node):
                 "step": int(depth_frame.shape[1] * bytes_per_pixel),
                 "data": base64.b64encode(depth_data).decode("utf-8"),
             }
-        
+
         # Add map data
         if use_mapfree:
             dummy_map_data = np.array([0], dtype=np.int8)
@@ -803,7 +989,7 @@ class BrainClientNode(Node):
             siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
             cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
             yaw = math.atan2(siny_cosp, cosy_cosp)
-            
+
             payload["map"] = {
                 "resolution": self.last_map.info.resolution,
                 "width": self.last_map.info.width,
@@ -818,7 +1004,7 @@ class BrainClientNode(Node):
         else:
             # No map available in non-mapfree mode
             return None
-        
+
         # Add robot_coords
         pose_msg = pose_source[1]
         pos = pose_msg.pose.position
@@ -826,7 +1012,7 @@ class BrainClientNode(Node):
         siny_cosp = 2.0 * (ori.w * ori.z + ori.x * ori.y)
         cosy_cosp = 1.0 - 2.0 * (ori.y * ori.y + ori.z * ori.z)
         theta = math.atan2(siny_cosp, cosy_cosp)
-        
+
         robot_coords_payload = {
             "x": pos.x,
             "y": pos.y,
@@ -843,7 +1029,7 @@ class BrainClientNode(Node):
                 )
             ),
         }
-        
+
         # Add covariance if available
         cov = getattr(pose_msg, "covariance", None)
         if cov is not None:
@@ -854,25 +1040,25 @@ class BrainClientNode(Node):
                     robot_coords_payload["cov_yaw"] = cov[35]
             except Exception:
                 pass
-        
+
         payload["robot_coords"] = robot_coords_payload
         return payload
 
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
-        
+
         if not self.is_brain_active:
             self.get_logger().warn(
                 "\033[93m[BrainClient] Brain is not active. Skipping chat_in message.\033[0m"
             )
             return
-        
+
         self.chat_history.append(data)
-        
+
         payload = {"text": data["text"]}
         if image_b64 := self._encode_current_image():
             payload["image_b64"] = image_b64
-        
+
         # Include navigation payload for immediate processing of navigation primitives.
         # Without this, navigation primitives are deferred until the next image message.
         # Exception: turn_and_move only needs robot_coords and can work with partial data.
@@ -881,17 +1067,25 @@ class BrainClientNode(Node):
             payload["map"] = nav_payload.get("map")
             payload["camera_info"] = nav_payload.get("camera_info")
             payload["robot_coords"] = nav_payload.get("robot_coords")
-            self.get_logger().debug("chat_in includes full navigation payload for immediate processing")
+            self.get_logger().debug(
+                "chat_in includes full navigation payload for immediate processing"
+            )
         else:
-            self.get_logger().debug("chat_in without full navigation payload - navigation will be deferred")
-        
+            self.get_logger().debug(
+                "chat_in without full navigation payload - navigation will be deferred"
+            )
+
+        # Store pose at message send time for local nav compensation
+        if "image_b64" in payload:
+            self.pose_at_image_send = self._get_current_pose_xyt()
+
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
         self.ws_bridge.send_message(outgoing_msg)
         self.get_logger().info(f"Sent MessageIn: {outgoing_msg.payload['text']}")
 
     def tts_callback(self, msg: String):
         """Handle direct TTS requests from /brain/tts topic."""
-        
+
         text = msg.data
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
@@ -904,7 +1098,7 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Brain is not active. Skipping custom input.\033[0m"
             )
             return
-        
+
         try:
             data = json.loads(msg.data)
             self.get_logger().info(
@@ -1266,6 +1460,9 @@ class BrainClientNode(Node):
                 payload["cov_y"] = 1e4
                 payload["cov_yaw"] = 1e4
 
+            # Store pose at image send time for local nav compensation
+            self.pose_at_image_send = (pos.x, pos.y, theta)
+
             pose_image_msg = MessageIn(type=MessageInType.POSE_IMAGE, payload=payload)
             self.ws_bridge.send_message(pose_image_msg)
         except Exception as e:
@@ -1388,9 +1585,33 @@ class BrainClientNode(Node):
 
             if payload.next_task.type in self.primitives_dict:
                 self._pause_gaze()  # Pause gaze during skill execution
+
+                # Apply pose compensation for local navigation commands
+                task_inputs = payload.next_task.inputs
+                if (
+                    payload.next_task.type == "navigate_to_position"
+                    and task_inputs.get("local_frame", False)
+                    and self.pose_at_image_send is not None
+                ):
+                    current_pose = self._get_current_pose_xyt()
+                    if current_pose is not None:
+                        delta = self._compute_pose_delta(
+                            self.pose_at_image_send, current_pose
+                        )
+                        original_inputs = task_inputs.copy()
+                        task_inputs = self._adjust_local_nav_command(task_inputs, delta)
+                        # Save debug images for pose compensation visualization
+                        self._save_pose_compensation_debug(
+                            original_inputs, task_inputs, delta
+                        )
+                    else:
+                        self.get_logger().warn(
+                            "[PoseCompensation] Could not get current pose for compensation"
+                        )
+
                 self.send_primitive_goal(
                     payload.next_task.type,
-                    payload.next_task.inputs,
+                    task_inputs,
                 )
                 status_msg = MessageIn(
                     type=MessageInType.PRIMITIVE_ACTIVATED,
@@ -1597,6 +1818,12 @@ class BrainClientNode(Node):
                             "camera_type": "arm_wrist",
                         }
                         self.get_logger().debug("Including arm camera image in message")
+
+                # Store pose and image at send time for local nav compensation
+                self.pose_at_image_send = self._get_current_pose_xyt()
+                self.image_at_send = (
+                    self.last_image.copy() if self.last_image is not None else None
+                )
 
                 # Build and send the message
                 image_msg = MessageIn(type=MessageInType.IMAGE, payload=payload)
