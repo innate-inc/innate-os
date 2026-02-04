@@ -86,7 +86,7 @@ ros-humble-nav2-behaviors
 ros-humble-nav2-lifecycle-manager
 
 # ROS2 Humble packages - SLAM
-ros-humble-slam-toolbox
+ros-humble-slam-toolbox-humble-lifecycle
 
 # ROS2 Humble packages - Vision/Perception
 ros-humble-cv-bridge
@@ -108,6 +108,7 @@ ros-humble-moveit-ros-move-group
 # ROS2 Humble packages - Middleware/Bridge
 ros-humble-rosbridge-suite
 ros-humble-rosbridge-server
+ros-humble-innate-rws
 ros-humble-foxglove-bridge
 ros-humble-rosbag2
 ros-humble-rosidl-default-generators

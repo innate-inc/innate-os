@@ -7,3 +7,9 @@ nvidia-vpi-dev
 
 # NVIDIA GStreamer plugins (for nvvidconv hardware acceleration on Jetson)
 nvidia-l4t-gstreamer
+
+# NVIDIA CUDA toolkit (required for PyTorch on Jetson)
+cuda-toolkit-12-6
+
+# cuDNN is separate from CUDA toolkit
+libcudnn9-cuda-12

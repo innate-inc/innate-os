@@ -377,18 +377,11 @@ else
 
     apt-get update
 
-    # Install common dependencies (required for both simulation and hardware)
-    if [ -f "$APT_DEPS_COMMON" ]; then
-        log "  Installing common apt dependencies..."
-        grep -v '^#' "$APT_DEPS_COMMON" | grep -v '^$' | xargs apt-get -o DPkg::Lock::Timeout=45 install -y
-        log "  Common apt dependencies installed"
-    fi
-
-    # Install hardware-specific dependencies (Jetson only)
-    if [ -f "$APT_DEPS_HARDWARE" ]; then
-        log "  Installing hardware-specific apt dependencies..."
-        grep -v '^#' "$APT_DEPS_HARDWARE" | grep -v '^$' | xargs apt-get -o DPkg::Lock::Timeout=45 install -y
-        log "  Hardware apt dependencies installed"
+    # Install all apt dependencies (common + hardware-specific) in one go
+    if [ -f "$APT_DEPS_COMMON" ] && [ -f "$APT_DEPS_HARDWARE" ]; then
+        log "  Installing apt dependencies (common + hardware)..."
+        cat "$APT_DEPS_COMMON" "$APT_DEPS_HARDWARE" | grep -v '^#' | grep -v '^$' | xargs apt-get -o DPkg::Lock::Timeout=45 install -y
+        log "  Apt dependencies installed"
     fi
 
     # Pip dependencies
