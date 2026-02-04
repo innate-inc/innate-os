@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-HeadInterface - Provides head tilt control capabilities to primitives.
+HeadInterface - Provides head tilt control capabilities to skills.
 
-This interface allows primitives to:
+This interface allows skills to:
 1. Set the head tilt position
 2. Access current head position from robot state
 """
@@ -15,7 +15,7 @@ from brain_client.logging_config import UniversalLogger
 class HeadInterface:
     """High-level interface for head (tilt) control.
 
-    Primitives should use this instead of directly publishing to head topics.
+    Skills should use this instead of directly publishing to head topics.
     """
 
     def __init__(self, node: Node, logger, head_position_topic: str = "/mars/head/set_position"):

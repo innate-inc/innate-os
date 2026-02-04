@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-MobilityInterface - Provides base movement (wheels) control capabilities to primitives.
+MobilityInterface - Provides base movement (wheels) control capabilities to skills.
 
-This interface allows primitives to:
+This interface allows skills to:
 1. Send velocity commands on the common cmd_vel topic
 2. Schedule automatic stop after a specified duration
 3. Precise blocking rotation via Nav2
@@ -20,7 +20,7 @@ from brain_client.logging_config import UniversalLogger
 class MobilityInterface:
     """High-level interface for base (wheel) motion.
 
-    Primitives should use this instead of directly publishing to cmd_vel.
+    Skills should use this instead of directly publishing to cmd_vel.
     """
 
     def __init__(self, node: Node, logger, cmd_vel_topic: str = "/cmd_vel"):

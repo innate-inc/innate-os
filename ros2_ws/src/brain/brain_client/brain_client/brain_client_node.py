@@ -47,11 +47,11 @@ from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import PoseWithCovariance, PoseWithCovarianceStamped
 from brain_messages.srv import GetChatHistory
-from brain_messages.action import ExecutePrimitive
+from brain_messages.action import ExecuteSkill
 from brain_messages.srv import GetAvailableDirectives
 from brain_messages.srv import ResetBrain
 from brain_messages.srv import SetDirectiveOnStartup
-from brain_messages.srv import GetAvailablePrimitives
+from brain_messages.srv import GetAvailableSkills
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
@@ -450,8 +450,8 @@ class BrainClientNode(Node):
         self._reload_primitives_client = self._service_call_node.create_client(
             Trigger, "/brain/reload_primitives"
         )
-        self._get_primitives_client_sync = self._service_call_node.create_client(
-            GetAvailablePrimitives, "/brain/get_available_primitives"
+        self._get_skills_client_sync = self._service_call_node.create_client(
+            GetAvailableSkills, "/brain/get_available_skills"
         )
 
         # --- Service for reloading primitives and directives ---
@@ -520,11 +520,11 @@ class BrainClientNode(Node):
             )
             time.sleep(1.0)
 
-        # Initialize primitives - query from primitive_execution_action_server
+        # Initialize primitives - query from skills_action_server
         self.primitives_dict = self._query_available_primitives()
         if not self.primitives_dict:
             self.get_logger().warn(
-                "No primitives available from primitive_execution_action_server, using fallback local loading"
+                "No primitives available from skills_action_server, using fallback local loading"
             )
             self.primitives_dict = initialize_skills(
                 self.get_logger(), self.simulator_mode
@@ -577,7 +577,7 @@ class BrainClientNode(Node):
 
         # Create the primitive execution action client once in the init.
         self.primitive_action_client = ActionClient(
-            self, ExecutePrimitive, "execute_primitive"
+            self, ExecuteSkill, "execute_skill"
         )
 
         # After initializing the primitive_action_client
@@ -590,22 +590,22 @@ class BrainClientNode(Node):
 
     def _query_available_primitives(self):
         """
-        Query available primitives from primitive_execution_action_server.
+        Query available primitives from skills_action_server.
         Returns a dict of primitive names mapped to their metadata (for directive validation and registration).
         """
         # Use helper node's client for synchronous calls (works from callbacks)
-        client = self._get_primitives_client_sync
+        client = self._get_skills_client_sync
 
         # Wait for service to be available
-        self.get_logger().info("Waiting for /brain/get_available_primitives service...")
+        self.get_logger().info("Waiting for /brain/get_available_skills service...")
         if not client.wait_for_service(timeout_sec=10.0):
             self.get_logger().error(
-                "Timeout waiting for /brain/get_available_primitives service"
+                "Timeout waiting for /brain/get_available_skills service"
             )
             return {}
 
         # Call service via helper node (not registered with any executor)
-        request = GetAvailablePrimitives.Request()
+        request = GetAvailableSkills.Request()
         future = client.call_async(request)
         rclpy.spin_until_future_complete(
             self._service_call_node, future, timeout_sec=10.0
@@ -617,7 +617,7 @@ class BrainClientNode(Node):
 
         try:
             response = future.result()
-            primitives_list = json.loads(response.primitives_json)
+            primitives_list = json.loads(response.skills_json)
 
             # Store the full primitives list for later use in registration
             self.primitives_metadata_list = primitives_list
@@ -1619,15 +1619,15 @@ class BrainClientNode(Node):
                 raise  # Re-raise the caught exception
 
     def send_primitive_goal(self, task_type, inputs):
-        goal_msg = ExecutePrimitive.Goal()
-        goal_msg.primitive_type = task_type
+        goal_msg = ExecuteSkill.Goal()
+        goal_msg.skill_type = task_type
 
         # Inputs are now only the direct arguments for the primitive's execute method.
         # Robot state injection is handled by the PrimitiveExecutionActionServer.
         goal_msg.inputs = json.dumps(inputs if inputs is not None else {})
 
         self.get_logger().info(
-            f"Sending goal for primitive: {goal_msg.primitive_type} with inputs: {goal_msg.inputs}"
+            f"Sending goal for skill: {goal_msg.skill_type} with inputs: {goal_msg.inputs}"
         )
         if not self.primitive_action_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().error("Primitive execution action server not available!")
@@ -1709,7 +1709,7 @@ class BrainClientNode(Node):
         # --- Send status message FIRST ---
         # Get primitive info from the primitive_running dictionary
         primitive_id = None
-        primitive_name = result.primitive_type  # Use name from result
+        primitive_name = result.skill_type  # Use name from result
         if (
             self.primitive_running
             and self.primitive_running["primitive_name"] == primitive_name

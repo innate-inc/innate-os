@@ -21,7 +21,7 @@ set(srv_files
   "srv/UpdateTaskMetadata.srv"
   "srv/ResetBrain.srv"
   "srv/GetAvailableBehaviors.srv"
-  "srv/GetAvailablePrimitives.srv"
+  "srv/GetAvailableSkills.srv"
   "srv/ChangeMap.srv"
   "srv/ChangeNavigationMode.srv"
   "srv/SaveMap.srv"
@@ -42,7 +42,7 @@ set(msg_files
 )
 
 set(action_files
-  "action/ExecutePrimitive.action"
+  "action/ExecuteSkill.action"
   "action/ExecutePolicy.action"
   "action/ExecuteBehavior.action"
 )

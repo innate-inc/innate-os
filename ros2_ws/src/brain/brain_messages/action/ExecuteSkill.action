@@ -1,13 +1,13 @@
 # Goal definition
-string primitive_type
+string skill_type
 string inputs
 ---
 # Result definition
 bool success
 string message
-string primitive_type
+string skill_type
 string success_type  # One of: "success", "cancelled", "failure"
 ---
 # Feedback definition
-string primitive_type
+string skill_type
 string feedback 

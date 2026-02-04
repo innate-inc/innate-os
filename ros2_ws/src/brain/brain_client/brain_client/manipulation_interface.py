@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ManipulationInterface - Provides IK and arm control capabilities to primitives.
+ManipulationInterface - Provides IK and arm control capabilities to skills.
 
-This interface allows primitives to:
+This interface allows skills to:
 1. Request inverse kinematics solutions for Cartesian poses
 2. Command the arm to move to joint positions
 3. Get current end-effector pose (forward kinematics)
@@ -22,7 +22,7 @@ class ManipulationInterface:
     """
     Interface for arm manipulation using IK and joint control.
 
-    This class provides high-level methods for primitives to control the arm
+    This class provides high-level methods for skills to control the arm
     without needing to know the details of ROS topics and services.
     """
 

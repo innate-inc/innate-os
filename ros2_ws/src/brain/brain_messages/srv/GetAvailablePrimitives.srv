@@ -1,7 +1,0 @@
-# Service to get all available primitives (code and physical)
-# Request
-bool include_in_training false  # If true, include learned primitives that are still in training (missing checkpoint)
----
-# Response contains JSON-encoded list of primitive metadata
-string primitives_json
-

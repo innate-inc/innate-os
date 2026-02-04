@@ -16,14 +16,14 @@ class SkillResult(Enum):
     Enum representing the possible results of a skill execution.
     """
 
-    SUCCESS = "success"  # The primitive completed successfully
-    FAILURE = "failure"  # The primitive failed to complete
-    CANCELLED = "cancelled"  # The primitive was cancelled before completion
+    SUCCESS = "success"  # The skill completed successfully
+    FAILURE = "failure"  # The skill failed to complete
+    CANCELLED = "cancelled"  # The skill was cancelled before completion
 
 
 class RobotStateType(Enum):
     """
-    Enum representing the types of robot state a primitive might require.
+    Enum representing the types of robot state a skill might require.
     """
 
     LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
@@ -117,7 +117,7 @@ class Skill(ABC):
     @abstractmethod
     def name(self):
         """
-        The name of the primitive.
+        The name of the skill.
         Must be defined by every subclass.
         """
         pass
@@ -125,21 +125,21 @@ class Skill(ABC):
     @abstractmethod
     def execute(self, *args, **kwargs):
         """
-        Execute the primitive.
+        Execute the skill.
 
         Subclasses must implement this method.
         Returns a tuple of (result_message, result_status) where result_status
-        is a PrimitiveResult enum value.
+        is a SkillResult enum value.
         """
         pass
 
     @abstractmethod
     def cancel(self):
         """
-        Cancel the execution of the primitive.
+        Cancel the execution of the skill.
 
         Subclasses must implement this method to properly handle cancellation.
-        This method should be safe to call at any time, even if the primitive
+        This method should be safe to call at any time, even if the skill
         is not currently executing.
 
         Returns a message describing the cancellation result.
@@ -148,7 +148,7 @@ class Skill(ABC):
 
     def update_robot_state(self, **kwargs):
         """
-        Update the primitive with the latest robot state.
+        Update the skill with the latest robot state.
         Automatically populates RobotState descriptors defined on the class.
         Subclasses can override this to add custom handling.
         """
@@ -160,7 +160,7 @@ class Skill(ABC):
 
     def get_required_robot_states(self) -> list[RobotStateType]:
         """
-        Declare the robot states required by this primitive.
+        Declare the robot states required by this skill.
         Automatically collects from RobotState descriptors defined on the class.
         """
         return [desc.state_type for desc in self._get_robot_state_descriptors().values()]
@@ -200,14 +200,14 @@ class Skill(ABC):
 
     def guidelines(self):
         """
-        Optionally provide guidelines for this primitive.
+        Optionally provide guidelines for this skill.
         Subclasses may override this method if guidelines are available.
         """
         return None
 
     def guidelines_when_running(self):
         """
-        Optionally provide guidelines for this primitive when it is running.
+        Optionally provide guidelines for this skill when it is running.
         Subclasses may override this method if guidelines are available.
         """
         return None
@@ -215,7 +215,7 @@ class Skill(ABC):
     def set_feedback_callback(self, callback):
         """Sets the feedback callback function."""
         self._feedback_callback = callback
-        self.logger.debug(f"Feedback callback set for primitive {self.name}.")
+        self.logger.debug(f"Feedback callback set for skill {self.name}.")
 
     def _send_feedback(self, message: str):
         """Sends feedback if the callback is set."""
@@ -223,12 +223,12 @@ class Skill(ABC):
             try:
                 self._feedback_callback(message)
             except Exception as e:
-                self.logger.error(f"Error sending feedback for primitive {self.name}: {e}")
+                self.logger.error(f"Error sending feedback for skill {self.name}: {e}")
 
 
 class PhysicalSkill(Skill):
     """
-    Base class for primitives that execute physical behaviors via the ExecuteBehavior action server.
+    Base class for skills that execute physical behaviors via the ExecuteBehavior action server.
 
     Subclasses only need to define:
     - behavior_name: The name of the behavior to execute on the action server
@@ -265,16 +265,16 @@ class PhysicalSkill(Skill):
 
         Returns:
             tuple: (result_message, result_status) where result_status is a
-                   PrimitiveResult enum value
+                   SkillResult enum value
         """
         if not self.node:
-            self.logger.error(f"{self.display_name} primitive is not functional due to missing ROS node.")
+            self.logger.error(f"{self.display_name} skill is not functional due to missing ROS node.")
             return "Skill not initialized correctly (no ROS node)", SkillResult.FAILURE
 
         if not self._action_client:
             self._action_client = ActionClient(self.node, ExecuteBehavior, "/behavior/execute")
             if not self._action_client:
-                self.logger.error(f"{self.display_name} primitive could not create ExecuteBehavior action client.")
+                self.logger.error(f"{self.display_name} skill could not create ExecuteBehavior action client.")
                 return "Skill could not create action client", SkillResult.FAILURE
 
         self.logger.info(
