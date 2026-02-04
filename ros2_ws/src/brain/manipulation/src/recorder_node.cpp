@@ -60,6 +60,14 @@ RecorderNode::RecorderNode()
     // Initialize TaskManager
     task_manager_ = std::make_unique<TaskManager>(data_directory_);
 
+    // Add innate-os/skills as an additional skill directory to scan
+    const char* home = std::getenv("HOME");
+    if (home) {
+        std::string innate_os_skills = std::string(home) + "/innate-os/skills";
+        task_manager_->add_skill_directory(innate_os_skills);
+        RCLCPP_INFO(this->get_logger(), "Added additional skill directory: %s", innate_os_skills.c_str());
+    }
+
     // Initialize latest image storage
     for (const auto& topic : image_topics_) {
         latest_images_[topic] = nullptr;
@@ -432,7 +440,21 @@ void RecorderNode::handle_new_physical_primitive(
     RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
     set_head_ai_position();
 
-    task_manager_->start_new_task(request->task_name, data_frequency_, "learned");
+    // Use task_directory if provided, otherwise fall back to default behavior
+    if (!request->task_directory.empty()) {
+        // Expand ~ to home directory if present
+        std::string task_dir = request->task_directory;
+        if (!task_dir.empty() && task_dir[0] == '~') {
+            const char* home = std::getenv("HOME");
+            if (home) {
+                task_dir = std::string(home) + task_dir.substr(1);
+            }
+        }
+        RCLCPP_INFO(this->get_logger(), "Using specified task directory: %s", task_dir.c_str());
+        task_manager_->start_new_task_at_directory(request->task_name, task_dir, data_frequency_, "learned");
+    } else {
+        task_manager_->start_new_task(request->task_name, data_frequency_, "learned");
+    }
     
     if (task_manager_->has_metadata()) {
         episode_count_ = task_manager_->get_number_of_episodes();

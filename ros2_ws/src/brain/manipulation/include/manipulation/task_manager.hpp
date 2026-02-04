@@ -15,9 +15,14 @@ class TaskManager {
 public:
     explicit TaskManager(const std::string& base_data_directory);
 
+    void add_skill_directory(const std::string& directory);
+
     void start_new_task(const std::string& task_name, double data_frequency, 
                         const std::string& primitive_type = "learned");
+    void start_new_task_at_directory(const std::string& task_name, const std::string& task_directory,
+                                      double data_frequency, const std::string& primitive_type = "learned");
     void resume_task(const std::string& task_name);
+    void resume_task_at_directory(const std::string& task_name, const std::string& task_directory);
     void add_episode(EpisodeData& episode_data, 
                      const std::string& start_timestamp, 
                      const std::string& end_timestamp);
@@ -43,6 +48,7 @@ private:
                                                                    std::string& error_msg);
 
     std::string base_data_directory_;
+    std::vector<std::string> additional_skill_directories_;
     std::string current_task_name_;
     std::string current_task_dir_;
     nlohmann::json metadata_;

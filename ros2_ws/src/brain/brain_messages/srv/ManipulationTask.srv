@@ -2,6 +2,7 @@
 
 # Request
 string task_name
+string task_directory  # Full path to skill directory (e.g., ~/innate-os/skills/my_skill or ~/skills/my_skill)
 string task_description
 bool mobile_task
 ---

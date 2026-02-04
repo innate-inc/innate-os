@@ -40,10 +40,11 @@ class TerminalInterface(Node):
                 break  # End of input
             if command == 'nt':
                 task_name = input("Enter task name: ")
+                task_directory = input("Enter task directory (leave empty for default ~/skills): ").strip()
                 task_description = input("Enter task description: ")
                 mobile_flag_str = input("Is this a mobile task? (y/n): ").strip().lower()
                 mobile_flag = True if mobile_flag_str == 'y' else False
-                self.call_new_task(task_name, task_description, mobile_flag)
+                self.call_new_task(task_name, task_description, mobile_flag, task_directory)
             elif command == 'ne':
                 self.call_new_episode()
             elif command == 'se':
@@ -74,9 +75,10 @@ class TerminalInterface(Node):
         print("=======================================\n")
 
     # ---------- Service Call Methods ----------
-    def call_new_task(self, task_name, task_description, mobile_flag):
+    def call_new_task(self, task_name, task_description, mobile_flag, task_directory=""):
         request = ManipulationTask.Request()
         request.task_name = task_name
+        request.task_directory = task_directory  # Full path to skill directory (optional)
         request.task_description = task_description
         request.mobile_task = mobile_flag
 
