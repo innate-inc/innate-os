@@ -112,14 +112,20 @@ class SkillsActionServer(Node):
         # Dynamic skill loading
         self.skill_loader = SkillLoader(self.get_logger())
 
-        # Define directory to scan for skills
-        # Using the unified skills directory at the root
+        # Define directories to scan for skills
         maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
         skills_directory = os.path.join(maurice_root, "skills")
+        user_skills_directory = os.path.join(os.path.expanduser("~"), "skills")
 
         if not os.path.exists(skills_directory):
             self.get_logger().fatal(f"Skills directory not found: {skills_directory}")
             raise FileNotFoundError(f"Skills directory must exist at {skills_directory}")
+
+        # Store directories for reload
+        self._skills_directories = [skills_directory]
+        if os.path.exists(user_skills_directory):
+            self._skills_directories.append(user_skills_directory)
+            self.get_logger().info(f"Also scanning user skills directory: {user_skills_directory}")
 
         # Load all skills dynamically
         discovered_skills = self.skill_loader.discover_skills_in_directory(skills_directory)
@@ -152,8 +158,8 @@ class SkillsActionServer(Node):
 
         self.get_logger().info(f"Successfully loaded {len(self._code_skills)} code skills")
 
-        # Load physical skills from metadata.json files
-        self._physical_skills, self._in_training_skills = self._load_physical_skills(skills_directory)
+        # Load physical skills from metadata.json files (from all skill directories)
+        self._physical_skills, self._in_training_skills = self._load_physical_skills(self._skills_directories)
         self.get_logger().info(f"Successfully loaded {len(self._physical_skills)} physical skills")
         self.get_logger().info(f"Found {len(self._in_training_skills)} in-training skills")
 
@@ -190,6 +196,12 @@ class SkillsActionServer(Node):
 
         maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
         skills_directory = os.path.join(maurice_root, "skills")
+        user_skills_directory = os.path.join(os.path.expanduser("~"), "skills")
+
+        # Update directories list
+        self._skills_directories = [skills_directory]
+        if os.path.exists(user_skills_directory):
+            self._skills_directories.append(user_skills_directory)
 
         # Reload code skills
         discovered_skills = self.skill_loader.discover_skills_in_directory(skills_directory)
@@ -212,8 +224,8 @@ class SkillsActionServer(Node):
             except Exception as e:
                 self.get_logger().error(f"Error instantiating {name}: {e}")
 
-        # Reload physical skills
-        self._physical_skills, self._in_training_skills = self._load_physical_skills(skills_directory)
+        # Reload physical skills (from all skill directories)
+        self._physical_skills, self._in_training_skills = self._load_physical_skills(self._skills_directories)
 
         self.get_logger().info(
             f"Reloaded {len(self._code_skills)} code + {len(self._physical_skills)} physical skills"
@@ -232,8 +244,11 @@ class SkillsActionServer(Node):
             response.message = f"Failed to reload skills: {e}"
         return response
 
-    def _load_physical_skills(self, skills_directory):
+    def _load_physical_skills(self, skills_directories):
         """Load physical skills from metadata.json files.
+
+        Args:
+            skills_directories: List of directories to scan for physical skills.
 
         Returns:
             tuple: (physical_skills dict, in_training_skills dict)
@@ -241,42 +256,46 @@ class SkillsActionServer(Node):
         physical_skills = {}
         in_training_skills = {}
 
-        for item in os.listdir(skills_directory):
-            item_path = os.path.join(skills_directory, item)
+        for skills_directory in skills_directories:
+            if not os.path.exists(skills_directory):
+                continue
 
-            # Check if it's a directory with metadata.json
-            if os.path.isdir(item_path):
-                metadata_path = os.path.join(item_path, "metadata.json")
-                if os.path.exists(metadata_path):
-                    with open(metadata_path) as f:
-                        metadata = json.load(f)
-                        skill_name = metadata.get("name", item)
+            for item in os.listdir(skills_directory):
+                item_path = os.path.join(skills_directory, item)
 
-                        # Validate skill before loading
-                        is_valid, is_in_training, episode_count = self.skill_loader.validate_physical_skill(
-                            item_path, metadata
-                        )
+                # Check if it's a directory with metadata.json
+                if os.path.isdir(item_path):
+                    metadata_path = os.path.join(item_path, "metadata.json")
+                    if os.path.exists(metadata_path):
+                        with open(metadata_path) as f:
+                            metadata = json.load(f)
+                            skill_name = metadata.get("name", item)
 
-                        if is_valid:
-                            skill_data = {
-                                "metadata": metadata,
-                                "directory": item_path,
-                                "in_training": is_in_training,
-                                "episode_count": episode_count,
-                            }
+                            # Validate skill before loading
+                            is_valid, is_in_training, episode_count = self.skill_loader.validate_physical_skill(
+                                item_path, metadata
+                            )
 
-                            if is_in_training:
-                                in_training_skills[skill_name] = skill_data
-                                self.get_logger().info(
-                                    f"Loaded in-training skill: {skill_name} (type: {metadata.get('type', 'unknown')})"
-                                )
+                            if is_valid:
+                                skill_data = {
+                                    "metadata": metadata,
+                                    "directory": item_path,
+                                    "in_training": is_in_training,
+                                    "episode_count": episode_count,
+                                }
+
+                                if is_in_training:
+                                    in_training_skills[skill_name] = skill_data
+                                    self.get_logger().info(
+                                        f"Loaded in-training skill: {skill_name} (type: {metadata.get('type', 'unknown')})"
+                                    )
+                                else:
+                                    physical_skills[skill_name] = skill_data
+                                    self.get_logger().info(
+                                        f"Loaded physical skill: {skill_name} (type: {metadata.get('type', 'unknown')})"
+                                    )
                             else:
-                                physical_skills[skill_name] = skill_data
-                                self.get_logger().info(
-                                    f"Loaded physical skill: {skill_name} (type: {metadata.get('type', 'unknown')})"
-                                )
-                        else:
-                            self.get_logger().warn(f"Skipped invalid physical skill: {skill_name}")
+                                self.get_logger().warn(f"Skipped invalid physical skill: {skill_name}")
 
         return physical_skills, in_training_skills
 
