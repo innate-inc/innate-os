@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import google.generativeai as genai
-from brain_client.skill_types import Skill, SkillResult, RobotState, RobotStateType
+from brain_client.skill_types import Skill, SkillResult, RobotState, RobotStateType, Interface, InterfaceType
 
 
 def _load_env_file(env_path: Path) -> dict:
@@ -29,8 +29,9 @@ class ScanForObjects(Skill):
     using Google Gemini vision API.
     """
 
-    # Camera image is continuously updated during execution
+    # Declare required state and interfaces
     image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
+    mobility = Interface(InterfaceType.MOBILITY)
 
     def __init__(self, logger):
         super().__init__(logger)

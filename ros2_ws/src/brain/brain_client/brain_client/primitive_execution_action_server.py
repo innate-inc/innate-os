@@ -32,6 +32,7 @@ from brain_client.skill_loader import SkillLoader
 from brain_client.skill_types import (
     SkillResult,
     RobotStateType,
+    InterfaceType,
 )
 from brain_client.manipulation_interface import ManipulationInterface
 from brain_client.mobility_interface import MobilityInterface
@@ -163,11 +164,7 @@ class PrimitiveExecutionActionServer(Node):
             try:
                 primitive_instance = primitive_class(self.get_logger())
                 primitive_instance.node = self  # Inject the node
-                primitive_instance.manipulation = (
-                    self.manipulation
-                )  # Inject manipulation interface
-                primitive_instance.mobility = self.mobility  # Inject mobility interface
-                primitive_instance.head = self.head  # Inject head interface
+                self._inject_required_interfaces(primitive_instance)
                 self._code_primitives[primitive_name] = primitive_instance
                 self.get_logger().info(f"Loaded code primitive: {primitive_name}")
             except Exception as e:
@@ -247,9 +244,7 @@ class PrimitiveExecutionActionServer(Node):
             try:
                 instance = cls(self.get_logger())
                 instance.node = self
-                instance.manipulation = self.manipulation
-                instance.mobility = self.mobility
-                instance.head = self.head
+                self._inject_required_interfaces(instance)
                 self._code_primitives[name] = instance
                 self.get_logger().info(f"Reloaded code primitive: {name}")
             except Exception as e:
@@ -642,6 +637,17 @@ class PrimitiveExecutionActionServer(Node):
 
         if robot_state_to_inject:  # Only call if there is state to update
             primitive.update_robot_state(**robot_state_to_inject)
+
+    def _inject_required_interfaces(self, primitive):
+        """Inject only the interfaces declared by the primitive via Interface descriptors."""
+        required_interfaces = primitive.get_required_interfaces()
+        for interface_type in required_interfaces:
+            if interface_type == InterfaceType.MANIPULATION:
+                primitive.inject_interface(interface_type, self.manipulation)
+            elif interface_type == InterfaceType.MOBILITY:
+                primitive.inject_interface(interface_type, self.mobility)
+            elif interface_type == InterfaceType.HEAD:
+                primitive.inject_interface(interface_type, self.head)
 
     def _state_update_thread_func(self):
         """Background thread that continuously updates robot state for running primitive."""

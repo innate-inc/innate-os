@@ -4,11 +4,13 @@ Arm Move To XYZ Skill - Move arm to a Cartesian position using IK.
 """
 
 import time
-from brain_client.skill_types import Skill, SkillResult
+from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
 
 
 class ArmMoveToXYZ(Skill):
     """Move the arm to a Cartesian position using inverse kinematics."""
+    
+    manipulation = Interface(InterfaceType.MANIPULATION)
     
     def __init__(self, logger):
         super().__init__(logger)

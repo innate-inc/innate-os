@@ -30,6 +30,16 @@ class RobotStateType(Enum):
     LAST_HEAD_POSITION = "last_head_position"
 
 
+class InterfaceType(Enum):
+    """
+    Enum representing the types of interfaces a skill might require.
+    """
+
+    MANIPULATION = "manipulation"
+    MOBILITY = "mobility"
+    HEAD = "head"
+
+
 class RobotState:
     """
     Descriptor for declaring and accessing robot state in skills.
@@ -63,15 +73,42 @@ class RobotState:
         setattr(obj, self._attr_name, value)
 
 
+class Interface:
+    """
+    Descriptor for declaring and accessing interfaces in skills.
+
+    Usage:
+        class MySkill(Skill):
+            mobility = Interface(InterfaceType.MOBILITY)
+            head = Interface(InterfaceType.HEAD)
+
+            def execute(self):
+                self.mobility.rotate(0.5)  # Use interface directly
+    """
+
+    def __init__(self, interface_type: InterfaceType):
+        self.interface_type = interface_type
+        self._attr_name: str | None = None
+
+    def __set_name__(self, owner: type, name: str):
+        """Called when the descriptor is assigned to a class attribute."""
+        self._attr_name = f"_interface_{name}"
+
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        """Get the interface instance."""
+        if obj is None:
+            return self
+        return getattr(obj, self._attr_name, None)
+
+    def __set__(self, obj: Any, value: Any):
+        """Set the interface instance."""
+        setattr(obj, self._attr_name, value)
+
+
 class Skill(ABC):
     def __init__(self, logger):
         self.logger = UniversalLogger(enabled=True, wrapped_logger=logger)
         self.node: Node | None = None
-        self.manipulation = (
-            None  # Will be injected by primitive_execution_action_server
-        )
-        self.mobility = None  # Will be injected by primitive_execution_action_server
-        self.head = None  # Will be injected by primitive_execution_action_server
         self._feedback_callback = None
 
     @property
@@ -136,6 +173,32 @@ class Skill(ABC):
                 if isinstance(attr, RobotState) and name not in descriptors:
                     descriptors[name] = attr
         return descriptors
+
+    def get_required_interfaces(self) -> list[InterfaceType]:
+        """
+        Declare the interfaces required by this skill.
+        Automatically collects from Interface descriptors defined on the class.
+        """
+        return [
+            desc.interface_type for desc in self._get_interface_descriptors().values()
+        ]
+
+    def _get_interface_descriptors(self) -> dict[str, "Interface"]:
+        """Collect all Interface descriptors from the class."""
+        descriptors = {}
+        for cls in type(self).__mro__:
+            for name, attr in vars(cls).items():
+                if isinstance(attr, Interface) and name not in descriptors:
+                    descriptors[name] = attr
+        return descriptors
+
+    def inject_interface(self, interface_type: InterfaceType, interface_instance):
+        """Inject an interface instance into the skill."""
+        for name, descriptor in self._get_interface_descriptors().items():
+            if descriptor.interface_type == interface_type:
+                setattr(self, name, interface_instance)
+                return True
+        return False
 
     def guidelines(self):
         """
