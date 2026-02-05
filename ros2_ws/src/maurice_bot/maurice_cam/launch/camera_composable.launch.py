@@ -404,6 +404,7 @@ def generate_launch_description():
     )
 
     # Isaac ROS Format Converter Left (RGB8 -> MONO8 for disparity)
+    # NOTE: image_width/height control GPU buffer allocation (~576MB at 1920x1200)
     isaac_format_left = ComposableNode(
         package='isaac_ros_image_proc',
         plugin='nvidia::isaac_ros::image_proc::ImageFormatConverterNode',
@@ -415,9 +416,9 @@ def generate_launch_description():
         ],
         parameters=[{
             'encoding_desired': 'mono8',
-            'image_width': 640,
-            'image_height': 480,
-            'type_negotiation_duration_s': 5,  # NITROS type negotiation timeout
+            'image_width': 480,   # Match rectified image width (default: 1920)
+            'image_height': 360,  # Match rectified image height (default: 1200)
+            'type_negotiation_duration_s': 5,
         }],
     )
 
@@ -433,15 +434,17 @@ def generate_launch_description():
         ],
         parameters=[{
             'encoding_desired': 'mono8',
-            'image_width': 640,
-            'image_height': 480,
-            'type_negotiation_duration_s': 5,  # NITROS type negotiation timeout
+            'image_width': 480,   # Match rectified image width (default: 1920)
+            'image_height': 360,  # Match rectified image height (default: 1200)
+            'type_negotiation_duration_s': 5,
         }],
     )
     
     # Isaac ROS Disparity Node (GPU SGM via VPI)
     # Uses CUDA backend by default, can use ORIN for hardware acceleration
     # NOTE: SGM expects BGR8/RGB8 images (nitros_image_bgr8) - VPI handles grayscale conversion internally
+    # WARNING: Isaac ROS 3.2 DisparityNode has hardcoded ~840MB GPU buffer pool (no output_width/height params)
+    # Consider using ESS instead, or upgrade to Isaac ROS 4.x for configurable buffers
     isaac_disparity = ComposableNode(
         package='isaac_ros_stereo_image_proc',
         plugin='nvidia::isaac_ros::stereo_image_proc::DisparityNode',
@@ -532,6 +535,8 @@ def generate_launch_description():
     )
 
     # Isaac ROS Disparity to Depth (using ESS disparity at 480x288)
+    # WARNING: Isaac ROS 3.2 DisparityToDepthNode has hardcoded ~880MB GPU buffer pool
+    # (block_size=9.2MB x 100 blocks, no output_width/height params available)
     isaac_disparity_to_depth = ComposableNode(
         package='isaac_ros_stereo_image_proc',
         plugin='nvidia::isaac_ros::stereo_image_proc::DisparityToDepthNode',
@@ -547,17 +552,20 @@ def generate_launch_description():
         }],
     )
     
-    # Isaac ROS Point Cloud from disparity + rectified color (480x360 for SGM)
-    # Uses rectified left image which matches SGM disparity resolution
+    # Isaac ROS Point Cloud from disparity + rectified color (480x288 after crop)
+    # Uses cropped left image which matches ESS disparity resolution
+    # IMPORTANT: output_width/output_height control GPU buffer allocation!
+    # Default is 1920x1200 which allocates ~1.3GB GPU memory.
+    # Set to match your actual resolution to reduce memory usage significantly.
     isaac_pointcloud = ComposableNode(
         package='isaac_ros_stereo_image_proc',
         plugin='nvidia::isaac_ros::stereo_image_proc::PointCloudNode',
         name='point_cloud_node',
         namespace=ISAAC_NS,
         remappings=[
-            ('left/image_rect_color', 'left/image_cropped'),  # From rectify node (480x360)
-            ('left/camera_info', 'left/camera_info_cropped'),       # From rectify node
-            ('right/camera_info', 'right/camera_info_cropped'),     # From rectify node
+            ('left/image_rect_color', 'left/image_cropped'),  # From crop node (480x288)
+            ('left/camera_info', 'left/camera_info_cropped'),       # From crop node
+            ('right/camera_info', 'right/camera_info_cropped'),     # From crop node
             ('disparity', 'disparity'),
             ('points2', 'points'),
         ],
@@ -565,6 +573,8 @@ def generate_launch_description():
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'use_color': True,
             'unit_scaling': 1.0,
+            'output_width': 480,    # Match your cropped image width (default: 1920)
+            'output_height': 288,   # Match your cropped image height (default: 1200)
             'type_negotiation_duration_s': 5,
         }],
     )
@@ -647,7 +657,7 @@ def generate_launch_description():
     # All nodes to include in the container(s)
     all_nodes = [
         main_camera_node,
-        # arm_camera_node,
+        arm_camera_node,
         # webrtc_node,
         # depth_estimator_node,
         main_camera_info_node,
@@ -678,11 +688,11 @@ def generate_launch_description():
         # isaac_pc_filter,
         # isaac_sor_filter,
         # isaac_radius_filter,
-        isaac_voxel_filter,
+        # isaac_voxel_filter,
         
                         # isaac_dnn_disparity,
                         # disparity_median_filter,
-                        disparity_edge_preserving_filter,  # Domain Transform edge-aware filter
+                        # disparity_edge_preserving_filter,  # Domain Transform edge-aware filter
                         isaac_pointcloud,
                         # isaac_passthrough_filter,
                         # isaac_pc_filter,
