@@ -14,10 +14,10 @@ Usage:
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
@@ -417,6 +417,7 @@ def generate_launch_description():
             'encoding_desired': 'mono8',
             'image_width': 640,
             'image_height': 480,
+            'type_negotiation_duration_s': 5,  # NITROS type negotiation timeout
         }],
     )
 
@@ -434,27 +435,29 @@ def generate_launch_description():
             'encoding_desired': 'mono8',
             'image_width': 640,
             'image_height': 480,
+            'type_negotiation_duration_s': 5,  # NITROS type negotiation timeout
         }],
     )
     
     # Isaac ROS Disparity Node (GPU SGM via VPI)
     # Uses CUDA backend by default, can use ORIN for hardware acceleration
-    # NOTE: SGM requires MONO8 images - use left/right/image_rect (from format converters)
+    # NOTE: SGM expects BGR8/RGB8 images (nitros_image_bgr8) - VPI handles grayscale conversion internally
     isaac_disparity = ComposableNode(
         package='isaac_ros_stereo_image_proc',
         plugin='nvidia::isaac_ros::stereo_image_proc::DisparityNode',
         name='disparity_node',
         namespace=ISAAC_NS,
         remappings=[
-            ('left/image_rect', 'left/image_rect'),
+            ('left/image_rect', 'left/image_rect_color'),   # Use color images directly (bgr8)
             ('left/camera_info', 'left/camera_info_rect'),
-            ('right/image_rect', 'right/image_rect'),
+            ('right/image_rect', 'right/image_rect_color'), # Use color images directly (bgr8)
             ('right/camera_info', 'right/camera_info_rect'),
+            ('disparity', 'disparity_unfiltered'),
         ],
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'backend': 'CUDA',  # Options: CUDA, XAVIER, ORIN
-            'max_disparity': 128.0,  # Must be 128 or 256 for ORIN backend
+            'backend': 'CUDA',  # Options: CUDA, XAVIER, ORIN (JETSON in newer API)
+            'max_disparity': 128.0,  # Must be 128 or 256 for ORIN/JETSON backend
             'window_size': 7,
             'num_passes': 2,
             'p1': 8,  # Penalty for disparity changes of +/- 1
@@ -462,6 +465,7 @@ def generate_launch_description():
             'p2_alpha': 1,
             'quality': 1,
             'confidence_threshold': 60000,
+            'type_negotiation_duration_s': 5,
         }],
     )
 
@@ -473,6 +477,7 @@ def generate_launch_description():
 
     # Isaac ROS ESS DNN Disparity Node (Deep Learning based)
     # Uses cropped 480x288 images - proper aspect ratio, no distortion
+    # Outputs to disparity_unfiltered, then median filter produces disparity
     isaac_dnn_disparity = ComposableNode(
         package='isaac_ros_ess',
         plugin='nvidia::isaac_ros::dnn_stereo_depth::ESSDisparityNode',
@@ -483,13 +488,47 @@ def generate_launch_description():
             ('left/camera_info', 'left/camera_info_cropped'),
             ('right/image_rect', 'right/image_cropped'),
             ('right/camera_info', 'right/camera_info_cropped'),
+            ('disparity', 'disparity_unfiltered'),
         ],
         parameters=[{
             'engine_file_path': "/home/jetson1/innate-os/ISAAC_ROS_WS/isaac_ros_assets/models/dnn_stereo_disparity/dnn_stereo_disparity_v4.1.0_onnx/light_ess.engine",
             'image_type': 'BGR_U8',  # Match camera output format (bgr8)
-            'threshold': 0.4,  # Confidence threshold (0.0 = fully dense)
+            'threshold': 0.10,  # Confidence threshold (0.0 = fully dense)
             'type_negotiation_duration_s': 5,
         }],
+    )
+
+    # Disparity Median Filter - applies OpenCV median filter to smooth disparity
+    disparity_median_filter = ComposableNode(
+        package='maurice_cam',
+        plugin='maurice_cam::DisparityMedianFilter',
+        name='disparity_median_filter',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('disparity_unfiltered', 'disparity_unfiltered'),
+            ('disparity', 'disparity_median'),  # Output to intermediate topic
+        ],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+        ],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    # Disparity Edge-Preserving Filter - Domain Transform based spatial filtering
+    # Smooths disparity while preserving depth discontinuities (object edges)
+    disparity_edge_preserving_filter = ComposableNode(
+        package='maurice_cam',
+        plugin='maurice_cam::DisparityEdgePreservingFilter',
+        name='disparity_edge_preserving_filter',
+        namespace=ISAAC_NS,
+        remappings=[
+            ('disparity_unfiltered', 'disparity_unfiltered'),  # Input from median filter
+            ('disparity', 'disparity'),                    # Final output
+        ],
+        parameters=[
+            LaunchConfiguration('camera_config'),
+        ],
+        extra_arguments=[{'use_intra_process_comms': True}],
     )
 
     # Isaac ROS Disparity to Depth (using ESS disparity at 480x288)
@@ -499,7 +538,7 @@ def generate_launch_description():
         name='disparity_to_depth',
         namespace=ISAAC_NS,
         remappings=[
-            ('disparity', 'bi3d_mask'),
+            ('disparity', 'disparity'),
             ('depth', 'depth'),
         ],
         parameters=[{
@@ -508,17 +547,17 @@ def generate_launch_description():
         }],
     )
     
-    # Isaac ROS Point Cloud from disparity + cropped color (480x288)
-    # Uses cropped left image which matches ESS disparity resolution exactly
+    # Isaac ROS Point Cloud from disparity + rectified color (480x360 for SGM)
+    # Uses rectified left image which matches SGM disparity resolution
     isaac_pointcloud = ComposableNode(
         package='isaac_ros_stereo_image_proc',
         plugin='nvidia::isaac_ros::stereo_image_proc::PointCloudNode',
         name='point_cloud_node',
         namespace=ISAAC_NS,
         remappings=[
-            ('left/image_rect_color', 'left/image_cropped'),
-            ('left/camera_info', 'left/camera_info_cropped'),
-            ('right/camera_info', 'right/camera_info_cropped'),
+            ('left/image_rect_color', 'left/image_cropped'),  # From rectify node (480x360)
+            ('left/camera_info', 'left/camera_info_cropped'),       # From rectify node
+            ('right/camera_info', 'right/camera_info_cropped'),     # From rectify node
             ('disparity', 'disparity'),
             ('points2', 'points'),
         ],
@@ -530,31 +569,14 @@ def generate_launch_description():
         }],
     )
 
-    # CropBox filter - crops to navigation-relevant region
-    isaac_pc_filter = ComposableNode(
+    # PassThrough filter - transforms point cloud to base_link frame
+    isaac_voxel_filter = ComposableNode(
         package='pcl_ros',
-        plugin='pcl_ros::CropBox',
-        name='pointcloud_cropbox_filter',
+        plugin='pcl_ros::VoxelGrid',
+        name='pointcloud_voxel_filter',
         namespace=ISAAC_NS,
         remappings=[
             ('input', 'points'),
-            ('output', 'points_cropped'),
-        ],
-        parameters=[
-            LaunchConfiguration('camera_config'),
-            {'use_sim_time': LaunchConfiguration('use_sim_time')}
-        ],
-        extra_arguments=[{'use_intra_process_comms': True}],
-    )
-    
-    # Statistical Outlier Removal - removes noise after cropping
-    isaac_sor_filter = ComposableNode(
-        package='pcl_ros',
-        plugin='pcl_ros::StatisticalOutlierRemoval',
-        name='pointcloud_sor_filter',
-        namespace=ISAAC_NS,
-        remappings=[
-            ('input', 'points_cropped'),
             ('output', 'points_filtered'),
         ],
         parameters=[
@@ -625,8 +647,8 @@ def generate_launch_description():
     # All nodes to include in the container(s)
     all_nodes = [
         main_camera_node,
-        arm_camera_node,
-        webrtc_node,
+        # arm_camera_node,
+        # webrtc_node,
         # depth_estimator_node,
         main_camera_info_node,
         # stereo_image_proc pipeline (OpenCV CPU)
@@ -644,16 +666,29 @@ def generate_launch_description():
         # Crop: 480x360 -> 480x288 (center crop, preserves aspect ratio)
         isaac_crop_left,
         isaac_crop_right,
-        # isaac_format_left,    # Only needed for SGM (mono8)
-        # isaac_format_right,   # Only needed for SGM (mono8)
-        # isaac_disparity,      # SGM - uses mono8
+        # Format converters NOT needed - SGM expects bgr8 (nitros_image_bgr8)
+        # isaac_format_left,
+        # isaac_format_right,
+        # isaac_disparity,      # SGM - uses bgr8 directly from rectify
 
-        isaac_dnn_disparity,    # ESS DNN - uses cropped 480x288 images
+        isaac_dnn_disparity, #loaded separately with 3s delay
         # isaac_disparity_to_depth,
-        isaac_pointcloud,
-        isaac_pc_filter,
-        isaac_sor_filter,
+        # isaac_pointcloud,
+        # isaac_passthrough_filter,
+        # isaac_pc_filter,
+        # isaac_sor_filter,
+        # isaac_radius_filter,
+        isaac_voxel_filter,
         
+                        # isaac_dnn_disparity,
+                        # disparity_median_filter,
+                        disparity_edge_preserving_filter,  # Domain Transform edge-aware filter
+                        isaac_pointcloud,
+                        # isaac_passthrough_filter,
+                        # isaac_pc_filter,
+                        # isaac_sor_filter,
+                        # isaac_radius_filter,
+ 
         # Bi3D Freespace Segmentation (better at detecting low obstacles like socks)
         # isaac_bi3d,
         # isaac_freespace,
@@ -691,6 +726,18 @@ def generate_launch_description():
             )
         ]
 
+    # # Load ESS node with 10 second delay
+    # load_ess_delayed = TimerAction(
+    #     period=10.0,
+    #     actions=[
+    #         LoadComposableNodes(
+    #             target_container='camera_container',
+    #             composable_node_descriptions=[
+    #                ],
+    #         )
+    #     ]
+    # )
+
     return LaunchDescription([
         # Launch arguments
         launch_main_camera_arg,
@@ -705,4 +752,6 @@ def generate_launch_description():
         bi3d_max_disparity_arg,
         # Container(s)
         *containers,
+        # Load ESS after 3 seconds
+        # load_ess_delayed,
     ])

@@ -16,6 +16,8 @@ find_package(image_transport REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(message_filters REQUIRED)
+find_package(stereo_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
@@ -143,6 +145,32 @@ ament_target_dependencies(main_camera_info_component
 )
 rclcpp_components_register_nodes(main_camera_info_component "maurice_cam::MainCameraInfo")
 
+# Disparity median filter component library
+add_library(disparity_median_filter_component SHARED maurice_cam/disparity_median_filter.cpp)
+target_compile_definitions(disparity_median_filter_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_link_libraries(disparity_median_filter_component ${OpenCV_LIBS})
+ament_target_dependencies(disparity_median_filter_component 
+  rclcpp 
+  rclcpp_components
+  sensor_msgs
+  stereo_msgs
+  cv_bridge
+)
+rclcpp_components_register_nodes(disparity_median_filter_component "maurice_cam::DisparityMedianFilter")
+
+# Disparity edge-preserving filter component library (Domain Transform based)
+add_library(disparity_edge_preserving_filter_component SHARED maurice_cam/disparity_edge_preserving_filter.cpp)
+target_compile_definitions(disparity_edge_preserving_filter_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_link_libraries(disparity_edge_preserving_filter_component ${OpenCV_LIBS})
+ament_target_dependencies(disparity_edge_preserving_filter_component 
+  rclcpp 
+  rclcpp_components
+  sensor_msgs
+  stereo_msgs
+  cv_bridge
+)
+rclcpp_components_register_nodes(disparity_edge_preserving_filter_component "maurice_cam::DisparityEdgePreservingFilter")
+
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
 # =============================================================================
@@ -233,6 +261,8 @@ set(COMPONENT_LIBRARIES
   arm_camera_driver_component
   webrtc_streamer_component
   main_camera_info_component
+  disparity_median_filter_component
+  disparity_edge_preserving_filter_component
 )
 if(VPI_FOUND)
   list(APPEND COMPONENT_LIBRARIES stereo_depth_estimator_component)

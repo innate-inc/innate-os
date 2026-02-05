@@ -1,6 +1,9 @@
 #!/bin/zsh
 # Launch ROS nodes in tmux windows with 2 panes each
 
+export ENABLE_GLOBAL_NITROS_DIAGNOSTICS=1
+export NEGOTIATED_SUBSCRIPTION_LOG_LEVEL=DEBUG
+export NITROS_LOG_LEVEL=DEBUG
 SESSION_NAME="ros_nodes"
 ROS_WS_PATH="$INNATE_OS_ROOT/ros2_ws"
 DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh"

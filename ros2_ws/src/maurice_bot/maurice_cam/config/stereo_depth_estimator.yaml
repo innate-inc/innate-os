@@ -71,7 +71,7 @@ arm_camera_driver:
     left_topic: "/mars/main_camera/left/image_raw"
     right_topic: "/mars/main_camera/right/image_raw"
     depth_topic: "/mars/main_camera/depth/image_rect_raw"
-    disparity_topic: "/mars/main_camera/disparity"
+    disparity_topic: "/mars/main_camera/isaac_image_proc/disparity_unfiltered"
     left_rectified_topic: "/mars/main_camera/left/image_rect"
     right_rectified_topic: "/mars/main_camera/right/image_rect"
     pointcloud_topic: "/mars/main_camera/points"
@@ -154,6 +154,22 @@ arm_camera_driver:
     exact_sync: false     # Use exact time synchronization (false=approximate)
 
 # ============================================================================
+# PASSTHROUGH FILTER (pcl_ros) - Transforms point cloud to base_link
+# ============================================================================
+/**/pointcloud_passthrough_filter:
+  ros__parameters:
+    # Transform input point cloud to base_link frame
+    input_frame: "base_link"    # Transform input to this frame
+    output_frame: "base_link"   # Output frame (same, just for transform)
+    
+    # PassThrough filter settings (pass all points, just do transform)
+    filter_field_name: ""       # Field to filter on
+    filter_limit_min: -100.0    # Very low (pass all)
+    filter_limit_max: 100.0     # Very high (pass all)
+    filter_limit_negative: false
+    keep_organized: false
+
+# ============================================================================
 # CROPBOX FILTER (pcl_ros)
 # ============================================================================
 /**/pointcloud_cropbox_filter:
@@ -191,3 +207,158 @@ arm_camera_driver:
     
     # Return outliers instead of inliers (false = keep inliers)
     negative: false
+
+# ============================================================================
+# RADIUS OUTLIER REMOVAL (pcl_ros) - Removes isolated points
+# ============================================================================
+/**/pointcloud_radius_filter:
+  ros__parameters:
+    # Search radius (meters) for neighbor search
+    # Points with fewer than min_neighbors within this radius are removed
+    radius_search: 0.10
+    
+    # Minimum number of neighbors required within search radius
+    # Points with fewer neighbors are considered outliers
+    min_neighbors: 20
+    
+    # Return outliers instead of inliers (false = keep inliers)
+    negative: false
+
+# ============================================================================
+# VOXEL GRID FILTER (pcl_ros) - Downsamples point cloud
+# ============================================================================
+/**/pointcloud_voxel_filter:
+  ros__parameters:
+    # Leaf size (voxel size) in meters for each axis
+    # Smaller = more points retained, larger = more aggressive downsampling
+    leaf_size: 0.02  # 2cm voxels
+    
+    # Transform frames
+    input_frame: "base_link"   # Transform input to this frame
+    output_frame: "base_link"  # Transform output to this frame
+
+# ============================================================================
+# DISPARITY MEDIAN FILTER (maurice_cam) - Quick denoising
+# ============================================================================
+/**/disparity_median_filter:
+  ros__parameters:
+    # Kernel size for median filter (must be odd: 3, 5, 7, etc.)
+    # Larger = more smoothing but loses fine detail
+    kernel_size: 1
+
+# ============================================================================
+# DISPARITY EDGE-PRESERVING FILTER (maurice_cam)
+# Domain Transform based spatial filter for edge-aware disparity smoothing
+# Based on "Domain Transform for Edge-Aware Image and Video Processing"
+# by Eduardo S. L. Gastal and Manuel M. Oliveira (SIGGRAPH 2011)
+#
+# This filter smooths disparity while preserving depth discontinuities (edges).
+# Ideal for cleaning up stereo matching noise without blurring object boundaries.
+# ============================================================================
+/**/disparity_edge_preserving_filter:
+  ros__parameters:
+    # Filter Magnitude: Number of filter iterations [1-5]
+    # Each iteration consists of horizontal + vertical passes.
+    # More iterations = smoother result, but more compute time.
+    # 1 = light smoothing, 5 = heavy smoothing
+    # Default: 2
+    filter_magnitude: 2
+    
+    # Smooth Alpha: Exponential moving average factor [0.25-1.0]
+    # Controls blending strength with neighboring pixels.
+    # Alpha = 1.0: No filtering (pass-through)
+    # Alpha = 0.25: Heavy filtering (strong blending)
+    # Lower values = more aggressive smoothing
+    # Default: 0.5
+    smooth_alpha: 0.5
+    
+    # Smooth Delta: Edge threshold in disparity units [1-50]
+    # Establishes the threshold used to preserve "edges" (depth discontinuities).
+    # Disparity differences larger than delta are treated as edges and preserved.
+    # Lower values = more edges preserved (conservative smoothing)
+    # Higher values = smoother result across more discontinuities
+    # For stereo matching with max_disparity=128, values 10-30 work well.
+    # Default: 20
+    smooth_delta: 15
+    
+    # Hole Filling: Symmetric hole-filling mode [0-5]
+    # In-place heuristic to fill invalid (zero) disparity pixels from neighbors.
+    # Searches symmetrically left/right for valid values and interpolates.
+    # 0 = disabled (no hole filling)
+    # 1 = 2 pixel search radius
+    # 2 = 4 pixel search radius  
+    # 3 = 8 pixel search radius
+    # 4 = 16 pixel search radius
+    # 5 = unlimited (search until valid pixel found)
+    # Default: 0 (disabled)
+    hole_filling: 1
+    
+    # =========================================================================
+    # DEPTH CLAMPING - Invalidate pixels outside depth range
+    # Uses disparity = f * |T| / depth, where f and T come from DisparityImage
+    # Applied AFTER hole filling, BEFORE edge-preserving smoothing
+    # =========================================================================
+    
+    # Minimum depth in meters - objects CLOSER than this are invalidated
+    # (They have disparity > threshold, likely noise or too close to be useful)
+    # -1 = disabled (no minimum depth limit)
+    # Typical values: 0.2 - 0.5m for indoor robots
+    # Default: -1 (disabled)
+    min_depth_meters: 0.25
+    
+    # Maximum depth in meters - objects FARTHER than this are invalidated
+    # (They have disparity < threshold, often noisy at long range)
+    # -1 = disabled (no maximum depth limit)
+    # Typical values: 3.0 - 10.0m depending on stereo baseline
+    # Default: -1 (disabled)
+    max_depth_meters: 2.0
+    
+    # =========================================================================
+    # EDGE INVALIDATION - Remove depth discontinuities (flying pixels)
+    # Uses Canny edge detection on disparity, then invalidates pixels along edges
+    # Applied AFTER depth clamping, BEFORE edge-preserving smoothing
+    # This removes "flying pixels" at object boundaries in point clouds
+    # =========================================================================
+    
+    # Edge Invalidation Width: Total width of invalidation band along edges (pixels)
+    # 0 = disabled
+    # 1 = invalidate only edge pixels
+    # 3 = invalidate edge + 1 pixel on each side (default)
+    # 5 = invalidate edge + 2 pixels on each side
+    # Larger values = more aggressive edge removal
+    # Default: 0 (disabled)
+    edge_invalidation_width: 5
+    
+    # Canny Low Threshold: Lower hysteresis threshold for edge detection
+    # Edges with gradient below this are rejected
+    # Lower = more sensitive (detects weaker edges)
+    # Range: 1-100, Default: 10
+    edge_canny_low: 15.0
+    
+    # Canny High Threshold: Upper hysteresis threshold for edge detection
+    # Edges with gradient above this are always kept
+    # Should be 2-3x edge_canny_low for good results
+    # Range: 10-300, Default: 30
+    edge_canny_high: 45.0
+    
+    # =========================================================================
+    # SPECKLE FILTER - Remove small isolated blobs
+    # Uses OpenCV's cv::filterSpeckles, designed for disparity maps
+    # Applied AFTER edge invalidation, BEFORE edge-preserving smoothing
+    # Removes small "floating" regions that are likely noise
+    # =========================================================================
+    
+    # Speckle Size: Maximum size (in pixels) of blobs to remove
+    # Blobs with fewer connected pixels than this are removed
+    # 0 = disabled
+    # Typical values: 50-200 for 480x288 images
+    # Default: 0 (disabled)
+    speckle_size: 700
+    
+    # Speckle Diff: Maximum disparity difference for connectivity
+    # Pixels within this disparity difference are considered "connected"
+    # Lower = stricter (only very similar disparities connect)
+    # Higher = more lenient (allows more disparity variation in a blob)
+    # Typical values: 0.5-2.0 disparity units
+    # Default: 1.0
+    speckle_diff: 2.0
