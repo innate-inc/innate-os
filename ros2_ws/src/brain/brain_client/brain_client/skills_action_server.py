@@ -94,7 +94,7 @@ class SkillsActionServer(Node):
         )
         self.wrist_camera_image_sub = self.create_subscription(
             CompressedImage,
-            "/mars/arm_camera/image/compressed",
+            "/mars/arm/image_raw/compressed",
             self.wrist_camera_image_callback,
             image_qos,
         )
