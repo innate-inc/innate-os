@@ -51,6 +51,7 @@ class SkillsActionServer(Node):
 
         # Robot state storage
         self.last_main_camera_image = None  # Stores cv2 image object
+        self.last_wrist_camera_image = None  # Stores cv2 image object from wrist camera
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
         self.last_head_position = None  # Stores head position dict (parsed JSON)
@@ -89,6 +90,12 @@ class SkillsActionServer(Node):
             CompressedImage,
             self.image_topic,
             self.main_camera_image_callback,
+            image_qos,
+        )
+        self.wrist_camera_image_sub = self.create_subscription(
+            CompressedImage,
+            "/mars/arm_camera/image/compressed",
+            self.wrist_camera_image_callback,
             image_qos,
         )
         self.odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
@@ -487,6 +494,22 @@ class SkillsActionServer(Node):
             else:
                 self.get_logger().warn("Skill requires LAST_MAIN_CAMERA_IMAGE_B64 but none available.")
 
+        if RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64 in required_states:
+            if self.last_wrist_camera_image is not None:
+                try:
+                    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+                    success, encoded_img_bytes = cv2.imencode(".jpg", self.last_wrist_camera_image, encode_params)
+                    if success:
+                        robot_state_to_inject[RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64.value] = base64.b64encode(
+                            encoded_img_bytes.tobytes()
+                        ).decode("utf-8")
+                    else:
+                        self.get_logger().error("Failed to encode last_wrist_camera_image for skill state")
+                except Exception as e_img:
+                    self.get_logger().error(f"Error encoding last_wrist_camera_image for skill: {e_img}")
+            else:
+                self.get_logger().warn("Skill requires LAST_WRIST_CAMERA_IMAGE_B64 but none available.")
+
         if RobotStateType.LAST_ODOM in required_states:
             if self.last_odom is not None:
                 pos = self.last_odom.pose.pose.position
@@ -776,6 +799,14 @@ class SkillsActionServer(Node):
             self.get_logger().debug("Received and decoded new image for skills.")
         except Exception as e:
             self.get_logger().error(f"Failed to decode compressed image for skill state: {e}")
+
+    def wrist_camera_image_callback(self, msg: CompressedImage):
+        try:
+            np_arr = np.frombuffer(msg.data, np.uint8)
+            self.last_wrist_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            self.get_logger().debug("Received and decoded new wrist camera image for skills.")
+        except Exception as e:
+            self.get_logger().error(f"Failed to decode wrist camera image for skill state: {e}")
 
     def odom_callback(self, msg: Odometry):
         self.last_odom = msg
