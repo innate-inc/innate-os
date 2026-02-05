@@ -105,8 +105,14 @@ class KDLIKNode(Node):
         self.get_logger().info(f"KDL IK node ready (eps={eps}, maxiter={maxiter})")
 
     def on_joint_states(self, msg: JointState):
-        """Store the latest joint states"""
+        """Store the latest joint states and update IK seed"""
         self.latest_joint_states = msg
+
+        # Update current_q (IK seed) from actual joint positions
+        for i, joint_name in enumerate(self.joint_names):
+            if joint_name in msg.name:
+                joint_idx = msg.name.index(joint_name)
+                self.current_q[i] = msg.position[joint_idx]
 
     def publish_fk(self):
         """Timer callback to publish FK result at 10Hz"""
