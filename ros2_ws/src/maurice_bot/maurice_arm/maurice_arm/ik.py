@@ -3,6 +3,7 @@
 KDL-based IK node loading URDF directly from maurice_sim and using the package-local URDF→KDL parser (urdf.py).
 """
 import os
+import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PoseStamped
@@ -214,11 +215,19 @@ class KDLIKNode(Node):
             )
             return  # Do not proceed
 
+        # Normalize joint angles to [-pi, pi]
+        def normalize_angle(angle):
+            while angle > math.pi:
+                angle -= 2 * math.pi
+            while angle < -math.pi:
+                angle += 2 * math.pi
+            return angle
+
         # publish JointState
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
         js.name = self.joint_names
-        js.position = [q_out[i] for i in range(q_out.rows())]
+        js.position = [normalize_angle(q_out[i]) for i in range(q_out.rows())]
         self.joint_pub.publish(js)
 
         # Publish command for the arm - COMMENTED OUT
