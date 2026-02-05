@@ -40,10 +40,17 @@ ament_target_dependencies(dynamic_footprint
 install(TARGETS dynamic_footprint DESTINATION lib/${PROJECT_NAME})
 
 # Build Switch BT control node plugin
+# Build BT control node plugins
 add_library(maurice_nav_bt_nodes SHARED
   src/switch_bt_node.cpp
 )
+target_include_directories(maurice_nav_bt_nodes PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
 ament_target_dependencies(maurice_nav_bt_nodes
+  rclcpp
+  std_msgs
   behaviortree_cpp_v3
 )
 install(TARGETS maurice_nav_bt_nodes

@@ -5,7 +5,10 @@
                 <PlannerSelector selected_planner="{selected_planner}" default_planner="mapfree" topic_name="/nav/current_planner"/>
                 <GoalCheckerSelector selected_goal_checker="{selected_goal_checker}" default_goal_checker="general_goal_checker" topic_name="/nav/current_goal_checker"/>
                 <RateController hz="1.0">
-                    <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+                    <Sequence>
+                        <!-- Set head to look down for better obstacle detection during navigation (runs at 1Hz) -->
+                        <SetHeadPosition position="-20" topic="/mars/head/set_position"/>
+                        <RecoveryNode number_of_retries="1" name="ComputePathToPose">
                         <Switch variable="{selected_planner}">
                             <ComputePathToPose name="mapfree" goal="{goal}" path="{path}" planner_id="GridBased" server_name="mapfree/compute_path_to_pose"/>
                             <ComputePathToPose name="navigation" goal="{goal}" path="{path}" planner_id="GridBased" server_name="navigation/compute_path_to_pose"/>
@@ -15,6 +18,7 @@
                             <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="navigation/global_costmap/clear_entirely_global_costmap"/>
                         </ReactiveFallback>
                     </RecoveryNode>
+                    </Sequence>
                 </RateController>
                 <RecoveryNode number_of_retries="1" name="FollowPath">
                     <FollowPath path="{path}" controller_id="InnateFollowPath" goal_checker_id="{selected_goal_checker}"/>
