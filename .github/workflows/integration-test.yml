@@ -1,0 +1,27 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  integration-test:
+    runs-on: selfhosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run integration tests
+        run: |
+          docker compose -f docker-compose.test.yml up \
+            --abort-on-container-exit \
+            --exit-code-from integration-test
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose.test.yml down || true
