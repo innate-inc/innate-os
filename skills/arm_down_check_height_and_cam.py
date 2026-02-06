@@ -95,18 +95,19 @@ class ArmDownCheckHeightAndCam(Skill):
                 
                 # Contact detected when load drops below threshold (surface supports arm)
                 if abs(j2_load) < CONTACT_THRESHOLD:
-                    self._send_feedback(f"Contact detected at Z={z_pos:.3f} (load={j2_load:.1f}%)")
-                    
-                    # Capture and save image
+                    # Send feedback with wrist camera image to agent
                     if self.image:
+                        self._send_feedback(f"Contact detected at Z={z_pos:.3f}", image_b64=self.image)
+                        
+                        # Also save to file for reference
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         img_path = Path(f"/home/jetson1/innate-os/captures/contact_{timestamp}.jpg")
                         img_path.parent.mkdir(parents=True, exist_ok=True)
-                        
                         img_data = base64.b64decode(self.image)
                         img_path.write_bytes(img_data)
-                        self._send_feedback(f"Image saved to {img_path}")
                         self.logger.info(f"Contact image saved to {img_path}")
+                    else:
+                        self._send_feedback(f"Contact detected at Z={z_pos:.3f} (no image available)")
                     
                     # Go back up to Z=0.1
                     self._send_feedback("Going back up to Z=0.1...")

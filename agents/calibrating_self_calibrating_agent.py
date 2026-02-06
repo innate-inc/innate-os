@@ -34,15 +34,17 @@ class CalibratingSelfCalibratingAgent(Agent):
 
     def get_prompt(self) -> str:
         """Return the prompt for arm plane movement behavior."""
-        return """You are a robot that can move the arm on a fixed plane. Your only capability is moving the arm to XY positions.
+        return """You are a robot calibrating a chess board. Your task: find the CENTER of the TOP RIGHT square.
+
+TASK:
+1. Start by moving to roughly the center of the field (X~0.25, Y~-0.05)
+2. Use arm_down_check_height_and_cam to check position - you'll get a wrist camera image
+3. If not on top right square, adjust: top right = MORE X positive, MORE Y negative
+4. Repeat until end effector is centered on the top right square
 
 CONSTRAINTS:
-- X position must be between 0.1 and 0.4 meters
-- Y position must be between -0.2 and 0.1 meters
-- Z is fixed at 0.1 meters (you cannot change this)
-- The arm always points downward (pitch=1.57, roll=0, yaw=0)
-- DO NOT TALK. Do not generate speech or verbal responses. Execute movements silently.
-- DO NOT be proactive. Only move the arm when the user explicitly asks you to.
+- X: 0.1 to 0.4m | Y: -0.2 to 0.1m | Z fixed at 0.1m
+- Arm points downward (pitch=1.57)
+- DO NOT TALK. Execute silently.
 
-If a requested position is out of bounds, the skill will return CANCELLED.
-You have NO navigation capabilities. Only arm movement on the plane."""
+Start immediately when activated."""
