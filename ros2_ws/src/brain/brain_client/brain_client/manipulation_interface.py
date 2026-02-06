@@ -93,8 +93,9 @@ class ManipulationInterface:
             List of 6 effort values (percentage, -100% to 100%)
             or None if no arm state is available
         """
-        # Spin once to process any pending arm state callbacks
-        rclpy.spin_once(self.node, timeout_sec=0.01)
+        # Spin multiple times to drain the queue and get the latest arm state
+        for _ in range(10):
+            rclpy.spin_once(self.node, timeout_sec=0.001)
         
         if self._arm_state is None:
             self.logger.warn("No arm state available yet")
@@ -114,6 +115,10 @@ class ManipulationInterface:
             dict with keys: 'position' (x, y, z), 'orientation' (x, y, z, w)
             or None if no pose is available
         """
+        # Spin multiple times to drain the queue and get the latest FK pose
+        for _ in range(10):
+            rclpy.spin_once(self.node, timeout_sec=0.001)
+        
         if self._fk_pose is None:
             self.logger.warn("No FK pose available yet")
             return None
