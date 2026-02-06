@@ -130,6 +130,57 @@ class SkillLoader:
         s1 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", class_name)
         return s1.lower()
 
+    def reload_skill_by_name(self, skill_name: str, directories: list[str]) -> type[Skill] | None:
+        """
+        Reload a specific skill by name from the given directories.
+        
+        Args:
+            skill_name: The name of the skill to reload
+            directories: List of directories to search for the skill
+            
+        Returns:
+            The reloaded skill class, or None if not found
+        """
+        for directory in directories:
+            directory_path = Path(directory)
+            if not directory_path.exists():
+                continue
+                
+            # Search for python files that might contain this skill
+            python_files = [f for f in directory_path.glob("*.py") 
+                          if f.name != "__init__.py" and not f.name.startswith("_")]
+            
+            for py_file in python_files:
+                try:
+                    # Try to load skills from this file
+                    discovered = self._load_skills_from_file(py_file)
+                    if skill_name in discovered:
+                        self.logger.info(f"Reloaded skill '{skill_name}' from {py_file}")
+                        return discovered[skill_name]
+                except Exception as e:
+                    self.logger.debug(f"Error checking {py_file} for skill {skill_name}: {e}")
+        
+        self.logger.warning(f"Could not find skill '{skill_name}' in any directory")
+        return None
+
+    def reload_skills_by_names(self, skill_names: list[str], directories: list[str]) -> dict[str, type[Skill]]:
+        """
+        Reload specific skills by name.
+        
+        Args:
+            skill_names: List of skill names to reload
+            directories: List of directories to search
+            
+        Returns:
+            Dictionary of reloaded skill classes
+        """
+        reloaded = {}
+        for name in skill_names:
+            skill_class = self.reload_skill_by_name(name, directories)
+            if skill_class is not None:
+                reloaded[name] = skill_class
+        return reloaded
+
     def load_skills_from_directories(self, directories: list[str]) -> dict[str, type[Skill]]:
         all_skills = {}
 

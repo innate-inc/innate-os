@@ -1,0 +1,13 @@
+# Request
+# List of skill names to reload (empty = reload all skills)
+string[] skills
+# List of agent names to reload (empty = reload all agents)
+string[] agents
+---
+# Response
+bool success
+string message
+# List of skills that were reloaded
+string[] reloaded_skills
+# List of agents that were reloaded
+string[] reloaded_agents

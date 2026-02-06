@@ -34,6 +34,7 @@ set(srv_files
   "srv/GetTrainingJobStatusByName.srv"
   "srv/ListTrainingJobs.srv"
   "srv/DownloadTrainingModel.srv"
+  "srv/ReloadSkillsAgents.srv"
 )
 
 set(msg_files

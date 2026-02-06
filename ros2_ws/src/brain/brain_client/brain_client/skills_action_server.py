@@ -14,6 +14,7 @@ import math  # For yaw calculation
 import os
 import threading
 import types
+from pathlib import Path
 
 import cv2  # For image processing
 import numpy as np  # For map data
@@ -192,6 +193,12 @@ class SkillsActionServer(Node):
         # Create service for reloading skills
         self._reload_srv = self.create_service(Trigger, "/brain/reload_primitives", self._handle_reload_skills)
 
+        # Create service for selective skill reload (PEAS-only, called by brain_client)
+        from brain_messages.srv import ReloadSkillsAgents
+        self._reload_skills_srv = self.create_service(
+            ReloadSkillsAgents, "/brain/reload_skills", self._handle_reload_skills_agents
+        )
+
         self.get_logger().debug("Skills Action Server has started.")
         self.get_logger().info(
             f"Total skills available: {len(self._code_skills) + len(self._physical_skills)}"
@@ -250,6 +257,116 @@ class SkillsActionServer(Node):
             response.success = False
             response.message = f"Failed to reload skills: {e}"
         return response
+
+    def _handle_reload_skills_agents(self, request, response):
+        """Service handler for selectively reloading specific skills."""
+        try:
+            skill_names = list(request.skills) if request.skills else []
+            reloaded = self._reload_skills_selective(skill_names)
+            response.success = True
+            response.reloaded_skills = reloaded
+            response.reloaded_agents = []  # Skills server doesn't handle agents
+            response.message = f"Reloaded {len(reloaded)} skills: {reloaded}"
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to reload skills: {e}"
+            response.reloaded_skills = []
+            response.reloaded_agents = []
+        return response
+
+    def _reload_skills_selective(self, skill_names: list[str]) -> list[str]:
+        """
+        Reload specific skills by name. If skill_names is empty, reload all.
+        
+        Args:
+            skill_names: List of skill names to reload. Empty list means reload all.
+            
+        Returns:
+            List of skill names that were successfully reloaded.
+        """
+        if not skill_names:
+            # Empty list means reload all
+            self._reload_skills()
+            return list(self._code_skills.keys()) + list(self._physical_skills.keys())
+        
+        self.get_logger().info(f"Selectively reloading skills: {skill_names}")
+        reloaded = []
+        
+        for skill_name in skill_names:
+            # Check if it's a code skill
+            if skill_name in self._code_skills or self._is_code_skill(skill_name):
+                reloaded_class = self.skill_loader.reload_skill_by_name(
+                    skill_name, self._skills_directories
+                )
+                if reloaded_class is not None:
+                    try:
+                        instance = reloaded_class(self.get_logger())
+                        instance.node = self
+                        self._inject_required_interfaces(instance)
+                        self._code_skills[skill_name] = instance
+                        reloaded.append(skill_name)
+                        self.get_logger().info(f"Reloaded code skill: {skill_name}")
+                    except Exception as e:
+                        self.get_logger().error(f"Error instantiating {skill_name}: {e}")
+            
+            # Check if it's a physical skill (reload from metadata)
+            elif skill_name in self._physical_skills or skill_name in self._in_training_skills:
+                # For physical skills, reload the metadata
+                if self._reload_physical_skill(skill_name):
+                    reloaded.append(skill_name)
+        
+        self.get_logger().info(f"Selectively reloaded {len(reloaded)} skills")
+        return reloaded
+
+    def _is_code_skill(self, skill_name: str) -> bool:
+        """Check if a skill name corresponds to a code skill file."""
+        for directory in self._skills_directories:
+            for py_file in Path(directory).glob("*.py"):
+                if py_file.name != "__init__.py" and not py_file.name.startswith("_"):
+                    # Check if the snake_case version of the file matches
+                    file_skill_name = py_file.stem
+                    if file_skill_name == skill_name:
+                        return True
+        return False
+
+    def _reload_physical_skill(self, skill_name: str) -> bool:
+        """Reload a single physical skill's metadata."""
+        for skills_directory in self._skills_directories:
+            skill_path = os.path.join(skills_directory, skill_name)
+            metadata_path = os.path.join(skill_path, "metadata.json")
+            
+            if os.path.exists(metadata_path):
+                try:
+                    with open(metadata_path) as f:
+                        metadata = json.load(f)
+                    
+                    is_valid, is_in_training, episode_count = self.skill_loader.validate_physical_skill(
+                        skill_path, metadata
+                    )
+                    
+                    if is_valid:
+                        skill_data = {
+                            "metadata": metadata,
+                            "directory": skill_path,
+                            "in_training": is_in_training,
+                            "episode_count": episode_count,
+                        }
+                        
+                        if is_in_training:
+                            self._in_training_skills[skill_name] = skill_data
+                            # Remove from ready skills if it was there
+                            self._physical_skills.pop(skill_name, None)
+                        else:
+                            self._physical_skills[skill_name] = skill_data
+                            # Remove from in-training if it was there
+                            self._in_training_skills.pop(skill_name, None)
+                        
+                        self.get_logger().info(f"Reloaded physical skill: {skill_name}")
+                        return True
+                except Exception as e:
+                    self.get_logger().error(f"Error reloading physical skill {skill_name}: {e}")
+        
+        return False
 
     def _load_physical_skills(self, skills_directories):
         """Load physical skills from metadata.json files.

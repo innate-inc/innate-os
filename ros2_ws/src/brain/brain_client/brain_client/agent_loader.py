@@ -205,6 +205,58 @@ class AgentLoader:
         s1 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", class_name)
         return s1.lower()
 
+    def reload_agent_by_name(self, agent_name: str, directories: List[str]) -> Optional[Type[Agent]]:
+        """
+        Reload a specific agent by name from the given directories.
+        
+        Args:
+            agent_name: The name of the agent to reload
+            directories: List of directories to search for the agent
+            
+        Returns:
+            The reloaded agent class, or None if not found
+        """
+        for directory in directories:
+            directory_path = Path(directory)
+            if not directory_path.exists():
+                continue
+                
+            # Search for python files that might contain this agent
+            python_files = [
+                f for f in directory_path.glob("*.py")
+                if f.name not in ["__init__.py", "types.py"] and not f.name.startswith("_")
+            ]
+            
+            for py_file in python_files:
+                try:
+                    discovered = self._load_agents_from_file(py_file)
+                    if agent_name in discovered:
+                        self.logger.info(f"Reloaded agent '{agent_name}' from {py_file}")
+                        return discovered[agent_name]
+                except Exception as e:
+                    self.logger.debug(f"Error checking {py_file} for agent {agent_name}: {e}")
+        
+        self.logger.warning(f"Could not find agent '{agent_name}' in any directory")
+        return None
+
+    def reload_agents_by_names(self, agent_names: List[str], directories: List[str]) -> Dict[str, Type[Agent]]:
+        """
+        Reload specific agents by name.
+        
+        Args:
+            agent_names: List of agent names to reload
+            directories: List of directories to search
+            
+        Returns:
+            Dictionary of reloaded agent classes
+        """
+        reloaded = {}
+        for name in agent_names:
+            agent_class = self.reload_agent_by_name(name, directories)
+            if agent_class is not None:
+                reloaded[name] = agent_class
+        return reloaded
+
     def load_agents_from_directories(
         self, directories: List[str]
     ) -> Dict[str, Type[Agent]]:

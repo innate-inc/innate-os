@@ -42,6 +42,9 @@ inspireface
 pygame
 pynput
 
+# Hot reload
+watchdog
+
 # Cupy
 cupy-cuda12x
 
