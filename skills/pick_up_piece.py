@@ -23,7 +23,8 @@ class PickUpPiece(Skill):
     FIXED_PITCH = 1.57
     
     # Heights in meters
-    HEIGHT_ABOVE = 0.10  # 10cm above board
+    HEIGHT_SAFE = 0.20   # 20cm safe travel height (won't knock pieces)
+    HEIGHT_ABOVE = 0.10  # 10cm above board for positioning
     HEIGHT_PICK = 0.04   # 4cm above ground for picking
     
     def __init__(self, logger):
@@ -55,10 +56,15 @@ class PickUpPiece(Skill):
         """
         Convert chess square (e.g., 'A1') to XY position using bilinear interpolation.
         
-        Board layout (from robot's perspective):
-        - A1 is bottom-left, H8 is top-right
-        - Files A-H map to columns 0-7
-        - Ranks 1-8 map to rows 0-7
+        Coordinate system (from robot's perspective):
+        - X positive = forward (away from robot)
+        - Y positive = left, Y negative = right
+        
+        Board layout:
+        - top_left: high X, high Y (forward-left) = A8
+        - top_right: high X, low Y (forward-right) = H8
+        - bottom_left: low X, high Y (close-left) = A1
+        - bottom_right: low X, low Y (close-right) = H1
         """
         if len(square) != 2:
             return None
@@ -87,10 +93,10 @@ class PickUpPiece(Skill):
             return None
         
         # Bilinear interpolation
-        # top_left = rank 8, file A (v=1, u=0)
-        # top_right = rank 8, file H (v=1, u=1)
-        # bottom_left = rank 1, file A (v=0, u=0)
-        # bottom_right = rank 1, file H (v=0, u=1)
+        # Mapping: u=0 is file A (left), u=1 is file H (right)
+        #          v=0 is rank 1 (bottom/close), v=1 is rank 8 (top/far)
+        # So: A1=(u=0,v=0)=bottom_left, H1=(u=1,v=0)=bottom_right
+        #     A8=(u=0,v=1)=top_left, H8=(u=1,v=1)=top_right
         
         x = (1-u)*(1-v)*bl["x"] + u*(1-v)*br["x"] + (1-u)*v*tl["x"] + u*v*tr["x"]
         y = (1-u)*(1-v)*bl["y"] + u*(1-v)*br["y"] + (1-u)*v*tl["y"] + u*v*tr["y"]
@@ -122,42 +128,79 @@ class PickUpPiece(Skill):
         x, y = pos
         self._send_feedback(f"Moving to {square} at X={x:.4f}, Y={y:.4f}")
         
-        # Step 1: Move 10cm above the square
-        self._send_feedback(f"Positioning 10cm above {square}...")
+        # Step 1: Move to safe height (20cm) at current position first
+        self._send_feedback("Moving to safe height...")
+        current_pose = self.manipulation.get_current_end_effector_pose()
+        if current_pose:
+            curr_x, curr_y = current_pose["position"]["x"], current_pose["position"]["y"]
+            success = self.manipulation.move_to_cartesian_pose(
+                x=curr_x, y=curr_y, z=self.HEIGHT_SAFE,
+                roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
+                duration=1
+            )
+            if not success:
+                return "Failed to move to safe height", SkillResult.FAILURE
+            time.sleep(1.5)
+        
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+        
+        # Step 2: Move horizontally to above target square at safe height
+        self._send_feedback(f"Moving above {square}...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=self.HEIGHT_ABOVE,
+            x=x, y=y, z=self.HEIGHT_SAFE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
             duration=2
         )
         if not success:
             return "Failed to move above square", SkillResult.FAILURE
-        time.sleep(2)
+        time.sleep(2.5)
         
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
         
-        # Step 2: Descend to picking height (4cm)
-        self._send_feedback(f"Descending to pick height...")
+        # Step 3: Descend to 10cm above
+        self._send_feedback("Descending to approach height...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=x, y=y, z=self.HEIGHT_ABOVE,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
+            duration=1
+        )
+        if not success:
+            return "Failed to descend to approach height", SkillResult.FAILURE
+        time.sleep(1.5)
+        
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+        
+        # Step 4: Open gripper
+        self._send_feedback("Opening gripper...")
+        self.manipulation.open_gripper()
+        time.sleep(0.7)
+        
+        # Step 5: Descend to picking height (4cm)
+        self._send_feedback("Descending to pick...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_PICK,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
             duration=1
         )
         if not success:
-            return "Failed to descend", SkillResult.FAILURE
+            return "Failed to descend to pick height", SkillResult.FAILURE
         time.sleep(1.5)
         
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
         
-        # Step 3: Pick the piece (gripper close would go here)
-        self._send_feedback("Picking piece...")
-        time.sleep(0.5)
+        # Step 6: Close gripper to grab piece
+        self._send_feedback("Grabbing piece...")
+        self.manipulation.close_gripper()
+        time.sleep(0.7)
         
-        # Step 4: Return to 10cm above
-        self._send_feedback(f"Lifting piece...")
+        # Step 7: Lift back to safe height
+        self._send_feedback("Lifting piece...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=self.HEIGHT_ABOVE,
+            x=x, y=y, z=self.HEIGHT_SAFE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
             duration=1
         )
