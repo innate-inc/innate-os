@@ -607,6 +607,8 @@ class BrainClientNode(Node):
         self.register_primitives_and_directive()
 
         # Initialize hot reload file watcher
+        self._hot_reload_pending = None  # (skill_names, agent_names) tuple
+        self._hot_reload_lock = threading.Lock()
         innate_root = os.environ.get(
             "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
         )
@@ -620,10 +622,11 @@ class BrainClientNode(Node):
                 os.path.join(innate_root, "agents"),
                 os.path.join(os.path.expanduser("~"), "agents"),
             ],
-            on_reload=self._handle_hot_reload,
+            on_reload=self._queue_hot_reload,
             debounce_seconds=1.0,
         )
         self._hot_reload_watcher.start()
+        self._hot_reload_timer = self.create_timer(0.5, self._process_hot_reload_queue)
 
         self.get_logger().info(
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
@@ -2463,11 +2466,38 @@ class BrainClientNode(Node):
         
         return reloaded_skills, reloaded_agents
 
-    def _handle_hot_reload(self, skill_names: list, agent_names: list):
+    def _queue_hot_reload(self, skill_names: list, agent_names: list):
         """
-        Callback for hot reload watcher when files change.
-        Runs in a separate thread, so we need to be careful with ROS calls.
+        Called from watchdog thread. Queues reload for processing on the ROS executor thread.
         """
+        with self._hot_reload_lock:
+            if self._hot_reload_pending is not None:
+                # Merge with existing pending reload
+                existing_skills, existing_agents = self._hot_reload_pending
+                merged_skills = list(set(existing_skills + skill_names))
+                merged_agents = list(set(existing_agents + agent_names))
+                self._hot_reload_pending = (merged_skills, merged_agents)
+            else:
+                self._hot_reload_pending = (list(skill_names), list(agent_names))
+        self.get_logger().info(
+            f"Queued hot reload: skills={skill_names}, agents={agent_names}"
+        )
+
+    def _process_hot_reload_queue(self):
+        """
+        ROS timer callback - runs on executor thread. Processes any pending hot reload.
+        """
+        with self._hot_reload_lock:
+            pending = self._hot_reload_pending
+            self._hot_reload_pending = None
+
+        if pending is None:
+            return
+
+        skill_names, agent_names = pending
+        self.get_logger().info(
+            f"Processing hot reload: skills={skill_names}, agents={agent_names}"
+        )
         try:
             self._perform_reload_selective(skill_names, agent_names)
         except Exception as e:
