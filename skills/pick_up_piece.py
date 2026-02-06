@@ -159,26 +159,12 @@ class PickUpPiece(Skill):
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
         
-        # Step 3: Descend to 10cm above
-        self._send_feedback("Descending to approach height...")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=self.HEIGHT_ABOVE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
-            duration=1
-        )
-        if not success:
-            return "Failed to descend to approach height", SkillResult.FAILURE
-        time.sleep(1.5)
-        
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-        
-        # Step 4: Open gripper
+        # Step 3: Open gripper while above the piece
         self._send_feedback("Opening gripper...")
         self.manipulation.open_gripper()
         time.sleep(0.7)
         
-        # Step 5: Descend to picking height (4cm)
+        # Step 4: Descend to picking height (4cm)
         self._send_feedback("Descending to pick...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_PICK,
@@ -192,12 +178,12 @@ class PickUpPiece(Skill):
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
         
-        # Step 6: Close gripper to grab piece
+        # Step 5: Close gripper to grab piece
         self._send_feedback("Grabbing piece...")
         self.manipulation.close_gripper()
         time.sleep(0.7)
         
-        # Step 7: Lift back to safe height
+        # Step 6: Lift back to safe height
         self._send_feedback("Lifting piece...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_SAFE,
