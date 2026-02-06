@@ -6,7 +6,7 @@ class BoardCalibrationAgent(Agent):
     """
     Board Calibration Agent - guides user through 4-corner calibration.
     
-    Workflow: torque off -> user moves to corner -> torque on (record FK) -> repeat for all 4 corners.
+    Workflow: torque off -> user moves to corner -> recording -> repeat for all 4 corners.
     """
 
     @property
