@@ -621,9 +621,10 @@ class SkillsActionServer(Node):
         skill = self._code_skills[skill_type]
 
         # Define a feedback publisher for the skill
-        def _publish_feedback(update_message: str):
+        def _publish_feedback(update_message: str, image_b64: str = None):
             feedback_msg = ExecuteSkill.Feedback()
             feedback_msg.feedback = update_message
+            feedback_msg.image_b64 = image_b64 or ""
             goal_handle.publish_feedback(feedback_msg)
             self.get_logger().debug(f"Published feedback for '{skill_type}': {update_message}")
 
