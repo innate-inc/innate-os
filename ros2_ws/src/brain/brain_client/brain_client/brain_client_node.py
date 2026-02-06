@@ -2396,9 +2396,6 @@ class BrainClientNode(Node):
             # Re-register with server
             self.register_primitives_and_directive()
 
-            # Reactivate brain
-            self._reactivate_brain()
-
             self.get_logger().info(
                 f"\033[1;92m[BrainClient] Reloaded {len(self.primitives_dict)} primitives, {len(self.directives)} directives\033[0m"
             )
