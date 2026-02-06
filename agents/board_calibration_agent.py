@@ -20,7 +20,9 @@ class BoardCalibrationAgent(Agent):
     def get_skills(self) -> List[str]:
         """Return position recording skill."""
         return [
-            "record_position"
+            "record_position",
+            "torque_on",
+            "torque_off"
         ]
 
     def get_inputs(self) -> List[str]:
