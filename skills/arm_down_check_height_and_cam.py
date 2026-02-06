@@ -31,8 +31,10 @@ class ArmDownCheckHeightAndCam(Skill):
     
     def guidelines(self):
         return (
-            "Move the arm down to Z=0 while keeping the current XY position. "
-            "The arm will point downward (pitch=1.57). No parameters required."
+            "Move the arm down while keeping the current XY position. "
+            "Detects contact when motor load drops (surface supports arm weight). "
+            "On contact: captures wrist camera image, saves to file, then returns to Z=0.1. "
+            "No parameters required."
         )
     
     def execute(self, duration: int = 3):
