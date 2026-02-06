@@ -63,6 +63,7 @@ from std_srvs.srv import SetBool, Trigger
 from brain_client.ws_bridge import WSBridge
 from brain_client.initializers import initialize_skills, initialize_agents
 from brain_client.tts_handler import TTSHandler
+from brain_client.hot_reload_watcher import HotReloadWatcher
 
 # Lazy import for gaze tracker (only loaded if agent uses gaze)
 ROSPersonTracker = None
@@ -604,6 +605,25 @@ class BrainClientNode(Node):
         # After initializing the primitive_action_client
         # Register the primitives with the server
         self.register_primitives_and_directive()
+
+        # Initialize hot reload file watcher
+        innate_root = os.environ.get(
+            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
+        )
+        self._hot_reload_watcher = HotReloadWatcher(
+            logger=self.get_logger(),
+            skills_directories=[
+                os.path.join(innate_root, "skills"),
+                os.path.join(os.path.expanduser("~"), "skills"),
+            ],
+            agents_directories=[
+                os.path.join(innate_root, "agents"),
+                os.path.join(os.path.expanduser("~"), "agents"),
+            ],
+            on_reload=self._handle_hot_reload,
+            debounce_seconds=1.0,
+        )
+        self._hot_reload_watcher.start()
 
         self.get_logger().info(
             "\033[1;92m[BrainClient] BrainClientNode initialized\033[0m"
@@ -2443,6 +2463,16 @@ class BrainClientNode(Node):
         
         return reloaded_skills, reloaded_agents
 
+    def _handle_hot_reload(self, skill_names: list, agent_names: list):
+        """
+        Callback for hot reload watcher when files change.
+        Runs in a separate thread, so we need to be careful with ROS calls.
+        """
+        try:
+            self._perform_reload_selective(skill_names, agent_names)
+        except Exception as e:
+            self.get_logger().error(f"Hot reload failed: {e}")
+
     def _update_primitives_after_selective_reload(self, reloaded_skill_names: list):
         """Update local primitives_dict after skills were reloaded in PEAS."""
         # Re-query the full list from PEAS to get updated metadata
@@ -2837,6 +2867,9 @@ class BrainClientNode(Node):
         # Cancel the agent timer if it exists
         if self.agent_timer and not self.agent_timer.is_canceled():
             self.agent_timer.cancel()
+        # Stop hot reload watcher
+        if hasattr(self, "_hot_reload_watcher") and self._hot_reload_watcher is not None:
+            self._hot_reload_watcher.stop()
         # Clean up TTS handler
         if hasattr(self, "tts_handler") and self.tts_handler is not None:
             self.tts_handler.close()
