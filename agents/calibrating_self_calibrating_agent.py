@@ -22,7 +22,7 @@ class CalibratingSelfCalibratingAgent(Agent):
         """Return only arm movement skills - no navigation."""
         return [
             "move_arm_on_plane",
-            "arm_go_down",
+            "arm_down_check_height_and_cam",
             "arm_go_up",
             "get_arm_pose",
             "get_motor_load"
