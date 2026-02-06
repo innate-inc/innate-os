@@ -124,6 +124,7 @@ if(VPI_FOUND)
     rclcpp 
     rclcpp_components
     sensor_msgs
+    stereo_msgs
     message_filters
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
@@ -170,6 +171,18 @@ ament_target_dependencies(disparity_edge_preserving_filter_component
   cv_bridge
 )
 rclcpp_components_register_nodes(disparity_edge_preserving_filter_component "maurice_cam::DisparityEdgePreservingFilter")
+
+# Disparity filter chain component library (unified pipeline of all filters)
+add_library(disparity_filter_chain_component SHARED maurice_cam/disparity_filter_chain.cpp)
+target_compile_definitions(disparity_filter_chain_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+target_link_libraries(disparity_filter_chain_component ${OpenCV_LIBS})
+ament_target_dependencies(disparity_filter_chain_component 
+  rclcpp 
+  rclcpp_components
+  sensor_msgs
+  stereo_msgs
+)
+rclcpp_components_register_nodes(disparity_filter_chain_component "maurice_cam::DisparityFilterChain")
 
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
@@ -233,6 +246,7 @@ if(VPI_FOUND)
     rclcpp
     rclcpp_components
     sensor_msgs
+    stereo_msgs
     message_filters
   )
 endif()
@@ -263,6 +277,7 @@ set(COMPONENT_LIBRARIES
   main_camera_info_component
   disparity_median_filter_component
   disparity_edge_preserving_filter_component
+  disparity_filter_chain_component
 )
 if(VPI_FOUND)
   list(APPEND COMPONENT_LIBRARIES stereo_depth_estimator_component)

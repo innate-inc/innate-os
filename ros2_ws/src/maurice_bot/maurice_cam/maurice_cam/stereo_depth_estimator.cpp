@@ -25,6 +25,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("right_topic", "/mars/main_camera/right/image_raw");
   this->declare_parameter<std::string>("depth_topic", "/mars/main_camera/depth");
   this->declare_parameter<std::string>("disparity_topic", "/mars/main_camera/disparity");
+  this->declare_parameter<std::string>("disparity_unfiltered_topic", "/mars/main_camera/disparity_unfiltered");
   this->declare_parameter<std::string>("left_rectified_topic", "/mars/main_camera/left/image_rect");
   this->declare_parameter<std::string>("right_rectified_topic", "/mars/main_camera/right/image_rect");
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
@@ -52,6 +53,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   right_topic_ = this->get_parameter("right_topic").as_string();
   depth_topic_ = this->get_parameter("depth_topic").as_string();
   disparity_topic_ = this->get_parameter("disparity_topic").as_string();
+  disparity_unfiltered_topic_ = this->get_parameter("disparity_unfiltered_topic").as_string();
   left_rectified_topic_ = this->get_parameter("left_rectified_topic").as_string();
   right_rectified_topic_ = this->get_parameter("right_rectified_topic").as_string();
   frame_id_ = this->get_parameter("frame_id").as_string();
@@ -84,6 +86,9 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
     RCLCPP_WARN(this->get_logger(), "CUDA requires p2 < 256, clamping %d -> 255", p2_);
     p2_ = 255;
   }
+
+  // Initialize disparity filter parameters
+  initFilterParams();
 
   RCLCPP_INFO(this->get_logger(), "=== Maurice Stereo Depth Estimator (VPI SGM CUDA) ===");
   RCLCPP_INFO(this->get_logger(), "Data directory: %s", data_directory_.c_str());
@@ -127,17 +132,21 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
   
   depth_pub_ = this->create_publisher<sensor_msgs::msg::Image>(depth_topic_, sensor_qos);
-  disparity_pub_ = this->create_publisher<sensor_msgs::msg::Image>(disparity_topic_, sensor_qos);
+  disparity_pub_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(disparity_topic_, sensor_qos);
+  disparity_unfiltered_pub_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(disparity_unfiltered_topic_, sensor_qos);
   left_rectified_pub_ = this->create_publisher<sensor_msgs::msg::Image>(left_rectified_topic_, sensor_qos);
   right_rectified_pub_ = this->create_publisher<sensor_msgs::msg::Image>(right_rectified_topic_, sensor_qos);
   pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, sensor_qos);
   
   RCLCPP_INFO(this->get_logger(), "Publishers created (lazy publishing - only publish when subscribed)");
   RCLCPP_INFO(this->get_logger(), "  Depth: %s", depth_topic_.c_str());
-  RCLCPP_INFO(this->get_logger(), "  Disparity: %s", disparity_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Disparity (filtered): %s", disparity_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Disparity (raw): %s", disparity_unfiltered_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Left rectified: %s", left_rectified_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Right rectified: %s", right_rectified_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Point cloud: %s (decimation: %d)", pointcloud_topic_.c_str(), pointcloud_decimation_);
+
+  logFilterConfig();
 
   // Create synchronized subscriptions for left and right images
   auto qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
@@ -442,11 +451,15 @@ void StereoDepthEstimator::syncCallback(
 
 void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat& right_input, const rclcpp::Time& timestamp)
 {
+  using clock = std::chrono::steady_clock;
+  const auto t_frame_start = clock::now();
+
   // ===== STEP 1: Scale to calibration resolution =====
   // Input images are already in the correct orientation (matching calibration)
   cv::Mat left_scaled, right_scaled;
   cv::resize(left_input, left_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
   cv::resize(right_input, right_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
+  const auto t_scale = clock::now();
 
   // ===== STEP 2: Convert to grayscale (keep color for point cloud) =====
   cv::Mat left_gray, right_gray;
@@ -460,11 +473,13 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     left_gray = left_scaled;
     right_gray = right_scaled;
   }
+  const auto t_gray = clock::now();
 
   // ===== STEP 3: Rectify using OpenCV =====
   cv::Mat left_rect, right_rect;
   cv::remap(left_gray, left_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
   cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
+  const auto t_rectify = clock::now();
 
   // ===== STEP 4: Publish rectified images if subscribed =====
   const bool pub_left_rect = left_rectified_pub_->get_subscription_count() > 0;
@@ -504,6 +519,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
       right_rectified_pub_->publish(std::move(right_rect_msg));
     }
   }
+  const auto t_pub_rect = clock::now();
 
   // ===== STEP 5: Wrap rectified images for VPI (CUDA) =====
   VPIImage vpi_left_wrap = nullptr;
@@ -549,6 +565,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
 
   // Synchronize
   vpiStreamSync(vpi_stream_);
+  const auto t_sgm = clock::now();
 
   // ===== STEP 7: Lock disparity and convert to depth using reprojectImageTo3D =====
   VPIImageData disparity_data;
@@ -578,11 +595,11 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   }
 
   vpiImageUnlock(vpi_disparity_);
+  const auto t_lock_copy = clock::now();
 
   // Zero out border pixels to eliminate edge artifacts from stereo matching
   if (disparity_border_margin_ > 0) {
     const int margin = disparity_border_margin_;
-    // Top and bottom borders
     for (int y = 0; y < margin && y < calib_height_; y++) {
       float* top_row = disparity_float.ptr<float>(y);
       float* bot_row = disparity_float.ptr<float>(calib_height_ - 1 - y);
@@ -591,7 +608,6 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
         bot_row[x] = 0.0f;
       }
     }
-    // Left and right borders (excluding corners already done)
     for (int y = margin; y < calib_height_ - margin; y++) {
       float* row = disparity_float.ptr<float>(y);
       for (int x = 0; x < margin && x < calib_width_; x++) {
@@ -600,64 +616,87 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
       }
     }
   }
+  const auto t_border = clock::now();
 
-  // Use cv::reprojectImageTo3D like Python script - uses full Q matrix
+  // ===== STEP 7a: Publish unfiltered disparity if subscribed =====
+  const bool pub_unfiltered = disparity_unfiltered_pub_->get_subscription_count() > 0;
+  if (pub_unfiltered) {
+    publishDisparityMsg(disparity_float, timestamp, disparity_unfiltered_pub_);
+  }
+  const auto t_convert = clock::now();
+
+  // ===== STEP 7b: Apply disparity filter chain (in-place) =====
+  cv::Mat disparity_lowres;  // quarter-res filtered disparity for point cloud
+  applyFilterChain(disparity_float, disparity_lowres);
+  const auto t_filter = clock::now();
+
+  // ===== STEP 7c: Publish filtered disparity if subscribed =====
+  const bool pub_disparity = disparity_pub_->get_subscription_count() > 0;
+  if (pub_disparity) {
+    publishDisparityMsg(disparity_float, timestamp, disparity_pub_);
+  }
+
+  // ===== STEP 8: Generate depth from filtered disparity =====
+  // Use reprojectImageTo3D with the Q matrix for proper 3D reprojection
   cv::Mat points_3d;
-  cv::reprojectImageTo3D(disparity_float, points_3d, Q_, true);  // handleMissingValues=true
+  cv::reprojectImageTo3D(disparity_float, points_3d, Q_, true);
 
-  // Extract depth (Z coordinate) and convert to uint16 millimeters
+  const float MAX_DEPTH_M = 10.0f;
   cv::Mat depth_calib(calib_height_, calib_width_, CV_16SC1);
-  const float MAX_DEPTH_M = 10.0f;  // Same as Python script
-  
   for (int y = 0; y < calib_height_; y++) {
     const cv::Vec3f* pt_row = points_3d.ptr<cv::Vec3f>(y);
     int16_t* depth_row = depth_calib.ptr<int16_t>(y);
     for (int x = 0; x < calib_width_; x++) {
-      float z = pt_row[x][2];  // Z coordinate is depth
+      float z = pt_row[x][2];
       if (std::fabs(z) <= MAX_DEPTH_M && std::isfinite(z)) {
-        // Convert meters to millimeters
         depth_row[x] = static_cast<int16_t>(std::clamp(z * 1000.0f, -32768.0f, 32767.0f));
       } else {
-        depth_row[x] = 0;  // Invalid depth
+        depth_row[x] = 0;
       }
     }
   }
 
-  // Prepare disparity visualization if subscribed
-  const bool pub_disparity = disparity_pub_->get_subscription_count() > 0;
-  cv::Mat disp_vis_calib;
-  if (pub_disparity) {
-    disp_vis_calib = cv::Mat(calib_height_, calib_width_, CV_8UC1);
-    float disp_vis_scale = 255.0f / static_cast<float>(max_disparity_);
-    for (int y = 0; y < calib_height_; y++) {
-      const float* disp_row = disparity_float.ptr<float>(y);
-      uint8_t* vis_row = disp_vis_calib.ptr<uint8_t>(y);
-      for (int x = 0; x < calib_width_; x++) {
-        vis_row[x] = static_cast<uint8_t>(
-          std::clamp(disp_row[x] * disp_vis_scale, 0.0f, 255.0f));
-      }
-    }
-  }
-
-  // ===== STEP 7: Upscale depth to input resolution =====
   cv::Mat depth_full;
   cv::resize(depth_calib, depth_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
+  const auto t_depth = clock::now();
 
-  // Check what needs to be published
   const bool pub_depth = depth_pub_->get_subscription_count() > 0;
   const bool pub_pointcloud = pointcloud_pub_->get_subscription_count() > 0;
 
-  // ===== STEP 8: Generate point cloud if subscribed =====
+  // ===== STEP 9: Generate point cloud directly from filtered disparity =====
+  // Use the disparity at its current resolution (quarter after filter downsample).
+  // This keeps the point count low and avoids an expensive upscale+decimate round-trip.
+  auto t_pc_resize = clock::now();
+  auto t_pc_alloc = t_pc_resize;
+  auto t_pc_fill = t_pc_resize;
+  auto t_pc_pub = t_pc_resize;
   if (pub_pointcloud) {
-    // Scale camera intrinsics from calibration to input resolution
-    const float scale_up = 1.0f / static_cast<float>(depth_scale_);
-    const float fx = static_cast<float>(P1_.at<double>(0, 0)) * scale_up;
-    const float fy = static_cast<float>(P1_.at<double>(1, 1)) * scale_up;
-    const float cx = static_cast<float>(P1_.at<double>(0, 2)) * scale_up;
-    const float cy = static_cast<float>(P1_.at<double>(1, 2)) * scale_up;
+    const int disp_w = disparity_lowres.cols;
+    const int disp_h = disparity_lowres.rows;
 
-    const int pc_width = image_width_ / pointcloud_decimation_;
-    const int pc_height = image_height_ / pointcloud_decimation_;
+    // Scale pixel-coordinate intrinsics (fx, fy, cx, cy) to the downsampled grid.
+    // But NOT the focal length used for depth: disparity values are still in
+    // calibration-resolution pixels (resize averages values, doesn't rescale them),
+    // so depth = f_calib * baseline / d must use the original focal length.
+    const float scale_to_disp = static_cast<float>(disp_w) / static_cast<float>(calib_width_);
+    const float fx = static_cast<float>(P1_.at<double>(0, 0)) * scale_to_disp;
+    const float fy = static_cast<float>(P1_.at<double>(1, 1)) * scale_to_disp;
+    const float cx = static_cast<float>(P1_.at<double>(0, 2)) * scale_to_disp;
+    const float cy = static_cast<float>(P1_.at<double>(1, 2)) * scale_to_disp;
+    const float f_depth = static_cast<float>(focal_length_);  // calib-res, matches disparity units
+    const float baseline = static_cast<float>(baseline_);
+
+    // Downsample colour image to match disparity resolution
+    cv::Mat color_for_pc;
+    const bool has_color = !left_color_for_pc.empty() && left_color_for_pc.channels() == 3;
+    if (has_color) {
+      cv::resize(left_color_for_pc, color_for_pc, cv::Size(disp_w, disp_h), 0, 0, cv::INTER_AREA);
+    }
+    t_pc_resize = clock::now();
+
+    // Apply decimation on top of the (already small) disparity
+    const int pc_width  = disp_w / pointcloud_decimation_;
+    const int pc_height = disp_h / pointcloud_decimation_;
     const int step = pointcloud_decimation_;
 
     auto cloud_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
@@ -671,53 +710,57 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
     modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
     modifier.resize(pc_width * pc_height);
+    t_pc_alloc = clock::now();
 
     sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
     sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
     sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
     sensor_msgs::PointCloud2Iterator<float> iter_rgb(*cloud_msg, "rgb");
 
-    const int16_t* depth_data = reinterpret_cast<const int16_t*>(depth_full.data);
-    const bool has_color = !left_color_for_pc.empty() && left_color_for_pc.channels() == 3;
-
     for (int v = 0; v < pc_height; ++v) {
       for (int u = 0; u < pc_width; ++u, ++iter_x, ++iter_y, ++iter_z, ++iter_rgb) {
-        int img_u = u * step;
-        int img_v = v * step;
-        int16_t depth_mm = depth_data[img_v * image_width_ + img_u];
+        const int px = u * step;
+        const int py = v * step;
+        const float d = disparity_lowres.at<float>(py, px);
 
-        if (true) {
-          float z = static_cast<float>(depth_mm) * 0.001f;
-          *iter_x = (static_cast<float>(img_u) - cx) * z / fx;
-          *iter_y = (static_cast<float>(img_v) - cy) * z / fy;
-          *iter_z = z;
+        if (d > 0.0f && std::isfinite(d)) {
+          float z = f_depth * baseline / d;
+          if (z > 0.0f && z <= MAX_DEPTH_M) {
+            *iter_x = (static_cast<float>(px) - cx) * z / fx;
+            *iter_y = (static_cast<float>(py) - cy) * z / fy;
+            *iter_z = z;
 
-          // Get color from the color image (BGR format) and pack as float
-          if (has_color) {
-            const cv::Vec3b& bgr = left_color_for_pc.at<cv::Vec3b>(img_v, img_u);
-            // Pack RGB into float (ROS convention: RGB packed as 0x00RRGGBB)
-            uint32_t rgb_packed = (static_cast<uint32_t>(bgr[2]) << 16) |  // R
-                                  (static_cast<uint32_t>(bgr[1]) << 8) |   // G
-                                  (static_cast<uint32_t>(bgr[0]));         // B
-            *iter_rgb = *reinterpret_cast<float*>(&rgb_packed);
-          } else {
-            uint32_t rgb_packed = 0x00808080;  // Gray fallback
-            *iter_rgb = *reinterpret_cast<float*>(&rgb_packed);
+            if (has_color) {
+              const cv::Vec3b& bgr = color_for_pc.at<cv::Vec3b>(py, px);
+              uint32_t rgb_packed = (static_cast<uint32_t>(bgr[2]) << 16) |
+                                    (static_cast<uint32_t>(bgr[1]) << 8) |
+                                    (static_cast<uint32_t>(bgr[0]));
+              float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
+              *iter_rgb = rgb_float;
+            } else {
+              uint32_t rgb_packed = 0x00808080;
+              float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
+              *iter_rgb = rgb_float;
+            }
+            continue;
           }
-        } else {
-          *iter_x = std::numeric_limits<float>::quiet_NaN();
-          *iter_y = std::numeric_limits<float>::quiet_NaN();
-          *iter_z = std::numeric_limits<float>::quiet_NaN();
-          uint32_t rgb_packed = 0x00000000;
-          *iter_rgb = *reinterpret_cast<float*>(&rgb_packed);
         }
+        // Invalid point
+        *iter_x = std::numeric_limits<float>::quiet_NaN();
+        *iter_y = std::numeric_limits<float>::quiet_NaN();
+        *iter_z = std::numeric_limits<float>::quiet_NaN();
+        uint32_t rgb_packed = 0x00000000;
+        float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
+        *iter_rgb = rgb_float;
       }
     }
+    t_pc_fill = clock::now();
 
     pointcloud_pub_->publish(std::move(cloud_msg));
+    t_pc_pub = clock::now();
   }
 
-  // ===== STEP 9: Publish depth if subscribed =====
+  // ===== STEP 10: Publish depth if subscribed =====
   if (pub_depth) {
     auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
     depth_msg->header.stamp = timestamp;
@@ -731,29 +774,505 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     memcpy(depth_msg->data.data(), depth_full.data, depth_msg->data.size());
     depth_pub_->publish(std::move(depth_msg));
   }
+  const auto t_frame_end = clock::now();
 
-  // ===== STEP 10: Publish disparity visualization if subscribed =====
-  if (pub_disparity && !disp_vis_calib.empty()) {
-    // Upscale disparity visualization to input resolution
-    cv::Mat disp_vis_full;
-    cv::resize(disp_vis_calib, disp_vis_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
-
-    auto disp_msg = std::make_unique<sensor_msgs::msg::Image>();
-    disp_msg->header.stamp = timestamp;
-    disp_msg->header.frame_id = frame_id_;
-    disp_msg->height = image_height_;
-    disp_msg->width = image_width_;
-    disp_msg->encoding = "mono8";
-    disp_msg->is_bigendian = false;
-    disp_msg->step = image_width_;
-    disp_msg->data.resize(disp_msg->height * disp_msg->step);
-    memcpy(disp_msg->data.data(), disp_vis_full.data, disp_msg->data.size());
-    disparity_pub_->publish(std::move(disp_msg));
-  }
+  // ===== Pipeline timing (throttled 1 Hz) =====
+  auto ms = [](std::chrono::steady_clock::duration d) {
+    return std::chrono::duration<double, std::milli>(d).count();
+  };
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    "Pipeline %.1fms | scale %.1f | gray %.1f | rectify %.1f | SGM %.1f | "
+    "lock+copy %.1f | border %.1f | filter %.1f | depth %.1f | "
+    "pc_resize %.1f | pc_alloc %.1f | pc_fill %.1f | pc_pub %.1f | depth_pub %.1f",
+    ms(t_frame_end - t_frame_start),
+    ms(t_scale - t_frame_start),
+    ms(t_gray - t_scale),
+    ms(t_rectify - t_gray),
+    ms(t_sgm - t_pub_rect),
+    ms(t_lock_copy - t_sgm),
+    ms(t_border - t_lock_copy),
+    ms(t_filter - t_convert),
+    ms(t_depth - t_filter),
+    ms(t_pc_resize - t_depth),
+    ms(t_pc_alloc - t_pc_resize),
+    ms(t_pc_fill - t_pc_alloc),
+    ms(t_pc_pub - t_pc_fill),
+    ms(t_frame_end - t_pc_pub));
 
   // Cleanup temporary wrapped images
   vpiImageDestroy(vpi_left_wrap);
   vpiImageDestroy(vpi_right_wrap);
+}
+
+// =============================================================================
+// Disparity publishing helper
+// =============================================================================
+void StereoDepthEstimator::publishDisparityMsg(
+    const cv::Mat& disparity_float,
+    const rclcpp::Time& timestamp,
+    rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr& pub)
+{
+  cv::Mat disp_full;
+  cv::resize(disparity_float, disp_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
+
+  auto msg = std::make_unique<stereo_msgs::msg::DisparityImage>();
+  msg->header.stamp = timestamp;
+  msg->header.frame_id = frame_id_;
+
+  msg->image.header = msg->header;
+  msg->image.height = image_height_;
+  msg->image.width = image_width_;
+  msg->image.encoding = "32FC1";
+  msg->image.is_bigendian = false;
+  msg->image.step = image_width_ * sizeof(float);
+  msg->image.data.resize(msg->image.height * msg->image.step);
+  memcpy(msg->image.data.data(), disp_full.data, msg->image.data.size());
+
+  const float scale_up = 1.0f / static_cast<float>(depth_scale_);
+  msg->f = static_cast<float>(focal_length_) * scale_up;
+  msg->t = static_cast<float>(baseline_);
+  msg->min_disparity = static_cast<float>(min_disparity_);
+  msg->max_disparity = static_cast<float>(max_disparity_);
+  msg->delta_d = 1.0f / 32.0f;  // VPI Q10.5
+
+  pub->publish(std::move(msg));
+}
+
+// =============================================================================
+// Disparity Filter Chain — integrated into depth estimator
+// =============================================================================
+void StereoDepthEstimator::initFilterParams()
+{
+  // 0. Downsample — run all filters at reduced resolution
+  declare_parameter<bool>("filter_downsample.enabled", true);
+  declare_parameter<int>("filter_downsample.factor", 4);
+  filter_downsample_enabled_ = get_parameter("filter_downsample.enabled").as_bool();
+  filter_downsample_factor_ = std::clamp(
+      static_cast<int>(get_parameter("filter_downsample.factor").as_int()), 1, 8);
+
+  // 1. Median
+  declare_parameter<bool>("median.enabled", false);
+  declare_parameter<int>("median.kernel_size", 5);
+  median_enabled_ = get_parameter("median.enabled").as_bool();
+  median_kernel_size_ = static_cast<int>(get_parameter("median.kernel_size").as_int());
+  if (median_kernel_size_ % 2 == 0) median_kernel_size_ += 1;
+  median_kernel_size_ = std::max(3, median_kernel_size_);
+
+  // 2. Bilateral
+  declare_parameter<bool>("bilateral.enabled", false);
+  declare_parameter<int>("bilateral.diameter", 5);
+  declare_parameter<double>("bilateral.sigma_color", 10.0);
+  declare_parameter<double>("bilateral.sigma_space", 10.0);
+  bilateral_enabled_ = get_parameter("bilateral.enabled").as_bool();
+  bilateral_diameter_ = static_cast<int>(get_parameter("bilateral.diameter").as_int());
+  bilateral_sigma_color_ = get_parameter("bilateral.sigma_color").as_double();
+  bilateral_sigma_space_ = get_parameter("bilateral.sigma_space").as_double();
+
+  // 3. Hole Filling
+  declare_parameter<bool>("hole_filling.enabled", false);
+  declare_parameter<int>("hole_filling.mode", 1);
+  declare_parameter<int>("hole_filling.strategy", 1);
+  hole_filling_enabled_ = get_parameter("hole_filling.enabled").as_bool();
+  int hf_mode = std::clamp(static_cast<int>(get_parameter("hole_filling.mode").as_int()), 0, 5);
+  const int hf_map[] = {0, 2, 4, 8, 16, 9999};
+  hole_fill_radius_ = hf_map[hf_mode];
+  hole_fill_strategy_ = std::clamp(static_cast<int>(get_parameter("hole_filling.strategy").as_int()), 0, 2);
+
+  // 4. Depth Clamping
+  declare_parameter<bool>("depth_clamp.enabled", false);
+  declare_parameter<double>("depth_clamp.min_depth_meters", 0.25);
+  declare_parameter<double>("depth_clamp.max_depth_meters", 5.0);
+  depth_clamp_enabled_ = get_parameter("depth_clamp.enabled").as_bool();
+  min_depth_meters_ = get_parameter("depth_clamp.min_depth_meters").as_double();
+  max_depth_meters_ = get_parameter("depth_clamp.max_depth_meters").as_double();
+
+  // 5. Edge Invalidation
+  declare_parameter<bool>("edge_invalidation.enabled", false);
+  declare_parameter<int>("edge_invalidation.width", 3);
+  declare_parameter<double>("edge_invalidation.canny_low", 10.0);
+  declare_parameter<double>("edge_invalidation.canny_high", 30.0);
+  edge_inv_enabled_ = get_parameter("edge_invalidation.enabled").as_bool();
+  edge_inv_width_ = std::max(1, static_cast<int>(get_parameter("edge_invalidation.width").as_int()));
+  edge_canny_low_ = get_parameter("edge_invalidation.canny_low").as_double();
+  edge_canny_high_ = get_parameter("edge_invalidation.canny_high").as_double();
+
+  // 6. Speckle
+  declare_parameter<bool>("speckle.enabled", false);
+  declare_parameter<int>("speckle.max_size", 200);
+  declare_parameter<double>("speckle.max_diff", 1.0);
+  speckle_enabled_ = get_parameter("speckle.enabled").as_bool();
+  speckle_max_size_ = std::max(1, static_cast<int>(get_parameter("speckle.max_size").as_int()));
+  speckle_max_diff_ = std::max(0.0, get_parameter("speckle.max_diff").as_double());
+
+  // 7. Domain Transform
+  declare_parameter<bool>("domain_transform.enabled", false);
+  declare_parameter<int>("domain_transform.iterations", 2);
+  declare_parameter<double>("domain_transform.alpha", 0.5);
+  declare_parameter<int>("domain_transform.delta", 20);
+  dt_enabled_ = get_parameter("domain_transform.enabled").as_bool();
+  dt_iterations_ = std::clamp(static_cast<int>(get_parameter("domain_transform.iterations").as_int()), 1, 5);
+  dt_alpha_ = std::clamp(get_parameter("domain_transform.alpha").as_double(), 0.25, 1.0);
+  dt_delta_ = std::clamp(static_cast<int>(get_parameter("domain_transform.delta").as_int()), 1, 50);
+
+  // 8. Temporal
+  declare_parameter<bool>("temporal.enabled", false);
+  declare_parameter<double>("temporal.alpha", 0.4);
+  declare_parameter<int>("temporal.delta", 20);
+  declare_parameter<int>("temporal.persistence", 3);
+  temporal_enabled_ = get_parameter("temporal.enabled").as_bool();
+  temporal_alpha_ = std::clamp(get_parameter("temporal.alpha").as_double(), 0.0, 1.0);
+  temporal_delta_ = std::clamp(static_cast<int>(get_parameter("temporal.delta").as_int()), 1, 100);
+  temporal_persistence_ = std::clamp(static_cast<int>(get_parameter("temporal.persistence").as_int()), 0, 8);
+
+  // Filter execution order
+  declare_parameter<std::vector<std::string>>("filter_order", {
+    "median", "bilateral", "hole_filling", "depth_clamp",
+    "edge_invalidation", "speckle", "domain_transform", "temporal"});
+  filter_order_ = get_parameter("filter_order").as_string_array();
+}
+
+void StereoDepthEstimator::logFilterConfig()
+{
+  auto log = [this](const char* name, bool on, const std::string & detail = "") {
+    RCLCPP_INFO(get_logger(), "  %-22s %s%s", name, on ? "ON" : "OFF", detail.c_str());
+  };
+
+  RCLCPP_INFO(get_logger(), "=== Disparity Filter Chain ===");
+  log("Downsample", filter_downsample_enabled_,
+      filter_downsample_enabled_ ? "  factor=" + std::to_string(filter_downsample_factor_) : "");
+
+  // Print execution order
+  std::string order_str;
+  for (const auto& name : filter_order_) {
+    if (!order_str.empty()) order_str += " → ";
+    order_str += name;
+  }
+  RCLCPP_INFO(get_logger(), "  Order: %s", order_str.c_str());
+
+  log("Median", median_enabled_,
+      median_enabled_ ? "  kernel=" + std::to_string(median_kernel_size_) : "");
+  log("Bilateral", bilateral_enabled_,
+      bilateral_enabled_ ? "  d=" + std::to_string(bilateral_diameter_) : "");
+  log("Hole Filling", hole_filling_enabled_,
+      hole_filling_enabled_ ? "  radius=" + std::to_string(hole_fill_radius_)
+        + " strategy=" + std::to_string(hole_fill_strategy_) : "");
+  log("Depth Clamping", depth_clamp_enabled_,
+      depth_clamp_enabled_ ? "  min=" + std::to_string(min_depth_meters_)
+        + "m max=" + std::to_string(max_depth_meters_) + "m" : "");
+  log("Edge Invalidation", edge_inv_enabled_,
+      edge_inv_enabled_ ? "  width=" + std::to_string(edge_inv_width_) : "");
+  log("Speckle Removal", speckle_enabled_,
+      speckle_enabled_ ? "  size=" + std::to_string(speckle_max_size_) : "");
+  log("Domain Transform", dt_enabled_,
+      dt_enabled_ ? "  iter=" + std::to_string(dt_iterations_)
+        + " a=" + std::to_string(dt_alpha_)
+        + " d=" + std::to_string(dt_delta_) : "");
+  log("Temporal", temporal_enabled_,
+      temporal_enabled_ ? "  alpha=" + std::to_string(temporal_alpha_)
+        + " delta=" + std::to_string(temporal_delta_)
+        + " persist=" + std::to_string(temporal_persistence_) : "");
+}
+
+void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres)
+{
+  const cv::Size orig_size = disparity.size();
+  const int f = filter_downsample_factor_;
+
+  // Downsample for faster filtering (INTER_AREA averages the pixel block → free noise reduction)
+  if (filter_downsample_enabled_ && f > 1) {
+    cv::resize(disparity, disparity,
+               cv::Size(orig_size.width / f, orig_size.height / f),
+               0, 0, cv::INTER_AREA);
+  }
+
+  // Run filters in configured order
+  for (const auto& name : filter_order_) {
+    if (name == "median" && median_enabled_) {
+      applyMedian(disparity);
+    } else if (name == "bilateral" && bilateral_enabled_) {
+      applyBilateral(disparity);
+    } else if (name == "hole_filling" && hole_filling_enabled_) {
+      fillHoles(disparity);
+    } else if (name == "depth_clamp" && depth_clamp_enabled_) {
+      // Disparity values are in calib-res pixels regardless of downsample,
+      // so use the original focal length (not scaled).
+      const float f_calib = static_cast<float>(focal_length_);
+      const float t = static_cast<float>(baseline_);
+      clampByDepth(disparity, f_calib, t);
+    } else if (name == "edge_invalidation" && edge_inv_enabled_) {
+      invalidateEdges(disparity);
+    } else if (name == "speckle" && speckle_enabled_) {
+      filterSpeckles(disparity);
+    } else if (name == "domain_transform" && dt_enabled_) {
+      applyDomainTransform(disparity);
+    } else if (name == "temporal" && temporal_enabled_) {
+      applyTemporal(disparity);
+    }
+  }
+
+  // Save low-res filtered result for point cloud before upsampling
+  disparity_lowres = disparity.clone();
+
+  // Upsample back to original resolution for disparity publishing / depth map
+  if (filter_downsample_enabled_ && f > 1) {
+    cv::resize(disparity, disparity, orig_size, 0, 0, cv::INTER_LINEAR);
+  }
+}
+
+void StereoDepthEstimator::applyMedian(cv::Mat& img)
+{
+  if (median_kernel_size_ <= 5) {
+    cv::medianBlur(img, img, median_kernel_size_);
+  } else {
+    double mn, mx;
+    cv::minMaxLoc(img, &mn, &mx);
+    if (mx <= 0) return;
+    cv::Mat u8;
+    img.convertTo(u8, CV_8U, 255.0 / mx);
+    cv::medianBlur(u8, u8, median_kernel_size_);
+    u8.convertTo(img, CV_32F, mx / 255.0);
+  }
+}
+
+void StereoDepthEstimator::applyBilateral(cv::Mat& img)
+{
+  cv::Mat src = img.clone();
+  cv::bilateralFilter(src, img, bilateral_diameter_,
+                      bilateral_sigma_color_, bilateral_sigma_space_);
+}
+
+void StereoDepthEstimator::fillHoles(cv::Mat& img)
+{
+  const int rows = img.rows, cols = img.cols;
+  const int max_r = (hole_fill_radius_ >= 9999) ? std::max(rows, cols) : hole_fill_radius_;
+
+  // Strategy 0: fill from left neighbour only (RealSense mode 0)
+  // Strategy 1: farthest from around — pick neighbour with smallest disparity
+  //             (= farthest depth). Safest, avoids foreground bleed. (RS default)
+  // Strategy 2: nearest from around — pick neighbour with largest disparity
+  //             (= nearest depth).
+  const int strategy = hole_fill_strategy_;
+
+  // Work on a clone so reads don't see writes from this pass
+  cv::Mat src = img.clone();
+
+  for (int y = 0; y < rows; ++y) {
+    float* dst_row = img.ptr<float>(y);
+    for (int x = 0; x < cols; ++x) {
+      if (src.at<float>(y, x) > 0) continue;
+
+      // Gather up to 4 neighbours (left, right, up, down)
+      float candidates[4] = {0, 0, 0, 0};
+      int count = 0;
+
+      // Left
+      for (int d = 1; d <= max_r && x - d >= 0; ++d)
+        if (src.at<float>(y, x - d) > 0) { candidates[count++] = src.at<float>(y, x - d); break; }
+      // Right
+      for (int d = 1; d <= max_r && x + d < cols; ++d)
+        if (src.at<float>(y, x + d) > 0) { candidates[count++] = src.at<float>(y, x + d); break; }
+      // Up
+      for (int d = 1; d <= max_r && y - d >= 0; ++d)
+        if (src.at<float>(y - d, x) > 0) { candidates[count++] = src.at<float>(y - d, x); break; }
+      // Down
+      for (int d = 1; d <= max_r && y + d < rows; ++d)
+        if (src.at<float>(y + d, x) > 0) { candidates[count++] = src.at<float>(y + d, x); break; }
+
+      if (count == 0) continue;
+
+      if (strategy == 0) {
+        // fill_from_left: use the first candidate found (left has priority)
+        dst_row[x] = candidates[0];
+      } else if (strategy == 1) {
+        // farthest_from_around: smallest disparity = farthest depth
+        float best = candidates[0];
+        for (int i = 1; i < count; ++i)
+          if (candidates[i] < best) best = candidates[i];
+        dst_row[x] = best;
+      } else {
+        // nearest_from_around: largest disparity = nearest depth
+        float best = candidates[0];
+        for (int i = 1; i < count; ++i)
+          if (candidates[i] > best) best = candidates[i];
+        dst_row[x] = best;
+      }
+    }
+  }
+}
+
+void StereoDepthEstimator::clampByDepth(cv::Mat& img, float f, float t)
+{
+  const float abs_t = std::abs(t);
+  if (f <= 0 || abs_t <= 0) return;
+  float max_d = (min_depth_meters_ > 0)
+    ? f * abs_t / static_cast<float>(min_depth_meters_)
+    : std::numeric_limits<float>::max();
+  float min_d = (max_depth_meters_ > 0)
+    ? f * abs_t / static_cast<float>(max_depth_meters_)
+    : 0.0f;
+  for (int y = 0; y < img.rows; ++y) {
+    float* row = img.ptr<float>(y);
+    for (int x = 0; x < img.cols; ++x) {
+      float d = row[x];
+      if (d <= 0) continue;
+      if (d > max_d || d < min_d) row[x] = 0.0f;
+    }
+  }
+}
+
+void StereoDepthEstimator::invalidateEdges(cv::Mat& img)
+{
+  double mn, mx;
+  cv::minMaxLoc(img, &mn, &mx);
+  if (mx <= 0) return;
+  cv::Mat u8;
+  img.convertTo(u8, CV_8U, 255.0 / mx);
+  cv::GaussianBlur(u8, u8, cv::Size(3, 3), 0.8);
+  cv::Mat edges;
+  cv::Canny(u8, edges, edge_canny_low_, edge_canny_high_);
+  if (edge_inv_width_ > 1) {
+    int k = edge_inv_width_ | 1;
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(k, k));
+    cv::dilate(edges, edges, kernel);
+  }
+  for (int y = 0; y < img.rows; ++y) {
+    float* dr = img.ptr<float>(y);
+    const uchar* er = edges.ptr<uchar>(y);
+    for (int x = 0; x < img.cols; ++x)
+      if (er[x] > 0 && dr[x] > 0) dr[x] = 0.0f;
+  }
+}
+
+void StereoDepthEstimator::filterSpeckles(cv::Mat& img)
+{
+  const float scale = 16.0f;
+  cv::Mat s16;
+  img.convertTo(s16, CV_16SC1, scale);
+  cv::filterSpeckles(s16, 0, speckle_max_size_, speckle_max_diff_ * scale);
+  s16.convertTo(img, CV_32FC1, 1.0 / scale);
+}
+
+void StereoDepthEstimator::applyDomainTransform(cv::Mat& img)
+{
+  for (int i = 0; i < dt_iterations_; ++i) {
+    dtPass(img, true);
+    dtPass(img, false);
+  }
+}
+
+void StereoDepthEstimator::dtPass(cv::Mat& img, bool horizontal)
+{
+  const int rows = img.rows, cols = img.cols;
+  const float a = static_cast<float>(dt_alpha_);
+  const float d = static_cast<float>(dt_delta_);
+
+  if (horizontal) {
+    for (int y = 0; y < rows; ++y) {
+      float* r = img.ptr<float>(y);
+      for (int x = 1; x < cols; ++x) {
+        if (r[x] <= 0 || r[x - 1] <= 0) continue;
+        float w = a * std::exp(-std::abs(r[x] - r[x - 1]) / d);
+        r[x] = r[x] * (1.f - w) + r[x - 1] * w;
+      }
+      for (int x = cols - 2; x >= 0; --x) {
+        if (r[x] <= 0 || r[x + 1] <= 0) continue;
+        float w = a * std::exp(-std::abs(r[x] - r[x + 1]) / d);
+        r[x] = r[x] * (1.f - w) + r[x + 1] * w;
+      }
+    }
+  } else {
+    for (int x = 0; x < cols; ++x) {
+      for (int y = 1; y < rows; ++y) {
+        float c = img.at<float>(y, x), p = img.at<float>(y - 1, x);
+        if (c <= 0 || p <= 0) continue;
+        float w = a * std::exp(-std::abs(c - p) / d);
+        img.at<float>(y, x) = c * (1.f - w) + p * w;
+      }
+      for (int y = rows - 2; y >= 0; --y) {
+        float c = img.at<float>(y, x), n = img.at<float>(y + 1, x);
+        if (c <= 0 || n <= 0) continue;
+        float w = a * std::exp(-std::abs(c - n) / d);
+        img.at<float>(y, x) = c * (1.f - w) + n * w;
+      }
+    }
+  }
+}
+
+void StereoDepthEstimator::applyTemporal(cv::Mat& img)
+{
+  const int total = img.rows * img.cols;
+
+  // First frame or resolution change: initialise history
+  if (prev_disparity_frame_.empty() || prev_disparity_frame_.size() != img.size()) {
+    prev_disparity_frame_ = img.clone();
+    temporal_history_.assign(total, 0);
+    return;
+  }
+
+  const float a = static_cast<float>(temporal_alpha_);
+  const float delta = static_cast<float>(temporal_delta_);
+  const int persist = temporal_persistence_;
+
+  // Pre-compute persistence bitmask LUT (same as RealSense).
+  // For each 8-bit history value, decide if the pixel is "credible enough".
+  // This is done once per frame (256 entries) — trivial cost.
+  std::array<bool, 256> persist_lut;
+  persist_lut.fill(false);
+  if (persist > 0) {
+    for (int i = 0; i < 256; ++i) {
+      int b7 = !!(i & 1), b6 = !!(i & 2), b5 = !!(i & 4), b4 = !!(i & 8);
+      int b3 = !!(i & 16), b2 = !!(i & 32), b1 = !!(i & 64), b0 = !!(i & 128);
+      int sum8 = b0+b1+b2+b3+b4+b5+b6+b7;
+      int sum3 = b0+b1+b2;
+      int sum4 = b0+b1+b2+b3;
+      int sum2 = b0+b1;
+      int sum5 = b0+b1+b2+b3+b4;
+      switch (persist) {
+        case 1: persist_lut[i] = (sum8 >= 8); break;   // valid 8/8
+        case 2: persist_lut[i] = (sum3 >= 2); break;   // valid 2/last 3
+        case 3: persist_lut[i] = (sum4 >= 2); break;   // valid 2/last 4
+        case 4: persist_lut[i] = (sum8 >= 2); break;   // valid 2/8
+        case 5: persist_lut[i] = (sum2 >= 1); break;   // valid 1/last 2
+        case 6: persist_lut[i] = (sum5 >= 1); break;   // valid 1/last 5
+        case 7: persist_lut[i] = (sum8 >= 1); break;   // valid 1/8
+        case 8: persist_lut[i] = true; break;           // persist indefinitely
+        default: break;
+      }
+    }
+  }
+
+  for (int y = 0; y < img.rows; ++y) {
+    float* cur = img.ptr<float>(y);
+    const float* prv = prev_disparity_frame_.ptr<float>(y);
+    const int row_off = y * img.cols;
+    for (int x = 0; x < img.cols; ++x) {
+      const int idx = row_off + x;
+      const bool cur_valid = (cur[x] > 0);
+      const bool prv_valid = (prv[x] > 0);
+
+      // Update per-pixel history: shift left, set LSB to current validity
+      uint8_t h = temporal_history_[idx];
+      h = static_cast<uint8_t>((h << 1) | (cur_valid ? 1 : 0));
+      temporal_history_[idx] = h;
+
+      if (cur_valid && prv_valid) {
+        // Delta threshold: if change is too large, reset (don't blend)
+        float diff = std::abs(cur[x] - prv[x]);
+        if (diff < delta) {
+          cur[x] = a * cur[x] + (1.f - a) * prv[x];
+        }
+        // else: keep current value as-is (edge/motion detected)
+      } else if (!cur_valid && prv_valid && persist > 0) {
+        // Hole in current frame — use persistence to decide whether to fill
+        if (persist_lut[h]) {
+          cur[x] = prv[x];
+        }
+      }
+      // cur valid, prv invalid: keep current (nothing to blend with)
+      // both invalid: leave as zero
+    }
+  }
+  prev_disparity_frame_ = img.clone();
 }
 
 } // namespace maurice_cam
