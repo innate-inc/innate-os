@@ -237,6 +237,12 @@ install(PROGRAMS
   RENAME stereo_calibrator
 )
 
+install(PROGRAMS
+  scripts/record_stereo.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME record_stereo
+)
+
 # Install launch files
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
