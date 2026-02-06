@@ -218,11 +218,12 @@ class Skill(ABC):
         self._feedback_callback = callback
         self.logger.debug(f"Feedback callback set for skill {self.name}.")
 
-    def _send_feedback(self, message: str):
-        """Sends feedback if the callback is set."""
+    def _send_feedback(self, message: str, image_b64: str = None):
+        """Sends feedback if the callback is set, optionally with an image."""
+        self.logger.info(f"Skill feedback [{self.name}]: {message}")
         if self._feedback_callback:
             try:
-                self._feedback_callback(message)
+                self._feedback_callback(message, image_b64)
             except Exception as e:
                 self.logger.error(f"Error sending feedback for skill {self.name}: {e}")
 

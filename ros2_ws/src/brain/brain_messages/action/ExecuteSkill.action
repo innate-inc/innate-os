@@ -10,4 +10,5 @@ string success_type  # One of: "success", "cancelled", "failure"
 ---
 # Feedback definition
 string skill_type
-string feedback 
+string feedback
+string image_b64

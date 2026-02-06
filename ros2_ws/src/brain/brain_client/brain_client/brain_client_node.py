@@ -1874,10 +1874,15 @@ class BrainClientNode(Node):
             feedback_text = feedback_msg_wrapper.feedback.feedback
             self.get_logger().info(f"Received primitive feedback: {feedback_text}")
 
+            # Build payload with optional image
+            payload = {"feedback": feedback_text}
+            if feedback_msg_wrapper.feedback.image_b64:
+                payload["image_b64"] = feedback_msg_wrapper.feedback.image_b64
+
             # Send this feedback to the server
             feedback_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_FEEDBACK,
-                payload={"feedback": feedback_text},
+                payload=payload,
             )
             self.ws_bridge.send_message(feedback_msg)
         except AttributeError:
