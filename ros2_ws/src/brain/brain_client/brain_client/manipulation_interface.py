@@ -93,6 +93,9 @@ class ManipulationInterface:
             List of 6 effort values (percentage, -100% to 100%)
             or None if no arm state is available
         """
+        # Spin once to process any pending arm state callbacks
+        rclpy.spin_once(self.node, timeout_sec=0.01)
+        
         if self._arm_state is None:
             self.logger.warn("No arm state available yet")
             return None
