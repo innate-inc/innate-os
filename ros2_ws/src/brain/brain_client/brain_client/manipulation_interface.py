@@ -44,10 +44,14 @@ class ManipulationInterface:
         # Subscribers
         self._ik_solution = None
         self._fk_pose = None
+        self._arm_state = None
         self._ik_solution_sub = self.node.create_subscription(
             JointState, "/ik_solution", self._ik_solution_callback, 10
         )
         self._fk_pose_sub = self.node.create_subscription(PoseStamped, "/fk_pose", self._fk_pose_callback, 10)
+        self._arm_state_sub = self.node.create_subscription(
+            JointState, "/mars/arm/state", self._arm_state_callback, 10
+        )
 
         # Service client for joint space control. We create the client once
         # here, but deliberately avoid any blocking wait_for_service calls
@@ -70,6 +74,28 @@ class ManipulationInterface:
     def _fk_pose_callback(self, msg: PoseStamped):
         """Store the latest FK pose."""
         self._fk_pose = msg
+
+    def _arm_state_callback(self, msg: JointState):
+        """Store the latest arm state (includes effort/load)."""
+        self._arm_state = msg
+
+    def get_motor_load(self) -> list[float] | None:
+        """
+        Get the current motor load/effort for all arm joints.
+
+        Returns:
+            List of 6 effort values (percentage, -100% to 100%)
+            or None if no arm state is available
+        """
+        if self._arm_state is None:
+            self.logger.warn("No arm state available yet")
+            return None
+
+        if not self._arm_state.effort:
+            self.logger.warn("Arm state has no effort data")
+            return None
+
+        return list(self._arm_state.effort)
 
     def get_current_end_effector_pose(self) -> dict | None:
         """
