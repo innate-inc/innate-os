@@ -53,15 +53,7 @@ class ManipulationInterface:
             PoseStamped, "/ik_solution_fk", self._ik_solution_fk_callback, 10
         )
         self._fk_pose_sub = self.node.create_subscription(PoseStamped, "/fk_pose", self._fk_pose_callback, 10)
-        self._arm_state_sub = self.node.create_subscription(
-            JointState, "/mars/arm/state", self._arm_state_callback, 10
-        )
-
-        # Arm joint state
-        self._arm_state = None
-        self._arm_state_sub = self.node.create_subscription(
-            JointState, "/mars/arm/state", self._arm_state_callback, 10
-        )
+        self._arm_state_sub = self.node.create_subscription(JointState, "/mars/arm/state", self._arm_state_callback, 10)
 
         # Service client for joint space control. We create the client once
         # here, but deliberately avoid any blocking wait_for_service calls
@@ -100,10 +92,6 @@ class ManipulationInterface:
             List of 6 effort values (percentage, -100% to 100%)
             or None if no arm state is available
         """
-        # Spin multiple times to drain the queue and get the latest arm state
-        for _ in range(10):
-            rclpy.spin_once(self.node, timeout_sec=0.001)
-        
         if self._arm_state is None:
             self.logger.warn("No arm state available yet")
             return None
@@ -125,7 +113,7 @@ class ManipulationInterface:
         # Spin multiple times to drain the queue and get the latest FK pose
         for _ in range(10):
             rclpy.spin_once(self.node, timeout_sec=0.001)
-        
+
         if self._fk_pose is None:
             self.logger.warn("No FK pose available yet")
             return None
@@ -462,7 +450,7 @@ class ManipulationInterface:
 
         # Clamp percent to 0-100
         percent = max(0.0, min(100.0, percent))
-        
+
         # Interpolate between closed and open based on percent
         positions[5] = self.GRIPPER_CLOSED + (self.GRIPPER_OPEN - self.GRIPPER_CLOSED) * (percent / 100.0)
         return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)
