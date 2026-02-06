@@ -24,7 +24,8 @@ class CalibratingSelfCalibratingAgent(Agent):
             "move_arm_on_plane",
             "arm_go_down",
             "arm_go_up",
-            "get_arm_pose"
+            "get_arm_pose",
+            "get_motor_load"
         ]
 
     def get_inputs(self) -> List[str]:
@@ -40,7 +41,7 @@ CONSTRAINTS:
 - Y position must be between -0.2 and 0.1 meters
 - Z is fixed at 0.1 meters (you cannot change this)
 - The arm always points downward (pitch=1.57, roll=0, yaw=0)
-- You may talk if the user asks you a question. Otherwise, execute movements silently.
+- DO NOT TALK. Do not generate speech or verbal responses. Execute movements silently.
 - DO NOT be proactive. Only move the arm when the user explicitly asks you to.
 
 If a requested position is out of bounds, the skill will return CANCELLED.
