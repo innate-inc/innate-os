@@ -23,9 +23,9 @@ class PickUpPiece(Skill):
     FIXED_PITCH = 1.57
     
     # Heights in meters
-    HEIGHT_SAFE = 0.20   # 20cm safe travel height (won't knock pieces)
-    HEIGHT_ABOVE = 0.10  # 10cm above board for positioning
-    HEIGHT_PICK = 0.04   # 4cm above ground for picking
+    HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
+    HEIGHT_ABOVE = 0.18  # 10cm above board for positioning
+    HEIGHT_PICK = 0.1   # 4cm above ground for picking
     
     def __init__(self, logger):
         super().__init__(logger)
@@ -165,7 +165,7 @@ class PickUpPiece(Skill):
         # Step 3: Open gripper while above the piece
         self.logger.info("[PickUpPiece] Step 3: Opening gripper")
         self._send_feedback("Opening gripper...")
-        self.manipulation.open_gripper()
+        self.manipulation.open_gripper(60)
         time.sleep(0.7)
         
         # Step 4: Descend to picking height (4cm)
@@ -174,7 +174,7 @@ class PickUpPiece(Skill):
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_PICK,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
-            duration=1
+            duration=2.5
         )
         if not success:
             return "Failed to descend to pick height", SkillResult.FAILURE
@@ -187,7 +187,7 @@ class PickUpPiece(Skill):
         self.logger.info("[PickUpPiece] Step 5: Closing gripper")
         self._send_feedback("Grabbing piece...")
         self.manipulation.close_gripper()
-        time.sleep(0.7)
+        time.sleep(2.0)
         
         # Step 6: Lift back to safe height
         self.logger.info(f"[PickUpPiece] Step 6: Lifting to safe height {self.HEIGHT_SAFE}m")
@@ -195,11 +195,11 @@ class PickUpPiece(Skill):
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_SAFE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
-            duration=1
+            duration=2
         )
         if not success:
             return "Failed to lift", SkillResult.FAILURE
-        time.sleep(1.5)
+        time.sleep(2.0)
         
         self.logger.info(f"[PickUpPiece] Complete: Picked up piece from {square}")
         self._send_feedback(f"Piece picked up from {square}")
