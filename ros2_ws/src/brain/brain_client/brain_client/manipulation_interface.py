@@ -260,9 +260,12 @@ class ManipulationInterface:
             self.logger.error("Failed to solve IK for target pose")
             return False
 
-        # IK returns 5 joints, but we need 6 (add joint6/gripper with default value of 0.0)
+        # IK returns 5 joints, but we need 6 - preserve current gripper position
         if len(joint_positions) == 5:
-            joint_positions.append(0.0)
+            current_gripper = 0.0
+            if self._arm_state is not None and len(self._arm_state.position) >= 6:
+                current_gripper = self._arm_state.position[5]
+            joint_positions.append(current_gripper)
 
         # Execute motion (non-blocking to avoid blocking the action server callback)
         return self.move_to_joint_positions(
@@ -349,12 +352,17 @@ class ManipulationInterface:
             self.logger.error(f"Exception calling torque_off: {e}")
             return False
 
-    def open_gripper(self, duration: float = 0.5) -> bool:
+    # Gripper position constants (radians)
+    GRIPPER_CLOSED = 0.0
+    GRIPPER_OPEN = 0.85
+
+    def open_gripper(self, percent: float = 100.0, duration: float = 0.5) -> bool:
         """
         Open the gripper (joint6).
 
         Args:
             duration: Time for gripper motion
+            percent: How open to make the gripper, 0-100% (default 100% = fully open)
 
         Returns:
             True if successful, False otherwise
@@ -372,10 +380,11 @@ class ManipulationInterface:
         if len(positions) < 6:
             positions.extend([0.0] * (6 - len(positions)))
 
-        # Set gripper to open position
-        # User says: 0 encoder = closed, 700 encoder = open
-        # With joint6 flip: to get encoder 700, send ~2.07 radians
-        positions[5] = 2.07
+        # Clamp percent to 0-100
+        percent = max(0.0, min(100.0, percent))
+        
+        # Interpolate between closed and open based on percent
+        positions[5] = self.GRIPPER_CLOSED + (self.GRIPPER_OPEN - self.GRIPPER_CLOSED) * (percent / 100.0)
         return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)
 
     def close_gripper(self, duration: float = 0.5) -> bool:
@@ -401,8 +410,5 @@ class ManipulationInterface:
         if len(positions) < 6:
             positions.extend([0.0] * (6 - len(positions)))
 
-        # Set gripper to closed position
-        # User says: 0 encoder = closed, 700 encoder = open
-        # With joint6 flip: to get encoder 0, send ~3.14 radians (PI)
-        positions[5] = 3.14
+        positions[5] = self.GRIPPER_CLOSED
         return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)
