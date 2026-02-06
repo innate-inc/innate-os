@@ -9,6 +9,7 @@ services:
       # Mount source and tests so the workspace can be rebuilt with latest code
       - ./ros2_ws/src:/root/innate-os/ros2_ws/src:ro
       - ./skills:/root/innate-os/skills:ro
+      - ./agents:/root/innate-os/agents:ro
 
     shm_size: "2g"
     # Rebuild workspace, then run integration tests via colcon test
@@ -17,6 +18,6 @@ services:
         cd /root/innate-os/ros2_ws &&
         colcon build &&
         source install/setup.zsh &&
-        colcon test --packages-select brain_client --ctest-args -R test_skill_integration --event-handlers console_direct+ &&
+        colcon test --packages-select brain_client --ctest-args -R "test_skill_integration|test_pose_image" --event-handlers console_direct+ &&
         colcon test-result --verbose
       '

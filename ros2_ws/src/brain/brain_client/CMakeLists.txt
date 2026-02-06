@@ -44,6 +44,9 @@ if(BUILD_TESTING)
   endfunction()
 
   add_ros_isolated_launch_test(test/test_skill_integration.launch.py)
+  add_ros_isolated_launch_test(test/test_pose_image.launch.py
+    TIMEOUT 180
+  )
 endif()
 
 ament_package()
