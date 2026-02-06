@@ -68,11 +68,18 @@ class ArmGoDown(Skill):
         if not success:
             return "Failed to solve IK or send arm command", SkillResult.FAILURE
         
-        # Wait for motion to complete (with cancellation check)
+        # Wait for motion to complete (with cancellation check and load feedback)
         start_time = time.time()
         while time.time() - start_time < duration:
             if self._cancelled:
                 return "Arm motion cancelled", SkillResult.CANCELLED
+            
+            # Read and report motor load
+            motor_load = self.manipulation.get_motor_load()
+            if motor_load is not None:
+                load_strs = [f"J{i+1}={load:.1f}%" for i, load in enumerate(motor_load)]
+                self._send_feedback(f"Load: {', '.join(load_strs)}")
+            
             time.sleep(0.1)
         
         return f"Arm moved down to Z={self.TARGET_Z}", SkillResult.SUCCESS
