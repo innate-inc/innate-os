@@ -339,6 +339,14 @@ private:
             // ========== READ STATE ==========
             auto [positions, velocities] = robot_->readState();
             
+            // Read motor load/effort for all 7 servos
+            std::vector<double> efforts;
+            for (int id = 1; id <= 7; ++id) {
+                int16_t load = dynamixel_->readPresentLoad(id);
+                // Convert load to percentage (-100% to 100%)
+                efforts.push_back(static_cast<double>(load) / 10.0);
+            }
+            
             // ========== PUBLISH ARM STATE ==========
             // Convert to radians
             std::vector<double> positions_rad;
@@ -364,6 +372,7 @@ private:
             arm_state_msg_.header.stamp = this->now();
             arm_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
             arm_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
+            arm_state_msg_.effort = std::vector<double>(efforts.begin(), efforts.begin() + 6);
             arm_state_pub_->publish(arm_state_msg_);
             
             // Store latest joint positions for trajectory planning
@@ -391,6 +400,9 @@ private:
             std::vector<double> all_velocities(velocities_rad.begin(), velocities_rad.begin() + 6);
             all_velocities.push_back(velocities_rad[6]);
             joint_state_msg_.velocity = all_velocities;
+            std::vector<double> all_efforts(efforts.begin(), efforts.begin() + 6);
+            all_efforts.push_back(efforts[6]);
+            joint_state_msg_.effort = all_efforts;
             joint_state_pub_->publish(joint_state_msg_);    // /joint_states (for robot_state_publisher)
             
             // ========== SEND COMMANDS IF AVAILABLE ==========
