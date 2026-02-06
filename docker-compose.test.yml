@@ -1,0 +1,22 @@
+services:
+  integration-test:
+    image: ${INNATE_TEST_IMAGE:-innate-os-innate:latest}
+    container_name: innate-integration-test
+    environment:
+      - INNATE_OS_ROOT=/root/innate-os
+      - SKIP_UPDATE_CHECK=1
+    volumes:
+      # Mount source and tests so the workspace can be rebuilt with latest code
+      - ./ros2_ws/src:/root/innate-os/ros2_ws/src:ro
+      - ./skills:/root/innate-os/skills:ro
+
+    shm_size: "2g"
+    # Rebuild workspace, then run integration tests via colcon test
+    command: >
+      zsh -lc '
+        cd /root/innate-os/ros2_ws &&
+        colcon build &&
+        source install/setup.zsh &&
+        colcon test --packages-select brain_client --ctest-args -R test_skill_integration --event-handlers console_direct+ &&
+        colcon test-result --verbose
+      '
