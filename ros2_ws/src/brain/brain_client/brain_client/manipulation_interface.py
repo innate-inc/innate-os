@@ -57,6 +57,7 @@ class ManipulationInterface:
         # Service clients for torque control
         self._torque_on_client = self.node.create_client(Trigger, "/mars/arm/torque_on")
         self._torque_off_client = self.node.create_client(Trigger, "/mars/arm/torque_off")
+        self._reboot_servos_client = self.node.create_client(Trigger, "/mars/arm/reboot")
 
         self.logger.info("ManipulationInterface initialized")
 
@@ -350,6 +351,37 @@ class ManipulationInterface:
                 return False
         except Exception as e:
             self.logger.error(f"Exception calling torque_off: {e}")
+            return False
+
+    def reboot_servos(self) -> bool:
+        """
+        Reboot all arm Dynamixel servos. This clears hardware errors
+        and reinitializes motor control state.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._reboot_servos_client.service_is_ready():
+            self.logger.error("[ManipulationInterface] Reboot servos service not ready")
+            return False
+
+        try:
+            request = Trigger.Request()
+            future = self._reboot_servos_client.call_async(request)
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
+            if future.result() is not None:
+                result = future.result()
+                if result.success:
+                    self.logger.info(f"Servos rebooted: {result.message}")
+                    return True
+                else:
+                    self.logger.error(f"Servo reboot failed: {result.message}")
+                    return False
+            else:
+                self.logger.error("Servo reboot service call timed out")
+                return False
+        except Exception as e:
+            self.logger.error(f"Exception calling reboot_servos: {e}")
             return False
 
     # Gripper position constants (radians)
