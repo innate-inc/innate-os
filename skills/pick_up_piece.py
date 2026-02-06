@@ -126,9 +126,11 @@ class PickUpPiece(Skill):
             return f"Invalid square '{square}' or incomplete calibration", SkillResult.FAILURE
         
         x, y = pos
+        self.logger.info(f"[PickUpPiece] Target {square} at X={x:.4f}, Y={y:.4f}")
         self._send_feedback(f"Moving to {square} at X={x:.4f}, Y={y:.4f}")
         
         # Step 1: Move to safe height (20cm) at current position first
+        self.logger.info(f"[PickUpPiece] Step 1: Moving to safe height {self.HEIGHT_SAFE}m")
         self._send_feedback("Moving to safe height...")
         current_pose = self.manipulation.get_current_end_effector_pose()
         if current_pose:
@@ -146,6 +148,7 @@ class PickUpPiece(Skill):
             return "Cancelled", SkillResult.CANCELLED
         
         # Step 2: Move horizontally to above target square at safe height
+        self.logger.info(f"[PickUpPiece] Step 2: Moving horizontally to X={x:.4f}, Y={y:.4f}, Z={self.HEIGHT_SAFE}")
         self._send_feedback(f"Moving above {square}...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_SAFE,
@@ -160,11 +163,13 @@ class PickUpPiece(Skill):
             return "Cancelled", SkillResult.CANCELLED
         
         # Step 3: Open gripper while above the piece
+        self.logger.info("[PickUpPiece] Step 3: Opening gripper")
         self._send_feedback("Opening gripper...")
         self.manipulation.open_gripper()
         time.sleep(0.7)
         
         # Step 4: Descend to picking height (4cm)
+        self.logger.info(f"[PickUpPiece] Step 4: Descending to pick height {self.HEIGHT_PICK}m")
         self._send_feedback("Descending to pick...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_PICK,
@@ -179,11 +184,13 @@ class PickUpPiece(Skill):
             return "Cancelled", SkillResult.CANCELLED
         
         # Step 5: Close gripper to grab piece
+        self.logger.info("[PickUpPiece] Step 5: Closing gripper")
         self._send_feedback("Grabbing piece...")
         self.manipulation.close_gripper()
         time.sleep(0.7)
         
         # Step 6: Lift back to safe height
+        self.logger.info(f"[PickUpPiece] Step 6: Lifting to safe height {self.HEIGHT_SAFE}m")
         self._send_feedback("Lifting piece...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_SAFE,
@@ -194,6 +201,7 @@ class PickUpPiece(Skill):
             return "Failed to lift", SkillResult.FAILURE
         time.sleep(1.5)
         
+        self.logger.info(f"[PickUpPiece] Complete: Picked up piece from {square}")
         self._send_feedback(f"Piece picked up from {square}")
         return f"Picked up piece from {square}", SkillResult.SUCCESS
     
