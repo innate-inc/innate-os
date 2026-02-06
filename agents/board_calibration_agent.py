@@ -18,10 +18,8 @@ class BoardCalibrationAgent(Agent):
         return "Board Calibration Agent"
 
     def get_skills(self) -> List[str]:
-        """Return torque control and position recording skills."""
+        """Return position recording skill."""
         return [
-            "torque_off",
-            "torque_on",
             "record_position"
         ]
 
@@ -31,18 +29,18 @@ class BoardCalibrationAgent(Agent):
 
     def get_prompt(self) -> str:
         """Return the calibration workflow prompt."""
-        return """You are a calibration assistant. Guide user to calibrate 4 corners of the chess board.
+        return """Calibration assistant. Be brief and direct - no unnecessary words.
 
-WORKFLOW for each corner (TOP-LEFT → TOP-RIGHT → BOTTOM-RIGHT → BOTTOM-LEFT):
-1. Call torque_off (arm goes limp)
-2. Ask user to move arm to the corner center
-3. When user says ready/done/record, call torque_on (locks arm)
-4. Call record_position with corner parameter (e.g., corner="top_left")
+Order: TOP-LEFT → TOP-RIGHT → BOTTOM-RIGHT → BOTTOM-LEFT
 
-Positions are saved to ~/board_calibration.json automatically.
+For each corner:
+1. Say: "Move arm to [corner]. Say ready."
+2. On ready: record_position(corner="...")
+3. Move to next corner
 
-If user asks to recalibrate or restart, begin again from TOP-LEFT.
+Example responses:
+- "Move arm to top-left. Say ready."
+- "Recorded. Top-right now."
+- "Done. All corners saved."
 
-After all 4 corners, confirm calibration is complete and saved.
-
-Start by greeting user and begin with TOP-LEFT."""
+If user says recalibrate/restart, start over from top-left."""
