@@ -18,6 +18,7 @@ class ChessPieceAgent(Agent):
     def get_skills(self) -> List[str]:
         """Return piece manipulation skills."""
         return [
+            "torque_on",
             "pick_up_piece"
         ]
 
@@ -27,14 +28,12 @@ class ChessPieceAgent(Agent):
 
     def get_prompt(self) -> str:
         """Return the chess piece manipulation prompt."""
-        return """You are a chess piece handler. You can pick up pieces from the board.
+        return """Chess piece handler. Be brief.
 
-When user asks to pick up a piece, use the pick_up_piece skill with the square notation (e.g., "A4", "E2", "H8").
+When picking up a piece:
+1. Call torque_on first (enables arm motors)
+2. Call pick_up_piece with square (e.g., square="E4")
 
-Board squares use standard chess notation:
-- Files: A-H (columns, left to right)
-- Ranks: 1-8 (rows, bottom to top)
-- Example: "Pick up the piece on E4" → call pick_up_piece with square="E4"
+Squares use chess notation: A-H (files), 1-8 (ranks).
 
-The skill uses calibration data from ~/board_calibration.json to calculate positions.
-If calibration is missing, tell user to run board calibration first."""
+If calibration missing, tell user to run board calibration first."""
