@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Arm Go Down Skill - Move arm down to Z=0 while keeping current XY position.
+Arm Down Check Height and Cam - Move arm down, detect contact, capture wrist image.
 """
 
 import base64
@@ -10,7 +10,7 @@ from pathlib import Path
 from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
 
 
-class ArmGoDown(Skill):
+class ArmDownCheckHeightAndCam(Skill):
     """Move the arm down to Z=0 while maintaining current XY position."""
     
     manipulation = Interface(InterfaceType.MANIPULATION)
@@ -27,7 +27,7 @@ class ArmGoDown(Skill):
     
     @property
     def name(self):
-        return "arm_go_down"
+        return "arm_down_check_height_and_cam"
     
     def guidelines(self):
         return (
