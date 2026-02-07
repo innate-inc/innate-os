@@ -7,7 +7,7 @@ Intra-process communication passes image data via shared_ptr (zero-copy).
 
 Pipeline:
   MainCameraDriver → StereoDepthEstimator (VPI SGM + filters + depth + points)
-                   → MainCameraInfo (CameraInfo publishers)
+                   → CameraInfo (published directly by MainCameraDriver)
   ArmCameraDriver
   WebRTCStreamer
   Remote throttle relays (lazy, 2 Hz) for RViz on a different machine
@@ -92,17 +92,6 @@ def generate_launch_description():
         extra_arguments=[{'use_intra_process_comms': True}],
     )
 
-    main_camera_info_node = ComposableNode(
-        package='maurice_cam',
-        plugin='maurice_cam::MainCameraInfo',
-        name='main_camera_info',
-        parameters=[
-            LaunchConfiguration('camera_config'),
-            {'use_sim_time': LaunchConfiguration('use_sim_time')}
-        ],
-        extra_arguments=[{'use_intra_process_comms': True}],
-    )
-
     # ── Container ─────────────────────────────────────────────────────────────
 
     # ── Remote throttle relays (lazy, intra-process zero-copy input) ────────
@@ -120,7 +109,6 @@ def generate_launch_description():
             arm_camera_node,
             webrtc_node,
             depth_estimator_node,
-            main_camera_info_node,
         ] + throttle_nodes,
         output='screen',
         emulate_tty=True,

@@ -7,9 +7,12 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "stereo_msgs/msg/disparity_image.hpp"
+
+#include "maurice_cam/stereo_calibration.hpp"
 
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -44,8 +47,6 @@ public:
 
 private:
   // ── Setup ──────────────────────────────────────────────────────────────
-  std::filesystem::path findCalibrationConfigDir();
-  bool loadCalibration(const std::filesystem::path& calib_path);
   bool initializeVPI();
   void cleanupVPI();
 
@@ -60,9 +61,15 @@ private:
                            rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr& pub);
 
   // ── Disparity Filters ──────────────────────────────────────────────────
+  struct FilterTimings {
+    double downsample_ms{0}, upsample_ms{0};
+    double depth_clamp_ms{0}, domain_transform_ms{0}, speckle_ms{0};
+    double edge_inv_ms{0}, median_ms{0}, bilateral_ms{0};
+    double hole_fill_ms{0}, temporal_ms{0};
+  };
   void initFilterParams();
   void logFilterConfig();
-  void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres);
+  void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, FilterTimings& timings);
   void applyMedian(cv::Mat& img);
   void applyBilateral(cv::Mat& img);
   void fillHoles(cv::Mat& img);
@@ -88,6 +95,8 @@ private:
   rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_unfiltered_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_rectified_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_color_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rectified_compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
 
   // ── General Parameters ─────────────────────────────────────────────────
@@ -95,6 +104,8 @@ private:
   std::string left_topic_, right_topic_;
   std::string depth_topic_, disparity_topic_, disparity_unfiltered_topic_;
   std::string left_rectified_topic_, right_rectified_topic_;
+  std::string left_rectified_color_topic_;
+  std::string left_rectified_compressed_topic_;
   std::string pointcloud_topic_;
   std::string frame_id_;
   int max_disparity_;
@@ -114,11 +125,10 @@ private:
   int calib_width_, calib_height_;       // calibration (processing)
   double depth_scale_;
 
-  // Calibration matrices
-  cv::Mat K1_, D1_, K2_, D2_;
-  cv::Mat R_, T_;
-  cv::Mat R1_, R2_, P1_, P2_, Q_;
+  // Calibration (shared utility class)
+  std::shared_ptr<StereoCalibration> stereo_calib_;
   double baseline_, focal_length_;
+  int jpeg_quality_{80};
 
   // Rectification maps (calibration resolution)
   cv::Mat map1_left_, map2_left_;

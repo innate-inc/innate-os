@@ -10,6 +10,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
 : Node("main_camera_driver", options)
 {
   // Declare parameters with defaults
+  this->declare_parameter<std::string>("data_directory", "/home/jetson1/innate-os/data");
   this->declare_parameter<std::string>("camera_symlink", "3D");
   this->declare_parameter<int>("width", 1280);  // Capture at 1280x480 (640x480 per side)
   this->declare_parameter<int>("height", 480);
@@ -36,6 +37,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("auto_exposure_update_interval", 3);
 
   // Get parameter values
+  data_directory_ = this->get_parameter("data_directory").as_string();
   std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
   capture_width_ = this->get_parameter("width").as_int();
   capture_height_ = this->get_parameter("height").as_int();
@@ -174,6 +176,29 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   // Initialize TurboJPEG encoder
   jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
   RCLCPP_INFO(this->get_logger(), "TurboJPEG encoder initialized");
+
+  // Load stereo calibration and create camera_info publishers
+  try {
+    stereo_calib_ = StereoCalibration::load(data_directory_);
+    left_info_msg_  = stereo_calib_->buildLeftCameraInfo(frame_id_);
+    right_info_msg_ = stereo_calib_->buildRightCameraInfo(right_frame_id_);
+    calibration_loaded_ = true;
+
+    auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+    left_info_pub_  = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+      "/mars/main_camera/left/camera_info", sensor_qos);
+    right_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+      "/mars/main_camera/right/camera_info", sensor_qos);
+
+    RCLCPP_INFO(this->get_logger(), "Stereo calibration loaded from: %s",
+                stereo_calib_->filePath().string().c_str());
+    RCLCPP_INFO(this->get_logger(), "  Calibration resolution: %dx%d",
+                stereo_calib_->calibWidth(), stereo_calib_->calibHeight());
+    RCLCPP_INFO(this->get_logger(), "  Publishing camera_info on left + right topics");
+  } catch (const std::exception& e) {
+    RCLCPP_WARN(this->get_logger(),
+      "Could not load stereo calibration: %s — camera_info will NOT be published", e.what());
+  }
 
   // Initialize camera
   if (initializeCamera()) {
@@ -610,6 +635,14 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   }
   left_pub_->publish(std::move(left_msg));
   right_pub_->publish(std::move(right_msg));
+
+  // Publish camera_info with same timestamp
+  if (calibration_loaded_) {
+    left_info_msg_.header.stamp = current_time;
+    right_info_msg_.header.stamp = current_time;
+    left_info_pub_->publish(left_info_msg_);
+    right_info_pub_->publish(right_info_msg_);
+  }
   
   // Conditionally create and publish compressed image at specified interval
   if (publish_compressed_) {
