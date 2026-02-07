@@ -33,6 +33,14 @@ _TOPICS = [
      '/mars/main_camera/remote/right/image_rect',
      'throttle_right_rect'),
 
+    ('/mars/main_camera/left/image_rect_color',
+     '/mars/main_camera/remote/left/image_rect_color',
+     'throttle_left_rect_color'),
+
+    ('/mars/main_camera/left/image_rect_color/compressed',
+     '/mars/main_camera/remote/left/image_rect_color/compressed',
+     'throttle_left_rect_compressed'),
+
     ('/mars/main_camera/depth/image_rect_raw',
      '/mars/main_camera/remote/depth/image_rect_raw',
      'throttle_depth'),

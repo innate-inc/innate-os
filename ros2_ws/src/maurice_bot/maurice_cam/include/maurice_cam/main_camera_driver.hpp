@@ -20,6 +20,9 @@
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
+
+#include "maurice_cam/stereo_calibration.hpp"
 
 #include <opencv2/opencv.hpp>
 
@@ -239,11 +242,20 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr stereo_pub_;
 
+  // Camera info publishers + calibration
+  rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_pub_;
+  std::shared_ptr<StereoCalibration> stereo_calib_;
+  sensor_msgs::msg::CameraInfo left_info_msg_;
+  sensor_msgs::msg::CameraInfo right_info_msg_;
+  bool calibration_loaded_{false};
+
   // Frame processing thread
   std::thread frame_thread_;
   std::atomic<bool> frame_thread_running_{false};
 
   // Camera parameters
+  std::string data_directory_;
   std::string camera_device_;
   int capture_width_;      // Capture resolution (full FOV)
   int capture_height_;

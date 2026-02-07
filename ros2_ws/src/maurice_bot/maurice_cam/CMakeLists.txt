@@ -119,10 +119,13 @@ rclcpp_components_register_nodes(webrtc_streamer_component "maurice_cam::WebRTCS
 
 # Stereo depth estimator component library (requires VPI)
 if(VPI_FOUND)
-  add_library(stereo_depth_estimator_component SHARED maurice_cam/stereo_depth_estimator.cpp)
+  add_library(stereo_depth_estimator_component SHARED
+    maurice_cam/stereo_depth_estimator.cpp
+    maurice_cam/stereo_calibration.cpp
+  )
   target_compile_definitions(stereo_depth_estimator_component PRIVATE BUILDING_COMPONENT_LIBRARY)
-  target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR})
-  target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY})
+  target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
+  target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
   if(nlohmann_json_FOUND)
     target_link_libraries(stereo_depth_estimator_component nlohmann_json::nlohmann_json)
   elseif(NLOHMANN_JSON_FOUND)
@@ -137,32 +140,6 @@ if(VPI_FOUND)
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
 endif()
-
-# Disparity median filter component library
-add_library(disparity_median_filter_component SHARED maurice_cam/disparity_median_filter.cpp)
-target_compile_definitions(disparity_median_filter_component PRIVATE BUILDING_COMPONENT_LIBRARY)
-target_link_libraries(disparity_median_filter_component ${OpenCV_LIBS})
-ament_target_dependencies(disparity_median_filter_component 
-  rclcpp 
-  rclcpp_components
-  sensor_msgs
-  stereo_msgs
-  cv_bridge
-)
-rclcpp_components_register_nodes(disparity_median_filter_component "maurice_cam::DisparityMedianFilter")
-
-# Disparity edge-preserving filter component library (Domain Transform based)
-add_library(disparity_edge_preserving_filter_component SHARED maurice_cam/disparity_edge_preserving_filter.cpp)
-target_compile_definitions(disparity_edge_preserving_filter_component PRIVATE BUILDING_COMPONENT_LIBRARY)
-target_link_libraries(disparity_edge_preserving_filter_component ${OpenCV_LIBS})
-ament_target_dependencies(disparity_edge_preserving_filter_component 
-  rclcpp 
-  rclcpp_components
-  sensor_msgs
-  stereo_msgs
-  cv_bridge
-)
-rclcpp_components_register_nodes(disparity_edge_preserving_filter_component "maurice_cam::DisparityEdgePreservingFilter")
 
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
@@ -222,9 +199,12 @@ ament_target_dependencies(webrtc_streamer_node
 
 # Create stereo depth estimator executable (requires VPI)
 if(VPI_FOUND)
-  add_executable(stereo_depth_estimator maurice_cam/stereo_depth_estimator.cpp)
-  target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR})
-  target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY})
+  add_executable(stereo_depth_estimator
+    maurice_cam/stereo_depth_estimator.cpp
+    maurice_cam/stereo_calibration.cpp
+  )
+  target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
+  target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
   if(nlohmann_json_FOUND)
     target_link_libraries(stereo_depth_estimator nlohmann_json::nlohmann_json)
   elseif(NLOHMANN_JSON_FOUND)
@@ -248,8 +228,6 @@ set(COMPONENT_LIBRARIES
   main_camera_driver_component
   arm_camera_driver_component
   webrtc_streamer_component
-  disparity_median_filter_component
-  disparity_edge_preserving_filter_component
 )
 if(VPI_FOUND)
   list(APPEND COMPONENT_LIBRARIES stereo_depth_estimator_component)

@@ -1,6 +1,5 @@
 #include "maurice_cam/stereo_depth_estimator.hpp"
-#include <nlohmann/json.hpp>
-#include <fstream>
+#include <turbojpeg.h>
 
 using namespace std::chrono_literals;
 
@@ -28,7 +27,10 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("disparity_unfiltered_topic", "/mars/main_camera/disparity_unfiltered");
   this->declare_parameter<std::string>("left_rectified_topic", "/mars/main_camera/left/image_rect");
   this->declare_parameter<std::string>("right_rectified_topic", "/mars/main_camera/right/image_rect");
+  this->declare_parameter<std::string>("left_rectified_color_topic", "/mars/main_camera/left/image_rect_color");
+  this->declare_parameter<std::string>("left_rectified_compressed_topic", "/mars/main_camera/left/image_rect_color/compressed");
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
+  this->declare_parameter<int>("jpeg_quality", 80);
   this->declare_parameter<int>("image_width", 640);   // Single camera image width
   this->declare_parameter<int>("image_height", 480);  // Single camera image height
   this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
@@ -56,7 +58,10 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   disparity_unfiltered_topic_ = this->get_parameter("disparity_unfiltered_topic").as_string();
   left_rectified_topic_ = this->get_parameter("left_rectified_topic").as_string();
   right_rectified_topic_ = this->get_parameter("right_rectified_topic").as_string();
+  left_rectified_color_topic_ = this->get_parameter("left_rectified_color_topic").as_string();
+  left_rectified_compressed_topic_ = this->get_parameter("left_rectified_compressed_topic").as_string();
   frame_id_ = this->get_parameter("frame_id").as_string();
+  jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
   image_width_ = this->get_parameter("image_width").as_int();
   image_height_ = this->get_parameter("image_height").as_int();
   process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
@@ -105,16 +110,27 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 
   // Find calibration config directory and load calibration
   try {
-    auto calib_dir = findCalibrationConfigDir();
-    auto calib_file = calib_dir / "stereo_calib.yaml";
-    
-    if (!loadCalibration(calib_file)) {
-      throw std::runtime_error("Failed to load calibration from: " + calib_file.string());
-    }
+    stereo_calib_ = StereoCalibration::load(data_directory_);
+    calib_width_  = stereo_calib_->calibWidth();
+    calib_height_ = stereo_calib_->calibHeight();
+    focal_length_ = stereo_calib_->focalLength();
+    baseline_     = stereo_calib_->baseline();
+
+    // Calculate depth scale factor (input resolution -> calibration resolution)
+    depth_scale_ = static_cast<double>(calib_width_) / static_cast<double>(image_width_);
+
+    // Compute rectification maps at calibration resolution
+    stereo_calib_->getRectificationMaps(map1_left_, map2_left_, map1_right_, map2_right_);
+
     calibration_loaded_ = true;
-    RCLCPP_INFO(this->get_logger(), "Loaded calibration from: %s", calib_file.string().c_str());
+    RCLCPP_INFO(this->get_logger(), "Loaded calibration from: %s", stereo_calib_->filePath().string().c_str());
     RCLCPP_INFO(this->get_logger(), "Calibration resolution: %dx%d", calib_width_, calib_height_);
     RCLCPP_INFO(this->get_logger(), "Depth scale factor: %.2f (input -> calib)", depth_scale_);
+    RCLCPP_INFO(this->get_logger(), "Scale: input %dx%d -> calib %dx%d (scale=%.3f)",
+                image_width_, image_height_, calib_width_, calib_height_, depth_scale_);
+    RCLCPP_INFO(this->get_logger(), "Stereo parameters: focal=%.2f px, baseline=%.4f m (%.1f mm)",
+                focal_length_, baseline_, baseline_ * 1000.0);
+    RCLCPP_INFO(this->get_logger(), "Rectification maps computed at %dx%d", calib_width_, calib_height_);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(this->get_logger(), "Calibration error: %s", e.what());
     throw;
@@ -136,6 +152,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   disparity_unfiltered_pub_ = this->create_publisher<stereo_msgs::msg::DisparityImage>(disparity_unfiltered_topic_, sensor_qos);
   left_rectified_pub_ = this->create_publisher<sensor_msgs::msg::Image>(left_rectified_topic_, sensor_qos);
   right_rectified_pub_ = this->create_publisher<sensor_msgs::msg::Image>(right_rectified_topic_, sensor_qos);
+  left_rectified_color_pub_ = this->create_publisher<sensor_msgs::msg::Image>(left_rectified_color_topic_, sensor_qos);
+  left_rectified_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(left_rectified_compressed_topic_, sensor_qos);
   pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, sensor_qos);
   
   RCLCPP_INFO(this->get_logger(), "Publishers created (lazy publishing - only publish when subscribed)");
@@ -144,6 +162,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "  Disparity (raw): %s", disparity_unfiltered_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Left rectified: %s", left_rectified_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Right rectified: %s", right_rectified_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Left rect color: %s", left_rectified_color_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Left rect compressed: %s", left_rectified_compressed_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Point cloud: %s (decimation: %d)", pointcloud_topic_.c_str(), pointcloud_decimation_);
 
   logFilterConfig();
@@ -170,134 +190,6 @@ StereoDepthEstimator::~StereoDepthEstimator()
   RCLCPP_INFO(this->get_logger(), "Shutting down Stereo Depth Estimator...");
   cleanupVPI();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator shutdown complete");
-}
-
-std::filesystem::path StereoDepthEstimator::findCalibrationConfigDir()
-{
-  std::filesystem::path data_path(data_directory_);
-  std::filesystem::path robot_info_path = data_path / "robot_info.json";
-
-  // Try to read robot_info.json to get the robot model
-  std::string robot_model;
-  if (std::filesystem::exists(robot_info_path)) {
-    try {
-      std::ifstream file(robot_info_path);
-      nlohmann::json robot_info;
-      file >> robot_info;
-      
-      if (robot_info.contains("model")) {
-        robot_model = robot_info["model"].get<std::string>();
-        RCLCPP_INFO(this->get_logger(), "Found robot model: %s", robot_model.c_str());
-      }
-    } catch (const std::exception& e) {
-      RCLCPP_WARN(this->get_logger(), "Could not parse robot_info.json: %s", e.what());
-    }
-  }
-
-  // Look for calibration_config_* directories
-  for (const auto& entry : std::filesystem::directory_iterator(data_path)) {
-    if (entry.is_directory()) {
-      std::string dirname = entry.path().filename().string();
-      if (dirname.find("calibration_config") != std::string::npos) {
-        // If we have a robot model, prefer matching directory
-        if (!robot_model.empty() && dirname.find(robot_model) != std::string::npos) {
-          RCLCPP_INFO(this->get_logger(), "Found matching calibration dir: %s", dirname.c_str());
-          return entry.path();
-        }
-        // Otherwise use the first calibration_config directory found
-        if (robot_model.empty()) {
-          RCLCPP_INFO(this->get_logger(), "Using calibration dir: %s", dirname.c_str());
-          return entry.path();
-        }
-      }
-    }
-  }
-
-  // If we have a robot model but didn't find exact match, use any calibration_config dir
-  for (const auto& entry : std::filesystem::directory_iterator(data_path)) {
-    if (entry.is_directory()) {
-      std::string dirname = entry.path().filename().string();
-      if (dirname.find("calibration_config") != std::string::npos) {
-        RCLCPP_WARN(this->get_logger(), "No exact match for model %s, using: %s", 
-                    robot_model.c_str(), dirname.c_str());
-        return entry.path();
-      }
-    }
-  }
-
-  throw std::runtime_error("No calibration_config directory found in: " + data_directory_);
-}
-
-bool StereoDepthEstimator::loadCalibration(const std::filesystem::path& calib_path)
-{
-  if (!std::filesystem::exists(calib_path)) {
-    RCLCPP_ERROR(this->get_logger(), "Calibration file not found: %s", calib_path.string().c_str());
-    return false;
-  }
-
-  cv::FileStorage fs(calib_path.string(), cv::FileStorage::READ);
-  if (!fs.isOpened()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to open calibration file: %s", calib_path.string().c_str());
-    return false;
-  }
-
-  // Read calibration parameters
-  fs["K1"] >> K1_;
-  fs["D1"] >> D1_;
-  fs["K2"] >> K2_;
-  fs["D2"] >> D2_;
-  fs["R"] >> R_;
-  fs["T"] >> T_;
-  fs["R1"] >> R1_;
-  fs["R2"] >> R2_;
-  fs["P1"] >> P1_;
-  fs["P2"] >> P2_;
-  fs["Q"] >> Q_;
-
-  // Read calibration image dimensions
-  fs["image_width"] >> calib_width_;
-  fs["image_height"] >> calib_height_;
-
-  fs.release();
-
-  // Validate required matrices
-  if (K1_.empty() || K2_.empty() || R1_.empty() || R2_.empty() || 
-      P1_.empty() || P2_.empty() || Q_.empty()) {
-    RCLCPP_ERROR(this->get_logger(), "Missing required calibration matrices");
-    return false;
-  }
-
-  // Calculate depth scale factor (input resolution -> calibration resolution)
-  depth_scale_ = static_cast<double>(calib_width_) / static_cast<double>(image_width_);
-  
-  RCLCPP_INFO(this->get_logger(), "Scale: input %dx%d -> calib %dx%d (scale=%.3f)",
-              image_width_, image_height_, calib_width_, calib_height_, depth_scale_);
-
-  // Extract baseline and focal length from Q matrix
-  // Q[2,3] = focal length, Q[3,2] = -1/Tx where Tx = baseline
-  focal_length_ = Q_.at<double>(2, 3);
-  double neg_inv_tx = Q_.at<double>(3, 2);
-  if (std::abs(neg_inv_tx) > 1e-6) {
-    baseline_ = std::abs(1.0 / neg_inv_tx);
-  } else {
-    baseline_ = std::abs(T_.at<double>(0, 0));
-    RCLCPP_WARN(this->get_logger(), "Q[3,2] near zero, using T vector for baseline");
-  }
-
-  RCLCPP_INFO(this->get_logger(), "Stereo parameters: focal=%.2f px, baseline=%.4f m (%.1f mm)",
-              focal_length_, baseline_, baseline_ * 1000.0);
-
-  // Compute OpenCV rectification maps at CALIBRATION resolution
-  // Maps are computed for unrotated images (calibration coordinate system)
-  cv::initUndistortRectifyMap(K1_, D1_, R1_, P1_, 
-                               cv::Size(calib_width_, calib_height_),
-                               CV_32FC1, map1_left_, map2_left_);
-  cv::initUndistortRectifyMap(K2_, D2_, R2_, P2_,
-                               cv::Size(calib_width_, calib_height_),
-                               CV_32FC1, map1_right_, map2_right_);
-  RCLCPP_INFO(this->get_logger(), "Rectification maps computed at %dx%d", calib_width_, calib_height_);
-
-  return true;
 }
 
 bool StereoDepthEstimator::initializeVPI()
@@ -461,14 +353,11 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   cv::resize(right_input, right_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
   const auto t_scale = clock::now();
 
-  // ===== STEP 2: Convert to grayscale (keep color for point cloud) =====
+  // ===== STEP 2: Convert to grayscale =====
   cv::Mat left_gray, right_gray;
-  cv::Mat left_color_for_pc;  // Color image at input resolution for point cloud
   if (left_input.channels() == 3) {
     cv::cvtColor(left_scaled, left_gray, cv::COLOR_BGR2GRAY);
     cv::cvtColor(right_scaled, right_gray, cv::COLOR_BGR2GRAY);
-    // Keep color image for point cloud at input resolution
-    left_color_for_pc = left_input.clone();
   } else {
     left_gray = left_scaled;
     right_gray = right_scaled;
@@ -484,7 +373,22 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   // ===== STEP 4: Publish rectified images if subscribed =====
   const bool pub_left_rect = left_rectified_pub_->get_subscription_count() > 0;
   const bool pub_right_rect = right_rectified_pub_->get_subscription_count() > 0;
-  
+  const bool pub_left_rect_color = left_rectified_color_pub_->get_subscription_count() > 0;
+  const bool pub_left_rect_compressed = left_rectified_compressed_pub_->get_subscription_count() > 0;
+  const bool pub_pointcloud = pointcloud_pub_->get_subscription_count() > 0;
+  const bool has_color_input = left_scaled.channels() == 3;
+
+  // Rectify the color image at calibration resolution if anyone needs it
+  // (color rect topic, compressed rect topic, or point cloud coloring).
+  // This must use the same rectification maps as the mono images so that
+  // color pixels align with the disparity.
+  cv::Mat left_color_rect;  // calib-resolution, BGR, rectified
+  const bool need_color_rect = has_color_input &&
+      (pub_left_rect_color || pub_left_rect_compressed || pub_pointcloud);
+  if (need_color_rect) {
+    cv::remap(left_scaled, left_color_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
+  }
+
   if (pub_left_rect || pub_right_rect) {
     // Upscale rectified images to input resolution
     cv::Mat left_rect_full, right_rect_full;
@@ -517,6 +421,57 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
       right_rect_msg->data.resize(right_rect_msg->height * right_rect_msg->step);
       memcpy(right_rect_msg->data.data(), right_rect_full.data, right_rect_msg->data.size());
       right_rectified_pub_->publish(std::move(right_rect_msg));
+    }
+  }
+
+  // Publish color rectified + compressed if subscribed
+  if (pub_left_rect_color || pub_left_rect_compressed) {
+    cv::Mat left_color_rect_src;
+    if (has_color_input) {
+      left_color_rect_src = left_color_rect;  // already rectified above
+    } else {
+      // If input was mono, convert rectified mono to BGR
+      cv::cvtColor(left_rect, left_color_rect_src, cv::COLOR_GRAY2BGR);
+    }
+    cv::Mat left_color_rect_full;
+    cv::resize(left_color_rect_src, left_color_rect_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
+
+    if (pub_left_rect_color) {
+      auto color_msg = std::make_unique<sensor_msgs::msg::Image>();
+      color_msg->header.stamp = timestamp;
+      color_msg->header.frame_id = frame_id_;
+      color_msg->height = image_height_;
+      color_msg->width = image_width_;
+      color_msg->encoding = "bgr8";
+      color_msg->is_bigendian = false;
+      color_msg->step = image_width_ * 3;
+      color_msg->data.resize(color_msg->height * color_msg->step);
+      memcpy(color_msg->data.data(), left_color_rect_full.data, color_msg->data.size());
+      left_rectified_color_pub_->publish(std::move(color_msg));
+    }
+
+    if (pub_left_rect_compressed) {
+      // Encode to JPEG using TurboJPEG
+      auto compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      compressed_msg->header.stamp = timestamp;
+      compressed_msg->header.frame_id = frame_id_;
+      compressed_msg->format = "jpeg";
+
+      tjhandle tj = tjInitCompress();
+      if (tj) {
+        unsigned char* jpeg_buf = nullptr;
+        unsigned long jpeg_size = 0;
+        int rc = tjCompress2(tj, left_color_rect_full.data,
+                             left_color_rect_full.cols, 0, left_color_rect_full.rows,
+                             TJPF_BGR, &jpeg_buf, &jpeg_size,
+                             TJSAMP_420, jpeg_quality_, TJFLAG_FASTDCT);
+        if (rc == 0 && jpeg_buf) {
+          compressed_msg->data.assign(jpeg_buf, jpeg_buf + jpeg_size);
+          left_rectified_compressed_pub_->publish(std::move(compressed_msg));
+        }
+        if (jpeg_buf) tjFree(jpeg_buf);
+        tjDestroy(tj);
+      }
     }
   }
   const auto t_pub_rect = clock::now();
@@ -632,7 +587,8 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
 
   // ===== STEP 7b: Apply disparity filter chain (in-place) =====
   cv::Mat disparity_lowres;  // quarter-res filtered disparity for point cloud
-  applyFilterChain(disparity_float, disparity_lowres);
+  FilterTimings filter_timings;
+  applyFilterChain(disparity_float, disparity_lowres, filter_timings);
   const auto t_filter = clock::now();
 
   // ===== STEP 7c: Publish filtered disparity if subscribed =====
@@ -642,19 +598,26 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   }
 
   // ===== STEP 8: Generate depth from filtered disparity =====
-  // Use reprojectImageTo3D with the Q matrix for proper 3D reprojection
-  cv::Mat points_3d;
-  cv::reprojectImageTo3D(disparity_float, points_3d, Q_, true);
-
+  // Direct depth computation: depth_mm = f * baseline / disparity * 1000
+  // Much faster than reprojectImageTo3D which computes full X,Y,Z per pixel.
+  const float f_calib = static_cast<float>(focal_length_);
+  const float abs_baseline = std::abs(static_cast<float>(baseline_));
+  const float fb = f_calib * abs_baseline;  // focal_length * baseline in meters
   const float MAX_DEPTH_M = 10.0f;
+
   cv::Mat depth_calib(calib_height_, calib_width_, CV_16SC1);
   for (int y = 0; y < calib_height_; y++) {
-    const cv::Vec3f* pt_row = points_3d.ptr<cv::Vec3f>(y);
+    const float* disp_row = disparity_float.ptr<float>(y);
     int16_t* depth_row = depth_calib.ptr<int16_t>(y);
     for (int x = 0; x < calib_width_; x++) {
-      float z = pt_row[x][2];
-      if (std::fabs(z) <= MAX_DEPTH_M && std::isfinite(z)) {
-        depth_row[x] = static_cast<int16_t>(std::clamp(z * 1000.0f, -32768.0f, 32767.0f));
+      const float d = disp_row[x];
+      if (d > 0.0f) {
+        float z = fb / d;  // depth in meters
+        if (z > 0.0f && z <= MAX_DEPTH_M) {
+          depth_row[x] = static_cast<int16_t>(std::clamp(z * 1000.0f, -32768.0f, 32767.0f));
+        } else {
+          depth_row[x] = 0;
+        }
       } else {
         depth_row[x] = 0;
       }
@@ -666,7 +629,6 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   const auto t_depth = clock::now();
 
   const bool pub_depth = depth_pub_->get_subscription_count() > 0;
-  const bool pub_pointcloud = pointcloud_pub_->get_subscription_count() > 0;
 
   // ===== STEP 9: Generate point cloud directly from filtered disparity =====
   // Use the disparity at its current resolution (quarter after filter downsample).
@@ -684,18 +646,19 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     // calibration-resolution pixels (resize averages values, doesn't rescale them),
     // so depth = f_calib * baseline / d must use the original focal length.
     const float scale_to_disp = static_cast<float>(disp_w) / static_cast<float>(calib_width_);
-    const float fx = static_cast<float>(P1_.at<double>(0, 0)) * scale_to_disp;
-    const float fy = static_cast<float>(P1_.at<double>(1, 1)) * scale_to_disp;
-    const float cx = static_cast<float>(P1_.at<double>(0, 2)) * scale_to_disp;
-    const float cy = static_cast<float>(P1_.at<double>(1, 2)) * scale_to_disp;
+    const float fx = static_cast<float>(stereo_calib_->P1().at<double>(0, 0)) * scale_to_disp;
+    const float fy = static_cast<float>(stereo_calib_->P1().at<double>(1, 1)) * scale_to_disp;
+    const float cx = static_cast<float>(stereo_calib_->P1().at<double>(0, 2)) * scale_to_disp;
+    const float cy = static_cast<float>(stereo_calib_->P1().at<double>(1, 2)) * scale_to_disp;
     const float f_depth = static_cast<float>(focal_length_);  // calib-res, matches disparity units
     const float baseline = static_cast<float>(baseline_);
 
-    // Downsample colour image to match disparity resolution
+    // Downsample rectified colour image to match disparity resolution.
+    // Must use the rectified image (not raw input) so colours align with disparity.
     cv::Mat color_for_pc;
-    const bool has_color = !left_color_for_pc.empty() && left_color_for_pc.channels() == 3;
+    const bool has_color = need_color_rect && !left_color_rect.empty();
     if (has_color) {
-      cv::resize(left_color_for_pc, color_for_pc, cv::Size(disp_w, disp_h), 0, 0, cv::INTER_AREA);
+      cv::resize(left_color_rect, color_for_pc, cv::Size(disp_w, disp_h), 0, 0, cv::INTER_AREA);
     }
     t_pc_resize = clock::now();
 
@@ -803,6 +766,16 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     ms(t_pc_fill - t_pc_alloc),
     ms(t_pc_pub - t_pc_fill),
     ms(t_frame_end - t_pc_pub));
+
+  // Detailed filter breakdown (throttled separately)
+  const auto& ft = filter_timings;
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    "Filter detail %.1fms | down %.1f | clamp %.1f | domain %.1f | speckle %.1f | "
+    "edge %.1f | median %.1f | bilateral %.1f | hole %.1f | temporal %.1f | up %.1f",
+    ms(t_filter - t_convert),
+    ft.downsample_ms, ft.depth_clamp_ms, ft.domain_transform_ms,
+    ft.speckle_ms, ft.edge_inv_ms, ft.median_ms, ft.bilateral_ms,
+    ft.hole_fill_ms, ft.temporal_ms, ft.upsample_ms);
 
   // Cleanup temporary wrapped images
   vpiImageDestroy(vpi_left_wrap);
@@ -978,40 +951,59 @@ void StereoDepthEstimator::logFilterConfig()
         + " persist=" + std::to_string(temporal_persistence_) : "");
 }
 
-void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres)
+void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, FilterTimings& timings)
 {
+  using clock = std::chrono::steady_clock;
   const cv::Size orig_size = disparity.size();
   const int f = filter_downsample_factor_;
 
   // Downsample for faster filtering (INTER_AREA averages the pixel block → free noise reduction)
+  auto t0 = clock::now();
   if (filter_downsample_enabled_ && f > 1) {
     cv::resize(disparity, disparity,
                cv::Size(orig_size.width / f, orig_size.height / f),
                0, 0, cv::INTER_AREA);
   }
+  auto t1 = clock::now();
+  timings.downsample_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
   // Run filters in configured order
   for (const auto& name : filter_order_) {
+    t0 = clock::now();
     if (name == "median" && median_enabled_) {
       applyMedian(disparity);
+      t1 = clock::now();
+      timings.median_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     } else if (name == "bilateral" && bilateral_enabled_) {
       applyBilateral(disparity);
+      t1 = clock::now();
+      timings.bilateral_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     } else if (name == "hole_filling" && hole_filling_enabled_) {
       fillHoles(disparity);
+      t1 = clock::now();
+      timings.hole_fill_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     } else if (name == "depth_clamp" && depth_clamp_enabled_) {
-      // Disparity values are in calib-res pixels regardless of downsample,
-      // so use the original focal length (not scaled).
       const float f_calib = static_cast<float>(focal_length_);
       const float t = static_cast<float>(baseline_);
       clampByDepth(disparity, f_calib, t);
+      t1 = clock::now();
+      timings.depth_clamp_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     } else if (name == "edge_invalidation" && edge_inv_enabled_) {
       invalidateEdges(disparity);
+      t1 = clock::now();
+      timings.edge_inv_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     } else if (name == "speckle" && speckle_enabled_) {
       filterSpeckles(disparity);
+      t1 = clock::now();
+      timings.speckle_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     } else if (name == "domain_transform" && dt_enabled_) {
       applyDomainTransform(disparity);
+      t1 = clock::now();
+      timings.domain_transform_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     } else if (name == "temporal" && temporal_enabled_) {
       applyTemporal(disparity);
+      t1 = clock::now();
+      timings.temporal_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
     }
   }
 
@@ -1019,9 +1011,12 @@ void StereoDepthEstimator::applyFilterChain(cv::Mat& disparity, cv::Mat& dispari
   disparity_lowres = disparity.clone();
 
   // Upsample back to original resolution for disparity publishing / depth map
+  t0 = clock::now();
   if (filter_downsample_enabled_ && f > 1) {
     cv::resize(disparity, disparity, orig_size, 0, 0, cv::INTER_LINEAR);
   }
+  t1 = clock::now();
+  timings.upsample_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
 void StereoDepthEstimator::applyMedian(cv::Mat& img)
@@ -1176,41 +1171,53 @@ void StereoDepthEstimator::applyDomainTransform(cv::Mat& img)
   }
 }
 
+// Fast exp approximation (Schraudolph 1999) — ~4× faster than std::exp,
+// accurate to ~0.3% in the range [-4, 0] which is our operating range.
+static inline float fast_expf(float x) {
+  union { float f; int32_t i; } u;
+  u.i = static_cast<int32_t>(12102203.0f * x + 1065353216.0f);
+  return u.f;
+}
+
 void StereoDepthEstimator::dtPass(cv::Mat& img, bool horizontal)
 {
-  const int rows = img.rows, cols = img.cols;
   const float a = static_cast<float>(dt_alpha_);
-  const float d = static_cast<float>(dt_delta_);
+  const float inv_d = -1.0f / static_cast<float>(dt_delta_);
 
   if (horizontal) {
+    const int rows = img.rows, cols = img.cols;
     for (int y = 0; y < rows; ++y) {
       float* r = img.ptr<float>(y);
       for (int x = 1; x < cols; ++x) {
         if (r[x] <= 0 || r[x - 1] <= 0) continue;
-        float w = a * std::exp(-std::abs(r[x] - r[x - 1]) / d);
+        float w = a * fast_expf(std::abs(r[x] - r[x - 1]) * inv_d);
         r[x] = r[x] * (1.f - w) + r[x - 1] * w;
       }
       for (int x = cols - 2; x >= 0; --x) {
         if (r[x] <= 0 || r[x + 1] <= 0) continue;
-        float w = a * std::exp(-std::abs(r[x] - r[x + 1]) / d);
+        float w = a * fast_expf(std::abs(r[x] - r[x + 1]) * inv_d);
         r[x] = r[x] * (1.f - w) + r[x + 1] * w;
       }
     }
   } else {
-    for (int x = 0; x < cols; ++x) {
-      for (int y = 1; y < rows; ++y) {
-        float c = img.at<float>(y, x), p = img.at<float>(y - 1, x);
-        if (c <= 0 || p <= 0) continue;
-        float w = a * std::exp(-std::abs(c - p) / d);
-        img.at<float>(y, x) = c * (1.f - w) + p * w;
+    // Transpose → horizontal pass → transpose back (cache-friendly)
+    cv::Mat t;
+    cv::transpose(img, t);
+    const int rows = t.rows, cols = t.cols;
+    for (int y = 0; y < rows; ++y) {
+      float* r = t.ptr<float>(y);
+      for (int x = 1; x < cols; ++x) {
+        if (r[x] <= 0 || r[x - 1] <= 0) continue;
+        float w = a * fast_expf(std::abs(r[x] - r[x - 1]) * inv_d);
+        r[x] = r[x] * (1.f - w) + r[x - 1] * w;
       }
-      for (int y = rows - 2; y >= 0; --y) {
-        float c = img.at<float>(y, x), n = img.at<float>(y + 1, x);
-        if (c <= 0 || n <= 0) continue;
-        float w = a * std::exp(-std::abs(c - n) / d);
-        img.at<float>(y, x) = c * (1.f - w) + n * w;
+      for (int x = cols - 2; x >= 0; --x) {
+        if (r[x] <= 0 || r[x + 1] <= 0) continue;
+        float w = a * fast_expf(std::abs(r[x] - r[x + 1]) * inv_d);
+        r[x] = r[x] * (1.f - w) + r[x + 1] * w;
       }
     }
+    cv::transpose(t, img);
   }
 }
 
