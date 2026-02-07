@@ -34,36 +34,47 @@ GRIPPER_CENTER_Y = 380  # measured from top of 480px image
 X_MIN, X_MAX = 0.1, 0.4
 Y_MIN, Y_MAX = -0.2, 0.1
 
-VISION_PROMPT = """You are a vision system for a robot arm on a chessboard.
+# CV on_target threshold in pixels (~1cm at Z=0.1)
+ON_TARGET_THRESHOLD_PX = 30
+
+VISION_PROMPT = """Detect the top-right square of the chessboard in this image.
 The camera is a FISHEYE wrist camera pointing straight down.
 
-A RED DOT with crosshair marks the EXACT CENTER of the gripper on the surface.
+A RED DOT with crosshair marks the current gripper position.
 
 TARGET: {target}
 
 {history_section}
 
-SPATIAL MAPPING (image directions to robot movement):
+Return the bounding box as box_2d in [ymin, xmin, ymax, xmax] format normalized to 0-1000.
+Also indicate which direction the red dot needs to move to reach the center of that square.
+
+SPATIAL MAPPING:
 - TOP of image = forward (+X)
 - BOTTOM of image = backward (-X)
 - RIGHT of image = robot's right (-Y)
 - LEFT of image = robot's left (+Y)
 
-Answer with ONLY this JSON (no markdown):
+Return ONLY this JSON (no markdown):
 {{
-  "on_target": true or false,
   "target_visible": true or false,
+  "box_2d": [ymin, xmin, ymax, xmax],
+  "label": "top_right_square",
   "move_x": "forward" or "backward" or "none",
   "move_y": "left" or "right" or "none",
   "reasoning": "brief description of what you see"
 }}
 
 Rules:
-- on_target=true ONLY if the red dot is clearly on the center of the target square.
-- If the target square is visible, say which direction the red dot needs to move to reach it.
+- box_2d: normalized coordinates 0-1000 of the target square. Use [0,0,0,0] if not visible.
+- move_x/move_y: direction the red dot needs to move to reach the target square center.
 - If you see mostly carpet/floor (overshot the board), the board edge tells you which way to go back.
 - "none" means that axis is already aligned with the target.
 - Be honest about what you see. Do NOT guess if the board is not visible."""
+
+# Image dimensions for denormalizing box_2d
+IMG_WIDTH = 640
+IMG_HEIGHT = 480
 
 
 class ArmDownCheckHeightAndCam(Skill):
@@ -227,7 +238,6 @@ class ArmDownCheckHeightAndCam(Skill):
         """Draw a red crosshair on the image at the gripper center point."""
         try:
             from PIL import Image, ImageDraw
-            import io
             
             img_data = base64.b64decode(image_b64)
             img = Image.open(io.BytesIO(img_data))
@@ -252,7 +262,7 @@ class ArmDownCheckHeightAndCam(Skill):
             return image_b64  # Return original on failure
     
     def _analyze_image(self, image_b64, current_x, current_y, contact_z, target_description):
-        """Analyze wrist camera image with internal vision agent using binary search."""
+        """Analyze wrist camera image with Gemini bbox detection + binary search."""
         
         # Fallback if no vision model configured
         if not self.vision_model or not image_b64:
@@ -297,6 +307,40 @@ class ArmDownCheckHeightAndCam(Skill):
             
             result = json.loads(response.text.strip())
             
+            # Check on_target using box_2d center vs red dot distance
+            # box_2d is [ymin, xmin, ymax, xmax] normalized 0-1000
+            box_2d = result.get("box_2d", [0, 0, 0, 0])
+            on_target_cv = False
+            dist_px = None
+            bbox_center = None
+            abs_bbox = None
+            
+            if box_2d and len(box_2d) == 4 and any(v > 0 for v in box_2d):
+                # Denormalize from 0-1000 to pixel coordinates
+                abs_y1 = int(box_2d[0] / 1000 * IMG_HEIGHT)
+                abs_x1 = int(box_2d[1] / 1000 * IMG_WIDTH)
+                abs_y2 = int(box_2d[2] / 1000 * IMG_HEIGHT)
+                abs_x2 = int(box_2d[3] / 1000 * IMG_WIDTH)
+                abs_bbox = [abs_x1, abs_y1, abs_x2, abs_y2]
+                
+                bbox_cx = (abs_x1 + abs_x2) / 2.0
+                bbox_cy = (abs_y1 + abs_y2) / 2.0
+                bbox_center = (bbox_cx, bbox_cy)
+                dist_px = ((bbox_cx - GRIPPER_CENTER_X)**2 + (bbox_cy - GRIPPER_CENTER_Y)**2)**0.5
+                on_target_cv = dist_px < ON_TARGET_THRESHOLD_PX
+                self.logger.info(
+                    f"[ArmDownCheck] box_2d={box_2d}, abs={abs_bbox}, "
+                    f"center=({bbox_cx:.0f},{bbox_cy:.0f}), "
+                    f"dot=({GRIPPER_CENTER_X},{GRIPPER_CENTER_Y}), dist={dist_px:.0f}px, "
+                    f"on_target={on_target_cv}"
+                )
+            
+            # Save debug image with bbox overlay
+            self._save_bbox_debug(image_b64, abs_bbox, bbox_center, on_target_cv, dist_px)
+            
+            # Override Gemini's on_target with our precise bbox check
+            result["on_target"] = on_target_cv
+            
             # Use binary search to compute next position from direction
             guidance = self._binary_search_step(result, current_x, current_y)
             
@@ -304,11 +348,12 @@ class ArmDownCheckHeightAndCam(Skill):
             short_summary = result.get("reasoning", "")[:100]
             move_x = result.get("move_x", "none")
             move_y = result.get("move_y", "none")
+            dist_info = f" dist={dist_px:.0f}px" if dist_px is not None else ""
             self._step_history.append({
                 "step": len(self._step_history) + 1,
                 "x": current_x,
                 "y": current_y,
-                "guidance": f"move_x={move_x}, move_y={move_y}. {short_summary}",
+                "guidance": f"move_x={move_x}, move_y={move_y}.{dist_info} {short_summary}",
             })
             
             self.logger.info(f"[ArmDownCheck] Vision: move_x={move_x}, move_y={move_y} -> {guidance}")
@@ -323,6 +368,47 @@ class ArmDownCheckHeightAndCam(Skill):
                 "guidance": f"(analysis failed: {e})",
             })
             return fallback
+    
+    def _save_bbox_debug(self, image_b64, bbox, bbox_center, on_target, dist_px):
+        """Save a debug image with the detected bbox and red dot for visual verification."""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            
+            img_data = base64.b64decode(image_b64)
+            img = Image.open(io.BytesIO(img_data))
+            draw = ImageDraw.Draw(img)
+            
+            # Draw red dot
+            cx, cy = GRIPPER_CENTER_X, GRIPPER_CENTER_Y
+            r = 7
+            draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill='red', outline='white', width=2)
+            draw.line([(cx-16, cy), (cx+16, cy)], fill='red', width=2)
+            draw.line([(cx, cy-16), (cx, cy+16)], fill='red', width=2)
+            
+            # Draw bbox if valid
+            if bbox and len(bbox) == 4 and any(v > 0 for v in bbox):
+                color = 'lime' if on_target else 'yellow'
+                draw.rectangle([bbox[0], bbox[1], bbox[2], bbox[3]], outline=color, width=3)
+                
+                # Draw bbox center
+                if bbox_center:
+                    bcx, bcy = bbox_center
+                    draw.ellipse([bcx-5, bcy-5, bcx+5, bcy+5], fill=color, outline='white', width=1)
+                    # Line from red dot to bbox center
+                    draw.line([(cx, cy), (bcx, bcy)], fill=color, width=2)
+                
+                # Label
+                label = f"{'ON TARGET' if on_target else 'OFF'} ({dist_px:.0f}px)" if dist_px else ""
+                draw.text((10, 10), label, fill=color)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            debug_path = Path(f"/home/jetson1/innate-os/captures/bbox_{timestamp}.jpg")
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=90)
+            debug_path.write_bytes(buf.getvalue())
+            self.logger.info(f"[ArmDownCheck] Debug bbox image: {debug_path}")
+        except Exception as e:
+            self.logger.warning(f"[ArmDownCheck] Could not save bbox debug image: {e}")
     
     def _binary_search_step(self, result, current_x, current_y):
         """Compute next position using binary search based on directional feedback."""

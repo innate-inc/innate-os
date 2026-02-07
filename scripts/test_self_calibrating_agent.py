@@ -82,8 +82,14 @@ def main():
     existing_captures = get_existing_captures()
     print(f"\n📁 Existing captures: {len(existing_captures)}")
 
-    # Step 1: Set directive
-    print(f"\n🔧 Step 1: Setting directive to '{AGENT_ID}'...")
+    # Step 1: Reload skills and agents to pick up code changes
+    print("\n🔄 Step 1: Reloading skills and agents...")
+    result = ros2_service_call("/brain/reload_skills_agents", "std_srvs/srv/Trigger")
+    print(f"   Result: skills reloaded")
+    time.sleep(2.0)
+
+    # Step 2: Set directive
+    print(f"\n🔧 Step 2: Setting directive to '{AGENT_ID}'...")
     result = ros2_topic_pub_once(
         "/brain/set_directive", "std_msgs/msg/String", f'{{data: "{AGENT_ID}"}}'
     )
