@@ -27,6 +27,7 @@ class ArmVitalsInput(InputDevice):
         super().__init__()
         self._sub = None
         self._last_is_ok = True
+        self._last_torque_enabled = None
         self.logger = UniversalLogger(enabled=False)
 
     def set_logger(self, logger):
@@ -59,6 +60,7 @@ class ArmVitalsInput(InputDevice):
             self.node.destroy_subscription(self._sub)
             self._sub = None
         self._last_is_ok = True
+        self._last_torque_enabled = None
 
     def _on_arm_status(self, msg):
         """Handle incoming arm status messages."""
@@ -70,4 +72,9 @@ class ArmVitalsInput(InputDevice):
             self.logger.warning(f"Arm failure detected: {msg.error}")
             self.send_data(error_text, data_type="chat_in")
 
+        if not msg.is_torque_enabled and self._last_torque_enabled is not False:
+            self.logger.warning("Arm torque is OFF")
+            self.send_data("Arm torque is OFF. Call reload_servos to recover.", data_type="chat_in")
+
         self._last_is_ok = msg.is_ok
+        self._last_torque_enabled = msg.is_torque_enabled
