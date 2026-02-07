@@ -7,7 +7,7 @@
                 <RateController hz="1.0">
                     <Sequence>
                         <!-- Set head to look down for better obstacle detection during navigation (runs at 1Hz) -->
-                        <SetHeadPosition position="-20" topic="/mars/head/set_position"/>
+                        <SetHeadPosition position="-15" topic="/mars/head/set_position"/>
                         <RecoveryNode number_of_retries="1" name="ComputePathToPose">
                         <Switch variable="{selected_planner}">
                             <ComputePathToPose name="mapfree" goal="{goal}" path="{path}" planner_id="GridBased" server_name="mapfree/compute_path_to_pose"/>

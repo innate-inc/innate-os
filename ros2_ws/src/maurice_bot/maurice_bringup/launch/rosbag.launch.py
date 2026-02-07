@@ -15,7 +15,7 @@ def generate_launch_description():
             cmd=[
                 'ros2', 'bag', 'record',
                 '/cmd_vel',
-                '/mars/main_camera/image/compressed',
+                '/mars/main_camera/left/image_raw/compressed',
                 '/mars/arm/image_raw/compressed',
                 '/mars/arm/state',
                 '/mars/arm/commands',

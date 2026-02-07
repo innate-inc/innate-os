@@ -60,10 +60,18 @@ include_directories(include)
 # =============================================================================
 
 # Main camera driver component library
-add_library(main_camera_driver_component SHARED maurice_cam/main_camera_driver.cpp)
+add_library(main_camera_driver_component SHARED
+  maurice_cam/main_camera_driver.cpp
+  maurice_cam/stereo_calibration.cpp
+)
 target_compile_definitions(main_camera_driver_component PRIVATE BUILDING_COMPONENT_LIBRARY)
 target_include_directories(main_camera_driver_component PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
 target_link_libraries(main_camera_driver_component ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+if(nlohmann_json_FOUND)
+  target_link_libraries(main_camera_driver_component nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(main_camera_driver_component PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
 ament_target_dependencies(main_camera_driver_component 
   rclcpp 
   rclcpp_components
@@ -130,22 +138,6 @@ if(VPI_FOUND)
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
 endif()
 
-# Main camera info component library
-add_library(main_camera_info_component SHARED maurice_cam/main_camera_info.cpp)
-target_compile_definitions(main_camera_info_component PRIVATE BUILDING_COMPONENT_LIBRARY)
-target_link_libraries(main_camera_info_component ${OpenCV_LIBS})
-if(nlohmann_json_FOUND)
-  target_link_libraries(main_camera_info_component nlohmann_json::nlohmann_json)
-elseif(NLOHMANN_JSON_FOUND)
-  target_include_directories(main_camera_info_component PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
-endif()
-ament_target_dependencies(main_camera_info_component 
-  rclcpp 
-  rclcpp_components
-  sensor_msgs
-)
-rclcpp_components_register_nodes(main_camera_info_component "maurice_cam::MainCameraInfo")
-
 # Disparity median filter component library
 add_library(disparity_median_filter_component SHARED maurice_cam/disparity_median_filter.cpp)
 target_compile_definitions(disparity_median_filter_component PRIVATE BUILDING_COMPONENT_LIBRARY)
@@ -172,26 +164,22 @@ ament_target_dependencies(disparity_edge_preserving_filter_component
 )
 rclcpp_components_register_nodes(disparity_edge_preserving_filter_component "maurice_cam::DisparityEdgePreservingFilter")
 
-# Disparity filter chain component library (unified pipeline of all filters)
-add_library(disparity_filter_chain_component SHARED maurice_cam/disparity_filter_chain.cpp)
-target_compile_definitions(disparity_filter_chain_component PRIVATE BUILDING_COMPONENT_LIBRARY)
-target_link_libraries(disparity_filter_chain_component ${OpenCV_LIBS})
-ament_target_dependencies(disparity_filter_chain_component 
-  rclcpp 
-  rclcpp_components
-  sensor_msgs
-  stereo_msgs
-)
-rclcpp_components_register_nodes(disparity_filter_chain_component "maurice_cam::DisparityFilterChain")
-
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
 # =============================================================================
 
 # Create main camera driver executable
-add_executable(main_camera_driver maurice_cam/main_camera_driver.cpp)
+add_executable(main_camera_driver
+  maurice_cam/main_camera_driver.cpp
+  maurice_cam/stereo_calibration.cpp
+)
 target_include_directories(main_camera_driver PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
 target_link_libraries(main_camera_driver ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+if(nlohmann_json_FOUND)
+  target_link_libraries(main_camera_driver nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(main_camera_driver PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
 ament_target_dependencies(main_camera_driver 
   rclcpp 
   rclcpp_components
@@ -251,20 +239,6 @@ if(VPI_FOUND)
   )
 endif()
 
-# Create main camera info executable
-add_executable(main_camera_info maurice_cam/main_camera_info.cpp)
-target_link_libraries(main_camera_info ${OpenCV_LIBS})
-if(nlohmann_json_FOUND)
-  target_link_libraries(main_camera_info nlohmann_json::nlohmann_json)
-elseif(NLOHMANN_JSON_FOUND)
-  target_include_directories(main_camera_info PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
-endif()
-ament_target_dependencies(main_camera_info
-  rclcpp
-  rclcpp_components
-  sensor_msgs
-)
-
 # =============================================================================
 # INSTALLATION
 # =============================================================================
@@ -274,10 +248,8 @@ set(COMPONENT_LIBRARIES
   main_camera_driver_component
   arm_camera_driver_component
   webrtc_streamer_component
-  main_camera_info_component
   disparity_median_filter_component
   disparity_edge_preserving_filter_component
-  disparity_filter_chain_component
 )
 if(VPI_FOUND)
   list(APPEND COMPONENT_LIBRARIES stereo_depth_estimator_component)
@@ -294,7 +266,6 @@ set(EXECUTABLE_TARGETS
   main_camera_driver
   arm_camera_driver
   webrtc_streamer_node
-  main_camera_info
 )
 if(VPI_FOUND)
   list(APPEND EXECUTABLE_TARGETS stereo_depth_estimator)

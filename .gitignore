@@ -73,15 +73,15 @@ ros2_ws/src/brain/manipulation/ckpts/*
 data/
 
 # Primitives directory - ignore checkpoints and data symlinks, keep metadata
-primitives/**/data
-primitives/**/action_only/
-primitives/**/*.h5
-primitives/**/*.pt
-primitives/**/*.pth
-primitives/**/__pycache__/
+skills/**/data
+skills/**/action_only/
+skills/**/*.h5
+skills/**/*.pt
+skills/**/*.pth
+skills/**/__pycache__/
 
 # Directives directory - track all directive files
-directives/**/__pycache__/
+agents/**/__pycache__/
 
 # recordings folder
 recordings/
@@ -97,3 +97,5 @@ logs
 
 # arm_wave directory (local data, not tracked)
 arm_wave/
+
+.vscode

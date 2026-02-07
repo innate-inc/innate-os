@@ -4,7 +4,7 @@
     data_directory: "~/skills"  # Base directory for skills (each task stores episodes in {task}/data/)
     data_frequency: 30                    # Frequency (e.g., Hz) at which data is recorded
     image_topics:                         # List of image topic names
-      - "/mars/main_camera/image"
+      - "/mars/main_camera/left/image_raw"
       - "/mars/arm/image_raw"
     arm_state_topic: "/mars/arm/state"          # Topic for the arm state
     leader_command_topic: "/mars/arm/commands"  # Single leader command topic

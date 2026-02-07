@@ -10,6 +10,7 @@ Pipeline:
                    → MainCameraInfo (CameraInfo publishers)
   ArmCameraDriver
   WebRTCStreamer
+  Remote throttle relays (lazy, 2 Hz) for RViz on a different machine
 
 Usage:
     ros2 launch maurice_cam camera_composable.launch.py
@@ -21,6 +22,8 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
+
+from maurice_cam.remote_throttle_nodes import make_remote_throttle_nodes
 
 
 def generate_launch_description():
@@ -70,9 +73,9 @@ def generate_launch_description():
         name='webrtc_streamer',
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'live_main_camera_topic': '/mars/main_camera/image',
+            'live_main_camera_topic': '/mars/main_camera/left/image_raw',
             'live_arm_camera_topic': '/mars/arm/image_raw',
-            'replay_main_camera_topic': '/brain/recorder/replay/main_camera/image',
+            'replay_main_camera_topic': '/brain/recorder/replay/main_camera/left/image_raw',
             'replay_arm_camera_topic': '/brain/recorder/replay/arm_camera/image_raw',
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
@@ -102,6 +105,11 @@ def generate_launch_description():
 
     # ── Container ─────────────────────────────────────────────────────────────
 
+    # ── Remote throttle relays (lazy, intra-process zero-copy input) ────────
+    throttle_nodes = make_remote_throttle_nodes()
+
+    # ── Container ─────────────────────────────────────────────────────────────
+
     camera_container = ComposableNodeContainer(
         name='camera_container',
         namespace='',
@@ -113,7 +121,7 @@ def generate_launch_description():
             webrtc_node,
             depth_estimator_node,
             main_camera_info_node,
-        ],
+        ] + throttle_nodes,
         output='screen',
         emulate_tty=True,
     )

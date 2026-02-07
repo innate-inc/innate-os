@@ -91,7 +91,7 @@ arm_camera_driver:
     # confidence_threshold: discard matches below this confidence.
     #   Range 0–65535. Lower = keep more (noisy) detail, higher = stricter.
     #   ~32000 is a good balance; 0 keeps everything.
-    confidence_threshold: 32000
+    confidence_threshold: 20000
 
     # min_disparity: ignore disparities below this (pixels). 0 = no lower limit.
     #   Increase to ignore very far objects.
@@ -99,21 +99,21 @@ arm_camera_driver:
 
     # p1: SGM smoothness penalty for ±1 disparity step between neighbours.
     #   Small value = more detail but more noise. Range 1–255.
-    p1: 10
+    p1: 8
 
     # p2: SGM smoothness penalty for disparity jumps >1 between neighbours.
     #   Must be ≥ p1 and < 256. Larger = smoother surfaces, less edge detail.
     #   Typical ratio p2/p1 ≈ 4–10.
-    p2: 60
+    p2: 120
 
     # uniqueness: ratio test to reject ambiguous matches.
     #   0.0 = disabled, 1.0 = very strict (rejects most matches).
     #   0.5–0.8 is typical. Higher = fewer false matches but more holes.
-    uniqueness: 0.75
+    uniqueness: -1.0
 
     # disparity_border_margin: zero out this many pixels from all image edges.
     #   Stereo matching is unreliable at borders. 10–30 is reasonable.
-    disparity_border_margin: 20
+    disparity_border_margin: 60 
 
     # ── Disparity Filter Chain ────────────────────────────────────────────
     #
@@ -125,26 +125,28 @@ arm_camera_driver:
     # Available filter names:
     #   median, bilateral, hole_filling, depth_clamp,
     #   edge_invalidation, speckle, domain_transform, temporal
-    filter_order:
+    filter_order: 
       - depth_clamp
+      # - median
+      # - bilateral
       - domain_transform
-      - temporal
-      - hole_filling
       - speckle
+      # - temporal
+      - edge_invalidation
 
     # ── 0. Downsample ─────────────────────────────────────────────────────
     # Shrink the disparity map before running filters, then upscale after.
     # Uses INTER_AREA (block-averaging) on the way down — free noise reduction.
     # factor=4 on a 640×480 calib image → filters run on 160×120 (16× faster).
     # The point cloud is also built from this smaller resolution.
-    filter_downsample.enabled: true
+    filter_downsample.enabled: false
     filter_downsample.factor: 2       # 1=off, 2=half, 4=quarter, 8=eighth
 
     # ── 1. Median ─────────────────────────────────────────────────────────
     # Classic median filter — kills salt-and-pepper noise (random single-pixel
     # spikes) without blurring edges much. Kernel must be odd.
     # 3 = light, 5 = moderate, 7+ = aggressive (gets slow above 5).
-    median.enabled: false
+    median.enabled: true
     median.kernel_size: 5
 
     # ── 2. Bilateral ──────────────────────────────────────────────────────
@@ -178,7 +180,7 @@ arm_camera_driver:
     # [min, max]. Cheap and very effective at removing background clutter
     # and near-camera noise. Run this early to save work for later filters.
     depth_clamp.enabled: true
-    depth_clamp.min_depth_meters: 0.1  # closer than 15 cm → invalid
+    depth_clamp.min_depth_meters: 0.25  # closer than 1 cm → invalid
     depth_clamp.max_depth_meters: 2.0   # farther than 2 m → invalid
 
     # ── 5. Edge Invalidation ──────────────────────────────────────────────
@@ -188,9 +190,9 @@ arm_camera_driver:
     #   width: dilation radius (pixels). Larger = wider kill zone.
     #   canny_low/high: Canny hysteresis thresholds on the normalised disparity.
     #     Lower = more sensitive (detects weaker edges). Typical: low 5–20, high 30–60.
-    edge_invalidation.enabled: false
-    edge_invalidation.width: 5
-    edge_invalidation.canny_low: 20.0 
+    edge_invalidation.enabled: true
+    edge_invalidation.width: 7
+    edge_invalidation.canny_low: 15.0 
     edge_invalidation.canny_high: 45.0
 
     # ── 6. Speckle Removal ────────────────────────────────────────────────
@@ -200,8 +202,8 @@ arm_camera_driver:
     #   max_diff: max disparity difference between neighbours to be "connected".
     #     Smaller = stricter grouping (more blobs killed). In disparity pixels.
     speckle.enabled: true
-    speckle.max_size: 1000
-    speckle.max_diff: 2.0
+    speckle.max_size: 300
+    speckle.max_diff: 1.0
 
     # ── 7. Domain Transform ───────────────────────────────────────────────
     # Recursive edge-preserving smoothing (like bilateral but much faster).
@@ -238,4 +240,4 @@ arm_camera_driver:
     temporal.enabled: true
     temporal.alpha: 0.4
     temporal.delta: 20
-    temporal.persistence: 3
+    temporal.persistence: 1

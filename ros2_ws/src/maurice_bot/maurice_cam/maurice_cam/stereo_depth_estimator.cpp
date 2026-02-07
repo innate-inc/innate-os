@@ -584,13 +584,18 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   const int16_t* disp_ptr = reinterpret_cast<const int16_t*>(disparity_data.buffer.pitch.planes[0].data);
   const int disp_pitch = disparity_data.buffer.pitch.planes[0].pitchBytes / sizeof(int16_t);
   
+  // VPI CUDA writes INT16_MAX (32767) for invalid / low-confidence pixels.
+  // After /32 that becomes ~1024, far above any real disparity.
+  // Clamp those to 0 (invalid) so downstream filters and depth math are clean.
+  const float max_valid_disparity = static_cast<float>(max_disparity_);
+
   cv::Mat disparity_float(calib_height_, calib_width_, CV_32FC1);
   for (int y = 0; y < calib_height_; y++) {
     const int16_t* disp_row = disp_ptr + y * disp_pitch;
     float* float_row = disparity_float.ptr<float>(y);
     for (int x = 0; x < calib_width_; x++) {
-      // Convert from Q10.5 to float pixels
-      float_row[x] = static_cast<float>(disp_row[x]) / DISPARITY_SCALE;
+      float d = static_cast<float>(disp_row[x]) / DISPARITY_SCALE;
+      float_row[x] = (d >= max_valid_disparity || d <= 0.0f) ? 0.0f : d;
     }
   }
 
@@ -1110,14 +1115,25 @@ void StereoDepthEstimator::clampByDepth(cv::Mat& img, float f, float t)
   float min_d = (max_depth_meters_ > 0)
     ? f * abs_t / static_cast<float>(max_depth_meters_)
     : 0.0f;
+  int killed_near = 0, killed_far = 0, total_valid = 0;
+  float d_min_seen = std::numeric_limits<float>::max(), d_max_seen = 0.0f;
   for (int y = 0; y < img.rows; ++y) {
     float* row = img.ptr<float>(y);
     for (int x = 0; x < img.cols; ++x) {
       float d = row[x];
       if (d <= 0) continue;
-      if (d > max_d || d < min_d) row[x] = 0.0f;
+      total_valid++;
+      if (d < d_min_seen) d_min_seen = d;
+      if (d > d_max_seen) d_max_seen = d;
+      if (d > max_d) { row[x] = 0.0f; killed_near++; }
+      else if (d < min_d) { row[x] = 0.0f; killed_far++; }
     }
   }
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    "depth_clamp: f=%.2f t=%.5f | min_depth=%.3fm -> max_d=%.1f | max_depth=%.1fm -> min_d=%.1f | "
+    "disp_range=[%.2f, %.2f] | killed: %d near + %d far / %d valid",
+    f, abs_t, min_depth_meters_, max_d, max_depth_meters_, min_d,
+    d_min_seen, d_max_seen, killed_near, killed_far, total_valid);
 }
 
 void StereoDepthEstimator::invalidateEdges(cv::Mat& img)
