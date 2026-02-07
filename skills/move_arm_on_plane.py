@@ -48,7 +48,7 @@ class MoveArmOnPlane(Skill):
         self,
         x: float,
         y: float,
-        duration: int = 3
+        duration: int = 1
     ):
         """
         Move arm to XY position on a fixed plane.
