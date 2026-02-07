@@ -28,10 +28,10 @@ LOG_FILE = Path("/home/jetson1/innate-os/captures/test_run.log")
 TIMEOUT_SECONDS = 120  # 2 minutes max
 
 
-def ros2_service_call(service, srv_type, args="{}"):
+def ros2_service_call(service, srv_type, args="{}", timeout=30):
     """Call a ROS2 service and return output."""
     cmd = ["ros2", "service", "call", service, srv_type, args]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     return result.stdout + result.stderr
 
 
@@ -84,9 +84,31 @@ def main():
 
     # Step 1: Reload skills and agents to pick up code changes
     print("\n🔄 Step 1: Reloading skills and agents...")
-    result = ros2_service_call("/brain/reload_skills_agents", "std_srvs/srv/Trigger")
-    print(f"   Result: skills reloaded")
-    time.sleep(2.0)
+    try:
+        reload_result = subprocess.run(
+            ["python3", "-c", """
+import rclpy
+from rclpy.node import Node
+from std_srvs.srv import Trigger
+rclpy.init()
+node = Node('reload_caller')
+client = node.create_client(Trigger, '/brain/reload')
+if client.wait_for_service(timeout_sec=10.0):
+    future = client.call_async(Trigger.Request())
+    rclpy.spin_until_future_complete(node, future, timeout_sec=30.0)
+    r = future.result()
+    print(f'OK: {r.message}' if r and r.success else 'FAILED')
+else:
+    print('SERVICE NOT AVAILABLE')
+node.destroy_node()
+rclpy.shutdown()
+"""],
+            capture_output=True, text=True, timeout=45, env={**os.environ}
+        )
+        print(f"   {reload_result.stdout.strip()}")
+    except Exception as e:
+        print(f"   Warning: reload failed ({e})")
+    time.sleep(3.0)
 
     # Step 2: Set directive
     print(f"\n🔧 Step 2: Setting directive to '{AGENT_ID}'...")
@@ -96,8 +118,8 @@ def main():
     print(f"   Result: directive set")
     time.sleep(1.0)
 
-    # Step 2: Reset brain
-    print("\n🔄 Step 2: Resetting brain...")
+    # Step 3: Reset brain
+    print("\n🔄 Step 3: Resetting brain...")
     result = ros2_service_call("/brain/reset_brain", "brain_messages/srv/ResetBrain")
     print(f"   Result: brain reset")
     time.sleep(1.0)
