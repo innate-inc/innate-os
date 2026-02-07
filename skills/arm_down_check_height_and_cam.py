@@ -5,6 +5,7 @@ an internal vision agent that provides actionable movement guidance.
 """
 
 import base64
+import io
 import json
 import time
 from datetime import datetime
@@ -204,17 +205,15 @@ class ArmDownCheckHeightAndCam(Skill):
                     # Capture fresh image from Z=0.1 (clear overhead view)
                     overhead_image = self.image
                     
-                    # Save raw + annotated images to file for reference
+                    # Save raw image for reference
                     if overhead_image:
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         captures_dir = Path("/home/jetson1/innate-os/captures")
                         captures_dir.mkdir(parents=True, exist_ok=True)
                         raw_path = captures_dir / f"contact_{timestamp}.jpg"
                         raw_path.write_bytes(base64.b64decode(overhead_image))
-                        annotated_b64 = self._annotate_image(overhead_image)
-                        ann_path = captures_dir / f"annotated_{timestamp}.jpg"
-                        ann_path.write_bytes(base64.b64decode(annotated_b64))
-                        self.logger.info(f"Images saved: {raw_path}, {ann_path}")
+                        self.logger.info(f"Raw image saved: {raw_path}")
+                        self._last_timestamp = timestamp  # For annotated save after analysis
                     
                     # Analyze overhead image with internal vision agent
                     guidance = self._analyze_image(
@@ -335,8 +334,8 @@ class ArmDownCheckHeightAndCam(Skill):
                     f"on_target={on_target_cv}"
                 )
             
-            # Save debug image with bbox overlay
-            self._save_bbox_debug(image_b64, abs_bbox, bbox_center, on_target_cv, dist_px)
+            # Save annotated image with red dot + bbox overlay
+            self._save_annotated(image_b64, abs_bbox, bbox_center, on_target_cv, dist_px)
             
             # Override Gemini's on_target with our precise bbox check
             result["on_target"] = on_target_cv
@@ -369,16 +368,16 @@ class ArmDownCheckHeightAndCam(Skill):
             })
             return fallback
     
-    def _save_bbox_debug(self, image_b64, bbox, bbox_center, on_target, dist_px):
-        """Save a debug image with the detected bbox and red dot for visual verification."""
+    def _save_annotated(self, image_b64, bbox, bbox_center, on_target, dist_px):
+        """Save annotated image with red dot, bbox, and distance info."""
         try:
-            from PIL import Image, ImageDraw, ImageFont
+            from PIL import Image, ImageDraw
             
             img_data = base64.b64decode(image_b64)
             img = Image.open(io.BytesIO(img_data))
             draw = ImageDraw.Draw(img)
             
-            # Draw red dot
+            # Draw red dot crosshair
             cx, cy = GRIPPER_CENTER_X, GRIPPER_CENTER_Y
             r = 7
             draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill='red', outline='white', width=2)
@@ -390,7 +389,7 @@ class ArmDownCheckHeightAndCam(Skill):
                 color = 'lime' if on_target else 'yellow'
                 draw.rectangle([bbox[0], bbox[1], bbox[2], bbox[3]], outline=color, width=3)
                 
-                # Draw bbox center
+                # Draw bbox center dot
                 if bbox_center:
                     bcx, bcy = bbox_center
                     draw.ellipse([bcx-5, bcy-5, bcx+5, bcy+5], fill=color, outline='white', width=1)
@@ -398,17 +397,18 @@ class ArmDownCheckHeightAndCam(Skill):
                     draw.line([(cx, cy), (bcx, bcy)], fill=color, width=2)
                 
                 # Label
-                label = f"{'ON TARGET' if on_target else 'OFF'} ({dist_px:.0f}px)" if dist_px else ""
+                label = f"{'ON TARGET' if on_target else 'OFF'} ({dist_px:.0f}px)" if dist_px is not None else ""
                 draw.text((10, 10), label, fill=color)
             
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            debug_path = Path(f"/home/jetson1/innate-os/captures/bbox_{timestamp}.jpg")
+            # Use timestamp from execute() if available
+            ts = getattr(self, '_last_timestamp', datetime.now().strftime("%Y%m%d_%H%M%S"))
+            ann_path = Path(f"/home/jetson1/innate-os/captures/annotated_{ts}.jpg")
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=90)
-            debug_path.write_bytes(buf.getvalue())
-            self.logger.info(f"[ArmDownCheck] Debug bbox image: {debug_path}")
+            ann_path.write_bytes(buf.getvalue())
+            self.logger.info(f"[ArmDownCheck] Annotated image: {ann_path}")
         except Exception as e:
-            self.logger.warning(f"[ArmDownCheck] Could not save bbox debug image: {e}")
+            self.logger.warning(f"[ArmDownCheck] Could not save annotated image: {e}")
     
     def _binary_search_step(self, result, current_x, current_y):
         """Compute next position using binary search based on directional feedback."""
