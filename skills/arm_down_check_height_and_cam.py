@@ -198,8 +198,9 @@ class ArmDownCheckHeightAndCam(Skill):
             return f"Arm moved down to Z={self.TARGET_Z} (no contact detected)", SkillResult.SUCCESS
 
         z_pos = contact
-        guidance = self._capture_and_analyze(x, y, z_pos, target_description)
+        image_b64 = self._capture_surface_image()
         self._move_up(x, y)
+        guidance = self._analyze_image(image_b64, x, y, z_pos, target_description)
         self._send_feedback(guidance)
         return f"Contact at Z={z_pos:.3f}. {guidance}", SkillResult.SUCCESS
 
@@ -240,11 +241,11 @@ class ArmDownCheckHeightAndCam(Skill):
 
     # ---- image capture & analysis ----
 
-    def _capture_and_analyze(self, x, y, contact_z, target_description):
-        """Capture surface image, save it, analyze with Gemini, save annotated."""
+    def _capture_surface_image(self):
+        """Capture and save wrist camera image while arm is on the surface."""
         image_b64 = self.image
         self._save_raw_image(image_b64)
-        return self._analyze_image(image_b64, x, y, contact_z, target_description)
+        return image_b64
 
     def _save_raw_image(self, image_b64):
         if not image_b64:
