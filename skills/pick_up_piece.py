@@ -24,8 +24,9 @@ class PickUpPiece(Skill):
     
     # Heights in meters
     HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
-    HEIGHT_ABOVE = 0.18  # 10cm above board for positioning
-    HEIGHT_PICK = 0.1   # 4cm above ground for picking
+    HEIGHT_ABOVE = 0.15  # 10cm above board for positioning
+    HEIGHT_PICK = 0.08       # 6cm - pick height for tall pieces
+    HEIGHT_PICK_PAWN = 0.06   # 4cm - pick height for pawns (2cm lower)
     
     def __init__(self, logger):
         super().__init__(logger)
@@ -103,12 +104,13 @@ class PickUpPiece(Skill):
         
         return x, y
     
-    def execute(self, square: str):
+    def execute(self, square: str, is_pawn: bool = True):
         """
         Pick up a piece from the specified square.
         
         Args:
             square: Chess notation (e.g., 'A4', 'E2')
+            is_pawn: If True, descend 2cm lower for shorter pawn pieces
         """
         self._cancelled = False
         
@@ -126,7 +128,15 @@ class PickUpPiece(Skill):
             return f"Invalid square '{square}' or incomplete calibration", SkillResult.FAILURE
         
         x, y = pos
-        self.logger.info(f"[PickUpPiece] Target {square} at X={x:.4f}, Y={y:.4f}")
+        
+        # For ranks 1-4, rotate yaw by 90 degrees
+        rank = int(square[1])
+        yaw = self.FIXED_YAW + 1.57 if rank <= 4 else self.FIXED_YAW
+        
+        # Pawns are shorter, so go 2cm lower
+        pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
+        
+        self.logger.info(f"[PickUpPiece] Target {square} (is_pawn={is_pawn}) at X={x:.4f}, Y={y:.4f} (yaw={yaw:.2f}, pick_z={pick_height})")
         self._send_feedback(f"Moving to {square} at X={x:.4f}, Y={y:.4f}")
         
         # Step 1: Move to safe height (20cm) at current position first
@@ -137,7 +147,7 @@ class PickUpPiece(Skill):
             curr_x, curr_y = current_pose["position"]["x"], current_pose["position"]["y"]
             success = self.manipulation.move_to_cartesian_pose(
                 x=curr_x, y=curr_y, z=self.HEIGHT_SAFE,
-                roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
+                roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
                 duration=1
             )
             if not success:
@@ -151,8 +161,8 @@ class PickUpPiece(Skill):
         self.logger.info(f"[PickUpPiece] Step 2: Moving horizontally to X={x:.4f}, Y={y:.4f}, Z={self.HEIGHT_SAFE}")
         self._send_feedback(f"Moving above {square}...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=self.HEIGHT_SAFE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
+            x=x, y=y, z=self.HEIGHT_ABOVE,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
             duration=2
         )
         if not success:
@@ -166,19 +176,19 @@ class PickUpPiece(Skill):
         self.logger.info("[PickUpPiece] Step 3: Opening gripper")
         self._send_feedback("Opening gripper...")
         self.manipulation.open_gripper(60)
-        time.sleep(0.7)
+        time.sleep(1.5)
         
-        # Step 4: Descend to picking height (4cm)
-        self.logger.info(f"[PickUpPiece] Step 4: Descending to pick height {self.HEIGHT_PICK}m")
+        # Step 4: Descend to picking height
+        self.logger.info(f"[PickUpPiece] Step 4: Descending to pick height {pick_height}m")
         self._send_feedback("Descending to pick...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=self.HEIGHT_PICK,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
+            x=x, y=y, z=pick_height,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
             duration=2.5
         )
         if not success:
             return "Failed to descend to pick height", SkillResult.FAILURE
-        time.sleep(1.5)
+        time.sleep(2.5)
         
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
@@ -186,7 +196,7 @@ class PickUpPiece(Skill):
         # Step 5: Close gripper to grab piece
         self.logger.info("[PickUpPiece] Step 5: Closing gripper")
         self._send_feedback("Grabbing piece...")
-        self.manipulation.close_gripper()
+        self.manipulation.close_gripper(strength=0.2)
         time.sleep(2.0)
         
         # Step 6: Lift back to safe height
@@ -194,7 +204,7 @@ class PickUpPiece(Skill):
         self._send_feedback("Lifting piece...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x, y=y, z=self.HEIGHT_SAFE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=self.FIXED_YAW,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
             duration=2
         )
         if not success:
