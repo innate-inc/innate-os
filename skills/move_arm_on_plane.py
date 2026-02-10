@@ -6,13 +6,14 @@ Move Arm on Plane Skill - Move arm to XY positions on a fixed plane.
 import math
 import time
 
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class MoveArmOnPlane(Skill):
     """Move the arm to XY positions on a fixed horizontal plane."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     # Fixed constants
     FIXED_Z = 0.15

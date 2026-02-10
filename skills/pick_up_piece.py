@@ -6,7 +6,9 @@ Pick Up Piece Skill - Pick up a chess piece from a given square using calibratio
 import json
 import time
 from pathlib import Path
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.mobility_interface import MobilityInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
@@ -21,8 +23,8 @@ DRIVE_SQUARES = 3
 class PickUpPiece(Skill):
     """Pick up a chess piece from a specified square (e.g., A4, B6)."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
-    mobility = Interface(InterfaceType.MOBILITY)
+    manipulation = Interface(ManipulationInterface)
+    mobility = Interface(MobilityInterface)
     
     # Fixed orientation - pointing downward
     FIXED_ROLL = 0.0

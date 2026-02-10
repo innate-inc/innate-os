@@ -6,7 +6,8 @@ Position Above Square - Move arm above a board square with gripper open.
 import json
 import time
 from pathlib import Path
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
@@ -15,7 +16,7 @@ CALIBRATION_FILE = Path.home() / "board_calibration.json"
 class PositionAboveSquare(Skill):
     """Position the arm 5cm above a board square with gripper open."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     # Fixed orientation - pointing downward
     FIXED_ROLL = 0.0

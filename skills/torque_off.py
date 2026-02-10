@@ -3,13 +3,14 @@
 Torque Off Skill - Disable torque on arm motors so user can manually move it.
 """
 
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class TorqueOff(Skill):
     """Disable torque on arm motors, allowing manual positioning."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     def __init__(self, logger):
         super().__init__(logger)

@@ -7,13 +7,14 @@ back to the center of the working plane. Full recovery in one call.
 import time
 import rclpy
 from std_srvs.srv import Trigger
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class ReloadServos(Skill):
     """Reboot servos, enable torque, and reposition arm to center of plane."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     # Center of the working plane
     CENTER_X = 0.25

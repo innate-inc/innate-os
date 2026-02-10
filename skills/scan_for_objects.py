@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import google.generativeai as genai
-from brain_client.skill_types import Skill, SkillResult, RobotState, RobotStateType, Interface, InterfaceType
+from brain_client.mobility_interface import MobilityInterface
+from brain_client.skill_types import Skill, SkillResult, RobotState, RobotStateType, Interface
 
 
 def _load_env_file(env_path: Path) -> dict:
@@ -31,7 +32,7 @@ class ScanForObjects(Skill):
 
     # Declare required state and interfaces
     image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
-    mobility = Interface(InterfaceType.MOBILITY)
+    mobility = Interface(MobilityInterface)
 
     def __init__(self, logger):
         super().__init__(logger)

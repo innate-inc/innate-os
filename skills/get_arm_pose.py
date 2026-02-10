@@ -3,13 +3,14 @@
 Get Arm Pose Skill - Retrieve current arm end-effector pose via FK.
 """
 
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class GetArmPose(Skill):
     """Retrieve the current arm end-effector pose using forward kinematics."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     def __init__(self, logger):
         super().__init__(logger)

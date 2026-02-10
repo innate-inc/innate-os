@@ -4,13 +4,14 @@ Arm Zero Position Skill - Move arm to all-zeros joint position.
 """
 
 import time
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class ArmZeroPosition(Skill):
     """Move the arm to the zero position (all joints at 0 radians)."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     def __init__(self, logger):
         super().__init__(logger)

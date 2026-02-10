@@ -7,7 +7,8 @@ import base64
 import json
 from datetime import datetime
 from pathlib import Path
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface, RobotState, RobotStateType
 
 
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
@@ -17,7 +18,7 @@ CORNER_CAPTURES_DIR = Path("/home/jetson1/innate-os/captures/corners")
 class RecordPosition(Skill):
     """Record current arm position, save to calibration file, and send as feedback."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     image = RobotState(RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64)
     
     def __init__(self, logger):

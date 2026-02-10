@@ -33,16 +33,6 @@ class RobotStateType(Enum):
     LAST_HEAD_POSITION = "last_head_position"
 
 
-class InterfaceType(Enum):
-    """
-    Enum representing the types of interfaces a skill might require.
-    """
-
-    MANIPULATION = "manipulation"
-    MOBILITY = "mobility"
-    HEAD = "head"
-
-
 class RobotState:
     """
     Descriptor for declaring and accessing robot state in skills.
@@ -82,15 +72,15 @@ class Interface:
 
     Usage:
         class MySkill(Skill):
-            mobility = Interface(InterfaceType.MOBILITY)
-            head = Interface(InterfaceType.HEAD)
+            mobility = Interface(MobilityInterface)
+            head = Interface(HeadInterface)
 
             def execute(self):
                 self.mobility.rotate(0.5)  # Use interface directly
     """
 
-    def __init__(self, interface_type: InterfaceType):
-        self.interface_type = interface_type
+    def __init__(self, interface_class: type):
+        self.interface_class = interface_class
         self._attr_name: str | None = None
 
     def __set_name__(self, owner: type, name: str):
@@ -175,12 +165,12 @@ class Skill(ABC):
                     descriptors[name] = attr
         return descriptors
 
-    def get_required_interfaces(self) -> list[InterfaceType]:
+    def get_required_interfaces(self) -> list[type]:
         """
         Declare the interfaces required by this skill.
         Automatically collects from Interface descriptors defined on the class.
         """
-        return [desc.interface_type for desc in self._get_interface_descriptors().values()]
+        return [desc.interface_class for desc in self._get_interface_descriptors().values()]
 
     def _get_interface_descriptors(self) -> dict[str, "Interface"]:
         """Collect all Interface descriptors from the class."""
@@ -191,10 +181,10 @@ class Skill(ABC):
                     descriptors[name] = attr
         return descriptors
 
-    def inject_interface(self, interface_type: InterfaceType, interface_instance):
+    def inject_interface(self, interface_class: type, interface_instance):
         """Inject an interface instance into the skill."""
         for name, descriptor in self._get_interface_descriptors().items():
-            if descriptor.interface_type == interface_type:
+            if descriptor.interface_class == interface_class:
                 setattr(self, name, interface_instance)
                 return True
         return False

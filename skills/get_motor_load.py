@@ -3,13 +3,14 @@
 Get Motor Load Skill - Retrieve current motor load/effort from arm actuators.
 """
 
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class GetMotorLoad(Skill):
     """Retrieve the current motor load/effort for all arm joints."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     def __init__(self, logger):
         super().__init__(logger)

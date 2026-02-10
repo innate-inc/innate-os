@@ -4,13 +4,14 @@ Arm Go Up Skill - Move arm up to Z=0.1 while keeping current XY position.
 """
 
 import time
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class ArmGoUp(Skill):
     """Move the arm up to Z=0.1 while maintaining current XY position."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     TARGET_Z = 0.1
     FIXED_ROLL = 0.0

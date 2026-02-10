@@ -4,13 +4,14 @@ Drive Cmd Vel Skill - Send a velocity command for a given duration.
 """
 
 import time
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.mobility_interface import MobilityInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class DriveCmdVel(Skill):
     """Send a cmd_vel command (linear + angular) for a specified duration."""
 
-    mobility = Interface(InterfaceType.MOBILITY)
+    mobility = Interface(MobilityInterface)
 
     def __init__(self, logger):
         super().__init__(logger)

@@ -3,13 +3,14 @@
 Torque On Skill - Enable torque on arm motors.
 """
 
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class TorqueOn(Skill):
     """Enable torque on arm motors to lock position."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     def __init__(self, logger):
         super().__init__(logger)

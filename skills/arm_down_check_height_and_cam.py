@@ -14,7 +14,8 @@ from datetime import datetime
 import google.generativeai as genai
 from pathlib import Path
 
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface, RobotState, RobotStateType
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -124,7 +125,7 @@ def _draw_bbox_overlay(draw, bbox, bbox_center, on_target, dist_px):
 class ArmDownCheckHeightAndCam(Skill):
     """Move arm down, detect contact, analyze image with Gemini bbox detection."""
 
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     image = RobotState(RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64)
 
     TARGET_Z = 0.0

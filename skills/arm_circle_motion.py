@@ -5,13 +5,14 @@ Arm Circle Motion Skill - Move arm in a circular pattern.
 
 import math
 import time
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.manipulation_interface import ManipulationInterface
+from brain_client.skill_types import Skill, SkillResult, Interface
 
 
 class ArmCircleMotion(Skill):
     """Move the arm in a circular motion pattern."""
     
-    manipulation = Interface(InterfaceType.MANIPULATION)
+    manipulation = Interface(ManipulationInterface)
     
     def __init__(self, logger):
         super().__init__(logger)

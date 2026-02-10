@@ -40,7 +40,6 @@ from brain_client.mobility_interface import MobilityInterface
 # Import skill loader and types
 from brain_client.skill_loader import SkillLoader
 from brain_client.skill_types import (
-    InterfaceType,
     RobotStateType,
     SkillResult,
 )
@@ -713,14 +712,14 @@ class SkillsActionServer(Node):
 
     def _inject_required_interfaces(self, skill):
         """Inject only the interfaces declared by the skill via Interface descriptors."""
-        required_interfaces = skill.get_required_interfaces()
-        for interface_type in required_interfaces:
-            if interface_type == InterfaceType.MANIPULATION:
-                skill.inject_interface(interface_type, self.manipulation)
-            elif interface_type == InterfaceType.MOBILITY:
-                skill.inject_interface(interface_type, self.mobility)
-            elif interface_type == InterfaceType.HEAD:
-                skill.inject_interface(interface_type, self.head)
+        interface_map = {
+            ManipulationInterface: self.manipulation,
+            MobilityInterface: self.mobility,
+            HeadInterface: self.head,
+        }
+        for interface_class in skill.get_required_interfaces():
+            if interface_class in interface_map:
+                skill.inject_interface(interface_class, interface_map[interface_class])
 
     def _state_update_thread_func(self):
         """Background thread that continuously updates robot state for running skill."""
