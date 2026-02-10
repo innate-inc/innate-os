@@ -37,7 +37,7 @@ class ArmZeroPosition(Skill):
         success = self.manipulation.move_to_joint_positions(
             joint_positions=joint_positions,
             duration=duration,
-            wait_for_completion=False
+            blocking=False
         )
         
         if not success:
