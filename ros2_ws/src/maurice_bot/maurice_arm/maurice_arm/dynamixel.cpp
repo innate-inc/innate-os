@@ -159,6 +159,26 @@ void Dynamixel::setHomeOffset(int motor_id, int home_position) {
     }
 }
 
+void Dynamixel::setProfileVelocity(int motor_id, int velocity) {
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->write4ByteTxRx(
+        port_handler_, motor_id, ADDR_PROFILE_VELOCITY, velocity, &dxl_error);
+    
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to set profile velocity for motor " + std::to_string(motor_id));
+    }
+}
+
+void Dynamixel::setProfileAcceleration(int motor_id, int acceleration) {
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->write4ByteTxRx(
+        port_handler_, motor_id, ADDR_PROFILE_ACCELERATION, acceleration, &dxl_error);
+    
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to set profile acceleration for motor " + std::to_string(motor_id));
+    }
+}
+
 int Dynamixel::readPosition(int motor_id) {
     uint32_t position = 0;
     uint8_t dxl_error = 0;

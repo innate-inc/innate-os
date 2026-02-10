@@ -23,6 +23,7 @@ maurice_arm:
           },
           "joint_2": {
               "servo_id": 2,
+              "profile_velocity": 100,
               "position_limits": {
                   "min": -1.5708,
                   "max": 1.22
@@ -30,9 +31,9 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 8000,
+                  "kp": 1000,
                   "ki": 0,
-                  "kd": 1200
+                  "kd": 4000
               }
           },
           "joint_3": {
@@ -41,16 +42,18 @@ maurice_arm:
                   "min": -1.5708,
                   "max": 1.7453
               },
+              "profile_velocity": 100,
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 4000,
+                  "kp": 1000,
                   "ki": 0,
-                  "kd": 16000
+                  "kd": 4000
               }
           },
           "joint_4": {
               "servo_id": 4,
+              "profile_velocity": 100,
               "position_limits": {
                   "min": -1.9199,
                   "max": 1.7453
@@ -58,9 +61,9 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 4000,
+                  "kp": 1000,
                   "ki": 0,
-                  "kd": 6000
+                  "kd": 4000
               }
           },
           "joint_5": {
