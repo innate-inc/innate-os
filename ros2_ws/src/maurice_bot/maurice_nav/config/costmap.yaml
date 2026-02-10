@@ -55,8 +55,8 @@ local_costmap:
       plugins: [
         "voxel_layer",
         "obstacle_layer",
-         "inflation_layer"
-         ]
+        "inflation_layer",
+        ]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -75,31 +75,6 @@ local_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
         inflation_radius: 0.25
-      # voxel_layer:
-      #   plugin: "nav2_costmap_2d::VoxelLayer"
-      #   enabled: True
-      #   footprint_clearing_enabled: true
-      #   publish_voxel_map: True
-      #   origin_z: 0.0
-      #   z_resolution: 0.03
-      #   z_voxels: 12
-      #   max_obstacle_height: 0.36
-      #   unknown_threshold: 5
-      #   mark_threshold: 1
-      #   observation_sources: pointcloud
-      #   combination_method: 0
-      #   pointcloud:  # no frame set, uses frame from message
-      #     topic: /mars/main_camera/isaac_image_proc/points_filtered
-      #     max_obstacle_height: 0.36 # TODO height based on arm? # right now just above head
-      #     min_obstacle_height: 0.02
-      #     obstacle_max_range: 1.5
-      #     obstacle_min_range: 0.05
-      #     raytrace_max_range: 3.0 
-      #     raytrace_min_range: 0.05
-      #     clearing: True
-      #     marking: True
-      #     data_type: "PointCloud2"
-      #     transport_type: "raw"  # raw or/ with compression (zlib, draco, zstd)
       voxel_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
         enabled:               true
@@ -165,7 +140,8 @@ mapfree:
         rolling_window: true
         width: 10
         height: 10
-        plugins: [ "obstacle_layer", 
+        plugins: [ 
+          "obstacle_layer", 
           "voxel_layer",
           "inflation_layer",
           ]
@@ -188,31 +164,6 @@ mapfree:
           cost_scaling_factor: 10.0
           inflation_radius: 0.35
         always_send_full_costmap: False
-        # voxel_layer:
-        #   plugin: "nav2_costmap_2d::VoxelLayer"
-        #   enabled: True
-        #   footprint_clearing_enabled: true
-        #   publish_voxel_map: True
-        #   origin_z: 0.0
-        #   z_resolution: 0.03
-        #   z_voxels: 12
-        #   max_obstacle_height: 0.36
-        #   unknown_threshold: 5
-        #   mark_threshold: 1
-        #   observation_sources: pointcloud
-        #   combination_method: 0
-        #   pointcloud:  # no frame set, uses frame from message
-        #     topic: /mars/main_camera/isaac_image_proc/points
-        #     max_obstacle_height: 0.36 # TODO height based on arm? # right now just above head
-        #     min_obstacle_height: 0.02
-        #     obstacle_max_range: 1.5
-        #     obstacle_min_range: 0.05
-        #     raytrace_max_range: 3.0 
-        #     raytrace_min_range: 0.05
-        #     clearing: True
-        #     marking: True
-        #     data_type: "PointCloud2"
-        #     transport_type: "raw"  # raw or/ with compression (zlib, draco, zstd)
         voxel_layer:
           plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
           enabled:               true
