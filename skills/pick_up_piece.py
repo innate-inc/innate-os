@@ -32,8 +32,8 @@ class PickUpPiece(Skill):
     # Heights in meters
     HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
     HEIGHT_ABOVE = 0.15  # 10cm above board for positioning
-    HEIGHT_PICK = 0.08       # 6cm - pick height for tall pieces
-    HEIGHT_PICK_PAWN = 0.06   # 4cm - pick height for pawns (2cm lower)
+    HEIGHT_PICK = 0.1       # 6cm - pick height for tall pieces
+    HEIGHT_PICK_PAWN = 0.08   # 4cm - pick height for pawns (2cm lower)
     
     def __init__(self, logger):
         super().__init__(logger)
