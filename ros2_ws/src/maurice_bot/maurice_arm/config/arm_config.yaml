@@ -30,9 +30,9 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 300,
-                  "ki": 200,
-                  "kd": 100
+                  "kp": 8000,
+                  "ki": 0,
+                  "kd": 1200
               }
           },
           "joint_3": {
@@ -44,9 +44,9 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 640,
-                  "ki": 100,
-                  "kd": 3600
+                  "kp": 4000,
+                  "ki": 0,
+                  "kd": 16000
               }
           },
           "joint_4": {
@@ -58,9 +58,9 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 400,
-                  "ki": 400,
-                  "kd": 1000
+                  "kp": 4000,
+                  "ki": 0,
+                  "kd": 6000
               }
           },
           "joint_5": {
