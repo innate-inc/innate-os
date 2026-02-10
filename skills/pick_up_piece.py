@@ -10,12 +10,19 @@ from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceTyp
 
 
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
+POSITION_STATE_FILE = Path.home() / "robot_position_state.json"
+
+# Max base driving speed in m/s
+DRIVE_SPEED = 0.02
+# Number of squares to offset by when driving
+DRIVE_SQUARES = 3
 
 
 class PickUpPiece(Skill):
     """Pick up a chess piece from a specified square (e.g., A4, B6)."""
     
     manipulation = Interface(InterfaceType.MANIPULATION)
+    mobility = Interface(InterfaceType.MOBILITY)
     
     # Fixed orientation - pointing downward
     FIXED_ROLL = 0.0
@@ -31,6 +38,72 @@ class PickUpPiece(Skill):
     def __init__(self, logger):
         super().__init__(logger)
         self._cancelled = False
+
+    def _load_position_state(self) -> float:
+        """Load current robot X offset from state file. 0.0 = calibration origin."""
+        if not POSITION_STATE_FILE.exists():
+            return 0.0
+        try:
+            data = json.loads(POSITION_STATE_FILE.read_text())
+            return float(data.get("offset_x", 0.0))
+        except Exception:
+            return 0.0
+
+    def _save_position_state(self, offset_x: float):
+        """Save current robot X offset to state file."""
+        try:
+            POSITION_STATE_FILE.write_text(json.dumps({"offset_x": offset_x}))
+        except Exception as e:
+            self.logger.error(f"[PickUpPiece] Failed to save position state: {e}")
+
+    def _compute_square_size_x(self, calibration: dict) -> float:
+        """Compute the X-direction size of one square from calibration corners."""
+        tl = calibration["top_left"]
+        tr = calibration["top_right"]
+        bl = calibration["bottom_left"]
+        br = calibration["bottom_right"]
+        avg_top_x = (tl["x"] + tr["x"]) / 2.0
+        avg_bottom_x = (bl["x"] + br["x"]) / 2.0
+        return (avg_top_x - avg_bottom_x) / 7.0
+
+    def _drive_to_offset(self, target_offset: float, current_offset: float) -> float:
+        """
+        Drive the robot base so that its X offset equals target_offset.
+        Positive offset = robot moved forward (toward board).
+        Returns the new offset after driving.
+        """
+        delta = target_offset - current_offset
+        if abs(delta) < 0.001:
+            return current_offset
+
+        if self.mobility is None:
+            self.logger.warn("[PickUpPiece] Mobility interface not available, skipping drive")
+            return current_offset
+
+        direction = 1.0 if delta > 0 else -1.0
+        drive_duration = abs(delta) / DRIVE_SPEED
+
+        self.logger.info(
+            f"[PickUpPiece] Driving {'forward' if direction > 0 else 'backward'} "
+            f"{abs(delta):.4f}m at {DRIVE_SPEED} m/s for {drive_duration:.1f}s"
+        )
+        self._send_feedback(f"Driving {'forward' if direction > 0 else 'backward'} {abs(delta)*100:.1f}cm...")
+
+        self.mobility.send_cmd_vel(linear_x=direction * DRIVE_SPEED, angular_z=0.0, duration=drive_duration)
+
+        # Wait for the drive to complete
+        start = time.time()
+        while time.time() - start < drive_duration:
+            if self._cancelled:
+                self.mobility.send_cmd_vel(linear_x=0.0, angular_z=0.0)
+                elapsed = time.time() - start
+                partial = current_offset + direction * DRIVE_SPEED * elapsed
+                self._save_position_state(partial)
+                return partial
+            time.sleep(0.1)
+
+        self._save_position_state(target_offset)
+        return target_offset
     
     @property
     def name(self):
@@ -136,8 +209,29 @@ class PickUpPiece(Skill):
         # Pawns are shorter, so go 2cm lower
         pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
         
-        self.logger.info(f"[PickUpPiece] Target {square} (is_pawn={is_pawn}) at X={x:.4f}, Y={y:.4f} (yaw={yaw:.2f}, pick_z={pick_height})")
-        self._send_feedback(f"Moving to {square} at X={x:.4f}, Y={y:.4f}")
+        # Drive base to optimal position for this rank
+        square_size = self._compute_square_size_x(calibration)
+        current_offset = self._load_position_state()
+        if rank <= 3:
+            # Close pieces: drive backward so arm has room
+            target_offset = -(DRIVE_SQUARES * square_size)
+        else:
+            # Rank > 3: arm can reach fine from calibration origin
+            target_offset = 0.0
+        
+        current_offset = self._drive_to_offset(target_offset, current_offset)
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+        
+        # Adjust arm X to compensate for robot base movement
+        # If robot moved forward by offset, board appears closer by offset
+        x_adj = x - current_offset
+        
+        self.logger.info(
+            f"[PickUpPiece] Target {square} (is_pawn={is_pawn}) at X={x:.4f} (adj={x_adj:.4f}), "
+            f"Y={y:.4f} (yaw={yaw:.2f}, pick_z={pick_height}, offset={current_offset:.4f})"
+        )
+        self._send_feedback(f"Moving to {square} at X={x_adj:.4f}, Y={y:.4f}")
         
         # Step 1: Move to safe height (20cm) at current position first
         self.logger.info(f"[PickUpPiece] Step 1: Moving to safe height {self.HEIGHT_SAFE}m")
@@ -146,7 +240,7 @@ class PickUpPiece(Skill):
         if current_pose:
             curr_x, curr_y = current_pose["position"]["x"], current_pose["position"]["y"]
             success = self.manipulation.move_to_cartesian_pose(
-                x=curr_x, y=curr_y, z=self.HEIGHT_SAFE,
+                x=x_adj, y=curr_y, z=self.HEIGHT_SAFE,
                 roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
                 duration=1
             )
@@ -161,7 +255,7 @@ class PickUpPiece(Skill):
         self.logger.info(f"[PickUpPiece] Step 2: Moving horizontally to X={x:.4f}, Y={y:.4f}, Z={self.HEIGHT_SAFE}")
         self._send_feedback(f"Moving above {square}...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=self.HEIGHT_ABOVE,
+            x=x_adj, y=y, z=self.HEIGHT_ABOVE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
             duration=2
         )
@@ -182,7 +276,7 @@ class PickUpPiece(Skill):
         self.logger.info(f"[PickUpPiece] Step 4: Descending to pick height {pick_height}m")
         self._send_feedback("Descending to pick...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=pick_height,
+            x=x_adj, y=y, z=pick_height,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
             duration=2.5
         )
@@ -203,13 +297,18 @@ class PickUpPiece(Skill):
         self.logger.info(f"[PickUpPiece] Step 6: Lifting to safe height {self.HEIGHT_SAFE}m")
         self._send_feedback("Lifting piece...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=x, y=y, z=self.HEIGHT_SAFE,
+            x=x_adj, y=y, z=self.HEIGHT_SAFE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
             duration=2
         )
         if not success:
             return "Failed to lift", SkillResult.FAILURE
         time.sleep(2.0)
+        
+        # Step 7: Drive back to calibration origin (offset 0)
+        self.logger.info("[PickUpPiece] Step 7: Driving back to calibration origin")
+        self._send_feedback("Returning to base position...")
+        current_offset = self._drive_to_offset(0.0, current_offset)
         
         self.logger.info(f"[PickUpPiece] Complete: Picked up piece from {square}")
         self._send_feedback(f"Piece picked up from {square}")
