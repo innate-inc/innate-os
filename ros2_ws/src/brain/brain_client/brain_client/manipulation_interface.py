@@ -43,10 +43,14 @@ class ManipulationInterface:
 
         # Subscribers
         self._ik_solution = None
+        self._ik_solution_fk = None
         self._fk_pose = None
         self._arm_state = None
         self._ik_solution_sub = self.node.create_subscription(
             JointState, "/ik_solution", self._ik_solution_callback, 10
+        )
+        self._ik_solution_fk_sub = self.node.create_subscription(
+            PoseStamped, "/ik_solution_fk", self._ik_solution_fk_callback, 10
         )
         self._fk_pose_sub = self.node.create_subscription(PoseStamped, "/fk_pose", self._fk_pose_callback, 10)
         self._arm_state_sub = self.node.create_subscription(
@@ -73,9 +77,12 @@ class ManipulationInterface:
 
     def _ik_solution_callback(self, msg: JointState):
         """Store the latest IK solution."""
-        # Log
-        self.logger.info(f"IK solution received: {msg}")
+        self.logger.debug(f"IK solution received: {msg}")
         self._ik_solution = msg
+
+    def _ik_solution_fk_callback(self, msg: PoseStamped):
+        """Store the FK of the latest IK solution (what commanded joints map to)."""
+        self._ik_solution_fk = msg
 
     def _fk_pose_callback(self, msg: PoseStamped):
         """Store the latest FK pose."""
@@ -192,6 +199,7 @@ class ManipulationInterface:
         """
         # Clear previous solution
         self._ik_solution = None
+        self._ik_solution_fk = None
 
         # Publish target pose to IK node
         target = Twist()
