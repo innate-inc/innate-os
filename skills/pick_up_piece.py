@@ -33,7 +33,7 @@ class PickUpPiece(Skill):
     HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
     HEIGHT_ABOVE = 0.15  # 10cm above board for positioning
     HEIGHT_PICK = 0.1       # 6cm - pick height for tall pieces
-    HEIGHT_PICK_PAWN = 0.08   # 4cm - pick height for pawns (2cm lower)
+    HEIGHT_PICK_PAWN = 0.07   # 4cm - pick height for pawns (2cm lower)
     
     # Gripper parameters
     GRIPPER_OPEN_PERCENT = 40  # How wide to open gripper before picking
