@@ -115,7 +115,9 @@ def generate_launch_description():
             # Remap costmap footprint to global /footprint
             ('/local_costmap/footprint', '/footprint'),
         ],
+        # prefix=['tmux', ' split-window', ' -t', ' ros_nodes', ' valgrind', ' --leak-check=full --track-origins=yes --log-file=valgrind_output.txt'],
     )
+    # ros2 run --prefix 'valgrind --leak-check=full --track-origins=yes --log-file=valgrind_output.txt' nav2_controller controller_server --ros-args -r __node:=controller_server -r cmd_vel:=cmd_vel_raw -r /local_costmap/footprint:=/footprint --params-file $(ros2 pkg prefix maurice_nav)/share/maurice_nav/config/controller.yaml --params-file $(ros2 pkg prefix maurice_nav)/share/maurice_nav/config/costmap.yaml
 
     return LaunchDescription([
         amcl_params_arg,

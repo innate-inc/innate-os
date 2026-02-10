@@ -524,6 +524,7 @@ class ModeManager(Node):
                 if not success:
                     failures.append(node_name)
                     self.get_logger().warning(f"Failed to configure {node_name}, continuing...")
+                    break
             self.get_logger().info(f"Configured nodes")
             
             
