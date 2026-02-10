@@ -13,4 +13,3 @@ extern "C" void BT_RegisterNodesFromPlugin(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<maurice_nav::Switch>("Switch");
   factory.registerNodeType<maurice_nav::SetHeadPosition>("SetHeadPosition");
 }
-

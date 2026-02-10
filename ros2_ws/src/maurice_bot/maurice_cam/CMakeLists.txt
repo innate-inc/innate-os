@@ -141,6 +141,7 @@ if(VPI_FOUND)
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
 endif()
 
+
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
 # =============================================================================
