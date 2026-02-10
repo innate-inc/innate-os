@@ -35,6 +35,10 @@ class PickUpPiece(Skill):
     HEIGHT_PICK = 0.1       # 6cm - pick height for tall pieces
     HEIGHT_PICK_PAWN = 0.08   # 4cm - pick height for pawns (2cm lower)
     
+    # Gripper parameters
+    GRIPPER_OPEN_PERCENT = 40  # How wide to open gripper before picking
+    GRIPPER_CLOSE_STRENGTH = 0.2  # Extra radians beyond closed position
+    
     def __init__(self, logger):
         super().__init__(logger)
         self._cancelled = False
@@ -269,7 +273,7 @@ class PickUpPiece(Skill):
         # Step 3: Open gripper while above the piece
         self.logger.info("[PickUpPiece] Step 3: Opening gripper")
         self._send_feedback("Opening gripper...")
-        self.manipulation.open_gripper(60)
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
         time.sleep(1.5)
         
         # Step 4: Descend to picking height
@@ -290,16 +294,18 @@ class PickUpPiece(Skill):
         # Step 5: Close gripper to grab piece
         self.logger.info("[PickUpPiece] Step 5: Closing gripper")
         self._send_feedback("Grabbing piece...")
-        self.manipulation.close_gripper(strength=0.2)
+        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH)
         time.sleep(2.0)
         
-        # Step 6: Lift back to safe height
+        # Step 6: Lift back to safe height (keep gripper closed on piece)
+        grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
         self.logger.info(f"[PickUpPiece] Step 6: Lifting to safe height {self.HEIGHT_SAFE}m")
         self._send_feedback("Lifting piece...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x_adj, y=y, z=self.HEIGHT_SAFE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
-            duration=2
+            duration=2,
+            gripper_position=grip_position
         )
         if not success:
             return "Failed to lift", SkillResult.FAILURE

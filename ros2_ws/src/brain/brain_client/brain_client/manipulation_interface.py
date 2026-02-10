@@ -294,6 +294,7 @@ class ManipulationInterface:
         duration: int = 3,
         ik_timeout: float = 2.0,
         blocking: bool = False,
+        gripper_position: float | None = None,
     ) -> bool:
         """
         Move the arm to a Cartesian pose (combines IK solving and motion execution).
@@ -304,6 +305,8 @@ class ManipulationInterface:
             duration: Trajectory duration in seconds
             ik_timeout: Maximum time to wait for IK solution
             blocking: If True, block until motion completes
+            gripper_position: Target gripper joint position in radians.
+                If None (default), uses the current actual gripper position.
 
         Returns:
             True if successful, False otherwise
@@ -315,11 +318,14 @@ class ManipulationInterface:
             self.logger.error("Failed to solve IK for target pose")
             return False
 
-        # IK returns 5 joints, but we need 6 - preserve current gripper position
+        # IK returns 5 joints, but we need 6 - append gripper position
         if len(joint_positions) == 5:
-            current_gripper = 0.0
-            if self._arm_state is not None and len(self._arm_state.position) >= 6:
+            if gripper_position is not None:
+                current_gripper = gripper_position
+            elif self._arm_state is not None and len(self._arm_state.position) >= 6:
                 current_gripper = self._arm_state.position[5]
+            else:
+                current_gripper = 0.0
             joint_positions.append(current_gripper)
 
         return self.move_to_joint_positions(
