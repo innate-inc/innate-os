@@ -3,6 +3,7 @@ maurice_arm:
     # Device detection automatic - looks for 7 servos at 1M baud
     baud_rate: 1000000
     control_frequency: 100.0
+    trajectory_rate_hz: 100.0
     # joint_7 is the head servo. Its position_limits define the head angle range (radians).
     # Head position is inverted: negative head angle = positive servo angle (direction_reversed: true)
     joints: |
@@ -23,7 +24,8 @@ maurice_arm:
           },
           "joint_2": {
               "servo_id": 2,
-              "profile_velocity": 100,
+              "profile_velocity": 200,
+              "profile_acceleration": 100,
               "position_limits": {
                   "min": -1.5708,
                   "max": 1.22
@@ -31,9 +33,9 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 1000,
+                  "kp": 8000,
                   "ki": 0,
-                  "kd": 4000
+                  "kd": 12000
               }
           },
           "joint_3": {
@@ -42,18 +44,20 @@ maurice_arm:
                   "min": -1.5708,
                   "max": 1.7453
               },
-              "profile_velocity": 100,
+              "profile_velocity": 200,
+              "profile_acceleration": 100,
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 1000,
+                  "kp": 4000,
                   "ki": 0,
                   "kd": 4000
               }
           },
           "joint_4": {
               "servo_id": 4,
-              "profile_velocity": 100,
+              "profile_velocity": 200,
+              "profile_acceleration": 100,
               "position_limits": {
                   "min": -1.9199,
                   "max": 1.7453
@@ -61,7 +65,7 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 1000,
+                  "kp": 4000,
                   "ki": 0,
                   "kd": 4000
               }
