@@ -25,7 +25,7 @@ maurice_arm:
           "joint_2": {
               "servo_id": 2,
               "profile_velocity": 200,
-              "profile_acceleration": 100,
+              "profile_acceleration": 50,
               "position_limits": {
                   "min": -1.5708,
                   "max": 1.22
@@ -45,19 +45,19 @@ maurice_arm:
                   "max": 1.7453
               },
               "profile_velocity": 200,
-              "profile_acceleration": 100,
+              "profile_acceleration": 50,
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
                   "kp": 4000,
                   "ki": 0,
-                  "kd": 4000
+                  "kd": 16000
               }
           },
           "joint_4": {
               "servo_id": 4,
               "profile_velocity": 200,
-              "profile_acceleration": 100,
+              "profile_acceleration": 50,
               "position_limits": {
                   "min": -1.9199,
                   "max": 1.7453
@@ -65,9 +65,9 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 4000,
-                  "ki": 0,
-                  "kd": 4000
+                  "kp": 1000,
+                  "ki": 1000,
+                  "kd": 16000
               }
           },
           "joint_5": {
