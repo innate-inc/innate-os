@@ -42,6 +42,7 @@ public:
         // Declare parameters
         this->declare_parameter("baud_rate", 1000000);
         this->declare_parameter("control_frequency", 100.0);
+        this->declare_parameter("trajectory_rate_hz", 30.0);
         this->declare_parameter("joints", "{}");
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
@@ -1043,7 +1044,7 @@ private:
         
         // Use simple cubic spline planning (fast, smooth trajectory)
         RCLCPP_INFO(this->get_logger(), "Planning with cubic spline for 6-DOF arm (including gripper)...");
-        const double dt = 1.0 / 30.0;
+        const double dt = 1.0 / this->get_parameter("trajectory_rate_hz").as_double();
         auto interpolated_trajectory = computeCubicSplineTrajectory(current_positions, target_positions, trajectory_time, dt);
         
         if (interpolated_trajectory.empty()) {
