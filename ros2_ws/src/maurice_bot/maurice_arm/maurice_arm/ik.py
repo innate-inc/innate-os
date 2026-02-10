@@ -23,7 +23,7 @@ class KDLIKNode(Node):
         super().__init__("kdl_ik_from_file")
 
         # 1) Declare & read solver parameters
-        self.declare_parameter("search_resolution", 0.001)
+        self.declare_parameter("search_resolution", 0.0001)
         self.declare_parameter("timeout", 0.2)
         eps = self.get_parameter("search_resolution").value
         timeout = self.get_parameter("timeout").value
@@ -91,6 +91,7 @@ class KDLIKNode(Node):
 
         # 6) publisher and subscription
         self.joint_pub = self.create_publisher(JointState, "/ik_solution", 10)
+        self.ik_fk_pub = self.create_publisher(PoseStamped, "/ik_solution_fk", 10)
         self.fk_pub = self.create_publisher(PoseStamped, "/fk_pose", 10)
         # self.command_pub = self.create_publisher(Float64MultiArray, '/maurice_arm/commands', 10)
         self.create_subscription(Twist, "/ik_delta", self.on_delta, 10)
@@ -241,6 +242,22 @@ class KDLIKNode(Node):
         js.name = self.joint_names
         js.position = [self._normalize_angle(best_solution[i]) for i in range(best_solution.rows())]
         self.joint_pub.publish(js)
+
+        # publish FK of the IK solution (what the commanded joints map to)
+        fk_frame = kdl.Frame()
+        if self.fksolver.JntToCart(best_solution, fk_frame) >= 0:
+            ik_fk_msg = PoseStamped()
+            ik_fk_msg.header.stamp = js.header.stamp
+            ik_fk_msg.header.frame_id = "base_link"
+            ik_fk_msg.pose.position.x = fk_frame.p.x()
+            ik_fk_msg.pose.position.y = fk_frame.p.y()
+            ik_fk_msg.pose.position.z = fk_frame.p.z()
+            quat = fk_frame.M.GetQuaternion()
+            ik_fk_msg.pose.orientation.x = quat[0]
+            ik_fk_msg.pose.orientation.y = quat[1]
+            ik_fk_msg.pose.orientation.z = quat[2]
+            ik_fk_msg.pose.orientation.w = quat[3]
+            self.ik_fk_pub.publish(ik_fk_msg)
 
         # Publish command for the arm - COMMENTED OUT
         # cmd_msg = Float64MultiArray()
