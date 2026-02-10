@@ -226,6 +226,15 @@ private:
                 config.kd = joint["pid_gains"]["kd"];
                 RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d", config.kp, config.ki, config.kd);
                 
+                if (joint.contains("profile_velocity")) {
+                    config.profile_velocity = joint["profile_velocity"];
+                    RCLCPP_INFO(this->get_logger(), "  Profile velocity: %d", config.profile_velocity);
+                }
+                if (joint.contains("profile_acceleration")) {
+                    config.profile_acceleration = joint["profile_acceleration"];
+                    RCLCPP_INFO(this->get_logger(), "  Profile acceleration: %d", config.profile_acceleration);
+                }
+                
                 // Parse head-specific config for joint 7
                 // Head angle limits are derived from position_limits (not duplicated in config)
                 if (i == 7 && joint.contains("head_config")) {
@@ -317,6 +326,18 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             dynamixel_->setD(config.servo_id, config.kd);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            
+            // Set profile velocity and acceleration (0 = no limit)
+            if (config.profile_velocity > 0) {
+                RCLCPP_INFO(this->get_logger(), "  Setting profile velocity: %d", config.profile_velocity);
+                dynamixel_->setProfileVelocity(config.servo_id, config.profile_velocity);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            if (config.profile_acceleration > 0) {
+                RCLCPP_INFO(this->get_logger(), "  Setting profile acceleration: %d", config.profile_acceleration);
+                dynamixel_->setProfileAcceleration(config.servo_id, config.profile_acceleration);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
             
             // Enable torque (if requested)
             if (enable_torque) {
@@ -1107,6 +1128,8 @@ private:
         int homing_offset = 0;
         int control_mode;
         int kp, ki, kd;
+        int profile_velocity = 0;
+        int profile_acceleration = 0;
         // Head-specific fields (for joint 7)
         // Note: head angle limits are derived from min_pos_rad/max_pos_rad at startup
         // Head position is inverted: negative head angle = positive servo angle
