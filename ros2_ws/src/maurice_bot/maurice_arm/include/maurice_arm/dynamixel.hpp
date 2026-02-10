@@ -39,6 +39,8 @@ public:
     void setI(int motor_id, int i);
     void setD(int motor_id, int d);
     void setHomeOffset(int motor_id, int home_position);
+    void setProfileVelocity(int motor_id, int velocity);
+    void setProfileAcceleration(int motor_id, int acceleration);
     
     // Read/Write
     int readPosition(int motor_id);
@@ -76,6 +78,8 @@ private:
     static constexpr int ADDR_HOMING_OFFSET = 20;
     static constexpr int ADDR_HARDWARE_ERROR_STATUS = 70;
     static constexpr int ADDR_PRESENT_LOAD = 126;
+    static constexpr int ADDR_PROFILE_ACCELERATION = 108;
+    static constexpr int ADDR_PROFILE_VELOCITY = 112;
     static constexpr int ADDR_PRESENT_TEMPERATURE = 146;
 };
 
