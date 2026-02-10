@@ -3,18 +3,22 @@
 Record Position Skill - Record current arm FK position, save to file, and send as feedback.
 """
 
+import base64
 import json
+from datetime import datetime
 from pathlib import Path
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
+from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
 
 
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
+CORNER_CAPTURES_DIR = Path("/home/jetson1/innate-os/captures/corners")
 
 
 class RecordPosition(Skill):
     """Record current arm position, save to calibration file, and send as feedback."""
     
     manipulation = Interface(InterfaceType.MANIPULATION)
+    image = RobotState(RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64)
     
     def __init__(self, logger):
         super().__init__(logger)
@@ -64,11 +68,27 @@ class RecordPosition(Skill):
         calibration[corner] = {"x": pos["x"], "y": pos["y"], "z": pos["z"]}
         CALIBRATION_FILE.write_text(json.dumps(calibration, indent=2))
         
+        self._save_corner_image(corner, pos)
+
         position_str = f"X={pos['x']:.4f}, Y={pos['y']:.4f}, Z={pos['z']:.4f}"
         self._send_feedback(f"RECORDED {corner.upper()}: {position_str}")
         self.logger.info(f"Saved {corner} to {CALIBRATION_FILE}")
         
         return f"{corner} recorded: {position_str}", SkillResult.SUCCESS
+
+    def _save_corner_image(self, corner: str, pos: dict):
+        """Save the latest wrist camera frame as a corner snapshot."""
+        if not self.image:
+            self.logger.warning("No wrist camera image available to save")
+            return
+        try:
+            CORNER_CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = CORNER_CAPTURES_DIR / f"corner_{corner}_{ts}.jpg"
+            path.write_bytes(base64.b64decode(self.image))
+            self.logger.info(f"Corner image saved: {path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save corner image: {e}")
     
     def cancel(self):
         """Nothing to cancel."""
