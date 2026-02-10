@@ -19,7 +19,7 @@ DRIVE_SQUARES = 3
 
 
 class PickUpPiece(Skill):
-    """Pick up a chess piece from a specified square (e.g., A4, B6)."""
+    """Pick up a chess piece from a specified square (e.g., A4, B6) and optionally place it on another."""
     
     manipulation = Interface(InterfaceType.MANIPULATION)
     mobility = Interface(InterfaceType.MOBILITY)
@@ -115,10 +115,11 @@ class PickUpPiece(Skill):
     
     def guidelines(self):
         return (
-            "Pick up a chess piece from a square. "
+            "Pick up a chess piece from a square and optionally place it on another. "
             "Requires 'square' parameter in chess notation (e.g., 'A1', 'H8'). "
+            "Optional 'place_square' parameter to place piece on target square. "
             "Uses calibration data to calculate position. "
-            "Moves 10cm above, descends to 4cm, picks piece, returns to 10cm."
+            "Moves above square, descends, picks piece, lifts, and places if target given."
         )
     
     def _load_calibration(self):
@@ -181,12 +182,13 @@ class PickUpPiece(Skill):
         
         return x, y
     
-    def execute(self, square: str, is_pawn: bool = True):
+    def execute(self, square: str, place_square: str | None = None, is_pawn: bool = True):
         """
-        Pick up a piece from the specified square.
+        Pick up a piece from the specified square and optionally place it on another.
         
         Args:
-            square: Chess notation (e.g., 'A4', 'E2')
+            square: Source square in chess notation (e.g., 'A4', 'E2')
+            place_square: Target square to place piece on (e.g., 'D5'). If None, just pick up.
             is_pawn: If True, descend 2cm lower for shorter pawn pieces
         """
         self._cancelled = False
@@ -311,14 +313,101 @@ class PickUpPiece(Skill):
             return "Failed to lift", SkillResult.FAILURE
         time.sleep(2.0)
         
-        # Step 7: Drive back to calibration origin (offset 0)
-        self.logger.info("[PickUpPiece] Step 7: Driving back to calibration origin")
+        # If no place square, just drive back and finish
+        if place_square is None:
+            self.logger.info("[PickUpPiece] Step 7: Driving back to calibration origin")
+            self._send_feedback("Returning to base position...")
+            current_offset = self._drive_to_offset(0.0, current_offset)
+            
+            self.logger.info(f"[PickUpPiece] Complete: Picked up piece from {square}")
+            self._send_feedback(f"Piece picked up from {square}")
+            return f"Picked up piece from {square}", SkillResult.SUCCESS
+        
+        # ========== PLACE PIECE ON TARGET SQUARE ==========
+        place_pos = self._square_to_position(place_square, calibration)
+        if place_pos is None:
+            return f"Invalid place square '{place_square}' or incomplete calibration", SkillResult.FAILURE
+        
+        place_x, place_y = place_pos
+        place_rank = int(place_square[1])
+        place_yaw = self.FIXED_YAW + 1.57 if place_rank <= 4 else self.FIXED_YAW
+        place_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
+        
+        # Drive base if needed for the place rank
+        if place_rank <= 3:
+            place_target_offset = -(DRIVE_SQUARES * square_size)
+        else:
+            place_target_offset = 0.0
+        
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+        
+        current_offset = self._drive_to_offset(place_target_offset, current_offset)
+        place_x_adj = place_x - current_offset
+        
+        self.logger.info(
+            f"[PickUpPiece] Placing on {place_square} at X={place_x:.4f} (adj={place_x_adj:.4f}), "
+            f"Y={place_y:.4f} (yaw={place_yaw:.2f}, place_z={place_height}, offset={current_offset:.4f})"
+        )
+        
+        # Step 7: Move above place square at safe height (keep gripper closed)
+        self.logger.info(f"[PickUpPiece] Step 7: Moving above {place_square}")
+        self._send_feedback(f"Moving above {place_square}...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=self.HEIGHT_ABOVE,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=2,
+            gripper_position=grip_position
+        )
+        if not success:
+            return "Failed to move above place square", SkillResult.FAILURE
+        time.sleep(2.5)
+        
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+        
+        # Step 8: Descend to place height (keep gripper closed)
+        self.logger.info(f"[PickUpPiece] Step 8: Descending to place height {place_height}m")
+        self._send_feedback("Descending to place...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=place_height,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=2.5,
+            gripper_position=grip_position
+        )
+        if not success:
+            return "Failed to descend to place height", SkillResult.FAILURE
+        time.sleep(2.5)
+        
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+        
+        # Step 9: Open gripper to release piece
+        self.logger.info("[PickUpPiece] Step 9: Releasing piece")
+        self._send_feedback("Releasing piece...")
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
+        time.sleep(1.5)
+        
+        # Step 10: Lift back to safe height
+        self.logger.info(f"[PickUpPiece] Step 10: Lifting to safe height {self.HEIGHT_SAFE}m")
+        self._send_feedback("Lifting after place...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=self.HEIGHT_SAFE,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=2
+        )
+        if not success:
+            return "Failed to lift after placing", SkillResult.FAILURE
+        time.sleep(2.0)
+        
+        # Step 11: Drive back to calibration origin
+        self.logger.info("[PickUpPiece] Step 11: Driving back to calibration origin")
         self._send_feedback("Returning to base position...")
         current_offset = self._drive_to_offset(0.0, current_offset)
         
-        self.logger.info(f"[PickUpPiece] Complete: Picked up piece from {square}")
-        self._send_feedback(f"Piece picked up from {square}")
-        return f"Picked up piece from {square}", SkillResult.SUCCESS
+        self.logger.info(f"[PickUpPiece] Complete: Moved piece from {square} to {place_square}")
+        self._send_feedback(f"Piece moved from {square} to {place_square}")
+        return f"Moved piece from {square} to {place_square}", SkillResult.SUCCESS
     
     def cancel(self):
         """Cancel the pick up operation."""
