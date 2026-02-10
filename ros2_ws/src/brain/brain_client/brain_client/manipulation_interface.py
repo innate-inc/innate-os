@@ -69,16 +69,6 @@ class ManipulationInterface:
 
         self.logger.info("ManipulationInterface initialized")
 
-    def spin_node_to_refresh_topics(self, count: int = 10, timeout_sec: float = 0.001):
-        """Spin the underlying ROS node to process pending callbacks.
-
-        Args:
-            count: Number of spin iterations.
-            timeout_sec: Timeout per iteration.
-        """
-        for _ in range(count):
-            rclpy.spin_once(self.node, timeout_sec=timeout_sec)
-
     def _ik_solution_callback(self, msg: JointState):
         """Store the latest IK solution."""
         self.logger.debug(f"IK solution received: {msg}")
@@ -104,7 +94,9 @@ class ManipulationInterface:
             List of 6 effort values (percentage, -100% to 100%)
             or None if no arm state is available
         """
-        self.spin_node_to_refresh_topics()
+        # Spin multiple times to drain the queue and get the latest arm state
+        for _ in range(10):
+            rclpy.spin_once(self.node, timeout_sec=0.001)
         
         if self._arm_state is None:
             self.logger.warn("No arm state available yet")
@@ -124,7 +116,9 @@ class ManipulationInterface:
             dict with keys: 'position' (x, y, z), 'orientation' (x, y, z, w)
             or None if no pose is available
         """
-        self.spin_node_to_refresh_topics()
+        # Spin multiple times to drain the queue and get the latest FK pose
+        for _ in range(10):
+            rclpy.spin_once(self.node, timeout_sec=0.001)
         
         if self._fk_pose is None:
             self.logger.warn("No FK pose available yet")
@@ -216,7 +210,8 @@ class ManipulationInterface:
         start_time = time.time()
         iteration = 0
         while time.time() - start_time < timeout:
-            self.spin_node_to_refresh_topics(count=1, timeout_sec=0.01)
+            # Spin once to allow callback to process incoming IK solution
+            rclpy.spin_once(self.node, timeout_sec=0.01)
 
             if self._ik_solution is not None:
                 joint_positions = list(self._ik_solution.position)
@@ -234,7 +229,7 @@ class ManipulationInterface:
         return None
 
     def move_to_joint_positions(
-        self, joint_positions: list[float], duration: int = 3, blocking: bool = False
+        self, joint_positions: list[float], duration: int = 3, wait_for_completion: bool = True
     ) -> bool:
         """
         Move the arm to specified joint positions using smooth trajectory.
@@ -242,7 +237,7 @@ class ManipulationInterface:
         Args:
             joint_positions: List of 6 joint angles in radians
             duration: Trajectory duration in seconds
-            blocking: If True, block until motion completes
+            wait_for_completion: If True, block until motion completes
 
         Returns:
             True if command was successful, False otherwise
@@ -268,21 +263,10 @@ class ManipulationInterface:
         request.time = float(duration)
 
         try:
-            future = self._goto_js_client.call_async(request)
-
-            if blocking:
-                # Wait for the service to respond (motion completion)
-                rclpy.spin_until_future_complete(
-                    self.node, future, timeout_sec=duration
-                )
-                if future.result() is not None:
-                    result = future.result()
-                    if not result.success:
-                        self.logger.error("[ManipulationInterface] GotoJS returned failure")
-                        return False
-                else:
-                    self.logger.error("[ManipulationInterface] GotoJS call timed out")
-                    return False
+            # Fire-and-forget: do not wait on the future here to avoid
+            # blocking the action callback. Any lower-level failures should
+            # be handled/logged by the GotoJS server.
+            self._goto_js_client.call_async(request)
         except Exception as e:
             self.logger.error(f"[ManipulationInterface] Exception calling GotoJS: {e}")
             return False
@@ -299,7 +283,6 @@ class ManipulationInterface:
         yaw: float = 0.0,
         duration: int = 3,
         ik_timeout: float = 2.0,
-        blocking: bool = False,
     ) -> bool:
         """
         Move the arm to a Cartesian pose (combines IK solving and motion execution).
@@ -309,7 +292,6 @@ class ManipulationInterface:
             roll, pitch, yaw: Target orientation in radians
             duration: Trajectory duration in seconds
             ik_timeout: Maximum time to wait for IK solution
-            blocking: If True, block until motion completes
 
         Returns:
             True if successful, False otherwise
@@ -328,10 +310,11 @@ class ManipulationInterface:
                 current_gripper = self._arm_state.position[5]
             joint_positions.append(current_gripper)
 
+        # Execute motion (non-blocking to avoid blocking the action server callback)
         return self.move_to_joint_positions(
             joint_positions,
             duration=duration,
-            blocking=blocking,
+            wait_for_completion=False,
         )
 
     def get_joint_limits(self) -> dict:
@@ -447,14 +430,13 @@ class ManipulationInterface:
     GRIPPER_CLOSED = 0.0
     GRIPPER_OPEN = 0.85
 
-    def open_gripper(self, percent: float = 100.0, duration: float = 0.5, blocking: bool = False) -> bool:
+    def open_gripper(self, percent: float = 100.0, duration: float = 0.5) -> bool:
         """
         Open the gripper (joint6).
 
         Args:
-            percent: How open to make the gripper, 0-100% (default 100% = fully open)
             duration: Time for gripper motion
-            blocking: If True, block until motion completes
+            percent: How open to make the gripper, 0-100% (default 100% = fully open)
 
         Returns:
             True if successful, False otherwise
@@ -464,7 +446,9 @@ class ManipulationInterface:
             self.logger.error("No arm state available")
             return False
 
-        self.spin_node_to_refresh_topics(count=5, timeout_sec=0.01)
+        # Drain message queue to get fresh state
+        for _ in range(5):
+            rclpy.spin_once(self.node, timeout_sec=0.01)
 
         positions = list(self._arm_state.position)
         if len(positions) < 6:
@@ -475,16 +459,14 @@ class ManipulationInterface:
         
         # Interpolate between closed and open based on percent
         positions[5] = self.GRIPPER_CLOSED + (self.GRIPPER_OPEN - self.GRIPPER_CLOSED) * (percent / 100.0)
-        return self.move_to_joint_positions(positions, duration=duration, blocking=blocking)
+        return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)
 
-    def close_gripper(self, strength: float = 0.0, duration: float = 0.5, blocking: bool = False) -> bool:
+    def close_gripper(self, duration: float = 0.5) -> bool:
         """
         Close the gripper (joint6).
 
         Args:
-            strength: Additional radians to close beyond 0.0 (e.g. 0.1 = close to -0.1 rad)
             duration: Time for gripper motion
-            blocking: If True, block until motion completes
 
         Returns:
             True if successful, False otherwise
@@ -494,11 +476,13 @@ class ManipulationInterface:
             self.logger.error("No arm state available")
             return False
 
-        self.spin_node_to_refresh_topics(count=5, timeout_sec=0.01)
+        # Drain message queue to get fresh state
+        for _ in range(5):
+            rclpy.spin_once(self.node, timeout_sec=0.01)
 
         positions = list(self._arm_state.position)
         if len(positions) < 6:
             positions.extend([0.0] * (6 - len(positions)))
 
-        positions[5] = self.GRIPPER_CLOSED - abs(strength)
-        return self.move_to_joint_positions(positions, duration=duration, blocking=blocking)
+        positions[5] = self.GRIPPER_CLOSED
+        return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)
