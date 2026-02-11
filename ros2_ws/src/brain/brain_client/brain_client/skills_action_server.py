@@ -16,7 +16,6 @@ import threading
 import types
 from pathlib import Path
 
-import cv2  # For image processing
 import numpy as np  # For map data
 import rclpy
 
@@ -26,13 +25,12 @@ from brain_messages.srv import GetAvailableSkills
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.node import Node
-from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 
 # Import ROS message types for subscriptions
-from sensor_msgs.msg import CompressedImage  # Image removed as it is unused
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from brain_client.camera_provider import CameraProvider
 from brain_client.head_interface import HeadInterface
 from brain_client.manipulation_interface import ManipulationInterface
 from brain_client.mobility_interface import MobilityInterface
@@ -50,9 +48,10 @@ class SkillsActionServer(Node):
     def __init__(self):
         super().__init__("skills_action_server")
 
+        # Camera images handled by a dedicated lightweight node (own thread)
+        self._camera_node = CameraProvider()
+
         # Robot state storage
-        self.last_main_camera_image = None  # Stores cv2 image object
-        self.last_wrist_camera_image = None  # Stores cv2 image object from wrist camera
         self.last_odom = None  # Stores Odometry message
         self.last_map = None  # Stores OccupancyGrid message
         self.last_head_position = None  # Stores head position dict (parsed JSON)
@@ -62,15 +61,6 @@ class SkillsActionServer(Node):
         self._current_skill_lock = threading.Lock()
         self._state_update_thread = None
         self._state_update_stop_event = threading.Event()
-
-        image_qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
-
-        self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
-        self.image_topic = self.get_parameter("image_topic").value
 
         # Topic for base velocity commands
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
@@ -85,20 +75,7 @@ class SkillsActionServer(Node):
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
 
-        # Subscribers for robot state
-        # TODO: Make topic names configurable if needed (e.g., via parameters)
-        self.main_camera_image_sub = self.create_subscription(
-            CompressedImage,
-            self.image_topic,
-            self.main_camera_image_callback,
-            image_qos,
-        )
-        self.wrist_camera_image_sub = self.create_subscription(
-            CompressedImage,
-            "/mars/arm/image_raw/compressed",
-            self.wrist_camera_image_callback,
-            image_qos,
-        )
+        # Subscribers for robot state (cameras handled by _camera_node)
         self.odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -596,34 +573,16 @@ class SkillsActionServer(Node):
         robot_state_to_inject = {}
 
         if RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64 in required_states:
-            if self.last_main_camera_image is not None:
-                try:
-                    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-                    success, encoded_img_bytes = cv2.imencode(".jpg", self.last_main_camera_image, encode_params)
-                    if success:
-                        robot_state_to_inject[RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value] = base64.b64encode(
-                            encoded_img_bytes.tobytes()
-                        ).decode("utf-8")
-                    else:
-                        self.get_logger().error("Failed to encode last_main_camera_image for skill state")
-                except Exception as e_img:
-                    self.get_logger().error(f"Error encoding last_main_camera_image for skill: {e_img}")
+            b64 = self._camera_node.last_main_camera_b64
+            if b64 is not None:
+                robot_state_to_inject[RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64.value] = b64
             else:
                 self.get_logger().warn("Skill requires LAST_MAIN_CAMERA_IMAGE_B64 but none available.")
 
         if RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64 in required_states:
-            if self.last_wrist_camera_image is not None:
-                try:
-                    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
-                    success, encoded_img_bytes = cv2.imencode(".jpg", self.last_wrist_camera_image, encode_params)
-                    if success:
-                        robot_state_to_inject[RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64.value] = base64.b64encode(
-                            encoded_img_bytes.tobytes()
-                        ).decode("utf-8")
-                    else:
-                        self.get_logger().error("Failed to encode last_wrist_camera_image for skill state")
-                except Exception as e_img:
-                    self.get_logger().error(f"Error encoding last_wrist_camera_image for skill: {e_img}")
+            b64 = self._camera_node.last_wrist_camera_b64
+            if b64 is not None:
+                robot_state_to_inject[RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64.value] = b64
             else:
                 self.get_logger().warn("Skill requires LAST_WRIST_CAMERA_IMAGE_B64 but none available.")
 
@@ -906,26 +865,11 @@ class SkillsActionServer(Node):
                 )
 
     def destroy(self):
+        self._camera_node.shutdown()
         self._action_server.destroy()
         super().destroy_node()
 
     # Callbacks for state subscriptions
-    def main_camera_image_callback(self, msg: CompressedImage):
-        try:
-            np_arr = np.frombuffer(msg.data, np.uint8)
-            self.last_main_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            self.get_logger().debug("Received and decoded new image for skills.")
-        except Exception as e:
-            self.get_logger().error(f"Failed to decode compressed image for skill state: {e}")
-
-    def wrist_camera_image_callback(self, msg: CompressedImage):
-        try:
-            np_arr = np.frombuffer(msg.data, np.uint8)
-            self.last_wrist_camera_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            self.get_logger().debug("Received and decoded new wrist camera image for skills.")
-        except Exception as e:
-            self.get_logger().error(f"Failed to decode wrist camera image for skill state: {e}")
-
     def odom_callback(self, msg: Odometry):
         self.last_odom = msg
         # self.get_logger().debug('Received new odometry for skills.')
