@@ -15,7 +15,7 @@ class MoveArmOnPlane(Skill):
     manipulation = Interface(InterfaceType.MANIPULATION)
     
     # Fixed constants
-    FIXED_Z = 0.15
+    FIXED_Z = 0.14
     FIXED_ROLL = 0.0
     FIXED_YAW = 0.0
     FIXED_PITCH = 1.57  # Pointing downward
@@ -43,7 +43,7 @@ class MoveArmOnPlane(Skill):
             f"X must be between {self.X_MIN} and {self.X_MAX} meters. "
             f"Y must be between {self.Y_MIN} and {self.Y_MAX} meters. "
             f"Z is fixed at {self.FIXED_Z}m, base pitch is {self.FIXED_PITCH} rad (pointing down). "
-            f"An optional pitch_deviation (radians) can be provided to offset the pitch from the default. "
+            f"An optional camera_vertical boolean can tilt the end-effector for vertical camera orientation (pitch deviation of -0.57 rad). "
             f"Returns CANCELLED if position is out of bounds."
         )
     
@@ -51,8 +51,8 @@ class MoveArmOnPlane(Skill):
         self,
         x: float,
         y: float,
-        pitch_deviation: float = 0.0,
-        duration: int = 1
+        camera_vertical: bool = False,
+        duration: float = 1.0
     ):
         """
         Move arm to XY position on a fixed plane.
@@ -60,7 +60,7 @@ class MoveArmOnPlane(Skill):
         Args:
             x: Target x position in meters
             y: Target y position in meters
-            pitch_deviation: Deviation from the fixed pitch in radians
+            camera_vertical: If True, apply a pitch deviation of -0.57 rad for vertical camera orientation
             duration: Motion duration in seconds
         """
         self._cancelled = False
@@ -82,6 +82,7 @@ class MoveArmOnPlane(Skill):
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
         
+        pitch_deviation = -0.57 if camera_vertical else 0.0
         pitch = self.FIXED_PITCH + pitch_deviation
         
         self.logger.info(
