@@ -34,7 +34,7 @@ class PickUpPieceGemini(Skill):
     FIXED_PITCH = 1.57
 
     # Pitch offset for tilting camera to look at the square
-    CAMERA_PITCH_OFFSET = -0.5
+    CAMERA_PITCH_OFFSET = -0.57
 
     # Heights in meters
     HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
