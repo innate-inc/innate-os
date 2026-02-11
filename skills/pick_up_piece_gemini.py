@@ -54,6 +54,12 @@ class PickUpPieceGemini(Skill):
     # Heights in meters
     HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
     HEIGHT_ABOVE = 0.15  # 10cm above board for positioning
+    HEIGHT_PICK = 0.1       # 6cm - pick height for tall pieces
+    HEIGHT_PICK_PAWN = 0.07   # 4cm - pick height for pawns (2cm lower)
+
+    # Gripper parameters
+    GRIPPER_OPEN_PERCENT = 40
+    GRIPPER_CLOSE_STRENGTH = 0.2
 
     def __init__(self, logger):
         super().__init__(logger)
@@ -107,6 +113,33 @@ class PickUpPieceGemini(Skill):
         avg_left_y = (tl["y"] + bl["y"]) / 2.0
         avg_right_y = (tr["y"] + br["y"]) / 2.0
         return (avg_left_y - avg_right_y) / 7.0
+
+    def _update_calibration(self, calibration: dict, corr_x: float, corr_y: float) -> dict:
+        """Shift all 4 calibration corners by the correction and save to disk.
+
+        The correction represents how far off the calibration is:
+        the arm needed to move by (corr_x, corr_y) to reach the actual square center,
+        so the calibration underestimates by that amount. Shift corners accordingly.
+        """
+        updated = {}
+        for corner in ["top_left", "top_right", "bottom_left", "bottom_right"]:
+            c = calibration[corner]
+            updated[corner] = {
+                "x": c["x"] + corr_x,
+                "y": c["y"] + corr_y,
+                "z": c["z"]
+            }
+
+        try:
+            CALIBRATION_FILE.write_text(json.dumps(updated, indent=2))
+            self.logger.info(
+                f"[PickUpPieceGemini] Calibration updated: shifted all corners by "
+                f"dX={corr_x:+.4f}m dY={corr_y:+.4f}m"
+            )
+        except Exception as e:
+            self.logger.error(f"[PickUpPieceGemini] Failed to save calibration: {e}")
+
+        return updated
 
     def _drive_to_offset(self, target_offset: float, current_offset: float) -> float:
         """
@@ -235,12 +268,14 @@ class PickUpPieceGemini(Skill):
             self.logger.error(f"[PickUpPieceGemini] Failed to save image: {e}")
             return None
 
-    def execute(self, square: str, speed: float = 1.0):
+    def execute(self, square: str, place_square: str | None = None, is_pawn: bool = True, speed: float = 1.0):
         """
-        Move above a square, tilt camera, and capture an image.
+        Pick up a piece from the specified square using Gemini vision for precision.
 
         Args:
-            square: Chess notation (e.g., 'A4', 'E2')
+            square: Source square in chess notation (e.g., 'A4', 'E2')
+            place_square: Target square to place piece on (e.g., 'D5'). If None, just pick up.
+            is_pawn: If True, descend lower for shorter pawn pieces
             speed: Speed multiplier (1.0 = normal, 2.0 = twice as fast, etc.)
         """
         speed = max(0.1, speed)
@@ -268,7 +303,8 @@ class PickUpPieceGemini(Skill):
         x, y = pos
 
         rank = int(square[1])
-        yaw = self.FIXED_YAW
+        yaw = self.FIXED_YAW + 1.57 if rank <= 4 else self.FIXED_YAW
+        pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
 
         # Drive base to optimal position for this rank
         square_size = self._compute_square_size_x(calibration)
@@ -356,16 +392,22 @@ class PickUpPieceGemini(Skill):
         # Step 4b: Analyze square bbox with Gemini and compute correction
         self.logger.info("[PickUpPieceGemini] Step 4b: Analyzing square bbox with Gemini")
         self._send_feedback("Analyzing square with Gemini...")
-        correction = self._analyze_square_bbox(square, calibration)
+        analysis = self._analyze_square_bbox(square, calibration)
 
-        if correction and not self._cancelled:
-            corr_x, corr_y = correction
+        if analysis and not self._cancelled:
+            corr_x, corr_y, perceived = analysis
+
+            # Update calibration based on measured offset
+            if abs(corr_x) > 0.001 or abs(corr_y) > 0.001:
+                calibration = self._update_calibration(calibration, corr_x, corr_y)
+                self.logger.info(f"[PickUpPieceGemini] Calibration updated dX={corr_x:+.4f} dY={corr_y:+.4f}")
+
             if abs(corr_x) > 0.002 or abs(corr_y) > 0.002:
                 # Step 4c: Reposition arm using correction
                 new_x = x_adj + corr_x
                 new_y = y + corr_y
                 self.logger.info(
-                    f"[PickUpPieceGemini] Step 4c: Repositioning by dX={corr_x:+.4f} dY={corr_y:+.4f} "
+                    f"[PickUpPieceGemini] Step 4c: Repositioning dX={corr_x:+.4f} dY={corr_y:+.4f} "
                     f"-> X={new_x:.4f}, Y={new_y:.4f}"
                 )
                 self._send_feedback(f"Adjusting position by dX={corr_x*100:+.1f}cm dY={corr_y*100:+.1f}cm...")
@@ -375,41 +417,182 @@ class PickUpPieceGemini(Skill):
                     duration=d(1.5)
                 )
                 if success:
-                    w(2.0)
+                    w(1.0)
                     x_adj = new_x
                     y = new_y
-
-                    # Step 4d: Re-capture and re-analyze to verify
-                    self.logger.info("[PickUpPieceGemini] Step 4d: Re-capturing image for verification")
-                    self._send_feedback("Verifying position...")
-                    self._save_capture(f"{square}_corrected")
-                    verify_correction = self._analyze_square_bbox(f"{square}_verify", calibration)
-                    if verify_correction:
-                        v_x, v_y = verify_correction
-                        v_dist = (v_x**2 + v_y**2) ** 0.5
-                        self.logger.info(
-                            f"[PickUpPieceGemini] Verification: residual dX={v_x:+.4f} dY={v_y:+.4f} "
-                            f"({v_dist*100:.1f}cm)"
-                        )
-                        self._send_feedback(f"Residual error: {v_dist*100:.1f}cm")
             else:
                 self.logger.info("[PickUpPieceGemini] Correction too small, skipping reposition")
 
-        # Step 5: Return pitch to normal before finishing
-        self.logger.info("[PickUpPieceGemini] Step 5: Restoring pitch")
+        # Step 5: Restore pitch to straight down
+        self.logger.info("[PickUpPieceGemini] Step 5: Restoring pitch for pickup")
         self._send_feedback("Restoring arm orientation...")
         self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=self.HEIGHT_SAFE,
+            x=x_adj, y=y, z=self.HEIGHT_ABOVE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
-            duration=d(2)
+            duration=d(1.5)
         )
+        w(1.5)
+
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+
+        # Step 6: Open gripper
+        self.logger.info("[PickUpPieceGemini] Step 6: Opening gripper")
+        self._send_feedback("Opening gripper...")
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
+        w(1.5)
+
+        # Step 7: Descend to pick height (two stages for vertical trajectory)
+        mid_pick_z = (self.HEIGHT_ABOVE + pick_height) / 2.0
+        self.logger.info(f"[PickUpPieceGemini] Step 7a: Descending to mid height {mid_pick_z:.3f}m")
+        self._send_feedback("Descending to pick...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=x_adj, y=y, z=mid_pick_z,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
+            duration=d(1.67)
+        )
+        if not success:
+            return "Failed to descend to mid pick height", SkillResult.FAILURE
+        w(1.67)
+
+        self.logger.info(f"[PickUpPieceGemini] Step 7b: Descending to pick height {pick_height}m")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=x_adj, y=y, z=pick_height,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
+            duration=d(1.67)
+        )
+        if not success:
+            return "Failed to descend to pick height", SkillResult.FAILURE
+        w(1.67)
+
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+
+        # Step 8: Close gripper to grab piece
+        self.logger.info("[PickUpPieceGemini] Step 8: Closing gripper")
+        self._send_feedback("Grabbing piece...")
+        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH)
         w(2.0)
 
-        # Step 6: Drive back to calibration origin
-        self.logger.info("[PickUpPieceGemini] Step 6: Driving back to calibration origin")
+        # Step 9: Lift to safe height
+        grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
+        self.logger.info(f"[PickUpPieceGemini] Step 9: Lifting to {self.HEIGHT_SAFE}m")
+        self._send_feedback("Lifting piece...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=x_adj, y=y, z=self.HEIGHT_SAFE,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
+            duration=d(2),
+            gripper_position=grip_position
+        )
+        if not success:
+            return "Failed to lift", SkillResult.FAILURE
+        w(2.0)
+
+        # If no place square, just drive back and finish
+        if place_square is None:
+            self.logger.info("[PickUpPieceGemini] Driving back to calibration origin")
+            self._send_feedback("Returning to base position...")
+            current_offset = self._drive_to_offset(0.0, current_offset)
+            msg = f"Picked up piece from {square}"
+            self.logger.info(f"[PickUpPieceGemini] Complete: {msg}")
+            self._send_feedback(msg)
+            return msg, SkillResult.SUCCESS
+
+        # ========== PLACE PIECE ON TARGET SQUARE ==========
+        place_pos = self._square_to_position(place_square, calibration)
+        if place_pos is None:
+            return f"Invalid place square '{place_square}'", SkillResult.FAILURE
+
+        place_x, place_y = place_pos
+        place_rank = int(place_square[1])
+        place_yaw = self.FIXED_YAW + 1.57 if place_rank <= 4 else self.FIXED_YAW
+        place_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
+
+        # Drive base if needed for the place rank
+        if place_rank <= 3:
+            place_target_offset = -(DRIVE_SQUARES * square_size)
+        else:
+            place_target_offset = 0.0
+
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+
+        current_offset = self._drive_to_offset(place_target_offset, current_offset)
+        place_x_adj = place_x - current_offset
+
+        self.logger.info(
+            f"[PickUpPieceGemini] Placing on {place_square} at X={place_x:.4f} (adj={place_x_adj:.4f}), "
+            f"Y={place_y:.4f}"
+        )
+
+        # Step 10: Move above place square
+        self.logger.info(f"[PickUpPieceGemini] Step 10: Moving above {place_square}")
+        self._send_feedback(f"Moving above {place_square}...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=self.HEIGHT_ABOVE,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=d(2),
+            gripper_position=grip_position
+        )
+        if not success:
+            return "Failed to move above place square", SkillResult.FAILURE
+        w(2.5)
+
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+
+        # Step 11: Descend to place height (two stages for vertical trajectory)
+        mid_place_z = (self.HEIGHT_ABOVE + place_height) / 2.0
+        self.logger.info(f"[PickUpPieceGemini] Step 11a: Descending to mid height {mid_place_z:.3f}m")
+        self._send_feedback("Descending to place...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=mid_place_z,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=d(1.67),
+            gripper_position=grip_position
+        )
+        if not success:
+            return "Failed to descend to mid place height", SkillResult.FAILURE
+        w(1.67)
+
+        self.logger.info(f"[PickUpPieceGemini] Step 11b: Descending to place height {place_height}m")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=place_height,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=d(1.67),
+            gripper_position=grip_position
+        )
+        if not success:
+            return "Failed to descend to place height", SkillResult.FAILURE
+        w(1.67)
+
+        if self._cancelled:
+            return "Cancelled", SkillResult.CANCELLED
+
+        # Step 12: Release piece
+        self.logger.info("[PickUpPieceGemini] Step 12: Releasing piece")
+        self._send_feedback("Releasing piece...")
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
+        w(1.5)
+
+        # Step 13: Lift back to safe height
+        self.logger.info(f"[PickUpPieceGemini] Step 13: Lifting to {self.HEIGHT_SAFE}m")
+        self._send_feedback("Lifting after place...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=self.HEIGHT_SAFE,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=d(2)
+        )
+        if not success:
+            return "Failed to lift after placing", SkillResult.FAILURE
+        w(2.0)
+
+        # Drive back to calibration origin
+        self.logger.info("[PickUpPieceGemini] Driving back to calibration origin")
         self._send_feedback("Returning to base position...")
         current_offset = self._drive_to_offset(0.0, current_offset)
 
+        msg = f"Moved piece from {square} to {place_square}"
         self.logger.info(f"[PickUpPieceGemini] Complete: {msg}")
         self._send_feedback(msg)
         return msg, SkillResult.SUCCESS
@@ -417,7 +600,7 @@ class PickUpPieceGemini(Skill):
     def _analyze_square_bbox(self, square: str, calibration: dict):
         """Ask Gemini for the bbox of the square and save annotated visualization.
 
-        Returns (x_correction, y_correction) in meters, or None on failure.
+        Returns (x_correction, y_correction, perceived_square) or None on failure.
         Spatial mapping: image top=+X, image right=-Y.
         """
         if not self.gemini_client or not self.image:
@@ -441,9 +624,13 @@ class PickUpPieceGemini(Skill):
             annotated_b64 = base64.b64encode(buf_gemini.getvalue()).decode('utf-8')
 
             prompt = (
-                "There is a red dot in this image. Return the bounding box of the chessboard square that contains the red dot. "
-                "Return ONLY JSON: {\"box_2d\": [ymin, xmin, ymax, xmax]} "
-                "where values are normalized 0-1000."
+                "This image shows a chessboard from above. There is a red dot on the board. "
+                "1) Identify which chess square the red dot is on. "
+                "Files are A-H (left to right), ranks are 1-8 (bottom to top). "
+                "2) Return the bounding box of that chessboard square. "
+                "Return ONLY JSON with two keys: "
+                "\"square\" (the square name like A1 or H8) and "
+                "\"box_2d\" (array of [ymin, xmin, ymax, xmax] normalized 0-1000)."
             )
 
             response = self.gemini_client.models.generate_content(
@@ -451,11 +638,14 @@ class PickUpPieceGemini(Skill):
                 contents=[prompt, types.Part.from_bytes(data=base64.b64decode(annotated_b64), mime_type="image/jpeg")],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    thinking_config=types.ThinkingConfig(thinking_budget=128),
                 ),
             )
             result = json.loads(response.text.strip())
             box_2d = result.get("box_2d", [0, 0, 0, 0])
+            perceived_square = result.get("square", None)
+
+            self.logger.info(f"[PickUpPieceGemini] Gemini response: {result}")
 
             if not box_2d or len(box_2d) != 4 or not any(v > 0 for v in box_2d):
                 self.logger.warning(f"[PickUpPieceGemini] Gemini returned invalid bbox: {box_2d}")
@@ -494,7 +684,7 @@ class PickUpPieceGemini(Skill):
             dist_m = (x_correction**2 + y_correction**2) ** 0.5
 
             self.logger.info(
-                f"[PickUpPieceGemini] Gemini bbox: box_2d={box_2d} "
+                f"[PickUpPieceGemini] Gemini bbox: box_2d={box_2d} perceived={perceived_square} "
                 f"px=[{x1},{y1},{x2},{y2}] bbox_center=({bbox_cx},{bbox_cy}) "
                 f"img_center=({img_cx},{img_cy}) dist={dist_px:.0f}px"
             )
@@ -524,7 +714,8 @@ class PickUpPieceGemini(Skill):
             draw.line([(img_cx, img_cy), (bbox_cx, bbox_cy)], fill='cyan', width=2)
 
             # Distance label
-            draw.text((10, 10), f"dist={dist_px:.0f}px corr=({x_correction:+.3f},{y_correction:+.3f})m", fill='cyan')
+            label = f"perceived={perceived_square or '?'} dist={dist_px:.0f}px corr=({x_correction:+.3f},{y_correction:+.3f})m"
+            draw.text((10, 10), label, fill='cyan')
 
             # Save
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -535,7 +726,7 @@ class PickUpPieceGemini(Skill):
             path.write_bytes(buf.getvalue())
             self.logger.info(f"[PickUpPieceGemini] Bbox visualization saved: {path}")
 
-            return (x_correction, y_correction)
+            return (x_correction, y_correction, perceived_square)
 
         except Exception as e:
             self.logger.error(f"[PickUpPieceGemini] Bbox analysis failed: {e}")
