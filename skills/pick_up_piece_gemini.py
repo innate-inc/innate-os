@@ -50,6 +50,7 @@ class PickUpPieceGemini(Skill):
 
     # Pitch offset for tilting camera to look at the square
     CAMERA_PITCH_OFFSET = -0.57
+    CAMERA_TILT_X_OFFSET = -0.025  # shift back 2.5cm when tilting to compensate
 
     # Heights in meters
     HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
@@ -366,8 +367,9 @@ class PickUpPieceGemini(Skill):
             f"[PickUpPieceGemini] Step 3: Tilting pitch from {self.FIXED_PITCH} to {tilted_pitch} rad"
         )
         self._send_feedback("Tilting camera to view square...")
+        tilt_x = x_adj + self.CAMERA_TILT_X_OFFSET
         success = self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=self.HEIGHT_ABOVE,
+            x=tilt_x, y=y, z=self.HEIGHT_ABOVE,
             roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
             duration=d(2)
         )
