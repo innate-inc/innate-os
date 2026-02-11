@@ -4,10 +4,13 @@ Pick Up Piece Gemini Skill - Move above a chess square, tilt the wrist camera, a
 """
 
 import base64
+import io
 import json
 import time
 from datetime import datetime
 from pathlib import Path
+from google import genai
+from google.genai import types
 from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
 
 
@@ -19,6 +22,18 @@ CAPTURES_DIR = Path.home() / "innate-os/captures/gemini"
 DRIVE_SPEED = 0.02
 # Number of squares to offset by when driving
 DRIVE_SQUARES = 3
+
+
+def _load_env_file(env_path: Path) -> dict:
+    env_vars = {}
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    env_vars[key.strip()] = value.strip()
+    return env_vars
 
 
 class PickUpPieceGemini(Skill):
@@ -43,6 +58,18 @@ class PickUpPieceGemini(Skill):
     def __init__(self, logger):
         super().__init__(logger)
         self._cancelled = False
+        self._init_gemini()
+
+    def _init_gemini(self):
+        env_vars = _load_env_file(Path(__file__).parent / ".env.scan")
+        self.api_key = env_vars.get("GEMINI_API_KEY", "")
+        self.gemini_client = None
+        if self.api_key and self.api_key != "your_gemini_api_key_here":
+            try:
+                self.gemini_client = genai.Client(api_key=self.api_key)
+                self.logger.info("[PickUpPieceGemini] Gemini configured (google-genai SDK)")
+            except Exception as e:
+                self.logger.warning(f"[PickUpPieceGemini] Gemini init failed: {e}")
 
     def _load_position_state(self) -> float:
         """Load current robot X offset from state file. 0.0 = calibration origin."""
@@ -70,6 +97,16 @@ class PickUpPieceGemini(Skill):
         avg_top_x = (tl["x"] + tr["x"]) / 2.0
         avg_bottom_x = (bl["x"] + br["x"]) / 2.0
         return (avg_top_x - avg_bottom_x) / 7.0
+
+    def _compute_square_size_y(self, calibration: dict) -> float:
+        """Compute the Y-direction size of one square from calibration corners."""
+        tl = calibration["top_left"]
+        tr = calibration["top_right"]
+        bl = calibration["bottom_left"]
+        br = calibration["bottom_right"]
+        avg_left_y = (tl["y"] + bl["y"]) / 2.0
+        avg_right_y = (tr["y"] + br["y"]) / 2.0
+        return (avg_left_y - avg_right_y) / 7.0
 
     def _drive_to_offset(self, target_offset: float, current_offset: float) -> float:
         """
@@ -316,6 +353,48 @@ class PickUpPieceGemini(Skill):
             msg = f"Moved above {square} but failed to capture image"
             self.logger.warning(f"[PickUpPieceGemini] {msg}")
 
+        # Step 4b: Analyze square bbox with Gemini and compute correction
+        self.logger.info("[PickUpPieceGemini] Step 4b: Analyzing square bbox with Gemini")
+        self._send_feedback("Analyzing square with Gemini...")
+        correction = self._analyze_square_bbox(square, calibration)
+
+        if correction and not self._cancelled:
+            corr_x, corr_y = correction
+            if abs(corr_x) > 0.002 or abs(corr_y) > 0.002:
+                # Step 4c: Reposition arm using correction
+                new_x = x_adj + corr_x
+                new_y = y + corr_y
+                self.logger.info(
+                    f"[PickUpPieceGemini] Step 4c: Repositioning by dX={corr_x:+.4f} dY={corr_y:+.4f} "
+                    f"-> X={new_x:.4f}, Y={new_y:.4f}"
+                )
+                self._send_feedback(f"Adjusting position by dX={corr_x*100:+.1f}cm dY={corr_y*100:+.1f}cm...")
+                success = self.manipulation.move_to_cartesian_pose(
+                    x=new_x, y=new_y, z=self.HEIGHT_ABOVE,
+                    roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
+                    duration=d(1.5)
+                )
+                if success:
+                    w(2.0)
+                    x_adj = new_x
+                    y = new_y
+
+                    # Step 4d: Re-capture and re-analyze to verify
+                    self.logger.info("[PickUpPieceGemini] Step 4d: Re-capturing image for verification")
+                    self._send_feedback("Verifying position...")
+                    self._save_capture(f"{square}_corrected")
+                    verify_correction = self._analyze_square_bbox(f"{square}_verify", calibration)
+                    if verify_correction:
+                        v_x, v_y = verify_correction
+                        v_dist = (v_x**2 + v_y**2) ** 0.5
+                        self.logger.info(
+                            f"[PickUpPieceGemini] Verification: residual dX={v_x:+.4f} dY={v_y:+.4f} "
+                            f"({v_dist*100:.1f}cm)"
+                        )
+                        self._send_feedback(f"Residual error: {v_dist*100:.1f}cm")
+            else:
+                self.logger.info("[PickUpPieceGemini] Correction too small, skipping reposition")
+
         # Step 5: Return pitch to normal before finishing
         self.logger.info("[PickUpPieceGemini] Step 5: Restoring pitch")
         self._send_feedback("Restoring arm orientation...")
@@ -334,6 +413,133 @@ class PickUpPieceGemini(Skill):
         self.logger.info(f"[PickUpPieceGemini] Complete: {msg}")
         self._send_feedback(msg)
         return msg, SkillResult.SUCCESS
+
+    def _analyze_square_bbox(self, square: str, calibration: dict):
+        """Ask Gemini for the bbox of the square and save annotated visualization.
+
+        Returns (x_correction, y_correction) in meters, or None on failure.
+        Spatial mapping: image top=+X, image right=-Y.
+        """
+        if not self.gemini_client or not self.image:
+            self.logger.warning("[PickUpPieceGemini] Skipping bbox analysis (no client or image)")
+            return None
+
+        try:
+            from PIL import Image, ImageDraw
+
+            img = Image.open(io.BytesIO(base64.b64decode(self.image)))
+            w, h = img.size
+            img_cx, img_cy = w // 2, h // 2
+
+            # Draw red dot at image center and encode for Gemini
+            img_for_gemini = img.copy()
+            draw_gemini = ImageDraw.Draw(img_for_gemini)
+            draw_gemini.ellipse([img_cx - 7, img_cy - 7, img_cx + 7, img_cy + 7],
+                                fill='red', outline='white', width=2)
+            buf_gemini = io.BytesIO()
+            img_for_gemini.save(buf_gemini, format='JPEG', quality=90)
+            annotated_b64 = base64.b64encode(buf_gemini.getvalue()).decode('utf-8')
+
+            prompt = (
+                "There is a red dot in this image. Return the bounding box of the chessboard square that contains the red dot. "
+                "Return ONLY JSON: {\"box_2d\": [ymin, xmin, ymax, xmax]} "
+                "where values are normalized 0-1000."
+            )
+
+            response = self.gemini_client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=[prompt, types.Part.from_bytes(data=base64.b64decode(annotated_b64), mime_type="image/jpeg")],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            result = json.loads(response.text.strip())
+            box_2d = result.get("box_2d", [0, 0, 0, 0])
+
+            if not box_2d or len(box_2d) != 4 or not any(v > 0 for v in box_2d):
+                self.logger.warning(f"[PickUpPieceGemini] Gemini returned invalid bbox: {box_2d}")
+                return None
+
+            # Denormalize bbox [ymin, xmin, ymax, xmax] -> pixel coords
+            y1 = int(box_2d[0] / 1000 * h)
+            x1 = int(box_2d[1] / 1000 * w)
+            y2 = int(box_2d[2] / 1000 * h)
+            x2 = int(box_2d[3] / 1000 * w)
+            bbox_cx = (x1 + x2) // 2
+            bbox_cy = (y1 + y2) // 2
+            bbox_w_px = max(x2 - x1, 1)
+            bbox_h_px = max(y2 - y1, 1)
+
+            dist_px = ((img_cx - bbox_cx) ** 2 + (img_cy - bbox_cy) ** 2) ** 0.5
+
+            # Compute meters-per-pixel using bbox as one square
+            sq_size_x = self._compute_square_size_x(calibration)
+            sq_size_y = self._compute_square_size_y(calibration)
+            # Image vertical (top-bottom) corresponds to robot X
+            m_per_px_vert = sq_size_x / bbox_h_px
+            # Image horizontal (left-right) corresponds to robot Y
+            m_per_px_horiz = sq_size_y / bbox_w_px
+
+            # Pixel offset: bbox center relative to image center
+            dx_px = bbox_cx - img_cx  # positive = bbox is right of center
+            dy_px = bbox_cy - img_cy  # positive = bbox is below center
+
+            # Convert to robot coordinates
+            # Image top = +X, so bbox above center (dy_px < 0) means move +X
+            x_correction = -dy_px * m_per_px_vert
+            # Image right = -Y, so bbox right of center (dx_px > 0) means move -Y
+            y_correction = -dx_px * m_per_px_horiz
+
+            dist_m = (x_correction**2 + y_correction**2) ** 0.5
+
+            self.logger.info(
+                f"[PickUpPieceGemini] Gemini bbox: box_2d={box_2d} "
+                f"px=[{x1},{y1},{x2},{y2}] bbox_center=({bbox_cx},{bbox_cy}) "
+                f"img_center=({img_cx},{img_cy}) dist={dist_px:.0f}px"
+            )
+            self.logger.info(
+                f"[PickUpPieceGemini] Correction: dx_px={dx_px} dy_px={dy_px} "
+                f"-> x_corr={x_correction:+.4f}m y_corr={y_correction:+.4f}m "
+                f"(sq_px={bbox_w_px}x{bbox_h_px} sq_m={sq_size_y:.4f}x{sq_size_x:.4f} dist={dist_m*100:.1f}cm)"
+            )
+
+            # Draw annotated image
+            draw = ImageDraw.Draw(img)
+
+            # Image center point (red crosshair)
+            draw.ellipse([img_cx - 7, img_cy - 7, img_cx + 7, img_cy + 7],
+                         fill='red', outline='white', width=2)
+            draw.line([(img_cx - 16, img_cy), (img_cx + 16, img_cy)], fill='red', width=2)
+            draw.line([(img_cx, img_cy - 16), (img_cx, img_cy + 16)], fill='red', width=2)
+
+            # Bbox rectangle (yellow)
+            draw.rectangle([x1, y1, x2, y2], outline='yellow', width=3)
+
+            # Bbox center (lime dot)
+            draw.ellipse([bbox_cx - 5, bbox_cy - 5, bbox_cx + 5, bbox_cy + 5],
+                         fill='lime', outline='white', width=1)
+
+            # Line from image center to bbox center (cyan)
+            draw.line([(img_cx, img_cy), (bbox_cx, bbox_cy)], fill='cyan', width=2)
+
+            # Distance label
+            draw.text((10, 10), f"dist={dist_px:.0f}px corr=({x_correction:+.3f},{y_correction:+.3f})m", fill='cyan')
+
+            # Save
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+            path = CAPTURES_DIR / f"bbox_{square}_{ts}.jpg"
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=90)
+            path.write_bytes(buf.getvalue())
+            self.logger.info(f"[PickUpPieceGemini] Bbox visualization saved: {path}")
+
+            return (x_correction, y_correction)
+
+        except Exception as e:
+            self.logger.error(f"[PickUpPieceGemini] Bbox analysis failed: {e}")
+            return None
 
     def cancel(self):
         """Cancel the operation."""
