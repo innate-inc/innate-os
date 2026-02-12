@@ -17,8 +17,8 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 2,
               "pid_gains": {
-                  "kp": 300,
-                  "ki": 10,
+                  "kp": 2000,
+                  "ki": 0,
                   "kd": 1000
               }
           },
