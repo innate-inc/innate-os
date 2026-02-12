@@ -658,6 +658,7 @@ export default function App() {
         "Content-Type": "application/json",
       };
 
+      // Set the directive
       const response = await fetch(`${baseUrl}/set_directive`, {
         method: "POST",
         headers,
@@ -666,6 +667,15 @@ export default function App() {
 
       const data = await response.json();
       console.log("Directive response:", data);
+
+      // Also activate the brain when selecting an agent
+      const brainResponse = await fetch(`${baseUrl}/set_brain_active`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ active: true }),
+      });
+      const brainData = await brainResponse.json();
+      console.log("Brain activation response:", brainData);
     } catch (error) {
       console.error("Error setting directive:", error);
     }
