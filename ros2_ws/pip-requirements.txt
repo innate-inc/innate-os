@@ -38,6 +38,9 @@ websocket-client
 # Other AI
 inspireface
 
+# Gemini (Google GenAI)
+google-genai
+
 # Input handling
 pygame
 pynput
