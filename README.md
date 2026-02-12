@@ -108,6 +108,7 @@ python main.py --vis --log-everything
 - `--vis` — Enable the Genesis simulation visualization window
 - `--log-everything` — Verbose logging for agent inputs/outputs
 - `--no-web` — Run without the web server (headless mode)
+- `--no-agent` — Run without connecting to rosbridge/brain agent (useful for pure sim/API testing)
 
 ### 2. Start the Frontend Development Server
 
