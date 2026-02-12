@@ -62,45 +62,45 @@ def setup_head_and_arm(node):
     except Exception as e:
         node.get_logger().warn(f'Failed to set head position: {e}')
 
-    # --- Read and disable arm torque ---
-    try:
-        from maurice_msgs.msg import ArmStatus
+    # # --- Read and disable arm torque ---
+    # try:
+    #     from maurice_msgs.msg import ArmStatus
 
-        received_status = {'msg': None}
+    #     received_status = {'msg': None}
 
-        def status_cb(msg):
-            received_status['msg'] = msg
+    #     def status_cb(msg):
+    #         received_status['msg'] = msg
 
-        status_sub = node.create_subscription(
-            ArmStatus, '/mars/arm/status', status_cb, 1)
+    #     status_sub = node.create_subscription(
+    #         ArmStatus, '/mars/arm/status', status_cb, 1)
 
-        start = time.time()
-        while received_status['msg'] is None and (time.time() - start) < 2.0:
-            rclpy.spin_once(node, timeout_sec=0.1)
-        node.destroy_subscription(status_sub)
+    #     start = time.time()
+    #     while received_status['msg'] is None and (time.time() - start) < 2.0:
+    #         rclpy.spin_once(node, timeout_sec=0.1)
+    #     node.destroy_subscription(status_sub)
 
-        if received_status['msg'] is not None:
-            node.original_torque_enabled = received_status['msg'].is_torque_enabled
-            node.get_logger().info(
-                f'Current arm torque: {"ON" if node.original_torque_enabled else "OFF"}')
-        else:
-            node.get_logger().warn('Could not read arm status (timeout)')
+    #     if received_status['msg'] is not None:
+    #         node.original_torque_enabled = received_status['msg'].is_torque_enabled
+    #         node.get_logger().info(
+    #             f'Current arm torque: {"ON" if node.original_torque_enabled else "OFF"}')
+    #     else:
+    #         node.get_logger().warn('Could not read arm status (timeout)')
 
-        # Disable arm torque so it's limp during calibration
-        torque_off_client = node.create_client(Trigger, '/mars/arm/torque_off')
-        if torque_off_client.wait_for_service(timeout_sec=2.0):
-            future = torque_off_client.call_async(Trigger.Request())
-            rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
-            if future.result() is not None and future.result().success:
-                node.get_logger().info('Disabled arm torque for calibration')
-            else:
-                node.get_logger().warn('Failed to disable arm torque')
-        else:
-            node.get_logger().warn('Arm torque_off service not available')
-        node.destroy_client(torque_off_client)
+    #     # Disable arm torque so it's limp during calibration
+    #     torque_off_client = node.create_client(Trigger, '/mars/arm/torque_off')
+    #     if torque_off_client.wait_for_service(timeout_sec=2.0):
+    #         future = torque_off_client.call_async(Trigger.Request())
+    #         rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
+    #         if future.result() is not None and future.result().success:
+    #             node.get_logger().info('Disabled arm torque for calibration')
+    #         else:
+    #             node.get_logger().warn('Failed to disable arm torque')
+    #     else:
+    #         node.get_logger().warn('Arm torque_off service not available')
+    #     node.destroy_client(torque_off_client)
 
-    except Exception as e:
-        node.get_logger().warn(f'Failed to disable arm torque: {e}')
+    # except Exception as e:
+    #     node.get_logger().warn(f'Failed to disable arm torque: {e}')
 
 
 def restore_head_and_arm(node):
@@ -123,22 +123,22 @@ def restore_head_and_arm(node):
         except Exception as e:
             node.get_logger().warn(f'Failed to restore head position: {e}')
 
-    # --- Restore arm torque ---
-    if node.original_torque_enabled is not None and node.original_torque_enabled:
-        try:
-            torque_client = node.create_client(Trigger, '/mars/arm/torque_on')
-            if torque_client.wait_for_service(timeout_sec=2.0):
-                future = torque_client.call_async(Trigger.Request())
-                rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
-                if future.result() is not None and future.result().success:
-                    node.get_logger().info('Restored arm torque to ON')
-                else:
-                    node.get_logger().warn('Failed to restore arm torque')
-            else:
-                node.get_logger().warn('Arm torque_on service not available')
-            node.destroy_client(torque_client)
-        except Exception as e:
-            node.get_logger().warn(f'Failed to restore arm torque: {e}')
+    # # --- Restore arm torque ---
+    # if node.original_torque_enabled is not None and node.original_torque_enabled:
+    #     try:
+    #         torque_client = node.create_client(Trigger, '/mars/arm/torque_on')
+    #         if torque_client.wait_for_service(timeout_sec=2.0):
+    #             future = torque_client.call_async(Trigger.Request())
+    #             rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
+    #             if future.result() is not None and future.result().success:
+    #                 node.get_logger().info('Restored arm torque to ON')
+    #             else:
+    #                 node.get_logger().warn('Failed to restore arm torque')
+    #         else:
+    #             node.get_logger().warn('Arm torque_on service not available')
+    #         node.destroy_client(torque_client)
+    #     except Exception as e:
+    #         node.get_logger().warn(f'Failed to restore arm torque: {e}')
 
 
 # ---------------------------------------------------------------------------
