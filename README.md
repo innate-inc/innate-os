@@ -140,13 +140,21 @@ python benchmarks/run_benchmarks.py --category navigation --trials 10
 
 ### Environment Configuration Files
 
-Environment configurations are stored as JSON files in the `data/environments/` directory. These files define the base scene and the dynamic entities present within it.
+Environment configurations are stored as JSON files in the `data/environments/` directory. These files define static scene settings (optional override) and dynamic entities.
 
 **Structure:**
 
 ```json
 {
-  "environment_name": "Baked_sc0_staging_00", // Base static scene name
+  "environment_name": "Baked_sc0_staging_00", // Scene preset name
+  "scene": { // Optional static-scene override (applied at simulator startup)
+    "name": "scenesmith_house_042",
+    "mesh_path": "data/scenes/scene_042/combined_house/house.glb",
+    "mesh_euler": [90, 0, 0],
+    "collision_stage_config": null, // Optional; ReplicaCAD-style stage config
+    "occupancy_stl_path": "data/scenes/scene_042/combined_house/house.stl",
+    "slice_output_prefix": "scene_042_slice"
+  },
   "entities": [
     {
       "name": "unique_entity_name", // e.g., "walker_1", "casualty_1"
@@ -173,6 +181,16 @@ Environment configurations are stored as JSON files in the `data/environments/` 
 
 *   **Fixed Entities:** An entity with only one pose in the `poses` list will be considered fixed at that position/orientation.
 *   **Moving Entities:** Entities with multiple poses will linearly interpolate (LERP for position, SLERP for orientation) between consecutive poses based on the current simulation time. The `loop` parameter determines if the trajectory restarts from the beginning after reaching the last pose's time.
+*   **Dynamic Entity Loading:** Entities can be loaded from `entities[*].asset_path`, but they must be present before `scene.build()` (typically via startup environment config). Introducing entirely new entities at runtime via `/set_environment` is rejected.
+*   **Static Scene Changes:** Static scene geometry is set when the simulator starts. Runtime static scene changes via `/set_environment` are rejected; restart with startup flags instead.
+
+To start with a specific environment config at boot time:
+
+```bash
+python main.py --initial-environment walking_man_path
+# or
+python main.py --initial-environment-path data/environments/walking_man_path.json
+```
 
 ## API Endpoints
 
@@ -183,7 +201,8 @@ The backend exposes several API endpoints for controlling the simulation and int
 ### Configuration & Control (`/config_api`)
 
 *   **`POST /set_environment`**
-    *   Sets the active environment by positioning pre-loaded entities.
+    *   Sets the active environment by placing configured entities.
+    *   Returns an error if the request requires unsupported runtime changes (e.g., static scene hot-swap or introducing new entities after startup).
     *   **Request Body:** JSON object containing *either*:
         *   `config_name`: (String) The name of a configuration file (without `.json`) in `data/environments/`.
         *   `config`: (Object) A full environment configuration dictionary (matching the structure described above).
