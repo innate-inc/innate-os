@@ -11,10 +11,12 @@ import io
 import json
 import time
 from datetime import datetime
-import google.generativeai as genai
 from pathlib import Path
 
 from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
+
+from google import genai
+from google.genai import types
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -146,15 +148,10 @@ class ArmDownCheckHeightAndCam(Skill):
     def _init_gemini(self):
         env_vars = _load_env_file(Path(__file__).parent / ".env.scan")
         self.api_key = env_vars.get("GEMINI_API_KEY", "")
-        self.vision_model = None
+        self._gemini_client = None
         if self.api_key and self.api_key != "your_gemini_api_key_here":
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                self.vision_model = genai.GenerativeModel("gemini-3-flash-preview")
-                self.logger.info("[ArmDownCheck] Gemini configured")
-            except Exception as e:
-                self.logger.warning(f"[ArmDownCheck] Gemini init failed: {e}")
+            self._gemini_client = genai.Client(api_key=self.api_key)
+            self.logger.info("[ArmDownCheck] Gemini configured")
 
     @property
     def name(self):
@@ -257,7 +254,7 @@ class ArmDownCheckHeightAndCam(Skill):
         self.logger.info(f"Raw image saved: {path}")
 
     def _analyze_image(self, image_b64, x, y, contact_z, target_description):
-        if not self.vision_model or not image_b64:
+        if self._gemini_client is None or not image_b64:
             return self._record_step(x, y, f"No vision analysis (X={x:.4f} Y={y:.4f})")
 
         annotated_b64 = self._add_crosshair(image_b64)
@@ -287,9 +284,17 @@ class ArmDownCheckHeightAndCam(Skill):
         history_section = self._build_history_section()
         prompt = VISION_PROMPT.format(target=target_description, history_section=history_section)
         try:
-            response = self.vision_model.generate_content(
-                [prompt, {"mime_type": "image/jpeg", "data": annotated_b64}],
-                generation_config=genai.GenerationConfig(response_mime_type="application/json"),
+            image_bytes = base64.b64decode(annotated_b64)
+
+            response = self._gemini_client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
             )
             return json.loads(response.text.strip())
         except Exception as e:
