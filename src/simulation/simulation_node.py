@@ -46,6 +46,10 @@ SCENE_PRESETS = {
 }
 
 
+class EnvironmentRebuildRequired(Exception):
+    """Raised when applying an environment requires rebuilding the Genesis scene."""
+
+
 def xyzw_to_wxyz(xyzw):
     return (xyzw[3], xyzw[0], xyzw[1], xyzw[2])
 
@@ -70,6 +74,7 @@ class SimulationNode:
         self.entity_specs: Dict[str, Dict[str, Any]] = {}
         self.manual_entity_hitboxes: Dict[str, Dict[str, float]] = {}
         self.current_scene_config = self._resolve_scene_config(initial_env_config)
+        self.scene_built = False
         # Store trajectory data for managed entities
         self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
@@ -160,6 +165,7 @@ class SimulationNode:
         self._init_map_params()
 
         self.scene.build()
+        self.scene_built = True
 
         print("Scene built")
 
@@ -1088,6 +1094,14 @@ class SimulationNode:
             print(f"[SimulationNode] {error}")
             return False, error
 
+        if self.scene_built:
+            error = (
+                f"Cannot load '{name}' from '{full_asset_path}': "
+                "scene is already built."
+            )
+            print(f"[SimulationNode] {error}")
+            return False, error
+
         initial_hide_pos = [0, 0, -1000]
         default_quat = [1.0, 0.0, 0.0, 0.0]
 
@@ -1198,7 +1212,68 @@ class SimulationNode:
                 return True
         return False
 
-    def _apply_environment_config(self, config: Dict[str, Any]):
+    def _requires_rebuild_for_load_errors(self, load_errors: Dict[str, str]) -> bool:
+        """Return True when load errors are caused by built-scene constraints."""
+        if not load_errors:
+            return False
+        return all("scene is already built" in error for error in load_errors.values())
+
+    def _rebuild_scene_for_environment(self, config: Dict[str, Any]) -> None:
+        """Tear down and rebuild the scene for a new static world/entity set."""
+        print("[SimulationNode] Rebuilding scene for new environment...")
+        self.env_config = config
+        self.current_scene_config = self._resolve_scene_config(config)
+
+        # Clear runtime state tied to old scene objects.
+        self.managed_entities.clear()
+        self.entity_specs.clear()
+        self.default_entity_catalog.clear()
+        self.manual_entity_hitboxes.clear()
+        self.entity_trajectories.clear()
+        self.active_entities.clear()
+        self.loaded_entities.clear()
+        self.loaded_dynamic_entities.clear()
+        self.scene_objects = []
+        self.trajectory_debug_objects = []
+
+        self.nav_target_pos = None
+        self.nav_target_yaw = None
+        self.commanded_lin_vel = np.zeros(3)
+        self.commanded_ang_vel = np.zeros(3)
+
+        # Destroy old scene if API exposes a destroy method.
+        if hasattr(self, "scene") and self.scene is not None:
+            try:
+                if hasattr(self.scene, "destroy"):
+                    self.scene.destroy()
+            except Exception as e:
+                print(f"[SimulationNode] Warning: scene.destroy() failed: {e}")
+
+        self.scene_built = False
+
+        self._init_scene()
+        self._init_environment()
+        self._init_robot()
+        self._init_camera()
+        self._init_map_params()
+
+        self.scene.build()
+        self.scene_built = True
+        print("[SimulationNode] Scene rebuilt")
+
+        self._add_objects_to_occupancy_grid()
+        self.init_movement()
+
+        # Reset logical robot tracking to known default after rebuild.
+        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
+        self.robot_logical_yaw = 0.0
+
+        # Apply requested placements/trajectories onto the rebuilt scene.
+        self._apply_environment_config(config, allow_rebuild=False)
+
+    def _apply_environment_config(
+        self, config: Dict[str, Any], allow_rebuild: bool = True
+    ):
         """Activates and positions managed entities based on config, hides others."""
         print(
             "[SimulationNode] Applying environment configuration "
@@ -1209,21 +1284,30 @@ class SimulationNode:
 
         if self._is_static_scene_change_requested(config):
             requested_scene = self._resolve_scene_config(config)
+            if allow_rebuild:
+                raise EnvironmentRebuildRequired(
+                    "Static scene change requested from "
+                    f"'{self.current_scene_config['name']}' to '{requested_scene['name']}', "
+                    "scene rebuild required."
+                )
             raise RuntimeError(
                 "Static scene change requested from "
                 f"'{self.current_scene_config['name']}' to '{requested_scene['name']}', "
-                "but scene hot-swapping is not supported yet. Restart the simulator "
-                "with --initial-environment or --initial-environment-path."
+                "but scene rebuild is disabled for this apply path."
             )
 
         load_errors = self._ensure_config_entities_loaded(config)
         if load_errors:
             details = "; ".join(f"{name}: {error}" for name, error in load_errors.items())
+            if allow_rebuild and self._requires_rebuild_for_load_errors(load_errors):
+                raise EnvironmentRebuildRequired(
+                    "Environment introduces entities that are not in the current "
+                    "built scene. Scene rebuild required. "
+                    f"Details: {details}"
+                )
             raise RuntimeError(
                 "Failed to load requested environment entities. "
-                "New entities cannot be added after scene build in Genesis. "
-                "Restart with --initial-environment/--initial-environment-path that "
-                f"includes these entities. Details: {details}"
+                f"Details: {details}"
             )
 
         # Clear previous trajectory data and active entities
@@ -1507,15 +1591,36 @@ class SimulationNode:
                     print("[SimulationNode] Received SetEnvironmentCmd.")
                     try:
                         self._apply_environment_config(latest_set_env_cmd.config)
-                        self._report_set_environment_result(
-                            latest_set_env_cmd, success=True
+                    except EnvironmentRebuildRequired as rebuild_exc:
+                        print(
+                            "[SimulationNode] Environment requires rebuild: "
+                            f"{rebuild_exc}"
                         )
+                        try:
+                            self._rebuild_scene_for_environment(latest_set_env_cmd.config)
+                            print("[SimulationNode] Environment rebuild/apply complete.")
+                            self._report_set_environment_result(
+                                latest_set_env_cmd, success=True
+                            )
+                        except Exception as e:
+                            error = f"Failed to rebuild environment: {e}"
+                            print(f"[SimulationNode] {error}")
+                            self._report_set_environment_result(
+                                latest_set_env_cmd, success=False, error=error
+                            )
                     except Exception as e:
                         error = str(e)
                         print(f"[SimulationNode] Failed to apply environment: {error}")
                         self._report_set_environment_result(
                             latest_set_env_cmd, success=False, error=error
                         )
+                    else:
+                        self._report_set_environment_result(
+                            latest_set_env_cmd, success=True
+                        )
+
+                    # Scene may have been rebuilt with different sim options.
+                    dt = self.scene.sim_options.dt
                     # We might want to reset robot pose after env change, TBD
 
                 # Apply latest ResetRobotCmd if it exists (after potential env change)
