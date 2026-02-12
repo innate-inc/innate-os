@@ -116,13 +116,8 @@ class PickUpPieceGemini(Skill):
         return (avg_left_y - avg_right_y) / 7.0
 
     def _update_calibration(self, calibration: dict, corr_x: float, corr_y: float) -> dict:
-        """Shift all 4 calibration corners by the correction and save to disk.
-
-        The correction represents how far off the calibration is:
-        the arm needed to move by (corr_x, corr_y) to reach the actual square center,
-        so the calibration underestimates by that amount. Shift corners accordingly.
-        """
-        updated = {}
+        """Shift all 4 calibration corners by the correction and save to disk."""
+        updated = dict(calibration)
         for corner in ["top_left", "top_right", "bottom_left", "bottom_right"]:
             c = calibration[corner]
             updated[corner] = {
@@ -130,16 +125,27 @@ class PickUpPieceGemini(Skill):
                 "y": c["y"] + corr_y,
                 "z": c["z"]
             }
+        try:
+            CALIBRATION_FILE.write_text(json.dumps(updated, indent=2))
+            self.logger.info(f"[PickUpPieceGemini] Calibration shifted dX={corr_x:+.4f}m dY={corr_y:+.4f}m")
+        except Exception as e:
+            self.logger.error(f"[PickUpPieceGemini] Failed to save calibration: {e}")
+        return updated
 
+    def _update_drive_scale(self, calibration: dict, corr_x: float, current_offset: float) -> dict:
+        """Update drive_scale_factor in calibration based on X correction after driving."""
+        old_scale = calibration.get("drive_scale_factor", 1.0)
+        new_scale = old_scale * (current_offset - corr_x) / current_offset
+        updated = dict(calibration)
+        updated["drive_scale_factor"] = round(new_scale, 4)
         try:
             CALIBRATION_FILE.write_text(json.dumps(updated, indent=2))
             self.logger.info(
-                f"[PickUpPieceGemini] Calibration updated: shifted all corners by "
-                f"dX={corr_x:+.4f}m dY={corr_y:+.4f}m"
+                f"[PickUpPieceGemini] Drive scale updated: {old_scale:.4f} -> {new_scale:.4f} "
+                f"(corr_x={corr_x:+.4f}m over {abs(current_offset)*100:.1f}cm drive)"
             )
         except Exception as e:
-            self.logger.error(f"[PickUpPieceGemini] Failed to save calibration: {e}")
-
+            self.logger.error(f"[PickUpPieceGemini] Failed to save drive scale: {e}")
         return updated
 
     def _drive_to_offset(self, target_offset: float, current_offset: float) -> float:
@@ -156,8 +162,16 @@ class PickUpPieceGemini(Skill):
             self.logger.warn("[PickUpPieceGemini] Mobility interface not available, skipping drive")
             return current_offset
 
+        # Load drive scale factor from calibration
+        scale = 1.0
+        try:
+            cal = json.loads(CALIBRATION_FILE.read_text())
+            scale = float(cal.get("drive_scale_factor", 1.0))
+        except:
+            pass
+
         direction = 1.0 if delta > 0 else -1.0
-        drive_duration = abs(delta) / DRIVE_SPEED
+        drive_duration = abs(delta) / (DRIVE_SPEED * scale)
 
         self.logger.info(
             f"[PickUpPieceGemini] Driving {'forward' if direction > 0 else 'backward'} "
@@ -362,9 +376,10 @@ class PickUpPieceGemini(Skill):
         self._send_feedback("Returning to base position...")
         self._drive_to_offset(0.0, current_offset)
 
-    def _capture_and_correct(self, square, calibration, x_adj, y, tilted_pitch, yaw):
+    def _capture_and_correct(self, square, calibration, x_adj, y, tilted_pitch, yaw, current_offset=0.0):
         """Tilt camera, capture, analyze with Gemini, apply correction.
 
+        When current_offset != 0 (we drove), updates drive_scale_factor instead of board corners.
         Returns (x_adj, y, calibration) with gripper offsets applied, or None on tilt failure.
         """
         tilt_x = x_adj + self.CAMERA_TILT_X_OFFSET
@@ -388,8 +403,14 @@ class PickUpPieceGemini(Skill):
         if analysis and not self._cancelled:
             corr_x, corr_y = analysis
             if abs(corr_x) > 0.001 or abs(corr_y) > 0.001:
-                calibration = self._update_calibration(calibration, corr_x, corr_y)
-                self.logger.info(f"[PickUpPieceGemini] Calibration updated dX={corr_x:+.4f} dY={corr_y:+.4f}")
+                if abs(current_offset) > 0.001:
+                    # We drove — attribute X error to driving, Y error to calibration
+                    calibration = self._update_drive_scale(calibration, corr_x, current_offset)
+                    if abs(corr_y) > 0.001:
+                        calibration = self._update_calibration(calibration, 0.0, corr_y)
+                else:
+                    # No driving — full correction goes to board calibration
+                    calibration = self._update_calibration(calibration, corr_x, corr_y)
             if abs(corr_x) > 0.002 or abs(corr_y) > 0.002:
                 new_x = x_adj + corr_x
                 new_y = y + corr_y
@@ -450,7 +471,7 @@ class PickUpPieceGemini(Skill):
         self._move_above_square(square, x_adj, y, tilted_pitch, yaw)
 
         # 3. Capture image and apply Gemini correction
-        result = self._capture_and_correct(square, calibration, x_adj, y, tilted_pitch, yaw)
+        result = self._capture_and_correct(square, calibration, x_adj, y, tilted_pitch, yaw, current_offset)
         if result is not None:
             x_adj, y, calibration = result
 
