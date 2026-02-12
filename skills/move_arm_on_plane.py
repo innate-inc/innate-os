@@ -19,6 +19,7 @@ class MoveArmOnPlane(Skill):
     FIXED_ROLL = 0.0
     FIXED_YAW = 0.0
     FIXED_PITCH = 1.57  # Pointing downward
+    CAMERA_PITCH_OFFSET = -0.48
     
     # X bounds
     X_MIN = 0.1
@@ -82,7 +83,7 @@ class MoveArmOnPlane(Skill):
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
         
-        pitch_deviation = -0.57 if camera_vertical else 0.0
+        pitch_deviation = self.CAMERA_PITCH_OFFSET if camera_vertical else 0.0
         pitch = self.FIXED_PITCH + pitch_deviation
         
         self.logger.info(
