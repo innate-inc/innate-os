@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
 
+from PIL import Image, ImageDraw
 from google import genai
 from google.genai import types
 
@@ -71,10 +72,10 @@ class PickUpPieceGemini(Skill):
 
     def _init_gemini(self):
         env_vars = _load_env_file(Path(__file__).parent / ".env.scan")
-        self.api_key = env_vars.get("GEMINI_API_KEY", "")
+        api_key = env_vars.get("GEMINI_API_KEY", "")
         self.gemini_client = None
-        if self.api_key and self.api_key != "your_gemini_api_key_here":
-            self.gemini_client = genai.Client(api_key=self.api_key)
+        if api_key and api_key != "your_gemini_api_key_here":
+            self.gemini_client = genai.Client(api_key=api_key)
             self.logger.info("[PickUpPieceGemini] Gemini configured (google-genai SDK)")
 
     def _load_position_state(self) -> float:
@@ -472,8 +473,6 @@ class PickUpPieceGemini(Skill):
         Spatial mapping: image top=+X, image right=-Y.
         """
         try:
-            from PIL import Image, ImageDraw
-
             img = Image.open(io.BytesIO(base64.b64decode(self.image)))
             w, h = img.size
             img_cx, img_cy = w // 2, h // 2
