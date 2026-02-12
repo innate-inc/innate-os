@@ -50,18 +50,18 @@ class PickUpPieceGemini(Skill):
     FIXED_PITCH = 1.57
 
     # Pitch offset for tilting camera to look at the square
-    CAMERA_PITCH_OFFSET = -0.57
+    CAMERA_PITCH_OFFSET = -0.48
     CAMERA_TILT_X_OFFSET = -0.025  # shift back 2.5cm when tilting to compensate
 
     # Heights in meters
     HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
     HEIGHT_ABOVE = 0.15  # 10cm above board for positioning
-    HEIGHT_PICK = 0.1       # 6cm - pick height for tall pieces
-    HEIGHT_PICK_PAWN = 0.07   # 4cm - pick height for pawns (2cm lower)
+    HEIGHT_PICK = 0.8       # 6cm - pick height for tall pieces
+    HEIGHT_PICK_PAWN = 0.05   # 4cm - pick height for pawns (2cm lower)
 
     # Gripper parameters
     GRIPPER_OPEN_PERCENT = 40
-    GRIPPER_CLOSE_STRENGTH = 0.2
+    GRIPPER_CLOSE_STRENGTH = 0.4
 
     def __init__(self, logger):
         super().__init__(logger)
@@ -395,7 +395,7 @@ class PickUpPieceGemini(Skill):
         analysis = self._analyze_square_bbox(square, calibration)
 
         if analysis and not self._cancelled:
-            corr_x, corr_y, perceived = analysis
+            corr_x, corr_y = analysis
 
             # Update calibration based on measured offset
             if abs(corr_x) > 0.001 or abs(corr_y) > 0.001:
@@ -423,42 +423,33 @@ class PickUpPieceGemini(Skill):
             else:
                 self.logger.info("[PickUpPieceGemini] Correction too small, skipping reposition")
 
-        # Step 5: Restore pitch to straight down
-        self.logger.info("[PickUpPieceGemini] Step 5: Restoring pitch for pickup")
-        self._send_feedback("Restoring arm orientation...")
-        self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=self.HEIGHT_ABOVE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
-            duration=d(1.5)
-        )
-        w(1.5)
+        # Undo tilt X offset to position gripper over the piece
+        x_adj -= self.CAMERA_TILT_X_OFFSET
+        self.logger.info(f"[PickUpPieceGemini] Undid tilt X offset -> X={x_adj:.4f}")
 
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # Step 6: Open gripper
-        self.logger.info("[PickUpPieceGemini] Step 6: Opening gripper")
+        # Step 5: Open gripper
+        self.logger.info("[PickUpPieceGemini] Step 5: Opening gripper")
         self._send_feedback("Opening gripper...")
         self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
         w(1.5)
 
-        # Step 7: Descend to pick height (two stages for vertical trajectory)
+        # Step 6: Descend to pick height (two stages for vertical trajectory)
         mid_pick_z = (self.HEIGHT_ABOVE + pick_height) / 2.0
-        self.logger.info(f"[PickUpPieceGemini] Step 7a: Descending to mid height {mid_pick_z:.3f}m")
+        self.logger.info(f"[PickUpPieceGemini] Step 6a: Descending to mid height {mid_pick_z:.3f}m")
         self._send_feedback("Descending to pick...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x_adj, y=y, z=mid_pick_z,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
             duration=d(1.67)
         )
         if not success:
             return "Failed to descend to mid pick height", SkillResult.FAILURE
         w(1.67)
 
-        self.logger.info(f"[PickUpPieceGemini] Step 7b: Descending to pick height {pick_height}m")
+        self.logger.info(f"[PickUpPieceGemini] Step 6b: Descending to pick height {pick_height}m")
         success = self.manipulation.move_to_cartesian_pose(
             x=x_adj, y=y, z=pick_height,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
             duration=d(1.67)
         )
         if not success:
@@ -468,25 +459,37 @@ class PickUpPieceGemini(Skill):
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
 
-        # Step 8: Close gripper to grab piece
-        self.logger.info("[PickUpPieceGemini] Step 8: Closing gripper")
+        # Step 7: Close gripper to grab piece
+        self.logger.info("[PickUpPieceGemini] Step 7: Closing gripper")
         self._send_feedback("Grabbing piece...")
         self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH)
         w(2.0)
 
-        # Step 9: Lift to safe height
+        # Step 8: Lift to safe height (two stages for vertical trajectory)
         grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
-        self.logger.info(f"[PickUpPieceGemini] Step 9: Lifting to {self.HEIGHT_SAFE}m")
+        mid_lift_z = (pick_height + self.HEIGHT_SAFE) / 2.0
+        self.logger.info(f"[PickUpPieceGemini] Step 8a: Lifting to mid height {mid_lift_z:.3f}m")
         self._send_feedback("Lifting piece...")
         success = self.manipulation.move_to_cartesian_pose(
+            x=x_adj, y=y, z=mid_lift_z,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
+            duration=d(1.67),
+            gripper_position=grip_position
+        )
+        if not success:
+            return "Failed to lift to mid height", SkillResult.FAILURE
+        w(1.67)
+
+        self.logger.info(f"[PickUpPieceGemini] Step 8b: Lifting to {self.HEIGHT_SAFE}m")
+        success = self.manipulation.move_to_cartesian_pose(
             x=x_adj, y=y, z=self.HEIGHT_SAFE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
-            duration=d(2),
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
+            duration=d(1.67),
             gripper_position=grip_position
         )
         if not success:
             return "Failed to lift", SkillResult.FAILURE
-        w(2.0)
+        w(1.67)
 
         # If no place square, just drive back and finish
         if place_square is None:
@@ -575,17 +578,28 @@ class PickUpPieceGemini(Skill):
         self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
         w(1.5)
 
-        # Step 13: Lift back to safe height
-        self.logger.info(f"[PickUpPieceGemini] Step 13: Lifting to {self.HEIGHT_SAFE}m")
+        # Step 13: Lift back to safe height (two stages for vertical trajectory)
+        mid_lift_z = (place_height + self.HEIGHT_SAFE) / 2.0
+        self.logger.info(f"[PickUpPieceGemini] Step 13a: Lifting to mid height {mid_lift_z:.3f}m")
         self._send_feedback("Lifting after place...")
+        success = self.manipulation.move_to_cartesian_pose(
+            x=place_x_adj, y=place_y, z=mid_lift_z,
+            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            duration=d(1.67)
+        )
+        if not success:
+            return "Failed to lift to mid height after placing", SkillResult.FAILURE
+        w(1.67)
+
+        self.logger.info(f"[PickUpPieceGemini] Step 13b: Lifting to {self.HEIGHT_SAFE}m")
         success = self.manipulation.move_to_cartesian_pose(
             x=place_x_adj, y=place_y, z=self.HEIGHT_SAFE,
             roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
-            duration=d(2)
+            duration=d(1.67)
         )
         if not success:
             return "Failed to lift after placing", SkillResult.FAILURE
-        w(2.0)
+        w(1.67)
 
         # Drive back to calibration origin
         self.logger.info("[PickUpPieceGemini] Driving back to calibration origin")
@@ -600,7 +614,7 @@ class PickUpPieceGemini(Skill):
     def _analyze_square_bbox(self, square: str, calibration: dict):
         """Ask Gemini for the bbox of the square and save annotated visualization.
 
-        Returns (x_correction, y_correction, perceived_square) or None on failure.
+        Returns (x_correction, y_correction) or None on failure.
         Spatial mapping: image top=+X, image right=-Y.
         """
         if not self.gemini_client or not self.image:
@@ -625,11 +639,8 @@ class PickUpPieceGemini(Skill):
 
             prompt = (
                 "This image shows a chessboard from above. There is a red dot on the board. "
-                "1) Identify which chess square the red dot is on. "
-                "Files are A-H (left to right), ranks are 1-8 (bottom to top). "
-                "2) Return the bounding box of that chessboard square. "
-                "Return ONLY JSON with two keys: "
-                "\"square\" (the square name like A1 or H8) and "
+                "Return the bounding box of the chessboard square the red dot is on. "
+                "Return ONLY JSON with one key: "
                 "\"box_2d\" (array of [ymin, xmin, ymax, xmax] normalized 0-1000)."
             )
 
@@ -649,7 +660,6 @@ class PickUpPieceGemini(Skill):
             )
             result = json.loads(response.text.strip())
             box_2d = result.get("box_2d", [0, 0, 0, 0])
-            perceived_square = result.get("square", None)
 
             self.logger.info(f"[PickUpPieceGemini] Gemini response: {result}")
 
@@ -690,7 +700,7 @@ class PickUpPieceGemini(Skill):
             dist_m = (x_correction**2 + y_correction**2) ** 0.5
 
             self.logger.info(
-                f"[PickUpPieceGemini] Gemini bbox: box_2d={box_2d} perceived={perceived_square} "
+                f"[PickUpPieceGemini] Gemini bbox: box_2d={box_2d} "
                 f"px=[{x1},{y1},{x2},{y2}] bbox_center=({bbox_cx},{bbox_cy}) "
                 f"img_center=({img_cx},{img_cy}) dist={dist_px:.0f}px"
             )
@@ -720,7 +730,7 @@ class PickUpPieceGemini(Skill):
             draw.line([(img_cx, img_cy), (bbox_cx, bbox_cy)], fill='cyan', width=2)
 
             # Distance label
-            label = f"perceived={perceived_square or '?'} dist={dist_px:.0f}px corr=({x_correction:+.3f},{y_correction:+.3f})m"
+            label = f"dist={dist_px:.0f}px corr=({x_correction:+.3f},{y_correction:+.3f})m"
             draw.text((10, 10), label, fill='cyan')
 
             # Save
@@ -732,7 +742,7 @@ class PickUpPieceGemini(Skill):
             path.write_bytes(buf.getvalue())
             self.logger.info(f"[PickUpPieceGemini] Bbox visualization saved: {path}")
 
-            return (x_correction, y_correction, perceived_square)
+            return (x_correction, y_correction)
 
         except Exception as e:
             self.logger.error(f"[PickUpPieceGemini] Bbox analysis failed: {e}")
