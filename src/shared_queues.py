@@ -1,6 +1,6 @@
 # src/shared_queues.py
 
-from typing import NamedTuple, Optional, List, Tuple
+from typing import NamedTuple, Optional, List, Tuple, Dict, Any
 import threading
 import queue
 
@@ -68,6 +68,11 @@ class SharedQueues:
         self.current_agent_id: Optional[str] = None
         self.startup_agent_id: Optional[str] = None
         self.agents_lock = threading.Lock()  # For thread-safe updates
+
+        # One-shot status map for /set_environment request/response.
+        # Key: request_id, Value: {"success": bool, "error": Optional[str]}
+        self.environment_apply_results: Dict[str, Dict[str, Any]] = {}
+        self.environment_apply_lock = threading.Lock()
 
     def update_robot_position(
         self, x: float, y: float, z: float, timestamp: float = None
@@ -140,3 +145,22 @@ class SharedQueues:
                 self.current_agent_id,
                 self.startup_agent_id,
             )
+
+    def set_environment_apply_result(
+        self, request_id: Optional[str], success: bool, error: Optional[str] = None
+    ) -> None:
+        """Store result for a set_environment request ID."""
+        if not request_id:
+            return
+        with self.environment_apply_lock:
+            self.environment_apply_results[request_id] = {
+                "success": success,
+                "error": error,
+            }
+
+    def pop_environment_apply_result(
+        self, request_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Pop and return a set_environment result if available."""
+        with self.environment_apply_lock:
+            return self.environment_apply_results.pop(request_id, None)
