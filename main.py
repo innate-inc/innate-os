@@ -125,6 +125,12 @@ def main():
         help="Run without the web server (headless mode)",
     )
     parser.add_argument(
+        "--no-agent",
+        action="store_true",
+        default=False,
+        help="Run without connecting to rosbridge/brain agent",
+    )
+    parser.add_argument(
         "--initial-environment",
         type=str,
         default=None,
@@ -164,11 +170,14 @@ def main():
         initial_env_config=initial_env_config,
     )
 
-    # 3) Start the agent (async) in a separate thread
-    agent_thread = run_agent_async(
-        SHARED_QUEUES,
-        rosbridge_uri=ROSBRIDGE_URI,
-    )
+    # 3) Start the agent (async) in a separate thread unless disabled
+    if args.no_agent:
+        print("[Main] --no-agent enabled. Skipping rosbridge/brain connection.")
+    else:
+        run_agent_async(
+            SHARED_QUEUES,
+            rosbridge_uri=ROSBRIDGE_URI,
+        )
 
     # 4) Start Uvicorn in another thread (unless --no-web)
     if not args.no_web:
