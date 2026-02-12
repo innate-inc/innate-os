@@ -184,6 +184,8 @@ Environment configurations are stored as JSON files in the `data/environments/` 
 *   **Moving Entities:** Entities with multiple poses will linearly interpolate (LERP for position, SLERP for orientation) between consecutive poses based on the current simulation time. The `loop` parameter determines if the trajectory restarts from the beginning after reaching the last pose's time.
 *   **Dynamic Entity Loading:** Entities can be loaded from `entities[*].asset_path`. If the entity is not present in the currently built scene, the simulator rebuilds the scene and then applies the config.
 *   **Static Scene Changes:** Changing `environment_name`/`scene` at runtime triggers an in-process scene rebuild, then the requested environment is applied.
+*   **Entity/Asset Set Changes:** If the requested `name -> asset_path` set differs from the currently active environment, the simulator rebuilds before applying.
+*   **No Out-of-World Parking:** Entities are no longer parked at an arbitrary far-away position; active scene contents are managed through rebuild + explicit config placement.
 
 To start with a specific environment config at boot time:
 
