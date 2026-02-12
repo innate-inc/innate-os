@@ -14,7 +14,7 @@ import uuid
 from src.agent.types import ResetRobotCmd, SetEnvironmentCmd, BrainActiveCmd
 
 router = APIRouter()
-SET_ENV_APPLY_TIMEOUT_S = 3.0
+SET_ENV_APPLY_TIMEOUT_S = 30.0
 SET_ENV_APPLY_POLL_INTERVAL_S = 0.02
 
 
