@@ -1,22 +1,9 @@
-# Innate-OS Update Notification for SSH Login
-# Source this in your .zshrc to show update notifications
+# Legacy shim: update_check.zsh now delegates to the dedicated welcome script.
+# Keep this file to avoid breaking existing ~/.zshrc setups that still source it.
 
-# Only run on interactive shells and SSH sessions
-if [[ -o interactive ]] && [[ -n "$SSH_CONNECTION" || -n "$SSH_TTY" ]]; then
-    # Check for updates (uses cache, fast)
-    if /home/jetson1/innate-os/scripts/update/innate-update --quick-check 2>/dev/null; then
-        # Up to date - show nothing or minimal message
-        : # Do nothing
-    else
-        # Updates available
-        echo ""
-        echo "╔════════════════════════════════════════════════════════╗"
-        echo "║  ⚠  INNATE-OS UPDATES AVAILABLE                        ║"
-        echo "╠════════════════════════════════════════════════════════╣"
-        echo "║  Run: innate-update check                              ║"
-        echo "║  Then: innate-update apply                             ║"
-        echo "╚════════════════════════════════════════════════════════╝"
-        echo ""
-    fi
+INNATE_OS_ROOT="${INNATE_OS_ROOT:-$HOME/innate-os}"
+WELCOME_SCRIPT="${INNATE_OS_ROOT}/scripts/ssh_welcome.zsh"
+
+if [[ -f "$WELCOME_SCRIPT" ]]; then
+    source "$WELCOME_SCRIPT"
 fi
-

@@ -123,3 +123,8 @@ if [ -f '/home/jetson1/google-cloud-sdk/path.zsh.inc' ]; then . '/home/jetson1/g
 if [ -f '/home/jetson1/google-cloud-sdk/completion.zsh.inc' ]; then . '/home/jetson1/google-cloud-sdk/completion.zsh.inc'; fi
 
 (ros2 daemon start &) >/dev/null 2>&1
+
+# SSH welcome banner + update status.
+if [ -f "$INNATE_OS_ROOT/scripts/ssh_welcome.zsh" ]; then
+    source "$INNATE_OS_ROOT/scripts/ssh_welcome.zsh"
+fi

@@ -357,7 +357,7 @@ sudo ./scripts/update/post_update.sh  # Rebuild and restart
 Add update notifications to your shell prompt:
 
 ```bash
-echo 'source ~/innate-os/scripts/update/update_check.zsh' >> ~/.zshrc
+echo 'source ~/innate-os/scripts/ssh_welcome.zsh' >> ~/.zshrc
 ```
 
 This shows a notification on login if updates are available.
