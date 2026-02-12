@@ -9,9 +9,10 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
+from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
+
 from google import genai
 from google.genai import types
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType, RobotState, RobotStateType
 
 
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
@@ -72,11 +73,8 @@ class PickUpPieceGemini(Skill):
         self.api_key = env_vars.get("GEMINI_API_KEY", "")
         self.gemini_client = None
         if self.api_key and self.api_key != "your_gemini_api_key_here":
-            try:
-                self.gemini_client = genai.Client(api_key=self.api_key)
-                self.logger.info("[PickUpPieceGemini] Gemini configured (google-genai SDK)")
-            except Exception as e:
-                self.logger.warning(f"[PickUpPieceGemini] Gemini init failed: {e}")
+            self.gemini_client = genai.Client(api_key=self.api_key)
+            self.logger.info("[PickUpPieceGemini] Gemini configured (google-genai SDK)")
 
     def _load_position_state(self) -> float:
         """Load current robot X offset from state file. 0.0 = calibration origin."""
@@ -637,7 +635,13 @@ class PickUpPieceGemini(Skill):
 
             response = self.gemini_client.models.generate_content(
                 model="gemini-3-flash-preview",
-                contents=[prompt, types.Part.from_bytes(data=base64.b64decode(annotated_b64), mime_type="image/jpeg")],
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(
+                        data=base64.b64decode(annotated_b64),
+                        mime_type="image/jpeg",
+                    ),
+                ],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     thinking_config=types.ThinkingConfig(thinking_budget=128),
