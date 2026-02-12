@@ -268,354 +268,200 @@ class PickUpPieceGemini(Skill):
             self.logger.error(f"[PickUpPieceGemini] Failed to save image: {e}")
             return None
 
-    def execute(self, square: str, place_square: str | None = None, is_pawn: bool = True, speed: float = 1.0):
-        """
-        Pick up a piece from the specified square using Gemini vision for precision.
+    def _d(self, seconds: float) -> float:
+        """Scale a duration by the speed factor."""
+        return seconds / self._speed
 
-        Args:
-            square: Source square in chess notation (e.g., 'A4', 'E2')
-            place_square: Target square to place piece on (e.g., 'D5'). If None, just pick up.
-            is_pawn: If True, descend lower for shorter pawn pieces
-            speed: Speed multiplier (1.0 = normal, 2.0 = twice as fast, etc.)
-        """
-        speed = max(0.1, speed)
-        def d(seconds: float) -> float:
-            """Scale a duration by the speed factor."""
-            return seconds / speed
-        def w(seconds: float):
-            """Sleep for a scaled duration."""
-            time.sleep(seconds / speed)
-        self._cancelled = False
+    def _w(self, seconds: float):
+        """Sleep for a scaled duration."""
+        time.sleep(seconds / self._speed)
 
-        if self.manipulation is None:
-            return "Manipulation interface not available", SkillResult.FAILURE
+    def _move_arm(self, x, y, z, pitch, yaw, duration, wait=None, gripper_position=None):
+        """Move arm to pose and optionally wait. Returns True on success."""
+        kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw,
+                      duration=self._d(duration))
+        if gripper_position is not None:
+            kwargs['gripper_position'] = gripper_position
+        success = self.manipulation.move_to_cartesian_pose(**kwargs)
+        if success and wait is not None:
+            self._w(wait)
+        return success
 
-        # Load calibration
-        calibration = self._load_calibration()
-        if calibration is None:
-            return "No calibration data found. Run board calibration first.", SkillResult.FAILURE
+    def _two_stage_vertical(self, x, y, from_z, to_z, pitch, yaw, gripper_position=None):
+        """Two-stage vertical movement for smooth trajectories. Returns error string or None."""
+        mid_z = (from_z + to_z) / 2.0
+        direction = "Descending" if to_z < from_z else "Lifting"
+        self.logger.info(f"[PickUpPieceGemini] {direction} to mid height {mid_z:.3f}m")
+        if not self._move_arm(x, y, mid_z, pitch, yaw, 1.67, wait=1.67, gripper_position=gripper_position):
+            return f"Failed at mid height {mid_z:.3f}m"
+        self.logger.info(f"[PickUpPieceGemini] {direction} to {to_z:.3f}m")
+        if not self._move_arm(x, y, to_z, pitch, yaw, 1.67, wait=1.67, gripper_position=gripper_position):
+            return f"Failed at height {to_z:.3f}m"
+        return None
 
-        # Calculate position
-        pos = self._square_to_position(square, calibration)
-        if pos is None:
-            return f"Invalid square '{square}' or incomplete calibration", SkillResult.FAILURE
-
-        x, y = pos
-
-        rank = int(square[1])
-        yaw = self.FIXED_YAW + 1.57 if rank <= 4 else self.FIXED_YAW
-        pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
-
-        # Drive base to optimal position for this rank
-        square_size = self._compute_square_size_x(calibration)
-        current_offset = self._load_position_state()
-        if rank <= 3:
-            target_offset = -(DRIVE_SQUARES * square_size)
-        else:
-            target_offset = 0.0
-
-        current_offset = self._drive_to_offset(target_offset, current_offset)
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # Adjust arm X to compensate for robot base movement
-        x_adj = x - current_offset
-
-        self.logger.info(
-            f"[PickUpPieceGemini] Target {square} at X={x:.4f} (adj={x_adj:.4f}), "
-            f"Y={y:.4f} (yaw={yaw:.2f}, offset={current_offset:.4f})"
-        )
-        self._send_feedback(f"Moving to {square} at X={x_adj:.4f}, Y={y:.4f}")
-
-        tilted_pitch = self.FIXED_PITCH + self.CAMERA_PITCH_OFFSET
-
-        # Step 1: Move to safe height at current position first
-        self.logger.info(f"[PickUpPieceGemini] Step 1: Moving to safe height {self.HEIGHT_SAFE}m")
-        self._send_feedback("Moving to safe height...")
+    def _move_above_square(self, square, x_adj, y, tilted_pitch, yaw):
+        """Move to safe height then above the target square."""
         current_pose = self.manipulation.get_current_end_effector_pose()
         if current_pose:
-            curr_x, curr_y = current_pose["position"]["x"], current_pose["position"]["y"]
-            success = self.manipulation.move_to_cartesian_pose(
-                x=x_adj, y=curr_y, z=self.HEIGHT_SAFE,
-                roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-                duration=d(1)
-            )
-            if not success:
-                return "Failed to move to safe height", SkillResult.FAILURE
-            w(1.5)
-
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # Step 2: Move horizontally to above target square
-        self.logger.info(f"[PickUpPieceGemini] Step 2: Moving above {square}")
+            curr_y = current_pose["position"]["y"]
+            self._move_arm(x_adj, curr_y, self.HEIGHT_SAFE, tilted_pitch, yaw, 1, wait=1.5)
         self._send_feedback(f"Moving above {square}...")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=self.HEIGHT_ABOVE,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-            duration=d(2)
-        )
-        if not success:
-            return "Failed to move above square", SkillResult.FAILURE
-        w(2.5)
+        self._move_arm(x_adj, y, self.HEIGHT_ABOVE, tilted_pitch, yaw, 2, wait=2.5)
 
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
+    def _pick_piece(self, x_adj, y, pick_height, tilted_pitch, yaw):
+        """Open gripper, descend, grab, lift. Returns grip_position."""
+        self._send_feedback("Opening gripper...")
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
+        self._w(1.5)
 
-        # Step 3: Apply tilt X offset for camera viewing
-        self.logger.info(
-            f"[PickUpPieceGemini] Step 3: Shifting X by {self.CAMERA_TILT_X_OFFSET}m for camera view"
-        )
-        self._send_feedback("Adjusting position for camera view...")
+        self._send_feedback("Descending to pick...")
+        self._two_stage_vertical(x_adj, y, self.HEIGHT_ABOVE, pick_height, tilted_pitch, yaw)
+
+        self._send_feedback("Grabbing piece...")
+        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH, blocking=True)
+        self._w(2.0)
+
+        grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
+        self._send_feedback("Lifting piece...")
+        self._two_stage_vertical(x_adj, y, pick_height, self.HEIGHT_SAFE, tilted_pitch, yaw, grip_position)
+        return grip_position
+
+    def _place_piece(self, place_square, calibration, square_size, current_offset,
+                     is_pawn, tilted_pitch, yaw, grip_position):
+        """Drive to place square, descend, release, lift."""
+        place_x, place_y = self._square_to_position(place_square, calibration)
+        place_rank = int(place_square[1])
+        place_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
+
+        # Drive base if needed
+        place_target_offset = -(DRIVE_SQUARES * square_size) if place_rank <= 3 else 0.0
+        current_offset = self._drive_to_offset(place_target_offset, current_offset)
+        place_x_adj = place_x - current_offset
+
+        # Apply gripper offsets
+        place_x_adj -= self.CAMERA_TILT_X_OFFSET
+        place_x_adj += self.GRIPPER_X_OFFSET
+        self.logger.info(f"[PickUpPieceGemini] Place X with offsets -> {place_x_adj:.4f}")
+
+        # Move above, descend, release, lift
+        self._send_feedback(f"Moving above {place_square}...")
+        self._move_arm(place_x_adj, place_y, self.HEIGHT_ABOVE, tilted_pitch, yaw, 2, wait=2.5, gripper_position=grip_position)
+
+        self._send_feedback("Descending to place...")
+        self._two_stage_vertical(place_x_adj, place_y, self.HEIGHT_ABOVE, place_height, tilted_pitch, yaw, grip_position)
+
+        self._send_feedback("Releasing piece...")
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
+        self._w(1.5)
+
+        self._send_feedback("Lifting after place...")
+        self._two_stage_vertical(place_x_adj, place_y, place_height, self.HEIGHT_SAFE, tilted_pitch, yaw)
+
+        # Drive back
+        self._send_feedback("Returning to base position...")
+        self._drive_to_offset(0.0, current_offset)
+
+    def _capture_and_correct(self, square, calibration, x_adj, y, tilted_pitch, yaw):
+        """Tilt camera, capture, analyze with Gemini, apply correction.
+
+        Returns (x_adj, y, calibration) with gripper offsets applied, or None on tilt failure.
+        """
         tilt_x = x_adj + self.CAMERA_TILT_X_OFFSET
-        success = self.manipulation.move_to_cartesian_pose(
-            x=tilt_x, y=y, z=self.HEIGHT_ABOVE,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-            duration=d(2)
-        )
-        if not success:
-            return "Failed to tilt camera", SkillResult.FAILURE
-        w(2.5)
+        self.logger.info(f"[PickUpPieceGemini] Shifting X by {self.CAMERA_TILT_X_OFFSET}m for camera view")
+        self._send_feedback("Adjusting position for camera view...")
+        if not self._move_arm(tilt_x, y, self.HEIGHT_ABOVE, tilted_pitch, yaw, 2, wait=2.5):
+            return None
 
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # Step 4: Capture and save image
-        self.logger.info("[PickUpPieceGemini] Step 4: Capturing image")
+        self.logger.info("[PickUpPieceGemini] Capturing image")
         self._send_feedback("Capturing image...")
         saved_path = self._save_capture(square)
-
         if saved_path:
-            msg = f"Image captured for {square} and saved to {saved_path}"
+            self.logger.info(f"[PickUpPieceGemini] Image saved to {saved_path}")
         else:
-            msg = f"Moved above {square} but failed to capture image"
-            self.logger.warning(f"[PickUpPieceGemini] {msg}")
+            self.logger.warning(f"[PickUpPieceGemini] Failed to capture image for {square}")
 
-        # Step 4b: Analyze square bbox with Gemini and compute correction
-        self.logger.info("[PickUpPieceGemini] Step 4b: Analyzing square bbox with Gemini")
+        self.logger.info("[PickUpPieceGemini] Analyzing square bbox with Gemini")
         self._send_feedback("Analyzing square with Gemini...")
         analysis = self._analyze_square_bbox(square, calibration)
 
         if analysis and not self._cancelled:
             corr_x, corr_y = analysis
-
-            # Update calibration based on measured offset
             if abs(corr_x) > 0.001 or abs(corr_y) > 0.001:
                 calibration = self._update_calibration(calibration, corr_x, corr_y)
                 self.logger.info(f"[PickUpPieceGemini] Calibration updated dX={corr_x:+.4f} dY={corr_y:+.4f}")
-
             if abs(corr_x) > 0.002 or abs(corr_y) > 0.002:
-                # Step 4c: Reposition arm using correction
                 new_x = x_adj + corr_x
                 new_y = y + corr_y
-                self.logger.info(
-                    f"[PickUpPieceGemini] Step 4c: Repositioning dX={corr_x:+.4f} dY={corr_y:+.4f} "
-                    f"-> X={new_x:.4f}, Y={new_y:.4f}"
-                )
-                self._send_feedback(f"Adjusting position by dX={corr_x*100:+.1f}cm dY={corr_y*100:+.1f}cm...")
-                success = self.manipulation.move_to_cartesian_pose(
-                    x=new_x, y=new_y, z=self.HEIGHT_ABOVE,
-                    roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-                    duration=d(1.5)
-                )
-                if success:
-                    w(1.0)
+                self.logger.info(f"[PickUpPieceGemini] Repositioning dX={corr_x:+.4f} dY={corr_y:+.4f}")
+                self._send_feedback(f"Adjusting by dX={corr_x*100:+.1f}cm dY={corr_y*100:+.1f}cm...")
+                if self._move_arm(new_x, new_y, self.HEIGHT_ABOVE, tilted_pitch, yaw, 1.5, wait=1.0):
                     x_adj = new_x
                     y = new_y
             else:
                 self.logger.info("[PickUpPieceGemini] Correction too small, skipping reposition")
 
-        # Undo tilt X offset + add gripper offset to position gripper over the piece
         x_adj -= self.CAMERA_TILT_X_OFFSET
         x_adj += self.GRIPPER_X_OFFSET
-        self.logger.info(f"[PickUpPieceGemini] Applied pick X offsets -> X={x_adj:.4f}")
+        self.logger.info(f"[PickUpPieceGemini] Applied gripper X offsets -> X={x_adj:.4f}")
+        return x_adj, y, calibration
 
-        # Step 5: Open gripper
-        self.logger.info("[PickUpPieceGemini] Step 5: Opening gripper")
-        self._send_feedback("Opening gripper...")
-        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
-        w(1.5)
+    def execute(self, square: str, place_square: str, is_pawn: bool = True, speed: float = 1.0):
+        """
+        Pick up a piece from the specified square using Gemini vision for precision.
 
-        # Step 6: Descend to pick height (two stages for vertical trajectory)
-        mid_pick_z = (self.HEIGHT_ABOVE + pick_height) / 2.0
-        self.logger.info(f"[PickUpPieceGemini] Step 6a: Descending to mid height {mid_pick_z:.3f}m")
-        self._send_feedback("Descending to pick...")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=mid_pick_z,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-            duration=d(1.67)
-        )
-        if not success:
-            return "Failed to descend to mid pick height", SkillResult.FAILURE
-        w(1.67)
+        Args:
+            square: Source square in chess notation (e.g., 'A4', 'E2')
+            place_square: Target square to place piece on (e.g., 'D5')
+            is_pawn: If True, descend lower for shorter pawn pieces
+            speed: Speed multiplier (1.0 = normal, 2.0 = twice as fast, etc.)
+        """
+        self._speed = max(0.1, speed)
+        self._cancelled = False
 
-        self.logger.info(f"[PickUpPieceGemini] Step 6b: Descending to pick height {pick_height}m")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=pick_height,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-            duration=d(1.67)
-        )
-        if not success:
-            return "Failed to descend to pick height", SkillResult.FAILURE
-        w(1.67)
+        if self.manipulation is None:
+            return "Manipulation interface not available", SkillResult.FAILURE
 
+        calibration = self._load_calibration()
+        if calibration is None:
+            return "No calibration data found. Run board calibration first.", SkillResult.FAILURE
+
+        pos = self._square_to_position(square, calibration)
+        if pos is None:
+            return f"Invalid square '{square}' or incomplete calibration", SkillResult.FAILURE
+
+        x, y = pos
+        rank = int(square[1])
+        yaw = self.FIXED_YAW
+        pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
+        tilted_pitch = self.FIXED_PITCH + self.CAMERA_PITCH_OFFSET
+
+        # 1. Drive base to optimal position
+        square_size = self._compute_square_size_x(calibration)
+        current_offset = self._load_position_state()
+        target_offset = -(DRIVE_SQUARES * square_size) if rank <= 3 else 0.0
+        current_offset = self._drive_to_offset(target_offset, current_offset)
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
+        x_adj = x - current_offset
+        self.logger.info(f"[PickUpPieceGemini] Target {square} X={x:.4f} (adj={x_adj:.4f}) Y={y:.4f}")
 
-        # Step 7: Close gripper to grab piece
-        self.logger.info("[PickUpPieceGemini] Step 7: Closing gripper")
-        self._send_feedback("Grabbing piece...")
-        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH, blocking=True)
-        w(2.0)
+        # 2. Move above source square
+        self._move_above_square(square, x_adj, y, tilted_pitch, yaw)
 
-        # Step 8: Lift to safe height (two stages for vertical trajectory)
-        grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
-        mid_lift_z = (pick_height + self.HEIGHT_SAFE) / 2.0
-        self.logger.info(f"[PickUpPieceGemini] Step 8a: Lifting to mid height {mid_lift_z:.3f}m")
-        self._send_feedback("Lifting piece...")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=mid_lift_z,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-            duration=d(1.67),
-            gripper_position=grip_position
+        # 3. Capture image and apply Gemini correction
+        result = self._capture_and_correct(square, calibration, x_adj, y, tilted_pitch, yaw)
+        if result is not None:
+            x_adj, y, calibration = result
+
+        # 4. Pick up the piece
+        grip_position = self._pick_piece(x_adj, y, pick_height, tilted_pitch, yaw)
+
+        # 5. Place the piece
+        self._place_piece(
+            place_square, calibration, square_size, current_offset,
+            is_pawn, tilted_pitch, yaw, grip_position
         )
-        if not success:
-            return "Failed to lift to mid height", SkillResult.FAILURE
-        w(1.67)
-
-        self.logger.info(f"[PickUpPieceGemini] Step 8b: Lifting to {self.HEIGHT_SAFE}m")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=x_adj, y=y, z=self.HEIGHT_SAFE,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
-            duration=d(1.67),
-            gripper_position=grip_position
-        )
-        if not success:
-            return "Failed to lift", SkillResult.FAILURE
-        w(1.67)
-
-        # If no place square, just drive back and finish
-        if place_square is None:
-            self.logger.info("[PickUpPieceGemini] Driving back to calibration origin")
-            self._send_feedback("Returning to base position...")
-            current_offset = self._drive_to_offset(0.0, current_offset)
-            msg = f"Picked up piece from {square}"
-            self.logger.info(f"[PickUpPieceGemini] Complete: {msg}")
-            self._send_feedback(msg)
-            return msg, SkillResult.SUCCESS
-
-        # ========== PLACE PIECE ON TARGET SQUARE ==========
-        place_pos = self._square_to_position(place_square, calibration)
-        if place_pos is None:
-            return f"Invalid place square '{place_square}'", SkillResult.FAILURE
-
-        place_x, place_y = place_pos
-        place_rank = int(place_square[1])
-        place_yaw = self.FIXED_YAW + 1.57 if place_rank <= 4 else self.FIXED_YAW
-        place_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
-
-        # Drive base if needed for the place rank
-        if place_rank <= 3:
-            place_target_offset = -(DRIVE_SQUARES * square_size)
-        else:
-            place_target_offset = 0.0
-
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        current_offset = self._drive_to_offset(place_target_offset, current_offset)
-        place_x_adj = place_x - current_offset
-
-        # Undo tilt X offset + add gripper offset to position gripper over the piece
-        place_x_adj -= self.CAMERA_TILT_X_OFFSET
-        place_x_adj += self.GRIPPER_X_OFFSET
-        self.logger.info(f"[PickUpPieceGemini] Applied place X offsets -> place X={place_x_adj:.4f}")
-
-        self.logger.info(
-            f"[PickUpPieceGemini] Placing on {place_square} at X={place_x:.4f} (adj={place_x_adj:.4f}), "
-            f"Y={place_y:.4f}"
-        )
-
-        # Step 10: Move above place square
-        self.logger.info(f"[PickUpPieceGemini] Step 10: Moving above {place_square}")
-        self._send_feedback(f"Moving above {place_square}...")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=place_x_adj, y=place_y, z=self.HEIGHT_ABOVE,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
-            duration=d(2),
-            gripper_position=grip_position
-        )
-        if not success:
-            return "Failed to move above place square", SkillResult.FAILURE
-        w(2.5)
-
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # Step 11: Descend to place height (two stages for vertical trajectory)
-        mid_place_z = (self.HEIGHT_ABOVE + place_height) / 2.0
-        self.logger.info(f"[PickUpPieceGemini] Step 11a: Descending to mid height {mid_place_z:.3f}m")
-        self._send_feedback("Descending to place...")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=place_x_adj, y=place_y, z=mid_place_z,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
-            duration=d(1.67),
-            gripper_position=grip_position
-        )
-        if not success:
-            return "Failed to descend to mid place height", SkillResult.FAILURE
-        w(1.67)
-
-        self.logger.info(f"[PickUpPieceGemini] Step 11b: Descending to place height {place_height}m")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=place_x_adj, y=place_y, z=place_height,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
-            duration=d(1.67),
-            gripper_position=grip_position
-        )
-        if not success:
-            return "Failed to descend to place height", SkillResult.FAILURE
-        w(1.67)
-
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # Step 12: Release piece
-        self.logger.info("[PickUpPieceGemini] Step 12: Releasing piece")
-        self._send_feedback("Releasing piece...")
-        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
-        w(1.5)
-
-        # Step 13: Lift back to safe height (two stages for vertical trajectory)
-        mid_lift_z = (place_height + self.HEIGHT_SAFE) / 2.0
-        self.logger.info(f"[PickUpPieceGemini] Step 13a: Lifting to mid height {mid_lift_z:.3f}m")
-        self._send_feedback("Lifting after place...")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=place_x_adj, y=place_y, z=mid_lift_z,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
-            duration=d(1.67)
-        )
-        if not success:
-            return "Failed to lift to mid height after placing", SkillResult.FAILURE
-        w(1.67)
-
-        self.logger.info(f"[PickUpPieceGemini] Step 13b: Lifting to {self.HEIGHT_SAFE}m")
-        success = self.manipulation.move_to_cartesian_pose(
-            x=place_x_adj, y=place_y, z=self.HEIGHT_SAFE,
-            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
-            duration=d(1.67)
-        )
-        if not success:
-            return "Failed to lift after placing", SkillResult.FAILURE
-        w(1.67)
-
-        # Drive back to calibration origin
-        self.logger.info("[PickUpPieceGemini] Driving back to calibration origin")
-        self._send_feedback("Returning to base position...")
-        current_offset = self._drive_to_offset(0.0, current_offset)
-
         msg = f"Moved piece from {square} to {place_square}"
-        self.logger.info(f"[PickUpPieceGemini] Complete: {msg}")
         self._send_feedback(msg)
         return msg, SkillResult.SUCCESS
 
@@ -625,10 +471,6 @@ class PickUpPieceGemini(Skill):
         Returns (x_correction, y_correction) or None on failure.
         Spatial mapping: image top=+X, image right=-Y.
         """
-        if not self.gemini_client or not self.image:
-            self.logger.warning("[PickUpPieceGemini] Skipping bbox analysis (no client or image)")
-            return None
-
         try:
             from PIL import Image, ImageDraw
 
