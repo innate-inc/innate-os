@@ -44,10 +44,14 @@ class ManipulationInterface:
         # Subscribers
         self._ik_solution = None
         self._fk_pose = None
+        self._arm_state = None
         self._ik_solution_sub = self.node.create_subscription(
             JointState, "/ik_solution", self._ik_solution_callback, 10
         )
         self._fk_pose_sub = self.node.create_subscription(PoseStamped, "/fk_pose", self._fk_pose_callback, 10)
+        self._arm_state_sub = self.node.create_subscription(
+            JointState, "/mars/arm/state", self._arm_state_callback, 10
+        )
 
         # Service client for joint space control. We create the client once
         # here, but deliberately avoid any blocking wait_for_service calls
@@ -70,6 +74,10 @@ class ManipulationInterface:
     def _fk_pose_callback(self, msg: PoseStamped):
         """Store the latest FK pose."""
         self._fk_pose = msg
+
+    def _arm_state_callback(self, msg: JointState):
+        """Store the latest arm state (joint positions from hardware)."""
+        self._arm_state = msg
 
     def get_current_end_effector_pose(self) -> dict | None:
         """

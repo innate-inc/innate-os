@@ -72,6 +72,7 @@ ros-humble-rosgraph-msgs
 ros-humble-tf2
 ros-humble-tf2-ros
 ros-humble-tf2-geometry-msgs
+ros-humble-tf-transformations
 
 # ROS2 Humble packages - Navigation
 ros-humble-navigation2
