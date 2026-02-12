@@ -51,13 +51,13 @@ class PickUpPieceGemini(Skill):
 
     # Pitch offset for tilting camera to look at the square
     CAMERA_PITCH_OFFSET = -0.48
-    CAMERA_TILT_X_OFFSET = -0.025  # shift back 2.5cm when tilting to compensate
+    CAMERA_TILT_X_OFFSET = -0.02  # shift back 2.5cm when tilting to compensate
 
     # Heights in meters
-    HEIGHT_SAFE = 0.25   # 20cm safe travel height (won't knock pieces)
+    HEIGHT_SAFE = 0.2   # 20cm safe travel height (won't knock pieces)
     HEIGHT_ABOVE = 0.15  # 10cm above board for positioning
-    HEIGHT_PICK = 0.8       # 6cm - pick height for tall pieces
-    HEIGHT_PICK_PAWN = 0.05   # 4cm - pick height for pawns (2cm lower)
+    HEIGHT_PICK = 0.08       # 8cm - pick height for tall pieces
+    HEIGHT_PICK_PAWN = 0.05   # 5cm - pick height for pawns (2cm lower)
 
     # Gripper parameters
     GRIPPER_OPEN_PERCENT = 40
@@ -326,6 +326,8 @@ class PickUpPieceGemini(Skill):
         )
         self._send_feedback(f"Moving to {square} at X={x_adj:.4f}, Y={y:.4f}")
 
+        tilted_pitch = self.FIXED_PITCH + self.CAMERA_PITCH_OFFSET
+
         # Step 1: Move to safe height at current position first
         self.logger.info(f"[PickUpPieceGemini] Step 1: Moving to safe height {self.HEIGHT_SAFE}m")
         self._send_feedback("Moving to safe height...")
@@ -334,7 +336,7 @@ class PickUpPieceGemini(Skill):
             curr_x, curr_y = current_pose["position"]["x"], current_pose["position"]["y"]
             success = self.manipulation.move_to_cartesian_pose(
                 x=x_adj, y=curr_y, z=self.HEIGHT_SAFE,
-                roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
+                roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
                 duration=d(1)
             )
             if not success:
@@ -349,7 +351,7 @@ class PickUpPieceGemini(Skill):
         self._send_feedback(f"Moving above {square}...")
         success = self.manipulation.move_to_cartesian_pose(
             x=x_adj, y=y, z=self.HEIGHT_ABOVE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=yaw,
             duration=d(2)
         )
         if not success:
@@ -359,12 +361,11 @@ class PickUpPieceGemini(Skill):
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
 
-        # Step 3: Tilt pitch to look at the square
-        tilted_pitch = self.FIXED_PITCH + self.CAMERA_PITCH_OFFSET
+        # Step 3: Apply tilt X offset for camera viewing
         self.logger.info(
-            f"[PickUpPieceGemini] Step 3: Tilting pitch from {self.FIXED_PITCH} to {tilted_pitch} rad"
+            f"[PickUpPieceGemini] Step 3: Shifting X by {self.CAMERA_TILT_X_OFFSET}m for camera view"
         )
-        self._send_feedback("Tilting camera to view square...")
+        self._send_feedback("Adjusting position for camera view...")
         tilt_x = x_adj + self.CAMERA_TILT_X_OFFSET
         success = self.manipulation.move_to_cartesian_pose(
             x=tilt_x, y=y, z=self.HEIGHT_ABOVE,
@@ -462,7 +463,7 @@ class PickUpPieceGemini(Skill):
         # Step 7: Close gripper to grab piece
         self.logger.info("[PickUpPieceGemini] Step 7: Closing gripper")
         self._send_feedback("Grabbing piece...")
-        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH)
+        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH, blocking=True)
         w(2.0)
 
         # Step 8: Lift to safe height (two stages for vertical trajectory)
@@ -523,6 +524,10 @@ class PickUpPieceGemini(Skill):
         current_offset = self._drive_to_offset(place_target_offset, current_offset)
         place_x_adj = place_x - current_offset
 
+        # Undo tilt X offset to position gripper over the piece
+        place_x_adj -= self.CAMERA_TILT_X_OFFSET
+        self.logger.info(f"[PickUpPieceGemini] Undid tilt X offset -> place X={place_x_adj:.4f}")
+
         self.logger.info(
             f"[PickUpPieceGemini] Placing on {place_square} at X={place_x:.4f} (adj={place_x_adj:.4f}), "
             f"Y={place_y:.4f}"
@@ -533,7 +538,7 @@ class PickUpPieceGemini(Skill):
         self._send_feedback(f"Moving above {place_square}...")
         success = self.manipulation.move_to_cartesian_pose(
             x=place_x_adj, y=place_y, z=self.HEIGHT_ABOVE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
             duration=d(2),
             gripper_position=grip_position
         )
@@ -550,7 +555,7 @@ class PickUpPieceGemini(Skill):
         self._send_feedback("Descending to place...")
         success = self.manipulation.move_to_cartesian_pose(
             x=place_x_adj, y=place_y, z=mid_place_z,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
             duration=d(1.67),
             gripper_position=grip_position
         )
@@ -561,7 +566,7 @@ class PickUpPieceGemini(Skill):
         self.logger.info(f"[PickUpPieceGemini] Step 11b: Descending to place height {place_height}m")
         success = self.manipulation.move_to_cartesian_pose(
             x=place_x_adj, y=place_y, z=place_height,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
             duration=d(1.67),
             gripper_position=grip_position
         )
@@ -584,7 +589,7 @@ class PickUpPieceGemini(Skill):
         self._send_feedback("Lifting after place...")
         success = self.manipulation.move_to_cartesian_pose(
             x=place_x_adj, y=place_y, z=mid_lift_z,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
             duration=d(1.67)
         )
         if not success:
@@ -594,7 +599,7 @@ class PickUpPieceGemini(Skill):
         self.logger.info(f"[PickUpPieceGemini] Step 13b: Lifting to {self.HEIGHT_SAFE}m")
         success = self.manipulation.move_to_cartesian_pose(
             x=place_x_adj, y=place_y, z=self.HEIGHT_SAFE,
-            roll=self.FIXED_ROLL, pitch=self.FIXED_PITCH, yaw=place_yaw,
+            roll=self.FIXED_ROLL, pitch=tilted_pitch, yaw=place_yaw,
             duration=d(1.67)
         )
         if not success:
