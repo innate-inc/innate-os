@@ -120,25 +120,15 @@ class SkillsActionServer(Node):
         # Dynamic skill loading
         self.skill_loader = SkillLoader(self.get_logger())
 
-        # Define directories to scan for skills
-        maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
-        skills_directory = os.path.join(maurice_root, "skills")
-        user_skills_directory = os.path.join(os.path.expanduser("~"), "skills")
+        # Define and store directories for code/physical skill discovery
+        self._skills_directories = self._resolve_skills_directories()
 
-        if not os.path.exists(skills_directory):
-            self.get_logger().fatal(f"Skills directory not found: {skills_directory}")
-            raise FileNotFoundError(f"Skills directory must exist at {skills_directory}")
+        # Load all code skills dynamically from all configured directories
+        discovered_skills = self.skill_loader.load_skills_from_directories(self._skills_directories)
 
-        # Store directories for reload
-        self._skills_directories = [skills_directory]
-        if os.path.exists(user_skills_directory):
-            self._skills_directories.append(user_skills_directory)
-            self.get_logger().info(f"Also scanning user skills directory: {user_skills_directory}")
-
-        # Load all skills dynamically
-        discovered_skills = self.skill_loader.discover_skills_in_directory(skills_directory)
-
-        self.get_logger().info(f"Discovered skills: {list(discovered_skills.keys())} in {skills_directory}")
+        self.get_logger().info(
+            f"Discovered skills: {list(discovered_skills.keys())} in directories {self._skills_directories}"
+        )
 
         # Handle special case for navigation skill based on simulator mode
         if self.simulator_mode and "navigate_to_position_sim" in discovered_skills:
@@ -208,17 +198,11 @@ class SkillsActionServer(Node):
         """Reload all skills from disk."""
         self.get_logger().info("Reloading skills...")
 
-        maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
-        skills_directory = os.path.join(maurice_root, "skills")
-        user_skills_directory = os.path.join(os.path.expanduser("~"), "skills")
+        # Refresh directories list (root skills + user skills)
+        self._skills_directories = self._resolve_skills_directories()
 
-        # Update directories list
-        self._skills_directories = [skills_directory]
-        if os.path.exists(user_skills_directory):
-            self._skills_directories.append(user_skills_directory)
-
-        # Reload code skills
-        discovered_skills = self.skill_loader.discover_skills_in_directory(skills_directory)
+        # Reload code skills from all configured directories
+        discovered_skills = self.skill_loader.load_skills_from_directories(self._skills_directories)
 
         # Handle simulator mode nav swap
         if self.simulator_mode and "navigate_to_position_sim" in discovered_skills:
@@ -244,6 +228,25 @@ class SkillsActionServer(Node):
         self.get_logger().info(
             f"Reloaded {len(self._code_skills)} code + {len(self._physical_skills)} physical skills"
         )
+
+    def _resolve_skills_directories(self) -> list[str]:
+        """Build the ordered list of skill directories to scan."""
+        maurice_root = os.environ.get(
+            "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
+        )
+        skills_directory = os.path.join(maurice_root, "skills")
+        user_skills_directory = os.path.join(os.path.expanduser("~"), "skills")
+
+        if not os.path.exists(skills_directory):
+            self.get_logger().fatal(f"Skills directory not found: {skills_directory}")
+            raise FileNotFoundError(f"Skills directory must exist at {skills_directory}")
+
+        # Match initializer behavior: ensure ~/skills is always available.
+        os.makedirs(user_skills_directory, exist_ok=True)
+
+        self.get_logger().info(f"Scanning root skills directory: {skills_directory}")
+        self.get_logger().info(f"Scanning user skills directory: {user_skills_directory}")
+        return [skills_directory, user_skills_directory]
 
     def _handle_reload_skills(self, request, response):
         """Service handler for reloading skills."""
