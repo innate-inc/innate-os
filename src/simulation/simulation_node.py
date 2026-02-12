@@ -8,7 +8,7 @@ from scipy.spatial.transform import Rotation as R, Slerp
 import time  # Add import for time functions
 import os  # Add os import for path joining
 import torch
-from typing import Dict, Any  # Add typing imports
+from typing import Dict, Any, List, Optional  # Add typing imports
 
 from src.simulation.stl_slicing import slice_stl
 from src.simulation.special_object_treatments import SpecialObjectHandler
@@ -32,19 +32,50 @@ from src.shared_queues import SharedQueues
 ROBOT_INIT_POS = (2, -5, 0.05)
 ROBOT_INIT_QUAT = (0, 0, 0, 1)
 
+DEFAULT_SCENE_CONFIG = {
+    "name": "Baked_sc0_staging_00",
+    "mesh_path": "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
+    "mesh_euler": [90, 0, 0],
+    "collision_stage_config": "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json",
+    "occupancy_stl_path": "data/replica_scene.stl",
+    "slice_output_prefix": "replica_scene_sliced",
+}
+
+SCENE_PRESETS = {
+    "Baked_sc0_staging_00": DEFAULT_SCENE_CONFIG,
+}
+
+
+class EnvironmentRebuildRequired(Exception):
+    """Raised when applying an environment requires rebuilding the Genesis scene."""
+
 
 def xyzw_to_wxyz(xyzw):
     return (xyzw[3], xyzw[0], xyzw[1], xyzw[2])
 
 
 class SimulationNode:
-    def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
+    def __init__(
+        self,
+        shared_queues: SharedQueues,
+        enable_vis: bool = True,
+        initial_env_config: Optional[Dict[str, Any]] = None,
+    ):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
         self.loaded_entities = {}  # To store references to loaded entities
         self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
         self.managed_entities: Dict[str, gs.Entity] = {}
-        self.env_config = None
+        self.env_config = initial_env_config
+        self.project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        self.default_entity_catalog: Dict[str, Dict[str, Any]] = {}
+        self.entity_specs: Dict[str, Dict[str, Any]] = {}
+        self.manual_entity_hitboxes: Dict[str, Dict[str, float]] = {}
+        self.current_scene_config = self._resolve_scene_config(initial_env_config)
+        self.scene_built = False
+        self.current_entity_asset_signature: Optional[tuple[tuple[str, str], ...]] = None
         # Store trajectory data for managed entities
         self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
@@ -135,6 +166,7 @@ class SimulationNode:
         self._init_map_params()
 
         self.scene.build()
+        self.scene_built = True
 
         print("Scene built")
 
@@ -142,6 +174,13 @@ class SimulationNode:
         self._add_objects_to_occupancy_grid()
 
         self.init_movement()
+
+        if self.env_config:
+            print("[SimulationNode] Applying initial environment configuration...")
+            self._apply_environment_config(self.env_config, allow_rebuild=False)
+        else:
+            # Explicitly represent empty active entity set at startup.
+            self.current_entity_asset_signature = tuple()
 
         print("SimulationNode initialized.")
 
@@ -168,53 +207,127 @@ class SimulationNode:
         # Add ground plane
         self.scene.add_entity(gs.morphs.Plane(pos=(0, 0.05, 0)))
 
-    def _init_environment(self):
-        """Initialize the environment meshes and process occupancy grid"""
-        # TODO: Make the base scene path configurable via env_config["environment_name"]
-        base_scene_path = "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb"
-        base_scene_collision_config = "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
+    def _resolve_project_path(self, path: str) -> str:
+        """Resolve relative paths from project root while preserving absolute paths."""
+        if os.path.isabs(path):
+            return path
+        return os.path.join(self.project_root, path)
 
-        # Option 1: Load base scene without convexification
-        # Prefix with _ to indicate it might be unused currently
-        _replica_scene = self.scene.add_entity(
+    def _resolve_scene_config(
+        self, env_config: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Resolve static scene settings from an environment config."""
+        scene_config = DEFAULT_SCENE_CONFIG.copy()
+        scene_config["mesh_euler"] = list(DEFAULT_SCENE_CONFIG["mesh_euler"])
+
+        env_name = None
+        if env_config and env_config.get("environment_name"):
+            env_name = env_config["environment_name"]
+            preset = SCENE_PRESETS.get(env_name)
+            if preset:
+                scene_config.update(preset)
+                scene_config["mesh_euler"] = list(preset.get("mesh_euler", [90, 0, 0]))
+            else:
+                scene_config["name"] = env_name
+
+        scene_block = env_config.get("scene") if isinstance(env_config, dict) else None
+        if isinstance(scene_block, dict):
+            scene_config["name"] = scene_block.get(
+                "name", env_name or scene_config["name"]
+            )
+            if scene_block.get("mesh_path"):
+                scene_config["mesh_path"] = scene_block["mesh_path"]
+            if scene_block.get("mesh_euler") is not None:
+                scene_config["mesh_euler"] = scene_block["mesh_euler"]
+            if "collision_stage_config" in scene_block:
+                scene_config["collision_stage_config"] = scene_block.get(
+                    "collision_stage_config"
+                )
+            if scene_block.get("occupancy_stl_path"):
+                scene_config["occupancy_stl_path"] = scene_block["occupancy_stl_path"]
+            if scene_block.get("slice_output_prefix"):
+                scene_config["slice_output_prefix"] = scene_block["slice_output_prefix"]
+        elif env_name:
+            scene_config["name"] = env_name
+
+        return scene_config
+
+    def _init_environment(self):
+        """Initialize static scene geometry and occupancy baseline."""
+        scene_config = self.current_scene_config
+        base_scene_path = self._resolve_project_path(scene_config["mesh_path"])
+        base_scene_euler = tuple(scene_config.get("mesh_euler", [90, 0, 0]))
+
+        print(
+            f"[SimulationNode] Loading static scene '{scene_config['name']}' "
+            f"from {base_scene_path}"
+        )
+
+        self.scene.add_entity(
             gs.morphs.Mesh(
                 file=base_scene_path,
                 fixed=True,
-                euler=(90, 0, 0),
+                euler=base_scene_euler,
                 pos=(0, 0, 0),
-                convexify=False,  # Load without convexification
-                collision=False,  # No collision on main mesh
+                convexify=False,
+                collision=False,
             )
         )
 
-        # Initialize scene_objects list (for collision objects)
+        # Initialize scene_objects list (for static collision objects)
         self.scene_objects = []
 
-        # Add separate collision geometry based on the stage config file
-        self._add_collision_from_stage_config(base_scene_collision_config)
+        # Add separate collision geometry when a stage config is available.
+        collision_stage_config = scene_config.get("collision_stage_config")
+        if collision_stage_config:
+            self._add_collision_from_stage_config(
+                self._resolve_project_path(collision_stage_config),
+                scene_euler=base_scene_euler,
+            )
+        else:
+            print(
+                "[SimulationNode] No collision_stage_config configured; "
+                "skipping static collision mesh import."
+            )
 
-        # --- Pre-load all potential dynamic entities ---
+        # Register default entity metadata and load startup-requested entities.
         self._preload_dynamic_entities()
 
-        # --- Apply an initial empty/default config to hide all preloaded entities initially? ---
-        # Or handle this in _preload_dynamic_entities by placing them far away.
-        # Let's place them far away during preload.
+        # Pre-load entities referenced by the startup environment config before build().
+        startup_entity_errors = self._ensure_config_entities_loaded(self.env_config)
+        if startup_entity_errors:
+            details = "; ".join(
+                f"{name}: {error}" for name, error in startup_entity_errors.items()
+            )
+            raise RuntimeError(
+                "Failed to load startup environment entities before scene build: "
+                f"{details}"
+            )
 
-        # Export as STL (should probably only include static geometry here)
-        # TODO: Revisit STL export - might not be needed or should exclude dynamic entities
-        file_path = "data/replica_scene.stl"
-        self._process_occupancy_grid(file_path)
+        self._process_occupancy_grid(
+            self._resolve_project_path(scene_config["occupancy_stl_path"]),
+            output_prefix=scene_config.get("slice_output_prefix", "scene_sliced"),
+        )
 
-    def _add_collision_from_stage_config(self, config_path):
+    def _add_collision_from_stage_config(
+        self, config_path: str, scene_euler: tuple = (90, 0, 0)
+    ):
         """Add collision geometry based on receptacles defined in the stage config"""
+        if not os.path.exists(config_path):
+            print(
+                f"[SimulationNode] Collision config not found at {config_path}; "
+                "skipping."
+            )
+            return
+
         with open(config_path, "r") as f:
             config = json.load(f)
 
         # Extract receptacles from user_defined section
         receptacles = config.get("user_defined", {})
 
-        # Create rotation for 90 degrees around X-axis (same as euler=(90,0,0) in main scene)
-        scene_rotation = R.from_euler("x", 90, degrees=True)
+        # Align receptacle transforms with the configured static scene orientation.
+        scene_rotation = R.from_euler("xyz", scene_euler, degrees=True)
 
         # Add collision meshes for each receptacle
         for name, receptacle in receptacles.items():
@@ -264,7 +377,9 @@ class SimulationNode:
                         # Load the actual object mesh with collision but no visualization
                         mesh_entity = self.scene.add_entity(
                             gs.morphs.Mesh(
-                                file=f"data/ReplicaCAD_dataset/objects/{object_name}.glb",
+                                file=self._resolve_project_path(
+                                    f"data/ReplicaCAD_dataset/objects/{object_name}.glb"
+                                ),
                                 pos=position.tolist(),
                                 quat=final_quat,
                                 fixed=True,
@@ -291,7 +406,7 @@ class SimulationNode:
                     except Exception as e:
                         print(f"Failed to load collision for {object_name}: {e}")
 
-    def _process_occupancy_grid(self, file_path):
+    def _process_occupancy_grid(self, file_path: str, output_prefix: str = "scene_slice"):
         """
         Process the STL mesh to create an occupancy grid.
         This version also retrieves the mesh bounds so that the map origin can be set
@@ -303,11 +418,16 @@ class SimulationNode:
         self.base_occupancy_grid = None
         self.grid_bounds = None
 
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(
+                f"[SimulationNode] Occupancy STL not found at path: {file_path}"
+            )
+
         for height in np.linspace(slice_height_min, slice_height_max, num_slices):
             grid_slice, bounds = slice_stl(
                 stl_path=file_path,
                 height=height,
-                output_path=f"replica_scene_sliced_{height:.1f}.png",
+                output_path=f"{output_prefix}_{height:.1f}.png",
                 pixel_size=0.05,
             )
             if self.base_occupancy_grid is None:
@@ -950,46 +1070,318 @@ class SimulationNode:
             f"[SimulationNode] Trajectory visualization complete: {len(self.trajectory_debug_objects)} objects"
         )
 
-    def _apply_environment_config(self, config: Dict[str, Any]):
-        """Activates and positions managed entities based on config, hides others."""
+    def _normalize_scale(self, scale: Any) -> List[float]:
+        """Normalize scale values to Genesis-compatible xyz list."""
+        if isinstance(scale, (int, float)):
+            uniform = float(scale)
+            return [uniform, uniform, uniform]
+
+        if isinstance(scale, (list, tuple)) and len(scale) == 3:
+            return [float(scale[0]), float(scale[1]), float(scale[2])]
+
+        return [1.0, 1.0, 1.0]
+
+    def _load_dynamic_entity(
+        self,
+        name: str,
+        asset_path: str,
+        scale: Any = None,
+        hitbox: Optional[Dict[str, float]] = None,
+    ) -> tuple[bool, Optional[str]]:
+        """Load a dynamic entity mesh into the scene and keep it hidden by default."""
+        if name in self.managed_entities:
+            return True, None
+
+        normalized_scale = self._normalize_scale(scale)
+        full_asset_path = self._resolve_project_path(asset_path)
+
+        if not os.path.exists(full_asset_path):
+            error = (
+                f"Cannot load '{name}': asset path not found ({full_asset_path})"
+            )
+            print(f"[SimulationNode] {error}")
+            return False, error
+
+        if self.scene_built:
+            error = (
+                f"Cannot load '{name}' from '{full_asset_path}': "
+                "scene is already built."
+            )
+            print(f"[SimulationNode] {error}")
+            return False, error
+
+        initial_pos = [0.0, 0.0, 0.0]
+        default_quat = [1.0, 0.0, 0.0, 0.0]
+
+        try:
+            entity_obj = self.scene.add_entity(
+                gs.morphs.Mesh(
+                    file=full_asset_path,
+                    pos=initial_pos,
+                    quat=default_quat,
+                    scale=normalized_scale,
+                    collision=False,
+                    convexify=False,
+                )
+            )
+            self.managed_entities[name] = entity_obj
+            self.entity_specs[name] = {
+                "asset_path": asset_path,
+                "scale": normalized_scale,
+            }
+            if hitbox is not None:
+                self.manual_entity_hitboxes[name] = hitbox
+
+            print(
+                f"[SimulationNode] Loaded dynamic entity '{name}' from "
+                f"{full_asset_path}"
+            )
+            return True, None
+        except Exception as e:
+            error = (
+                f"Error loading entity '{name}' from path '{full_asset_path}': {e}"
+            )
+            print(f"[SimulationNode] {error}")
+            return False, error
+
+    def _ensure_config_entities_loaded(
+        self, config: Optional[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """Load any entities referenced in config that are not yet managed."""
+        if not config or "entities" not in config:
+            return {}
+
+        load_errors: Dict[str, str] = {}
+
+        for entity_data in config["entities"]:
+            name = entity_data.get("name")
+            if not name:
+                continue
+
+            if name in self.managed_entities:
+                existing_spec = self.entity_specs.get(name, {})
+                requested_asset = entity_data.get("asset_path")
+                if (
+                    requested_asset
+                    and existing_spec
+                    and requested_asset != existing_spec.get("asset_path")
+                ):
+                    error = (
+                        f"Entity '{name}' already loaded from "
+                        f"{existing_spec.get('asset_path')} and cannot be hot-swapped "
+                        f"to {requested_asset} at runtime."
+                    )
+                    print(f"[SimulationNode] {error}")
+                    load_errors[name] = error
+                # Allow per-config hitbox overrides for already loaded entities.
+                hitbox = entity_data.get("hitbox")
+                if hitbox is not None:
+                    self.manual_entity_hitboxes[name] = hitbox
+                continue
+
+            default_spec = self.default_entity_catalog.get(name, {})
+            asset_path = entity_data.get("asset_path", default_spec.get("asset_path"))
+            scale = entity_data.get("scale", default_spec.get("scale", [1.0, 1.0, 1.0]))
+            hitbox = entity_data.get("hitbox", default_spec.get("hitbox"))
+
+            if not asset_path:
+                error = (
+                    f"Skipping entity '{name}': missing asset_path "
+                    "and no default entry exists."
+                )
+                print(f"[SimulationNode] {error}")
+                load_errors[name] = error
+                continue
+
+            loaded, error = self._load_dynamic_entity(
+                name=name,
+                asset_path=asset_path,
+                scale=scale,
+                hitbox=hitbox,
+            )
+            if not loaded:
+                load_errors[name] = error or "Unknown entity load failure."
+
+        return load_errors
+
+    def _is_static_scene_change_requested(
+        self, config: Optional[Dict[str, Any]]
+    ) -> bool:
+        """Check if config requests a different static scene than current runtime."""
+        requested_scene = self._resolve_scene_config(config)
+        keys = (
+            "mesh_path",
+            "mesh_euler",
+            "collision_stage_config",
+            "occupancy_stl_path",
+        )
+        for key in keys:
+            if requested_scene.get(key) != self.current_scene_config.get(key):
+                return True
+        return False
+
+    def _requires_rebuild_for_load_errors(self, load_errors: Dict[str, str]) -> bool:
+        """Return True when load errors are caused by built-scene constraints."""
+        if not load_errors:
+            return False
+        return all("scene is already built" in error for error in load_errors.values())
+
+    def _build_requested_entity_asset_signature(
+        self, config: Optional[Dict[str, Any]]
+    ) -> tuple[tuple[str, str], ...]:
+        """Canonical signature of requested entity->asset mappings."""
+        if not config:
+            return tuple()
+
+        signature_items: List[tuple[str, str]] = []
+        for entity_data in config.get("entities", []):
+            name = entity_data.get("name")
+            if not name:
+                continue
+
+            explicit_asset = entity_data.get("asset_path")
+            existing_asset = self.entity_specs.get(name, {}).get("asset_path")
+            default_asset = self.default_entity_catalog.get(name, {}).get("asset_path")
+            resolved_asset = explicit_asset or existing_asset or default_asset or ""
+            signature_items.append((name, resolved_asset))
+
+        signature_items.sort()
+        return tuple(signature_items)
+
+    def _rebuild_scene_for_environment(self, config: Dict[str, Any]) -> None:
+        """Tear down and rebuild the scene for a new static world/entity set."""
+        print("[SimulationNode] Rebuilding scene for new environment...")
+        self.env_config = config
+        self.current_scene_config = self._resolve_scene_config(config)
+
+        # Clear runtime state tied to old scene objects.
+        self.managed_entities.clear()
+        self.entity_specs.clear()
+        self.default_entity_catalog.clear()
+        self.manual_entity_hitboxes.clear()
+        self.entity_trajectories.clear()
+        self.active_entities.clear()
+        self.current_entity_asset_signature = None
+        self.loaded_entities.clear()
+        self.loaded_dynamic_entities.clear()
+        self.scene_objects = []
+        self.trajectory_debug_objects = []
+
+        self.nav_target_pos = None
+        self.nav_target_yaw = None
+        self.commanded_lin_vel = np.zeros(3)
+        self.commanded_ang_vel = np.zeros(3)
+
+        # Destroy old scene if API exposes a destroy method.
+        if hasattr(self, "scene") and self.scene is not None:
+            try:
+                if hasattr(self.scene, "destroy"):
+                    self.scene.destroy()
+            except Exception as e:
+                print(f"[SimulationNode] Warning: scene.destroy() failed: {e}")
+
+        self.scene_built = False
+
+        self._init_scene()
+        self._init_environment()
+        self._init_robot()
+        self._init_camera()
+        self._init_map_params()
+
+        self.scene.build()
+        self.scene_built = True
+        print("[SimulationNode] Scene rebuilt")
+
+        self._add_objects_to_occupancy_grid()
+        self.init_movement()
+
+        # Reset logical robot tracking to known default after rebuild.
+        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
+        self.robot_logical_yaw = 0.0
+
+        # Apply requested placements/trajectories onto the rebuilt scene.
+        self._apply_environment_config(config, allow_rebuild=False)
+
+    def _apply_environment_config(
+        self, config: Dict[str, Any], allow_rebuild: bool = True
+    ):
+        """Load (or rebuild for) requested assets, then place configured entities."""
         print(
             "[SimulationNode] Applying environment configuration "
             "via entity placement..."
         )
 
+        self.env_config = config
+
+        if self._is_static_scene_change_requested(config):
+            requested_scene = self._resolve_scene_config(config)
+            if allow_rebuild:
+                raise EnvironmentRebuildRequired(
+                    "Static scene change requested from "
+                    f"'{self.current_scene_config['name']}' to '{requested_scene['name']}', "
+                    "scene rebuild required."
+                )
+            raise RuntimeError(
+                "Static scene change requested from "
+                f"'{self.current_scene_config['name']}' to '{requested_scene['name']}', "
+                "but scene rebuild is disabled for this apply path."
+            )
+
+        requested_signature = self._build_requested_entity_asset_signature(config)
+        if (
+            allow_rebuild
+            and self.current_entity_asset_signature is not None
+            and requested_signature != self.current_entity_asset_signature
+        ):
+            raise EnvironmentRebuildRequired(
+                "Requested entity/asset set differs from currently active environment. "
+                "Scene rebuild required."
+            )
+
+        load_errors = self._ensure_config_entities_loaded(config)
+        if load_errors:
+            details = "; ".join(f"{name}: {error}" for name, error in load_errors.items())
+            if allow_rebuild and self._requires_rebuild_for_load_errors(load_errors):
+                raise EnvironmentRebuildRequired(
+                    "Environment introduces entities that are not in the current "
+                    "built scene. Scene rebuild required. "
+                    f"Details: {details}"
+                )
+            raise RuntimeError(
+                "Failed to load requested environment entities. "
+                f"Details: {details}"
+            )
+
         # Clear previous trajectory data and active entities
         self.entity_trajectories.clear()
         self._clear_all_active_entities()
 
-        if not self.managed_entities:
+        entities = config.get("entities", []) if config else []
+        if not entities:
             print(
-                "[SimulationNode] No managed entities were pre-loaded. "
-                "Cannot apply config."
+                "[SimulationNode] No entities in environment config. "
+                "Cleared active entities."
             )
+            self.current_entity_asset_signature = requested_signature
             return
 
-        # Set of entity names specified in the current config
-        active_entity_names = set()
-        if config and "entities" in config:
-            for entity_data in config["entities"]:
-                name = entity_data.get("name")
-                if name:
-                    active_entity_names.add(name)
+        if not self.managed_entities:
+            raise RuntimeError(
+                "No managed entities are loaded, but environment requested entities."
+            )
 
         # Iterate through all potentially active entities defined in the config
-        if config and "entities" in config:
-            for entity_data in config["entities"]:
+        if entities:
+            for entity_data in entities:
                 name = entity_data.get("name")
                 poses = entity_data.get("poses", [])
                 # Get loop parameter, default to False
                 loop = entity_data.get("loop", False)
 
                 if name not in self.managed_entities:
-                    print(
-                        f"[SimulationNode] Warning: Entity '{name}' in config "
-                        f"was not pre-loaded. Skipping."
+                    raise RuntimeError(
+                        f"Entity '{name}' is not loaded; cannot apply environment."
                     )
-                    continue
 
                 entity_obj = self.managed_entities[name]
 
@@ -1000,13 +1392,10 @@ class SimulationNode:
                     orientation = pose.get("orientation")  # Assumed [w, x, y, z]
 
                     if position is None or orientation is None:
-                        print(
-                            f"[SimulationNode] Skipping entity '{name}': missing "
-                            f"pos/orient in pose: {pose}"
+                        raise RuntimeError(
+                            f"Entity '{name}' is missing position/orientation in pose: "
+                            f"{pose}"
                         )
-                        # Move it out of the way just in case
-                        entity_obj.set_pos([0, 0, -1000])
-                        continue
 
                     print(f"[SimulationNode] Placing entity: '{name}' at {position}")
                     try:
@@ -1017,7 +1406,9 @@ class SimulationNode:
                         self._add_entity_to_active_list(name, position)
 
                     except Exception as e:
-                        print(f"[SimulationNode] Error placing entity '{name}': {e}")
+                        raise RuntimeError(
+                            f"Error placing entity '{name}': {e}"
+                        ) from e
 
                 elif len(poses) > 1:
                     # Store trajectory data for update loop
@@ -1033,12 +1424,11 @@ class SimulationNode:
                     )
 
                 else:
-                    print(
-                        f"[SimulationNode] Skipping entity '{name}': no poses defined."
+                    raise RuntimeError(
+                        f"Entity '{name}' has no poses defined."
                     )
-                    # Move it out of the way
-                    entity_obj.set_pos([0, 0, -1000])
 
+        self.current_entity_asset_signature = requested_signature
         # Note: Debug grids are automatically saved when entities regenerate
 
     def _update_entity_poses(self, sim_time: float):
@@ -1144,19 +1534,18 @@ class SimulationNode:
                 self._add_entity_to_active_list(name, interp_pos.tolist())
 
     def _preload_dynamic_entities(self):
-        """Pre-loads all known dynamic entities into the scene initially."""
-        print("[SimulationNode] Pre-loading dynamic entities...")
+        """
+        Register default entity metadata used as fallbacks in environment configs.
+        Actual entity loading is driven by the target environment config.
+        """
+        print("[SimulationNode] Registering default entity catalog...")
 
-        # Define potential entities here (name, path, default scale, optional manual hitbox)
-        potential_entities = [
+        default_entities = [
             {
                 "name": "walker_1",
                 "asset_path": "data/assets/walking_man/man.obj",
                 "scale": [1.0, 1.0, 1.0],
-                "hitbox": {
-                    "width": 0.6,
-                    "height": 0.6,
-                },  # Optional manual hitbox (meters)
+                "hitbox": {"width": 0.6, "height": 0.6},
             },
             {
                 "name": "casualty_1",
@@ -1164,65 +1553,21 @@ class SimulationNode:
                 "scale": [0.010, 0.010, 0.010],
                 "hitbox": {"width": 0.6, "height": 2.0},
             },
-            # {
-            #     "name": "banana_peel",
-            #     "asset_path": "data/assets/palatial_asset_bef5/bef5.xml",
-            #     "scale": 1.0,
-            # },
-            # Add other potential entities here in the future
         ]
 
-        initial_hide_pos = [0, 0, -1000]  # Position to hide entities initially
-        default_quat = [1.0, 0.0, 0.0, 0.0]  # Default orientation (w,x,y,z)
+        self.default_entity_catalog = {
+            entity_data["name"]: entity_data.copy() for entity_data in default_entities
+        }
 
-        # Extract manual hitboxes from entity definitions
-        self.manual_entity_hitboxes = {}
-        for entity_data in potential_entities:
-            if "hitbox" in entity_data:
-                self.manual_entity_hitboxes[entity_data["name"]] = entity_data["hitbox"]
-
-        for entity_data in potential_entities:
-            name = entity_data["name"]
-            asset_path = entity_data["asset_path"]
-            scale = entity_data["scale"]
-            print(f"[SimulationNode] Pre-loading: {name} from {asset_path}")
-
-            try:
-                # Construct absolute asset path relative to project root
-                project_root = os.path.dirname(
-                    os.path.dirname(os.path.dirname(__file__))
-                )
-                full_asset_path = os.path.join(project_root, asset_path)
-
-                entity_obj = self.scene.add_entity(
-                    gs.morphs.Mesh(
-                        file=full_asset_path,
-                        pos=initial_hide_pos,  # Start hidden
-                        quat=default_quat,
-                        scale=scale,
-                        collision=False,
-                        convexify=False,
-                    )
-                    # if asset_path.endswith((".obj", ".glb", ".gltf", ".stl"))
-                    # else gs.morphs.MJCF(
-                    #     file=full_asset_path,
-                    #     pos=initial_hide_pos,  # Start hidden
-                    #     quat=default_quat,
-                    #     scale=scale,
-                    #     collision=False,
-                    #     convexify=False,
-                    #     visualization=True,
-                    #     requires_jac_and_IK=True,
-                    # )
-                )
-                # Store reference
-                self.managed_entities[name] = entity_obj
-                print(f"[SimulationNode] Pre-loaded '{name}' successfully.")
-            except Exception as e:
-                print(
-                    f"[SimulationNode] Error pre-loading entity '{name}' from "
-                    f"path '{asset_path}': {e}"
-                )
+    def _report_set_environment_result(
+        self, cmd: SetEnvironmentCmd, success: bool, error: Optional[str] = None
+    ) -> None:
+        """Send set_environment apply status back to API layer."""
+        self.shared_queues.set_environment_apply_result(
+            request_id=getattr(cmd, "request_id", None),
+            success=success,
+            error=error,
+        )
 
     def run(self):
         local_forward = np.array([1.0, 0.0, 0.0])
@@ -1271,7 +1616,38 @@ class SimulationNode:
                 # Apply latest SetEnvironmentCmd FIRST if it exists
                 if latest_set_env_cmd is not None:
                     print("[SimulationNode] Received SetEnvironmentCmd.")
-                    self._apply_environment_config(latest_set_env_cmd.config)
+                    try:
+                        self._apply_environment_config(latest_set_env_cmd.config)
+                    except EnvironmentRebuildRequired as rebuild_exc:
+                        print(
+                            "[SimulationNode] Environment requires rebuild: "
+                            f"{rebuild_exc}"
+                        )
+                        try:
+                            self._rebuild_scene_for_environment(latest_set_env_cmd.config)
+                            print("[SimulationNode] Environment rebuild/apply complete.")
+                            self._report_set_environment_result(
+                                latest_set_env_cmd, success=True
+                            )
+                        except Exception as e:
+                            error = f"Failed to rebuild environment: {e}"
+                            print(f"[SimulationNode] {error}")
+                            self._report_set_environment_result(
+                                latest_set_env_cmd, success=False, error=error
+                            )
+                    except Exception as e:
+                        error = str(e)
+                        print(f"[SimulationNode] Failed to apply environment: {error}")
+                        self._report_set_environment_result(
+                            latest_set_env_cmd, success=False, error=error
+                        )
+                    else:
+                        self._report_set_environment_result(
+                            latest_set_env_cmd, success=True
+                        )
+
+                    # Scene may have been rebuilt with different sim options.
+                    dt = self.scene.sim_options.dt
                     # We might want to reset robot pose after env change, TBD
 
                 # Apply latest ResetRobotCmd if it exists (after potential env change)

@@ -1,8 +1,7 @@
 # intypes.py
 
-from typing import NamedTuple, Dict, Any, List
+from typing import NamedTuple, Dict, Any, List, Optional
 import numpy as np
-import time
 
 
 class RobotStateMsg(NamedTuple):
@@ -149,7 +148,8 @@ class SetEnvironmentCmd(NamedTuple):
     """Command to set the simulation environment from a configuration dict."""
 
     config: Dict[str, Any]
-    timestamp: float = time.time()
+    timestamp: float
+    request_id: Optional[str] = None
 
 
 # Navigation-related message types

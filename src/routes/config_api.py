@@ -5,6 +5,8 @@ from pydantic import BaseModel, root_validator
 import time  # Add time import for timestamp
 import os  # Need os for path joining
 import json  # Need json for loading file
+import asyncio
+import uuid
 
 # ResetRobotCmd is used by the /reset_robot route
 # SetEnvironmentCmd is used to send the config to the simulation node
@@ -12,6 +14,8 @@ import json  # Need json for loading file
 from src.agent.types import ResetRobotCmd, SetEnvironmentCmd, BrainActiveCmd
 
 router = APIRouter()
+SET_ENV_APPLY_TIMEOUT_S = 30.0
+SET_ENV_APPLY_POLL_INTERVAL_S = 0.02
 
 
 # Pydantic model for the reset request body (copied from video_api)
@@ -34,6 +38,19 @@ class SetEnvironmentRequest(BaseModel):
         if config is None and config_name is None:
             raise ValueError("Either 'config' or 'config_name' must be provided.")
         return values
+
+
+async def wait_for_environment_apply_result(
+    shared_queues, request_id: str, timeout_s: float = SET_ENV_APPLY_TIMEOUT_S
+):
+    """Wait for SimulationNode to report set_environment success/failure."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        result = shared_queues.pop_environment_apply_result(request_id)
+        if result is not None:
+            return result
+        await asyncio.sleep(SET_ENV_APPLY_POLL_INTERVAL_S)
+    return None
 
 
 @router.post("/set_environment")
@@ -98,8 +115,12 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
         )
 
     # --- Send the command to the simulation ---
+    request_id = str(uuid.uuid4())
+
     try:
-        set_env_cmd = SetEnvironmentCmd(config=env_config, timestamp=time.time())
+        set_env_cmd = SetEnvironmentCmd(
+            config=env_config, timestamp=time.time(), request_id=request_id
+        )
         shared_queues.agent_to_sim.put_nowait(set_env_cmd)
         # Don't log full config here for brevity/security
         print("[ConfigAPI] Enqueued SetEnvironmentCmd")
@@ -110,10 +131,24 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
             status_code=500, detail=f"Failed to queue environment update: {e}"
         )
 
+    apply_result = await wait_for_environment_apply_result(shared_queues, request_id)
+    if apply_result is None:
+        raise HTTPException(
+            status_code=504,
+            detail="Timed out waiting for environment application result from simulator.",
+        )
+
+    if not apply_result.get("success", False):
+        raise HTTPException(
+            status_code=400,
+            detail=apply_result.get("error") or "Simulator failed to apply environment.",
+        )
+
     return JSONResponse(
         {
             "status": "success",
-            "message": "Environment configuration command sent to simulation.",
+            "message": "Environment configuration applied.",
+            "request_id": request_id,
             # Optionally include name if loaded from file
             "source": (
                 f"file: {body.config_name}.json"
