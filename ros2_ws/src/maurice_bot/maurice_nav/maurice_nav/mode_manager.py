@@ -38,6 +38,12 @@ configure_only_nodes = {
     'mapfree': {'navigation/planner_server'},
 }
 
+# Nodes that should only be deactivated (not cleaned up/unconfigured) to avoid RMW bugs
+# These nodes stay in INACTIVE state rather than being fully unconfigured
+skip_cleanup_nodes = {
+    'controller_server',  # Zenoh RMW crashes during TF unsubscription in cleanup
+}
+
 modes_nodes = {
     'mapping': ['slam_toolbox'],
     'mapfree': [
@@ -511,11 +517,19 @@ class ModeManager(Node):
             
             failures = []
             for node_name in all_nodes_except_target:
-                # Transition node to unconfigured
-                success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_UNCONFIGURED)
+                # Check if this node should skip cleanup (only deactivate to INACTIVE)
+                if node_name in skip_cleanup_nodes:
+                    self.get_logger().info(f"Deactivating {node_name} (skip cleanup due to RMW bug)")
+                    success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_INACTIVE)
+                    # Small delay to let RMW layer stabilize after deactivation
+                    time.sleep(0.2)
+                else:
+                    # Transition node to unconfigured
+                    success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_UNCONFIGURED)
+                
                 if not success:
                     failures.append(node_name)
-                    self.get_logger().warning(f"Failed to transition {node_name} to unconfigured")
+                    self.get_logger().warning(f"Failed to transition {node_name}")
 
             # Phase 1: Configure all nodes in forward order
             self.get_logger().info(f"Configuring {len(node_names)} nodes for {mode.value} mode")
