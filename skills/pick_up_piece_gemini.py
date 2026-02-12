@@ -51,7 +51,8 @@ class PickUpPieceGemini(Skill):
 
     # Pitch offset for tilting camera to look at the square
     CAMERA_PITCH_OFFSET = -0.48
-    CAMERA_TILT_X_OFFSET = -0.02  # shift back 2.5cm when tilting to compensate
+    CAMERA_TILT_X_OFFSET = -0.02  # shift back 2cm when tilting to compensate
+    GRIPPER_X_OFFSET = 0.01  # extra 1cm forward for pick/place to avoid bumping pieces
 
     # Heights in meters
     HEIGHT_SAFE = 0.2   # 20cm safe travel height (won't knock pieces)
@@ -424,9 +425,10 @@ class PickUpPieceGemini(Skill):
             else:
                 self.logger.info("[PickUpPieceGemini] Correction too small, skipping reposition")
 
-        # Undo tilt X offset to position gripper over the piece
+        # Undo tilt X offset + add gripper offset to position gripper over the piece
         x_adj -= self.CAMERA_TILT_X_OFFSET
-        self.logger.info(f"[PickUpPieceGemini] Undid tilt X offset -> X={x_adj:.4f}")
+        x_adj += self.GRIPPER_X_OFFSET
+        self.logger.info(f"[PickUpPieceGemini] Applied pick X offsets -> X={x_adj:.4f}")
 
         # Step 5: Open gripper
         self.logger.info("[PickUpPieceGemini] Step 5: Opening gripper")
@@ -524,9 +526,10 @@ class PickUpPieceGemini(Skill):
         current_offset = self._drive_to_offset(place_target_offset, current_offset)
         place_x_adj = place_x - current_offset
 
-        # Undo tilt X offset to position gripper over the piece
+        # Undo tilt X offset + add gripper offset to position gripper over the piece
         place_x_adj -= self.CAMERA_TILT_X_OFFSET
-        self.logger.info(f"[PickUpPieceGemini] Undid tilt X offset -> place X={place_x_adj:.4f}")
+        place_x_adj += self.GRIPPER_X_OFFSET
+        self.logger.info(f"[PickUpPieceGemini] Applied place X offsets -> place X={place_x_adj:.4f}")
 
         self.logger.info(
             f"[PickUpPieceGemini] Placing on {place_square} at X={place_x:.4f} (adj={place_x_adj:.4f}), "
