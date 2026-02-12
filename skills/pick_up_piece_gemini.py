@@ -372,9 +372,10 @@ class PickUpPieceGemini(Skill):
         self._send_feedback("Lifting after place...")
         self._two_stage_vertical(place_x_adj, place_y, place_height, self.HEIGHT_SAFE, tilted_pitch, yaw)
 
-        # Drive back
+        # Drive back and return to safe pose
         self._send_feedback("Returning to base position...")
         self._drive_to_offset(0.0, current_offset)
+        self._move_arm(0.15, 0.1, 0.1, tilted_pitch, yaw, 2, wait=2.0)
 
     def _capture_and_correct(self, square, calibration, x_adj, y, tilted_pitch, yaw, current_offset=0.0):
         """Tilt camera, capture, analyze with Gemini, apply correction.
