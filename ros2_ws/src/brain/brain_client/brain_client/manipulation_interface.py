@@ -54,6 +54,9 @@ class ManipulationInterface:
         )
         self._fk_pose_sub = self.node.create_subscription(PoseStamped, "/fk_pose", self._fk_pose_callback, 10)
         self._arm_state_sub = self.node.create_subscription(JointState, "/mars/arm/state", self._arm_state_callback, 10)
+        self._arm_state_sub = self.node.create_subscription(
+            JointState, "/mars/arm/state", self._arm_state_callback, 10
+        )
 
         # Service client for joint space control. We create the client once
         # here, but deliberately avoid any blocking wait_for_service calls

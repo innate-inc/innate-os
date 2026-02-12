@@ -23,7 +23,6 @@ Usage:
 """
 
 import json
-import math
 import sys
 import threading
 import time
@@ -34,16 +33,14 @@ from typing import Optional
 import cv2
 import numpy as np
 import rclpy
-from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from sensor_msgs.msg import JointState
-from geometry_msgs.msg import PoseStamped
-from geometry_msgs.msg import Twist
-from std_msgs.msg import Float64MultiArray
 from cv_bridge import CvBridge
 import message_filters
 
+from tf_transformations import euler_from_quaternion
+
+from brain_client.manipulation_interface import ManipulationInterface
 from maurice_cam.calibration_debug_vis import generate_debug_mosaic, generate_visualizations
 from maurice_cam.calibration_utils import (
     setup_head_and_arm,
@@ -94,30 +91,10 @@ class StereoCalibrator(Node):
         self.declare_parameter('image_width', 640)
         self.declare_parameter('image_height', 480)
         self.declare_parameter('data_directory', '/home/jetson1/innate-os/data')
-        self.declare_parameter('fk_pose_topic', '/fk_pose')
-        self.declare_parameter('fk_pose_publish_topic', '/stereo_calibrator/fk_pose')
-        self.declare_parameter('ik_request_topic', '/ik_delta')
-        self.declare_parameter('ik_solution_topic', '/ik_solution')
-        self.declare_parameter('arm_command_topic', '/mars/arm/commands')
-        self.declare_parameter('auto_move_arm', True)
-        self.declare_parameter('auto_stage_delta_y', 0.03)
-        self.declare_parameter('auto_stage_delta_z', 0.01)
-        self.declare_parameter('auto_target_roll', 0.0)
-        self.declare_parameter('auto_target_pitch', 0.0)
-        self.declare_parameter('auto_target_yaw', 0.0)
-        self.declare_parameter('auto_ik_timeout', 2.0)
-        self.declare_parameter(
-            'auto',
-            0.0,
-            ParameterDescriptor(
-                dynamic_typing=True,
-                description='If > 0, publish FK poses every N seconds',
-            ),
-        )
         
         # ChArUco board parameters
-        self.declare_parameter('squares_x', 8)   # 8 squares wide
-        self.declare_parameter('squares_y', 11)   # 11 squares tall
+        self.declare_parameter('squares_x', 17)   # 8 squares wide
+        self.declare_parameter('squares_y', 9)   # 11 squares tall
         self.declare_parameter('square_size', 0.016)  # 16mm in meters
         self.declare_parameter('marker_size', 0.012)  # 12mm in meters
         self.declare_parameter('dictionary_id', cv2.aruco.DICT_4X4_250)
@@ -127,6 +104,12 @@ class StereoCalibrator(Node):
         self.declare_parameter('min_corners', 10)  # Minimum corners to accept an image (recommend 10+ for calibrateCamera)
         self.declare_parameter('use_legacy_pattern', True)  # Enable for calib.io boards (OpenCV 4.6.0+)
         self.declare_parameter('debug', False)  # Enable debug mosaic after each capture
+        self.declare_parameter('save_fk_pose', False)  # Save FK pose alongside captured images
+
+        # Auto-move parameters
+        self.declare_parameter('auto_move', False)  # Enable automatic arm movement through pre-recorded poses
+        self.declare_parameter('auto_move_interval', 5)  # Seconds between moves
+        self.declare_parameter('auto_capture_delay', 2.0)  # Seconds to wait after move before capture
 
         # Get parameters
         self.left_topic = self.get_parameter('left_topic').value
@@ -134,19 +117,6 @@ class StereoCalibrator(Node):
         self.image_width = self.get_parameter('image_width').value
         self.image_height = self.get_parameter('image_height').value
         self.data_directory = Path(self.get_parameter('data_directory').value)
-        self.fk_pose_topic = self.get_parameter('fk_pose_topic').value
-        self.fk_pose_publish_topic = self.get_parameter('fk_pose_publish_topic').value
-        self.ik_request_topic = self.get_parameter('ik_request_topic').value
-        self.ik_solution_topic = self.get_parameter('ik_solution_topic').value
-        self.arm_command_topic = self.get_parameter('arm_command_topic').value
-        self.auto_move_arm = bool(self.get_parameter('auto_move_arm').value)
-        self.auto_stage_delta_y = float(self.get_parameter('auto_stage_delta_y').value)
-        self.auto_stage_delta_z = float(self.get_parameter('auto_stage_delta_z').value)
-        self.auto_target_roll = float(self.get_parameter('auto_target_roll').value)
-        self.auto_target_pitch = float(self.get_parameter('auto_target_pitch').value)
-        self.auto_target_yaw = float(self.get_parameter('auto_target_yaw').value)
-        self.auto_ik_timeout = float(self.get_parameter('auto_ik_timeout').value)
-        self.auto_interval = float(self.get_parameter('auto').value)
         
         self.squares_x = self.get_parameter('squares_x').value
         self.squares_y = self.get_parameter('squares_y').value
@@ -158,6 +128,12 @@ class StereoCalibrator(Node):
         self.min_corners = self.get_parameter('min_corners').value
         self.use_legacy_pattern = self.get_parameter('use_legacy_pattern').value
         self.debug = self.get_parameter('debug').value
+        self.save_fk_pose = self.get_parameter('save_fk_pose').value
+
+        # Auto-move params
+        self.auto_move = self.get_parameter('auto_move').value
+        self.auto_move_interval = self.get_parameter('auto_move_interval').value
+        self.auto_capture_delay = self.get_parameter('auto_capture_delay').value
 
         # Create ChArUco board
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
@@ -187,20 +163,11 @@ class StereoCalibrator(Node):
         self.bridge = CvBridge()
         self.latest_left_frame = None
         self.latest_right_frame = None
-        self.latest_fk_pose = None
-        self.latest_ik_solution = None
-        self.latest_ik_solution_seq = 0
         self.frame_lock = threading.Lock()
-        self.fk_lock = threading.Lock()
-        self.ik_lock = threading.Lock()
         self.capture_requested = False
         self.images_captured = 0
         self.capture_attempts = 0
         self.calibration_done = False
-        self.auto_tick_count = 0
-        self.auto_publish_count = 0
-        self.auto_stage_targets = None
-        self.auto_stage_index = 0
 
         # Image storage directory - inside data directory so images persist
         self.tmp_image_dir = self.data_directory / 'stereo_calibration_images'
@@ -208,6 +175,16 @@ class StereoCalibrator(Node):
 
         # Set up head and arm for calibration
         setup_head_and_arm(self)
+
+        # Initialize ManipulationInterface for arm control
+        self.manipulation = ManipulationInterface(self, self.get_logger())
+
+        # Auto-move state
+        self.auto_move_poses = []  # List of (x, y, z, roll, pitch, yaw) tuples
+        self.auto_move_index = 0
+        self.auto_move_active = False  # True while an auto-move sequence is running
+        if self.auto_move:
+            self.auto_move_poses = self._load_fk_poses()
 
         # Check for existing images and ask user
         self.check_existing_images()
@@ -218,22 +195,10 @@ class StereoCalibrator(Node):
         self.get_logger().info('=' * 60)
         self.get_logger().info(f'Left topic: {self.left_topic}')
         self.get_logger().info(f'Right topic: {self.right_topic}')
-        self.get_logger().info(f'FK pose topic: {self.fk_pose_topic}')
-        self.get_logger().info(f'IK request topic: {self.ik_request_topic}')
-        self.get_logger().info(f'IK solution topic: {self.ik_solution_topic}')
-        self.get_logger().info(f'Arm command topic: {self.arm_command_topic}')
-        if self.auto_interval > 0:
-            self.get_logger().info(
-                f'Auto FK publish: every {self.auto_interval:.2f}s to {self.fk_pose_publish_topic}'
-            )
-            self.get_logger().info(
-                f'Auto arm staging: {"ENABLED" if self.auto_move_arm else "DISABLED"} '
-                f'(Δy={self.auto_stage_delta_y:.3f}m, Δz={self.auto_stage_delta_z:.3f}m, '
-                f'IK timeout={self.auto_ik_timeout:.2f}s)'
-            )
-            self.get_logger().info(
-                f'Auto target RPY: ({self.auto_target_roll:.3f}, {self.auto_target_pitch:.3f}, {self.auto_target_yaw:.3f})'
-            )
+        self.get_logger().info(f'Using ManipulationInterface for arm control')
+        if self.auto_move and self.auto_move_poses:
+            self.get_logger().info(f'Auto-move ENABLED: {len(self.auto_move_poses)} poses, '
+                                   f'interval={self.auto_move_interval}s, capture_delay={self.auto_capture_delay}s')
         self.get_logger().info(f'Image size: {self.image_width}x{self.image_height} per camera')
         self.get_logger().info(f'ChArUco board: {self.squares_x}x{self.squares_y}')
         self.get_logger().info(f'Square size: {self.square_size*1000:.1f}mm, Marker size: {self.marker_size*1000:.1f}mm')
@@ -253,27 +218,22 @@ class StereoCalibrator(Node):
         )
         self.sync.registerCallback(self.image_callback)
 
-        # Subscribe to FK pose
-        self.create_subscription(PoseStamped, self.fk_pose_topic, self.fk_pose_callback, 10)
-        self.create_subscription(JointState, self.ik_solution_topic, self.ik_solution_callback, 10)
-
-        # IK request + direct arm command bridge
-        self.ik_target_pub = self.create_publisher(Twist, self.ik_request_topic, 10)
-        self.arm_command_pub = self.create_publisher(Float64MultiArray, self.arm_command_topic, 10)
-
-        # Optional periodic FK publishing
-        if self.auto_interval > 0:
-            self.fk_pose_pub = self.create_publisher(PoseStamped, self.fk_pose_publish_topic, 10)
-            self.auto_fk_timer = self.create_timer(self.auto_interval, self.publish_fk_pose_periodic)
-
-        # Start keyboard input thread
-        self.input_thread = threading.Thread(target=self.keyboard_input_loop, daemon=True)
-        self.input_thread.start()
+        # Start keyboard input thread (only when auto-move is disabled)
+        if not self.auto_move or not self.auto_move_poses:
+            self.input_thread = threading.Thread(target=self.keyboard_input_loop, daemon=True)
+            self.input_thread.start()
 
         # Create timer to process captures
         self.timer = self.create_timer(0.1, self.process_capture)
-        self.get_logger().info('=' * 60)
-        self.get_logger().warn('>>> Move the arm out of the way then Press ENTER to capture an image <<<')
+
+        # Start auto-move sequence if enabled
+        if self.auto_move and self.auto_move_poses:
+            self.get_logger().info('Starting auto-move sequence in background thread...')
+            self.auto_move_thread = threading.Thread(target=self._auto_move_loop, daemon=True)
+            self.auto_move_thread.start()
+        else:
+            self.get_logger().info('=' * 60)
+            self.get_logger().warn('>>> Move the arm out of the way then Press ENTER to capture an image <<<')
 
     def image_callback(self, left_msg, right_msg):
         """Store latest left and right frames."""
@@ -314,211 +274,136 @@ class StereoCalibrator(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to convert image: {e}')
 
-    def fk_pose_callback(self, msg: PoseStamped):
-        """Store latest FK pose."""
-        with self.fk_lock:
-            self.latest_fk_pose = msg
-
-    def ik_solution_callback(self, msg: JointState):
-        """Store latest IK solution for set_arm_pose_via_ik()."""
-        with self.ik_lock:
-            self.latest_ik_solution = msg
-            self.latest_ik_solution_seq += 1
-
-    def set_arm_pose_via_ik(
-        self,
-        x: float,
-        y: float,
-        z: float,
-        roll: float = 0.0,
-        pitch: float = 0.0,
-        yaw: float = 0.0,
-        timeout: float = 2.0,
-    ) -> bool:
-        """Request IK and forward solution to /mars/arm/commands.
-
-        Returns True on success, False on timeout/empty solution.
-        """
-        with self.ik_lock:
-            start_seq = self.latest_ik_solution_seq
-
-        target = Twist()
-        target.linear.x = float(x)
-        target.linear.y = float(y)
-        target.linear.z = float(z)
-        target.angular.x = float(roll)
-        target.angular.y = float(pitch)
-        target.angular.z = float(yaw)
-
-        self.ik_target_pub.publish(target)
-
-        deadline = time.monotonic() + max(0.05, float(timeout))
-        solution_msg = None
-        while time.monotonic() < deadline:
-            # Process incoming callbacks so /ik_solution can be received while waiting.
-            rclpy.spin_once(self, timeout_sec=0.01)
-            with self.ik_lock:
-                if self.latest_ik_solution_seq > start_seq:
-                    solution_msg = self.latest_ik_solution
-                    break
-
-        if solution_msg is None:
-            self.get_logger().warn('Timed out waiting for IK solution.')
-            return False
-
-        joint_positions = list(solution_msg.position)
-        if len(joint_positions) == 0:
-            self.get_logger().warn('IK returned empty joint solution.')
-            return False
-
-        cmd = Float64MultiArray()
-        cmd.data = joint_positions
-        self.arm_command_pub.publish(cmd)
-        self.get_logger().info(f'Sent IK solution with {len(joint_positions)} joints to arm command topic.')
-        return True
-
-    def _save_fk_pose(self, index: int) -> None:
-        """Save the latest FK pose to disk alongside captured images."""
-        with self.fk_lock:
-            pose_msg = self.latest_fk_pose
-
-        if pose_msg is None:
+    def _save_fk_pose(self) -> None:
+        """Append the current FK pose to the fk_poses.json array file."""
+        ee_pose = self.manipulation.get_current_end_effector_pose()
+        if ee_pose is None:
             self.get_logger().warn('FK pose not available; skipping FK pose save for this capture.')
             return
 
-        payload = {
-            'header': {
-                'stamp': {
-                    'sec': int(pose_msg.header.stamp.sec),
-                    'nanosec': int(pose_msg.header.stamp.nanosec),
-                },
-                'frame_id': pose_msg.header.frame_id,
-            },
-            'pose': {
-                'position': {
-                    'x': float(pose_msg.pose.position.x),
-                    'y': float(pose_msg.pose.position.y),
-                    'z': float(pose_msg.pose.position.z),
-                },
-                'orientation': {
-                    'x': float(pose_msg.pose.orientation.x),
-                    'y': float(pose_msg.pose.orientation.y),
-                    'z': float(pose_msg.pose.orientation.z),
-                    'w': float(pose_msg.pose.orientation.w),
-                },
-            },
-        }
-
-        fk_path = self.tmp_image_dir / f'fk_pose_{index:03d}.json'
+        fk_path = self.tmp_image_dir / 'fk_poses.json'
         try:
+            # Load existing array or start fresh
+            if fk_path.exists():
+                with fk_path.open('r', encoding='utf-8') as f:
+                    poses_list = json.load(f)
+            else:
+                poses_list = []
+
+            poses_list.append(ee_pose)
+
             with fk_path.open('w', encoding='utf-8') as f:
-                json.dump(payload, f, indent=2)
+                json.dump(poses_list, f, indent=2)
         except Exception as e:
             self.get_logger().warn(f'Failed to save FK pose: {e}')
 
-    def _quat_to_rpy(self, x: float, y: float, z: float, w: float) -> tuple[float, float, float]:
-        """Convert quaternion to roll/pitch/yaw."""
-        sinr_cosp = 2.0 * (w * x + y * z)
-        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-        roll = math.atan2(sinr_cosp, cosr_cosp)
+    def _load_fk_poses(self) -> list:
+        """Load pre-recorded FK poses from fk_poses.json and convert to
+        (x, y, z, roll, pitch, yaw) tuples.
 
-        sinp = 2.0 * (w * y - z * x)
-        if abs(sinp) >= 1.0:
-            pitch = math.copysign(math.pi / 2.0, sinp)
-        else:
-            pitch = math.asin(sinp)
+        Each entry in the JSON array should have:
+          {"position": {"x", "y", "z"}, "orientation": {"x", "y", "z", "w"}, ...}
 
-        siny_cosp = 2.0 * (w * z + x * y)
-        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-        yaw = math.atan2(siny_cosp, cosy_cosp)
-        return roll, pitch, yaw
+        Returns:
+            List of (x, y, z, roll, pitch, yaw) tuples.
+        """
+        fk_path = self.tmp_image_dir / 'fk_poses.json'
+        if not fk_path.exists():
+            self.get_logger().warn(f'FK poses file not found: {fk_path}')
+            return []
 
-    def _init_auto_stage_targets_from_fk(self, pose_msg: PoseStamped) -> None:
-        """Initialize 3-stage arm targets from current FK pose."""
-        px = float(pose_msg.pose.position.x)
-        py = float(pose_msg.pose.position.y)
-        pz = float(pose_msg.pose.position.z)
-        roll = self.auto_target_roll
-        pitch = self.auto_target_pitch
-        yaw = self.auto_target_yaw
+        try:
+            with fk_path.open('r', encoding='utf-8') as f:
+                poses_list = json.load(f)
+        except Exception as e:
+            self.get_logger().warn(f'Failed to read FK poses file: {e}')
+            return []
 
-        dy = self.auto_stage_delta_y
-        dz = self.auto_stage_delta_z
-        self.auto_stage_targets = [
-            {'x': px, 'y': py, 'z': pz, 'roll': roll, 'pitch': pitch, 'yaw': yaw},
-            {'x': px, 'y': py + dy, 'z': pz + dz, 'roll': roll, 'pitch': pitch, 'yaw': yaw},
-            {'x': px, 'y': py - dy, 'z': pz + dz, 'roll': roll, 'pitch': pitch, 'yaw': yaw},
-        ]
-        self.auto_stage_index = 0
-        self.get_logger().info(
-            '[AUTO] Initialized arm stages from current FK pose '
-            f'(base xyz=({px:.3f}, {py:.3f}, {pz:.3f}))'
-        )
+        poses = []
+        for i, entry in enumerate(poses_list):
+            try:
+                # Support both direct {position, orientation} and wrapped {pose: {position, orientation}}
+                pose = entry.get('pose', entry) if isinstance(entry, dict) else entry
+                pos = pose['position']
+                ori = pose['orientation']
 
-    def publish_fk_pose_periodic(self) -> None:
-        """Publish the latest FK pose at a fixed interval (auto > 0)."""
-        self.auto_tick_count += 1
+                x, y, z = pos['x'], pos['y'], pos['z']
+                qx, qy, qz, qw = ori['x'], ori['y'], ori['z'], ori['w']
+                roll, pitch, yaw = euler_from_quaternion([qx, qy, qz, qw])
+
+                poses.append((x, y, z, roll, pitch, yaw))
+            except Exception as e:
+                self.get_logger().warn(f'Failed to parse FK pose entry {i}: {e}')
+
+        self.get_logger().info(f'Loaded {len(poses)} FK poses from {fk_path}')
+        return poses
+
+    def _auto_move_loop(self):
+        """Background thread: iterate through pre-recorded poses, move arm, and auto-capture."""
+        self.get_logger().info(f'Auto-move: starting with {len(self.auto_move_poses)} poses')
+
+        # Ensure gripper is closed before moving
+        self.get_logger().info('Auto-move: closing gripper...')
+        self.manipulation.close_gripper(duration=1.0)
+        time.sleep(1.5)
+
+        while rclpy.ok() and not self.calibration_done and self.auto_move_index < len(self.auto_move_poses):
+            pose = self.auto_move_poses[self.auto_move_index]
+            x, y, z, roll, pitch, yaw = pose
+            idx = self.auto_move_index + 1
+            total = len(self.auto_move_poses)
+
+            self.get_logger().info(
+                f'Auto-move [{idx}/{total}]: Moving to pose '
+                f'(x={x:.3f}, y={y:.3f}, z={z:.3f}, '
+                f'r={np.degrees(roll):.1f}°, p={np.degrees(pitch):.1f}°, y={np.degrees(yaw):.1f}°)'
+            )
+
+            success = self.manipulation.move_to_cartesian_pose(
+                x, y, z, roll, pitch, yaw, duration=3, ik_timeout=3.0
+            )
+
+            if not success:
+                self.get_logger().warn(f'Auto-move [{idx}/{total}]: Move failed, skipping pose')
+                self.auto_move_index += 1
+                continue
+
+            # Wait for the arm to finish the trajectory + settle time
+            self.get_logger().info(
+                f'Auto-move [{idx}/{total}]: Move issued, waiting {self.auto_capture_delay}s before capture...'
+            )
+            time.sleep(self.auto_capture_delay)
+
+            # Request capture (processed by the main timer callback)
+            self.capture_requested = True
+            self.get_logger().info(f'Auto-move [{idx}/{total}]: Capture requested')
+
+            # Wait for the capture to be processed before moving on
+            while self.capture_requested and rclpy.ok() and not self.calibration_done:
+                time.sleep(0.1)
+
+            self.auto_move_index += 1
+
+            # Wait the interval before the next move (unless calibration is done)
+            if not self.calibration_done and self.auto_move_index < len(self.auto_move_poses):
+                self.get_logger().info(
+                    f'Auto-move: waiting {self.auto_move_interval}s before next pose...'
+                )
+                time.sleep(self.auto_move_interval)
 
         if self.calibration_done:
-            self.get_logger().info(
-                f'[AUTO tick {self.auto_tick_count}] Calibration done; skipping auto FK publish.'
-            )
-            return
-
-        with self.fk_lock:
-            pose_msg = self.latest_fk_pose
-
-        if pose_msg is None:
-            self.get_logger().warn(
-                f'[AUTO tick {self.auto_tick_count}] No FK pose received yet; skipping publish.'
-            )
-            return
-
-        out_msg = PoseStamped()
-        out_msg.header.stamp = self.get_clock().now().to_msg()
-        out_msg.header.frame_id = pose_msg.header.frame_id
-        out_msg.pose = pose_msg.pose
-        self.fk_pose_pub.publish(out_msg)
-
-        self.auto_publish_count += 1
-        stage = ((self.auto_publish_count - 1) % 3) + 1
-        self.get_logger().info(
-            '[AUTO] Published FK pose '
-            f'#{self.auto_publish_count} (tick {self.auto_tick_count}, stage {stage}/3) '
-            f'to {self.fk_pose_publish_topic} | '
-            f'xyz=({out_msg.pose.position.x:.3f}, {out_msg.pose.position.y:.3f}, {out_msg.pose.position.z:.3f})'
-        )
-
-        if not self.auto_move_arm:
-            return
-
-        if self.auto_stage_targets is None:
-            self._init_auto_stage_targets_from_fk(pose_msg)
-
-        stage_idx = self.auto_stage_index % 3
-        target = self.auto_stage_targets[stage_idx]
-        self.get_logger().info(
-            '[AUTO] Stage '
-            f'{stage_idx + 1}/3 -> IK target '
-            f'xyz=({target["x"]:.3f}, {target["y"]:.3f}, {target["z"]:.3f}) '
-            f'rpy=({target["roll"]:.3f}, {target["pitch"]:.3f}, {target["yaw"]:.3f})'
-        )
-
-        ok = self.set_arm_pose_via_ik(
-            target['x'],
-            target['y'],
-            target['z'],
-            target['roll'],
-            target['pitch'],
-            target['yaw'],
-            timeout=self.auto_ik_timeout,
-        )
-
-        if ok:
-            self.get_logger().info(f'[AUTO] Stage {stage_idx + 1}/3 arm command sent.')
-            self.auto_stage_index = (self.auto_stage_index + 1) % 3
-        else:
-            self.get_logger().warn(f'[AUTO] Stage {stage_idx + 1}/3 failed; will retry this stage next tick.')
+            self.get_logger().info('Auto-move: stopping — calibration complete')
+        elif self.auto_move_index >= len(self.auto_move_poses):
+            self.get_logger().info('Auto-move: all poses exhausted')
+            # Wait for the last capture to be processed
+            while self.capture_requested and rclpy.ok():
+                time.sleep(0.1)
+            if not self.calibration_done and self.images_captured > 0:
+                self.get_logger().info(
+                    f'Auto-move: running calibration with {self.images_captured} images '
+                    f'(requested {self.num_images_required})'
+                )
+                self.run_calibration()
 
     def check_existing_images(self):
         """Check for existing calibration images in /tmp and ask user if they want to use them."""
@@ -784,7 +669,8 @@ class StereoCalibrator(Node):
             try:
                 cv2.imwrite(str(self.tmp_image_dir / f'left_{self.images_captured:03d}.png'), left_img)
                 cv2.imwrite(str(self.tmp_image_dir / f'right_{self.images_captured:03d}.png'), right_img)
-                self._save_fk_pose(self.images_captured)
+                if self.save_fk_pose:
+                    self._save_fk_pose()
             except Exception as e:
                 self.get_logger().warn(f'Failed to save images: {e}')
 
@@ -844,11 +730,11 @@ class StereoCalibrator(Node):
             f'Common points: {len(self.common_obj_points)} images'
         )
         
-        # Debug: check shapes
-        for i, (obj_l, corners_l) in enumerate(zip(self.indiv_obj_points_left, self.indiv_corners_left)):
-            self.get_logger().debug(f'  Left  img {i+1}: obj={obj_l.shape}, corners={corners_l.shape}')
-        for i, (obj_r, corners_r) in enumerate(zip(self.indiv_obj_points_right, self.indiv_corners_right)):
-            self.get_logger().debug(f'  Right img {i+1}: obj={obj_r.shape}, corners={corners_r.shape}')
+        # # Debug: check shapes
+        # for i, (obj_l, corners_l) in enumerate(zip(self.indiv_obj_points_left, self.indiv_corners_left)):
+        #     self.get_logger().debug(f'  Left  img {i+1}: obj={obj_l.shape}, corners={corners_l.shape}')
+        # for i, (obj_r, corners_r) in enumerate(zip(self.indiv_obj_points_right, self.indiv_corners_right)):
+        #     self.get_logger().debug(f'  Right img {i+1}: obj={obj_r.shape}, corners={corners_r.shape}')
         
         # Calibrate left camera using ALL left-camera corners (not just common)
         ret_left, K1, D1, rvecs_left, tvecs_left = cv2.calibrateCamera(
