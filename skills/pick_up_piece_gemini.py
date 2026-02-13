@@ -23,7 +23,7 @@ CAPTURES_DIR = Path.home() / "innate-os/captures/gemini"
 # Max base driving speed in m/s
 DRIVE_SPEED = 0.02
 # Number of squares to offset by when driving
-DRIVE_SQUARES = 3
+DRIVE_SQUARES = 4
 
 
 def _load_env_file(env_path: Path) -> dict:
@@ -349,7 +349,7 @@ class PickUpPieceGemini(Skill):
         place_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
 
         # Drive base if needed
-        place_target_offset = -(DRIVE_SQUARES * square_size) if place_rank <= 3 else 0.0
+        place_target_offset = -(DRIVE_SQUARES * square_size) if place_rank <= 4 else 0.0
         current_offset = self._drive_to_offset(place_target_offset, current_offset)
         place_x_adj = place_x - current_offset
 
@@ -461,7 +461,7 @@ class PickUpPieceGemini(Skill):
         # 1. Drive base to optimal position
         square_size = self._compute_square_size_x(calibration)
         current_offset = self._load_position_state()
-        target_offset = -(DRIVE_SQUARES * square_size) if rank <= 3 else 0.0
+        target_offset = -(DRIVE_SQUARES * square_size) if rank <= 4 else 0.0
         current_offset = self._drive_to_offset(target_offset, current_offset)
         if self._cancelled:
             return "Cancelled", SkillResult.CANCELLED
