@@ -3,44 +3,20 @@
  */
 import { useState, useEffect, useRef } from "react";
 import styled from "styled-components";
-// Example icon from react-icons (feel free to use your own icon or an SVG):
-import {
-  IoSend,
-  IoPerson,
-  IoHardwareChip,
-  IoMic,
-  IoMicOff,
-  IoBrush,
-} from "react-icons/io5";
-// Import directive icons
-import {
-  IoHappy,
-  IoFlag,
-  IoShield,
-  IoHeart,
-  IoSettings,
-} from "react-icons/io5";
+import { IoSend, IoPerson, IoHardwareChip, IoStop } from "react-icons/io5";
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
-import { useAuth0 } from "@auth0/auth0-react";
-import { isAuthorized, fetchAndStoreUserInfo } from "../services/authService";
 import Groq from "groq-sdk";
 import { CartesiaClient } from "@cartesia/cartesia-js";
 
 const ChatContainer = styled.div`
-  /* Default desktop width */
-  width: 800px;
+  width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
-  align-self: center;
-  font-family: ${({ theme }) => theme.fonts.body};
-
-  /* On screens below 768px, take the full width */
-  @media (max-width: 768px) {
-    width: 100%;
-  }
+  font-family: ${({ theme }) => theme.fonts.mono};
+  background: ${({ theme }) => theme.colors.background};
 `;
 
 const MessagesWrapper = styled.div`
@@ -49,7 +25,7 @@ const MessagesWrapper = styled.div`
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 `;
 
 interface MessageBubbleProps {
@@ -57,59 +33,44 @@ interface MessageBubbleProps {
 }
 
 const MessageBubble = styled.div<MessageBubbleProps>`
-  max-width: 80%;
-  background: ${({ $isUser, theme }) =>
-    $isUser
-      ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-      : theme.colors.secondary};
-  color: ${({ $isUser, theme }) =>
-    $isUser ? "#ffffff" : theme.colors.foreground};
-  border: ${({ $isUser, theme }) =>
-    $isUser ? "none" : `1px solid ${theme.colors.border}`};
-  border-radius: 18px;
-  border-bottom-left-radius: ${({ $isUser }) => ($isUser ? "18px" : "0")};
-  border-bottom-right-radius: ${({ $isUser }) => ($isUser ? "0" : "18px")};
-  padding: 12px 16px;
-  margin-bottom: 8px;
+  max-width: 90%;
+  padding: 8px 12px;
   align-self: ${({ $isUser }) => ($isUser ? "flex-end" : "flex-start")};
   text-align: ${({ $isUser }) => ($isUser ? "right" : "left")};
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.5;
-  box-shadow: ${({ theme }) => theme.shadows.small};
-
-  @media (prefers-color-scheme: dark) {
-    background: ${({ $isUser }) =>
-      $isUser
-        ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-        : "#1e293b"};
-    color: ${({ $isUser }) => ($isUser ? "#ffffff" : "#e5e7eb")};
-    border: ${({ $isUser }) => ($isUser ? "none" : "1px solid #374151")};
-  }
+  display: inline-block;
+  background: ${({ $isUser, theme }) =>
+    $isUser ? "rgba(64, 31, 251, 0.1)" : theme.colors.secondary};
+  color: ${({ $isUser, theme }) =>
+    $isUser ? theme.colors.primary : theme.colors.foreground};
+  border: 1px solid
+    ${({ $isUser, theme }) =>
+      $isUser ? theme.colors.primary : theme.colors.foreground};
+  border-bottom-left-radius: ${({ $isUser }) => ($isUser ? "4px" : "0")};
+  border-bottom-right-radius: ${({ $isUser }) => ($isUser ? "0" : "4px")};
+  box-shadow: ${({ $isUser }) =>
+    $isUser ? "none" : "4px 4px 0 rgba(255,255,255,0.05)"};
 `;
 
 const MessageSender = styled.div<{ $isUser: boolean }>`
-  font-size: 13px;
-  font-weight: ${({ theme }) => theme.fontWeights.semibold};
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
   margin-bottom: 4px;
-  color: ${({ $isUser, theme }) => ($isUser ? "#f0f4ff" : theme.colors.muted)};
+  opacity: 0.5;
   display: flex;
   align-items: center;
   gap: 6px;
-
-  @media (prefers-color-scheme: dark) {
-    color: ${({ $isUser }) => ($isUser ? "#f0f4ff" : "#9ca3af")};
-  }
 `;
 
 const InputArea = styled.div`
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: 12px 16px;
-  background: ${({ theme }) => theme.colors.secondary};
-  border-radius: 20px;
-  margin: 12px;
-  box-shadow: ${({ theme }) => theme.shadows.small};
+  padding: 16px;
+  gap: 8px;
+  border-top: 1px solid ${({ theme }) => theme.colors.foreground};
 `;
 
 interface TextInputProps {
@@ -119,63 +80,59 @@ interface TextInputProps {
 const TextInput = styled.input<TextInputProps>`
   flex: 1;
   border: none;
-  border-radius: 16px;
-  padding: 12px;
+  padding: 10px;
   outline: none;
-  background: ${({ $isListening }) =>
-    $isListening ? "#f0f4ff20" : "transparent"};
-  font-size: 15px;
-  font-family: ${({ theme }) => theme.fonts.body};
+  background: ${({ theme }) => theme.colors.secondary};
+  font-size: 13px;
+  font-family: ${({ theme }) => theme.fonts.mono};
   color: ${({ theme }) => theme.colors.foreground};
+  border-bottom: 2px solid transparent;
+
+  &:focus {
+    border-bottom-color: ${({ theme }) => theme.colors.primary};
+  }
+
   ::placeholder {
     color: ${({ theme }) => theme.colors.muted};
   }
 `;
 
 const SendButton = styled.button`
-  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
-  border: none;
-  border-radius: 50%;
   width: 40px;
   height: 40px;
   display: flex;
   align-items: center;
-  padding: 0;
   justify-content: center;
   cursor: pointer;
-  margin-left: 8px;
-  color: white;
-  transition: transform 0.2s ease;
+  color: ${({ theme }) => theme.colors.foreground};
+  background: transparent;
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  border-radius: 50%;
+  transition: all 0.2s;
 
   &:hover {
-    transform: scale(1.05);
+    background: ${({ theme }) => theme.colors.foreground};
+    color: ${({ theme }) => theme.colors.background};
   }
 `;
 
-const MicButton = styled.button<{ $isListening: boolean }>`
-  background: ${({ $isListening }) =>
-    $isListening
-      ? "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)"
-      : "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)"};
-  border: none;
-  border-radius: 50%;
+const StopButton = styled.button`
   width: 40px;
   height: 40px;
   display: flex;
   align-items: center;
-  padding: 0;
   justify-content: center;
   cursor: pointer;
-  margin-right: 8px;
-  color: white;
-  transition: all 0.2s ease;
+  border-radius: 50%;
+  transition: all 0.2s;
+  border: 1px solid ${({ theme }) => theme.colors.foreground};
+  background: transparent;
+  color: ${({ theme }) => theme.colors.foreground};
 
   &:hover {
-    transform: scale(1.05);
-    background: ${({ $isListening }) =>
-      $isListening
-        ? "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)"
-        : "linear-gradient(135deg, #4b5563 0%, #374151 100%)"};
+    background: #dc2626;
+    border-color: #dc2626;
+    color: white;
   }
 `;
 
@@ -184,8 +141,8 @@ const DirectivesContainer = styled.div`
   overflow-x: auto;
   padding: 8px 12px;
   gap: 8px;
-  background: ${({ theme }) => theme.colors.secondary};
-  border-bottom: 1px solid ${({ theme }) => theme.colors.border};
+  background: ${({ theme }) => theme.colors.background};
+  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
 `;
 
 interface DirectiveButtonProps {
@@ -264,53 +221,22 @@ const IconWrapper = styled.div<{ $isActive: boolean }>`
   }
 `;
 
-// Define the directive type
-interface Directive {
+// Define the agent type (from robot)
+interface Agent {
   id: string;
-  title: string;
-  subtitle: string;
-  icon: React.ReactNode;
+  display_name: string;
+  display_icon: string | null;
+  prompt: string;
+  skills: string[];
 }
 
-// Define all available directives
-const DIRECTIVES: Directive[] = [
-  {
-    id: "default_directive",
-    title: "Default",
-    subtitle: "Obedient, no initiative",
-    icon: <IoSettings size={16} />,
-  },
-  {
-    id: "sassy_directive",
-    title: "Sassy",
-    subtitle: "Playful, witty behavior",
-    icon: <IoHappy size={16} />,
-  },
-  {
-    id: "friendly_guide_directive",
-    title: "Guide",
-    subtitle: "Guides you around",
-    icon: <IoFlag size={16} />,
-  },
-  {
-    id: "security_patrol_directive",
-    title: "Security",
-    subtitle: "Vigilant, protective",
-    icon: <IoShield size={16} />,
-  },
-  {
-    id: "elder_safety_directive",
-    title: "Elder Care",
-    subtitle: "Proactively cares for users",
-    icon: <IoHeart size={16} />,
-  },
-  {
-    id: "interior_designer_directive",
-    title: "Interior Designer",
-    subtitle: "Designs your home",
-    icon: <IoBrush size={16} />,
-  },
-];
+// Available agents response from the API
+interface AvailableAgentsResponse {
+  agents: Agent[];
+  current_agent_id: string | null;
+  startup_agent_id: string | null;
+  error?: string;
+}
 
 const CHAT_IN_TOPIC = "/brain/chat_in";
 const CHAT_OUT_TOPIC = "/brain/chat_out";
@@ -396,15 +322,13 @@ export function Chat({ onSetDirective }: ChatProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
-  const [activeDirective, setActiveDirective] = useState("default_directive");
+  const [activeDirective, setActiveDirective] = useState<string | null>(null);
   const [expandedSystemMessages, setExpandedSystemMessages] = useState<{
     [key: number]: boolean;
   }>({});
   const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
-    {}
+    {},
   );
-  const { user, isAuthenticated, getAccessTokenSilently } = useAuth0();
-  const [userInfoStored, setUserInfoStored] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -420,62 +344,55 @@ export function Chat({ onSetDirective }: ChatProps) {
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const backendWsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
 
+  // State for agents fetched from the robot
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
+  const hasAgentsRef = useRef(false);
+
+  // Fetch available agents from the robot on mount
+  useEffect(() => {
+    const fetchAgents = async () => {
+      try {
+        const baseUrl =
+          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+        const response = await fetch(`${baseUrl}/get_available_agents`);
+        const data: AvailableAgentsResponse = await response.json();
+
+        if (data.agents && data.agents.length > 0) {
+          setAgents(data.agents);
+          hasAgentsRef.current = true;
+          // Set active directive to current agent from robot, or first agent
+          if (data.current_agent_id) {
+            setActiveDirective(data.current_agent_id);
+          } else if (data.agents.length > 0) {
+            setActiveDirective(data.agents[0].id);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching agents:", error);
+      } finally {
+        setIsLoadingAgents(false);
+      }
+    };
+
+    fetchAgents();
+
+    // Poll for agents every 5 seconds until we have some
+    const intervalId = setInterval(async () => {
+      if (!hasAgentsRef.current) {
+        await fetchAgents();
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, []);
+
   const handleScroll = () => {
     if (containerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
       setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 10);
     }
   };
-
-  // Effect to store user info when authenticated
-  useEffect(() => {
-    if (useDirectRobotWs) {
-      if (!userInfoStored) {
-        setUserInfoStored(true);
-      }
-      return;
-    }
-
-    if (isAuthenticated && user && !userInfoStored) {
-      const fetchUserInfo = async () => {
-        try {
-          const accessToken = await getAccessTokenSilently();
-          const data = await fetchAndStoreUserInfo(user, accessToken);
-
-          if (data) {
-            // Check if the user is authorized
-            if (data.is_authorized || data.email) {
-              setUserInfoStored(true);
-            } else {
-              // If we don't have an email, try again after a delay
-              setTimeout(() => {
-                setUserInfoStored(false); // Reset to trigger another attempt
-              }, 2000);
-            }
-          } else {
-            // If we couldn't store the user info, try again after a delay
-            setTimeout(() => {
-              setUserInfoStored(false); // Reset to trigger another attempt
-            }, 2000);
-          }
-        } catch {
-          // If there was an error, try again after a delay
-          setTimeout(() => {
-            setUserInfoStored(false); // Reset to trigger another attempt
-          }, 2000);
-        }
-      };
-
-      fetchUserInfo();
-    }
-  }, [
-    isAuthenticated,
-    user,
-    userInfoStored,
-    getAccessTokenSilently,
-    useDirectRobotWs,
-  ]);
-
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
     if (
@@ -486,49 +403,12 @@ export function Chat({ onSetDirective }: ChatProps) {
       return;
     }
 
-    // Check if the user is authorized to connect
-    if (!isAuthorized(user)) {
-      setMessages((prev) => {
-        // Check if we already have this message to avoid duplicates
-        const hasUnauthorizedMessage = prev.some(
-          (m) =>
-            m.sender === "system" &&
-            m.text.includes("not authorized") &&
-            m.isError
-        );
-
-        if (hasUnauthorizedMessage) {
-          return prev;
-        }
-
-        return [
-          ...prev,
-          {
-            sender: "system",
-            text: "You are not authorized to use the chat. Please subscribe or contact axel@innate.bot for access.",
-            timestamp: Date.now() / 1000,
-            isError: true,
-          },
-        ];
-      });
-      return;
-    }
-
-    // Make sure user info is stored before connecting to WebSocket
-    if (!useDirectRobotWs && isAuthenticated && user && !userInfoStored) {
-      return;
-    }
-
-    // Get user ID and email from Auth0 if authenticated
-    const userId = isAuthenticated && user && user.sub ? user.sub : "anonymous";
-    const userEmail = isAuthenticated && user && user.email ? user.email : "";
-
-    // Add user ID and email as query parameters
+    // Use anonymous user ID
+    const userId = "anonymous";
+    // Add user ID as query parameter
     const wsUrl = useDirectRobotWs
       ? robotWsUrl
-      : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(
-          userId
-        )}&email=${encodeURIComponent(userEmail)}`;
+      : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(userId)}`;
 
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
@@ -624,14 +504,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         socket.close();
       }
     };
-  }, [
-    isAuthenticated,
-    user,
-    userInfoStored,
-    useDirectRobotWs,
-    robotWsUrl,
-    backendWsBaseUrl,
-  ]);
+  }, [useDirectRobotWs, robotWsUrl, backendWsBaseUrl]);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -639,26 +512,63 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   }, [messages, isScrolledToBottom]);
 
+  // Listen for voice transcription events from App.tsx
+  useEffect(() => {
+    const handleVoiceTranscription = (event: CustomEvent<{ text: string }>) => {
+      const text = event.detail.text;
+      if (
+        text &&
+        wsRef.current &&
+        wsRef.current.readyState === WebSocket.OPEN
+      ) {
+        if (useDirectRobotWs) {
+          const timestamp = Math.floor(Date.now() / 1000);
+          const outgoingMessage = {
+            text,
+            sender: "user",
+            timestamp,
+          } as const;
+
+          wsRef.current.send(
+            JSON.stringify({
+              op: "publish",
+              topic: CHAT_IN_TOPIC,
+              msg: { data: JSON.stringify(outgoingMessage) },
+            }),
+          );
+
+          setMessages((prev) =>
+            appendUniqueMessage(prev, {
+              sender: outgoingMessage.sender,
+              text: outgoingMessage.text,
+              timestamp: outgoingMessage.timestamp,
+            }),
+          );
+        } else {
+          wsRef.current.send(text);
+        }
+        console.log("Sent voice transcription to chat:", text);
+      }
+    };
+
+    window.addEventListener(
+      "voice-transcription",
+      handleVoiceTranscription as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        "voice-transcription",
+        handleVoiceTranscription as EventListener,
+      );
+    };
+  }, [useDirectRobotWs]);
+
   const handleSend = async () => {
     const cleanDraft = draft.trim();
     if (!cleanDraft || !wsRef.current) return;
 
     // Initialize AudioContext on user interaction
     await ensureAudioContext();
-
-    // Check if the user is authorized to send messages
-    if (!isAuthorized(user)) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "system",
-          text: "You are not authorized to send messages. Please subscribe or contact axel@innate.bot for access.",
-          timestamp: Date.now() / 1000,
-          isError: true,
-        },
-      ]);
-      return;
-    }
 
     // Check if WebSocket is open
     if (wsRef.current.readyState === WebSocket.OPEN) {
@@ -693,15 +603,6 @@ export function Chat({ onSetDirective }: ChatProps) {
       // Clear the input
       setDraft("");
     } else {
-      // Try to reconnect
-      if (
-        wsRef.current.readyState === WebSocket.CLOSED ||
-        wsRef.current.readyState === WebSocket.CLOSING
-      ) {
-        // Force a re-render to trigger the useEffect that establishes the WebSocket connection
-        setUserInfoStored(false);
-      }
-
       // Add a message to the UI
       setMessages((prev) => [
         ...prev,
@@ -772,6 +673,37 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   };
 
+  const stopAgent = async () => {
+    try {
+      const baseUrl =
+        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+      const response = await fetch(`${baseUrl}/stop_agent`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      console.log("Agent stopped:", data);
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "Agent stopped.",
+          timestamp: Date.now() / 1000,
+        },
+      ]);
+    } catch (error) {
+      console.error("Error stopping agent:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "system",
+          text: "Error stopping agent.",
+          timestamp: Date.now() / 1000,
+          isError: true,
+        },
+      ]);
+    }
+  };
+
   const processAudio = async (audioBlob: Blob) => {
     try {
       // Convert blob to base64
@@ -798,7 +730,7 @@ export function Chat({ onSetDirective }: ChatProps) {
           // Create FormData to send the file
           const formData = new FormData();
           formData.append("file", file);
-          formData.append("model", "distil-whisper-large-v3-en");
+          formData.append("model", "whisper-large-v3-turbo");
 
           console.log("Key", import.meta.env.VITE_GROQ_API_KEY);
 
@@ -809,7 +741,7 @@ export function Chat({ onSetDirective }: ChatProps) {
           });
           const transcription = await groq.audio.transcriptions.create({
             file: file,
-            model: "distil-whisper-large-v3-en",
+            model: "whisper-large-v3-turbo",
           });
 
           if (transcription && transcription.text) {
@@ -823,8 +755,8 @@ export function Chat({ onSetDirective }: ChatProps) {
                   !(
                     msg.sender === "system" &&
                     msg.text === "Processing your speech..."
-                  )
-              )
+                  ),
+              ),
             );
           } else {
             throw new Error("No transcription returned");
@@ -839,7 +771,7 @@ export function Chat({ onSetDirective }: ChatProps) {
                 !(
                   msg.sender === "system" &&
                   msg.text === "Processing your speech..."
-                )
+                ),
             );
 
             return [
@@ -869,7 +801,7 @@ export function Chat({ onSetDirective }: ChatProps) {
   };
 
   const filteredMessages = messages.filter(
-    (msg) => msg.sender !== "vision_agent_output"
+    (msg) => msg.sender !== "vision_agent_output",
   );
 
   // Use the grouping utility to prepare messages for display.
@@ -915,8 +847,9 @@ export function Chat({ onSetDirective }: ChatProps) {
   const ensureAudioContext = async () => {
     // Create AudioContext if it doesn't exist
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext ||
-        (window as any).webkitAudioContext)();
+      audioContextRef.current = new (
+        window.AudioContext || (window as any).webkitAudioContext
+      )();
     }
 
     // Resume the AudioContext if it's suspended
@@ -1023,7 +956,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         // Handle completion
         if (parsedMessage.type === "chunk" && parsedMessage.done) {
           console.log(
-            `Finished receiving ${isUser ? "user" : "robot"} message audio`
+            `Finished receiving ${isUser ? "user" : "robot"} message audio`,
           );
         }
       });
@@ -1061,7 +994,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         const audioBuffer = audioContextRef.current.createBuffer(
           1, // mono
           nextChunk.length,
-          44100 // sample rate
+          44100, // sample rate
         );
 
         // Fill the buffer with our audio data
@@ -1155,42 +1088,6 @@ export function Chat({ onSetDirective }: ChatProps) {
 
   return (
     <ChatContainer>
-      <button
-        onClick={enableAudio}
-        style={{
-          background: "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)",
-          color: "white",
-          border: "none",
-          borderRadius: "8px",
-          padding: "8px 16px",
-          margin: "8px",
-          cursor: "pointer",
-          alignSelf: "center",
-        }}
-      >
-        Enable Audio
-      </button>
-      <DirectivesContainer>
-        {DIRECTIVES.map((directive) => (
-          <DirectiveButton
-            key={directive.id}
-            $isActive={activeDirective === directive.id}
-            onClick={() => {
-              setActiveDirective(directive.id);
-              onSetDirective(directive.id);
-            }}
-          >
-            <IconWrapper $isActive={activeDirective === directive.id}>
-              {directive.icon}
-            </IconWrapper>
-            <DirectiveContent>
-              <DirectiveTitle>{directive.title}</DirectiveTitle>
-              <DirectiveSubtitle>{directive.subtitle}</DirectiveSubtitle>
-            </DirectiveContent>
-          </DirectiveButton>
-        ))}
-      </DirectivesContainer>
-
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
         {groupedMessages.map((message, index) => {
           if (message.sender === "user") {
@@ -1291,16 +1188,12 @@ export function Chat({ onSetDirective }: ChatProps) {
       )}
 
       <InputArea>
-        <MicButton
-          onClick={toggleListening}
-          $isListening={isListening}
-          title={isListening ? "Stop recording" : "Start voice input"}
-        >
-          {isListening ? <IoMicOff size={20} /> : <IoMic size={20} />}
-        </MicButton>
+        <StopButton onClick={stopAgent} title="Stop current agent action">
+          <IoStop size={20} />
+        </StopButton>
         <TextInput
           type="text"
-          placeholder={isListening ? "Listening..." : "Type your message..."}
+          placeholder="Type your message..."
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {

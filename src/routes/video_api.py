@@ -166,3 +166,46 @@ async def set_brain_active(request: Request, brain_request: SetBrainActiveReques
             return {"status": "queue_full"}
     else:
         return {"status": "no_shared_queues"}
+
+
+@router.get("/get_available_agents")
+def get_available_agents(request: Request):
+    """
+    Returns the list of available agents/directives from the robot brain.
+    Each agent includes: id, display_name, display_icon, prompt, skills.
+    Also returns the current and startup agent IDs.
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    if shared_queues is None:
+        return JSONResponse(
+            {
+                "agents": [],
+                "current_agent_id": None,
+                "startup_agent_id": None,
+                "error": "Simulation not initialized",
+            },
+            status_code=200,
+        )
+
+    agents, current_agent_id, startup_agent_id = shared_queues.get_available_agents()
+
+    # Convert AgentInfo namedtuples to dicts for JSON serialization
+    agents_data = [
+        {
+            "id": agent.id,
+            "display_name": agent.display_name,
+            "display_icon": agent.display_icon,
+            "prompt": agent.prompt,
+            "skills": agent.skills,
+        }
+        for agent in agents
+    ]
+
+    return JSONResponse(
+        {
+            "agents": agents_data,
+            "current_agent_id": current_agent_id,
+            "startup_agent_id": startup_agent_id,
+        }
+    )

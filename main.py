@@ -1,8 +1,9 @@
 import argparse
 import time
 import threading
-import platform
 import os
+import json
+from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 import genesis as gs
 import uvicorn
@@ -27,13 +28,13 @@ ROSBRIDGE_URI = "ws://localhost:9090"  # Connects to Innate OS running locally i
 
 app = FastAPI()
 
-# Enable CORS with support for Authorization header
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*", "Authorization"],
+    allow_headers=["*"],
 )
 
 # Mount the React build directory
@@ -41,17 +42,8 @@ frontend_build_path = os.path.join(os.path.dirname(__file__), "frontend", "dist"
 app.mount("/static", StaticFiles(directory=frontend_build_path), name="static")
 
 # Include the routers
-# Note: We're not adding authentication to the video_api_router yet
-# to keep things simple
 app.include_router(video_api_router)
-
-# Add authentication to the chat_api_router
-# This will require a valid Auth0 token for all endpoints in this router
-# except for the WebSocket endpoint which handles authentication separately
-# The WebSocket endpoint will handle authentication on its own
 app.include_router(chat_api_router)
-
-# Add the config_api router with authentication
 app.include_router(config_api_router)
 
 # Initialize a placeholder on the application's state so that downstream
@@ -77,6 +69,38 @@ def frame_collector(shared_queues: SharedQueues):
             shared_queues.latest_frames[cam_name] = frame
 
 
+def load_initial_environment_config(
+    config_name: Optional[str], config_path: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Load initial environment config from name in data/environments or explicit path."""
+    if config_name and config_path:
+        raise ValueError(
+            "Provide only one of --initial-environment or --initial-environment-path."
+        )
+
+    if not config_name and not config_path:
+        return None
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+
+    if config_name:
+        resolved_path = os.path.join(
+            project_root, "data", "environments", f"{config_name}.json"
+        )
+    else:
+        resolved_path = (
+            config_path
+            if os.path.isabs(config_path)
+            else os.path.join(project_root, config_path)
+        )
+
+    with open(resolved_path, "r") as f:
+        config = json.load(f)
+
+    print(f"[Main] Loaded initial environment config from {resolved_path}")
+    return config
+
+
 # Additional endpoints and functions (if any) can be placed here.
 
 
@@ -88,51 +112,37 @@ def main():
     parser.add_argument(
         "-v", "--vis", action="store_true", default=False, help="Enable visualization"
     )
-    # Add Auth0 configuration arguments
-    parser.add_argument(
-        "--auth0-domain",
-        type=str,
-        default="",
-        help="Auth0 domain (e.g., your-tenant.auth0.com)",
-    )
-    parser.add_argument(
-        "--auth0-audience",
-        type=str,
-        default="",
-        help="Auth0 API identifier",
-    )
-    # Add logging flag argument
     parser.add_argument(
         "--log-everything",
         action="store_true",
         default=False,
         help="Enable logging of all model outputs",
     )
-    # Add authentication control argument
-    parser.add_argument(
-        "--need-oauth",
-        type=str,
-        choices=["true", "false"],
-        default="true",
-        help="Require OAuth authentication for chat API (default: true)",
-    )
-    # Add no-web flag to skip starting the web server
     parser.add_argument(
         "--no-web",
         action="store_true",
         default=False,
         help="Run without the web server (headless mode)",
     )
+    parser.add_argument(
+        "--no-agent",
+        action="store_true",
+        default=False,
+        help="Run without connecting to rosbridge/brain agent",
+    )
+    parser.add_argument(
+        "--initial-environment",
+        type=str,
+        default=None,
+        help="Initial environment config name from data/environments (without .json)",
+    )
+    parser.add_argument(
+        "--initial-environment-path",
+        type=str,
+        default=None,
+        help="Path to initial environment JSON (absolute or workspace-relative)",
+    )
     args = parser.parse_args()
-
-    # Set Auth0 environment variables
-    if args.auth0_domain:
-        os.environ["AUTH0_DOMAIN"] = args.auth0_domain
-    if args.auth0_audience:
-        os.environ["AUTH0_AUDIENCE"] = args.auth0_audience
-
-    # Set authentication requirement flag
-    os.environ["NEED_OAUTH"] = args.need_oauth
 
     # 1) Create shared queues
     global SHARED_QUEUES
@@ -145,14 +155,29 @@ def main():
     )
     collector_thread.start()
 
-    # 2) Start the simulation node (no initial config path needed now)
-    sim_node = SimulationNode(SHARED_QUEUES, enable_vis=args.vis)
+    try:
+        initial_env_config = load_initial_environment_config(
+            config_name=args.initial_environment,
+            config_path=args.initial_environment_path,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to load initial environment config: {e}") from e
 
-    # 3) Start the agent (async) in a separate thread
-    agent_thread = run_agent_async(
+    # 2) Start the simulation node
+    sim_node = SimulationNode(
         SHARED_QUEUES,
-        rosbridge_uri=ROSBRIDGE_URI,
+        enable_vis=args.vis,
+        initial_env_config=initial_env_config,
     )
+
+    # 3) Start the agent (async) in a separate thread unless disabled
+    if args.no_agent:
+        print("[Main] --no-agent enabled. Skipping rosbridge/brain connection.")
+    else:
+        run_agent_async(
+            SHARED_QUEUES,
+            rosbridge_uri=ROSBRIDGE_URI,
+        )
 
     # 4) Start Uvicorn in another thread (unless --no-web)
     if not args.no_web:
@@ -167,31 +192,20 @@ def main():
         uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
         uvicorn_thread.start()
 
-    # 5) Launch simulation run() in its own thread (macOS) or directly
-    # (other platforms)
-    sim_node.run()
-
-    # 6) If visualization is requested, drive the viewer in the main thread
+    # 5) Run simulation on main thread (keeps viewer + camera rendering in same OpenGL context)
     if args.vis:
-        try:
-            # Keep the simulation running and responsive
-            while not SHARED_QUEUES.exit_event.is_set():
-                time.sleep(0.1)
-        except KeyboardInterrupt:
-            pass
-        print("[Main] Viewer closed or keyboard interrupt. Shutting down...")
+        print("[Main] Visualization enabled. Close viewer window or press Q to stop.")
     else:
         print("[Main] No viewer requested. Press Ctrl+C to stop.")
-        try:
-            while not SHARED_QUEUES.exit_event.is_set():
-                time.sleep(1.0)
-        except KeyboardInterrupt:
-            pass
 
-    # 7) On exit, signal all threads to stop
+    # Run simulation - this blocks until exit_event is set or viewer closes
+    sim_node.run()
+    print("[Main] Simulation ended.")
+
+    # 6) Cleanup and exit
     SHARED_QUEUES.exit_event.set()
-    agent_thread.join()
     print("[Main] All threads finished. Goodbye.")
+    os._exit(0)  # Force exit to avoid hanging on stubborn threads
 
 
 if __name__ == "__main__":

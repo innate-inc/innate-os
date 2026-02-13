@@ -8,7 +8,7 @@ from scipy.spatial.transform import Rotation as R, Slerp
 import time  # Add import for time functions
 import os  # Add os import for path joining
 import torch
-from typing import Dict, Any  # Add typing imports
+from typing import Dict, Any, List, Optional  # Add typing imports
 
 from src.simulation.stl_slicing import slice_stl
 from src.simulation.special_object_treatments import SpecialObjectHandler
@@ -22,13 +22,32 @@ from src.agent.types import (
     PositionCmd,
     ResetRobotCmd,
     SetEnvironmentCmd,
+    DrawTrajectoryCmd,
+    ClearTrajectoryCmd,
 )
 from src.simulation.utils import rotate_vector
 from src.shared_queues import SharedQueues
 
 
-ROBOT_INIT_POS = (2, -5, 0.8)
+ROBOT_INIT_POS = (2, -5, 0.05)
 ROBOT_INIT_QUAT = (0, 0, 0, 1)
+
+DEFAULT_SCENE_CONFIG = {
+    "name": "Baked_sc0_staging_00",
+    "mesh_path": "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
+    "mesh_euler": [90, 0, 0],
+    "collision_stage_config": "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json",
+    "occupancy_stl_path": "data/replica_scene.stl",
+    "slice_output_prefix": "replica_scene_sliced",
+}
+
+SCENE_PRESETS = {
+    "Baked_sc0_staging_00": DEFAULT_SCENE_CONFIG,
+}
+
+
+class EnvironmentRebuildRequired(Exception):
+    """Raised when applying an environment requires rebuilding the Genesis scene."""
 
 
 def xyzw_to_wxyz(xyzw):
@@ -36,13 +55,27 @@ def xyzw_to_wxyz(xyzw):
 
 
 class SimulationNode:
-    def __init__(self, shared_queues: SharedQueues, enable_vis: bool = True):
+    def __init__(
+        self,
+        shared_queues: SharedQueues,
+        enable_vis: bool = True,
+        initial_env_config: Optional[Dict[str, Any]] = None,
+    ):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
         self.loaded_entities = {}  # To store references to loaded entities
         self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
         self.managed_entities: Dict[str, gs.Entity] = {}
-        self.env_config = None
+        self.env_config = initial_env_config
+        self.project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        self.default_entity_catalog: Dict[str, Dict[str, Any]] = {}
+        self.entity_specs: Dict[str, Dict[str, Any]] = {}
+        self.manual_entity_hitboxes: Dict[str, Dict[str, float]] = {}
+        self.current_scene_config = self._resolve_scene_config(initial_env_config)
+        self.scene_built = False
+        self.current_entity_asset_signature: Optional[tuple[tuple[str, str], ...]] = None
         # Store trajectory data for managed entities
         self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
@@ -53,25 +86,43 @@ class SimulationNode:
 
         # Add timing variables for real-time simulation
         self.last_render_time = 0
-        self.render_interval = 0.5  # Render every 0.5 seconds
+        self.render_interval = 1 / 10  # Render at 15 FPS
 
         # Store commanded velocities for odometry
         self.commanded_lin_vel = np.zeros(3)  # [vx, vy, vz]
         self.commanded_ang_vel = np.zeros(3)  # [wx, wy, wz]
 
-        # Navigation control parameters
-        self.max_linear_velocity = 0.5  # m/s
-        self.max_angular_velocity = 1.0  # rad/s
+        # Navigation control parameters - differential drive kinematics
+        # Physical constraints:
+        self.wheel_base = 0.18  # m - distance between wheels (from URDF collision box)
+        self.max_wheel_speed = 0.6  # m/s - max individual wheel speed
+        # Derived limits: max_linear = max_wheel_speed, max_angular = 2*max_wheel_speed/wheel_base
+        # Software caps (for smoother motion, can be at or below physical limits):
+        self.linear_velocity_cap = 0.5  # m/s - software cap on forward speed
+        self.angular_velocity_cap = 1.0  # rad/s - software cap on rotation speed
+        # Tolerances:
         self.position_tolerance = (
             0.02  # m - how close to target before considering reached
         )
         self.angle_tolerance = (
             0.02  # rad - how close to target angle before considering reached
         )
+        # Heading must be within this angle of movement direction before moving forward
+        self.heading_alignment_threshold = 0.15  # rad (~8.6 degrees)
 
         # Current navigation target (None if no active target)
         self.nav_target_pos = None
         self.nav_target_yaw = None
+
+        # Trajectory visualization state
+        self.trajectory_debug_objects = (
+            []
+        )  # Store references to debug objects for clearing
+
+        # Logical robot position tracking (separate from physics mesh to avoid collision drift)
+        # These track the "intended" robot position, unaffected by collision resolution
+        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
+        self.robot_logical_yaw = 0.0  # Extracted from ROBOT_INIT_QUAT
 
         # Arm control state
         self.arm_joint_names = [
@@ -115,6 +166,7 @@ class SimulationNode:
         self._init_map_params()
 
         self.scene.build()
+        self.scene_built = True
 
         print("Scene built")
 
@@ -122,6 +174,13 @@ class SimulationNode:
         self._add_objects_to_occupancy_grid()
 
         self.init_movement()
+
+        if self.env_config:
+            print("[SimulationNode] Applying initial environment configuration...")
+            self._apply_environment_config(self.env_config, allow_rebuild=False)
+        else:
+            # Explicitly represent empty active entity set at startup.
+            self.current_entity_asset_signature = tuple()
 
         print("SimulationNode initialized.")
 
@@ -132,7 +191,7 @@ class SimulationNode:
     def _init_scene(self):
         """Initialize the main simulation scene"""
         self.scene = gs.Scene(
-            sim_options=gs.options.SimOptions(dt=0.1, substeps=10),
+            sim_options=gs.options.SimOptions(dt=0.05, substeps=4),
             viewer_options=gs.options.ViewerOptions(
                 camera_pos=(3.5, 0.0, 2.5),
                 camera_lookat=(0.0, 0.0, 0.5),
@@ -148,53 +207,127 @@ class SimulationNode:
         # Add ground plane
         self.scene.add_entity(gs.morphs.Plane(pos=(0, 0.05, 0)))
 
-    def _init_environment(self):
-        """Initialize the environment meshes and process occupancy grid"""
-        # TODO: Make the base scene path configurable via env_config["environment_name"]
-        base_scene_path = "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb"
-        base_scene_collision_config = "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
+    def _resolve_project_path(self, path: str) -> str:
+        """Resolve relative paths from project root while preserving absolute paths."""
+        if os.path.isabs(path):
+            return path
+        return os.path.join(self.project_root, path)
 
-        # Option 1: Load base scene without convexification
-        # Prefix with _ to indicate it might be unused currently
-        _replica_scene = self.scene.add_entity(
+    def _resolve_scene_config(
+        self, env_config: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Resolve static scene settings from an environment config."""
+        scene_config = DEFAULT_SCENE_CONFIG.copy()
+        scene_config["mesh_euler"] = list(DEFAULT_SCENE_CONFIG["mesh_euler"])
+
+        env_name = None
+        if env_config and env_config.get("environment_name"):
+            env_name = env_config["environment_name"]
+            preset = SCENE_PRESETS.get(env_name)
+            if preset:
+                scene_config.update(preset)
+                scene_config["mesh_euler"] = list(preset.get("mesh_euler", [90, 0, 0]))
+            else:
+                scene_config["name"] = env_name
+
+        scene_block = env_config.get("scene") if isinstance(env_config, dict) else None
+        if isinstance(scene_block, dict):
+            scene_config["name"] = scene_block.get(
+                "name", env_name or scene_config["name"]
+            )
+            if scene_block.get("mesh_path"):
+                scene_config["mesh_path"] = scene_block["mesh_path"]
+            if scene_block.get("mesh_euler") is not None:
+                scene_config["mesh_euler"] = scene_block["mesh_euler"]
+            if "collision_stage_config" in scene_block:
+                scene_config["collision_stage_config"] = scene_block.get(
+                    "collision_stage_config"
+                )
+            if scene_block.get("occupancy_stl_path"):
+                scene_config["occupancy_stl_path"] = scene_block["occupancy_stl_path"]
+            if scene_block.get("slice_output_prefix"):
+                scene_config["slice_output_prefix"] = scene_block["slice_output_prefix"]
+        elif env_name:
+            scene_config["name"] = env_name
+
+        return scene_config
+
+    def _init_environment(self):
+        """Initialize static scene geometry and occupancy baseline."""
+        scene_config = self.current_scene_config
+        base_scene_path = self._resolve_project_path(scene_config["mesh_path"])
+        base_scene_euler = tuple(scene_config.get("mesh_euler", [90, 0, 0]))
+
+        print(
+            f"[SimulationNode] Loading static scene '{scene_config['name']}' "
+            f"from {base_scene_path}"
+        )
+
+        self.scene.add_entity(
             gs.morphs.Mesh(
                 file=base_scene_path,
                 fixed=True,
-                euler=(90, 0, 0),
+                euler=base_scene_euler,
                 pos=(0, 0, 0),
-                convexify=False,  # Load without convexification
-                collision=False,  # No collision on main mesh
+                convexify=False,
+                collision=False,
             )
         )
 
-        # Initialize scene_objects list (for collision objects)
+        # Initialize scene_objects list (for static collision objects)
         self.scene_objects = []
 
-        # Add separate collision geometry based on the stage config file
-        self._add_collision_from_stage_config(base_scene_collision_config)
+        # Add separate collision geometry when a stage config is available.
+        collision_stage_config = scene_config.get("collision_stage_config")
+        if collision_stage_config:
+            self._add_collision_from_stage_config(
+                self._resolve_project_path(collision_stage_config),
+                scene_euler=base_scene_euler,
+            )
+        else:
+            print(
+                "[SimulationNode] No collision_stage_config configured; "
+                "skipping static collision mesh import."
+            )
 
-        # --- Pre-load all potential dynamic entities ---
+        # Register default entity metadata and load startup-requested entities.
         self._preload_dynamic_entities()
 
-        # --- Apply an initial empty/default config to hide all preloaded entities initially? ---
-        # Or handle this in _preload_dynamic_entities by placing them far away.
-        # Let's place them far away during preload.
+        # Pre-load entities referenced by the startup environment config before build().
+        startup_entity_errors = self._ensure_config_entities_loaded(self.env_config)
+        if startup_entity_errors:
+            details = "; ".join(
+                f"{name}: {error}" for name, error in startup_entity_errors.items()
+            )
+            raise RuntimeError(
+                "Failed to load startup environment entities before scene build: "
+                f"{details}"
+            )
 
-        # Export as STL (should probably only include static geometry here)
-        # TODO: Revisit STL export - might not be needed or should exclude dynamic entities
-        file_path = "data/replica_scene.stl"
-        self._process_occupancy_grid(file_path)
+        self._process_occupancy_grid(
+            self._resolve_project_path(scene_config["occupancy_stl_path"]),
+            output_prefix=scene_config.get("slice_output_prefix", "scene_sliced"),
+        )
 
-    def _add_collision_from_stage_config(self, config_path):
+    def _add_collision_from_stage_config(
+        self, config_path: str, scene_euler: tuple = (90, 0, 0)
+    ):
         """Add collision geometry based on receptacles defined in the stage config"""
+        if not os.path.exists(config_path):
+            print(
+                f"[SimulationNode] Collision config not found at {config_path}; "
+                "skipping."
+            )
+            return
+
         with open(config_path, "r") as f:
             config = json.load(f)
 
         # Extract receptacles from user_defined section
         receptacles = config.get("user_defined", {})
 
-        # Create rotation for 90 degrees around X-axis (same as euler=(90,0,0) in main scene)
-        scene_rotation = R.from_euler("x", 90, degrees=True)
+        # Align receptacle transforms with the configured static scene orientation.
+        scene_rotation = R.from_euler("xyz", scene_euler, degrees=True)
 
         # Add collision meshes for each receptacle
         for name, receptacle in receptacles.items():
@@ -244,7 +377,9 @@ class SimulationNode:
                         # Load the actual object mesh with collision but no visualization
                         mesh_entity = self.scene.add_entity(
                             gs.morphs.Mesh(
-                                file=f"data/ReplicaCAD_dataset/objects/{object_name}.glb",
+                                file=self._resolve_project_path(
+                                    f"data/ReplicaCAD_dataset/objects/{object_name}.glb"
+                                ),
                                 pos=position.tolist(),
                                 quat=final_quat,
                                 fixed=True,
@@ -271,7 +406,7 @@ class SimulationNode:
                     except Exception as e:
                         print(f"Failed to load collision for {object_name}: {e}")
 
-    def _process_occupancy_grid(self, file_path):
+    def _process_occupancy_grid(self, file_path: str, output_prefix: str = "scene_slice"):
         """
         Process the STL mesh to create an occupancy grid.
         This version also retrieves the mesh bounds so that the map origin can be set
@@ -283,11 +418,16 @@ class SimulationNode:
         self.base_occupancy_grid = None
         self.grid_bounds = None
 
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(
+                f"[SimulationNode] Occupancy STL not found at path: {file_path}"
+            )
+
         for height in np.linspace(slice_height_min, slice_height_max, num_slices):
             grid_slice, bounds = slice_stl(
                 stl_path=file_path,
                 height=height,
-                output_path=f"replica_scene_sliced_{height:.1f}.png",
+                output_path=f"{output_prefix}_{height:.1f}.png",
                 pixel_size=0.05,
             )
             if self.base_occupancy_grid is None:
@@ -550,6 +690,7 @@ class SimulationNode:
                 file="data/urdf/maurice.urdf",
                 pos=ROBOT_INIT_POS,
                 quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
+                fixed=True,  # Disable physics dynamics - robot is moved kinematically via set_pos/set_quat
             )
         )
 
@@ -659,129 +800,588 @@ class SimulationNode:
         """Initialize robot movement - no-op for Maurice"""
         pass
 
-    def _update_navigation_movement(self, dt):
-        """Smoothly move robot towards navigation target with velocity limits."""
-        # Get current robot state
-        current_pos = self.robot.get_pos().cpu().numpy()
-        current_quat = self.robot.get_quat().cpu().numpy()  # [w, x, y, z]
+    def _update_navigation_movement(self, dt, sim_time=0.0):
+        """
+        Differential drive navigation: robot heading must be tangent to trajectory.
 
-        # Convert current quaternion to yaw angle
-        current_yaw = 2 * np.arctan2(
-            current_quat[3], current_quat[0]
-        )  # z, w components
+        Key constraints:
+        1. Robot can only move forward/backward in the direction it's facing
+        2. Must rotate to face target before moving forward
+        3. Speed is limited by differential drive kinematics:
+           - v_left = v - ω * L/2
+           - v_right = v + ω * L/2
+           - Both wheel speeds must be <= max_wheel_speed
+
+        NOTE: Uses logical position tracking to avoid drift from collision resolution.
+        The physics mesh may be pushed by collisions, but navigation calculations
+        use the tracked logical position to maintain consistent reference frame.
+        """
+        # Use tracked logical position instead of physics mesh position
+        # This prevents collision-induced drift from affecting navigation
+        current_pos = self.robot_logical_pos.copy()
+        current_yaw = self.robot_logical_yaw
 
         # Calculate position error
         pos_error = self.nav_target_pos - current_pos
         distance_to_target = np.linalg.norm(pos_error[:2])  # Only X,Y distance
 
-        # Calculate angle error (normalize to [-pi, pi])
-        angle_error = self.nav_target_yaw - current_yaw
-        while angle_error > np.pi:
-            angle_error -= 2 * np.pi
-        while angle_error < -np.pi:
-            angle_error += 2 * np.pi
+        # Calculate the angle TO the target position (direction we need to move)
+        angle_to_target = np.arctan2(pos_error[1], pos_error[0])
 
-        # Check if we've reached the target
+        # Calculate heading error: difference between current heading and direction to target
+        heading_error = angle_to_target - current_yaw
+        # Normalize to [-pi, pi]
+        while heading_error > np.pi:
+            heading_error -= 2 * np.pi
+        while heading_error < -np.pi:
+            heading_error += 2 * np.pi
+
+        # Calculate final orientation error (for when we reach position)
+        final_angle_error = self.nav_target_yaw - current_yaw
+        while final_angle_error > np.pi:
+            final_angle_error -= 2 * np.pi
+        while final_angle_error < -np.pi:
+            final_angle_error += 2 * np.pi
+
+        # Check if we've reached the target position
         position_reached = distance_to_target < self.position_tolerance
-        angle_reached = abs(angle_error) < self.angle_tolerance
+        final_angle_reached = abs(final_angle_error) < self.angle_tolerance
 
-        if position_reached and angle_reached:
-            # Target reached, clear navigation target
+        if position_reached and final_angle_reached:
+            # Target fully reached, clear navigation target
             self.nav_target_pos = None
             self.nav_target_yaw = None
             self.commanded_lin_vel = np.zeros(3)
             self.commanded_ang_vel = np.zeros(3)
             return
 
-        # Calculate desired velocities
-        if distance_to_target > self.position_tolerance:
-            # Calculate direction to target (in world frame)
-            direction = pos_error[:2] / distance_to_target
+        # Determine what to do based on state
+        linear_vel = 0.0
+        angular_vel = 0.0
 
-            # Apply velocity limit
-            desired_speed = min(self.max_linear_velocity, distance_to_target / dt)
+        if not position_reached:
+            # We need to move toward the target
+            # Check if heading is aligned with movement direction
+            heading_aligned = abs(heading_error) < self.heading_alignment_threshold
 
-            # Calculate velocity in world frame
-            linear_velocity = direction * desired_speed
+            if heading_aligned:
+                # Heading is aligned - move forward while making small corrections
+                # Calculate desired angular velocity for path correction
+                angular_vel = np.clip(
+                    heading_error / dt,
+                    -self.angular_velocity_cap,
+                    self.angular_velocity_cap,
+                )
 
-            # Move robot position
-            new_pos = current_pos + np.array(
-                [linear_velocity[0] * dt, linear_velocity[1] * dt, 0]
-            )
-            self.robot.set_pos(new_pos)
+                # Calculate max linear velocity given angular velocity (differential drive constraint)
+                # |v| + |ω| * L/2 <= max_wheel_speed
+                max_linear_for_turn = (
+                    self.max_wheel_speed - abs(angular_vel) * self.wheel_base / 2
+                )
+                max_linear_for_turn = max(0.0, max_linear_for_turn)  # Can't be negative
 
-            # Store commanded velocities for odometry
-            self.commanded_lin_vel = np.array(
-                [linear_velocity[0], linear_velocity[1], 0]
-            )
+                # Also limit by software cap and distance (don't overshoot)
+                desired_linear = min(
+                    self.linear_velocity_cap,
+                    max_linear_for_turn,
+                    distance_to_target / dt,
+                )
+
+                linear_vel = desired_linear
+            else:
+                # Heading not aligned - rotate in place to face target
+                angular_vel = np.sign(heading_error) * min(
+                    self.angular_velocity_cap,
+                    abs(heading_error) / dt,
+                )
+                linear_vel = 0.0  # Don't move forward while rotating significantly
         else:
-            self.commanded_lin_vel = np.zeros(3)
+            # Position reached, rotate to final orientation
+            angular_vel = np.sign(final_angle_error) * min(
+                self.angular_velocity_cap,
+                abs(final_angle_error) / dt,
+            )
+            linear_vel = 0.0
 
-        # Handle rotation
-        if abs(angle_error) > self.angle_tolerance:
-            # Apply angular velocity limit
-            desired_angular_vel = np.sign(angle_error) * min(
-                self.max_angular_velocity, abs(angle_error) / dt
+        # Apply movement using differential drive model
+        # Robot moves in the direction it's facing
+        cos_yaw = np.cos(current_yaw)
+        sin_yaw = np.sin(current_yaw)
+
+        # Update position (forward motion in heading direction)
+        new_pos = current_pos + np.array(
+            [cos_yaw * linear_vel * dt, sin_yaw * linear_vel * dt, 0.0]
+        )
+
+        # Update orientation
+        new_yaw = current_yaw + angular_vel * dt
+        new_quat = [
+            np.cos(new_yaw / 2.0),  # w
+            0.0,  # x
+            0.0,  # y
+            np.sin(new_yaw / 2.0),  # z
+        ]
+
+        # Update logical position tracking (this is our source of truth)
+        self.robot_logical_pos = new_pos.copy()
+        self.robot_logical_yaw = new_yaw
+
+        # Apply to physics mesh for visualization (may be pushed by collisions,
+        # but we don't read it back for navigation calculations)
+        self.robot.set_pos(new_pos)
+        self.robot.set_quat(new_quat)
+
+        # Store commanded velocities for odometry (in world frame)
+        self.commanded_lin_vel = np.array(
+            [cos_yaw * linear_vel, sin_yaw * linear_vel, 0]
+        )
+        self.commanded_ang_vel = np.array([0, 0, angular_vel])
+
+    def _clear_trajectory_visualization(self):
+        """Remove all previously drawn trajectory debug objects from the scene."""
+        if not self.trajectory_debug_objects:
+            return
+
+        print(
+            f"[SimulationNode] Clearing {len(self.trajectory_debug_objects)} trajectory objects"
+        )
+        for obj in self.trajectory_debug_objects:
+            try:
+                if obj is not None:
+                    self.scene.clear_debug_object(obj)
+            except Exception as e:
+                print(
+                    f"[SimulationNode] Warning: Failed to remove trajectory object: {e}"
+                )
+        self.trajectory_debug_objects.clear()
+
+    def _catmull_rom_spline(self, points, num_segments=10):
+        """
+        Generate a smooth Catmull-Rom spline through the given points.
+        Returns interpolated points along the curve.
+
+        Args:
+            points: List of (x, y) tuples representing waypoints
+            num_segments: Number of interpolated segments between each pair of points
+        """
+        if len(points) < 2:
+            return points
+
+        result = []
+
+        # Pad the points for Catmull-Rom (duplicate first and last points)
+        padded = [points[0]] + points + [points[-1]]
+
+        for i in range(1, len(padded) - 2):
+            p0 = np.array(padded[i - 1])
+            p1 = np.array(padded[i])
+            p2 = np.array(padded[i + 1])
+            p3 = np.array(padded[i + 2])
+
+            for t in np.linspace(0, 1, num_segments, endpoint=False):
+                # Catmull-Rom spline formula
+                t2 = t * t
+                t3 = t2 * t
+
+                point = 0.5 * (
+                    (2 * p1)
+                    + (-p0 + p2) * t
+                    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+                    + (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+                )
+                result.append(tuple(point))
+
+        # Add the last point
+        result.append(points[-1])
+
+        return result
+
+    def _draw_trajectory(self, cmd: DrawTrajectoryCmd):
+        """
+        Draw a navigation trajectory on the floor as a smooth curve.
+
+        Args:
+            cmd: DrawTrajectoryCmd containing waypoints and visualization parameters
+        """
+        if not cmd.waypoints or len(cmd.waypoints) < 2:
+            print("[SimulationNode] Cannot draw trajectory: need at least 2 waypoints")
+            return
+
+        # Clear any existing trajectory
+        self._clear_trajectory_visualization()
+
+        # Extract (x, y) points from waypoints
+        points_2d = [(wp.x, wp.y) for wp in cmd.waypoints]
+
+        # Interpolate using Catmull-Rom spline for smooth curve
+        # Use more segments for longer paths
+        segments_per_waypoint = max(5, min(20, 50 // len(points_2d)))
+        interpolated_points = self._catmull_rom_spline(
+            points_2d, num_segments=segments_per_waypoint
+        )
+
+        print(
+            f"[SimulationNode] Drawing trajectory: {len(cmd.waypoints)} waypoints -> "
+            f"{len(interpolated_points)} interpolated points"
+        )
+
+        # Draw line segments between interpolated points
+        floor_z = cmd.floor_height
+        for i in range(len(interpolated_points) - 1):
+            start = (interpolated_points[i][0], interpolated_points[i][1], floor_z)
+            end = (
+                interpolated_points[i + 1][0],
+                interpolated_points[i + 1][1],
+                floor_z,
             )
 
-            # Update orientation
-            new_yaw = current_yaw + desired_angular_vel * dt
+            try:
+                obj = self.scene.draw_debug_line(
+                    start=start,
+                    end=end,
+                    radius=cmd.line_radius,
+                    color=cmd.color,
+                )
+                if obj is not None:
+                    self.trajectory_debug_objects.append(obj)
+            except Exception as e:
+                print(f"[SimulationNode] Error drawing trajectory segment: {e}")
+                break
 
-            # Convert yaw to quaternion [w, x, y, z]
-            new_quat = [
-                np.cos(new_yaw / 2.0),  # w
-                0.0,  # x
-                0.0,  # y
-                np.sin(new_yaw / 2.0),  # z
-            ]
+        # Draw small spheres at original waypoints for visibility
+        waypoint_color = (1.0, 0.5, 0.0, 0.9)  # Orange for waypoints
+        for i, wp in enumerate(cmd.waypoints):
+            try:
+                # Slightly larger sphere for start/end
+                radius = 0.04 if (i == 0 or i == len(cmd.waypoints) - 1) else 0.025
+                obj = self.scene.draw_debug_sphere(
+                    pos=(wp.x, wp.y, floor_z + 0.01),
+                    radius=radius,
+                    color=(
+                        waypoint_color if i > 0 else (0.0, 1.0, 0.0, 0.9)
+                    ),  # Green for start
+                )
+                if obj is not None:
+                    self.trajectory_debug_objects.append(obj)
+            except Exception as e:
+                print(f"[SimulationNode] Error drawing waypoint sphere: {e}")
 
-            self.robot.set_quat(new_quat)
+        print(
+            f"[SimulationNode] Trajectory visualization complete: {len(self.trajectory_debug_objects)} objects"
+        )
 
-            # Store commanded angular velocity for odometry
-            self.commanded_ang_vel = np.array([0, 0, desired_angular_vel])
-        else:
-            self.commanded_ang_vel = np.zeros(3)
+    def _normalize_scale(self, scale: Any) -> List[float]:
+        """Normalize scale values to Genesis-compatible xyz list."""
+        if isinstance(scale, (int, float)):
+            uniform = float(scale)
+            return [uniform, uniform, uniform]
 
-    def _apply_environment_config(self, config: Dict[str, Any]):
-        """Activates and positions managed entities based on config, hides others."""
+        if isinstance(scale, (list, tuple)) and len(scale) == 3:
+            return [float(scale[0]), float(scale[1]), float(scale[2])]
+
+        return [1.0, 1.0, 1.0]
+
+    def _load_dynamic_entity(
+        self,
+        name: str,
+        asset_path: str,
+        scale: Any = None,
+        hitbox: Optional[Dict[str, float]] = None,
+    ) -> tuple[bool, Optional[str]]:
+        """Load a dynamic entity mesh into the scene and keep it hidden by default."""
+        if name in self.managed_entities:
+            return True, None
+
+        normalized_scale = self._normalize_scale(scale)
+        full_asset_path = self._resolve_project_path(asset_path)
+
+        if not os.path.exists(full_asset_path):
+            error = (
+                f"Cannot load '{name}': asset path not found ({full_asset_path})"
+            )
+            print(f"[SimulationNode] {error}")
+            return False, error
+
+        if self.scene_built:
+            error = (
+                f"Cannot load '{name}' from '{full_asset_path}': "
+                "scene is already built."
+            )
+            print(f"[SimulationNode] {error}")
+            return False, error
+
+        initial_pos = [0.0, 0.0, 0.0]
+        default_quat = [1.0, 0.0, 0.0, 0.0]
+
+        try:
+            entity_obj = self.scene.add_entity(
+                gs.morphs.Mesh(
+                    file=full_asset_path,
+                    pos=initial_pos,
+                    quat=default_quat,
+                    scale=normalized_scale,
+                    collision=False,
+                    convexify=False,
+                )
+            )
+            self.managed_entities[name] = entity_obj
+            self.entity_specs[name] = {
+                "asset_path": asset_path,
+                "scale": normalized_scale,
+            }
+            if hitbox is not None:
+                self.manual_entity_hitboxes[name] = hitbox
+
+            print(
+                f"[SimulationNode] Loaded dynamic entity '{name}' from "
+                f"{full_asset_path}"
+            )
+            return True, None
+        except Exception as e:
+            error = (
+                f"Error loading entity '{name}' from path '{full_asset_path}': {e}"
+            )
+            print(f"[SimulationNode] {error}")
+            return False, error
+
+    def _ensure_config_entities_loaded(
+        self, config: Optional[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """Load any entities referenced in config that are not yet managed."""
+        if not config or "entities" not in config:
+            return {}
+
+        load_errors: Dict[str, str] = {}
+
+        for entity_data in config["entities"]:
+            name = entity_data.get("name")
+            if not name:
+                continue
+
+            if name in self.managed_entities:
+                existing_spec = self.entity_specs.get(name, {})
+                requested_asset = entity_data.get("asset_path")
+                if (
+                    requested_asset
+                    and existing_spec
+                    and requested_asset != existing_spec.get("asset_path")
+                ):
+                    error = (
+                        f"Entity '{name}' already loaded from "
+                        f"{existing_spec.get('asset_path')} and cannot be hot-swapped "
+                        f"to {requested_asset} at runtime."
+                    )
+                    print(f"[SimulationNode] {error}")
+                    load_errors[name] = error
+                # Allow per-config hitbox overrides for already loaded entities.
+                hitbox = entity_data.get("hitbox")
+                if hitbox is not None:
+                    self.manual_entity_hitboxes[name] = hitbox
+                continue
+
+            default_spec = self.default_entity_catalog.get(name, {})
+            asset_path = entity_data.get("asset_path", default_spec.get("asset_path"))
+            scale = entity_data.get("scale", default_spec.get("scale", [1.0, 1.0, 1.0]))
+            hitbox = entity_data.get("hitbox", default_spec.get("hitbox"))
+
+            if not asset_path:
+                error = (
+                    f"Skipping entity '{name}': missing asset_path "
+                    "and no default entry exists."
+                )
+                print(f"[SimulationNode] {error}")
+                load_errors[name] = error
+                continue
+
+            loaded, error = self._load_dynamic_entity(
+                name=name,
+                asset_path=asset_path,
+                scale=scale,
+                hitbox=hitbox,
+            )
+            if not loaded:
+                load_errors[name] = error or "Unknown entity load failure."
+
+        return load_errors
+
+    def _is_static_scene_change_requested(
+        self, config: Optional[Dict[str, Any]]
+    ) -> bool:
+        """Check if config requests a different static scene than current runtime."""
+        requested_scene = self._resolve_scene_config(config)
+        keys = (
+            "mesh_path",
+            "mesh_euler",
+            "collision_stage_config",
+            "occupancy_stl_path",
+        )
+        for key in keys:
+            if requested_scene.get(key) != self.current_scene_config.get(key):
+                return True
+        return False
+
+    def _requires_rebuild_for_load_errors(self, load_errors: Dict[str, str]) -> bool:
+        """Return True when load errors are caused by built-scene constraints."""
+        if not load_errors:
+            return False
+        return all("scene is already built" in error for error in load_errors.values())
+
+    def _build_requested_entity_asset_signature(
+        self, config: Optional[Dict[str, Any]]
+    ) -> tuple[tuple[str, str], ...]:
+        """Canonical signature of requested entity->asset mappings."""
+        if not config:
+            return tuple()
+
+        signature_items: List[tuple[str, str]] = []
+        for entity_data in config.get("entities", []):
+            name = entity_data.get("name")
+            if not name:
+                continue
+
+            explicit_asset = entity_data.get("asset_path")
+            existing_asset = self.entity_specs.get(name, {}).get("asset_path")
+            default_asset = self.default_entity_catalog.get(name, {}).get("asset_path")
+            resolved_asset = explicit_asset or existing_asset or default_asset or ""
+            signature_items.append((name, resolved_asset))
+
+        signature_items.sort()
+        return tuple(signature_items)
+
+    def _rebuild_scene_for_environment(self, config: Dict[str, Any]) -> None:
+        """Tear down and rebuild the scene for a new static world/entity set."""
+        print("[SimulationNode] Rebuilding scene for new environment...")
+        self.env_config = config
+        self.current_scene_config = self._resolve_scene_config(config)
+
+        # Clear runtime state tied to old scene objects.
+        self.managed_entities.clear()
+        self.entity_specs.clear()
+        self.default_entity_catalog.clear()
+        self.manual_entity_hitboxes.clear()
+        self.entity_trajectories.clear()
+        self.active_entities.clear()
+        self.current_entity_asset_signature = None
+        self.loaded_entities.clear()
+        self.loaded_dynamic_entities.clear()
+        self.scene_objects = []
+        self.trajectory_debug_objects = []
+
+        self.nav_target_pos = None
+        self.nav_target_yaw = None
+        self.commanded_lin_vel = np.zeros(3)
+        self.commanded_ang_vel = np.zeros(3)
+
+        # Destroy old scene if API exposes a destroy method.
+        if hasattr(self, "scene") and self.scene is not None:
+            try:
+                if hasattr(self.scene, "destroy"):
+                    self.scene.destroy()
+            except Exception as e:
+                print(f"[SimulationNode] Warning: scene.destroy() failed: {e}")
+
+        self.scene_built = False
+
+        self._init_scene()
+        self._init_environment()
+        self._init_robot()
+        self._init_camera()
+        self._init_map_params()
+
+        self.scene.build()
+        self.scene_built = True
+        print("[SimulationNode] Scene rebuilt")
+
+        self._add_objects_to_occupancy_grid()
+        self.init_movement()
+
+        # Reset logical robot tracking to known default after rebuild.
+        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
+        self.robot_logical_yaw = 0.0
+
+        # Apply requested placements/trajectories onto the rebuilt scene.
+        self._apply_environment_config(config, allow_rebuild=False)
+
+    def _apply_environment_config(
+        self, config: Dict[str, Any], allow_rebuild: bool = True
+    ):
+        """Load (or rebuild for) requested assets, then place configured entities."""
         print(
             "[SimulationNode] Applying environment configuration "
             "via entity placement..."
         )
 
+        self.env_config = config
+
+        if self._is_static_scene_change_requested(config):
+            requested_scene = self._resolve_scene_config(config)
+            if allow_rebuild:
+                raise EnvironmentRebuildRequired(
+                    "Static scene change requested from "
+                    f"'{self.current_scene_config['name']}' to '{requested_scene['name']}', "
+                    "scene rebuild required."
+                )
+            raise RuntimeError(
+                "Static scene change requested from "
+                f"'{self.current_scene_config['name']}' to '{requested_scene['name']}', "
+                "but scene rebuild is disabled for this apply path."
+            )
+
+        requested_signature = self._build_requested_entity_asset_signature(config)
+        if (
+            allow_rebuild
+            and self.current_entity_asset_signature is not None
+            and requested_signature != self.current_entity_asset_signature
+        ):
+            raise EnvironmentRebuildRequired(
+                "Requested entity/asset set differs from currently active environment. "
+                "Scene rebuild required."
+            )
+
+        load_errors = self._ensure_config_entities_loaded(config)
+        if load_errors:
+            details = "; ".join(f"{name}: {error}" for name, error in load_errors.items())
+            if allow_rebuild and self._requires_rebuild_for_load_errors(load_errors):
+                raise EnvironmentRebuildRequired(
+                    "Environment introduces entities that are not in the current "
+                    "built scene. Scene rebuild required. "
+                    f"Details: {details}"
+                )
+            raise RuntimeError(
+                "Failed to load requested environment entities. "
+                f"Details: {details}"
+            )
+
         # Clear previous trajectory data and active entities
         self.entity_trajectories.clear()
         self._clear_all_active_entities()
 
-        if not self.managed_entities:
+        entities = config.get("entities", []) if config else []
+        if not entities:
             print(
-                "[SimulationNode] No managed entities were pre-loaded. "
-                "Cannot apply config."
+                "[SimulationNode] No entities in environment config. "
+                "Cleared active entities."
             )
+            self.current_entity_asset_signature = requested_signature
             return
 
-        # Set of entity names specified in the current config
-        active_entity_names = set()
-        if config and "entities" in config:
-            for entity_data in config["entities"]:
-                name = entity_data.get("name")
-                if name:
-                    active_entity_names.add(name)
+        if not self.managed_entities:
+            raise RuntimeError(
+                "No managed entities are loaded, but environment requested entities."
+            )
 
         # Iterate through all potentially active entities defined in the config
-        if config and "entities" in config:
-            for entity_data in config["entities"]:
+        if entities:
+            for entity_data in entities:
                 name = entity_data.get("name")
                 poses = entity_data.get("poses", [])
                 # Get loop parameter, default to False
                 loop = entity_data.get("loop", False)
 
                 if name not in self.managed_entities:
-                    print(
-                        f"[SimulationNode] Warning: Entity '{name}' in config "
-                        f"was not pre-loaded. Skipping."
+                    raise RuntimeError(
+                        f"Entity '{name}' is not loaded; cannot apply environment."
                     )
-                    continue
 
                 entity_obj = self.managed_entities[name]
 
@@ -792,13 +1392,10 @@ class SimulationNode:
                     orientation = pose.get("orientation")  # Assumed [w, x, y, z]
 
                     if position is None or orientation is None:
-                        print(
-                            f"[SimulationNode] Skipping entity '{name}': missing "
-                            f"pos/orient in pose: {pose}"
+                        raise RuntimeError(
+                            f"Entity '{name}' is missing position/orientation in pose: "
+                            f"{pose}"
                         )
-                        # Move it out of the way just in case
-                        entity_obj.set_pos([0, 0, -1000])
-                        continue
 
                     print(f"[SimulationNode] Placing entity: '{name}' at {position}")
                     try:
@@ -809,7 +1406,9 @@ class SimulationNode:
                         self._add_entity_to_active_list(name, position)
 
                     except Exception as e:
-                        print(f"[SimulationNode] Error placing entity '{name}': {e}")
+                        raise RuntimeError(
+                            f"Error placing entity '{name}': {e}"
+                        ) from e
 
                 elif len(poses) > 1:
                     # Store trajectory data for update loop
@@ -825,12 +1424,11 @@ class SimulationNode:
                     )
 
                 else:
-                    print(
-                        f"[SimulationNode] Skipping entity '{name}': no poses defined."
+                    raise RuntimeError(
+                        f"Entity '{name}' has no poses defined."
                     )
-                    # Move it out of the way
-                    entity_obj.set_pos([0, 0, -1000])
 
+        self.current_entity_asset_signature = requested_signature
         # Note: Debug grids are automatically saved when entities regenerate
 
     def _update_entity_poses(self, sim_time: float):
@@ -936,19 +1534,18 @@ class SimulationNode:
                 self._add_entity_to_active_list(name, interp_pos.tolist())
 
     def _preload_dynamic_entities(self):
-        """Pre-loads all known dynamic entities into the scene initially."""
-        print("[SimulationNode] Pre-loading dynamic entities...")
+        """
+        Register default entity metadata used as fallbacks in environment configs.
+        Actual entity loading is driven by the target environment config.
+        """
+        print("[SimulationNode] Registering default entity catalog...")
 
-        # Define potential entities here (name, path, default scale, optional manual hitbox)
-        potential_entities = [
+        default_entities = [
             {
                 "name": "walker_1",
                 "asset_path": "data/assets/walking_man/man.obj",
                 "scale": [1.0, 1.0, 1.0],
-                "hitbox": {
-                    "width": 0.6,
-                    "height": 0.6,
-                },  # Optional manual hitbox (meters)
+                "hitbox": {"width": 0.6, "height": 0.6},
             },
             {
                 "name": "casualty_1",
@@ -956,65 +1553,21 @@ class SimulationNode:
                 "scale": [0.010, 0.010, 0.010],
                 "hitbox": {"width": 0.6, "height": 2.0},
             },
-            # {
-            #     "name": "banana_peel",
-            #     "asset_path": "data/assets/palatial_asset_bef5/bef5.xml",
-            #     "scale": 1.0,
-            # },
-            # Add other potential entities here in the future
         ]
 
-        initial_hide_pos = [0, 0, -1000]  # Position to hide entities initially
-        default_quat = [1.0, 0.0, 0.0, 0.0]  # Default orientation (w,x,y,z)
+        self.default_entity_catalog = {
+            entity_data["name"]: entity_data.copy() for entity_data in default_entities
+        }
 
-        # Extract manual hitboxes from entity definitions
-        self.manual_entity_hitboxes = {}
-        for entity_data in potential_entities:
-            if "hitbox" in entity_data:
-                self.manual_entity_hitboxes[entity_data["name"]] = entity_data["hitbox"]
-
-        for entity_data in potential_entities:
-            name = entity_data["name"]
-            asset_path = entity_data["asset_path"]
-            scale = entity_data["scale"]
-            print(f"[SimulationNode] Pre-loading: {name} from {asset_path}")
-
-            try:
-                # Construct absolute asset path relative to project root
-                project_root = os.path.dirname(
-                    os.path.dirname(os.path.dirname(__file__))
-                )
-                full_asset_path = os.path.join(project_root, asset_path)
-
-                entity_obj = self.scene.add_entity(
-                    gs.morphs.Mesh(
-                        file=full_asset_path,
-                        pos=initial_hide_pos,  # Start hidden
-                        quat=default_quat,
-                        scale=scale,
-                        collision=False,
-                        convexify=False,
-                    )
-                    # if asset_path.endswith((".obj", ".glb", ".gltf", ".stl"))
-                    # else gs.morphs.MJCF(
-                    #     file=full_asset_path,
-                    #     pos=initial_hide_pos,  # Start hidden
-                    #     quat=default_quat,
-                    #     scale=scale,
-                    #     collision=False,
-                    #     convexify=False,
-                    #     visualization=True,
-                    #     requires_jac_and_IK=True,
-                    # )
-                )
-                # Store reference
-                self.managed_entities[name] = entity_obj
-                print(f"[SimulationNode] Pre-loaded '{name}' successfully.")
-            except Exception as e:
-                print(
-                    f"[SimulationNode] Error pre-loading entity '{name}' from "
-                    f"path '{asset_path}': {e}"
-                )
+    def _report_set_environment_result(
+        self, cmd: SetEnvironmentCmd, success: bool, error: Optional[str] = None
+    ) -> None:
+        """Send set_environment apply status back to API layer."""
+        self.shared_queues.set_environment_apply_result(
+            request_id=getattr(cmd, "request_id", None),
+            success=success,
+            error=error,
+        )
 
     def run(self):
         local_forward = np.array([1.0, 0.0, 0.0])
@@ -1053,13 +1606,48 @@ class SimulationNode:
                             cmd, SetEnvironmentCmd
                         ):  # Check for new command
                             latest_set_env_cmd = cmd
+                        elif isinstance(cmd, DrawTrajectoryCmd):
+                            self._draw_trajectory(cmd)
+                        elif isinstance(cmd, ClearTrajectoryCmd):
+                            self._clear_trajectory_visualization()
                     except queue.Empty:
                         break
 
                 # Apply latest SetEnvironmentCmd FIRST if it exists
                 if latest_set_env_cmd is not None:
                     print("[SimulationNode] Received SetEnvironmentCmd.")
-                    self._apply_environment_config(latest_set_env_cmd.config)
+                    try:
+                        self._apply_environment_config(latest_set_env_cmd.config)
+                    except EnvironmentRebuildRequired as rebuild_exc:
+                        print(
+                            "[SimulationNode] Environment requires rebuild: "
+                            f"{rebuild_exc}"
+                        )
+                        try:
+                            self._rebuild_scene_for_environment(latest_set_env_cmd.config)
+                            print("[SimulationNode] Environment rebuild/apply complete.")
+                            self._report_set_environment_result(
+                                latest_set_env_cmd, success=True
+                            )
+                        except Exception as e:
+                            error = f"Failed to rebuild environment: {e}"
+                            print(f"[SimulationNode] {error}")
+                            self._report_set_environment_result(
+                                latest_set_env_cmd, success=False, error=error
+                            )
+                    except Exception as e:
+                        error = str(e)
+                        print(f"[SimulationNode] Failed to apply environment: {error}")
+                        self._report_set_environment_result(
+                            latest_set_env_cmd, success=False, error=error
+                        )
+                    else:
+                        self._report_set_environment_result(
+                            latest_set_env_cmd, success=True
+                        )
+
+                    # Scene may have been rebuilt with different sim options.
+                    dt = self.scene.sim_options.dt
                     # We might want to reset robot pose after env change, TBD
 
                 # Apply latest ResetRobotCmd if it exists (after potential env change)
@@ -1076,6 +1664,13 @@ class SimulationNode:
                         )
                         self.robot.set_pos(custom_position)
                         self.robot.set_quat(xyzw_to_wxyz(custom_orientation))
+                        # Update logical position tracking
+                        self.robot_logical_pos = np.array(custom_position)
+                        # Extract yaw from quaternion (xyzw format)
+                        qx, qy, qz, qw = custom_orientation
+                        self.robot_logical_yaw = np.arctan2(
+                            2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)
+                        )
                     else:
                         # Use default position and orientation
                         print(
@@ -1083,10 +1678,16 @@ class SimulationNode:
                         )
                         self.robot.set_pos(ROBOT_INIT_POS)
                         self.robot.set_quat(xyzw_to_wxyz(ROBOT_INIT_QUAT))
+                        # Update logical position tracking
+                        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
+                        self.robot_logical_yaw = 0.0  # Default orientation has yaw=0
 
                     # Reset commanded velocities
                     self.commanded_lin_vel = np.zeros(3)
                     self.commanded_ang_vel = np.zeros(3)
+                    # Clear any active navigation target
+                    self.nav_target_pos = None
+                    self.nav_target_yaw = None
 
                 # Apply arm joint positions if we have an arm command (immediate)
                 if latest_arm_cmd is not None:
@@ -1141,37 +1742,36 @@ class SimulationNode:
                     angular_vel = latest_velocity_cmd.angular_z
 
                     # Convert desired velocities to robot position update
-                    current_pos = self.robot.get_pos().cpu().numpy()
-                    current_quat = self.robot.get_quat().cpu().numpy()
+                    # Use logical position to avoid collision drift
+                    current_pos = self.robot_logical_pos.copy()
+                    current_yaw = self.robot_logical_yaw
 
                     # Update position based on linear velocity and current orientation
                     dt = self.scene.sim_options.dt
-                    # Convert current quaternion to rotation matrix to get forward direction
-                    current_rot = R.from_quat(
-                        [
-                            current_quat[1],
-                            current_quat[2],
-                            current_quat[3],
-                            current_quat[0],
-                        ]
-                    )
-                    forward_dir = current_rot.apply(
-                        [1, 0, 0]
-                    )  # Transform x-axis by current rotation
+                    # Calculate forward direction from yaw
+                    cos_yaw = np.cos(current_yaw)
+                    sin_yaw = np.sin(current_yaw)
+                    forward_dir = np.array([cos_yaw, sin_yaw, 0.0])
 
                     # Move in the forward direction
                     new_pos = current_pos + forward_dir * linear_vel * dt
 
                     # Update orientation based on angular velocity
-                    angle = angular_vel * dt
-                    delta_rot = R.from_euler("z", angle)
-                    new_rot = delta_rot * current_rot
-                    new_quat = new_rot.as_quat()  # Returns [x, y, z, w]
+                    new_yaw = current_yaw + angular_vel * dt
                     new_quat = np.array(
-                        [new_quat[3], new_quat[0], new_quat[1], new_quat[2]]
-                    )  # Convert to Genesis format
+                        [
+                            np.cos(new_yaw / 2.0),  # w
+                            0.0,  # x
+                            0.0,  # y
+                            np.sin(new_yaw / 2.0),  # z
+                        ]
+                    )
 
-                    # Set the new position and orientation
+                    # Update logical position tracking
+                    self.robot_logical_pos = new_pos.copy()
+                    self.robot_logical_yaw = new_yaw
+
+                    # Set the new position and orientation on physics mesh
                     self.robot.set_pos(new_pos)
                     self.robot.set_quat(new_quat)
 
@@ -1189,14 +1789,23 @@ class SimulationNode:
 
             # --- (B) Handle smooth navigation movement ---
             if self.nav_target_pos is not None and self.nav_target_yaw is not None:
-                self._update_navigation_movement(dt)
+                self._update_navigation_movement(dt, sim_time)
 
             # --- (C) Update moving entities ---
             self._update_entity_poses(sim_time)
 
             # --- (D) Gather robot pose, velocity (after applying commands)
-            pos = self.robot.get_pos().cpu().numpy()
-            quat = self.robot.get_quat().cpu().numpy()
+            # Use logical position for odometry to avoid drift from collision resolution
+            pos = self.robot_logical_pos.copy()
+            # Convert logical yaw to quaternion [w, x, y, z] format
+            quat = np.array(
+                [
+                    np.cos(self.robot_logical_yaw / 2.0),  # w
+                    0.0,  # x
+                    0.0,  # y
+                    np.sin(self.robot_logical_yaw / 2.0),  # z
+                ]
+            )
 
             # Use commanded velocities for odometry
             lin_vel = self.commanded_lin_vel
@@ -1240,7 +1849,9 @@ class SimulationNode:
                 offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
                 rotated_offset = rotate_vector(offset, robot_quat)
                 chase_pos = robot_pos + rotated_offset
-                self.chase_camera.set_pose(pos=chase_pos, lookat=robot_pos)
+                self.chase_camera.set_pose(
+                    pos=chase_pos, lookat=robot_pos, up=(0, 0, 1)
+                )
 
                 # Render all cameras
                 rgb, depth, seg, normal = self.robot_camera.render(depth=True)
@@ -1332,11 +1943,20 @@ class SimulationNode:
                 pos[0], pos[1], pos[2], quat[1], quat[2], quat[3], quat[0], sim_time
             )
 
-            # Publish the unified RobotStateMsg to the bridge
+            # Publish the unified RobotStateMsg to the sensor queue (size-1, latest only)
+            # If queue is full, discard old frame and put new one
             try:
-                self.shared_queues.sim_to_agent.put_nowait(state_msg)
+                self.shared_queues.sensor_to_agent.put_nowait(state_msg)
             except queue.Full:
-                pass
+                # Discard old frame and put new one
+                try:
+                    self.shared_queues.sensor_to_agent.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.shared_queues.sensor_to_agent.put_nowait(state_msg)
+                except queue.Full:
+                    pass
 
             # --- (G) Publish the map when changed or periodically
             should_publish_map = (
@@ -1399,5 +2019,8 @@ class SimulationNode:
 
         # Cleanup
         if self.enable_vis:
-            self.scene.viewer.stop()
+            try:
+                self.scene.viewer.stop()
+            except Exception:
+                pass  # Viewer may already be closed
         print("SimulationNode stopped.")

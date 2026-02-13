@@ -100,16 +100,15 @@ From the project root directory:
 
 ```bash
 # Recommended for development
-python main.py --vis --log-everything --need-oauth false
+python main.py --vis --log-everything
 ```
 
 **Options:**
 
 - `--vis` — Enable the Genesis simulation visualization window
-- `--need-oauth false` — Disable authentication for local development
 - `--log-everything` — Verbose logging for agent inputs/outputs
 - `--no-web` — Run without the web server (headless mode)
-- `--auth0-domain` / `--auth0-audience` — Auth0 config (required if OAuth enabled)
+- `--no-agent` — Run without connecting to rosbridge/brain agent (useful for pure sim/API testing)
 
 ### 2. Start the Frontend Development Server
 
@@ -155,13 +154,21 @@ python benchmarks/run_benchmarks.py --category navigation --trials 10
 
 ### Environment Configuration Files
 
-Environment configurations are stored as JSON files in the `data/environments/` directory. These files define the base scene and the dynamic entities present within it.
+Environment configurations are stored as JSON files in the `data/environments/` directory. These files define static scene settings (optional override) and dynamic entities.
 
 **Structure:**
 
 ```json
 {
-  "environment_name": "Baked_sc0_staging_00", // Base static scene name
+  "environment_name": "Baked_sc0_staging_00", // Scene preset name
+  "scene": { // Optional static-scene override (applied immediately; may trigger scene rebuild)
+    "name": "scenesmith_house_042",
+    "mesh_path": "data/scenes/scene_042/combined_house/house.glb",
+    "mesh_euler": [90, 0, 0],
+    "collision_stage_config": null, // Optional; ReplicaCAD-style stage config
+    "occupancy_stl_path": "data/scenes/scene_042/combined_house/house.stl",
+    "slice_output_prefix": "scene_042_slice"
+  },
   "entities": [
     {
       "name": "unique_entity_name", // e.g., "walker_1", "casualty_1"
@@ -188,25 +195,30 @@ Environment configurations are stored as JSON files in the `data/environments/` 
 
 *   **Fixed Entities:** An entity with only one pose in the `poses` list will be considered fixed at that position/orientation.
 *   **Moving Entities:** Entities with multiple poses will linearly interpolate (LERP for position, SLERP for orientation) between consecutive poses based on the current simulation time. The `loop` parameter determines if the trajectory restarts from the beginning after reaching the last pose's time.
+*   **Dynamic Entity Loading:** Entities can be loaded from `entities[*].asset_path`. If the entity is not present in the currently built scene, the simulator rebuilds the scene and then applies the config.
+*   **Static Scene Changes:** Changing `environment_name`/`scene` at runtime triggers an in-process scene rebuild, then the requested environment is applied.
+*   **Entity/Asset Set Changes:** If the requested `name -> asset_path` set differs from the currently active environment, the simulator rebuilds before applying.
+*   **No Out-of-World Parking:** Entities are no longer parked at an arbitrary far-away position; active scene contents are managed through rebuild + explicit config placement.
 
-### Authentication (Auth0)
+To start with a specific environment config at boot time:
 
-This application uses Auth0 for handling user logins and securing API endpoints.
-
-*   **Setup:** See [AUTH0_SETUP.md](AUTH0_SETUP.md) for detailed instructions on configuring your Auth0 tenant, application, and API.
-*   **Development:** For local development without requiring login, start the backend with the `--need-oauth false` flag.
+```bash
+python main.py --initial-environment walking_man_path
+# or
+python main.py --initial-environment-path data/environments/walking_man_path.json
+```
 
 ## API Endpoints
 
-The backend exposes several API endpoints for controlling the simulation and interacting with the agent. Most configuration endpoints require authentication (an Auth0 Bearer token).
+The backend exposes several API endpoints for controlling the simulation and interacting with the agent.
 
 **Base URL:** `http://localhost:8000` (unless configured differently)
 
 ### Configuration & Control (`/config_api`)
 
 *   **`POST /set_environment`**
-    *   Sets the active environment by positioning pre-loaded entities.
-    *   **Requires Auth Token.**
+    *   Sets the active environment by placing configured entities.
+    *   Waits for simulator apply completion and returns an error if apply/rebuild fails.
     *   **Request Body:** JSON object containing *either*:
         *   `config_name`: (String) The name of a configuration file (without `.json`) in `data/environments/`.
         *   `config`: (Object) A full environment configuration dictionary (matching the structure described above).
@@ -214,7 +226,6 @@ The backend exposes several API endpoints for controlling the simulation and int
         ```bash
         curl -X POST http://localhost:8000/set_environment \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer YOUR_AUTH0_TOKEN" \
         -d '{
           "config_name": "lying_man_corner"
         }'
@@ -223,7 +234,6 @@ The backend exposes several API endpoints for controlling the simulation and int
         ```bash
         curl -X POST http://localhost:8000/set_environment \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer YOUR_AUTH0_TOKEN" \
         -d '{
           "config": {
             "environment_name": "Baked_sc0_staging_00",
@@ -243,7 +253,6 @@ The backend exposes several API endpoints for controlling the simulation and int
 
 *   **`POST /reset_robot`**
     *   Resets the robot's position and orientation.
-    *   **Requires Auth Token.**
     *   **Request Body (Optional):** JSON object
         ```json
         {
@@ -258,7 +267,6 @@ The backend exposes several API endpoints for controlling the simulation and int
 
 *   **`POST /shutdown`**
     *   Gracefully shuts down the simulation backend.
-    *   **Requires Auth Token.**
 
 ### Video & State (`/video_api`)
 
@@ -271,9 +279,8 @@ The backend exposes several API endpoints for controlling the simulation and int
 ### Chat (`/chat_api`)
 
 *   **`GET /`**: Serves the main React frontend (`index.html`).
-*   **`GET /auth/user-info`**: Gets authenticated user details (ID, email, authorization status). Requires Auth token.
-*   **`GET /is-connected/{user_id}`**: Checks if a user is connected via WebSocket. Requires Auth token.
-*   **`WS /ws/chat`**: WebSocket endpoint for real-time chat between frontend and agent. Handles its own authentication via query parameters during connection setup.
+*   **`GET /is-connected/{user_id}`**: Checks if a user is connected via WebSocket.
+*   **`WS /ws/chat`**: WebSocket endpoint for real-time chat between frontend and agent.
 
 ## Project Structure
 
@@ -288,13 +295,11 @@ The backend exposes several API endpoints for controlling the simulation and int
 │   └── ...                # Config files (package.json, vite.config.js, .env)
 ├── src/
 │   ├── agent/             # Agent communication types, WebSocket bridge
-│   ├── middleware/        # Authentication middleware
 │   ├── routes/            # FastAPI API route definitions (config, video, chat)
 │   ├── simulation/        # SimulationNode, utilities
 │   └── shared_queues.py   # Inter-process/thread communication queues
 ├── venv/                  # Virtual environment (ignored by git)
 ├── .gitignore
-├── AUTH0_SETUP.md         # Auth0 setup guide
 ├── main.py            # Main FastAPI application entry point
 ├── README.md              # This file
 ├── requirements.macos.txt # Python dependencies for macOS
@@ -315,7 +320,6 @@ The backend exposes several API endpoints for controlling the simulation and int
     *   Ensure the backend is running.
     *   Ensure the Innate OS is running in Docker.
     *   Check browser console logs for errors.
-*   **Authentication Errors:** Verify Auth0 configuration in `.env` (frontend) and command-line arguments or environment variables (backend). Ensure the audience and domain match.
 
 ## VM Deployment
 

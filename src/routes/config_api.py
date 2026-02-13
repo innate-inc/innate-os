@@ -1,18 +1,21 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, root_validator
 import time  # Add time import for timestamp
 import os  # Need os for path joining
 import json  # Need json for loading file
-
-from src.middleware.auth import get_current_user
+import asyncio
+import uuid
 
 # ResetRobotCmd is used by the /reset_robot route
 # SetEnvironmentCmd is used to send the config to the simulation node
-from src.agent.types import ResetRobotCmd, SetEnvironmentCmd
+# BrainActiveCmd is used to activate/deactivate the brain via rosbridge
+from src.agent.types import ResetRobotCmd, SetEnvironmentCmd, BrainActiveCmd
 
 router = APIRouter()
+SET_ENV_APPLY_TIMEOUT_S = 30.0
+SET_ENV_APPLY_POLL_INTERVAL_S = 0.02
 
 
 # Pydantic model for the reset request body (copied from video_api)
@@ -37,7 +40,20 @@ class SetEnvironmentRequest(BaseModel):
         return values
 
 
-@router.post("/set_environment", dependencies=[Depends(get_current_user)])
+async def wait_for_environment_apply_result(
+    shared_queues, request_id: str, timeout_s: float = SET_ENV_APPLY_TIMEOUT_S
+):
+    """Wait for SimulationNode to report set_environment success/failure."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        result = shared_queues.pop_environment_apply_result(request_id)
+        if result is not None:
+            return result
+        await asyncio.sleep(SET_ENV_APPLY_POLL_INTERVAL_S)
+    return None
+
+
+@router.post("/set_environment")
 # Update signature to use the new request model
 async def set_environment(request: Request, body: SetEnvironmentRequest):
     """
@@ -99,8 +115,12 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
         )
 
     # --- Send the command to the simulation ---
+    request_id = str(uuid.uuid4())
+
     try:
-        set_env_cmd = SetEnvironmentCmd(config=env_config, timestamp=time.time())
+        set_env_cmd = SetEnvironmentCmd(
+            config=env_config, timestamp=time.time(), request_id=request_id
+        )
         shared_queues.agent_to_sim.put_nowait(set_env_cmd)
         # Don't log full config here for brevity/security
         print("[ConfigAPI] Enqueued SetEnvironmentCmd")
@@ -111,10 +131,24 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
             status_code=500, detail=f"Failed to queue environment update: {e}"
         )
 
+    apply_result = await wait_for_environment_apply_result(shared_queues, request_id)
+    if apply_result is None:
+        raise HTTPException(
+            status_code=504,
+            detail="Timed out waiting for environment application result from simulator.",
+        )
+
+    if not apply_result.get("success", False):
+        raise HTTPException(
+            status_code=400,
+            detail=apply_result.get("error") or "Simulator failed to apply environment.",
+        )
+
     return JSONResponse(
         {
             "status": "success",
-            "message": "Environment configuration command sent to simulation.",
+            "message": "Environment configuration applied.",
+            "request_id": request_id,
             # Optionally include name if loaded from file
             "source": (
                 f"file: {body.config_name}.json"
@@ -128,7 +162,7 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
 # --- Moved Routes ---
 
 
-@router.post("/reset_robot", dependencies=[Depends(get_current_user)])
+@router.post("/reset_robot")
 async def reset_robot(
     request: Request, reset_request: Optional[ResetRobotRequest] = None
 ):
@@ -185,7 +219,43 @@ async def reset_robot(
         )
 
 
-@router.post("/shutdown", dependencies=[Depends(get_current_user)])
+@router.post("/stop_agent")
+def stop_agent(request: Request):
+    """
+    Endpoint to stop the current agent action (e.g., navigation).
+    Cancels any ongoing navigation and deactivates the brain via rosbridge.
+
+    Returns:
+        JSON response confirming the agent has been stopped
+    """
+    shared_queues = request.app.state.SHARED_QUEUES
+
+    # Check if we have valid shared_queues
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    # Cancel navigation if active
+    if hasattr(shared_queues, "nav_controller") and shared_queues.nav_controller:
+        shared_queues.nav_controller.cancel_navigation()
+
+    # Deactivate brain via rosbridge (calls /brain/set_brain_active with data=False)
+    try:
+        shared_queues.sim_to_agent.put_nowait(BrainActiveCmd(active=False))
+        print("[ConfigAPI] Agent stopped via API endpoint (brain deactivated)")
+    except Exception as e:
+        print(f"[ConfigAPI] Error sending brain deactivate command: {e}")
+        return JSONResponse(
+            {"status": "error", "message": f"Failed to stop agent: {e}"},
+            status_code=500,
+        )
+
+    return JSONResponse({"status": "success", "message": "Agent stopped"})
+
+
+@router.post("/shutdown")
 def shutdown_simulator(request: Request):
     """
     Endpoint to gracefully shut down the simulator.
