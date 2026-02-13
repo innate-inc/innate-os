@@ -1,0 +1,10 @@
+# Multi-waypoint joint-space trajectory.
+# waypoints: flat array of joint positions [j1..j6, j1..j6, ...]
+# num_joints: number of joints per waypoint (6)
+# segment_durations: duration in seconds for each segment between consecutive
+#                    waypoints (length = num_waypoints - 1)
+std_msgs/Float64MultiArray waypoints
+int32 num_joints
+float64[] segment_durations
+---
+bool success
