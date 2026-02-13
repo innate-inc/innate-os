@@ -13,6 +13,7 @@ Usage:
 import os
 import sys
 import time
+import json
 import yaml
 import subprocess
 import threading
@@ -145,6 +146,17 @@ def load_pid_config(path):
         return {}
     params = {}
     for joint_key, gains in raw.items():
+        if joint_key == 'gain_scheduling':
+            # Pass gain scheduling as JSON string (same format as arm_config.yaml)
+            gs_json = {"enabled": True}
+            for profile in ('near', 'far'):
+                if profile in gains and isinstance(gains[profile], dict):
+                    gs_json[profile] = {}
+                    for jkey, jgains in gains[profile].items():
+                        if isinstance(jgains, dict):
+                            gs_json[profile][jkey] = {k: int(v) for k, v in jgains.items() if k in ('kp', 'ki', 'kd')}
+            params["gain_scheduling"] = json.dumps(gs_json)
+            continue
         if not isinstance(gains, dict):
             continue
         for field in ('kp', 'ki', 'kd', 'profile_velocity', 'profile_acceleration'):
