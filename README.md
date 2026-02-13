@@ -122,6 +122,19 @@ yarn dev
 
 The frontend will typically be available at `http://localhost:5173`.
 
+#### Optional: Direct Robot WebSocket + WebRTC
+
+The frontend can connect directly to a robot ROSBridge endpoint (instead of proxying chat/video through the simulator backend):
+
+```bash
+# frontend/.env
+VITE_DIRECT_ROBOT_WS=true
+VITE_DIRECT_WEBRTC=true
+VITE_ROBOT_WS_URL=ws://<robot-ip>:9090
+```
+
+When disabled (default), the frontend keeps using `VITE_WS_BASE_URL` and `VITE_SIM_BASE_URL` as before.
+
 ## Benchmarks
 
 The `benchmarks/` directory contains a framework for evaluating agent performance across various task categories (navigation, task completion, real-time interruption, etc.).
