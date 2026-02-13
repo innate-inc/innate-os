@@ -312,6 +312,79 @@ const DIRECTIVES: Directive[] = [
   },
 ];
 
+const CHAT_IN_TOPIC = "/brain/chat_in";
+const CHAT_OUT_TOPIC = "/brain/chat_out";
+
+const VALID_CHAT_SENDERS = new Set<Message["sender"]>([
+  "user",
+  "robot",
+  "robot_thoughts",
+  "robot_anticipation",
+  "system",
+  "vision_agent_output",
+]);
+
+const parseRosbridgeChatMessage = (payload: unknown): Message | null => {
+  let parsedPayload: unknown = payload;
+
+  if (typeof parsedPayload === "string") {
+    try {
+      parsedPayload = JSON.parse(parsedPayload);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!parsedPayload || typeof parsedPayload !== "object") {
+    return null;
+  }
+
+  const chatMessage = parsedPayload as {
+    sender?: unknown;
+    text?: unknown;
+    timestamp?: unknown;
+    timestamp_sec?: unknown;
+  };
+
+  if (
+    typeof chatMessage.sender !== "string" ||
+    !VALID_CHAT_SENDERS.has(chatMessage.sender as Message["sender"]) ||
+    typeof chatMessage.text !== "string"
+  ) {
+    return null;
+  }
+
+  const timestamp =
+    typeof chatMessage.timestamp === "number"
+      ? chatMessage.timestamp
+      : typeof chatMessage.timestamp_sec === "number"
+        ? chatMessage.timestamp_sec
+        : Date.now() / 1000;
+
+  return {
+    sender: chatMessage.sender as Message["sender"],
+    text: chatMessage.text,
+    timestamp,
+  };
+};
+
+const appendUniqueMessage = (previous: Message[], incoming: Message): Message[] => {
+  const duplicateExists = previous.some(
+    (message) =>
+      message.sender === incoming.sender &&
+      message.text === incoming.text &&
+      message.timestamp === incoming.timestamp
+  );
+
+  if (duplicateExists) {
+    return previous;
+  }
+
+  const nextMessages = [...previous, incoming];
+  nextMessages.sort((a, b) => a.timestamp - b.timestamp);
+  return nextMessages;
+};
+
 interface ChatProps {
   onSetDirective: (directive: string) => void;
 }
@@ -343,6 +416,9 @@ export function Chat({ onSetDirective }: ChatProps) {
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const [audioQueue, setAudioQueue] = useState<Float32Array[]>([]);
   const isPlayingRef = useRef<boolean>(false);
+  const useDirectRobotWs = import.meta.env.VITE_DIRECT_ROBOT_WS === "true";
+  const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
+  const backendWsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -353,6 +429,13 @@ export function Chat({ onSetDirective }: ChatProps) {
 
   // Effect to store user info when authenticated
   useEffect(() => {
+    if (useDirectRobotWs) {
+      if (!userInfoStored) {
+        setUserInfoStored(true);
+      }
+      return;
+    }
+
     if (isAuthenticated && user && !userInfoStored) {
       const fetchUserInfo = async () => {
         try {
@@ -385,7 +468,13 @@ export function Chat({ onSetDirective }: ChatProps) {
 
       fetchUserInfo();
     }
-  }, [isAuthenticated, user, userInfoStored, getAccessTokenSilently]);
+  }, [
+    isAuthenticated,
+    user,
+    userInfoStored,
+    getAccessTokenSilently,
+    useDirectRobotWs,
+  ]);
 
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
@@ -426,7 +515,7 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
 
     // Make sure user info is stored before connecting to WebSocket
-    if (isAuthenticated && user && !userInfoStored) {
+    if (!useDirectRobotWs && isAuthenticated && user && !userInfoStored) {
       return;
     }
 
@@ -435,11 +524,11 @@ export function Chat({ onSetDirective }: ChatProps) {
     const userEmail = isAuthenticated && user && user.email ? user.email : "";
 
     // Add user ID and email as query parameters
-    const wsUrl = `${
-      import.meta.env.VITE_WS_BASE_URL
-    }/ws/chat?user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(
-      userEmail
-    )}`;
+    const wsUrl = useDirectRobotWs
+      ? robotWsUrl
+      : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(
+          userId
+        )}&email=${encodeURIComponent(userEmail)}`;
 
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
@@ -448,12 +537,32 @@ export function Chat({ onSetDirective }: ChatProps) {
         wsRef.current = socket;
 
         socket.onopen = () => {
-          console.log("Connected to chat websocket");
+          if (useDirectRobotWs) {
+            socket.send(JSON.stringify({ op: "subscribe", topic: CHAT_OUT_TOPIC }));
+            socket.send(JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }));
+          } else {
+            console.log("Connected to chat websocket");
+          }
         };
 
         socket.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+
+            if (useDirectRobotWs) {
+              if (
+                data.op === "publish" &&
+                (data.topic === CHAT_OUT_TOPIC || data.topic === CHAT_IN_TOPIC)
+              ) {
+                const parsedMessage = parseRosbridgeChatMessage(
+                  data.msg?.data ?? data.msg ?? data.data
+                );
+                if (parsedMessage) {
+                  setMessages((prev) => appendUniqueMessage(prev, parsedMessage));
+                }
+              }
+              return;
+            }
 
             // Handle error messages
             if (data.error) {
@@ -470,29 +579,14 @@ export function Chat({ onSetDirective }: ChatProps) {
             }
 
             if (data.sender && data.text) {
-              setMessages((prev) => {
-                // Check if an identical message already exists
-                const duplicateExists = prev.some(
-                  (m) =>
-                    m.sender === data.sender &&
-                    m.text === data.text &&
-                    m.timestamp === data.timestamp
-                );
-                if (duplicateExists) {
-                  return prev;
-                }
-                // Add the new message and sort by timestamp in ascending order
-                const newMessages = [
-                  ...prev,
-                  {
-                    sender: data.sender,
-                    text: data.text,
-                    timestamp: data.timestamp,
-                  },
-                ];
-                newMessages.sort((a, b) => a.timestamp - b.timestamp);
-                return newMessages;
+              const parsedMessage = parseRosbridgeChatMessage({
+                sender: data.sender,
+                text: data.text,
+                timestamp: data.timestamp,
               });
+              if (parsedMessage) {
+                setMessages((prev) => appendUniqueMessage(prev, parsedMessage));
+              }
             }
           } catch {
             console.error("Invalid message received:", event.data);
@@ -530,7 +624,14 @@ export function Chat({ onSetDirective }: ChatProps) {
         socket.close();
       }
     };
-  }, [isAuthenticated, user, userInfoStored]);
+  }, [
+    isAuthenticated,
+    user,
+    userInfoStored,
+    useDirectRobotWs,
+    robotWsUrl,
+    backendWsBaseUrl,
+  ]);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -561,8 +662,33 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Check if WebSocket is open
     if (wsRef.current.readyState === WebSocket.OPEN) {
-      // Send the draft message to the server via WebSocket
-      wsRef.current.send(cleanDraft);
+      if (useDirectRobotWs) {
+        const timestamp = Math.floor(Date.now() / 1000);
+        const outgoingMessage = {
+          text: cleanDraft,
+          sender: "user",
+          timestamp,
+        } as const;
+
+        wsRef.current.send(
+          JSON.stringify({
+            op: "publish",
+            topic: CHAT_IN_TOPIC,
+            msg: { data: JSON.stringify(outgoingMessage) },
+          })
+        );
+
+        setMessages((prev) =>
+          appendUniqueMessage(prev, {
+            sender: outgoingMessage.sender,
+            text: outgoingMessage.text,
+            timestamp: outgoingMessage.timestamp,
+          })
+        );
+      } else {
+        // Send the draft message to the backend via WebSocket
+        wsRef.current.send(cleanDraft);
+      }
 
       // Clear the input
       setDraft("");
