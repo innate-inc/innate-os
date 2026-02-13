@@ -12,7 +12,7 @@ import time
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
-from maurice_msgs.srv import GotoJS
+from maurice_msgs.srv import GotoJS, GotoJSTrajectory
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
@@ -59,6 +59,7 @@ class ManipulationInterface:
         # here, but deliberately avoid any blocking wait_for_service calls
         # to keep the executor responsive.
         self._goto_js_client = self.node.create_client(GotoJS, "/mars/arm/goto_js")
+        self._goto_js_traj_client = self.node.create_client(GotoJSTrajectory, "/mars/arm/goto_js_trajectory")
 
         # Service clients for torque control
         self._torque_on_client = self.node.create_client(Trigger, "/mars/arm/torque_on")
@@ -333,6 +334,108 @@ class ManipulationInterface:
             duration=duration,
             blocking=blocking,
         )
+
+    def move_cartesian_trajectory(
+        self,
+        poses: list[dict],
+        segment_duration: float = 1.0,
+        ik_timeout: float = 2.0,
+        gripper_position: float | None = None,
+    ) -> bool:
+        """
+        Move the arm through a list of Cartesian poses as one smooth trajectory.
+
+        Each pose is a dict with keys: x, y, z, roll, pitch, yaw.
+        The arm linearly interpolates between consecutive joint-space waypoints
+        at the servo rate with no deceleration at intermediate points.
+
+        Args:
+            poses: List of dicts, each with {x, y, z, roll, pitch, yaw}.
+            segment_duration: Time in seconds for each segment between
+                consecutive waypoints.
+            ik_timeout: Maximum time to wait for each IK solution.
+            gripper_position: Target gripper joint position in radians.
+                If None, uses the current actual gripper position.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        if len(poses) < 2:
+            self.logger.error("[ManipulationInterface] Need at least 2 poses for trajectory")
+            return False
+
+        # Resolve gripper position once
+        if gripper_position is None:
+            self.spin_node_to_refresh_topics(count=5, timeout_sec=0.01)
+            if self._arm_state is not None and len(self._arm_state.position) >= 6:
+                gripper_position = self._arm_state.position[5]
+            else:
+                gripper_position = 0.0
+
+        # Solve IK for every pose
+        waypoint_joints = []
+        for i, p in enumerate(poses):
+            joints = self.solve_ik(
+                p["x"], p["y"], p["z"],
+                p.get("roll", 0.0), p.get("pitch", 0.0), p.get("yaw", 0.0),
+                timeout=ik_timeout,
+            )
+            if joints is None:
+                self.logger.error(
+                    f"[ManipulationInterface] IK failed for trajectory pose {i}: {p}"
+                )
+                return False
+            # Append gripper (IK returns 5 joints)
+            if len(joints) == 5:
+                joints.append(gripper_position)
+            waypoint_joints.append(joints)
+
+        # Check service readiness
+        if self._goto_js_traj_client is None:
+            self.logger.error("[ManipulationInterface] GotoJSTrajectory client not initialized")
+            return False
+        if not self._goto_js_traj_client.service_is_ready():
+            self.logger.error("[ManipulationInterface] GotoJSTrajectory service not ready")
+            return False
+
+        # Build flat waypoint array and segment durations
+        num_joints = len(waypoint_joints[0])
+        flat_waypoints = []
+        for wj in waypoint_joints:
+            flat_waypoints.extend(wj)
+
+        seg_durations = [segment_duration] * (len(waypoint_joints) - 1)
+
+        request = GotoJSTrajectory.Request()
+        request.waypoints = Float64MultiArray()
+        request.waypoints.data = flat_waypoints
+        request.num_joints = num_joints
+        request.segment_durations = seg_durations
+
+        total_time = sum(seg_durations) + segment_duration  # extra for current->first
+        try:
+            future = self._goto_js_traj_client.call_async(request)
+            rclpy.spin_until_future_complete(
+                self.node, future, timeout_sec=total_time + 5.0
+            )
+            if future.result() is not None:
+                if not future.result().success:
+                    self.logger.error(
+                        "[ManipulationInterface] GotoJSTrajectory returned failure"
+                    )
+                    return False
+            else:
+                self.logger.error(
+                    "[ManipulationInterface] GotoJSTrajectory call timed out"
+                )
+                return False
+        except Exception as e:
+            self.logger.error(
+                f"[ManipulationInterface] Exception calling GotoJSTrajectory: {e}"
+            )
+            return False
+
+        return True
 
     def get_joint_limits(self) -> dict:
         """

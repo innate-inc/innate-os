@@ -33,6 +33,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ArmStatus.msg"
   "srv/LightCommand.srv"
   "srv/GotoJS.srv"
+  "srv/GotoJSTrajectory.srv"
   "srv/SetRobotName.srv"
   "srv/GridLocalize.srv"
   "srv/TriggerUpdate.srv"
