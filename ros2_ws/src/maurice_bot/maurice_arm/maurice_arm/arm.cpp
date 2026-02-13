@@ -26,6 +26,7 @@
 #include <sstream>
 #include <cstdint>
 #include <set>
+#include <array>
 
 using json = nlohmann::json;
 
@@ -63,6 +64,10 @@ public:
             this->declare_parameter(prefix + "profile_velocity", joint_configs_[i].profile_velocity);
             this->declare_parameter(prefix + "profile_acceleration", joint_configs_[i].profile_acceleration);
         }
+        
+        // Parse gain scheduling from JSON string parameter
+        this->declare_parameter("gain_scheduling", std::string("{}"));
+        parseGainScheduling(this->get_parameter("gain_scheduling").as_string());
         
         // Use fixed device path
         std::string device_name = "/dev/ttyACM0";
@@ -287,6 +292,45 @@ private:
         RCLCPP_INFO(this->get_logger(), "Parsed %zu joint configurations", joint_configs_.size());
     }
     
+    void parseGainScheduling(const std::string& json_str) {
+        try {
+            auto gs = json::parse(json_str);
+            gs_enabled_ = gs.value("enabled", false);
+            
+            // Initialize with current joint defaults
+            for (int i = 0; i < 3; i++) {
+                auto& jc = joint_configs_[i + 1];  // joints 2, 3, 4
+                gs_near_[i] = {jc.kp, jc.ki, jc.kd};
+                gs_far_[i] = {jc.kp, jc.ki, jc.kd};
+            }
+            
+            for (const std::string& profile : {"near", "far"}) {
+                if (!gs.contains(profile)) continue;
+                auto& arr = (profile == "near") ? gs_near_ : gs_far_;
+                for (int j : {2, 3, 4}) {
+                    std::string key = "joint_" + std::to_string(j);
+                    if (!gs[profile].contains(key)) continue;
+                    auto& jg = gs[profile][key];
+                    int idx = j - 2;
+                    arr[idx].kp = jg.value("kp", arr[idx].kp);
+                    arr[idx].ki = jg.value("ki", arr[idx].ki);
+                    arr[idx].kd = jg.value("kd", arr[idx].kd);
+                }
+            }
+            
+            RCLCPP_INFO(this->get_logger(), "Gain scheduling %s | near: J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d] | far: J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d]",
+                gs_enabled_ ? "ENABLED" : "DISABLED",
+                gs_near_[0].kp, gs_near_[0].ki, gs_near_[0].kd,
+                gs_near_[1].kp, gs_near_[1].ki, gs_near_[1].kd,
+                gs_near_[2].kp, gs_near_[2].ki, gs_near_[2].kd,
+                gs_far_[0].kp, gs_far_[0].ki, gs_far_[0].kd,
+                gs_far_[1].kp, gs_far_[1].ki, gs_far_[1].kd,
+                gs_far_[2].kp, gs_far_[2].ki, gs_far_[2].kd);
+        } catch (const json::exception& e) {
+            RCLCPP_WARN(this->get_logger(), "Failed to parse gain_scheduling JSON: %s", e.what());
+        }
+    }
+    
     rcl_interfaces::msg::SetParametersResult onParameterChange(
         const std::vector<rclcpp::Parameter>& parameters) {
         
@@ -299,6 +343,12 @@ private:
         
         for (const auto& param : parameters) {
             std::string name = param.get_name();
+            
+            // Handle gain scheduling JSON string
+            if (name == "gain_scheduling") {
+                parseGainScheduling(param.as_string());
+                continue;
+            }
             
             // Match pattern: joint_N_<suffix>
             if (name.size() >= 10 && name.substr(0, 6) == "joint_") {
@@ -537,6 +587,52 @@ private:
             all_efforts.push_back(efforts[6]);
             joint_state_msg_.effort = all_efforts;
             joint_state_pub_->publish(joint_state_msg_);    // /joint_states (for robot_state_publisher)
+            
+            // ========== GAIN SCHEDULING ==========
+            if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {
+                gs_cycle_counter_ = 0;
+                
+                // Extension based on elbow angle (p3):
+                //   p3 = +π/2 → 0.0  (folded / near base → near gains)
+                //   p3 =  0   → 0.5  (half extended)
+                //   p3 = -π/2 → 1.0  (fully unfolded / far → far gains)
+                double p3 = positions_rad[2];
+                double extension = std::clamp((M_PI_2 - p3) / M_PI, 0.0, 1.0);
+                
+                // Interpolate gains for joints 2, 3, 4 and check if changed
+                bool gs_changed = false;
+                std::vector<std::tuple<int, int, int, int>> gs_pid_data;
+                
+                for (int i = 0; i < 3; i++) {
+                    int ji = i + 1;  // joint_configs_ index (0-based): joints 2,3,4 = indices 1,2,3
+                    GainProfile interp;
+                    interp.kp = gs_near_[i].kp + static_cast<int>(extension * (gs_far_[i].kp - gs_near_[i].kp));
+                    interp.ki = gs_near_[i].ki + static_cast<int>(extension * (gs_far_[i].ki - gs_near_[i].ki));
+                    interp.kd = gs_near_[i].kd + static_cast<int>(extension * (gs_far_[i].kd - gs_near_[i].kd));
+                    
+                    if (interp.kp != gs_last_applied_[i].kp ||
+                        interp.ki != gs_last_applied_[i].ki ||
+                        interp.kd != gs_last_applied_[i].kd) {
+                        gs_changed = true;
+                        gs_last_applied_[i] = interp;
+                        joint_configs_[ji].kp = interp.kp;
+                        joint_configs_[ji].ki = interp.ki;
+                        joint_configs_[ji].kd = interp.kd;
+                    }
+                    
+                    gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.kd, interp.ki, interp.kp);
+                }
+                
+                if (gs_changed) {
+                    dynamixel_->syncWritePID(gs_pid_data);
+                    RCLCPP_INFO(this->get_logger(),
+                        "GainSched ext=%.2f | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                        extension,
+                        gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
+                        gs_last_applied_[1].kp, gs_last_applied_[1].ki, gs_last_applied_[1].kd,
+                        gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
+                }
+            }
             
             // ========== SEND COMMANDS IF AVAILABLE ==========
             if (has_arm_command_.load() || has_head_command_.load()) {
@@ -1453,6 +1549,15 @@ private:
     
     // PID hot-reload
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+    
+    // Gain scheduling
+    struct GainProfile { int kp = 0, ki = 0, kd = 0; };
+    static constexpr int kGainScheduleInterval = 20;  // control cycles between updates (~200ms at 100Hz)
+    bool gs_enabled_ = false;
+    std::array<GainProfile, 3> gs_near_;          // near profiles for joints 2, 3, 4
+    std::array<GainProfile, 3> gs_far_;           // far profiles for joints 2, 3, 4
+    std::array<GainProfile, 3> gs_last_applied_;  // last gains written (for change detection)
+    int gs_cycle_counter_ = 0;
 
     static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
     static constexpr int kTemperatureWarningC = 70;
