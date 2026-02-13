@@ -25,6 +25,7 @@
 #include <future>
 #include <sstream>
 #include <cstdint>
+#include <set>
 
 using json = nlohmann::json;
 
@@ -52,6 +53,16 @@ public:
         
         // Parse joints configuration
         parseJointConfig(joints_str);
+        
+        // Declare per-joint PID and profile parameters for hot-reload tuning
+        for (size_t i = 0; i < joint_configs_.size(); ++i) {
+            std::string prefix = "joint_" + std::to_string(i + 1) + "_";
+            this->declare_parameter(prefix + "kp", joint_configs_[i].kp);
+            this->declare_parameter(prefix + "ki", joint_configs_[i].ki);
+            this->declare_parameter(prefix + "kd", joint_configs_[i].kd);
+            this->declare_parameter(prefix + "profile_velocity", joint_configs_[i].profile_velocity);
+            this->declare_parameter(prefix + "profile_acceleration", joint_configs_[i].profile_acceleration);
+        }
         
         // Use fixed device path
         std::string device_name = "/dev/ttyACM0";
@@ -177,6 +188,11 @@ public:
             std::bind(&MauriceArmNode::healthMonitorCallback, this),
             health_callback_group_);
         
+        // Register parameter change callback for PID hot-reload
+        param_callback_handle_ = this->add_on_set_parameters_callback(
+            std::bind(&MauriceArmNode::onParameterChange, this, std::placeholders::_1));
+        RCLCPP_INFO(this->get_logger(), "PID hot-reload enabled (use ros2 param set or pid_hot_reload.py)");
+        
         RCLCPP_INFO(this->get_logger(), "Maurice Arm Node ready!");
         
         // Wait a bit for MoveIt to be ready, then go to home position
@@ -271,6 +287,92 @@ private:
         RCLCPP_INFO(this->get_logger(), "Parsed %zu joint configurations", joint_configs_.size());
     }
     
+    rcl_interfaces::msg::SetParametersResult onParameterChange(
+        const std::vector<rclcpp::Parameter>& parameters) {
+        
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        
+        // Collect which joints had PID or profile changes
+        std::set<int> pid_changed_joints;
+        std::set<int> profile_changed_joints;
+        
+        for (const auto& param : parameters) {
+            std::string name = param.get_name();
+            
+            // Match pattern: joint_N_<suffix>
+            if (name.size() >= 10 && name.substr(0, 6) == "joint_") {
+                size_t underscore2 = name.find('_', 6);
+                if (underscore2 == std::string::npos) continue;
+                
+                int joint_num = 0;
+                try {
+                    joint_num = std::stoi(name.substr(6, underscore2 - 6));
+                } catch (...) { continue; }
+                
+                if (joint_num < 1 || joint_num > static_cast<int>(joint_configs_.size())) continue;
+                
+                std::string suffix = name.substr(underscore2 + 1);
+                int value = static_cast<int>(param.as_int());
+                
+                if (suffix == "kp") {
+                    joint_configs_[joint_num - 1].kp = value;
+                    pid_changed_joints.insert(joint_num);
+                } else if (suffix == "ki") {
+                    joint_configs_[joint_num - 1].ki = value;
+                    pid_changed_joints.insert(joint_num);
+                } else if (suffix == "kd") {
+                    joint_configs_[joint_num - 1].kd = value;
+                    pid_changed_joints.insert(joint_num);
+                } else if (suffix == "profile_velocity") {
+                    joint_configs_[joint_num - 1].profile_velocity = value;
+                    profile_changed_joints.insert(joint_num);
+                } else if (suffix == "profile_acceleration") {
+                    joint_configs_[joint_num - 1].profile_acceleration = value;
+                    profile_changed_joints.insert(joint_num);
+                } else {
+                    continue;
+                }
+                
+                RCLCPP_INFO(this->get_logger(), "Hot-reload: joint %d %s = %d",
+                    joint_num, suffix.c_str(), value);
+            }
+        }
+        
+        try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
+            // SyncWrite PID for changed joints
+            if (!pid_changed_joints.empty()) {
+                std::vector<std::tuple<int, int, int, int>> pid_data;
+                for (int jn : pid_changed_joints) {
+                    const auto& c = joint_configs_[jn - 1];
+                    pid_data.emplace_back(c.servo_id, c.kd, c.ki, c.kp);
+                }
+                dynamixel_->syncWritePID(pid_data);
+                RCLCPP_INFO(this->get_logger(), "Hot-reload: sync-wrote PID for %zu servo(s)", pid_data.size());
+            }
+            
+            // SyncWrite profile for changed joints
+            if (!profile_changed_joints.empty()) {
+                std::vector<std::tuple<int, int, int>> profile_data;
+                for (int jn : profile_changed_joints) {
+                    const auto& c = joint_configs_[jn - 1];
+                    profile_data.emplace_back(c.servo_id, c.profile_acceleration, c.profile_velocity);
+                }
+                dynamixel_->syncWriteProfile(profile_data);
+                RCLCPP_INFO(this->get_logger(), "Hot-reload: sync-wrote profile for %zu servo(s)", profile_data.size());
+            }
+            
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Hot-reload syncWrite failed: %s", e.what());
+            result.successful = false;
+            result.reason = std::string("SyncWrite failed: ") + e.what();
+        }
+        
+        return result;
+    }
+    
     void initializeServos() {
         std::lock_guard<std::mutex> lock(dynamixel_mutex_);
         configureServosLocked();
@@ -326,14 +428,8 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             
-            // Set PID gains
-            RCLCPP_INFO(this->get_logger(), "  Setting PID gains: P=%d, I=%d, D=%d", config.kp, config.ki, config.kd);
-            dynamixel_->setP(config.servo_id, config.kp);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            dynamixel_->setI(config.servo_id, config.ki);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            dynamixel_->setD(config.servo_id, config.kd);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // PID gains are set via syncWritePID after this loop
+            RCLCPP_INFO(this->get_logger(), "  PID gains: P=%d, I=%d, D=%d (will sync-write)", config.kp, config.ki, config.kd);
             
             // Set profile velocity and acceleration (0 = no limit)
             if (config.profile_velocity > 0) {
@@ -354,6 +450,14 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
+        
+        // Write all PID gains in a single SyncWrite packet
+        std::vector<std::tuple<int, int, int, int>> pid_data;
+        for (const auto& config : joint_configs_) {
+            pid_data.emplace_back(config.servo_id, config.kd, config.ki, config.kp);
+        }
+        RCLCPP_INFO(this->get_logger(), "SyncWrite PID gains for %zu servos", pid_data.size());
+        dynamixel_->syncWritePID(pid_data);
         
         // Move head to default position
         RCLCPP_INFO(this->get_logger(), "Moving head to default position (0.0 deg)");
@@ -1346,6 +1450,9 @@ private:
     
     // Mutex to protect Dynamixel serial bus access
     std::mutex dynamixel_mutex_;
+    
+    // PID hot-reload
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
     static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
     static constexpr int kTemperatureWarningC = 70;
