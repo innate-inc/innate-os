@@ -592,14 +592,10 @@ private:
             if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {
                 gs_cycle_counter_ = 0;
                 
-                // Extension based on elbow angle (p3):
-                //   p3 = +π/2 → 0.0  (folded / near base → near gains)
-                //   p3 =  0   → 0.5  (half extended)
-                //   p3 = -π/2 → 1.0  (fully unfolded / far → far gains)
-                double p3 = positions_rad[2];
-                double extension = std::clamp((M_PI_2 - p3) / M_PI, 0.0, 1.0);
+                // Interpolate based on J2 angle: 0 → near, π/2 → far, clamped to [0, π/2]
+                double p2 = positions_rad[1];
+                double extension = std::clamp(p2 / M_PI_2, 0.0, 1.0);
                 
-                // Interpolate gains for joints 2, 3, 4 and check if changed
                 bool gs_changed = false;
                 std::vector<std::tuple<int, int, int, int>> gs_pid_data;
                 
@@ -619,15 +615,13 @@ private:
                         joint_configs_[ji].ki = interp.ki;
                         joint_configs_[ji].kd = interp.kd;
                     }
-                    
                     gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.kd, interp.ki, interp.kp);
                 }
-                
                 if (gs_changed) {
                     dynamixel_->syncWritePID(gs_pid_data);
                     RCLCPP_INFO(this->get_logger(),
-                        "GainSched ext=%.2f | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
-                        extension,
+                        "GainSched ext=%.2f (J2=%.2f) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                        extension, p2,
                         gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
                         gs_last_applied_[1].kp, gs_last_applied_[1].ki, gs_last_applied_[1].kd,
                         gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
@@ -1558,6 +1552,7 @@ private:
     std::array<GainProfile, 3> gs_far_;           // far profiles for joints 2, 3, 4
     std::array<GainProfile, 3> gs_last_applied_;  // last gains written (for change detection)
     int gs_cycle_counter_ = 0;
+    bool gs_was_far_ = false;  // tracks last state for threshold crossing log
 
     static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
     static constexpr int kTemperatureWarningC = 70;

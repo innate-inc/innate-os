@@ -126,7 +126,7 @@ maurice_arm:
       {
           "enabled": true,
           "near": {
-              "joint_2": {"kp": 2000, "ki": 0, "kd": 2000},
+              "joint_2": {"kp": 1500, "ki": 0, "kd": 2000},
               "joint_3": {"kp": 1500, "ki": 0, "kd": 1500},
               "joint_4": {"kp": 800,  "ki": 1000, "kd": 4000}
           },
