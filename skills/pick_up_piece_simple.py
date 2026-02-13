@@ -30,8 +30,8 @@ class PickUpPieceSimple(Skill):
     PITCH_DOWN = 1.57          # straight down
     PITCH_TILTED = 1.57 - 0.48  # tilted for far ranks (7-8)
     YAW_CENTER = 0.0
-    YAW_LEFT = -1.57           # rotated left for ranks 1-3, cols A-D
-    YAW_RIGHT = 1.57           # rotated right for ranks 1-3, cols E-H
+    YAW_LEFT = 1.57           # rotated left for ranks 1-3, cols A-D
+    YAW_RIGHT = -1.57           # rotated right for ranks 1-3, cols E-H
 
     # Heights in meters
     HEIGHT_SAFE = 0.15          # 20cm safe travel height
@@ -140,11 +140,36 @@ class PickUpPieceSimple(Skill):
     def _vertical_move(self, x, y, from_z, to_z, pitch, yaw, gripper_position=None):
         """Move vertically in VERTICAL_STEPS increments with fixed X, Y.
 
-        This ensures the IK solver follows a straight vertical path without
-        drifting in X/Y.  Returns error string or None.
+        Tries the smooth trajectory service first (no stop between steps).
+        Falls back to individual moves if the service isn't available.
+        Returns error string or None.
         """
         direction = "Descending" if to_z < from_z else "Lifting"
         n = self.VERTICAL_STEPS
+
+        # Build waypoint poses (including from_z so the trajectory starts there)
+        poses = []
+        for i in range(n + 1):
+            frac = i / n
+            z = from_z + (to_z - from_z) * frac
+            poses.append(dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw))
+
+        # Try smooth trajectory first
+        seg_dur = self._d(1.0)  # duration per segment, scaled by speed
+        try:
+            success = self.manipulation.move_cartesian_trajectory(
+                poses,
+                segment_duration=seg_dur,
+                gripper_position=gripper_position,
+            )
+            if success:
+                self.logger.info(f"[PickUpPieceSimple] {direction} trajectory complete ({n} segments)")
+                return None
+            self.logger.warning(f"[PickUpPieceSimple] Trajectory service failed, falling back to step-by-step")
+        except Exception as e:
+            self.logger.warning(f"[PickUpPieceSimple] Trajectory not available ({e}), falling back")
+
+        # Fallback: individual moves
         for i in range(1, n + 1):
             frac = i / n
             z = from_z + (to_z - from_z) * frac
