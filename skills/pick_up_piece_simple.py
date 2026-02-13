@@ -39,11 +39,14 @@ class PickUpPieceSimple(Skill):
     HEIGHT_PICK_PAWN = 0.05    # 5cm pick height for pawns
 
     # Gripper parameters
-    GRIPPER_OPEN_PERCENT = 40
+    GRIPPER_OPEN_PERCENT = 50
     GRIPPER_CLOSE_STRENGTH = 0.4
 
     # Number of intermediate Z steps for vertical moves
     VERTICAL_STEPS = 4
+
+    # Relay rank for intermediary handoff when crossing rank 6/7 boundary
+    RELAY_RANK = 5
 
     def __init__(self, logger):
         super().__init__(logger)
@@ -185,11 +188,110 @@ class PickUpPieceSimple(Skill):
         """Return arm to the resting safe pose."""
         self._move_arm(0.15, 0.1, 0.1, pitch, yaw, 2, wait=2.0)
 
+    def _needs_relay(self, src_square, dst_square):
+        """Check if move crosses the rank 6/7 boundary requiring a relay."""
+        src_rank = int(src_square[1])
+        dst_rank = int(dst_square[1])
+        return (src_rank <= 6) != (dst_rank <= 6)
+
+    def _relay_position(self, src_square, dst_square, calibration):
+        """Compute a relay square on rank 5 for intermediary handoff.
+
+        Uses the file of whichever square is in ranks 1-6 so the relay
+        stays close to the reachable side of the board.
+        Returns (relay_square_str, (x, y)) or (relay_square_str, None).
+        """
+        src_rank = int(src_square[1])
+        if src_rank <= 6:
+            file_char = src_square[0].upper()
+        else:
+            file_char = dst_square[0].upper()
+        relay_square = f"{file_char}{self.RELAY_RANK}"
+        pos = self._square_to_position(relay_square, calibration)
+        return relay_square, pos
+
+    def _do_pick_place(self, src_x, src_y, dst_x, dst_y, pick_height,
+                        src_pitch, src_yaw, dst_pitch, dst_yaw,
+                        src_label, dst_label):
+        """Single pick-and-place cycle: pick from src, place at dst.
+
+        Uses src orientation for picking, dst orientation for placing.
+        Returns error string or None on success.
+        """
+        # Move above source at safe height
+        self._send_feedback(f"Moving above {src_label}...")
+        if not self._move_arm(src_x, src_y, self.HEIGHT_SAFE, src_pitch, src_yaw, 2, wait=2.5):
+            return f"Failed to move above {src_label}"
+        if self._cancelled:
+            return "Cancelled"
+
+        # Open gripper
+        self._send_feedback("Opening gripper...")
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
+        self._w(1.5)
+
+        # Descend to pick height
+        self._send_feedback(f"Descending to pick from {src_label}...")
+        err = self._vertical_move(src_x, src_y, self.HEIGHT_SAFE, pick_height,
+                                  src_pitch, src_yaw)
+        if err:
+            return f"Pick descent failed: {err}"
+
+        # Grab
+        self._send_feedback("Grabbing piece...")
+        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH, blocking=True)
+        self._w(2.0)
+        grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
+
+        # Lift to safe height
+        self._send_feedback("Lifting piece...")
+        err = self._vertical_move(src_x, src_y, pick_height, self.HEIGHT_SAFE,
+                                  src_pitch, src_yaw, gripper_position=grip_position)
+        if err:
+            return f"Lift failed: {err}"
+        if self._cancelled:
+            return "Cancelled"
+
+        # Move above destination at safe height
+        self._send_feedback(f"Moving above {dst_label}...")
+        if not self._move_arm(dst_x, dst_y, self.HEIGHT_SAFE, dst_pitch, dst_yaw, 2, wait=2.5,
+                              gripper_position=grip_position):
+            return f"Failed to move above {dst_label}"
+        if self._cancelled:
+            return "Cancelled"
+
+        # Descend to place height
+        self._send_feedback(f"Descending to place on {dst_label}...")
+        err = self._vertical_move(dst_x, dst_y, self.HEIGHT_SAFE, pick_height,
+                                  dst_pitch, dst_yaw, gripper_position=grip_position)
+        if err:
+            return f"Place descent failed: {err}"
+
+        # Release
+        self._send_feedback("Releasing piece...")
+        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
+        self._w(1.5)
+
+        # Lift to safe height
+        self._send_feedback("Lifting after place...")
+        err = self._vertical_move(dst_x, dst_y, pick_height, self.HEIGHT_SAFE,
+                                  dst_pitch, dst_yaw)
+        if err:
+            return f"Post-place lift failed: {err}"
+
+        return None
+
     # ── Main logic ────────────────────────────────────────────────────
 
     def execute(self, square: str, place_square: str, is_pawn: bool = True, speed: float = 1.0):
         """
         Pick up a piece from square and place it on place_square.
+
+        When a move crosses the rank 6/7 boundary the arm cannot reach
+        ranks 7-8 with a vertical gripper, so we relay through an
+        intermediary square on rank 5: place the piece there, reorient
+        the gripper (tilted ~0.48 rad for 7-8, vertical for 1-6), then
+        pick up again and continue to the destination.
 
         Args:
             square: Source square in chess notation (e.g. 'A4')
@@ -227,78 +329,50 @@ class PickUpPieceSimple(Skill):
             f"pitch={dst_pitch:.2f} yaw={dst_yaw:.2f}"
         )
 
-        # ── 1. Move above source square at safe height ──
+        if self._needs_relay(square, place_square):
+            # ── Two-step relay through intermediary ──
+            relay_sq, relay_pos = self._relay_position(square, place_square, calibration)
+            if relay_pos is None:
+                return "Failed to compute relay position", SkillResult.FAILURE
+            relay_x, relay_y = relay_pos
 
-        self._send_feedback(f"Moving above {square}...")
-        if not self._move_arm(src_x, src_y, self.HEIGHT_SAFE, src_pitch, src_yaw, 2, wait=2.5):
-            return f"Failed to move above {square}", SkillResult.FAILURE
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
+            self.logger.info(
+                f"[PickUpPieceSimple] Relay through {relay_sq} "
+                f"({relay_x:.4f},{relay_y:.4f})"
+            )
 
-        # ── 2. Open gripper ──
+            # Leg 1: pick from source, place at relay (keep source orientation)
+            self._send_feedback(f"Relay leg 1: {square} -> {relay_sq}")
+            err = self._do_pick_place(
+                src_x, src_y, relay_x, relay_y, pick_height,
+                src_pitch, src_yaw, src_pitch, src_yaw,
+                square, f"relay {relay_sq}"
+            )
+            if err:
+                return f"Relay leg 1 failed: {err}", SkillResult.FAILURE
+            if self._cancelled:
+                return "Cancelled", SkillResult.CANCELLED
 
-        self._send_feedback("Opening gripper...")
-        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
-        self._w(1.5)
+            # Leg 2: pick from relay, place at destination (destination orientation)
+            self._send_feedback(f"Relay leg 2: {relay_sq} -> {place_square}")
+            err = self._do_pick_place(
+                relay_x, relay_y, dst_x, dst_y, pick_height,
+                dst_pitch, dst_yaw, dst_pitch, dst_yaw,
+                f"relay {relay_sq}", place_square
+            )
+            if err:
+                return f"Relay leg 2 failed: {err}", SkillResult.FAILURE
+        else:
+            # ── Direct move (no orientation change needed) ──
+            err = self._do_pick_place(
+                src_x, src_y, dst_x, dst_y, pick_height,
+                src_pitch, src_yaw, dst_pitch, dst_yaw,
+                square, place_square
+            )
+            if err:
+                return f"Move failed: {err}", SkillResult.FAILURE
 
-        # ── 3. Descend to pick height (4 steps) ──
-
-        self._send_feedback(f"Descending to pick {square}...")
-        err = self._vertical_move(src_x, src_y, self.HEIGHT_SAFE, pick_height,
-                                  src_pitch, src_yaw)
-        if err:
-            return f"Pick descent failed: {err}", SkillResult.FAILURE
-
-        # ── 4. Grab ──
-
-        self._send_feedback("Grabbing piece...")
-        self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH, blocking=True)
-        self._w(2.0)
-        grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
-
-        # ── 5. Lift to safe height (4 steps) ──
-
-        self._send_feedback("Lifting piece...")
-        err = self._vertical_move(src_x, src_y, pick_height, self.HEIGHT_SAFE,
-                                  src_pitch, src_yaw, gripper_position=grip_position)
-        if err:
-            return f"Lift failed: {err}", SkillResult.FAILURE
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # ── 6. Move above target square at safe height ──
-
-        self._send_feedback(f"Moving above {place_square}...")
-        if not self._move_arm(dst_x, dst_y, self.HEIGHT_SAFE, dst_pitch, dst_yaw, 2, wait=2.5,
-                              gripper_position=grip_position):
-            return f"Failed to move above {place_square}", SkillResult.FAILURE
-        if self._cancelled:
-            return "Cancelled", SkillResult.CANCELLED
-
-        # ── 7. Descend to place height (4 steps) ──
-
-        self._send_feedback(f"Descending to place on {place_square}...")
-        err = self._vertical_move(dst_x, dst_y, self.HEIGHT_SAFE, pick_height,
-                                  dst_pitch, dst_yaw, gripper_position=grip_position)
-        if err:
-            return f"Place descent failed: {err}", SkillResult.FAILURE
-
-        # ── 8. Release ──
-
-        self._send_feedback("Releasing piece...")
-        self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
-        self._w(1.5)
-
-        # ── 9. Lift to safe height (4 steps) ──
-
-        self._send_feedback("Lifting after place...")
-        err = self._vertical_move(dst_x, dst_y, pick_height, self.HEIGHT_SAFE,
-                                  dst_pitch, dst_yaw)
-        if err:
-            return f"Post-place lift failed: {err}", SkillResult.FAILURE
-
-        # ── 10. Return to safe pose ──
-
+        # ── Return to safe pose ──
         self._send_feedback("Returning to safe pose...")
         self._go_to_safe_pose(self.PITCH_DOWN, self.YAW_CENTER)
 
