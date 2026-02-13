@@ -540,6 +540,76 @@ private:
     }
     
     
+    /**
+     * Shared helper: apply intelligent joint limits, direction flips, and
+     * convert from external radians to hardware encoder counts.
+     *
+     * @param command_data  Joint positions in external (radian) convention.
+     *                      Modified in-place (limits + flips applied).
+     * @return Encoder counts ready to write to servos.
+     */
+    std::vector<int> applyLimitsAndConvertToEncoder(std::vector<double>& command_data) {
+        // ===== INTELLIGENT JOINT LIMITS =====
+        // Adjust joint2 limits based on joint1 position (collision avoidance)
+        if (command_data.size() >= 2) {
+            double joint1_pos = command_data[0];  // joint1 position in radians
+            double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
+            
+            // Get joint2 limits from config (index 1 = joint_2)
+            const auto& joint2_config = joint_configs_[1];
+            double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
+            double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
+            
+            // Since joint2 will be flipped, we need to invert the limits for pre-flip values
+            // After flip: joint2_flipped = -joint2_pos
+            // So if we want joint2_flipped to be within [config_min, config_max]
+            // We need joint2_pos to be within [-config_max, -config_min]
+            double joint2_min_limit = -config_max;  // Will become config_max after flip
+            double joint2_max_limit = -config_min;  // Will become config_min after flip
+            
+            // Determine joint2's minimum limit based on joint1's position with linear slope
+            const double original_min_limit = -config_max;
+            const double restricted_limit = -0.5;  // Restricted limit (pre-flip)
+            
+            if (joint1_pos < 1.0) {
+                // Below 1.0 rad: fully restricted to -0.5
+                joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
+            } else if (joint1_pos < 1.25) {
+                // Between 1.0 and 1.25 rad: linear interpolation
+                double t = (joint1_pos - 1.0) / (1.25 - 1.0);  // 0 at 1.0, 1 at 1.25
+                double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
+                joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
+            }
+            // Above 1.25 rad: use original config limits (no additional restriction)
+            
+            // Warn if clamping occurs
+            if (joint2_pos < joint2_min_limit) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", 
+                    joint1_pos, joint2_pos, joint2_min_limit);
+            }
+            
+            // Enforce the limits (before flipping)
+            command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
+        }
+        
+        // Now convert from EXTERNAL to HARDWARE convention for servos
+        // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
+        std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
+        for (size_t idx : flip_indices) {
+            if (idx < command_data.size()) {
+                command_data[idx] = -command_data[idx];
+            }
+        }
+        
+        // Convert to encoder counts
+        std::vector<int> command_encoder;
+        for (double pos : command_data) {
+            command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+        }
+        return command_encoder;
+    }
+    
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
         try {
             // Commands come in EXTERNAL convention (same as published joint states)
@@ -551,64 +621,7 @@ private:
                 return;
             }
             
-            // ===== INTELLIGENT JOINT LIMITS =====
-            // Adjust joint2 limits based on joint1 position (collision avoidance)
-            if (command_data.size() >= 2) {
-                double joint1_pos = command_data[0];  // joint1 position in radians
-                double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
-                
-                // Get joint2 limits from config (index 1 = joint_2)
-                const auto& joint2_config = joint_configs_[1];
-                double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
-                double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
-                
-                // Since joint2 will be flipped, we need to invert the limits for pre-flip values
-                // After flip: joint2_flipped = -joint2_pos
-                // So if we want joint2_flipped to be within [config_min, config_max]
-                // We need joint2_pos to be within [-config_max, -config_min]
-                double joint2_min_limit = -config_max;  // Will become config_max after flip
-                double joint2_max_limit = -config_min;  // Will become config_min after flip
-                
-                // Determine joint2's minimum limit based on joint1's position with linear slope
-                const double original_min_limit = -config_max;
-                const double restricted_limit = -0.5;  // Restricted limit (pre-flip)
-                
-                if (joint1_pos < 1.0) {
-                    // Below 1.0 rad: fully restricted to -0.5
-                    joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
-                } else if (joint1_pos < 1.25) {
-                    // Between 1.0 and 1.25 rad: linear interpolation
-                    double t = (joint1_pos - 1.0) / (1.25 - 1.0);  // 0 at 1.0, 1 at 1.25
-                    double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
-                    joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
-                }
-                // Above 1.25 rad: use original config limits (no additional restriction)
-                
-                // Warn if clamping occurs
-                if (joint2_pos < joint2_min_limit) {
-                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", 
-                        joint1_pos, joint2_pos, joint2_min_limit);
-                }
-                
-                // Enforce the limits (before flipping)
-                command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
-            }
-            
-            // Now convert from EXTERNAL to HARDWARE convention for servos
-            // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-            std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-            for (size_t idx : flip_indices) {
-                if (idx < command_data.size()) {
-                    command_data[idx] = -command_data[idx];
-                }
-            }
-            
-            // Convert to encoder counts (only 6 arm joints)
-            std::vector<int> command_encoder;
-            for (double pos : command_data) {
-                command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-            }
+            std::vector<int> command_encoder = applyLimitsAndConvertToEncoder(command_data);
             
             // Store only the 6 arm positions - timer will add head position
             std::lock_guard<std::mutex> lock(arm_command_mutex_);
@@ -1073,25 +1086,8 @@ private:
             // Send command
             {
                 std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-                
-                // Convert radians to encoder counts
                 std::vector<double> command_data = point;
-                
-                // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-                std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-                for (size_t idx : flip_indices) {
-                    if (idx < command_data.size()) {
-                        command_data[idx] = -command_data[idx];
-                    }
-                }
-                
-                // Convert to encoder counts
-                std::vector<int> command_encoder;
-                for (double pos : command_data) {
-                    command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-                }
-                
-                latest_arm_command_ = command_encoder;
+                latest_arm_command_ = applyLimitsAndConvertToEncoder(command_data);
                 has_arm_command_ = true;
             }
             
@@ -1173,24 +1169,8 @@ private:
             
             {
                 std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-                
                 std::vector<double> command_data = point;
-                
-                // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-                std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-                for (size_t idx : flip_indices) {
-                    if (idx < command_data.size()) {
-                        command_data[idx] = -command_data[idx];
-                    }
-                }
-                
-                // Convert to encoder counts
-                std::vector<int> command_encoder;
-                for (double pos : command_data) {
-                    command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-                }
-                
-                latest_arm_command_ = command_encoder;
+                latest_arm_command_ = applyLimitsAndConvertToEncoder(command_data);
                 has_arm_command_ = true;
             }
             
