@@ -803,6 +803,14 @@ private:
             const double original_min_limit = -config_max;
             const double restricted_limit = -0.5;  // Restricted limit (pre-flip)
             
+            if (joint1_pos < -1.35) {
+                // Below -0.25 rad: no additional restriction (negative side clear)
+            } else if (joint1_pos < -1.0) {
+                // Between -0.25 and 0.0 rad: linear interpolation (entering restricted zone)
+                double t = - (joint1_pos - (-1.0)) / (-1.0 - (-1.35));  // 0 at -0.25, 1 at 0.0
+                double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
+                joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
+            } else
             if (joint1_pos < 1.0) {
                 // Below 1.0 rad: fully restricted to -0.5
                 joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
