@@ -13,6 +13,12 @@ export const PreviewContainer = styled.div`
   aspect-ratio: 640 / 480;
   overflow: hidden;
   background: #0a0a0a;
+
+  @media (max-width: 1024px) {
+    max-width: 100%;
+    aspect-ratio: auto;
+    width: 100%;
+  }
 `;
 
 // Define the shared styles as a function to avoid TypeScript errors
@@ -46,7 +52,7 @@ const getMainImageStyles = ($viewMode: string) => css`
     }
   }}
 
-  @media (max-width: 768px) {
+  @media (max-width: 1024px) {
     position: relative;
     left: 0;
     top: 0;
@@ -88,7 +94,7 @@ const getSecondaryImageStyles = ($viewMode: string) => css`
     }
   }}
 
-  @media (max-width: 768px) {
+  @media (max-width: 1024px) {
     ${() => {
       if ($viewMode === "frontFocus" || $viewMode === "chaseFocus") {
         return css`

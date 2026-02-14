@@ -127,25 +127,6 @@ export const GlobalStyle = createGlobalStyle`
     0% { background-position: 0 0; }
     100% { background-position: 50px 50px; }
   }
-
-  @media (max-width: 1024px) {
-    .workspace {
-      grid-template-columns: 250px 1fr !important;
-    }
-    .col-chat {
-      position: absolute;
-      right: 0;
-      top: 0;
-      bottom: 0;
-      width: 300px;
-      transform: translateX(100%);
-      z-index: 10;
-      border-left: 1px solid ${theme.colors.foreground};
-      transition: transform 0.3s;
-    }
-    .col-chat.open { transform: translateX(0); }
-    .footer { grid-template-columns: 1fr auto !important; }
-  }
 `;
 
 export default theme;
