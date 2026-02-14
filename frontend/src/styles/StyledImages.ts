@@ -125,8 +125,16 @@ export const SecondaryImage = styled.img<{ $viewMode: string }>`
 // Export the styled video components
 export const MainVideo = styled.video<{ $viewMode: string }>`
   ${({ $viewMode }) => getMainImageStyles($viewMode)}
+  display: block;
+  background: #000;
+  min-width: 1px;
+  min-height: 1px;
 `;
 
 export const SecondaryVideo = styled.video<{ $viewMode: string }>`
   ${({ $viewMode }) => getSecondaryImageStyles($viewMode)}
+  display: block;
+  background: #000;
+  min-width: 1px;
+  min-height: 1px;
 `;

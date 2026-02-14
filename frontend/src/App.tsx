@@ -4,6 +4,14 @@ import styled from "styled-components";
 import "./App.css";
 import { ImageDisplay } from "./components/ImageDisplay";
 import { Chat } from "./components/Chat";
+import {
+  AvailableAgentsResponse,
+  RobotAgent,
+  getAvailableAgentsDirect,
+  resetBrainDirect,
+  setBrainActiveDirect,
+  setDirectiveDirect,
+} from "./services/rosbridgeService";
 
 // Main App Container
 const AppContainer = styled.div`
@@ -335,27 +343,15 @@ const SensitivityLabel = styled.div`
   opacity: 0.5;
 `;
 
-// Agent types
-interface Agent {
-  id: string;
-  display_name: string;
-  display_icon: string | null;
-  prompt: string;
-  skills: string[];
-}
-
-interface AvailableAgentsResponse {
-  agents: Agent[];
-  current_agent_id: string | null;
-  startup_agent_id: string | null;
-  error?: string;
-}
-
 export default function App() {
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agents, setAgents] = useState<RobotAgent[]>([]);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const hasAgentsRef = useRef(false);
+  const isFetchingAgentsRef = useRef(false);
+  const blockedAgentsFetchUntilRef = useRef(0);
+  const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
+  const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("frontFocus");
@@ -383,11 +379,23 @@ export default function App() {
   // Fetch available agents from the robot on mount
   useEffect(() => {
     const fetchAgents = async () => {
+      const now = Date.now();
+      if (isFetchingAgentsRef.current || now < blockedAgentsFetchUntilRef.current) {
+        return;
+      }
+
+      isFetchingAgentsRef.current = true;
       try {
-        const baseUrl =
-          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
-        const response = await fetch(`${baseUrl}/get_available_agents`);
-        const data: AvailableAgentsResponse = await response.json();
+        let data: AvailableAgentsResponse;
+
+        if (useDirectRobot) {
+          data = await getAvailableAgentsDirect(robotWsUrl);
+        } else {
+          const baseUrl =
+            import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+          const response = await fetch(`${baseUrl}/get_available_agents`);
+          data = (await response.json()) as AvailableAgentsResponse;
+        }
 
         if (data.agents && data.agents.length > 0) {
           setAgents(data.agents);
@@ -400,8 +408,17 @@ export default function App() {
           }
         }
       } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        if (useDirectRobot && errorMessage.includes("timed out")) {
+          blockedAgentsFetchUntilRef.current = Date.now() + 60_000;
+          console.warn(
+            "[Agents] /brain/get_available_directives timed out. Pausing retries for 60s.",
+          );
+        }
         console.error("Error fetching agents:", error);
       } finally {
+        isFetchingAgentsRef.current = false;
         setIsLoadingAgents(false);
       }
     };
@@ -416,7 +433,7 @@ export default function App() {
     }, 5000);
 
     return () => clearInterval(intervalId);
-  }, []);
+  }, [useDirectRobot, robotWsUrl]);
 
   // Voice recognition functions
   const SILENCE_DURATION = 1500; // ms of silence before processing speech
@@ -617,6 +634,21 @@ export default function App() {
 
   async function handleResetRobot(memory_state?: string) {
     try {
+      const isValidMemoryState = typeof memory_state === "string";
+
+      if (useDirectRobot) {
+        await resetBrainDirect(
+          robotWsUrl,
+          isValidMemoryState ? memory_state : undefined,
+        );
+        if (isValidMemoryState && memory_state) {
+          alert(`Robot reset requested with memory state: ${memory_state}!`);
+        } else {
+          alert("Robot reset requested!");
+        }
+        return;
+      }
+
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
@@ -624,7 +656,6 @@ export default function App() {
         "Content-Type": "application/json",
       };
 
-      const isValidMemoryState = typeof memory_state === "string";
       const body = isValidMemoryState
         ? JSON.stringify({ memory_state })
         : JSON.stringify({});
@@ -651,6 +682,12 @@ export default function App() {
 
   async function handleSetDirective(directive: string) {
     try {
+      if (useDirectRobot) {
+        await setDirectiveDirect(robotWsUrl, directive);
+        await setBrainActiveDirect(robotWsUrl, true);
+        return;
+      }
+
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
@@ -745,7 +782,7 @@ export default function App() {
 
         <ChatColumn className="col-chat">
           <PanelHeader>Interaction Log</PanelHeader>
-          <Chat onSetDirective={handleSetDirective} />
+          <Chat />
         </ChatColumn>
       </Workspace>
 

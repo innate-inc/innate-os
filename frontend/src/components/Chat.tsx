@@ -7,8 +7,8 @@ import { IoSend, IoPerson, IoHardwareChip, IoStop } from "react-icons/io5";
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
-import Groq from "groq-sdk";
 import { CartesiaClient } from "@cartesia/cartesia-js";
+import { stopAgentDirect } from "../services/rosbridgeService";
 
 const ChatContainer = styled.div`
   width: 100%;
@@ -73,11 +73,7 @@ const InputArea = styled.div`
   border-top: 1px solid ${({ theme }) => theme.colors.foreground};
 `;
 
-interface TextInputProps {
-  $isListening: boolean;
-}
-
-const TextInput = styled.input<TextInputProps>`
+const TextInput = styled.input`
   flex: 1;
   border: none;
   padding: 10px;
@@ -136,129 +132,95 @@ const StopButton = styled.button`
   }
 `;
 
-const DirectivesContainer = styled.div`
-  display: flex;
-  overflow-x: auto;
-  padding: 8px 12px;
-  gap: 8px;
-  background: ${({ theme }) => theme.colors.background};
-  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
-`;
+const CHAT_IN_TOPIC = "/brain/chat_in";
+const CHAT_OUT_TOPIC = "/brain/chat_out";
 
-interface DirectiveButtonProps {
-  $isActive: boolean;
-}
+const VALID_CHAT_SENDERS = new Set<Message["sender"]>([
+  "user",
+  "robot",
+  "robot_thoughts",
+  "robot_anticipation",
+  "system",
+  "vision_agent_output",
+]);
 
-const DirectiveButton = styled.button<DirectiveButtonProps>`
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 9999px;
-  min-width: max-content;
-  transition: all 0.2s ease;
-  border: none;
-  cursor: pointer;
-  font-family: ${({ theme }) => theme.fonts.body};
+const parseRosbridgeChatMessage = (payload: unknown): Message | null => {
+  let parsedPayload: unknown = payload;
 
-  background: ${({ $isActive }) =>
-    $isActive
-      ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-      : "transparent"};
-  color: ${({ $isActive, theme }) =>
-    $isActive ? "#ffffff" : theme.colors.foreground};
-
-  &:hover {
-    background: ${({ $isActive, theme }) =>
-      $isActive
-        ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-        : theme.colors.background};
-  }
-
-  @media (prefers-color-scheme: dark) {
-    color: ${({ $isActive }) => ($isActive ? "#ffffff" : "#e5e7eb")};
-
-    &:hover {
-      background: ${({ $isActive }) =>
-        $isActive
-          ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-          : "#334155"};
+  if (typeof parsedPayload === "string") {
+    try {
+      parsedPayload = JSON.parse(parsedPayload);
+    } catch {
+      return null;
     }
   }
-`;
 
-const DirectiveContent = styled.div`
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-`;
-
-const DirectiveTitle = styled.span`
-  font-weight: 500;
-  font-size: 14px;
-  display: block;
-`;
-
-const DirectiveSubtitle = styled.span`
-  font-size: 12px;
-  opacity: 0.8;
-  display: block;
-`;
-
-const IconWrapper = styled.div<{ $isActive: boolean }>`
-  position: relative;
-
-  &::after {
-    content: "";
-    position: absolute;
-    top: -2px;
-    right: -2px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: white;
-    display: ${({ $isActive }) => ($isActive ? "block" : "none")};
+  if (!parsedPayload || typeof parsedPayload !== "object") {
+    return null;
   }
-`;
 
-// Define the agent type (from robot)
-interface Agent {
-  id: string;
-  display_name: string;
-  display_icon: string | null;
-  prompt: string;
-  skills: string[];
-}
+  const chatMessage = parsedPayload as {
+    sender?: unknown;
+    text?: unknown;
+    timestamp?: unknown;
+    timestamp_sec?: unknown;
+  };
 
-// Available agents response from the API
-interface AvailableAgentsResponse {
-  agents: Agent[];
-  current_agent_id: string | null;
-  startup_agent_id: string | null;
-  error?: string;
-}
+  if (
+    typeof chatMessage.sender !== "string" ||
+    !VALID_CHAT_SENDERS.has(chatMessage.sender as Message["sender"]) ||
+    typeof chatMessage.text !== "string"
+  ) {
+    return null;
+  }
 
-interface ChatProps {
-  onSetDirective: (directive: string) => void;
-}
+  const timestamp =
+    typeof chatMessage.timestamp === "number"
+      ? chatMessage.timestamp
+      : typeof chatMessage.timestamp_sec === "number"
+        ? chatMessage.timestamp_sec
+        : Date.now() / 1000;
 
-export function Chat({ onSetDirective }: ChatProps) {
+  return {
+    sender: chatMessage.sender as Message["sender"],
+    text: chatMessage.text,
+    timestamp,
+  };
+};
+
+const appendUniqueMessage = (
+  previous: Message[],
+  incoming: Message,
+): Message[] => {
+  const duplicateExists = previous.some(
+    (message) =>
+      message.sender === incoming.sender &&
+      message.text === incoming.text &&
+      message.timestamp === incoming.timestamp,
+  );
+
+  if (duplicateExists) {
+    return previous;
+  }
+
+  const nextMessages = [...previous, incoming];
+  nextMessages.sort((a, b) => a.timestamp - b.timestamp);
+  return nextMessages;
+};
+
+export function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
-  const [activeDirective, setActiveDirective] = useState<string | null>(null);
   const [expandedSystemMessages, setExpandedSystemMessages] = useState<{
     [key: number]: boolean;
   }>({});
   const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
     {},
   );
-  const [isListening, setIsListening] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const cartesiaRef = useRef<CartesiaClient | null>(null);
@@ -267,57 +229,16 @@ export function Chat({ onSetDirective }: ChatProps) {
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const [audioQueue, setAudioQueue] = useState<Float32Array[]>([]);
   const isPlayingRef = useRef<boolean>(false);
-
-  // State for agents fetched from the robot
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
-  const hasAgentsRef = useRef(false);
-
-  // Fetch available agents from the robot on mount
-  useEffect(() => {
-    const fetchAgents = async () => {
-      try {
-        const baseUrl =
-          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
-        const response = await fetch(`${baseUrl}/get_available_agents`);
-        const data: AvailableAgentsResponse = await response.json();
-
-        if (data.agents && data.agents.length > 0) {
-          setAgents(data.agents);
-          hasAgentsRef.current = true;
-          // Set active directive to current agent from robot, or first agent
-          if (data.current_agent_id) {
-            setActiveDirective(data.current_agent_id);
-          } else if (data.agents.length > 0) {
-            setActiveDirective(data.agents[0].id);
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching agents:", error);
-      } finally {
-        setIsLoadingAgents(false);
-      }
-    };
-
-    fetchAgents();
-
-    // Poll for agents every 5 seconds until we have some
-    const intervalId = setInterval(async () => {
-      if (!hasAgentsRef.current) {
-        await fetchAgents();
-      }
-    }, 5000);
-
-    return () => clearInterval(intervalId);
-  }, []);
-
+  const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
+  const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
+  const backendWsBaseUrl =
+    import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
   const handleScroll = () => {
     if (containerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
       setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 10);
     }
   };
-
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
     if (
@@ -330,11 +251,42 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Use anonymous user ID
     const userId = "anonymous";
-
     // Add user ID as query parameter
-    const wsUrl = `${
-      import.meta.env.VITE_WS_BASE_URL
-    }/ws/chat?user_id=${encodeURIComponent(userId)}`;
+    const wsUrl = useDirectRobot
+      ? robotWsUrl
+      : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(userId)}`;
+    let reconnectTimeout: number | null = null;
+    let reconnectAttempts = 0;
+    let shouldReconnect = true;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    const BASE_RECONNECT_DELAY_MS = 2000;
+    const MAX_RECONNECT_DELAY_MS = 15000;
+
+    const clearReconnectTimeout = () => {
+      if (reconnectTimeout !== null) {
+        window.clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (!shouldReconnect || reconnectTimeout !== null) {
+        return;
+      }
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        return;
+      }
+
+      reconnectAttempts += 1;
+      const delayMs = Math.min(
+        BASE_RECONNECT_DELAY_MS * reconnectAttempts,
+        MAX_RECONNECT_DELAY_MS,
+      );
+      reconnectTimeout = window.setTimeout(() => {
+        reconnectTimeout = null;
+        connectWebSocket();
+      }, delayMs);
+    };
 
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
@@ -343,12 +295,40 @@ export function Chat({ onSetDirective }: ChatProps) {
         wsRef.current = socket;
 
         socket.onopen = () => {
-          console.log("Connected to chat websocket");
+          reconnectAttempts = 0;
+          clearReconnectTimeout();
+          if (useDirectRobot) {
+            socket.send(
+              JSON.stringify({ op: "subscribe", topic: CHAT_OUT_TOPIC }),
+            );
+            socket.send(
+              JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }),
+            );
+          } else {
+            console.log("Connected to chat websocket");
+          }
         };
 
         socket.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+
+            if (useDirectRobot) {
+              if (
+                data.op === "publish" &&
+                (data.topic === CHAT_OUT_TOPIC || data.topic === CHAT_IN_TOPIC)
+              ) {
+                const parsedMessage = parseRosbridgeChatMessage(
+                  data.msg?.data ?? data.msg ?? data.data,
+                );
+                if (parsedMessage) {
+                  setMessages((prev) =>
+                    appendUniqueMessage(prev, parsedMessage),
+                  );
+                }
+              }
+              return;
+            }
 
             // Handle error messages
             if (data.error) {
@@ -365,29 +345,14 @@ export function Chat({ onSetDirective }: ChatProps) {
             }
 
             if (data.sender && data.text) {
-              setMessages((prev) => {
-                // Check if an identical message already exists
-                const duplicateExists = prev.some(
-                  (m) =>
-                    m.sender === data.sender &&
-                    m.text === data.text &&
-                    m.timestamp === data.timestamp,
-                );
-                if (duplicateExists) {
-                  return prev;
-                }
-                // Add the new message and sort by timestamp in ascending order
-                const newMessages = [
-                  ...prev,
-                  {
-                    sender: data.sender,
-                    text: data.text,
-                    timestamp: data.timestamp,
-                  },
-                ];
-                newMessages.sort((a, b) => a.timestamp - b.timestamp);
-                return newMessages;
+              const parsedMessage = parseRosbridgeChatMessage({
+                sender: data.sender,
+                text: data.text,
+                timestamp: data.timestamp,
               });
+              if (parsedMessage) {
+                setMessages((prev) => appendUniqueMessage(prev, parsedMessage));
+              }
             }
           } catch {
             console.error("Invalid message received:", event.data);
@@ -397,11 +362,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         socket.onclose = (event) => {
           // Try to reconnect after a delay if it wasn't a clean close
           if (!event.wasClean) {
-            setTimeout(() => {
-              if (wsRef.current?.readyState === WebSocket.CLOSED) {
-                connectWebSocket();
-              }
-            }, 3000);
+            scheduleReconnect();
           }
         };
 
@@ -421,11 +382,13 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Cleanup function
     return () => {
+      shouldReconnect = false;
+      clearReconnectTimeout();
       if (socket) {
         socket.close();
       }
     };
-  }, []);
+  }, [useDirectRobot, robotWsUrl, backendWsBaseUrl]);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -442,7 +405,32 @@ export function Chat({ onSetDirective }: ChatProps) {
         wsRef.current &&
         wsRef.current.readyState === WebSocket.OPEN
       ) {
-        wsRef.current.send(text);
+        if (useDirectRobot) {
+          const timestamp = Math.floor(Date.now() / 1000);
+          const outgoingMessage = {
+            text,
+            sender: "user",
+            timestamp,
+          } as const;
+
+          wsRef.current.send(
+            JSON.stringify({
+              op: "publish",
+              topic: CHAT_IN_TOPIC,
+              msg: { data: JSON.stringify(outgoingMessage) },
+            }),
+          );
+
+          setMessages((prev) =>
+            appendUniqueMessage(prev, {
+              sender: outgoingMessage.sender,
+              text: outgoingMessage.text,
+              timestamp: outgoingMessage.timestamp,
+            }),
+          );
+        } else {
+          wsRef.current.send(text);
+        }
         console.log("Sent voice transcription to chat:", text);
       }
     };
@@ -457,7 +445,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         handleVoiceTranscription as EventListener,
       );
     };
-  }, []);
+  }, [useDirectRobot]);
 
   const handleSend = async () => {
     const cleanDraft = draft.trim();
@@ -468,8 +456,33 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Check if WebSocket is open
     if (wsRef.current.readyState === WebSocket.OPEN) {
-      // Send the draft message to the server via WebSocket
-      wsRef.current.send(cleanDraft);
+      if (useDirectRobot) {
+        const timestamp = Math.floor(Date.now() / 1000);
+        const outgoingMessage = {
+          text: cleanDraft,
+          sender: "user",
+          timestamp,
+        } as const;
+
+        wsRef.current.send(
+          JSON.stringify({
+            op: "publish",
+            topic: CHAT_IN_TOPIC,
+            msg: { data: JSON.stringify(outgoingMessage) },
+          }),
+        );
+
+        setMessages((prev) =>
+          appendUniqueMessage(prev, {
+            sender: outgoingMessage.sender,
+            text: outgoingMessage.text,
+            timestamp: outgoingMessage.timestamp,
+          }),
+        );
+      } else {
+        // Send the draft message to the backend via WebSocket
+        wsRef.current.send(cleanDraft);
+      }
 
       // Clear the input
       setDraft("");
@@ -486,73 +499,20 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   };
 
-  // Speech recognition functions
-  const startListening = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      mediaRecorderRef.current = new MediaRecorder(stream);
-      audioChunksRef.current = [];
-
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, {
-          type: "audio/webm",
-        });
-        await processAudio(audioBlob);
-
-        // Stop all tracks to release the microphone
-        stream.getTracks().forEach((track) => track.stop());
-      };
-
-      mediaRecorderRef.current.start();
-      setIsListening(true);
-    } catch (error) {
-      console.error("Error accessing microphone:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "system",
-          text: "Error accessing microphone. Please check your browser permissions.",
-          timestamp: Date.now() / 1000,
-          isError: true,
-        },
-      ]);
-    }
-  };
-
-  const stopListening = () => {
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== "inactive"
-    ) {
-      mediaRecorderRef.current.stop();
-    }
-    setIsListening(false);
-  };
-
-  const toggleListening = () => {
-    if (isListening) {
-      stopListening();
-    } else {
-      startListening();
-    }
-  };
-
   const stopAgent = async () => {
     try {
-      const baseUrl =
-        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/stop_agent`, {
-        method: "POST",
-      });
-      const data = await response.json();
-      console.log("Agent stopped:", data);
+      if (useDirectRobot) {
+        await stopAgentDirect(robotWsUrl);
+      } else {
+        const baseUrl =
+          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+        const response = await fetch(`${baseUrl}/stop_agent`, {
+          method: "POST",
+        });
+        const data = await response.json();
+        console.log("Agent stopped:", data);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -568,102 +528,6 @@ export function Chat({ onSetDirective }: ChatProps) {
         {
           sender: "system",
           text: "Error stopping agent.",
-          timestamp: Date.now() / 1000,
-          isError: true,
-        },
-      ]);
-    }
-  };
-
-  const processAudio = async (audioBlob: Blob) => {
-    try {
-      // Convert blob to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(audioBlob);
-
-      reader.onloadend = async () => {
-        // Show processing message
-        setMessages((prev) => [
-          ...prev,
-          {
-            sender: "system",
-            text: "Processing your speech...",
-            timestamp: Date.now() / 1000,
-          },
-        ]);
-
-        try {
-          // Create a temporary file from the blob
-          const file = new File([audioBlob], "recording.webm", {
-            type: "audio/webm",
-          });
-
-          // Create FormData to send the file
-          const formData = new FormData();
-          formData.append("file", file);
-          formData.append("model", "whisper-large-v3-turbo");
-
-          console.log("Key", import.meta.env.VITE_GROQ_API_KEY);
-
-          // Send to backend for processing with Groq API
-          const groq = new Groq({
-            apiKey: import.meta.env.VITE_GROQ_API_KEY || "",
-            dangerouslyAllowBrowser: true,
-          });
-          const transcription = await groq.audio.transcriptions.create({
-            file: file,
-            model: "whisper-large-v3-turbo",
-          });
-
-          if (transcription && transcription.text) {
-            // Set the transcribed text as the draft
-            setDraft(transcription.text);
-
-            // Remove the processing message
-            setMessages((prev) =>
-              prev.filter(
-                (msg) =>
-                  !(
-                    msg.sender === "system" &&
-                    msg.text === "Processing your speech..."
-                  ),
-              ),
-            );
-          } else {
-            throw new Error("No transcription returned");
-          }
-        } catch (error) {
-          console.error("Error processing audio:", error);
-
-          // Remove the processing message and show error
-          setMessages((prev) => {
-            const filteredMessages = prev.filter(
-              (msg) =>
-                !(
-                  msg.sender === "system" &&
-                  msg.text === "Processing your speech..."
-                ),
-            );
-
-            return [
-              ...filteredMessages,
-              {
-                sender: "system",
-                text: "Error processing your speech. Please try again.",
-                timestamp: Date.now() / 1000,
-                isError: true,
-              },
-            ];
-          });
-        }
-      };
-    } catch (error) {
-      console.error("Error processing audio:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "system",
-          text: "Error processing your speech. Please try again.",
           timestamp: Date.now() / 1000,
           isError: true,
         },
@@ -942,21 +806,6 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   }, [messages]);
 
-  // Add a button to enable audio for the session
-  const enableAudio = async () => {
-    try {
-      const success = await ensureAudioContext();
-      if (success) {
-        // Maybe show a toast or some UI indication that audio is now enabled
-        console.log("Audio enabled successfully");
-      } else {
-        console.warn("Failed to enable audio");
-      }
-    } catch (error) {
-      console.error("Error enabling audio:", error);
-    }
-  };
-
   return (
     <ChatContainer>
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
@@ -1073,8 +922,6 @@ export function Chat({ onSetDirective }: ChatProps) {
               handleSend();
             }
           }}
-          $isListening={isListening}
-          disabled={isListening}
         />
         <SendButton onClick={handleSend}>
           <IoSend size={20} style={{ display: "block", padding: 0 }} />

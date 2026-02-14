@@ -1,11 +1,14 @@
 import styled from "styled-components";
 import { isMobile } from "react-device-detect";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   PreviewContainer,
   MainImage,
   SecondaryImage,
+  MainVideo,
+  SecondaryVideo,
 } from "../styles/StyledImages";
+import { useRobotWebRTC } from "../hooks/useRobotWebRTC";
 
 type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus";
 
@@ -303,18 +306,47 @@ export function ImageDisplay({
   setViewMode,
   onSetDirective,
 }: ImageDisplayProps) {
-  // State to track if we should show the loading screen
-  const [showLoading, setShowLoading] = useState(true);
-  // State to track if we've failed to connect to the simulation
-  const [connectionFailed, setConnectionFailed] = useState(false);
-  // State to store the error message
-  const [errorMessage, setErrorMessage] = useState("Simulation not running");
-  // State to track if we're checking the simulation
-  const [isChecking, setIsChecking] = useState(false);
+  const [backendShowLoading, setBackendShowLoading] = useState(true);
+  const [backendConnectionFailed, setBackendConnectionFailed] = useState(false);
+  const [backendErrorMessage, setBackendErrorMessage] = useState(
+    "Simulation not running",
+  );
+  const [isCheckingBackend, setIsCheckingBackend] = useState(false);
   const [showDirectiveModal, setShowDirectiveModal] = useState(false);
   const [directiveText, setDirectiveText] = useState("");
 
-  // Grab IP from environment, use a fallback if missing
+  const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
+  const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
+  const {
+    mainStream,
+    secondaryStream,
+    hasMedia,
+    isConnecting: isWebRTCConnecting,
+    error: webRTCError,
+    reconnect: reconnectWebRTC,
+  } = useRobotWebRTC({
+    enabled: useDirectRobot,
+    wsUrl: robotWsUrl,
+    source: "live",
+  });
+
+  const mainVideoRef = useRef<HTMLVideoElement | null>(null);
+  const secondaryVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const connectionFailed = useDirectRobot
+    ? Boolean(webRTCError)
+    : backendConnectionFailed;
+  const directMainStream =
+    viewMode === "chaseFocus" ? (secondaryStream ?? mainStream) : mainStream;
+  const directSecondaryStream =
+    viewMode === "chaseFocus" ? mainStream : secondaryStream;
+  const showLoading = useDirectRobot
+    ? !hasMedia && !webRTCError
+    : backendShowLoading;
+  const errorMessage = useDirectRobot
+    ? (webRTCError ?? "Failed to connect to robot WebRTC stream.")
+    : backendErrorMessage;
+
   const baseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
   // Set up the sources for the main and secondary feeds based on view mode
@@ -334,8 +366,12 @@ export function ImageDisplay({
   }
 
   // Function to check if the simulation is running
-  const checkSimulationReady = async () => {
-    setIsChecking(true);
+  const checkSimulationReady = useCallback(async () => {
+    if (useDirectRobot) {
+      return;
+    }
+
+    setIsCheckingBackend(true);
 
     try {
       const response = await fetch(`${baseUrl}/video_feeds_ready`);
@@ -345,34 +381,38 @@ export function ImageDisplay({
 
         if (data.ready) {
           // Simulation is running, hide loading screen
-          setShowLoading(false);
-          setConnectionFailed(false);
+          setBackendShowLoading(false);
+          setBackendConnectionFailed(false);
         } else {
           // Simulation is not running, show error message
-          setConnectionFailed(true);
-          setErrorMessage(data.message);
+          setBackendConnectionFailed(true);
+          setBackendErrorMessage(data.message);
         }
       } else {
         // API call failed
-        setConnectionFailed(true);
-        setErrorMessage("Failed to connect to the server");
+        setBackendConnectionFailed(true);
+        setBackendErrorMessage("Failed to connect to the server");
       }
     } catch (error) {
       console.error("Error checking simulation status:", error);
-      setConnectionFailed(true);
-      setErrorMessage("Error connecting to the server");
+      setBackendConnectionFailed(true);
+      setBackendErrorMessage("Error connecting to the server");
     } finally {
-      setIsChecking(false);
+      setIsCheckingBackend(false);
     }
-  };
+  }, [baseUrl, useDirectRobot]);
 
   // Check simulation when component mounts or viewMode changes
   useEffect(() => {
+    if (useDirectRobot) {
+      return;
+    }
+
     checkSimulationReady();
 
     // Set up polling to periodically check if simulation becomes available
     const intervalId = setInterval(() => {
-      if (connectionFailed) {
+      if (backendConnectionFailed) {
         checkSimulationReady();
       }
     }, 5000); // Check every 5 seconds if in failed state
@@ -380,7 +420,37 @@ export function ImageDisplay({
     return () => {
       clearInterval(intervalId);
     };
-  }, [viewMode]);
+  }, [viewMode, useDirectRobot, backendConnectionFailed, checkSimulationReady]);
+
+  useEffect(() => {
+    if (!useDirectRobot || !mainVideoRef.current) {
+      return;
+    }
+
+    const video = mainVideoRef.current;
+    video.srcObject = directMainStream;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    if (directMainStream) {
+      void video.play().catch(() => {});
+    }
+  }, [useDirectRobot, directMainStream]);
+
+  useEffect(() => {
+    if (!useDirectRobot || !secondaryVideoRef.current) {
+      return;
+    }
+
+    const video = secondaryVideoRef.current;
+    video.srcObject = directSecondaryStream;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    if (directSecondaryStream) {
+      void video.play().catch(() => {});
+    }
+  }, [useDirectRobot, directSecondaryStream]);
 
   // Only show all modes on desktop. On mobile, remove "sideBySide".
   const desktopModes: ViewMode[] = ["sideBySide", "frontFocus", "chaseFocus"];
@@ -426,15 +496,33 @@ export function ImageDisplay({
         {/* Background Grid */}
         <SimGrid />
 
-        {/* Main feed */}
-        <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
-
-        {/* Secondary feed */}
-        <SecondaryImage
-          $viewMode={viewMode}
-          src={subSrc}
-          alt="Secondary Camera"
-        />
+        {useDirectRobot ? (
+          <>
+            <MainVideo
+              ref={mainVideoRef}
+              $viewMode={viewMode}
+              muted
+              autoPlay
+              playsInline
+            />
+            <SecondaryVideo
+              ref={secondaryVideoRef}
+              $viewMode={viewMode}
+              muted
+              autoPlay
+              playsInline
+            />
+          </>
+        ) : (
+          <>
+            <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
+            <SecondaryImage
+              $viewMode={viewMode}
+              src={subSrc}
+              alt="Secondary Camera"
+            />
+          </>
+        )}
 
         {/* Loading indicator */}
         {showLoading && (
@@ -443,13 +531,23 @@ export function ImageDisplay({
               <>
                 <ErrorText>{errorMessage}</ErrorText>
                 <LoadingText>
-                  Please check if the simulation is running and try again.
+                  {useDirectRobot
+                    ? "Please check robot WebRTC availability and try again."
+                    : "Please check if the simulation is running and try again."}
                 </LoadingText>
                 <RetryButton
-                  onClick={checkSimulationReady}
-                  disabled={isChecking}
+                  onClick={
+                    useDirectRobot ? reconnectWebRTC : checkSimulationReady
+                  }
+                  disabled={useDirectRobot ? false : isCheckingBackend}
                 >
-                  {isChecking ? "Checking..." : "Retry Connection"}
+                  {useDirectRobot
+                    ? isWebRTCConnecting
+                      ? "Reconnecting..."
+                      : "Retry Connection"
+                    : isCheckingBackend
+                      ? "Checking..."
+                      : "Retry Connection"}
                 </RetryButton>
               </>
             ) : (

@@ -45,8 +45,6 @@ export const theme = {
 
 // Global styles
 export const GlobalStyle = createGlobalStyle`
-  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
-
   * {
     box-sizing: border-box;
     margin: 0;
