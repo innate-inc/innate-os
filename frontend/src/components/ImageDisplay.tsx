@@ -314,7 +314,7 @@ export function ImageDisplay({
   const [showDirectiveModal, setShowDirectiveModal] = useState(false);
   const [directiveText, setDirectiveText] = useState("");
 
-  const useDirectWebRTC = import.meta.env.VITE_DIRECT_WEBRTC === "true";
+  const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
 
   const {
@@ -324,7 +324,7 @@ export function ImageDisplay({
     error: webRTCError,
     reconnect: reconnectWebRTC,
   } = useRobotWebRTC({
-    enabled: useDirectWebRTC,
+    enabled: useDirectRobot,
     wsUrl: robotWsUrl,
     source: "live",
   });
@@ -332,17 +332,17 @@ export function ImageDisplay({
   const mainVideoRef = useRef<HTMLVideoElement | null>(null);
   const secondaryVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  const connectionFailed = useDirectWebRTC
+  const connectionFailed = useDirectRobot
     ? Boolean(webRTCError)
     : backendConnectionFailed;
   const directMainStream =
     viewMode === "chaseFocus" ? secondaryStream ?? mainStream : mainStream;
   const directSecondaryStream =
     viewMode === "chaseFocus" ? mainStream : secondaryStream;
-  const showLoading = useDirectWebRTC
+  const showLoading = useDirectRobot
     ? !directMainStream && !webRTCError
     : backendShowLoading;
-  const errorMessage = useDirectWebRTC
+  const errorMessage = useDirectRobot
     ? webRTCError ?? "Failed to connect to robot WebRTC stream."
     : backendErrorMessage;
 
@@ -366,7 +366,7 @@ export function ImageDisplay({
 
   // Function to check if the simulation is running
   const checkSimulationReady = useCallback(async () => {
-    if (useDirectWebRTC) {
+    if (useDirectRobot) {
       return;
     }
 
@@ -399,11 +399,11 @@ export function ImageDisplay({
     } finally {
       setIsCheckingBackend(false);
     }
-  }, [baseUrl, useDirectWebRTC]);
+  }, [baseUrl, useDirectRobot]);
 
   // Check simulation when component mounts or viewMode changes
   useEffect(() => {
-    if (useDirectWebRTC) {
+    if (useDirectRobot) {
       return;
     }
 
@@ -419,10 +419,10 @@ export function ImageDisplay({
     return () => {
       clearInterval(intervalId);
     };
-  }, [viewMode, useDirectWebRTC, backendConnectionFailed, checkSimulationReady]);
+  }, [viewMode, useDirectRobot, backendConnectionFailed, checkSimulationReady]);
 
   useEffect(() => {
-    if (!useDirectWebRTC || !mainVideoRef.current) {
+    if (!useDirectRobot || !mainVideoRef.current) {
       return;
     }
 
@@ -430,10 +430,10 @@ export function ImageDisplay({
     if (directMainStream) {
       void mainVideoRef.current.play().catch(() => {});
     }
-  }, [useDirectWebRTC, directMainStream]);
+  }, [useDirectRobot, directMainStream]);
 
   useEffect(() => {
-    if (!useDirectWebRTC || !secondaryVideoRef.current) {
+    if (!useDirectRobot || !secondaryVideoRef.current) {
       return;
     }
 
@@ -441,7 +441,7 @@ export function ImageDisplay({
     if (directSecondaryStream) {
       void secondaryVideoRef.current.play().catch(() => {});
     }
-  }, [useDirectWebRTC, directSecondaryStream]);
+  }, [useDirectRobot, directSecondaryStream]);
 
   // Only show all modes on desktop. On mobile, remove "sideBySide".
   const desktopModes: ViewMode[] = ["sideBySide", "frontFocus", "chaseFocus"];
@@ -487,7 +487,7 @@ export function ImageDisplay({
         {/* Background Grid */}
         <SimGrid />
 
-        {useDirectWebRTC ? (
+        {useDirectRobot ? (
           <>
             <MainVideo
               ref={mainVideoRef}
@@ -521,16 +521,16 @@ export function ImageDisplay({
             {connectionFailed ? (
               <>
                 <ErrorText>{errorMessage}</ErrorText>
-                <LoadingText>
-                  {useDirectWebRTC
+                  <LoadingText>
+                  {useDirectRobot
                     ? "Please check robot WebRTC availability and try again."
                     : "Please check if the simulation is running and try again."}
-                </LoadingText>
+                  </LoadingText>
                 <RetryButton
-                  onClick={useDirectWebRTC ? reconnectWebRTC : checkSimulationReady}
-                  disabled={useDirectWebRTC ? false : isCheckingBackend}
+                  onClick={useDirectRobot ? reconnectWebRTC : checkSimulationReady}
+                  disabled={useDirectRobot ? false : isCheckingBackend}
                 >
-                  {useDirectWebRTC
+                  {useDirectRobot
                     ? isWebRTCConnecting
                       ? "Reconnecting..."
                       : "Retry Connection"

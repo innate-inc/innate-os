@@ -7,8 +7,8 @@ import { IoSend, IoPerson, IoHardwareChip, IoStop } from "react-icons/io5";
 import { RobotGroupedBubble } from "./RobotGroupedBubble";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { groupMessages, Message, DisplayMessage } from "../utils/groupMessages";
-import Groq from "groq-sdk";
 import { CartesiaClient } from "@cartesia/cartesia-js";
+import { stopAgentDirect } from "../services/rosbridgeService";
 
 const ChatContainer = styled.div`
   width: 100%;
@@ -73,11 +73,7 @@ const InputArea = styled.div`
   border-top: 1px solid ${({ theme }) => theme.colors.foreground};
 `;
 
-interface TextInputProps {
-  $isListening: boolean;
-}
-
-const TextInput = styled.input<TextInputProps>`
+const TextInput = styled.input`
   flex: 1;
   border: none;
   padding: 10px;
@@ -135,108 +131,6 @@ const StopButton = styled.button`
     color: white;
   }
 `;
-
-const DirectivesContainer = styled.div`
-  display: flex;
-  overflow-x: auto;
-  padding: 8px 12px;
-  gap: 8px;
-  background: ${({ theme }) => theme.colors.background};
-  border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
-`;
-
-interface DirectiveButtonProps {
-  $isActive: boolean;
-}
-
-const DirectiveButton = styled.button<DirectiveButtonProps>`
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 9999px;
-  min-width: max-content;
-  transition: all 0.2s ease;
-  border: none;
-  cursor: pointer;
-  font-family: ${({ theme }) => theme.fonts.body};
-
-  background: ${({ $isActive }) =>
-    $isActive
-      ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-      : "transparent"};
-  color: ${({ $isActive, theme }) =>
-    $isActive ? "#ffffff" : theme.colors.foreground};
-
-  &:hover {
-    background: ${({ $isActive, theme }) =>
-      $isActive
-        ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-        : theme.colors.background};
-  }
-
-  @media (prefers-color-scheme: dark) {
-    color: ${({ $isActive }) => ($isActive ? "#ffffff" : "#e5e7eb")};
-
-    &:hover {
-      background: ${({ $isActive }) =>
-        $isActive
-          ? "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)"
-          : "#334155"};
-    }
-  }
-`;
-
-const DirectiveContent = styled.div`
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-`;
-
-const DirectiveTitle = styled.span`
-  font-weight: 500;
-  font-size: 14px;
-  display: block;
-`;
-
-const DirectiveSubtitle = styled.span`
-  font-size: 12px;
-  opacity: 0.8;
-  display: block;
-`;
-
-const IconWrapper = styled.div<{ $isActive: boolean }>`
-  position: relative;
-
-  &::after {
-    content: "";
-    position: absolute;
-    top: -2px;
-    right: -2px;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: white;
-    display: ${({ $isActive }) => ($isActive ? "block" : "none")};
-  }
-`;
-
-// Define the agent type (from robot)
-interface Agent {
-  id: string;
-  display_name: string;
-  display_icon: string | null;
-  prompt: string;
-  skills: string[];
-}
-
-// Available agents response from the API
-interface AvailableAgentsResponse {
-  agents: Agent[];
-  current_agent_id: string | null;
-  startup_agent_id: string | null;
-  error?: string;
-}
 
 const CHAT_IN_TOPIC = "/brain/chat_in";
 const CHAT_OUT_TOPIC = "/brain/chat_out";
@@ -311,27 +205,19 @@ const appendUniqueMessage = (previous: Message[], incoming: Message): Message[] 
   return nextMessages;
 };
 
-interface ChatProps {
-  onSetDirective: (directive: string) => void;
-}
-
-export function Chat({ onSetDirective }: ChatProps) {
+export function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isScrolledToBottom, setIsScrolledToBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
-  const [activeDirective, setActiveDirective] = useState<string | null>(null);
   const [expandedSystemMessages, setExpandedSystemMessages] = useState<{
     [key: number]: boolean;
   }>({});
   const systemContentRefs = useRef<{ [key: number]: HTMLDivElement | null }>(
     {},
   );
-  const [isListening, setIsListening] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const cartesiaRef = useRef<CartesiaClient | null>(null);
@@ -340,52 +226,9 @@ export function Chat({ onSetDirective }: ChatProps) {
   const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const [audioQueue, setAudioQueue] = useState<Float32Array[]>([]);
   const isPlayingRef = useRef<boolean>(false);
-  const useDirectRobotWs = import.meta.env.VITE_DIRECT_ROBOT_WS === "true";
+  const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const backendWsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
-
-  // State for agents fetched from the robot
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [isLoadingAgents, setIsLoadingAgents] = useState(true);
-  const hasAgentsRef = useRef(false);
-
-  // Fetch available agents from the robot on mount
-  useEffect(() => {
-    const fetchAgents = async () => {
-      try {
-        const baseUrl =
-          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
-        const response = await fetch(`${baseUrl}/get_available_agents`);
-        const data: AvailableAgentsResponse = await response.json();
-
-        if (data.agents && data.agents.length > 0) {
-          setAgents(data.agents);
-          hasAgentsRef.current = true;
-          // Set active directive to current agent from robot, or first agent
-          if (data.current_agent_id) {
-            setActiveDirective(data.current_agent_id);
-          } else if (data.agents.length > 0) {
-            setActiveDirective(data.agents[0].id);
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching agents:", error);
-      } finally {
-        setIsLoadingAgents(false);
-      }
-    };
-
-    fetchAgents();
-
-    // Poll for agents every 5 seconds until we have some
-    const intervalId = setInterval(async () => {
-      if (!hasAgentsRef.current) {
-        await fetchAgents();
-      }
-    }, 5000);
-
-    return () => clearInterval(intervalId);
-  }, []);
 
   const handleScroll = () => {
     if (containerRef.current) {
@@ -406,7 +249,7 @@ export function Chat({ onSetDirective }: ChatProps) {
     // Use anonymous user ID
     const userId = "anonymous";
     // Add user ID as query parameter
-    const wsUrl = useDirectRobotWs
+    const wsUrl = useDirectRobot
       ? robotWsUrl
       : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(userId)}`;
 
@@ -417,7 +260,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         wsRef.current = socket;
 
         socket.onopen = () => {
-          if (useDirectRobotWs) {
+          if (useDirectRobot) {
             socket.send(JSON.stringify({ op: "subscribe", topic: CHAT_OUT_TOPIC }));
             socket.send(JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }));
           } else {
@@ -429,7 +272,7 @@ export function Chat({ onSetDirective }: ChatProps) {
           try {
             const data = JSON.parse(event.data);
 
-            if (useDirectRobotWs) {
+            if (useDirectRobot) {
               if (
                 data.op === "publish" &&
                 (data.topic === CHAT_OUT_TOPIC || data.topic === CHAT_IN_TOPIC)
@@ -504,7 +347,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         socket.close();
       }
     };
-  }, [useDirectRobotWs, robotWsUrl, backendWsBaseUrl]);
+  }, [useDirectRobot, robotWsUrl, backendWsBaseUrl]);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -521,7 +364,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         wsRef.current &&
         wsRef.current.readyState === WebSocket.OPEN
       ) {
-        if (useDirectRobotWs) {
+        if (useDirectRobot) {
           const timestamp = Math.floor(Date.now() / 1000);
           const outgoingMessage = {
             text,
@@ -561,7 +404,7 @@ export function Chat({ onSetDirective }: ChatProps) {
         handleVoiceTranscription as EventListener,
       );
     };
-  }, [useDirectRobotWs]);
+  }, [useDirectRobot]);
 
   const handleSend = async () => {
     const cleanDraft = draft.trim();
@@ -572,7 +415,7 @@ export function Chat({ onSetDirective }: ChatProps) {
 
     // Check if WebSocket is open
     if (wsRef.current.readyState === WebSocket.OPEN) {
-      if (useDirectRobotWs) {
+      if (useDirectRobot) {
         const timestamp = Math.floor(Date.now() / 1000);
         const outgoingMessage = {
           text: cleanDraft,
@@ -615,73 +458,20 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   };
 
-  // Speech recognition functions
-  const startListening = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      mediaRecorderRef.current = new MediaRecorder(stream);
-      audioChunksRef.current = [];
-
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, {
-          type: "audio/webm",
-        });
-        await processAudio(audioBlob);
-
-        // Stop all tracks to release the microphone
-        stream.getTracks().forEach((track) => track.stop());
-      };
-
-      mediaRecorderRef.current.start();
-      setIsListening(true);
-    } catch (error) {
-      console.error("Error accessing microphone:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "system",
-          text: "Error accessing microphone. Please check your browser permissions.",
-          timestamp: Date.now() / 1000,
-          isError: true,
-        },
-      ]);
-    }
-  };
-
-  const stopListening = () => {
-    if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== "inactive"
-    ) {
-      mediaRecorderRef.current.stop();
-    }
-    setIsListening(false);
-  };
-
-  const toggleListening = () => {
-    if (isListening) {
-      stopListening();
-    } else {
-      startListening();
-    }
-  };
-
   const stopAgent = async () => {
     try {
-      const baseUrl =
-        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
-      const response = await fetch(`${baseUrl}/stop_agent`, {
-        method: "POST",
-      });
-      const data = await response.json();
-      console.log("Agent stopped:", data);
+      if (useDirectRobot) {
+        await stopAgentDirect(robotWsUrl);
+      } else {
+        const baseUrl =
+          import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+        const response = await fetch(`${baseUrl}/stop_agent`, {
+          method: "POST",
+        });
+        const data = await response.json();
+        console.log("Agent stopped:", data);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -697,102 +487,6 @@ export function Chat({ onSetDirective }: ChatProps) {
         {
           sender: "system",
           text: "Error stopping agent.",
-          timestamp: Date.now() / 1000,
-          isError: true,
-        },
-      ]);
-    }
-  };
-
-  const processAudio = async (audioBlob: Blob) => {
-    try {
-      // Convert blob to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(audioBlob);
-
-      reader.onloadend = async () => {
-        // Show processing message
-        setMessages((prev) => [
-          ...prev,
-          {
-            sender: "system",
-            text: "Processing your speech...",
-            timestamp: Date.now() / 1000,
-          },
-        ]);
-
-        try {
-          // Create a temporary file from the blob
-          const file = new File([audioBlob], "recording.webm", {
-            type: "audio/webm",
-          });
-
-          // Create FormData to send the file
-          const formData = new FormData();
-          formData.append("file", file);
-          formData.append("model", "whisper-large-v3-turbo");
-
-          console.log("Key", import.meta.env.VITE_GROQ_API_KEY);
-
-          // Send to backend for processing with Groq API
-          const groq = new Groq({
-            apiKey: import.meta.env.VITE_GROQ_API_KEY || "",
-            dangerouslyAllowBrowser: true,
-          });
-          const transcription = await groq.audio.transcriptions.create({
-            file: file,
-            model: "whisper-large-v3-turbo",
-          });
-
-          if (transcription && transcription.text) {
-            // Set the transcribed text as the draft
-            setDraft(transcription.text);
-
-            // Remove the processing message
-            setMessages((prev) =>
-              prev.filter(
-                (msg) =>
-                  !(
-                    msg.sender === "system" &&
-                    msg.text === "Processing your speech..."
-                  ),
-              ),
-            );
-          } else {
-            throw new Error("No transcription returned");
-          }
-        } catch (error) {
-          console.error("Error processing audio:", error);
-
-          // Remove the processing message and show error
-          setMessages((prev) => {
-            const filteredMessages = prev.filter(
-              (msg) =>
-                !(
-                  msg.sender === "system" &&
-                  msg.text === "Processing your speech..."
-                ),
-            );
-
-            return [
-              ...filteredMessages,
-              {
-                sender: "system",
-                text: "Error processing your speech. Please try again.",
-                timestamp: Date.now() / 1000,
-                isError: true,
-              },
-            ];
-          });
-        }
-      };
-    } catch (error) {
-      console.error("Error processing audio:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "system",
-          text: "Error processing your speech. Please try again.",
           timestamp: Date.now() / 1000,
           isError: true,
         },
@@ -1071,21 +765,6 @@ export function Chat({ onSetDirective }: ChatProps) {
     }
   }, [messages]);
 
-  // Add a button to enable audio for the session
-  const enableAudio = async () => {
-    try {
-      const success = await ensureAudioContext();
-      if (success) {
-        // Maybe show a toast or some UI indication that audio is now enabled
-        console.log("Audio enabled successfully");
-      } else {
-        console.warn("Failed to enable audio");
-      }
-    } catch (error) {
-      console.error("Error enabling audio:", error);
-    }
-  };
-
   return (
     <ChatContainer>
       <MessagesWrapper ref={containerRef} onScroll={handleScroll}>
@@ -1202,8 +881,6 @@ export function Chat({ onSetDirective }: ChatProps) {
               handleSend();
             }
           }}
-          $isListening={isListening}
-          disabled={isListening}
         />
         <SendButton onClick={handleSend}>
           <IoSend size={20} style={{ display: "block", padding: 0 }} />
