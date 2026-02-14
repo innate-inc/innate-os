@@ -19,7 +19,7 @@ class ChessPieceAgent(Agent):
         """Return piece manipulation skills."""
         return [
             "torque_on",
-            "pick_up_piece"
+            "pick_up_piece_simple"
         ]
 
     def get_inputs(self) -> List[str]:
@@ -32,7 +32,7 @@ class ChessPieceAgent(Agent):
 
 When picking up a piece:
 1. Call torque_on first (enables arm motors)
-2. Call pick_up_piece with square (e.g., square="E4")
+2. Call pick_up_piece_simple with square and place_square (e.g., square="E2", place_square="E4")
 
 Squares use chess notation: A-H (files), 1-8 (ranks).
 
