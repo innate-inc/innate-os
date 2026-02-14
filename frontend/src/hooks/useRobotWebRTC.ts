@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const WEBRTC_START_TOPIC = "/webrtc/start";
 const WEBRTC_OFFER_TOPIC = "/webrtc/offer";
@@ -17,13 +17,14 @@ interface UseRobotWebRTCOptions {
 interface UseRobotWebRTCReturn {
   mainStream: MediaStream | null;
   secondaryStream: MediaStream | null;
+  hasMedia: boolean;
   isConnecting: boolean;
   error: string | null;
   reconnect: () => void;
 }
 
-const RECONNECT_DELAY_MS = 3000;
 const CONNECTION_TIMEOUT_MS = 30000;
+const START_SIGNAL_DELAY_MS = 100;
 
 export function useRobotWebRTC({
   enabled,
@@ -32,65 +33,51 @@ export function useRobotWebRTC({
 }: UseRobotWebRTCOptions): UseRobotWebRTCReturn {
   const [mainStream, setMainStream] = useState<MediaStream | null>(null);
   const [secondaryStream, setSecondaryStream] = useState<MediaStream | null>(
-    null
+    null,
   );
+  const [hasMedia, setHasMedia] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reconnectCount, setReconnectCount] = useState(0);
+  const hasMediaRef = useRef(false);
 
   const reconnect = useCallback(() => {
     setReconnectCount((count) => count + 1);
   }, []);
 
   useEffect(() => {
+    hasMediaRef.current = hasMedia;
+  }, [hasMedia]);
+
+  useEffect(() => {
     if (!enabled) {
       setMainStream(null);
       setSecondaryStream(null);
+      setHasMedia(false);
       setIsConnecting(false);
       setError(null);
       return;
     }
 
     let isMounted = true;
-    let shouldReconnect = true;
     let ws: WebSocket | null = null;
     let pc: RTCPeerConnection | null = null;
-    let reconnectTimer: number | null = null;
     let connectionTimeout: number | null = null;
+    let startSignalTimer: number | null = null;
     let processingOffer = false;
     let remoteDescriptionSet = false;
     const iceCandidateQueue: RTCIceCandidateInit[] = [];
     let videoTrackCount = 0;
 
     const clearTimers = () => {
-      if (reconnectTimer !== null) {
-        window.clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
       if (connectionTimeout !== null) {
         window.clearTimeout(connectionTimeout);
         connectionTimeout = null;
       }
-    };
-
-    const sendRosbridgeMessage = (payload: object) => {
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
+      if (startSignalTimer !== null) {
+        window.clearTimeout(startSignalTimer);
+        startSignalTimer = null;
       }
-    };
-
-    const publishTopic = (topic: string, msg: object) => {
-      sendRosbridgeMessage({ op: "publish", topic, msg });
-    };
-
-    const scheduleReconnect = () => {
-      if (!shouldReconnect || reconnectTimer !== null) {
-        return;
-      }
-      reconnectTimer = window.setTimeout(() => {
-        reconnectTimer = null;
-        connectWebSocket();
-      }, RECONNECT_DELAY_MS);
     };
 
     const closeConnections = () => {
@@ -114,6 +101,16 @@ export function useRobotWebRTC({
       }
     };
 
+    const sendRosbridgeMessage = (payload: object) => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+      }
+    };
+
+    const publishTopic = (topic: string, msg: object) => {
+      sendRosbridgeMessage({ op: "publish", topic, msg });
+    };
+
     const createPeerConnection = () => {
       pc = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
@@ -127,6 +124,7 @@ export function useRobotWebRTC({
         if (!event.candidate) {
           return;
         }
+
         publishTopic(WEBRTC_ICE_IN_TOPIC, {
           data: JSON.stringify({
             candidate: event.candidate.candidate,
@@ -141,35 +139,40 @@ export function useRobotWebRTC({
           return;
         }
 
-        videoTrackCount += 1;
         const stream = new MediaStream([event.track]);
+        const mid = event.transceiver?.mid;
+        const isMainMid = mid === "0" || mid === "video0";
+        const isSecondaryMid = mid === "1" || mid === "video1";
 
-        if (videoTrackCount === 1) {
+        if (isMainMid) {
           setMainStream(stream);
-        } else if (videoTrackCount === 2) {
+        } else if (isSecondaryMid) {
           setSecondaryStream(stream);
+          setMainStream((current) => current ?? stream);
+        } else {
+          videoTrackCount += 1;
+          if (videoTrackCount === 1) {
+            setMainStream(stream);
+          } else if (videoTrackCount === 2) {
+            setSecondaryStream(stream);
+          }
         }
 
-        clearTimers();
+        setHasMedia(true);
         setIsConnecting(false);
         setError(null);
+        clearTimers();
       };
 
       pc.oniceconnectionstatechange = () => {
         if (!pc || !isMounted) {
           return;
         }
-        const state = pc.iceConnectionState;
-        if (state === "connected" || state === "completed") {
-          setIsConnecting(false);
-          setError(null);
-          clearTimers();
-        } else if (
-          state === "disconnected" ||
-          state === "failed" ||
-          state === "closed"
-        ) {
-          setIsConnecting(true);
+      };
+
+      pc.onsignalingstatechange = () => {
+        if (!pc) {
+          return;
         }
       };
     };
@@ -181,12 +184,9 @@ export function useRobotWebRTC({
 
       processingOffer = true;
       try {
-        await pc.setRemoteDescription({
-          type: "offer",
-          sdp: offerSdp,
-        });
-
+        await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
         remoteDescriptionSet = true;
+
         for (const candidate of iceCandidateQueue) {
           try {
             await pc.addIceCandidate(candidate);
@@ -202,9 +202,7 @@ export function useRobotWebRTC({
       } catch (offerError) {
         console.error("[WebRTC] Failed to process offer:", offerError);
       } finally {
-        window.setTimeout(() => {
-          processingOffer = false;
-        }, 500);
+        processingOffer = false;
       }
     };
 
@@ -242,13 +240,10 @@ export function useRobotWebRTC({
     };
 
     const connectWebSocket = () => {
-      if (!isMounted) {
-        return;
-      }
-
       closeConnections();
       setMainStream(null);
       setSecondaryStream(null);
+      setHasMedia(false);
       setError(null);
       setIsConnecting(true);
 
@@ -256,7 +251,7 @@ export function useRobotWebRTC({
         if (!isMounted) {
           return;
         }
-        setError("Timed out while waiting for WebRTC stream from robot.");
+        setError("Timed out while waiting for WebRTC media from robot.");
         setIsConnecting(false);
       }, CONNECTION_TIMEOUT_MS);
 
@@ -268,9 +263,18 @@ export function useRobotWebRTC({
         }
 
         createPeerConnection();
+
         sendRosbridgeMessage({ op: "subscribe", topic: WEBRTC_OFFER_TOPIC });
         sendRosbridgeMessage({ op: "subscribe", topic: WEBRTC_ICE_OUT_TOPIC });
-        publishTopic(WEBRTC_START_TOPIC, { data: JSON.stringify({ source }) });
+
+        startSignalTimer = window.setTimeout(() => {
+          const sourceForRobot =
+            source === "episode_replay" ? "replay" : source;
+          publishTopic(WEBRTC_START_TOPIC, {
+            data: JSON.stringify({ source: sourceForRobot }),
+          });
+          startSignalTimer = null;
+        }, START_SIGNAL_DELAY_MS);
       };
 
       ws.onmessage = async (event) => {
@@ -307,11 +311,14 @@ export function useRobotWebRTC({
       };
 
       ws.onclose = () => {
-        if (!isMounted || !shouldReconnect) {
+        if (!isMounted) {
           return;
         }
-        setIsConnecting(true);
-        scheduleReconnect();
+
+        if (!hasMediaRef.current) {
+          setError("Robot signaling WebSocket closed.");
+          setIsConnecting(false);
+        }
       };
     };
 
@@ -319,10 +326,10 @@ export function useRobotWebRTC({
 
     return () => {
       isMounted = false;
-      shouldReconnect = false;
       closeConnections();
       setMainStream(null);
       setSecondaryStream(null);
+      setHasMedia(false);
       setIsConnecting(false);
     };
   }, [enabled, wsUrl, source, reconnectCount]);
@@ -330,6 +337,7 @@ export function useRobotWebRTC({
   return {
     mainStream,
     secondaryStream,
+    hasMedia,
     isConnecting,
     error,
     reconnect,

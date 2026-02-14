@@ -348,6 +348,8 @@ export default function App() {
   const [agents, setAgents] = useState<RobotAgent[]>([]);
   const [isLoadingAgents, setIsLoadingAgents] = useState(true);
   const hasAgentsRef = useRef(false);
+  const isFetchingAgentsRef = useRef(false);
+  const blockedAgentsFetchUntilRef = useRef(0);
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const [viewMode, setViewMode] = useState<
@@ -377,6 +379,12 @@ export default function App() {
   // Fetch available agents from the robot on mount
   useEffect(() => {
     const fetchAgents = async () => {
+      const now = Date.now();
+      if (isFetchingAgentsRef.current || now < blockedAgentsFetchUntilRef.current) {
+        return;
+      }
+
+      isFetchingAgentsRef.current = true;
       try {
         let data: AvailableAgentsResponse;
 
@@ -400,8 +408,17 @@ export default function App() {
           }
         }
       } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        if (useDirectRobot && errorMessage.includes("timed out")) {
+          blockedAgentsFetchUntilRef.current = Date.now() + 60_000;
+          console.warn(
+            "[Agents] /brain/get_available_directives timed out. Pausing retries for 60s.",
+          );
+        }
         console.error("Error fetching agents:", error);
       } finally {
+        isFetchingAgentsRef.current = false;
         setIsLoadingAgents(false);
       }
     };
