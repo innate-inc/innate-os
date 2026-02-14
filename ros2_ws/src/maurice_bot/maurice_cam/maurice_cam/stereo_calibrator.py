@@ -20,13 +20,14 @@ Usage:
     ros2 run maurice_cam stereo_calibrator --ros-args -p squares_y:=8 -p squares_x:=11 -p square_size:=0.016 -p marker_size:=0.012
 
     Then press Enter to capture images. After 30 images, calibration is computed.
+    ros2 bag record /mars/arm/commands /mars/main_camera/calib/enter_events
 """
 
-import json
+import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -35,12 +36,10 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from std_msgs.msg import Empty
 from cv_bridge import CvBridge
 import message_filters
 
-from tf_transformations import euler_from_quaternion
-
-from brain_client.manipulation_interface import ManipulationInterface
 from maurice_cam.calibration_debug_vis import generate_debug_mosaic, generate_visualizations
 from maurice_cam.calibration_utils import (
     setup_head_and_arm,
@@ -104,12 +103,8 @@ class StereoCalibrator(Node):
         self.declare_parameter('min_corners', 10)  # Minimum corners to accept an image (recommend 10+ for calibrateCamera)
         self.declare_parameter('use_legacy_pattern', True)  # Enable for calib.io boards (OpenCV 4.6.0+)
         self.declare_parameter('debug', False)  # Enable debug mosaic after each capture
-        self.declare_parameter('save_fk_pose', False)  # Save FK pose alongside captured images
-
-        # Auto-move parameters
-        self.declare_parameter('auto_move', False)  # Enable automatic arm movement through pre-recorded poses
-        self.declare_parameter('auto_move_interval', 5)  # Seconds between moves
-        self.declare_parameter('auto_capture_delay', 2.0)  # Seconds to wait after move before capture
+        self.declare_parameter('playback', True)  # Playback mode: replay a rosbag
+        self.declare_parameter('bag_path', '/home/jetson1/innate-os/data/calibration_bag')     # Path to rosbag for playback
 
         # Get parameters
         self.left_topic = self.get_parameter('left_topic').value
@@ -128,12 +123,8 @@ class StereoCalibrator(Node):
         self.min_corners = self.get_parameter('min_corners').value
         self.use_legacy_pattern = self.get_parameter('use_legacy_pattern').value
         self.debug = self.get_parameter('debug').value
-        self.save_fk_pose = self.get_parameter('save_fk_pose').value
-
-        # Auto-move params
-        self.auto_move = self.get_parameter('auto_move').value
-        self.auto_move_interval = self.get_parameter('auto_move_interval').value
-        self.auto_capture_delay = self.get_parameter('auto_capture_delay').value
+        self.playback = self.get_parameter('playback').value
+        self.bag_path = self.get_parameter('bag_path').value
 
         # Create ChArUco board
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
@@ -164,7 +155,6 @@ class StereoCalibrator(Node):
         self.latest_left_frame = None
         self.latest_right_frame = None
         self.frame_lock = threading.Lock()
-        self.capture_requested = False
         self.images_captured = 0
         self.capture_attempts = 0
         self.calibration_done = False
@@ -173,18 +163,14 @@ class StereoCalibrator(Node):
         self.tmp_image_dir = self.data_directory / 'stereo_calibration_images'
         self.tmp_image_dir.mkdir(parents=True, exist_ok=True)
 
+        # Enter-event topic: keyboard thread publishes, callback triggers capture
+        self._enter_pub = self.create_publisher(Empty, '/mars/main_camera/calib/enter_events', 10)
+        self._enter_sub = self.create_subscription(
+            Empty, '/mars/main_camera/calib/enter_events', self._enter_event_callback, 1
+        )
+
         # Set up head and arm for calibration
         setup_head_and_arm(self)
-
-        # Initialize ManipulationInterface for arm control
-        self.manipulation = ManipulationInterface(self, self.get_logger())
-
-        # Auto-move state
-        self.auto_move_poses = []  # List of (x, y, z, roll, pitch, yaw) tuples
-        self.auto_move_index = 0
-        self.auto_move_active = False  # True while an auto-move sequence is running
-        if self.auto_move:
-            self.auto_move_poses = self._load_fk_poses()
 
         # Check for existing images and ask user
         self.check_existing_images()
@@ -195,10 +181,6 @@ class StereoCalibrator(Node):
         self.get_logger().info('=' * 60)
         self.get_logger().info(f'Left topic: {self.left_topic}')
         self.get_logger().info(f'Right topic: {self.right_topic}')
-        self.get_logger().info(f'Using ManipulationInterface for arm control')
-        if self.auto_move and self.auto_move_poses:
-            self.get_logger().info(f'Auto-move ENABLED: {len(self.auto_move_poses)} poses, '
-                                   f'interval={self.auto_move_interval}s, capture_delay={self.auto_capture_delay}s')
         self.get_logger().info(f'Image size: {self.image_width}x{self.image_height} per camera')
         self.get_logger().info(f'ChArUco board: {self.squares_x}x{self.squares_y}')
         self.get_logger().info(f'Square size: {self.square_size*1000:.1f}mm, Marker size: {self.marker_size*1000:.1f}mm')
@@ -209,7 +191,7 @@ class StereoCalibrator(Node):
         # Create synchronized subscriptions for left and right images
         self.left_sub = message_filters.Subscriber(self, Image, self.left_topic)
         self.right_sub = message_filters.Subscriber(self, Image, self.right_topic)
-        
+
         # Use ApproximateTimeSynchronizer since timestamps may differ slightly
         self.sync = message_filters.ApproximateTimeSynchronizer(
             [self.left_sub, self.right_sub],
@@ -218,22 +200,17 @@ class StereoCalibrator(Node):
         )
         self.sync.registerCallback(self.image_callback)
 
-        # Start keyboard input thread (only when auto-move is disabled)
-        if not self.auto_move or not self.auto_move_poses:
+        # Start input / playback
+        if self.playback:
+            self.get_logger().info('Mode: PLAYBACK (replaying rosbag)')
+            self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
+            self._playback_thread.start()
+        else:
+            self.get_logger().info('Mode: RECORD (manual capture)')
             self.input_thread = threading.Thread(target=self.keyboard_input_loop, daemon=True)
             self.input_thread.start()
-
-        # Create timer to process captures
-        self.timer = self.create_timer(0.1, self.process_capture)
-
-        # Start auto-move sequence if enabled
-        if self.auto_move and self.auto_move_poses:
-            self.get_logger().info('Starting auto-move sequence in background thread...')
-            self.auto_move_thread = threading.Thread(target=self._auto_move_loop, daemon=True)
-            self.auto_move_thread.start()
-        else:
             self.get_logger().info('=' * 60)
-            self.get_logger().warn('>>> Move the arm out of the way then Press ENTER to capture an image <<<')
+            self.get_logger().warn('>>> Move the arm and press ENTER to capture an image <<<')
 
     def image_callback(self, left_msg, right_msg):
         """Store latest left and right frames."""
@@ -274,136 +251,76 @@ class StereoCalibrator(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to convert image: {e}')
 
-    def _save_fk_pose(self) -> None:
-        """Append the current FK pose to the fk_poses.json array file."""
-        ee_pose = self.manipulation.get_current_end_effector_pose()
-        if ee_pose is None:
-            self.get_logger().warn('FK pose not available; skipping FK pose save for this capture.')
+    # ------------------------------------------------------------------ #
+    #  Enter-event handling
+    # ------------------------------------------------------------------ #
+
+    def _enter_event_callback(self, msg: Empty):
+        """Called when an enter event is received — grab latest frames and process."""
+        if self.calibration_done:
             return
 
-        fk_path = self.tmp_image_dir / 'fk_poses.json'
-        try:
-            # Load existing array or start fresh
-            if fk_path.exists():
-                with fk_path.open('r', encoding='utf-8') as f:
-                    poses_list = json.load(f)
-            else:
-                poses_list = []
+        with self.frame_lock:
+            if self.latest_left_frame is None or self.latest_right_frame is None:
+                self.get_logger().warn('No frames available yet. Make sure the camera is running.')
+                return
+            left_img = self.latest_left_frame.copy()
+            right_img = self.latest_right_frame.copy()
 
-            poses_list.append(ee_pose)
+        self.capture_attempts += 1
+        result = self._process_image_pair(left_img, right_img, label='Capture', save_images=True)
 
-            with fk_path.open('w', encoding='utf-8') as f:
-                json.dump(poses_list, f, indent=2)
-        except Exception as e:
-            self.get_logger().warn(f'Failed to save FK pose: {e}')
-
-    def _load_fk_poses(self) -> list:
-        """Load pre-recorded FK poses from fk_poses.json and convert to
-        (x, y, z, roll, pitch, yaw) tuples.
-
-        Each entry in the JSON array should have:
-          {"position": {"x", "y", "z"}, "orientation": {"x", "y", "z", "w"}, ...}
-
-        Returns:
-            List of (x, y, z, roll, pitch, yaw) tuples.
-        """
-        fk_path = self.tmp_image_dir / 'fk_poses.json'
-        if not fk_path.exists():
-            self.get_logger().warn(f'FK poses file not found: {fk_path}')
-            return []
-
-        try:
-            with fk_path.open('r', encoding='utf-8') as f:
-                poses_list = json.load(f)
-        except Exception as e:
-            self.get_logger().warn(f'Failed to read FK poses file: {e}')
-            return []
-
-        poses = []
-        for i, entry in enumerate(poses_list):
-            try:
-                # Support both direct {position, orientation} and wrapped {pose: {position, orientation}}
-                pose = entry.get('pose', entry) if isinstance(entry, dict) else entry
-                pos = pose['position']
-                ori = pose['orientation']
-
-                x, y, z = pos['x'], pos['y'], pos['z']
-                qx, qy, qz, qw = ori['x'], ori['y'], ori['z'], ori['w']
-                roll, pitch, yaw = euler_from_quaternion([qx, qy, qz, qw])
-
-                poses.append((x, y, z, roll, pitch, yaw))
-            except Exception as e:
-                self.get_logger().warn(f'Failed to parse FK pose entry {i}: {e}')
-
-        self.get_logger().info(f'Loaded {len(poses)} FK poses from {fk_path}')
-        return poses
-
-    def _auto_move_loop(self):
-        """Background thread: iterate through pre-recorded poses, move arm, and auto-capture."""
-        self.get_logger().info(f'Auto-move: starting with {len(self.auto_move_poses)} poses')
-
-        # Ensure gripper is closed before moving
-        self.get_logger().info('Auto-move: closing gripper...')
-        self.manipulation.close_gripper(duration=1.0)
-        time.sleep(1.5)
-
-        while rclpy.ok() and not self.calibration_done and self.auto_move_index < len(self.auto_move_poses):
-            pose = self.auto_move_poses[self.auto_move_index]
-            x, y, z, roll, pitch, yaw = pose
-            idx = self.auto_move_index + 1
-            total = len(self.auto_move_poses)
-
+        if result.success:
             self.get_logger().info(
-                f'Auto-move [{idx}/{total}]: Moving to pose '
-                f'(x={x:.3f}, y={y:.3f}, z={z:.3f}, '
-                f'r={np.degrees(roll):.1f}°, p={np.degrees(pitch):.1f}°, y={np.degrees(yaw):.1f}°)'
+                f'[{self.images_captured}] '
+                f'Captured! Detected {result.num_common} common corners.'
             )
 
-            success = self.manipulation.move_to_cartesian_pose(
-                x, y, z, roll, pitch, yaw, duration=3, ik_timeout=3.0
+        # Generate debug mosaic after every capture attempt
+        if self.debug:
+            generate_debug_mosaic(self, result)
+
+    # ------------------------------------------------------------------ #
+    #  Rosbag playback
+    # ------------------------------------------------------------------ #
+
+    def _playback_loop(self):
+        """Background thread: play a rosbag and run calibration when it finishes."""
+        bag = self.bag_path
+        if not bag:
+            # Default bag path
+            bag = str(self.tmp_image_dir / 'calibration_bag')
+
+        bag_path = Path(bag)
+        if not bag_path.exists():
+            self.get_logger().error(f'Bag not found: {bag_path}')
+            return
+
+        self.get_logger().info(f'Playing rosbag: {bag_path}')
+
+        # Wait a moment for subscriptions to connect
+        time.sleep(2.0)
+
+        try:
+            proc = subprocess.run(
+                ['ros2', 'bag', 'play', '-r', '1.5', str(bag_path)],
+                check=False,
             )
+            if proc.returncode != 0:
+                self.get_logger().warn(f'ros2 bag play exited with code {proc.returncode}')
+        except Exception as e:
+            self.get_logger().error(f'Failed to play bag: {e}')
+            return
 
-            if not success:
-                self.get_logger().warn(f'Auto-move [{idx}/{total}]: Move failed, skipping pose')
-                self.auto_move_index += 1
-                continue
+        self.get_logger().info(
+            f'Bag playback finished — captured {self.images_captured} images'
+        )
 
-            # Wait for the arm to finish the trajectory + settle time
-            self.get_logger().info(
-                f'Auto-move [{idx}/{total}]: Move issued, waiting {self.auto_capture_delay}s before capture...'
-            )
-            time.sleep(self.auto_capture_delay)
-
-            # Request capture (processed by the main timer callback)
-            self.capture_requested = True
-            self.get_logger().info(f'Auto-move [{idx}/{total}]: Capture requested')
-
-            # Wait for the capture to be processed before moving on
-            while self.capture_requested and rclpy.ok() and not self.calibration_done:
-                time.sleep(0.1)
-
-            self.auto_move_index += 1
-
-            # Wait the interval before the next move (unless calibration is done)
-            if not self.calibration_done and self.auto_move_index < len(self.auto_move_poses):
-                self.get_logger().info(
-                    f'Auto-move: waiting {self.auto_move_interval}s before next pose...'
-                )
-                time.sleep(self.auto_move_interval)
-
-        if self.calibration_done:
-            self.get_logger().info('Auto-move: stopping — calibration complete')
-        elif self.auto_move_index >= len(self.auto_move_poses):
-            self.get_logger().info('Auto-move: all poses exhausted')
-            # Wait for the last capture to be processed
-            while self.capture_requested and rclpy.ok():
-                time.sleep(0.1)
-            if not self.calibration_done and self.images_captured > 0:
-                self.get_logger().info(
-                    f'Auto-move: running calibration with {self.images_captured} images '
-                    f'(requested {self.num_images_required})'
-                )
-                self.run_calibration()
+        if self.images_captured > 0 and not self.calibration_done:
+            self.get_logger().info('Running calibration with captured images...')
+            self.run_calibration()
+        elif self.images_captured == 0:
+            self.get_logger().error('No images captured during playback. Check your bag.')
 
     def check_existing_images(self):
         """Check for existing calibration images in /tmp and ask user if they want to use them."""
@@ -499,18 +416,17 @@ class StereoCalibrator(Node):
         while rclpy.ok() and not self.calibration_done:
             try:
                 # Wait for Enter key
-                input('Slightly move the camera/robot and press Enter to capture the next image')
+                input(f'[{self.images_captured} captured] Move the board and press Enter (Ctrl+C to finish and calibrate)')
                 if not self.calibration_done:
-                    self.capture_requested = True
-            except EOFError:
+                    self._enter_pub.publish(Empty())
+            except (EOFError, KeyboardInterrupt):
                 break
 
     def _process_image_pair(self, left_img, right_img, label='capture', save_images=False) -> DetectionResult:
         """Detect ChArUco corners in a stereo image pair and store if valid.
 
         This is the shared detection/filtering/storage pipeline used by both
-        live capture (``process_capture``) and offline reload
-        (``load_existing_images``).
+        live capture and offline reload (``load_existing_images``).
 
         Args:
             left_img: BGR left image.
@@ -669,8 +585,6 @@ class StereoCalibrator(Node):
             try:
                 cv2.imwrite(str(self.tmp_image_dir / f'left_{self.images_captured:03d}.png'), left_img)
                 cv2.imwrite(str(self.tmp_image_dir / f'right_{self.images_captured:03d}.png'), right_img)
-                if self.save_fk_pose:
-                    self._save_fk_pose()
             except Exception as e:
                 self.get_logger().warn(f'Failed to save images: {e}')
 
@@ -681,42 +595,6 @@ class StereoCalibrator(Node):
         result.corners_right_filtered = corners_right_filtered
         result.obj_pts_common = obj_pts_common
         return result
-
-    def process_capture(self):
-        """Process capture request in main thread."""
-        if self.calibration_done:
-            return
-
-        if not self.capture_requested:
-            return
-        
-        self.capture_requested = False
-
-        with self.frame_lock:
-            if self.latest_left_frame is None or self.latest_right_frame is None:
-                self.get_logger().warn('No frames available yet. Make sure the camera is running.')
-                return
-            left_img = self.latest_left_frame.copy()
-            right_img = self.latest_right_frame.copy()
-
-        self.capture_attempts += 1
-        result = self._process_image_pair(left_img, right_img, label='Capture', save_images=True)
-
-        if result.success:
-            self.get_logger().info(
-                f'[{self.images_captured}/{self.num_images_required}] '
-                f'Captured! Detected {result.num_common} common corners.'
-            )
-
-        # Generate debug mosaic after every capture attempt
-        if self.debug:
-            generate_debug_mosaic(self, result)
-
-        # Check if we have enough images
-        if result.success and self.images_captured >= self.num_images_required:
-            self.get_logger().info('')
-            self.get_logger().info('All images captured! Computing calibration...')
-            self.run_calibration()
 
     def run_calibration(self):
         """Run stereo calibration using collected data."""
@@ -853,7 +731,11 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        if not node.calibration_done and node.images_captured > 0:
+            print(f'\n\nCtrl+C received — running calibration with {node.images_captured} captured images...\n')
+            node.run_calibration()
+        elif node.images_captured == 0:
+            print('\nCtrl+C received — no images captured, exiting.')
     except Exception as e:
         # "context is not valid" is expected on SIGTERM / normal shutdown — ignore it
         if 'context is not valid' not in str(e):

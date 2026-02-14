@@ -241,7 +241,7 @@ def prompt_save(node):
     # Signal shutdown
     node.get_logger().info('Calibration complete. Shutting down...')
     try:
-        node.destroy_node()
+        rclpy.shutdown()
     except Exception as e:
         node.get_logger().warn(f'Error during shutdown: {e}')
     finally:
