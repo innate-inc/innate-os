@@ -339,6 +339,7 @@ class ManipulationInterface:
         self,
         poses: list[dict],
         segment_duration: float = 1.0,
+        segment_durations: list[float] | None = None,
         ik_timeout: float = 2.0,
         gripper_position: float | None = None,
     ) -> bool:
@@ -352,7 +353,9 @@ class ManipulationInterface:
         Args:
             poses: List of dicts, each with {x, y, z, roll, pitch, yaw}.
             segment_duration: Time in seconds for each segment between
-                consecutive waypoints.
+                consecutive waypoints (used when segment_durations is None).
+            segment_durations: Optional list of per-segment durations.
+                Overrides segment_duration when provided.
             ik_timeout: Maximum time to wait for each IK solution.
             gripper_position: Target gripper joint position in radians.
                 If None, uses the current actual gripper position.
@@ -404,7 +407,10 @@ class ManipulationInterface:
         for wj in waypoint_joints:
             flat_waypoints.extend(wj)
 
-        seg_durations = [segment_duration] * (len(waypoint_joints) - 1)
+        if segment_durations is not None:
+            seg_durations = list(segment_durations)
+        else:
+            seg_durations = [segment_duration] * (len(waypoint_joints) - 1)
 
         request = GotoJSTrajectory.Request()
         request.waypoints = Float64MultiArray()
