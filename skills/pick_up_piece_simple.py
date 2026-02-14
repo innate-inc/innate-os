@@ -41,6 +41,7 @@ class PickUpPieceSimple(Skill):
     # Gripper parameters
     GRIPPER_OPEN_PERCENT = 50
     GRIPPER_CLOSE_STRENGTH = 0.4
+    GRIPPER_MIN_WAIT = 1.0      # minimum seconds to wait for gripper to actuate
 
     # Number of intermediate Z steps for vertical moves
     VERTICAL_STEPS = 4
@@ -128,6 +129,10 @@ class PickUpPieceSimple(Skill):
     def _w(self, seconds: float):
         """Sleep for a scaled duration."""
         time.sleep(seconds / self._speed)
+
+    def _gripper_wait(self, seconds: float):
+        """Wait for a gripper operation. Scales with speed but never below GRIPPER_MIN_WAIT."""
+        time.sleep(max(seconds / self._speed, self.GRIPPER_MIN_WAIT))
 
     def _move_arm(self, x, y, z, pitch, yaw, duration, wait=None, gripper_position=None):
         """Move arm to pose and optionally wait. Returns True on success."""
@@ -218,6 +223,13 @@ class PickUpPieceSimple(Skill):
         Uses src orientation for picking, dst orientation for placing.
         Returns error string or None on success.
         """
+        # Compute gripper positions in radians so every trajectory command
+        # carries an explicit gripper target (avoids stale _arm_state reads).
+        open_grip = (self.manipulation.GRIPPER_CLOSED
+                     + (self.manipulation.GRIPPER_OPEN - self.manipulation.GRIPPER_CLOSED)
+                     * (self.GRIPPER_OPEN_PERCENT / 100.0))
+        closed_grip = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
+
         # Move above source at safe height
         self._send_feedback(f"Moving above {src_label}...")
         if not self._move_arm(src_x, src_y, self.HEIGHT_SAFE, src_pitch, src_yaw, 2, wait=2.5):
@@ -225,23 +237,25 @@ class PickUpPieceSimple(Skill):
         if self._cancelled:
             return "Cancelled"
 
-        # Open gripper
+        # Open gripper and wait for it to fully open before descending
         self._send_feedback("Opening gripper...")
         self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
-        self._w(1.5)
+        self._gripper_wait(1.5)
 
-        # Descend to pick height
+        # Descend to pick height (pass open_grip explicitly so trajectory
+        # doesn't read stale arm state and close the gripper)
         self._send_feedback(f"Descending to pick from {src_label}...")
         err = self._vertical_move(src_x, src_y, self.HEIGHT_SAFE, pick_height,
-                                  src_pitch, src_yaw)
+                                  src_pitch, src_yaw,
+                                  gripper_position=open_grip)
         if err:
             return f"Pick descent failed: {err}"
 
         # Grab
         self._send_feedback("Grabbing piece...")
         self.manipulation.close_gripper(strength=self.GRIPPER_CLOSE_STRENGTH, blocking=True)
-        self._w(2.0)
-        grip_position = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
+        self._gripper_wait(2.0)
+        grip_position = closed_grip
 
         # Lift to safe height
         self._send_feedback("Lifting piece...")
@@ -270,12 +284,13 @@ class PickUpPieceSimple(Skill):
         # Release
         self._send_feedback("Releasing piece...")
         self.manipulation.open_gripper(self.GRIPPER_OPEN_PERCENT)
-        self._w(1.5)
+        self._gripper_wait(1.5)
 
-        # Lift to safe height
+        # Lift to safe height (pass open_grip to avoid stale state closing gripper)
         self._send_feedback("Lifting after place...")
         err = self._vertical_move(dst_x, dst_y, pick_height, self.HEIGHT_SAFE,
-                                  dst_pitch, dst_yaw)
+                                  dst_pitch, dst_yaw,
+                                  gripper_position=open_grip)
         if err:
             return f"Post-place lift failed: {err}"
 
