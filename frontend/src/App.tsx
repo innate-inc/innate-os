@@ -23,6 +23,14 @@ const AppContainer = styled.div`
   max-width: 1600px;
   align-self: center;
   width: calc(100% - 40px);
+
+  @media (max-width: 1024px) {
+    margin: 0;
+    border: none;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
 `;
 
 // Header
@@ -32,6 +40,12 @@ const Header = styled.header`
   border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
   height: 60px;
   align-items: center;
+
+  @media (max-width: 1024px) {
+    display: flex;
+    justify-content: space-between;
+    padding: 0;
+  }
 `;
 
 const Logo = styled.div`
@@ -44,6 +58,12 @@ const Logo = styled.div`
   align-items: center;
   height: 100%;
   border-right: 1px solid ${({ theme }) => theme.colors.foreground};
+
+  @media (max-width: 1024px) {
+    border-right: none;
+    font-size: 20px;
+    padding: 0 8px;
+  }
 `;
 
 const StatusBadge = styled.div`
@@ -68,6 +88,63 @@ const StatusDot = styled.div`
   animation: pulse 2s infinite;
 `;
 
+const HamburgerButton = styled.button`
+  display: none;
+  background: none;
+  border: none;
+  color: white;
+  padding: 8px;
+  margin-left: 8px;
+  cursor: pointer;
+
+  @media (max-width: 1024px) {
+    display: flex;
+    align-items: center;
+  }
+`;
+
+const DrawerOverlay = styled.div<{ $isOpen: boolean }>`
+  display: none;
+
+  @media (max-width: 1024px) {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    z-index: 60;
+    opacity: ${({ $isOpen }) => ($isOpen ? 1 : 0)};
+    pointer-events: ${({ $isOpen }) => ($isOpen ? "auto" : "none")};
+    transition: opacity 0.3s;
+  }
+`;
+
+const DrawerHeader = styled.div`
+  display: none;
+
+  @media (max-width: 1024px) {
+    display: flex;
+    height: 60px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    border-bottom: 1px solid ${({ theme }) => theme.colors.foreground};
+    background: ${({ theme }) => theme.colors.background};
+  }
+`;
+
+const DrawerCloseButton = styled.button`
+  background: none;
+  border: none;
+  color: ${({ theme }) => theme.colors.foreground};
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 4px;
+
+  &:hover {
+    opacity: 1;
+  }
+`;
+
 // Workspace
 const Workspace = styled.div`
   display: grid;
@@ -79,17 +156,35 @@ const Workspace = styled.div`
   }
 
   @media (max-width: 1024px) {
-    grid-template-columns: 200px 1fr;
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: none;
+    width: 100%;
+    max-width: 100%;
   }
 `;
 
 // Left Sidebar
-const Sidebar = styled.aside`
+const Sidebar = styled.aside<{ $isOpen?: boolean }>`
   border-right: 1px solid ${({ theme }) => theme.colors.foreground};
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   background: ${({ theme }) => theme.colors.background};
+
+  @media (max-width: 1024px) {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 300px;
+    z-index: 70;
+    transform: ${({ $isOpen }) =>
+      $isOpen ? "translateX(0)" : "translateX(-100%)"};
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: ${({ $isOpen }) =>
+      $isOpen ? "0 0 30px rgba(0,0,0,0.5)" : "none"};
+  }
 `;
 
 const PanelSection = styled.div`
@@ -172,6 +267,13 @@ const MainContent = styled.main`
   overflow: hidden;
   align-items: center;
   justify-content: center;
+
+  @media (max-width: 1024px) {
+    height: 35vh;
+    flex-shrink: 0;
+    width: 100%;
+    min-width: 0;
+  }
 `;
 
 // Chat Column
@@ -183,7 +285,13 @@ const ChatColumn = styled.aside`
   overflow: hidden;
 
   @media (max-width: 1024px) {
-    display: none;
+    display: flex;
+    border-left: none;
+    border-top: 1px solid ${({ theme }) => theme.colors.foreground};
+    min-height: 0;
+    flex: 1;
+    width: 100%;
+    min-width: 0;
   }
 `;
 
@@ -199,7 +307,9 @@ const Footer = styled.footer`
   }
 
   @media (max-width: 1024px) {
+    height: auto;
     grid-template-columns: 1fr;
+    padding-bottom: env(safe-area-inset-bottom, 12px);
   }
 `;
 
@@ -208,11 +318,16 @@ const ControlPanel = styled.div`
   display: flex;
   gap: 20px;
   align-items: center;
+
+  @media (max-width: 1024px) {
+    display: none;
+  }
 `;
 
 const ActionButton = styled.button<{ $isDanger?: boolean }>`
   height: 50px;
   padding: 0 24px;
+  white-space: nowrap;
   font-family: ${({ theme }) => theme.fonts.mono};
   font-size: 12px;
   text-transform: uppercase;
@@ -235,6 +350,11 @@ const ActionButton = styled.button<{ $isDanger?: boolean }>`
     color: ${({ $isDanger, theme }) =>
       $isDanger ? "white" : theme.colors.background};
   }
+
+  @media (max-width: 1024px) {
+    width: 100%;
+    justify-content: center;
+  }
 `;
 
 const WaveformViz = styled.div`
@@ -248,7 +368,11 @@ const WaveformViz = styled.div`
   gap: 16px;
 
   @media (max-width: 1024px) {
-    display: none;
+    display: flex;
+    border-left: none;
+    border-top: 1px solid ${({ theme }) => theme.colors.foreground};
+    padding: 12px 16px;
+    order: -1;
   }
 `;
 
@@ -355,6 +479,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<
     "sideBySide" | "frontFocus" | "chaseFocus"
   >("frontFocus");
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // Voice recognition state
   const [isVoiceActive, setIsVoiceActive] = useState(false);
@@ -380,7 +505,10 @@ export default function App() {
   useEffect(() => {
     const fetchAgents = async () => {
       const now = Date.now();
-      if (isFetchingAgentsRef.current || now < blockedAgentsFetchUntilRef.current) {
+      if (
+        isFetchingAgentsRef.current ||
+        now < blockedAgentsFetchUntilRef.current
+      ) {
         return;
       }
 
@@ -721,7 +849,25 @@ export default function App() {
   return (
     <AppContainer>
       <Header>
-        <Logo>INNATE SIM</Logo>
+        <div style={{ display: "flex", alignItems: "center", height: "100%" }}>
+          <HamburgerButton onClick={() => setIsDrawerOpen(!isDrawerOpen)}>
+            <svg
+              width="24"
+              height="24"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M4 6h16M4 12h16M4 18h16"
+              />
+            </svg>
+          </HamburgerButton>
+          <Logo>INNATE SIM</Logo>
+        </div>
         <div></div>
         <StatusBadge>
           <StatusDot />
@@ -729,8 +875,37 @@ export default function App() {
         </StatusBadge>
       </Header>
 
-      <Workspace className="workspace">
-        <Sidebar>
+      <Workspace>
+        <Sidebar $isOpen={isDrawerOpen}>
+          <DrawerHeader>
+            <span
+              style={{
+                fontSize: 14,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+                opacity: 0.7,
+              }}
+            >
+              System Configuration
+            </span>
+            <DrawerCloseButton onClick={() => setIsDrawerOpen(false)}>
+              <svg
+                width="20"
+                height="20"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </DrawerCloseButton>
+          </DrawerHeader>
           <PanelSection>
             <PanelHeader>Unit Identifier</PanelHeader>
             <BigStat>
@@ -769,6 +944,18 @@ export default function App() {
               )}
             </div>
           </PanelSection>
+          <div style={{ padding: 16, marginTop: "auto" }}>
+            <ActionButton
+              $isDanger
+              onClick={() => {
+                handleResetRobot();
+                setIsDrawerOpen(false);
+              }}
+              style={{ width: "100%", justifyContent: "center" }}
+            >
+              Reset
+            </ActionButton>
+          </div>
         </Sidebar>
 
         <MainContent>
@@ -780,13 +967,13 @@ export default function App() {
           />
         </MainContent>
 
-        <ChatColumn className="col-chat">
+        <ChatColumn>
           <PanelHeader>Interaction Log</PanelHeader>
           <Chat />
         </ChatColumn>
       </Workspace>
 
-      <Footer className="footer">
+      <Footer>
         <ControlPanel>
           <div style={{ flex: 1 }}></div>
           <ActionButton $isDanger onClick={() => handleResetRobot()}>
@@ -829,6 +1016,11 @@ export default function App() {
           </SensitivityContainer>
         </WaveformViz>
       </Footer>
+
+      <DrawerOverlay
+        $isOpen={isDrawerOpen}
+        onClick={() => setIsDrawerOpen(false)}
+      />
     </AppContainer>
   );
 }
