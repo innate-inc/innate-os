@@ -188,12 +188,15 @@ const parseRosbridgeChatMessage = (payload: unknown): Message | null => {
   };
 };
 
-const appendUniqueMessage = (previous: Message[], incoming: Message): Message[] => {
+const appendUniqueMessage = (
+  previous: Message[],
+  incoming: Message,
+): Message[] => {
   const duplicateExists = previous.some(
     (message) =>
       message.sender === incoming.sender &&
       message.text === incoming.text &&
-      message.timestamp === incoming.timestamp
+      message.timestamp === incoming.timestamp,
   );
 
   if (duplicateExists) {
@@ -228,8 +231,8 @@ export function Chat() {
   const isPlayingRef = useRef<boolean>(false);
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
-  const backendWsBaseUrl = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
-
+  const backendWsBaseUrl =
+    import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
   const handleScroll = () => {
     if (containerRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
@@ -252,6 +255,38 @@ export function Chat() {
     const wsUrl = useDirectRobot
       ? robotWsUrl
       : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(userId)}`;
+    let reconnectTimeout: number | null = null;
+    let reconnectAttempts = 0;
+    let shouldReconnect = true;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    const BASE_RECONNECT_DELAY_MS = 2000;
+    const MAX_RECONNECT_DELAY_MS = 15000;
+
+    const clearReconnectTimeout = () => {
+      if (reconnectTimeout !== null) {
+        window.clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (!shouldReconnect || reconnectTimeout !== null) {
+        return;
+      }
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        return;
+      }
+
+      reconnectAttempts += 1;
+      const delayMs = Math.min(
+        BASE_RECONNECT_DELAY_MS * reconnectAttempts,
+        MAX_RECONNECT_DELAY_MS,
+      );
+      reconnectTimeout = window.setTimeout(() => {
+        reconnectTimeout = null;
+        connectWebSocket();
+      }, delayMs);
+    };
 
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
@@ -260,9 +295,15 @@ export function Chat() {
         wsRef.current = socket;
 
         socket.onopen = () => {
+          reconnectAttempts = 0;
+          clearReconnectTimeout();
           if (useDirectRobot) {
-            socket.send(JSON.stringify({ op: "subscribe", topic: CHAT_OUT_TOPIC }));
-            socket.send(JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }));
+            socket.send(
+              JSON.stringify({ op: "subscribe", topic: CHAT_OUT_TOPIC }),
+            );
+            socket.send(
+              JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }),
+            );
           } else {
             console.log("Connected to chat websocket");
           }
@@ -278,10 +319,12 @@ export function Chat() {
                 (data.topic === CHAT_OUT_TOPIC || data.topic === CHAT_IN_TOPIC)
               ) {
                 const parsedMessage = parseRosbridgeChatMessage(
-                  data.msg?.data ?? data.msg ?? data.data
+                  data.msg?.data ?? data.msg ?? data.data,
                 );
                 if (parsedMessage) {
-                  setMessages((prev) => appendUniqueMessage(prev, parsedMessage));
+                  setMessages((prev) =>
+                    appendUniqueMessage(prev, parsedMessage),
+                  );
                 }
               }
               return;
@@ -319,11 +362,7 @@ export function Chat() {
         socket.onclose = (event) => {
           // Try to reconnect after a delay if it wasn't a clean close
           if (!event.wasClean) {
-            setTimeout(() => {
-              if (wsRef.current?.readyState === WebSocket.CLOSED) {
-                connectWebSocket();
-              }
-            }, 3000);
+            scheduleReconnect();
           }
         };
 
@@ -343,6 +382,8 @@ export function Chat() {
 
     // Cleanup function
     return () => {
+      shouldReconnect = false;
+      clearReconnectTimeout();
       if (socket) {
         socket.close();
       }
@@ -428,7 +469,7 @@ export function Chat() {
             op: "publish",
             topic: CHAT_IN_TOPIC,
             msg: { data: JSON.stringify(outgoingMessage) },
-          })
+          }),
         );
 
         setMessages((prev) =>
@@ -436,7 +477,7 @@ export function Chat() {
             sender: outgoingMessage.sender,
             text: outgoingMessage.text,
             timestamp: outgoingMessage.timestamp,
-          })
+          }),
         );
       } else {
         // Send the draft message to the backend via WebSocket

@@ -681,16 +681,16 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
 
         if ret:
             jpg_bytes = encoded_img.tobytes()
-            base64_jpg = base64.b64encode(jpg_bytes).decode("utf-8")
 
             # Build a sensor_msgs/CompressedImage message
+            # RWS expects uint8[] as a JSON int array, not base64
             compressed_msg = {
                 "header": {
                     "stamp": {"sec": sec, "nanosec": nsec},
                     "frame_id": rsm.frame_id,
                 },
-                "format": "jpeg",  # official field in CompressedImage
-                "data": base64_jpg,  # base64-encoded JPEG data
+                "format": "jpeg",
+                "data": list(jpg_bytes),
             }
             outbound = rosbridge_publish(
                 "/mars/main_camera/image/compressed", compressed_msg
@@ -704,16 +704,16 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
 
         if ret:
             jpg_bytes = encoded_img.tobytes()
-            base64_jpg = base64.b64encode(jpg_bytes).decode("utf-8")
 
             # Build a sensor_msgs/CompressedImage message
+            # RWS expects uint8[] as a JSON int array, not base64
             compressed_msg = {
                 "header": {
                     "stamp": {"sec": sec, "nanosec": nsec},
                     "frame_id": "arm_wrist_camera_frame",
                 },
                 "format": "jpeg",
-                "data": base64_jpg,
+                "data": list(jpg_bytes),
             }
             outbound = rosbridge_publish(
                 "/mars/arm/image_raw/compressed", compressed_msg

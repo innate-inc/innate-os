@@ -308,18 +308,19 @@ export function ImageDisplay({
 }: ImageDisplayProps) {
   const [backendShowLoading, setBackendShowLoading] = useState(true);
   const [backendConnectionFailed, setBackendConnectionFailed] = useState(false);
-  const [backendErrorMessage, setBackendErrorMessage] =
-    useState("Simulation not running");
+  const [backendErrorMessage, setBackendErrorMessage] = useState(
+    "Simulation not running",
+  );
   const [isCheckingBackend, setIsCheckingBackend] = useState(false);
   const [showDirectiveModal, setShowDirectiveModal] = useState(false);
   const [directiveText, setDirectiveText] = useState("");
 
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
-
   const {
     mainStream,
     secondaryStream,
+    hasMedia,
     isConnecting: isWebRTCConnecting,
     error: webRTCError,
     reconnect: reconnectWebRTC,
@@ -336,14 +337,14 @@ export function ImageDisplay({
     ? Boolean(webRTCError)
     : backendConnectionFailed;
   const directMainStream =
-    viewMode === "chaseFocus" ? secondaryStream ?? mainStream : mainStream;
+    viewMode === "chaseFocus" ? (secondaryStream ?? mainStream) : mainStream;
   const directSecondaryStream =
     viewMode === "chaseFocus" ? mainStream : secondaryStream;
   const showLoading = useDirectRobot
-    ? !directMainStream && !webRTCError
+    ? !hasMedia && !webRTCError
     : backendShowLoading;
   const errorMessage = useDirectRobot
-    ? webRTCError ?? "Failed to connect to robot WebRTC stream."
+    ? (webRTCError ?? "Failed to connect to robot WebRTC stream.")
     : backendErrorMessage;
 
   const baseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
@@ -426,9 +427,13 @@ export function ImageDisplay({
       return;
     }
 
-    mainVideoRef.current.srcObject = directMainStream;
+    const video = mainVideoRef.current;
+    video.srcObject = directMainStream;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
     if (directMainStream) {
-      void mainVideoRef.current.play().catch(() => {});
+      void video.play().catch(() => {});
     }
   }, [useDirectRobot, directMainStream]);
 
@@ -437,9 +442,13 @@ export function ImageDisplay({
       return;
     }
 
-    secondaryVideoRef.current.srcObject = directSecondaryStream;
+    const video = secondaryVideoRef.current;
+    video.srcObject = directSecondaryStream;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
     if (directSecondaryStream) {
-      void secondaryVideoRef.current.play().catch(() => {});
+      void video.play().catch(() => {});
     }
   }, [useDirectRobot, directSecondaryStream]);
 
@@ -521,13 +530,15 @@ export function ImageDisplay({
             {connectionFailed ? (
               <>
                 <ErrorText>{errorMessage}</ErrorText>
-                  <LoadingText>
+                <LoadingText>
                   {useDirectRobot
                     ? "Please check robot WebRTC availability and try again."
                     : "Please check if the simulation is running and try again."}
-                  </LoadingText>
+                </LoadingText>
                 <RetryButton
-                  onClick={useDirectRobot ? reconnectWebRTC : checkSimulationReady}
+                  onClick={
+                    useDirectRobot ? reconnectWebRTC : checkSimulationReady
+                  }
                   disabled={useDirectRobot ? false : isCheckingBackend}
                 >
                   {useDirectRobot
