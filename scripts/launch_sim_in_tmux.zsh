@@ -26,8 +26,8 @@ tmux send-keys -t mars:rosbridge-app.1 "ros2 launch maurice_control app.sim.laun
 echo "Started app control..."
 # === Window 2: WebRTC Streamer ===
 tmux new-window -t mars -n webrtc
-tmux send-keys -t mars:webrtc "ros2 launch maurice_cam webrtc_streamer.launch.py" C-m
-echo "Started webrtc streamer..."
+tmux send-keys -t mars:webrtc "ros2 launch maurice_cam webrtc_streamer.sim.launch.py" C-m
+echo "Started webrtc streamer (sim mode with compressed images)..."
 
 # === Window 3: Nav + Brain ===
 tmux new-window -t mars -n nav-brain

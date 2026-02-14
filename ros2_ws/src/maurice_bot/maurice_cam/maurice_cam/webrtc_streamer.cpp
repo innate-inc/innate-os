@@ -14,17 +14,20 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
       pool_main_(nullptr),
       pool_arm_(nullptr),
       current_source_("live"),
-      camera_qos_(rclcpp::QoS(1).best_effort()) {
+      camera_qos_(rclcpp::QoS(1).best_effort()),
+      use_compressed_images_(false) {
     // Initialize GStreamer
     gst_init(nullptr, nullptr);
 
     // Declare parameters
+    this->declare_parameter("use_compressed_images", false);
     this->declare_parameter("live_main_camera_topic", "/mars/main_camera/image");
     this->declare_parameter("live_arm_camera_topic", "/mars/arm/image_raw");
     this->declare_parameter("replay_main_camera_topic", "/brain/recorder/replay/main_camera/image");
     this->declare_parameter("replay_arm_camera_topic", "/brain/recorder/replay/arm_camera/image_raw");
 
     // Get parameters
+    use_compressed_images_ = this->get_parameter("use_compressed_images").as_bool();
     live_main_topic_ = this->get_parameter("live_main_camera_topic").as_string();
     live_arm_topic_ = this->get_parameter("live_arm_camera_topic").as_string();
     replay_main_topic_ = this->get_parameter("replay_main_camera_topic").as_string();
@@ -47,7 +50,8 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
     // Create initial subscriptions for live source
     create_subscriptions("live");
 
-    RCLCPP_INFO(this->get_logger(), "WebRTC Streamer ready (source: %s)", current_source_.c_str());
+    RCLCPP_INFO(this->get_logger(), "WebRTC Streamer ready (source: %s, compressed: %s)", current_source_.c_str(),
+                use_compressed_images_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "  Live topics: %s, %s", live_main_topic_.c_str(), live_arm_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  Replay topics: %s, %s", replay_main_topic_.c_str(), replay_arm_topic_.c_str());
 }
@@ -57,8 +61,10 @@ WebRTCStreamer::~WebRTCStreamer() {
 }
 
 void WebRTCStreamer::destroy_subscriptions() {
-    image_sub_main_.reset();
-    image_sub_arm_.reset();
+    image_sub_main_raw_.reset();
+    image_sub_arm_raw_.reset();
+    image_sub_main_compressed_.reset();
+    image_sub_arm_compressed_.reset();
 }
 
 void WebRTCStreamer::create_subscriptions(const std::string& source) {
@@ -73,19 +79,35 @@ void WebRTCStreamer::create_subscriptions(const std::string& source) {
         arm_topic = live_arm_topic_;
     }
 
-    image_sub_main_ = this->create_subscription<sensor_msgs::msg::Image>(
-        main_topic, camera_qos_, std::bind(&WebRTCStreamer::on_image_main, this, std::placeholders::_1));
-
-    image_sub_arm_ = this->create_subscription<sensor_msgs::msg::Image>(
-        arm_topic, camera_qos_, std::bind(&WebRTCStreamer::on_image_arm, this, std::placeholders::_1));
+    if (use_compressed_images_) {
+        // Subscribe to compressed image topics (for sim/rosbridge)
+        image_sub_main_compressed_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+            main_topic + "/compressed", camera_qos_,
+            std::bind(&WebRTCStreamer::on_image_main_compressed, this, std::placeholders::_1));
+        image_sub_arm_compressed_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
+            arm_topic + "/compressed", camera_qos_,
+            std::bind(&WebRTCStreamer::on_image_arm_compressed, this, std::placeholders::_1));
+        RCLCPP_INFO(this->get_logger(), "Subscribed to %s compressed sources: %s/compressed, %s/compressed",
+                    source.c_str(), main_topic.c_str(), arm_topic.c_str());
+    } else {
+        // Subscribe to raw image topics (default)
+        image_sub_main_raw_ = this->create_subscription<sensor_msgs::msg::Image>(
+            main_topic, camera_qos_, std::bind(&WebRTCStreamer::on_image_main_raw, this, std::placeholders::_1));
+        image_sub_arm_raw_ = this->create_subscription<sensor_msgs::msg::Image>(
+            arm_topic, camera_qos_, std::bind(&WebRTCStreamer::on_image_arm_raw, this, std::placeholders::_1));
+        RCLCPP_INFO(this->get_logger(), "Subscribed to %s raw sources: %s, %s", source.c_str(), main_topic.c_str(),
+                    arm_topic.c_str());
+    }
 
     current_source_ = source;
-    RCLCPP_INFO(this->get_logger(), "Subscribed to %s sources: %s, %s", source.c_str(), main_topic.c_str(),
-                arm_topic.c_str());
 }
 
-cv::Mat WebRTCStreamer::process_image(const sensor_msgs::msg::Image::SharedPtr& msg, int target_width,
-                                      int target_height) {
+cv::Mat WebRTCStreamer::process_raw_image(const sensor_msgs::msg::Image::SharedPtr& msg, int target_width,
+                                          int target_height) {
+    if (!msg || msg->data.empty() || msg->height == 0 || msg->width == 0) {
+        return cv::Mat();
+    }
+
     // Create cv::Mat from raw image data
     int cv_type = CV_8UC3;  // Default to 3-channel 8-bit
     int conversion_code = -1;
@@ -139,6 +161,28 @@ cv::Mat WebRTCStreamer::process_image(const sensor_msgs::msg::Image::SharedPtr& 
     return result;
 }
 
+cv::Mat WebRTCStreamer::process_compressed_image(const sensor_msgs::msg::CompressedImage::SharedPtr& msg,
+                                                 int target_width, int target_height) {
+    if (!msg || msg->data.empty()) {
+        return cv::Mat();
+    }
+
+    // Decode JPEG/PNG compressed image
+    cv::Mat img = cv::imdecode(cv::Mat(msg->data), cv::IMREAD_COLOR);
+    if (img.empty()) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Failed to decode compressed image (format: %s)", msg->format.c_str());
+        return cv::Mat();
+    }
+
+    // Resize if needed
+    if (img.rows != target_height || img.cols != target_width) {
+        cv::resize(img, img, cv::Size(target_width, target_height));
+    }
+
+    return img;
+}
+
 GstBufferPool* WebRTCStreamer::create_frame_pool(int width, int height, int channels) {
     gsize frame_size = width * height * channels;
 
@@ -188,7 +232,7 @@ void WebRTCStreamer::push_frame(GstElement* appsrc, const cv::Mat& frame, GstBuf
     gst_buffer_unref(buffer);  // Returns to pool
 }
 
-void WebRTCStreamer::on_image_main(const sensor_msgs::msg::Image::SharedPtr msg) {
+void WebRTCStreamer::on_image_main_raw(const sensor_msgs::msg::Image::SharedPtr msg) {
     GstElement* appsrc = nullptr;
     GstBufferPool* pool = nullptr;
     {
@@ -205,7 +249,7 @@ void WebRTCStreamer::on_image_main(const sensor_msgs::msg::Image::SharedPtr msg)
         return;
     }
 
-    cv::Mat img = process_image(msg, 640, 480);
+    cv::Mat img = process_raw_image(msg, 640, 480);
     if (!img.empty()) {
         push_frame(appsrc, img, pool);
     }
@@ -213,7 +257,7 @@ void WebRTCStreamer::on_image_main(const sensor_msgs::msg::Image::SharedPtr msg)
     gst_object_unref(appsrc);
 }
 
-void WebRTCStreamer::on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg) {
+void WebRTCStreamer::on_image_arm_raw(const sensor_msgs::msg::Image::SharedPtr msg) {
     GstElement* appsrc = nullptr;
     GstBufferPool* pool = nullptr;
     {
@@ -230,7 +274,57 @@ void WebRTCStreamer::on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg) 
         return;
     }
 
-    cv::Mat img = process_image(msg, 640, 480);
+    cv::Mat img = process_raw_image(msg, 640, 480);
+    if (!img.empty()) {
+        push_frame(appsrc, img, pool);
+    }
+
+    gst_object_unref(appsrc);
+}
+
+void WebRTCStreamer::on_image_main_compressed(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+    GstElement* appsrc = nullptr;
+    GstBufferPool* pool = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(pipeline_mutex_);
+        appsrc = appsrc_main_;
+        pool = pool_main_;
+        if (appsrc)
+            gst_object_ref(appsrc);
+    }
+
+    if (!appsrc || !pool) {
+        if (appsrc)
+            gst_object_unref(appsrc);
+        return;
+    }
+
+    cv::Mat img = process_compressed_image(msg, 640, 480);
+    if (!img.empty()) {
+        push_frame(appsrc, img, pool);
+    }
+
+    gst_object_unref(appsrc);
+}
+
+void WebRTCStreamer::on_image_arm_compressed(const sensor_msgs::msg::CompressedImage::SharedPtr msg) {
+    GstElement* appsrc = nullptr;
+    GstBufferPool* pool = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(pipeline_mutex_);
+        appsrc = appsrc_arm_;
+        pool = pool_arm_;
+        if (appsrc)
+            gst_object_ref(appsrc);
+    }
+
+    if (!appsrc || !pool) {
+        if (appsrc)
+            gst_object_unref(appsrc);
+        return;
+    }
+
+    cv::Mat img = process_compressed_image(msg, 640, 480);
     if (!img.empty()) {
         push_frame(appsrc, img, pool);
     }

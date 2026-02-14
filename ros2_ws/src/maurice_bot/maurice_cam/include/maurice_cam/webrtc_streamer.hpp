@@ -7,6 +7,7 @@
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 
 #include <gst/gst.h>
 #include <gst/webrtc/webrtc.h>
@@ -31,8 +32,10 @@ class WebRTCStreamer : public rclcpp::Node {
     void on_start(const std_msgs::msg::String::SharedPtr msg);
     void on_answer(const std_msgs::msg::String::SharedPtr msg);
     void on_ice_in(const std_msgs::msg::String::SharedPtr msg);
-    void on_image_main(const sensor_msgs::msg::Image::SharedPtr msg);
-    void on_image_arm(const sensor_msgs::msg::Image::SharedPtr msg);
+    void on_image_main_raw(const sensor_msgs::msg::Image::SharedPtr msg);
+    void on_image_arm_raw(const sensor_msgs::msg::Image::SharedPtr msg);
+    void on_image_main_compressed(const sensor_msgs::msg::CompressedImage::SharedPtr msg);
+    void on_image_arm_compressed(const sensor_msgs::msg::CompressedImage::SharedPtr msg);
 
     // GStreamer callbacks (static for C callback interface)
     static void on_ice_candidate(GstElement* webrtc, guint mline, gchar* candidate, gpointer user_data);
@@ -44,7 +47,9 @@ class WebRTCStreamer : public rclcpp::Node {
     void create_subscriptions(const std::string& source);
     void destroy_subscriptions();
     void cleanup_pipeline();
-    cv::Mat process_image(const sensor_msgs::msg::Image::SharedPtr& msg, int target_width, int target_height);
+    cv::Mat process_raw_image(const sensor_msgs::msg::Image::SharedPtr& msg, int target_width, int target_height);
+    cv::Mat process_compressed_image(const sensor_msgs::msg::CompressedImage::SharedPtr& msg, int target_width,
+                                     int target_height);
     void push_frame(GstElement* appsrc, const cv::Mat& frame, GstBufferPool* pool);
     GstBufferPool* create_frame_pool(int width, int height, int channels);
 
@@ -56,8 +61,10 @@ class WebRTCStreamer : public rclcpp::Node {
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr answer_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ice_in_sub_;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr start_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_main_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_arm_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_main_raw_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_arm_raw_;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr image_sub_main_compressed_;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr image_sub_arm_compressed_;
 
     // GStreamer elements (initialized first in constructor)
     GstElement* pipeline_;
@@ -83,6 +90,9 @@ class WebRTCStreamer : public rclcpp::Node {
 
     // Thread safety
     std::mutex pipeline_mutex_;
+
+    // Use compressed images (for sim/rosbridge)
+    bool use_compressed_images_;
 };
 
 }  // namespace maurice_cam
