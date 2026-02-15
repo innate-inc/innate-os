@@ -514,6 +514,14 @@ if ! groups "$ACTUAL_USER" | grep -q "\bdialout\b"; then
     log "  Note: User may need to log out and back in for group changes to take effect"
 fi
 
+# Suppress default Ubuntu MOTD on SSH login (our custom banner in .zshrc is enough)
+HUSHLOGIN="$ACTUAL_HOME/.hushlogin"
+if [ ! -f "$HUSHLOGIN" ]; then
+    log "  Creating .hushlogin to suppress Ubuntu MOTD"
+    touch "$HUSHLOGIN"
+    chown "$ACTUAL_USER:$ACTUAL_USER" "$HUSHLOGIN"
+fi
+
 # -----------------------------------------------------------------------------
 # 9. Setup DDS configuration
 # -----------------------------------------------------------------------------
