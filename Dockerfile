@@ -13,15 +13,25 @@ ARG MODE=simulation
 # 1. Install base packages needed before apt-dependencies.txt
 RUN apt-get update && apt-get install -y \
     curl \
-    iputils-ping
+    iputils-ping \
+    gnupg \
+    lsb-release \
+    htop \
+    btop
 
-# 2. Copy and install common apt dependencies
+# 2. Add Innate packages repository (for ros-humble-innate-rws, etc.)
+RUN curl -fsSL https://innate-inc.github.io/innate-packages/pubkey.gpg | \
+        gpg --dearmor -o /usr/share/keyrings/innate-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/innate-archive-keyring.gpg] https://innate-inc.github.io/innate-packages/ $(lsb_release -cs) main" | \
+        tee /etc/apt/sources.list.d/innate.list > /dev/null
+
+# 3. Copy and install common apt dependencies
 COPY ros2_ws/apt-dependencies.common.txt /tmp/apt-dependencies.common.txt
 RUN apt-get update && \
     grep -v '^#' /tmp/apt-dependencies.common.txt | grep -v '^$' | xargs apt-get install -y && \
     rm /tmp/apt-dependencies.common.txt
 
-# 3. Install hardware-specific dependencies if in hardware mode
+# 4. Install hardware-specific dependencies if in hardware mode
 COPY ros2_ws/apt-dependencies.hardware.txt /tmp/apt-dependencies.hardware.txt
 RUN if [ "$MODE" = "hardware" ]; then \
         apt-get update && \
@@ -29,7 +39,7 @@ RUN if [ "$MODE" = "hardware" ]; then \
     fi && \
     rm /tmp/apt-dependencies.hardware.txt
 
-# 4. Install pip packages
+# 5. Install pip packages
 RUN pip install --upgrade \
     websockets \
     pydantic \
