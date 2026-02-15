@@ -48,8 +48,24 @@ class SkillsActionServer(Node):
     def __init__(self):
         super().__init__("skills_action_server")
 
+        self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
+        self.image_topic = self.get_parameter("image_topic").value
+        self.declare_parameter(
+            "wrist_camera_image_topic",
+            "/mars/arm/image_raw/compressed",
+        )
+        self.wrist_camera_image_topic = self.get_parameter(
+            "wrist_camera_image_topic"
+        ).value
+        self.declare_parameter("depth_image_topic", "/depth/image_raw")
+        self.depth_image_topic = self.get_parameter("depth_image_topic").value
+
         # Camera images handled by a dedicated lightweight node (own thread)
-        self._camera_node = CameraProvider()
+        self._camera_node = CameraProvider(
+            main_camera_topic=self.image_topic,
+            wrist_camera_topic=self.wrist_camera_image_topic,
+            depth_image_topic=self.depth_image_topic,
+        )
 
         # Robot state storage
         self.last_odom = None  # Stores Odometry message
@@ -585,6 +601,13 @@ class SkillsActionServer(Node):
                 robot_state_to_inject[RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64.value] = b64
             else:
                 self.get_logger().warn("Skill requires LAST_WRIST_CAMERA_IMAGE_B64 but none available.")
+
+        if RobotStateType.LAST_DEPTH_IMAGE in required_states:
+            depth_state = self._camera_node.last_depth_state
+            if depth_state is not None:
+                robot_state_to_inject[RobotStateType.LAST_DEPTH_IMAGE.value] = depth_state
+            else:
+                self.get_logger().warn("Skill requires LAST_DEPTH_IMAGE but none available.")
 
         if RobotStateType.LAST_ODOM in required_states:
             if self.last_odom is not None:
