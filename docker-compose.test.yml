@@ -5,14 +5,10 @@ services:
     environment:
       - INNATE_OS_ROOT=/root/innate-os
       - SKIP_UPDATE_CHECK=1
-    volumes:
-      # Mount source and tests so the workspace can be rebuilt with latest code
-      - ./ros2_ws/src:/root/innate-os/ros2_ws/src:ro
-      - ./skills:/root/innate-os/skills:ro
-      - ./agents:/root/innate-os/agents:ro
 
     shm_size: "2g"
-    # Rebuild workspace, then run integration tests via colcon test
+    # Test image already contains ros2_ws, skills, and agents from Dockerfile.test.
+    # Rebuild once in-container to keep behavior aligned with current test workflow.
     command: >
       zsh -lc '
         cd /root/innate-os/ros2_ws &&
