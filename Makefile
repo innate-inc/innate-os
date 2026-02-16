@@ -9,13 +9,14 @@
 #   make logs       - Show container logs
 #   make clean      - Stop containers and remove volumes
 #   make test       - Run integration tests in Docker
+#   make install-hooks - Install repository git hooks
 #
 
 COMPOSE_FILE := docker-compose.dev.yml
 CONTAINER := innate
 TMUX_SESSION := mars
 
-.PHONY: sim build up down shell logs clean help test
+.PHONY: sim build up down shell logs clean help test install-hooks
 
 # Default target
 help:
@@ -28,6 +29,7 @@ help:
 	@echo "  make logs    - Show container logs"
 	@echo "  make clean   - Stop containers and remove volumes"
 	@echo "  make test    - Run integration tests in Docker"
+	@echo "  make install-hooks - Install repository git hooks"
 
 # One-liner to start simulation
 sim: up
@@ -75,3 +77,9 @@ test:
 	docker build --progress=plain -t innate-os-test:latest -f Dockerfile.test . 2>&1
 	INNATE_TEST_IMAGE=innate-os-test:latest docker compose -f docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-test
 	@docker compose -f docker-compose.test.yml down
+
+# Install repository git hooks
+install-hooks:
+	@chmod +x .githooks/pre-commit
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed from .githooks"

@@ -79,6 +79,22 @@ Simply SSH into the robot.
 
 Connect via the app like explained in the [documentation](https://docs.innate.bot).
 
+## Development Hooks
+
+Install repository Git hooks:
+
+```bash
+make install-hooks
+```
+
+The pre-commit hook formats only staged/modified files:
+- Python: `ruff check --fix` and `ruff format`
+- C/C++: `clang-format -i`
+
+Install required tools if needed:
+- `pip install ruff`
+- install `clang-format` from your package manager
+
 ## Building from Source
 
 ### Dependencies

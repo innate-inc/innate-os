@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+
+staged_files=()
+while IFS= read -r -d '' file; do
+    staged_files+=("${file}")
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if [ "${#staged_files[@]}" -eq 0 ]; then
+    exit 0
+fi
+
+python_files=()
+cpp_files=()
+
+for file in "${staged_files[@]}"; do
+    if [ ! -f "${file}" ]; then
+        continue
+    fi
+
+    case "${file}" in
+        *.py)
+            python_files+=("${file}")
+            ;;
+        *.c|*.cc|*.cpp|*.cxx|*.h|*.hh|*.hpp|*.hxx|*.ipp)
+            cpp_files+=("${file}")
+            ;;
+    esac
+done
+
+require_cmd() {
+    local cmd="$1"
+    local hint="$2"
+
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+        echo "pre-commit: required command '${cmd}' was not found."
+        echo "pre-commit: ${hint}"
+        exit 1
+    fi
+}
+
+if [ "${#python_files[@]}" -gt 0 ]; then
+    require_cmd "ruff" "Install it with: pip install ruff"
+    echo "pre-commit: formatting staged Python files (ruff)"
+    ruff check --fix "${python_files[@]}"
+    ruff format "${python_files[@]}"
+    git add -- "${python_files[@]}"
+fi
+
+if [ "${#cpp_files[@]}" -gt 0 ]; then
+    require_cmd "clang-format" "Install it with your package manager (clang-format)."
+    echo "pre-commit: formatting staged C/C++ files (clang-format)"
+    clang-format -i "${cpp_files[@]}"
+    git add -- "${cpp_files[@]}"
+fi
+
+exit 0
