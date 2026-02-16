@@ -15,7 +15,7 @@ jobs:
 
       - name: Build test image
         run: |
-          docker build -t innate-os-test -f Dockerfile.test .
+          docker build --progress=plain -t innate-os-test -f Dockerfile.test . 2>&1
 
       - name: Run basic tests
         run: |
