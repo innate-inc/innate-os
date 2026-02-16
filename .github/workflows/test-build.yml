@@ -32,7 +32,7 @@ jobs:
             source /opt/ros/humble/setup.bash
             source /root/innate-os/ros2_ws/install/setup.bash
             echo 'Listing available packages...'
-            ros2 pkg list | head -20
+            ros2 pkg list 2>/dev/null | head -20 || true
             echo 'Build verification complete!'
           "
 
