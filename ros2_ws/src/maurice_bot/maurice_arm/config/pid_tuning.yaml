@@ -1,0 +1,82 @@
+# =============================================================
+# PID Tuning Configuration for Maurice Arm
+# =============================================================
+# Edit values below and save. If pid_hot_reload.py is running,
+# changes apply INSTANTLY to the servos.
+#
+# PID gains (range 0 - 16383):
+#   kp = Proportional gain (stiffness)
+#   ki = Integral gain (steady-state error correction)
+#   kd = Derivative gain (damping / overshoot reduction)
+#
+# Profile (0 = unlimited):
+#   profile_velocity     = max velocity (rev/min units)
+#   profile_acceleration = max acceleration (rev/min^2 units)
+# =============================================================
+
+joint_1:  # Base rotation
+  kp: 2000
+  ki: 0
+  kd: 1000
+  profile_velocity: 0
+  profile_acceleration: 0
+
+joint_2:  # Shoulder
+  kp: 6000
+  ki: 0
+  kd: 12000
+  profile_velocity: 200
+  profile_acceleration: 50
+
+joint_3:  # Elbow
+  kp: 4000
+  ki: 0
+  kd: 16000
+  profile_velocity: 200
+  profile_acceleration: 50
+
+joint_4:  # Wrist pitch
+  kp: 2000
+  ki: 1000
+  kd: 16000
+  profile_velocity: 200
+  profile_acceleration: 50
+
+joint_5:  # Wrist roll
+  kp: 400
+  ki: 0
+  kd: 0
+  profile_velocity: 0
+  profile_acceleration: 0
+
+joint_6:  # Gripper
+  kp: 400
+  ki: 0
+  kd: 0
+  profile_velocity: 0
+  profile_acceleration: 0
+
+joint_7:  # Head
+  kp: 400
+  ki: 1011
+  kd: 0
+  profile_velocity: 0
+  profile_acceleration: 0
+
+# =============================================================
+# Gain Scheduling (auto-adjusts PID based on arm extension)
+# =============================================================
+# When enabled, PID gains for joints 2-4 are interpolated between
+# "near" (arm retracted) and "far" (arm fully extended) profiles.
+# Extension is computed from joint 2+3 angles automatically.
+# The per-joint gains above are used when scheduling is OFF.
+# =============================================================
+gain_scheduling:
+  near:  # Arm retracted / close to base
+    joint_2: {kp: 1500, ki: 0, kd: 2000}
+    joint_3: {kp: 1500, ki: 0, kd: 2000}
+    joint_4: {kp: 800, ki: 1000, kd: 4000}
+  far:   # Arm fully extended / reaching far
+    joint_2: {kp: 6000, ki: 0, kd: 12000}
+    joint_3: {kp: 8000, ki: 0, kd: 12000}
+    joint_4: {kp: 1500, ki: 1000, kd: 12000}

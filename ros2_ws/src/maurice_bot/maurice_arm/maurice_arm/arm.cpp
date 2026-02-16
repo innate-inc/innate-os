@@ -9,6 +9,7 @@
 #include "maurice_arm/dynamixel.hpp"
 #include "maurice_arm/robot.hpp"
 #include "maurice_msgs/srv/goto_js.hpp"
+#include "maurice_msgs/srv/goto_js_trajectory.hpp"
 #include "maurice_msgs/msg/arm_status.hpp"
 #include <moveit_msgs/srv/get_motion_plan.hpp>
 #include <moveit_msgs/msg/motion_plan_request.hpp>
@@ -24,6 +25,8 @@
 #include <future>
 #include <sstream>
 #include <cstdint>
+#include <set>
+#include <array>
 
 using json = nlohmann::json;
 
@@ -42,6 +45,7 @@ public:
         // Declare parameters
         this->declare_parameter("baud_rate", 1000000);
         this->declare_parameter("control_frequency", 100.0);
+        this->declare_parameter("trajectory_rate_hz", 30.0);
         this->declare_parameter("joints", "{}");
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
@@ -50,6 +54,20 @@ public:
         
         // Parse joints configuration
         parseJointConfig(joints_str);
+        
+        // Declare per-joint PID and profile parameters for hot-reload tuning
+        for (size_t i = 0; i < joint_configs_.size(); ++i) {
+            std::string prefix = "joint_" + std::to_string(i + 1) + "_";
+            this->declare_parameter(prefix + "kp", joint_configs_[i].kp);
+            this->declare_parameter(prefix + "ki", joint_configs_[i].ki);
+            this->declare_parameter(prefix + "kd", joint_configs_[i].kd);
+            this->declare_parameter(prefix + "profile_velocity", joint_configs_[i].profile_velocity);
+            this->declare_parameter(prefix + "profile_acceleration", joint_configs_[i].profile_acceleration);
+        }
+        
+        // Parse gain scheduling from JSON string parameter
+        this->declare_parameter("gain_scheduling", std::string("{}"));
+        parseGainScheduling(this->get_parameter("gain_scheduling").as_string());
         
         // Use fixed device path
         std::string device_name = "/dev/ttyACM0";
@@ -100,6 +118,12 @@ public:
         arm_goto_js_service_ = this->create_service<maurice_msgs::srv::GotoJS>(
             "/mars/arm/goto_js",
             std::bind(&MauriceArmNode::armGotoJSCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
+        
+        arm_goto_js_traj_service_ = this->create_service<maurice_msgs::srv::GotoJSTrajectory>(
+            "/mars/arm/goto_js_trajectory",
+            std::bind(&MauriceArmNode::armGotoJSTrajectoryCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
         
@@ -169,6 +193,11 @@ public:
             std::bind(&MauriceArmNode::healthMonitorCallback, this),
             health_callback_group_);
         
+        // Register parameter change callback for PID hot-reload
+        param_callback_handle_ = this->add_on_set_parameters_callback(
+            std::bind(&MauriceArmNode::onParameterChange, this, std::placeholders::_1));
+        RCLCPP_INFO(this->get_logger(), "PID hot-reload enabled (use ros2 param set or pid_hot_reload.py)");
+        
         RCLCPP_INFO(this->get_logger(), "Maurice Arm Node ready!");
         
         // Wait a bit for MoveIt to be ready, then go to home position
@@ -226,6 +255,15 @@ private:
                 config.kd = joint["pid_gains"]["kd"];
                 RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d", config.kp, config.ki, config.kd);
                 
+                if (joint.contains("profile_velocity")) {
+                    config.profile_velocity = joint["profile_velocity"];
+                    RCLCPP_INFO(this->get_logger(), "  Profile velocity: %d", config.profile_velocity);
+                }
+                if (joint.contains("profile_acceleration")) {
+                    config.profile_acceleration = joint["profile_acceleration"];
+                    RCLCPP_INFO(this->get_logger(), "  Profile acceleration: %d", config.profile_acceleration);
+                }
+                
                 // Parse head-specific config for joint 7
                 // Head angle limits are derived from position_limits (not duplicated in config)
                 if (i == 7 && joint.contains("head_config")) {
@@ -252,6 +290,137 @@ private:
             }
         }
         RCLCPP_INFO(this->get_logger(), "Parsed %zu joint configurations", joint_configs_.size());
+    }
+    
+    void parseGainScheduling(const std::string& json_str) {
+        try {
+            auto gs = json::parse(json_str);
+            gs_enabled_ = gs.value("enabled", false);
+            
+            // Initialize with current joint defaults
+            for (int i = 0; i < 3; i++) {
+                auto& jc = joint_configs_[i + 1];  // joints 2, 3, 4
+                gs_near_[i] = {jc.kp, jc.ki, jc.kd};
+                gs_far_[i] = {jc.kp, jc.ki, jc.kd};
+            }
+            
+            for (const std::string& profile : {"near", "far"}) {
+                if (!gs.contains(profile)) continue;
+                auto& arr = (profile == "near") ? gs_near_ : gs_far_;
+                for (int j : {2, 3, 4}) {
+                    std::string key = "joint_" + std::to_string(j);
+                    if (!gs[profile].contains(key)) continue;
+                    auto& jg = gs[profile][key];
+                    int idx = j - 2;
+                    arr[idx].kp = jg.value("kp", arr[idx].kp);
+                    arr[idx].ki = jg.value("ki", arr[idx].ki);
+                    arr[idx].kd = jg.value("kd", arr[idx].kd);
+                }
+            }
+            
+            RCLCPP_INFO(this->get_logger(), "Gain scheduling %s | near: J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d] | far: J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d]",
+                gs_enabled_ ? "ENABLED" : "DISABLED",
+                gs_near_[0].kp, gs_near_[0].ki, gs_near_[0].kd,
+                gs_near_[1].kp, gs_near_[1].ki, gs_near_[1].kd,
+                gs_near_[2].kp, gs_near_[2].ki, gs_near_[2].kd,
+                gs_far_[0].kp, gs_far_[0].ki, gs_far_[0].kd,
+                gs_far_[1].kp, gs_far_[1].ki, gs_far_[1].kd,
+                gs_far_[2].kp, gs_far_[2].ki, gs_far_[2].kd);
+        } catch (const json::exception& e) {
+            RCLCPP_WARN(this->get_logger(), "Failed to parse gain_scheduling JSON: %s", e.what());
+        }
+    }
+    
+    rcl_interfaces::msg::SetParametersResult onParameterChange(
+        const std::vector<rclcpp::Parameter>& parameters) {
+        
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        
+        // Collect which joints had PID or profile changes
+        std::set<int> pid_changed_joints;
+        std::set<int> profile_changed_joints;
+        
+        for (const auto& param : parameters) {
+            std::string name = param.get_name();
+            
+            // Handle gain scheduling JSON string
+            if (name == "gain_scheduling") {
+                parseGainScheduling(param.as_string());
+                continue;
+            }
+            
+            // Match pattern: joint_N_<suffix>
+            if (name.size() >= 10 && name.substr(0, 6) == "joint_") {
+                size_t underscore2 = name.find('_', 6);
+                if (underscore2 == std::string::npos) continue;
+                
+                int joint_num = 0;
+                try {
+                    joint_num = std::stoi(name.substr(6, underscore2 - 6));
+                } catch (...) { continue; }
+                
+                if (joint_num < 1 || joint_num > static_cast<int>(joint_configs_.size())) continue;
+                
+                std::string suffix = name.substr(underscore2 + 1);
+                int value = static_cast<int>(param.as_int());
+                
+                if (suffix == "kp") {
+                    joint_configs_[joint_num - 1].kp = value;
+                    pid_changed_joints.insert(joint_num);
+                } else if (suffix == "ki") {
+                    joint_configs_[joint_num - 1].ki = value;
+                    pid_changed_joints.insert(joint_num);
+                } else if (suffix == "kd") {
+                    joint_configs_[joint_num - 1].kd = value;
+                    pid_changed_joints.insert(joint_num);
+                } else if (suffix == "profile_velocity") {
+                    joint_configs_[joint_num - 1].profile_velocity = value;
+                    profile_changed_joints.insert(joint_num);
+                } else if (suffix == "profile_acceleration") {
+                    joint_configs_[joint_num - 1].profile_acceleration = value;
+                    profile_changed_joints.insert(joint_num);
+                } else {
+                    continue;
+                }
+                
+                RCLCPP_INFO(this->get_logger(), "Hot-reload: joint %d %s = %d",
+                    joint_num, suffix.c_str(), value);
+            }
+        }
+        
+        try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
+            // SyncWrite PID for changed joints
+            if (!pid_changed_joints.empty()) {
+                std::vector<std::tuple<int, int, int, int>> pid_data;
+                for (int jn : pid_changed_joints) {
+                    const auto& c = joint_configs_[jn - 1];
+                    pid_data.emplace_back(c.servo_id, c.kd, c.ki, c.kp);
+                }
+                dynamixel_->syncWritePID(pid_data);
+                RCLCPP_INFO(this->get_logger(), "Hot-reload: sync-wrote PID for %zu servo(s)", pid_data.size());
+            }
+            
+            // SyncWrite profile for changed joints
+            if (!profile_changed_joints.empty()) {
+                std::vector<std::tuple<int, int, int>> profile_data;
+                for (int jn : profile_changed_joints) {
+                    const auto& c = joint_configs_[jn - 1];
+                    profile_data.emplace_back(c.servo_id, c.profile_acceleration, c.profile_velocity);
+                }
+                dynamixel_->syncWriteProfile(profile_data);
+                RCLCPP_INFO(this->get_logger(), "Hot-reload: sync-wrote profile for %zu servo(s)", profile_data.size());
+            }
+            
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Hot-reload syncWrite failed: %s", e.what());
+            result.successful = false;
+            result.reason = std::string("SyncWrite failed: ") + e.what();
+        }
+        
+        return result;
     }
     
     void initializeServos() {
@@ -309,14 +478,20 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
             
-            // Set PID gains
-            RCLCPP_INFO(this->get_logger(), "  Setting PID gains: P=%d, I=%d, D=%d", config.kp, config.ki, config.kd);
-            dynamixel_->setP(config.servo_id, config.kp);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            dynamixel_->setI(config.servo_id, config.ki);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            dynamixel_->setD(config.servo_id, config.kd);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // PID gains are set via syncWritePID after this loop
+            RCLCPP_INFO(this->get_logger(), "  PID gains: P=%d, I=%d, D=%d (will sync-write)", config.kp, config.ki, config.kd);
+            
+            // Set profile velocity and acceleration (0 = no limit)
+            if (config.profile_velocity > 0) {
+                RCLCPP_INFO(this->get_logger(), "  Setting profile velocity: %d", config.profile_velocity);
+                dynamixel_->setProfileVelocity(config.servo_id, config.profile_velocity);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            if (config.profile_acceleration > 0) {
+                RCLCPP_INFO(this->get_logger(), "  Setting profile acceleration: %d", config.profile_acceleration);
+                dynamixel_->setProfileAcceleration(config.servo_id, config.profile_acceleration);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
             
             // Enable torque (if requested)
             if (enable_torque) {
@@ -325,6 +500,14 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
+        
+        // Write all PID gains in a single SyncWrite packet
+        std::vector<std::tuple<int, int, int, int>> pid_data;
+        for (const auto& config : joint_configs_) {
+            pid_data.emplace_back(config.servo_id, config.kd, config.ki, config.kp);
+        }
+        RCLCPP_INFO(this->get_logger(), "SyncWrite PID gains for %zu servos", pid_data.size());
+        dynamixel_->syncWritePID(pid_data);
         
         // Move head to default position
         RCLCPP_INFO(this->get_logger(), "Moving head to default position (0.0 deg)");
@@ -338,6 +521,14 @@ private:
             
             // ========== READ STATE ==========
             auto [positions, velocities] = robot_->readState();
+            
+            // Read motor load/effort for all 7 servos
+            std::vector<double> efforts;
+            for (int id = 1; id <= 7; ++id) {
+                int16_t load = dynamixel_->readPresentLoad(id);
+                // Convert load to percentage (-100% to 100%)
+                efforts.push_back(static_cast<double>(load) / 10.0);
+            }
             
             // ========== PUBLISH ARM STATE ==========
             // Convert to radians
@@ -364,6 +555,7 @@ private:
             arm_state_msg_.header.stamp = this->now();
             arm_state_msg_.position = std::vector<double>(positions_rad.begin(), positions_rad.begin() + 6);
             arm_state_msg_.velocity = std::vector<double>(velocities_rad.begin(), velocities_rad.begin() + 6);
+            arm_state_msg_.effort = std::vector<double>(efforts.begin(), efforts.begin() + 6);
             arm_state_pub_->publish(arm_state_msg_);
             
             // Store latest joint positions for trajectory planning
@@ -391,7 +583,50 @@ private:
             std::vector<double> all_velocities(velocities_rad.begin(), velocities_rad.begin() + 6);
             all_velocities.push_back(velocities_rad[6]);
             joint_state_msg_.velocity = all_velocities;
+            std::vector<double> all_efforts(efforts.begin(), efforts.begin() + 6);
+            all_efforts.push_back(efforts[6]);
+            joint_state_msg_.effort = all_efforts;
             joint_state_pub_->publish(joint_state_msg_);    // /joint_states (for robot_state_publisher)
+            
+            // ========== GAIN SCHEDULING ==========
+            if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {
+                gs_cycle_counter_ = 0;
+                
+                // Interpolate based on J2 angle: 0 → near, π/2 → far, clamped to [0, π/2]
+                double p2 = positions_rad[1];
+                double extension = std::clamp(p2 / M_PI_2, 0.0, 1.0);
+                
+                bool gs_changed = false;
+                std::vector<std::tuple<int, int, int, int>> gs_pid_data;
+                
+                for (int i = 0; i < 3; i++) {
+                    int ji = i + 1;  // joint_configs_ index (0-based): joints 2,3,4 = indices 1,2,3
+                    GainProfile interp;
+                    interp.kp = gs_near_[i].kp + static_cast<int>(extension * (gs_far_[i].kp - gs_near_[i].kp));
+                    interp.ki = gs_near_[i].ki + static_cast<int>(extension * (gs_far_[i].ki - gs_near_[i].ki));
+                    interp.kd = gs_near_[i].kd + static_cast<int>(extension * (gs_far_[i].kd - gs_near_[i].kd));
+                    
+                    if (interp.kp != gs_last_applied_[i].kp ||
+                        interp.ki != gs_last_applied_[i].ki ||
+                        interp.kd != gs_last_applied_[i].kd) {
+                        gs_changed = true;
+                        gs_last_applied_[i] = interp;
+                        joint_configs_[ji].kp = interp.kp;
+                        joint_configs_[ji].ki = interp.ki;
+                        joint_configs_[ji].kd = interp.kd;
+                    }
+                    gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.kd, interp.ki, interp.kp);
+                }
+                if (gs_changed) {
+                    dynamixel_->syncWritePID(gs_pid_data);
+                    RCLCPP_INFO(this->get_logger(),
+                        "GainSched ext=%.2f (J2=%.2f) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                        extension, p2,
+                        gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
+                        gs_last_applied_[1].kp, gs_last_applied_[1].ki, gs_last_applied_[1].kd,
+                        gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
+                }
+            }
             
             // ========== SEND COMMANDS IF AVAILABLE ==========
             if (has_arm_command_.load() || has_head_command_.load()) {
@@ -499,6 +734,76 @@ private:
     }
     
     
+    /**
+     * Shared helper: apply intelligent joint limits, direction flips, and
+     * convert from external radians to hardware encoder counts.
+     *
+     * @param command_data  Joint positions in external (radian) convention.
+     *                      Modified in-place (limits + flips applied).
+     * @return Encoder counts ready to write to servos.
+     */
+    std::vector<int> applyLimitsAndConvertToEncoder(std::vector<double>& command_data) {
+        // ===== INTELLIGENT JOINT LIMITS =====
+        // Adjust joint2 limits based on joint1 position (collision avoidance)
+        if (command_data.size() >= 2) {
+            double joint1_pos = command_data[0];  // joint1 position in radians
+            double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
+            
+            // Get joint2 limits from config (index 1 = joint_2)
+            const auto& joint2_config = joint_configs_[1];
+            double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
+            double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
+            
+            // Since joint2 will be flipped, we need to invert the limits for pre-flip values
+            // After flip: joint2_flipped = -joint2_pos
+            // So if we want joint2_flipped to be within [config_min, config_max]
+            // We need joint2_pos to be within [-config_max, -config_min]
+            double joint2_min_limit = -config_max;  // Will become config_max after flip
+            double joint2_max_limit = -config_min;  // Will become config_min after flip
+            
+            // Determine joint2's minimum limit based on joint1's position with linear slope
+            const double original_min_limit = -config_max;
+            const double restricted_limit = -0.5;  // Restricted limit (pre-flip)
+            
+            if (joint1_pos < 1.0) {
+                // Below 1.0 rad: fully restricted to -0.5
+                joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
+            } else if (joint1_pos < 1.25) {
+                // Between 1.0 and 1.25 rad: linear interpolation
+                double t = (joint1_pos - 1.0) / (1.25 - 1.0);  // 0 at 1.0, 1 at 1.25
+                double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
+                joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
+            }
+            // Above 1.25 rad: use original config limits (no additional restriction)
+            
+            // Warn if clamping occurs
+            if (joint2_pos < joint2_min_limit) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", 
+                    joint1_pos, joint2_pos, joint2_min_limit);
+            }
+            
+            // Enforce the limits (before flipping)
+            command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
+        }
+        
+        // Now convert from EXTERNAL to HARDWARE convention for servos
+        // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
+        std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
+        for (size_t idx : flip_indices) {
+            if (idx < command_data.size()) {
+                command_data[idx] = -command_data[idx];
+            }
+        }
+        
+        // Convert to encoder counts
+        std::vector<int> command_encoder;
+        for (double pos : command_data) {
+            command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
+        }
+        return command_encoder;
+    }
+    
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
         try {
             // Commands come in EXTERNAL convention (same as published joint states)
@@ -510,64 +815,7 @@ private:
                 return;
             }
             
-            // ===== INTELLIGENT JOINT LIMITS =====
-            // Adjust joint2 limits based on joint1 position (collision avoidance)
-            if (command_data.size() >= 2) {
-                double joint1_pos = command_data[0];  // joint1 position in radians
-                double joint2_pos = command_data[1];  // joint2 position in radians (before flipping)
-                
-                // Get joint2 limits from config (index 1 = joint_2)
-                const auto& joint2_config = joint_configs_[1];
-                double config_min = joint2_config.min_pos_rad;  // e.g., -1.5708
-                double config_max = joint2_config.max_pos_rad;  // e.g., 1.22
-                
-                // Since joint2 will be flipped, we need to invert the limits for pre-flip values
-                // After flip: joint2_flipped = -joint2_pos
-                // So if we want joint2_flipped to be within [config_min, config_max]
-                // We need joint2_pos to be within [-config_max, -config_min]
-                double joint2_min_limit = -config_max;  // Will become config_max after flip
-                double joint2_max_limit = -config_min;  // Will become config_min after flip
-                
-                // Determine joint2's minimum limit based on joint1's position with linear slope
-                const double original_min_limit = -config_max;
-                const double restricted_limit = -0.5;  // Restricted limit (pre-flip)
-                
-                if (joint1_pos < 1.0) {
-                    // Below 1.0 rad: fully restricted to -0.5
-                    joint2_min_limit = std::max(joint2_min_limit, restricted_limit);
-                } else if (joint1_pos < 1.25) {
-                    // Between 1.0 and 1.25 rad: linear interpolation
-                    double t = (joint1_pos - 1.0) / (1.25 - 1.0);  // 0 at 1.0, 1 at 1.25
-                    double interpolated_limit = restricted_limit + t * (original_min_limit - restricted_limit);
-                    joint2_min_limit = std::max(joint2_min_limit, interpolated_limit);
-                }
-                // Above 1.25 rad: use original config limits (no additional restriction)
-                
-                // Warn if clamping occurs
-                if (joint2_pos < joint2_min_limit) {
-                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "Joint2 limited due to joint1=%.3f: requested %.3f, clamped to %.3f", 
-                        joint1_pos, joint2_pos, joint2_min_limit);
-                }
-                
-                // Enforce the limits (before flipping)
-                command_data[1] = std::clamp(joint2_pos, joint2_min_limit, joint2_max_limit);
-            }
-            
-            // Now convert from EXTERNAL to HARDWARE convention for servos
-            // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-            std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-            for (size_t idx : flip_indices) {
-                if (idx < command_data.size()) {
-                    command_data[idx] = -command_data[idx];
-                }
-            }
-            
-            // Convert to encoder counts (only 6 arm joints)
-            std::vector<int> command_encoder;
-            for (double pos : command_data) {
-                command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-            }
+            std::vector<int> command_encoder = applyLimitsAndConvertToEncoder(command_data);
             
             // Store only the 6 arm positions - timer will add head position
             std::lock_guard<std::mutex> lock(arm_command_mutex_);
@@ -1010,7 +1258,7 @@ private:
         
         // Use simple cubic spline planning (fast, smooth trajectory)
         RCLCPP_INFO(this->get_logger(), "Planning with cubic spline for 6-DOF arm (including gripper)...");
-        const double dt = 1.0 / 30.0;
+        const double dt = 1.0 / this->get_parameter("trajectory_rate_hz").as_double();
         auto interpolated_trajectory = computeCubicSplineTrajectory(current_positions, target_positions, trajectory_time, dt);
         
         if (interpolated_trajectory.empty()) {
@@ -1032,25 +1280,8 @@ private:
             // Send command
             {
                 std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-                
-                // Convert radians to encoder counts
                 std::vector<double> command_data = point;
-                
-                // Apply direction flips for joints 2, 3, 4, 6 (indices 1, 2, 3, 5)
-                std::array<size_t, 4> flip_indices = {1, 2, 3, 5};
-                for (size_t idx : flip_indices) {
-                    if (idx < command_data.size()) {
-                        command_data[idx] = -command_data[idx];
-                    }
-                }
-                
-                // Convert to encoder counts
-                std::vector<int> command_encoder;
-                for (double pos : command_data) {
-                    command_encoder.push_back(static_cast<int>((pos / (2 * M_PI)) * 4096 + 2048));
-                }
-                
-                latest_arm_command_ = command_encoder;
+                latest_arm_command_ = applyLimitsAndConvertToEncoder(command_data);
                 has_arm_command_ = true;
             }
             
@@ -1062,6 +1293,140 @@ private:
         
         RCLCPP_INFO(this->get_logger(), "Trajectory execution complete");
         return true;
+    }
+    
+    /**
+     * Plan and execute a multi-waypoint trajectory.
+     * Linearly interpolates between consecutive waypoints at trajectory_rate_hz
+     * with no deceleration/acceleration at intermediate waypoints.
+     *
+     * @param waypoints Vector of joint-position vectors (6 joints each)
+     * @param segment_durations Duration in seconds for each segment (size = waypoints.size()-1)
+     * @return true if execution succeeded
+     */
+    bool planAndExecuteMultiWaypointTrajectory(
+        const std::vector<std::vector<double>>& waypoints,
+        const std::vector<double>& segment_durations) {
+        
+        if (waypoints.size() < 2) {
+            RCLCPP_ERROR(this->get_logger(), "Need at least 2 waypoints for trajectory");
+            return false;
+        }
+        if (segment_durations.size() != waypoints.size() - 1) {
+            RCLCPP_ERROR(this->get_logger(), "segment_durations size (%zu) must equal waypoints-1 (%zu)",
+                        segment_durations.size(), waypoints.size() - 1);
+            return false;
+        }
+        
+        const double dt = 1.0 / this->get_parameter("trajectory_rate_hz").as_double();
+        
+        // Build one big trajectory by linearly interpolating each segment
+        std::vector<std::vector<double>> full_trajectory;
+        
+        for (size_t seg = 0; seg < segment_durations.size(); ++seg) {
+            double dur = segment_durations[seg];
+            if (dur <= 0.0) {
+                RCLCPP_WARN(this->get_logger(), "Segment %zu has non-positive duration %.3f, skipping", seg, dur);
+                continue;
+            }
+            
+            const auto& start = waypoints[seg];
+            const auto& end = waypoints[seg + 1];
+            int num_steps = std::max(1, static_cast<int>(dur / dt));
+            
+            // For all segments except the first, skip step 0 (already added as
+            // last point of previous segment).
+            int start_step = (seg == 0) ? 0 : 1;
+            
+            for (int step = start_step; step <= num_steps; ++step) {
+                double alpha = static_cast<double>(step) / num_steps;
+                std::vector<double> point(start.size());
+                for (size_t j = 0; j < start.size(); ++j) {
+                    point[j] = start[j] + alpha * (end[j] - start[j]);
+                }
+                full_trajectory.push_back(point);
+            }
+        }
+        
+        if (full_trajectory.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "Multi-waypoint trajectory is empty after interpolation");
+            return false;
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Executing multi-waypoint trajectory: %zu segments, %zu total points",
+                    segment_durations.size(), full_trajectory.size());
+        
+        // Execute: send each point at dt intervals
+        auto sleep_duration = std::chrono::duration<double>(dt);
+        for (size_t i = 0; i < full_trajectory.size(); ++i) {
+            const auto& point = full_trajectory[i];
+            
+            {
+                std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
+                std::vector<double> command_data = point;
+                latest_arm_command_ = applyLimitsAndConvertToEncoder(command_data);
+                has_arm_command_ = true;
+            }
+            
+            if (i < full_trajectory.size() - 1) {
+                std::this_thread::sleep_for(sleep_duration);
+            }
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Multi-waypoint trajectory execution complete");
+        return true;
+    }
+    
+    /**
+     * Service callback for goto_js_trajectory service.
+     * Unpacks waypoints from flat array and executes multi-waypoint trajectory.
+     */
+    void armGotoJSTrajectoryCallback(
+        const std::shared_ptr<maurice_msgs::srv::GotoJSTrajectory::Request> request,
+        std::shared_ptr<maurice_msgs::srv::GotoJSTrajectory::Response> response) {
+        
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/goto_js_trajectory");
+        
+        int num_joints = request->num_joints;
+        const auto& flat = request->waypoints.data;
+        const auto& seg_durs = request->segment_durations;
+        
+        if (num_joints <= 0 || flat.size() % num_joints != 0) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid waypoints: %zu values not divisible by %d joints",
+                        flat.size(), num_joints);
+            response->success = false;
+            return;
+        }
+        
+        // Unpack flat array into waypoint vectors
+        size_t num_waypoints = flat.size() / num_joints;
+        std::vector<std::vector<double>> waypoints;
+        for (size_t i = 0; i < num_waypoints; ++i) {
+            waypoints.emplace_back(flat.begin() + i * num_joints,
+                                   flat.begin() + (i + 1) * num_joints);
+        }
+        
+        std::vector<double> durations(seg_durs.begin(), seg_durs.end());
+        
+        RCLCPP_INFO(this->get_logger(), "Trajectory: %zu waypoints, %zu segments",
+                    waypoints.size(), durations.size());
+        
+        // Prepend current position as waypoint[0] so the arm starts from where it is
+        {
+            std::lock_guard<std::mutex> lock(joint_state_mutex_);
+            if (!latest_joint_positions_.empty()) {
+                waypoints.insert(waypoints.begin(), latest_joint_positions_);
+                // First segment: use the first segment_duration for getting to the first requested waypoint
+                // If no segment duration provided for this, use 0.5s default
+                if (!durations.empty()) {
+                    durations.insert(durations.begin(), durations[0]);
+                } else {
+                    durations.insert(durations.begin(), 0.5);
+                }
+            }
+        }
+        
+        response->success = planAndExecuteMultiWaypointTrajectory(waypoints, durations);
     }
     
     /**
@@ -1107,6 +1472,8 @@ private:
         int homing_offset = 0;
         int control_mode;
         int kp, ki, kd;
+        int profile_velocity = 0;
+        int profile_acceleration = 0;
         // Head-specific fields (for joint 7)
         // Note: head angle limits are derived from min_pos_rad/max_pos_rad at startup
         // Head position is inverted: negative head angle = positive servo angle
@@ -1127,6 +1494,7 @@ private:
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
     rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_goto_js_service_;
+    rclcpp::Service<maurice_msgs::srv::GotoJSTrajectory>::SharedPtr arm_goto_js_traj_service_;
     sensor_msgs::msg::JointState arm_state_msg_;  // 6-joint message for /mars/arm/state
     sensor_msgs::msg::JointState joint_state_msg_;  // 7-joint message for /joint_states
     std::vector<int> latest_arm_command_;
@@ -1172,6 +1540,19 @@ private:
     
     // Mutex to protect Dynamixel serial bus access
     std::mutex dynamixel_mutex_;
+    
+    // PID hot-reload
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+    
+    // Gain scheduling
+    struct GainProfile { int kp = 0, ki = 0, kd = 0; };
+    static constexpr int kGainScheduleInterval = 20;  // control cycles between updates (~200ms at 100Hz)
+    bool gs_enabled_ = false;
+    std::array<GainProfile, 3> gs_near_;          // near profiles for joints 2, 3, 4
+    std::array<GainProfile, 3> gs_far_;           // far profiles for joints 2, 3, 4
+    std::array<GainProfile, 3> gs_last_applied_;  // last gains written (for change detection)
+    int gs_cycle_counter_ = 0;
+    bool gs_was_far_ = false;  // tracks last state for threshold crossing log
 
     static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
     static constexpr int kTemperatureWarningC = 70;
