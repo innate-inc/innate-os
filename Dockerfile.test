@@ -9,26 +9,32 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV ROS_DISTRO=humble
 ENV INNATE_OS_ROOT=/root/innate-os
 
-# Install prerequisites
+# Install minimal prerequisites first (needed for add-apt-repository)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     curl \
     gnupg \
     lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add universe repository (for gstreamer, pygame, libhdf5-dev, etc.)
+RUN add-apt-repository universe
+
+# Install remaining prerequisites
+RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     iproute2 \
     iputils-ping \
     libcairo2-dev \
     python3-pip \
+    libhdf5-dev \
+    ros-humble-kdl-parser-py \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup locale
 RUN locale-gen en_US en_US.UTF-8 && \
     update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 ENV LANG=en_US.UTF-8
-
-# Add universe repository (for gstreamer, pygame, etc.)
-RUN add-apt-repository universe
 
 # Add Innate packages repository (for ros-humble-innate-rws, etc.)
 RUN curl -fsSL https://innate-inc.github.io/innate-packages/pubkey.gpg | \
