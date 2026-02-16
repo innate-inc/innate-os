@@ -74,6 +74,17 @@ class SkillLoader:
 
         try:
             spec.loader.exec_module(module)
+        except ModuleNotFoundError as e:
+            missing = e.name or str(e)
+            self.logger.warning(
+                f"Skipping skill module {module_name}: missing dependency '{missing}'"
+            )
+            return skills
+        except ImportError as e:
+            self.logger.warning(
+                f"Skipping skill module {module_name}: import failed ({e})"
+            )
+            return skills
         except Exception as e:
             self.logger.error(f"Error executing module {module_name}: {e}")
             return skills
@@ -284,28 +295,28 @@ class SkillLoader:
         """Internal validation for replay skills. Returns bool for validity."""
         replay_file = execution.get("replay_file")
         if not replay_file:
-            self.logger.error(f"Replay skill in {skill_dir} missing replay_file in execution config")
+            self.logger.warning(f"Replay skill in {skill_dir} missing replay_file in execution config")
             return False
 
         replay_path = os.path.join(skill_dir, replay_file)
         if not os.path.exists(replay_path):
-            self.logger.error(f"Replay skill file not found: {replay_path}")
+            self.logger.warning(f"Replay skill file not found: {replay_path}")
             return False
 
         # Validate H5 file structure
         try:
             with h5py.File(replay_path, "r") as h5file:
                 if "action" not in h5file:
-                    self.logger.error(f"Replay file {replay_path} missing required 'action' dataset")
+                    self.logger.warning(f"Replay file {replay_path} missing required 'action' dataset")
                     return False
 
                 actions = h5file["action"][:]
                 if actions.shape[0] == 0:
-                    self.logger.error(f"Replay file {replay_path} contains no actions")
+                    self.logger.warning(f"Replay file {replay_path} contains no actions")
                     return False
 
         except Exception as e:
-            self.logger.error(f"Failed to validate replay file {replay_path}: {e}")
+            self.logger.warning(f"Failed to validate replay file {replay_path}: {e}")
             return False
 
         self.logger.info(f"Replay skill validation passed: {skill_dir}")
