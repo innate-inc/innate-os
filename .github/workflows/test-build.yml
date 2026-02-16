@@ -13,6 +13,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check system resources
+        run: |
+          echo "=== Memory ==="
+          free -h
+          echo "=== Disk ==="
+          df -h
+          echo "=== Docker info ==="
+          docker system df
+
       - name: Build test image
         run: |
           docker build --progress=plain -t innate-os-test -f Dockerfile.test . 2>&1

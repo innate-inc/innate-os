@@ -88,7 +88,7 @@ RUN cd /root/innate-os/ros2_ws/src && \
 WORKDIR /root/innate-os/ros2_ws
 RUN . /opt/ros/humble/setup.sh && \
     rosdep install --from-paths src --ignore-src -r -y || true && \
-    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    colcon build --parallel-workers 2 --cmake-args -DCMAKE_BUILD_TYPE=Release \
         --packages-skip maurice_cam maurice_nav maurice_control
 
 # Create entrypoint script with Zenoh configuration
