@@ -379,14 +379,16 @@ class ManipulationInterface:
         waypoint_joints = []
         for i, p in enumerate(poses):
             joints = self.solve_ik(
-                p["x"], p["y"], p["z"],
-                p.get("roll", 0.0), p.get("pitch", 0.0), p.get("yaw", 0.0),
+                p["x"],
+                p["y"],
+                p["z"],
+                p.get("roll", 0.0),
+                p.get("pitch", 0.0),
+                p.get("yaw", 0.0),
                 timeout=ik_timeout,
             )
             if joints is None:
-                self.logger.error(
-                    f"[ManipulationInterface] IK failed for trajectory pose {i}: {p}"
-                )
+                self.logger.error(f"[ManipulationInterface] IK failed for trajectory pose {i}: {p}")
                 return False
             # Append gripper (IK returns 5 joints)
             if len(joints) == 5:
@@ -421,24 +423,16 @@ class ManipulationInterface:
         total_time = sum(seg_durations) + segment_duration  # extra for current->first
         try:
             future = self._goto_js_traj_client.call_async(request)
-            rclpy.spin_until_future_complete(
-                self.node, future, timeout_sec=total_time + 5.0
-            )
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=total_time + 5.0)
             if future.result() is not None:
                 if not future.result().success:
-                    self.logger.error(
-                        "[ManipulationInterface] GotoJSTrajectory returned failure"
-                    )
+                    self.logger.error("[ManipulationInterface] GotoJSTrajectory returned failure")
                     return False
             else:
-                self.logger.error(
-                    "[ManipulationInterface] GotoJSTrajectory call timed out"
-                )
+                self.logger.error("[ManipulationInterface] GotoJSTrajectory call timed out")
                 return False
         except Exception as e:
-            self.logger.error(
-                f"[ManipulationInterface] Exception calling GotoJSTrajectory: {e}"
-            )
+            self.logger.error(f"[ManipulationInterface] Exception calling GotoJSTrajectory: {e}")
             return False
 
         return True

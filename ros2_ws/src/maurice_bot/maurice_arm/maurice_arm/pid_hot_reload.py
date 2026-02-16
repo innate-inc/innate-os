@@ -10,18 +10,20 @@ Usage:
     python3 pid_hot_reload.py [path/to/pid_tuning.yaml] [--no-plot]
 """
 
-import os
-import sys
-import time
 import json
-import yaml
+import os
 import subprocess
+import sys
 import threading
+import time
 from collections import deque
+
+import yaml
 
 # Optional: real-time ASCII plotting
 try:
     import plotext as plt
+
     HAS_PLOT = True
 except ImportError:
     HAS_PLOT = False
@@ -29,16 +31,16 @@ except ImportError:
 # Optional: ROS2 subscription for joint state data
 try:
     import rclpy
-    from rclpy.node import Node
     from sensor_msgs.msg import JointState
+
     HAS_ROS = True
 except ImportError:
     HAS_ROS = False
 
 # --- Configuration ---
 HISTORY_SECONDS = 5
-HISTORY_SIZE = 500          # samples to keep (~5s at 100 Hz)
-PLOT_REFRESH_HZ = 4         # plot redraws per second
+HISTORY_SIZE = 500  # samples to keep (~5s at 100 Hz)
+PLOT_REFRESH_HZ = 4  # plot redraws per second
 JOINT_NAMES = ["J1 Base", "J2 Shoulder", "J3 Elbow", "J4 Wrist", "J5 Roll", "J6 Grip"]
 JOINT_COLORS = ["red", "green", "blue", "yellow", "cyan", "magenta"]
 PLOT_JOINTS = [1, 2, 3]  # indices into JOINT_NAMES (0-based): J2, J3, J4
@@ -75,8 +77,8 @@ class JointStateCollector:
 def start_ros_subscriber(collector):
     """Spin a minimal rclpy node in a daemon thread."""
     rclpy.init()
-    node = rclpy.create_node('pid_hot_reload')
-    node.create_subscription(JointState, '/mars/arm/state', collector.callback, 10)
+    node = rclpy.create_node("pid_hot_reload")
+    node.create_subscription(JointState, "/mars/arm/state", collector.callback, 10)
     thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     thread.start()
     return node
@@ -125,13 +127,14 @@ def draw_plot(collector, status_line=""):
 # =====================================================================
 def find_config_path():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    source_path = os.path.join(script_dir, '..', 'config', 'pid_tuning.yaml')
+    source_path = os.path.join(script_dir, "..", "config", "pid_tuning.yaml")
     if os.path.exists(source_path):
         return os.path.abspath(source_path)
     try:
         from ament_index_python.packages import get_package_share_directory
-        pkg_dir = get_package_share_directory('maurice_arm')
-        installed_path = os.path.join(pkg_dir, 'config', 'pid_tuning.yaml')
+
+        pkg_dir = get_package_share_directory("maurice_arm")
+        installed_path = os.path.join(pkg_dir, "config", "pid_tuning.yaml")
         if os.path.exists(installed_path):
             return installed_path
     except Exception:
@@ -140,33 +143,33 @@ def find_config_path():
 
 
 def load_pid_config(path):
-    with open(path, 'r') as f:
+    with open(path) as f:
         raw = yaml.safe_load(f)
     if raw is None:
         return {}
     params = {}
     for joint_key, gains in raw.items():
-        if joint_key == 'gain_scheduling':
+        if joint_key == "gain_scheduling":
             # Pass gain scheduling as JSON string (same format as arm_config.yaml)
             gs_json = {"enabled": True}
-            for profile in ('near', 'far'):
+            for profile in ("near", "far"):
                 if profile in gains and isinstance(gains[profile], dict):
                     gs_json[profile] = {}
                     for jkey, jgains in gains[profile].items():
                         if isinstance(jgains, dict):
-                            gs_json[profile][jkey] = {k: int(v) for k, v in jgains.items() if k in ('kp', 'ki', 'kd')}
+                            gs_json[profile][jkey] = {k: int(v) for k, v in jgains.items() if k in ("kp", "ki", "kd")}
             params["gain_scheduling"] = json.dumps(gs_json)
             continue
         if not isinstance(gains, dict):
             continue
-        for field in ('kp', 'ki', 'kd', 'profile_velocity', 'profile_acceleration'):
+        for field in ("kp", "ki", "kd", "profile_velocity", "profile_acceleration"):
             if field in gains:
                 params[f"{joint_key}_{field}"] = int(gains[field])
     return params
 
 
 def apply_params(params, prev_params=None):
-    node_name = '/maurice_arm'
+    node_name = "/maurice_arm"
     if prev_params is not None:
         changed = {k: v for k, v in params.items() if prev_params.get(k) != v}
     else:
@@ -174,12 +177,12 @@ def apply_params(params, prev_params=None):
     if not changed:
         return 0, ""
 
-    ros2_params = {'/maurice_arm': {'ros__parameters': changed}}
-    tmp_path = '/tmp/pid_hot_reload_params.yaml'
-    with open(tmp_path, 'w') as f:
+    ros2_params = {"/maurice_arm": {"ros__parameters": changed}}
+    tmp_path = "/tmp/pid_hot_reload_params.yaml"
+    with open(tmp_path, "w") as f:
         yaml.dump(ros2_params, f)
 
-    cmd = ['ros2', 'param', 'load', node_name, tmp_path]
+    cmd = ["ros2", "param", "load", node_name, tmp_path]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
@@ -196,8 +199,8 @@ def apply_params(params, prev_params=None):
 #  Main
 # =====================================================================
 def main():
-    no_plot = '--no-plot' in sys.argv
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    no_plot = "--no-plot" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     config_path = os.path.abspath(args[0]) if args else find_config_path()
 
     if config_path is None or not os.path.exists(config_path):
@@ -255,7 +258,7 @@ def main():
                     new_params = load_pid_config(config_path)
                     if new_params != prev_params:
                         n, summary = apply_params(new_params, prev_params)
-                        ts = time.strftime('%H:%M:%S')
+                        ts = time.strftime("%H:%M:%S")
                         if n > 0:
                             status_line = f"[{ts}] Updated {n} param(s): {summary}"
                         else:
@@ -293,5 +296,5 @@ def main():
             break
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
