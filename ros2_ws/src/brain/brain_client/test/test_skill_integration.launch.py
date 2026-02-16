@@ -37,6 +37,7 @@ REQUIRED_SKILLS = {
     "arm_circle_motion",
     "arm_move_to_xyz",
     "arm_zero_position",
+    "scan_for_objects",
 }
 
 

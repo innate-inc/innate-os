@@ -27,6 +27,10 @@ class SkillLoader:
 
     def __init__(self, logger):
         self.logger = logger
+        strict_value = os.environ.get("INNATE_STRICT_SKILL_IMPORTS", "").strip().lower()
+        self.strict_skill_imports = strict_value in {"1", "true", "yes", "on"}
+        if self.strict_skill_imports:
+            self.logger.info("Skill loader strict import mode enabled")
 
     def discover_skills_in_directory(self, directory_path: str) -> dict[str, type[Skill]]:
         skills = {}
@@ -50,6 +54,8 @@ class SkillLoader:
                 discovered = self._load_skills_from_file(py_file)
                 skills.update(discovered)
             except Exception as e:
+                if self.strict_skill_imports:
+                    raise
                 self.logger.error(f"Error loading skills from {py_file}: {e}")
 
         self.logger.info(f"Discovered {len(skills)} skills in {directory_path}")
@@ -76,16 +82,20 @@ class SkillLoader:
             spec.loader.exec_module(module)
         except ModuleNotFoundError as e:
             missing = e.name or str(e)
-            self.logger.warning(
-                f"Skipping skill module {module_name}: missing dependency '{missing}'"
-            )
+            message = f"Skipping skill module {module_name}: missing dependency '{missing}'"
+            if self.strict_skill_imports:
+                raise RuntimeError(message) from e
+            self.logger.warning(message)
             return skills
         except ImportError as e:
-            self.logger.warning(
-                f"Skipping skill module {module_name}: import failed ({e})"
-            )
+            message = f"Skipping skill module {module_name}: import failed ({e})"
+            if self.strict_skill_imports:
+                raise RuntimeError(message) from e
+            self.logger.warning(message)
             return skills
         except Exception as e:
+            if self.strict_skill_imports:
+                raise
             self.logger.error(f"Error executing module {module_name}: {e}")
             return skills
         finally:
@@ -210,6 +220,8 @@ class SkillLoader:
                     all_skills[name] = skill_class
 
             except Exception as e:
+                if self.strict_skill_imports:
+                    raise
                 self.logger.error(f"Error loading skills from {directory}: {e}")
 
         return all_skills
