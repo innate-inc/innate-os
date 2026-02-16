@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2-dev \
     python3-pip \
     libhdf5-dev \
-    ros-humble-kdl-parser-py \
+    ros-humble-kdl-parser \
     && rm -rf /var/lib/apt/lists/*
 
 # Setup locale
