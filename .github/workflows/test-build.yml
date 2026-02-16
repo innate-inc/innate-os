@@ -32,7 +32,7 @@ jobs:
             source /opt/ros/humble/setup.bash
             source /root/innate-os/ros2_ws/install/setup.bash
             echo 'Listing workspace packages...'
-            ros2 pkg list 2>/dev/null || true
+            ros2 pkg list 2>/dev/null | grep -E '^(maurice_|brain_|manipulation|topic_tools|rplidar)' || true
             echo 'Build verification complete!'
           "
 
