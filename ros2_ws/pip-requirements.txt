@@ -37,6 +37,8 @@ websocket-client
 
 # Other AI
 inspireface
+google-genai
+python-chess
 
 # Input handling
 pygame
@@ -47,4 +49,3 @@ watchdog
 
 # Cupy
 cupy-cuda12x
-
