@@ -30,10 +30,16 @@ ENV LANG=en_US.UTF-8
 # Add universe repository (for gstreamer, pygame, etc.)
 RUN add-apt-repository universe
 
+# Add Innate packages repository (for ros-humble-innate-rws, etc.)
+RUN curl -fsSL https://innate-inc.github.io/innate-packages/pubkey.gpg | \
+    gpg --dearmor -o /usr/share/keyrings/innate-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/innate-archive-keyring.gpg] https://innate-inc.github.io/innate-packages/ $(lsb_release -cs) main" | \
+    tee /etc/apt/sources.list.d/innate.list > /dev/null
+
 # Copy apt dependencies file first (for better layer caching)
 COPY ros2_ws/apt-dependencies.common.txt /tmp/apt-dependencies.txt
 
-# Install apt dependencies from common list (hardware-specific packages excluded)
+# Install apt dependencies from common list
 RUN apt-get update && \
     grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | \
     xargs apt-get install -y && \
