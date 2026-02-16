@@ -5,8 +5,6 @@ from brain_client.agent_types import Agent
 class BoardCalibrationAgent(Agent):
     """
     Board Calibration Agent - guides user through 4-corner calibration.
-    
-    Workflow: torque off -> user moves to corner -> recording -> repeat for all 4 corners.
     """
 
     @property
@@ -20,9 +18,7 @@ class BoardCalibrationAgent(Agent):
     def get_skills(self) -> List[str]:
         """Return position recording skill."""
         return [
-            "record_position",
-            "torque_on",
-            "torque_off"
+            "record_position"
         ]
 
     def get_inputs(self) -> List[str]:

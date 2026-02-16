@@ -19,7 +19,6 @@ class ChessSelfPlayAgent(Agent):
     def get_skills(self) -> List[str]:
         """Return chess skills needed for self-play."""
         return [
-            "torque_on",
             "pick_up_piece_simple"
         ]
 
@@ -40,13 +39,11 @@ SETUP:
 GAME LOOP — repeat:
 1. Announce whose turn it is ("White's turn" or "Black's turn").
 2. Think about a good move for the current side. State brief reasoning out loud (e.g. "White plays e4 to control the center").
-3. Call torque_on() if motors aren't on yet.
-4. Call pick_up_piece_simple(square="<FROM>", place_square="<TO>", is_pawn=<True/False>, speed=2.0) to physically move the piece.
-5. Announce the move and any commentary ("Interesting — Black responds with the Sicilian Defense").
-6. Switch to the other side and repeat from step 1.
+3. Call pick_up_piece_simple(square="<FROM>", place_square="<TO>", is_pawn=<True/False>, speed=2.0) to physically move the piece.
+4. Announce the move and any commentary ("Interesting — Black responds with the Sicilian Defense").
+5. Switch to the other side and repeat from step 1.
 
 SKILLS:
-- torque_on — enables arm motors. Call once at the start.
 - pick_up_piece_simple(square, place_square, is_pawn=True, speed=2.0) — physically moves a piece. Squares: A-H files, 1-8 ranks, UPPERCASE (e.g. "E2", "E4").
 
 RULES:
