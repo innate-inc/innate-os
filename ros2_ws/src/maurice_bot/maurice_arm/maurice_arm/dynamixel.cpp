@@ -149,6 +149,63 @@ void Dynamixel::setD(int motor_id, int d) {
     }
 }
 
+void Dynamixel::syncWritePID(const std::vector<std::tuple<int, int, int, int>>& pid_data) {
+    // Addresses 80-85: D(2 bytes) + I(2 bytes) + P(2 bytes) = 6 bytes contiguous
+    dynamixel::GroupSyncWrite syncWrite(port_handler_, packet_handler_, POSITION_D, 6);
+    
+    for (const auto& [servo_id, kd, ki, kp] : pid_data) {
+        uint8_t param[6];
+        // D gain at offset 0 (addr 80), little-endian
+        param[0] = DXL_LOBYTE(static_cast<uint16_t>(kd));
+        param[1] = DXL_HIBYTE(static_cast<uint16_t>(kd));
+        // I gain at offset 2 (addr 82), little-endian
+        param[2] = DXL_LOBYTE(static_cast<uint16_t>(ki));
+        param[3] = DXL_HIBYTE(static_cast<uint16_t>(ki));
+        // P gain at offset 4 (addr 84), little-endian
+        param[4] = DXL_LOBYTE(static_cast<uint16_t>(kp));
+        param[5] = DXL_HIBYTE(static_cast<uint16_t>(kp));
+        
+        if (!syncWrite.addParam(servo_id, param)) {
+            throw std::runtime_error("Failed to add PID param for servo " + std::to_string(servo_id));
+        }
+    }
+    
+    int dxl_comm_result = syncWrite.txPacket();
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("SyncWrite PID failed: " + std::string(packet_handler_->getTxRxResult(dxl_comm_result)));
+    }
+    syncWrite.clearParam();
+}
+
+void Dynamixel::syncWriteProfile(const std::vector<std::tuple<int, int, int>>& profile_data) {
+    // Addresses 108-115: Profile Acceleration(4 bytes) + Profile Velocity(4 bytes) = 8 bytes contiguous
+    dynamixel::GroupSyncWrite syncWrite(port_handler_, packet_handler_, ADDR_PROFILE_ACCELERATION, 8);
+    
+    for (const auto& [servo_id, accel, vel] : profile_data) {
+        uint8_t param[8];
+        // Profile Acceleration at offset 0 (addr 108), little-endian 4 bytes
+        param[0] = DXL_LOBYTE(DXL_LOWORD(static_cast<uint32_t>(accel)));
+        param[1] = DXL_HIBYTE(DXL_LOWORD(static_cast<uint32_t>(accel)));
+        param[2] = DXL_LOBYTE(DXL_HIWORD(static_cast<uint32_t>(accel)));
+        param[3] = DXL_HIBYTE(DXL_HIWORD(static_cast<uint32_t>(accel)));
+        // Profile Velocity at offset 4 (addr 112), little-endian 4 bytes
+        param[4] = DXL_LOBYTE(DXL_LOWORD(static_cast<uint32_t>(vel)));
+        param[5] = DXL_HIBYTE(DXL_LOWORD(static_cast<uint32_t>(vel)));
+        param[6] = DXL_LOBYTE(DXL_HIWORD(static_cast<uint32_t>(vel)));
+        param[7] = DXL_HIBYTE(DXL_HIWORD(static_cast<uint32_t>(vel)));
+        
+        if (!syncWrite.addParam(servo_id, param)) {
+            throw std::runtime_error("Failed to add profile param for servo " + std::to_string(servo_id));
+        }
+    }
+    
+    int dxl_comm_result = syncWrite.txPacket();
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("SyncWrite profile failed: " + std::string(packet_handler_->getTxRxResult(dxl_comm_result)));
+    }
+    syncWrite.clearParam();
+}
+
 void Dynamixel::setHomeOffset(int motor_id, int home_position) {
     uint8_t dxl_error = 0;
     int dxl_comm_result = packet_handler_->write4ByteTxRx(
@@ -156,6 +213,26 @@ void Dynamixel::setHomeOffset(int motor_id, int home_position) {
     
     if (dxl_comm_result != COMM_SUCCESS) {
         throw std::runtime_error("Failed to set home offset for motor " + std::to_string(motor_id));
+    }
+}
+
+void Dynamixel::setProfileVelocity(int motor_id, int velocity) {
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->write4ByteTxRx(
+        port_handler_, motor_id, ADDR_PROFILE_VELOCITY, velocity, &dxl_error);
+    
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to set profile velocity for motor " + std::to_string(motor_id));
+    }
+}
+
+void Dynamixel::setProfileAcceleration(int motor_id, int acceleration) {
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->write4ByteTxRx(
+        port_handler_, motor_id, ADDR_PROFILE_ACCELERATION, acceleration, &dxl_error);
+    
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to set profile acceleration for motor " + std::to_string(motor_id));
     }
 }
 
