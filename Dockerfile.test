@@ -30,12 +30,11 @@ ENV LANG=en_US.UTF-8
 RUN add-apt-repository universe
 
 # Copy apt dependencies file first (for better layer caching)
-COPY ros2_ws/apt-dependencies.txt /tmp/apt-dependencies.txt
+COPY ros2_ws/apt-dependencies.common.txt /tmp/apt-dependencies.txt
 
-# Install apt dependencies, skipping Jetson-specific packages
+# Install apt dependencies from common list (hardware-specific packages excluded)
 RUN apt-get update && \
     grep -v '^#' /tmp/apt-dependencies.txt | grep -v '^$' | \
-    grep -v -E '^(nvidia-|cuda-|libcudnn|ros-humble-innate-rws|ros-humble-slam-toolbox-humble-lifecycle)' | \
     xargs apt-get install -y || true && \
     rm -rf /var/lib/apt/lists/*
 
