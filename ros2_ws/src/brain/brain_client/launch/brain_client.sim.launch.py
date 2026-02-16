@@ -172,6 +172,7 @@ def generate_launch_description():
                 parameters=[
                     {
                         "image_topic": LaunchConfiguration("image_topic"),
+                        "depth_image_topic": LaunchConfiguration("depth_image_topic"),
                         "map_topic": LaunchConfiguration("map_topic"),
                         "simulator_mode": LaunchConfiguration("simulator_mode"),
                     }
