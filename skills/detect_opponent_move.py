@@ -14,17 +14,16 @@ import time
 from pathlib import Path
 
 import chess
-
 from google import genai
 from google.genai import types
 
 from brain_client.skill_types import (
-    Skill,
-    SkillResult,
-    RobotState,
-    RobotStateType,
     Interface,
     InterfaceType,
+    RobotState,
+    RobotStateType,
+    Skill,
+    SkillResult,
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────
@@ -46,6 +45,7 @@ def _load_env_file(env_path: Path) -> dict:
 
 
 # ── ASCII board renderer ──────────────────────────────────────────────
+
 
 def _fen_to_ascii(fen: str) -> str:
     """Render a FEN string as a labelled ASCII board (rank 8 at top)."""
@@ -73,7 +73,7 @@ class DetectOpponentMove(Skill):
     OBS_X = 0.20
     OBS_Y = -0.03
     OBS_Z = 0.18
-    OBS_PITCH = 1.57   # straight down
+    OBS_PITCH = 1.57  # straight down
     OBS_YAW = 0.0
     FIXED_ROLL = 0.0
 
@@ -164,8 +164,12 @@ class DetectOpponentMove(Skill):
 
         self._send_feedback("Moving arm to observation pose...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=self.OBS_X, y=self.OBS_Y, z=self.OBS_Z,
-            roll=self.FIXED_ROLL, pitch=self.OBS_PITCH, yaw=self.OBS_YAW,
+            x=self.OBS_X,
+            y=self.OBS_Y,
+            z=self.OBS_Z,
+            roll=self.FIXED_ROLL,
+            pitch=self.OBS_PITCH,
+            yaw=self.OBS_YAW,
             duration=2.0,
         )
         if success:
@@ -175,8 +179,12 @@ class DetectOpponentMove(Skill):
     def _go_to_safe_pose(self):
         """Return arm to resting safe pose and head to neutral."""
         self.manipulation.move_to_cartesian_pose(
-            x=0.15, y=0.1, z=0.1,
-            roll=self.FIXED_ROLL, pitch=self.OBS_PITCH, yaw=self.OBS_YAW,
+            x=0.15,
+            y=0.1,
+            z=0.1,
+            roll=self.FIXED_ROLL,
+            pitch=self.OBS_PITCH,
+            yaw=self.OBS_YAW,
             duration=2.0,
         )
         if self.head:
@@ -230,28 +238,23 @@ class DetectOpponentMove(Skill):
 
     # ── Debug helpers ──────────────────────────────────────────────────
 
-    def _save_gemini_inputs(self, label: str, prompt: str,
-                            main_b64: str | None, wrist_b64: str | None):
+    def _save_gemini_inputs(self, label: str, prompt: str, main_b64: str | None, wrist_b64: str | None):
         """Save the prompt and images sent to Gemini for debugging."""
         try:
             CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
             ts = int(time.time())
             (CAPTURES_DIR / f"{label}_prompt_{ts}.txt").write_text(prompt)
             if main_b64:
-                (CAPTURES_DIR / f"{label}_main_{ts}.jpg").write_bytes(
-                    base64.b64decode(main_b64))
+                (CAPTURES_DIR / f"{label}_main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
             if wrist_b64:
-                (CAPTURES_DIR / f"{label}_wrist_{ts}.jpg").write_bytes(
-                    base64.b64decode(wrist_b64))
+                (CAPTURES_DIR / f"{label}_wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
             self.logger.info(f"[DetectOpponentMove] Saved {label} inputs to {CAPTURES_DIR}")
         except Exception as e:
             self.logger.warning(f"[DetectOpponentMove] Failed to save {label} inputs: {e}")
 
     # ── Gemini calls ──────────────────────────────────────────────────
 
-    def _ask_gemini_detect_move(self, board_context: str,
-                                main_b64: str | None,
-                                wrist_b64: str | None) -> dict | None:
+    def _ask_gemini_detect_move(self, board_context: str, main_b64: str | None, wrist_b64: str | None) -> dict | None:
         """Stage 1: Ask Gemini which move was played.
 
         Returns parsed dict {move_uci, confidence, reasoning} or None.
@@ -273,11 +276,9 @@ class DetectOpponentMove(Skill):
 
         contents = [prompt]
         if main_b64:
-            contents.append(types.Part.from_bytes(
-                data=base64.b64decode(main_b64), mime_type="image/jpeg"))
+            contents.append(types.Part.from_bytes(data=base64.b64decode(main_b64), mime_type="image/jpeg"))
         if wrist_b64:
-            contents.append(types.Part.from_bytes(
-                data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
+            contents.append(types.Part.from_bytes(data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
 
         # Save what we're sending to Gemini for debugging
         self._save_gemini_inputs("stage1", prompt, main_b64, wrist_b64)
@@ -298,10 +299,9 @@ class DetectOpponentMove(Skill):
             self.logger.error(f"[DetectOpponentMove] Gemini stage 1 failed: {e}")
             return None
 
-    def _ask_gemini_confirm(self, board_context: str,
-                            candidates: list,
-                            main_b64: str | None,
-                            wrist_b64: str | None) -> dict | None:
+    def _ask_gemini_confirm(
+        self, board_context: str, candidates: list, main_b64: str | None, wrist_b64: str | None
+    ) -> dict | None:
         """Stage 2: Disambiguation when stage 1 had low confidence.
 
         Narrows the candidate list and asks Gemini to pick one.
@@ -319,11 +319,9 @@ class DetectOpponentMove(Skill):
 
         contents = [prompt]
         if main_b64:
-            contents.append(types.Part.from_bytes(
-                data=base64.b64decode(main_b64), mime_type="image/jpeg"))
+            contents.append(types.Part.from_bytes(data=base64.b64decode(main_b64), mime_type="image/jpeg"))
         if wrist_b64:
-            contents.append(types.Part.from_bytes(
-                data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
+            contents.append(types.Part.from_bytes(data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
 
         # Save what we're sending to Gemini for debugging
         self._save_gemini_inputs("stage2", prompt, main_b64, wrist_b64)
@@ -353,14 +351,11 @@ class DetectOpponentMove(Skill):
         """
         try:
             move = chess.Move.from_uci(move_uci)
-        except ValueError:
-            raise ValueError(f"Invalid UCI notation: {move_uci}")
+        except ValueError as err:
+            raise ValueError(f"Invalid UCI notation: {move_uci}") from err
 
         if move not in board.legal_moves:
-            raise ValueError(
-                f"Move {move_uci} is not legal. "
-                f"Legal moves: {[m.uci() for m in board.legal_moves]}"
-            )
+            raise ValueError(f"Move {move_uci} is not legal. Legal moves: {[m.uci() for m in board.legal_moves]}")
 
         san = board.san(move)
         board.push(move)
@@ -429,16 +424,11 @@ class DetectOpponentMove(Skill):
         confidence = float(result.get("confidence", 0.0))
         reasoning = result.get("reasoning", "")
 
-        self.logger.info(
-            f"[DetectOpponentMove] Stage 1: move={move_uci} "
-            f"conf={confidence:.2f} reason={reasoning}"
-        )
+        self.logger.info(f"[DetectOpponentMove] Stage 1: move={move_uci} conf={confidence:.2f} reason={reasoning}")
 
         # ── 6. Stage 2: Confirm if low confidence ──
         if confidence < self.CONFIDENCE_THRESHOLD and move_uci in legal_moves:
-            self._send_feedback(
-                f"Low confidence ({confidence:.0%}) on {move_uci}. Running confirmation..."
-            )
+            self._send_feedback(f"Low confidence ({confidence:.0%}) on {move_uci}. Running confirmation...")
             # Build candidate list: the detected move + a few neighbours
             candidates = [move_uci]
             for m in legal_moves:
@@ -459,10 +449,7 @@ class DetectOpponentMove(Skill):
                     move_uci = move2
                     confidence = conf2
                     reasoning = result2.get("reasoning", reasoning)
-                    self.logger.info(
-                        f"[DetectOpponentMove] Stage 2 override: "
-                        f"move={move_uci} conf={confidence:.2f}"
-                    )
+                    self.logger.info(f"[DetectOpponentMove] Stage 2 override: move={move_uci} conf={confidence:.2f}")
 
         # ── 7. Validate and apply ──
         self._send_feedback(f"Detected move: {move_uci} (confidence: {confidence:.0%})")
@@ -480,11 +467,7 @@ class DetectOpponentMove(Skill):
         # ── 9. Return to safe pose ──
         self._go_to_safe_pose()
 
-        msg = (
-            f"Opponent played {san} ({move_uci}). "
-            f"Confidence: {confidence:.0%}. "
-            f"{reasoning}"
-        )
+        msg = f"Opponent played {san} ({move_uci}). Confidence: {confidence:.0%}. {reasoning}"
         self._send_feedback(msg)
         return msg, SkillResult.SUCCESS
 

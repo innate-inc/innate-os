@@ -13,8 +13,8 @@ Orientation strategy by rank/column:
 import json
 import time
 from pathlib import Path
-from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
 
+from brain_client.skill_types import Interface, InterfaceType, Skill, SkillResult
 
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
 
@@ -27,34 +27,34 @@ class PickUpPieceSimple(Skill):
 
     # Orientation constants
     FIXED_ROLL = 0.0
-    PITCH_DOWN = 1.57          # straight down
+    PITCH_DOWN = 1.57  # straight down
     PITCH_TILTED = 1.57 - 0.48  # tilted for far ranks (7-8)
     YAW_CENTER = 0.0
-    YAW_LEFT = 1.57           # rotated left for ranks 1-3, cols A-D
-    YAW_RIGHT = -1.57           # rotated right for ranks 1-3, cols E-H
+    YAW_LEFT = 1.57  # rotated left for ranks 1-3, cols A-D
+    YAW_RIGHT = -1.57  # rotated right for ranks 1-3, cols E-H
 
     # Heights in meters
-    HEIGHT_SAFE = 0.15          # 20cm safe travel height
-    HEIGHT_PICK = 0.08         # 8cm pick height for tall pieces
-    HEIGHT_PICK_PAWN = 0.05    # 5cm pick height for pawns
+    HEIGHT_SAFE = 0.15  # 20cm safe travel height
+    HEIGHT_PICK = 0.08  # 8cm pick height for tall pieces
+    HEIGHT_PICK_PAWN = 0.05  # 5cm pick height for pawns
 
     # Gripper parameters
     GRIPPER_OPEN_PERCENT = 50
     GRIPPER_CLOSE_STRENGTH = 0.4
-    GRIPPER_MIN_WAIT = 1.0      # minimum seconds to wait for gripper to actuate
+    GRIPPER_MIN_WAIT = 1.0  # minimum seconds to wait for gripper to actuate
 
     # Number of intermediate Z steps for vertical moves
     VERTICAL_STEPS = 4
 
     # Phase speed multipliers (> 1.0 = faster, < 1.0 = slower, on top of speed)
-    PHASE_AIR = 1.5            # lateral moves at safe height
-    PHASE_LIFT = 1.3           # lifting after grab/release
-    PHASE_DESCENT_FAR = 1.2    # top portion of descent
-    PHASE_DESCENT_NEAR = 0.6   # near-board portion of descent
+    PHASE_AIR = 1.5  # lateral moves at safe height
+    PHASE_LIFT = 1.3  # lifting after grab/release
+    PHASE_DESCENT_FAR = 1.2  # top portion of descent
+    PHASE_DESCENT_NEAR = 0.6  # near-board portion of descent
 
     # Ranks 7-8 adjustments
     TILTED_SPEED_FACTOR = 0.75  # extra caution multiplier for tilted moves
-    HEIGHT_SAFE_TILTED = 0.18   # higher safe height to avoid bumps
+    HEIGHT_SAFE_TILTED = 0.18  # higher safe height to avoid bumps
 
     # Relay rank for intermediary handoff when crossing rank 6/7 boundary
     RELAY_RANK = 5
@@ -95,8 +95,8 @@ class PickUpPieceSimple(Skill):
         if file_char not in "ABCDEFGH" or rank_char not in "12345678":
             return None
 
-        file_idx = ord(file_char) - ord('A')  # A=0, H=7
-        rank_idx = int(rank_char) - 1          # 1=0, 8=7
+        file_idx = ord(file_char) - ord("A")  # A=0, H=7
+        rank_idx = int(rank_char) - 1  # 1=0, 8=7
 
         u = file_idx / 7.0  # 0 at A, 1 at H
         v = rank_idx / 7.0  # 0 at rank 1, 1 at rank 8
@@ -108,8 +108,8 @@ class PickUpPieceSimple(Skill):
         if not all([tl, tr, bl, br]):
             return None
 
-        x = (1-u)*(1-v)*bl["x"] + u*(1-v)*br["x"] + (1-u)*v*tl["x"] + u*v*tr["x"]
-        y = (1-u)*(1-v)*bl["y"] + u*(1-v)*br["y"] + (1-u)*v*tl["y"] + u*v*tr["y"]
+        x = (1 - u) * (1 - v) * bl["x"] + u * (1 - v) * br["x"] + (1 - u) * v * tl["x"] + u * v * tr["x"]
+        y = (1 - u) * (1 - v) * bl["y"] + u * (1 - v) * br["y"] + (1 - u) * v * tl["y"] + u * v * tr["y"]
         return x, y
 
     def _orientation_for_square(self, square):
@@ -146,17 +146,15 @@ class PickUpPieceSimple(Skill):
 
     def _move_arm(self, x, y, z, pitch, yaw, duration, wait=None, gripper_position=None):
         """Move arm to pose and optionally wait. Returns True on success."""
-        kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw,
-                      duration=self._d(duration))
+        kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw, duration=self._d(duration))
         if gripper_position is not None:
-            kwargs['gripper_position'] = gripper_position
+            kwargs["gripper_position"] = gripper_position
         success = self.manipulation.move_to_cartesian_pose(**kwargs)
         if success and wait is not None:
             self._w(wait)
         return success
 
-    def _vertical_move(self, x, y, from_z, to_z, pitch, yaw,
-                       gripper_position=None, caution=1.0):
+    def _vertical_move(self, x, y, from_z, to_z, pitch, yaw, gripper_position=None, caution=1.0):
         """Move vertically in VERTICAL_STEPS increments with fixed X, Y.
 
         Per-segment speed profiling:
@@ -177,8 +175,7 @@ class PickUpPieceSimple(Skill):
         for i in range(n):
             if descending:
                 frac = (i + 0.5) / n  # midpoint of segment, 0=top 1=bottom
-                phase = (self.PHASE_DESCENT_FAR
-                         + (self.PHASE_DESCENT_NEAR - self.PHASE_DESCENT_FAR) * frac)
+                phase = self.PHASE_DESCENT_FAR + (self.PHASE_DESCENT_NEAR - self.PHASE_DESCENT_FAR) * frac
             else:
                 phase = self.PHASE_LIFT
             seg_durs.append(1.0 / (self._speed * phase * caution))
@@ -200,9 +197,10 @@ class PickUpPieceSimple(Skill):
             if success:
                 self.logger.info(
                     f"[PickUpPieceSimple] {direction} trajectory complete "
-                    f"({n} segments, durs={[f'{d:.2f}' for d in seg_durs]})")
+                    f"({n} segments, durs={[f'{d:.2f}' for d in seg_durs]})"
+                )
                 return None
-            self.logger.warning(f"[PickUpPieceSimple] Trajectory service failed, falling back to step-by-step")
+            self.logger.warning("[PickUpPieceSimple] Trajectory service failed, falling back to step-by-step")
         except Exception as e:
             self.logger.warning(f"[PickUpPieceSimple] Trajectory not available ({e}), falling back")
 
@@ -212,10 +210,9 @@ class PickUpPieceSimple(Skill):
             z = from_z + (to_z - from_z) * frac
             dur = seg_durs[i - 1]
             self.logger.info(f"[PickUpPieceSimple] {direction} step {i}/{n} -> z={z:.3f}m ({dur:.2f}s)")
-            kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw,
-                          duration=dur)
+            kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw, duration=dur)
             if gripper_position is not None:
-                kwargs['gripper_position'] = gripper_position
+                kwargs["gripper_position"] = gripper_position
             if not self.manipulation.move_to_cartesian_pose(**kwargs):
                 return f"Failed at {direction.lower()} step {i}/{n} z={z:.3f}m"
             time.sleep(dur)
@@ -249,10 +246,22 @@ class PickUpPieceSimple(Skill):
         pos = self._square_to_position(relay_square, calibration)
         return relay_square, pos
 
-    def _do_pick_place(self, src_x, src_y, dst_x, dst_y, pick_height,
-                        src_pitch, src_yaw, dst_pitch, dst_yaw,
-                        src_label, dst_label,
-                        safe_height=None, caution=1.0):
+    def _do_pick_place(
+        self,
+        src_x,
+        src_y,
+        dst_x,
+        dst_y,
+        pick_height,
+        src_pitch,
+        src_yaw,
+        dst_pitch,
+        dst_yaw,
+        src_label,
+        dst_label,
+        safe_height=None,
+        caution=1.0,
+    ):
         """Single pick-and-place cycle: pick from src, place at dst.
 
         Uses src orientation for picking, dst orientation for placing.
@@ -269,9 +278,9 @@ class PickUpPieceSimple(Skill):
 
         # Compute gripper positions in radians so every trajectory command
         # carries an explicit gripper target (avoids stale _arm_state reads).
-        open_grip = (self.manipulation.GRIPPER_CLOSED
-                     + (self.manipulation.GRIPPER_OPEN - self.manipulation.GRIPPER_CLOSED)
-                     * (self.GRIPPER_OPEN_PERCENT / 100.0))
+        open_grip = self.manipulation.GRIPPER_CLOSED + (
+            self.manipulation.GRIPPER_OPEN - self.manipulation.GRIPPER_CLOSED
+        ) * (self.GRIPPER_OPEN_PERCENT / 100.0)
         closed_grip = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
 
         # Phase-adjusted base durations for air moves (before _d scaling)
@@ -280,8 +289,7 @@ class PickUpPieceSimple(Skill):
 
         # Move above source at safe height (FAST – in the air)
         self._send_feedback(f"Moving above {src_label}...")
-        if not self._move_arm(src_x, src_y, safe_height, src_pitch, src_yaw,
-                              air_dur, wait=air_wait):
+        if not self._move_arm(src_x, src_y, safe_height, src_pitch, src_yaw, air_dur, wait=air_wait):
             return f"Failed to move above {src_label}"
         if self._cancelled:
             return "Cancelled"
@@ -293,9 +301,9 @@ class PickUpPieceSimple(Skill):
 
         # Descend to pick height (PROGRESSIVE – fast top, slow near board)
         self._send_feedback(f"Descending to pick from {src_label}...")
-        err = self._vertical_move(src_x, src_y, safe_height, pick_height,
-                                  src_pitch, src_yaw,
-                                  gripper_position=open_grip, caution=caution)
+        err = self._vertical_move(
+            src_x, src_y, safe_height, pick_height, src_pitch, src_yaw, gripper_position=open_grip, caution=caution
+        )
         if err:
             return f"Pick descent failed: {err}"
 
@@ -307,9 +315,9 @@ class PickUpPieceSimple(Skill):
 
         # Lift to safe height (FAST – lifting via PHASE_LIFT)
         self._send_feedback("Lifting piece...")
-        err = self._vertical_move(src_x, src_y, pick_height, safe_height,
-                                  src_pitch, src_yaw,
-                                  gripper_position=grip_position, caution=caution)
+        err = self._vertical_move(
+            src_x, src_y, pick_height, safe_height, src_pitch, src_yaw, gripper_position=grip_position, caution=caution
+        )
         if err:
             return f"Lift failed: {err}"
         if self._cancelled:
@@ -317,18 +325,18 @@ class PickUpPieceSimple(Skill):
 
         # Move above destination at safe height (FAST – in the air)
         self._send_feedback(f"Moving above {dst_label}...")
-        if not self._move_arm(dst_x, dst_y, safe_height, dst_pitch, dst_yaw,
-                              air_dur, wait=air_wait,
-                              gripper_position=grip_position):
+        if not self._move_arm(
+            dst_x, dst_y, safe_height, dst_pitch, dst_yaw, air_dur, wait=air_wait, gripper_position=grip_position
+        ):
             return f"Failed to move above {dst_label}"
         if self._cancelled:
             return "Cancelled"
 
         # Descend to place height (PROGRESSIVE)
         self._send_feedback(f"Descending to place on {dst_label}...")
-        err = self._vertical_move(dst_x, dst_y, safe_height, pick_height,
-                                  dst_pitch, dst_yaw,
-                                  gripper_position=grip_position, caution=caution)
+        err = self._vertical_move(
+            dst_x, dst_y, safe_height, pick_height, dst_pitch, dst_yaw, gripper_position=grip_position, caution=caution
+        )
         if err:
             return f"Place descent failed: {err}"
 
@@ -339,9 +347,9 @@ class PickUpPieceSimple(Skill):
 
         # Lift to safe height (FAST)
         self._send_feedback("Lifting after place...")
-        err = self._vertical_move(dst_x, dst_y, pick_height, safe_height,
-                                  dst_pitch, dst_yaw,
-                                  gripper_position=open_grip, caution=caution)
+        err = self._vertical_move(
+            dst_x, dst_y, pick_height, safe_height, dst_pitch, dst_yaw, gripper_position=open_grip, caution=caution
+        )
         if err:
             return f"Post-place lift failed: {err}"
 
@@ -405,19 +413,24 @@ class PickUpPieceSimple(Skill):
                 return "Failed to compute relay position", SkillResult.FAILURE
             relay_x, relay_y = relay_pos
 
-            self.logger.info(
-                f"[PickUpPieceSimple] Relay through {relay_sq} "
-                f"({relay_x:.4f},{relay_y:.4f})"
-            )
+            self.logger.info(f"[PickUpPieceSimple] Relay through {relay_sq} ({relay_x:.4f},{relay_y:.4f})")
 
             # Leg 1: pick from source, place at relay (keep source orientation)
             # Tilted caution if source is rank 7-8
             leg1_tilted = src_rank >= 7
             self._send_feedback(f"Relay leg 1: {square} -> {relay_sq}")
             err = self._do_pick_place(
-                src_x, src_y, relay_x, relay_y, pick_height,
-                src_pitch, src_yaw, src_pitch, src_yaw,
-                square, f"relay {relay_sq}",
+                src_x,
+                src_y,
+                relay_x,
+                relay_y,
+                pick_height,
+                src_pitch,
+                src_yaw,
+                src_pitch,
+                src_yaw,
+                square,
+                f"relay {relay_sq}",
                 safe_height=self.HEIGHT_SAFE_TILTED if leg1_tilted else None,
                 caution=self.TILTED_SPEED_FACTOR if leg1_tilted else 1.0,
             )
@@ -431,9 +444,17 @@ class PickUpPieceSimple(Skill):
             leg2_tilted = dst_rank >= 7
             self._send_feedback(f"Relay leg 2: {relay_sq} -> {place_square}")
             err = self._do_pick_place(
-                relay_x, relay_y, dst_x, dst_y, pick_height,
-                dst_pitch, dst_yaw, dst_pitch, dst_yaw,
-                f"relay {relay_sq}", place_square,
+                relay_x,
+                relay_y,
+                dst_x,
+                dst_y,
+                pick_height,
+                dst_pitch,
+                dst_yaw,
+                dst_pitch,
+                dst_yaw,
+                f"relay {relay_sq}",
+                place_square,
                 safe_height=self.HEIGHT_SAFE_TILTED if leg2_tilted else None,
                 caution=self.TILTED_SPEED_FACTOR if leg2_tilted else 1.0,
             )
@@ -443,9 +464,17 @@ class PickUpPieceSimple(Skill):
             # ── Direct move (no orientation change needed) ──
             any_tilted = src_rank >= 7 or dst_rank >= 7
             err = self._do_pick_place(
-                src_x, src_y, dst_x, dst_y, pick_height,
-                src_pitch, src_yaw, dst_pitch, dst_yaw,
-                square, place_square,
+                src_x,
+                src_y,
+                dst_x,
+                dst_y,
+                pick_height,
+                src_pitch,
+                src_yaw,
+                dst_pitch,
+                dst_yaw,
+                square,
+                place_square,
                 safe_height=self.HEIGHT_SAFE_TILTED if any_tilted else None,
                 caution=self.TILTED_SPEED_FACTOR if any_tilted else 1.0,
             )
