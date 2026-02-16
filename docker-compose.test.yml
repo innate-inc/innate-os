@@ -1,6 +1,6 @@
 services:
   integration-test:
-    image: ${INNATE_TEST_IMAGE:-innate-os-innate:latest}
+    image: ${INNATE_TEST_IMAGE:-innate-os-test:latest}
     container_name: innate-integration-test
     environment:
       - INNATE_OS_ROOT=/root/innate-os

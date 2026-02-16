@@ -10,14 +10,20 @@ on:
 jobs:
   integration-test:
     runs-on: selfhosted
+    env:
+      TEST_IMAGE: innate-os-test:latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Build test image
+        run: |
+          docker build --progress=plain -t ${TEST_IMAGE} -f Dockerfile.test . 2>&1
+
       - name: Run integration tests
         run: |
-          docker compose -f docker-compose.test.yml up \
+          INNATE_TEST_IMAGE=${TEST_IMAGE} docker compose -f docker-compose.test.yml up \
             --abort-on-container-exit \
             --exit-code-from integration-test
 
@@ -25,3 +31,4 @@ jobs:
         if: always()
         run: |
           docker compose -f docker-compose.test.yml down || true
+          docker rmi ${TEST_IMAGE} || true

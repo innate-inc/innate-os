@@ -72,5 +72,6 @@ clean:
 # Run integration tests in Docker
 test:
 	@echo "Running integration tests..."
-	docker compose -f docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-test
+	docker build --progress=plain -t innate-os-test:latest -f Dockerfile.test . 2>&1
+	INNATE_TEST_IMAGE=innate-os-test:latest docker compose -f docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-test
 	@docker compose -f docker-compose.test.yml down
