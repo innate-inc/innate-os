@@ -31,8 +31,8 @@ jobs:
           docker run --rm innate-os-test bash -c "
             source /opt/ros/humble/setup.bash
             source /root/innate-os/ros2_ws/install/setup.bash
-            echo 'Listing available packages...'
-            ros2 pkg list 2>/dev/null | head -20 || true
+            echo 'Listing workspace packages...'
+            ros2 pkg list 2>/dev/null || true
             echo 'Build verification complete!'
           "
 
