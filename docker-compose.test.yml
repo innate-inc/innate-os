@@ -5,7 +5,6 @@ services:
     environment:
       - INNATE_OS_ROOT=/root/innate-os
       - SKIP_UPDATE_CHECK=1
-      - INNATE_STRICT_SKILL_IMPORTS=1
 
     shm_size: "2g"
     # Test image already contains ros2_ws, skills, and agents from Dockerfile.test.

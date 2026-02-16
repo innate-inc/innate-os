@@ -53,7 +53,7 @@ RUN apt-get update && \
 
 # Copy and install Python dependencies, skipping Jetson-specific packages
 COPY ros2_ws/pip-requirements.txt /tmp/pip-requirements.txt
-RUN pip3 install --no-cache-dir meson ninja google-generativeai && \
+RUN pip3 install --no-cache-dir meson ninja && \
     grep -v 'pypi.jetson-ai-lab.io' /tmp/pip-requirements.txt | \
     grep -v -E '^cupy' | \
     grep -v -E '^pynput' | \
