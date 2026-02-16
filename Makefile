@@ -8,13 +8,14 @@
 #   make shell      - Open a shell in the container
 #   make logs       - Show container logs
 #   make clean      - Stop containers and remove volumes
+#   make test       - Run integration tests in Docker
 #
 
 COMPOSE_FILE := docker-compose.dev.yml
 CONTAINER := innate
 TMUX_SESSION := mars
 
-.PHONY: sim build up down shell logs clean help
+.PHONY: sim build up down shell logs clean help test
 
 # Default target
 help:
@@ -26,6 +27,7 @@ help:
 	@echo "  make shell   - Open a shell in the container"
 	@echo "  make logs    - Show container logs"
 	@echo "  make clean   - Stop containers and remove volumes"
+	@echo "  make test    - Run integration tests in Docker"
 
 # One-liner to start simulation
 sim: up
@@ -66,3 +68,10 @@ logs:
 # Stop containers and remove volumes
 clean:
 	docker compose -f $(COMPOSE_FILE) down -v
+
+# Run integration tests in Docker
+test:
+	@echo "Running integration tests..."
+	docker build --progress=plain -t innate-os-test:latest -f Dockerfile.test . 2>&1
+	INNATE_TEST_IMAGE=innate-os-test:latest docker compose -f docker-compose.test.yml up --abort-on-container-exit --exit-code-from integration-test
+	@docker compose -f docker-compose.test.yml down
