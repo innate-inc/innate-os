@@ -60,6 +60,9 @@ RUN pip3 install --no-cache-dir meson ninja && \
     grep -v -E '^bluezero' | \
     pip3 install --no-cache-dir -r /dev/stdin
 
+# Test-only dependency: required by skills/scan_for_objects.py in integration tests.
+RUN pip3 install --no-cache-dir google-generativeai
+
 # Initialize rosdep
 RUN rosdep init || true && rosdep update
 
