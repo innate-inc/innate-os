@@ -64,7 +64,7 @@ class Robot:
         )
         for id in self.servo_ids:
             self.pwm_writer.addParam(id, [2048])
-        #self._disable_torque()
+        # self._disable_torque()
         self.motor_control_state = MotorControlType.POSITION_CONTROL
 
     def read_position(self, tries=2):
@@ -194,9 +194,7 @@ class Robot:
                 error_status = self.dynamixel.read_hardware_error_status(motor_id)
 
                 if error_status != 0:
-                    print(
-                        f"Dynamixel ID {motor_id} has a hardware error: {error_status}"
-                    )
+                    print(f"Dynamixel ID {motor_id} has a hardware error: {error_status}")
                     self._reboot_single_dynamixel(motor_id)
                 else:
                     print(f"Dynamixel ID {motor_id} is healthy")
@@ -208,9 +206,7 @@ class Robot:
         Reboots a single Dynamixel servo.
         """
         print(f"Rebooting Dynamixel ID: {motor_id}")
-        dxl_comm_result, dxl_error = self.dynamixel.packetHandler.reboot(
-            self.dynamixel.portHandler, motor_id
-        )
+        dxl_comm_result, dxl_error = self.dynamixel.packetHandler.reboot(self.dynamixel.portHandler, motor_id)
         if dxl_comm_result != COMM_SUCCESS:
             print(f"Failed to reboot Dynamixel ID {motor_id}")
             print("Error:", self.dynamixel.packetHandler.getTxRxResult(dxl_comm_result))
@@ -224,12 +220,8 @@ class Robot:
         time.sleep(0.5)
 
         # After rebooting, we need to reinitialize the motor control state for this servo
-        self.dynamixel._disable_torque(
-            motor_id
-        )  # Ensure torque is disabled after reboot
-        self.dynamixel.set_operating_mode(
-            motor_id, OperatingMode.POSITION
-        )  # Set to position control mode
+        self.dynamixel._disable_torque(motor_id)  # Ensure torque is disabled after reboot
+        self.dynamixel.set_operating_mode(motor_id, OperatingMode.POSITION)  # Set to position control mode
         self.dynamixel._enable_torque(motor_id)  # Re-enable torque
 
     def _reboot_all(self):
@@ -239,9 +231,7 @@ class Robot:
         print("Rebooting all Dynamixel servos...")
         for motor_id in self.servo_ids:
             print(f"Rebooting Dynamixel ID: {motor_id}")
-            dxl_comm_result, dxl_error = self.dynamixel.packetHandler.reboot(
-                self.dynamixel.portHandler, motor_id
-            )
+            dxl_comm_result, dxl_error = self.dynamixel.packetHandler.reboot(self.dynamixel.portHandler, motor_id)
             if dxl_comm_result != COMM_SUCCESS:
                 print(f"Failed to reboot Dynamixel ID {motor_id}")
                 print(
@@ -250,9 +240,7 @@ class Robot:
                 )
             elif dxl_error != 0:
                 print(f"Dynamixel ID {motor_id} responded with an error")
-                print(
-                    "Error:", self.dynamixel.packetHandler.getRxPacketError(dxl_error)
-                )
+                print("Error:", self.dynamixel.packetHandler.getRxPacketError(dxl_error))
             else:
                 print(f"Dynamixel ID {motor_id} rebooted successfully")
             self.dynamixel.disconnect()
@@ -275,4 +263,3 @@ if __name__ == "__main__":
         pos = robot.read_position()
         elapsed = time.time() - s
         print(f"read took {elapsed} pos {pos}")
-

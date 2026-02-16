@@ -63,9 +63,7 @@ class MockOdometry:
         class PoseData:
             def __init__(self, x=0.0, y=0.0, z=0.0, qw=1.0, qx=0.0, qy=0.0, qz=0.0):
                 self.position = type("Position", (), {"x": x, "y": y, "z": z})
-                self.orientation = type(
-                    "Orientation", (), {"w": qw, "x": qx, "y": qy, "z": qz}
-                )
+                self.orientation = type("Orientation", (), {"w": qw, "x": qx, "y": qy, "z": qz})
 
         def __init__(self):
             self.pose = self.PoseData()
@@ -97,9 +95,7 @@ class MockSetBoolResponse:
 
 
 class MockWSBridge:
-    def __init__(
-        self, node, incoming_topic="ws_messages", outgoing_topic="ws_outgoing"
-    ):
+    def __init__(self, node, incoming_topic="ws_messages", outgoing_topic="ws_outgoing"):
         self.node = node
         self.incoming_topic = incoming_topic
         self.outgoing_topic = outgoing_topic
@@ -195,25 +191,15 @@ sys.modules["maurice_msgs.srv"].GotoJS.Response = MagicMock()
 mock_navigate = MockPrimitive("navigate_to_position", "Navigate to a position")
 mock_email = MockPrimitive("send_email", "Send an email")
 sys.modules["brain_client.primitives.navigate_to_position"] = MagicMock()
-sys.modules["brain_client.primitives.navigate_to_position"].NavigateToPosition = (
-    lambda logger: mock_navigate
-)
+sys.modules["brain_client.primitives.navigate_to_position"].NavigateToPosition = lambda logger: mock_navigate
 sys.modules["brain_client.primitives.send_email"] = MagicMock()
 sys.modules["brain_client.primitives.send_email"].SendEmail = lambda logger: mock_email
 
 # Mock the directives
-mock_default = MockDirective(
-    "default_directive", ["navigate_to_position"], "Default directive"
-)
-mock_sassy = MockDirective(
-    "sassy_directive", ["navigate_to_position"], "Sassy directive"
-)
-mock_friendly = MockDirective(
-    "friendly_guide_directive", ["navigate_to_position"], "Friendly guide directive"
-)
-mock_security = MockDirective(
-    "security_patrol_directive", ["navigate_to_position"], "Security patrol directive"
-)
+mock_default = MockDirective("default_directive", ["navigate_to_position"], "Default directive")
+mock_sassy = MockDirective("sassy_directive", ["navigate_to_position"], "Sassy directive")
+mock_friendly = MockDirective("friendly_guide_directive", ["navigate_to_position"], "Friendly guide directive")
+mock_security = MockDirective("security_patrol_directive", ["navigate_to_position"], "Security patrol directive")
 mock_elder = MockDirective(
     "elder_safety_directive",
     ["navigate_to_position", "send_email"],
@@ -221,25 +207,15 @@ mock_elder = MockDirective(
 )
 
 sys.modules["brain_client.directives.default_directive"] = MagicMock()
-sys.modules["brain_client.directives.default_directive"].DefaultDirective = (
-    lambda: mock_default
-)
+sys.modules["brain_client.directives.default_directive"].DefaultDirective = lambda: mock_default
 sys.modules["brain_client.directives.sassy_directive"] = MagicMock()
-sys.modules["brain_client.directives.sassy_directive"].SassyDirective = (
-    lambda: mock_sassy
-)
+sys.modules["brain_client.directives.sassy_directive"].SassyDirective = lambda: mock_sassy
 sys.modules["brain_client.directives.friendly_guide_directive"] = MagicMock()
-sys.modules[
-    "brain_client.directives.friendly_guide_directive"
-].FriendlyGuideDirective = lambda: mock_friendly
+sys.modules["brain_client.directives.friendly_guide_directive"].FriendlyGuideDirective = lambda: mock_friendly
 sys.modules["brain_client.directives.security_patrol_directive"] = MagicMock()
-sys.modules[
-    "brain_client.directives.security_patrol_directive"
-].SecurityPatrolDirective = lambda: mock_security
+sys.modules["brain_client.directives.security_patrol_directive"].SecurityPatrolDirective = lambda: mock_security
 sys.modules["brain_client.directives.elder_safety_directive"] = MagicMock()
-sys.modules["brain_client.directives.elder_safety_directive"].ElderSafetyDirective = (
-    lambda: mock_elder
-)
+sys.modules["brain_client.directives.elder_safety_directive"].ElderSafetyDirective = lambda: mock_elder
 
 # Mock the WSBridge
 sys.modules["brain_client.ws_bridge"] = MagicMock()

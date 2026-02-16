@@ -17,6 +17,7 @@ from geometry_msgs.msg import TransformStamped
 CRC8_POLY = 0x8C
 CRC8_INIT = 0x00
 
+
 class I2CManager:
     # Command definitions (Jetson → MCU)
     CMD_MOVE = 0x01
@@ -24,10 +25,19 @@ class I2CManager:
     CMD_CALIBRATE = 0x04
 
     # Response definitions (MCU → Jetson)
-    RESP_MOVE = 0x81      # Position feedback
-    RESP_STATUS = 0x83    # Health data
-    RESP_CALIBRATE = 0x84 # Calibration status
-    def __init__(self, node: Node, bus_number=1, device_address=0x42, update_frequency=30.0, debug=False, speed_command_timeout=5.0):
+    RESP_MOVE = 0x81  # Position feedback
+    RESP_STATUS = 0x83  # Health data
+    RESP_CALIBRATE = 0x84  # Calibration status
+
+    def __init__(
+        self,
+        node: Node,
+        bus_number=1,
+        device_address=0x42,
+        update_frequency=30.0,
+        debug=False,
+        speed_command_timeout=5.0,
+    ):
         self.node = node
         self.debug = debug
         self.logger = self.node.get_logger()
@@ -35,7 +45,7 @@ class I2CManager:
         self.speed_command_timeout = speed_command_timeout
         self.bus_number = bus_number
         self.device_address = device_address
-        
+
         # Initialize I2C bus
         try:
             self.bus = smbus.SMBus(bus_number)
@@ -43,7 +53,7 @@ class I2CManager:
         except Exception as e:
             self.logger.error(f"Failed to connect to I2C bus {bus_number}: {e}")
             raise
-        
+
         # -------------------------
         # Stored command values
         # -------------------------
@@ -51,7 +61,7 @@ class I2CManager:
         self.last_speed_command_time = 0.0
         self.status_requested = False
         self.calibration_requested = False
-        
+
         # -------------------------
         # Stored responses
         # -------------------------
@@ -61,7 +71,7 @@ class I2CManager:
         self.motor_temperature = 0.0
         self.fault_code = 0
         self.calibration_status = None
-        
+
         # Communication thread control
         self.running = True
         self.comm_thread = threading.Thread(target=self._communication_loop, daemon=True)
@@ -101,13 +111,13 @@ class I2CManager:
         """
         if len(data_bytes) != 6:
             raise ValueError("Data must be exactly 6 bytes")
-        
+
         try:
             # Build 8-byte message
             message = bytearray([cmd_id]) + bytearray(data_bytes)
             crc = self._calculate_crc(message)
             message.append(crc)
-            
+
             # Send via I2C
             self.bus.write_i2c_block_data(self.device_address, 0x00, list(message))
             return True
@@ -124,35 +134,35 @@ class I2CManager:
         try:
             # Small delay to allow MCU to prepare response
             time.sleep(0.001)  # 1ms delay
-            
+
             # Read 8 bytes from MCU
             data = self.bus.read_i2c_block_data(self.device_address, 0x00, 8)
-            
+
             if len(data) != 8:
                 return None
-            
+
             # Check if response is empty (all zeros or first byte is 0)
             if data[0] == 0x00:
                 if self.debug:
                     self.logger.debug("Received empty response from MCU")
                 return None
-            
+
             # Verify CRC
             message = data[:7]
             received_crc = data[7]
             calculated_crc = self._calculate_crc(message)
-            
+
             if received_crc != calculated_crc:
                 if self.debug:
                     self.logger.debug(f"CRC mismatch: expected 0x{calculated_crc:02X}, got 0x{received_crc:02X}")
                 return None
-            
+
             resp_id = data[0]
             response_data = data[1:7]
-            
+
             self._process_response(resp_id, response_data)
             return True
-            
+
         except Exception as e:
             if self.debug:
                 self.logger.debug(f"Failed to read response: {e}")
@@ -162,7 +172,7 @@ class I2CManager:
         """Process received response from MCU"""
         if self.debug:
             self.logger.debug(f"Received response 0x{resp_id:02X}: {[hex(b) for b in data]}")
-        
+
         if resp_id == self.RESP_MOVE:
             # Position feedback: x, y (cm), theta (rad*100)
             try:
@@ -178,13 +188,14 @@ class I2CManager:
             self.current_transform.transform.translation.y = y / 100.0
             self.current_transform.transform.translation.z = 0.0
             import math
+
             theta_rad = theta / 100.0
             self.current_transform.transform.rotation.x = 0.0
             self.current_transform.transform.rotation.y = 0.0
             self.current_transform.transform.rotation.z = math.sin(theta_rad / 2.0)
             self.current_transform.transform.rotation.w = math.cos(theta_rad / 2.0)
             if self.debug:
-                self.logger.debug(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
+                self.logger.debug(f"Position Update - X: {x / 100.0}, Y: {y / 100.0}, θ: {theta_rad} rad")
         elif resp_id == self.RESP_STATUS:
             # Health status: battery voltage, motor temp, fault code
             try:
@@ -193,11 +204,13 @@ class I2CManager:
                 self.motor_temperature = temp  # Temperature in Celsius
                 self.fault_code = fault
                 if self.debug:
-                    self.logger.debug(f"Status - Battery: {self.battery_voltage:.2f}V, Motor Temp: {temp}°C, Fault: {fault}")
+                    self.logger.debug(
+                        f"Status - Battery: {self.battery_voltage:.2f}V, Motor Temp: {temp}°C, Fault: {fault}"
+                    )
                 self.logger.info(f"Status - Battery: {self.battery_voltage:.2f}V, Motor Temp: {temp}°C, Fault: {fault}")
             except struct.error as e:
                 self.logger.error(f"Failed to unpack status response: {e}")
-                
+
         elif resp_id == self.RESP_CALIBRATE:
             # Calibration status
             try:
@@ -220,11 +233,11 @@ class I2CManager:
             speed, turn = 0.0, 0.0
         else:
             speed, turn = self.latest_speed
-        
+
         # Scale and clamp values
         speed_int = int(max(-32767, min(32767, speed * 100)))
         turn_int = int(max(-32767, min(32767, turn * 100)))
-        
+
         # Pack: speed (2 bytes), turn (2 bytes), reserved (2 bytes)
         data = struct.pack(">hhH", speed_int, turn_int, 0x0000)
         return self._send_command(self.CMD_MOVE, data)
@@ -237,7 +250,7 @@ class I2CManager:
         """Send status request if pending"""
         if not self.status_requested:
             return False
-        
+
         # All bytes reserved (zero)
         data = bytes([0x00] * 6)
         success = self._send_command(self.CMD_STATUS, data)
@@ -249,7 +262,7 @@ class I2CManager:
         """Send calibration command if pending"""
         if not self.calibration_requested:
             return False
-        
+
         # All bytes reserved (zero)
         data = bytes([0x00] * 6)
         success = self._send_command(self.CMD_CALIBRATE, data)
@@ -261,20 +274,20 @@ class I2CManager:
         """Main communication loop running at fixed frequency"""
         while self.running:
             loop_start = time.time()
-            
+
             # Always send movement command
             self._send_move_command()
             self._read_response()  # Try to read position feedback
-            
+
             # Send conditional commands
             if self.status_requested:
                 self._send_status_request()
                 self._read_response()
-            
+
             if self.calibration_requested:
                 self._send_calibrate_command()
                 self._read_response()
-            
+
             # Maintain fixed update rate
             elapsed = time.time() - loop_start
             sleep_time = (1.0 / self.update_frequency) - elapsed
@@ -317,5 +330,5 @@ class I2CManager:
     def __del__(self):
         self.running = False
         time.sleep(0.1)  # Give the communication loop time to exit
-        if hasattr(self, 'bus') and self.bus:
+        if hasattr(self, "bus") and self.bus:
             self.bus.close()

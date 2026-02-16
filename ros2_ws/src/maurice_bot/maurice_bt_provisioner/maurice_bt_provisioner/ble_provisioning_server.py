@@ -28,24 +28,24 @@ from nmcli_utils import (
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - BLE_Provisioner - %(levelname)s - %(message)s',
+    format="%(asctime)s - BLE_Provisioner - %(levelname)s - %(message)s",
     stream=sys.stdout,
 )
-logger = logging.getLogger('BLE_Provisioner')
+logger = logging.getLogger("BLE_Provisioner")
 
 # --- BlueZ / D-Bus constants ---
-BLUEZ_SERVICE_NAME   = 'org.bluez'
-DBUS_OM_IFACE        = 'org.freedesktop.DBus.ObjectManager'
-DBUS_PROP_IFACE      = 'org.freedesktop.DBus.Properties'
-GATT_MANAGER_IFACE   = 'org.bluez.GattManager1'
-LE_ADV_MGR_IFACE     = 'org.bluez.LEAdvertisingManager1'
-LE_ADV_IFACE         = 'org.bluez.LEAdvertisement1'
-GATT_SERVICE_IFACE   = 'org.bluez.GattService1'
-GATT_CHRC_IFACE      = 'org.bluez.GattCharacteristic1'
+BLUEZ_SERVICE_NAME = "org.bluez"
+DBUS_OM_IFACE = "org.freedesktop.DBus.ObjectManager"
+DBUS_PROP_IFACE = "org.freedesktop.DBus.Properties"
+GATT_MANAGER_IFACE = "org.bluez.GattManager1"
+LE_ADV_MGR_IFACE = "org.bluez.LEAdvertisingManager1"
+LE_ADV_IFACE = "org.bluez.LEAdvertisement1"
+GATT_SERVICE_IFACE = "org.bluez.GattService1"
+GATT_CHRC_IFACE = "org.bluez.GattCharacteristic1"
 
 # --- BLE UUIDs (same as the old Bluezero server) ---
-SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0'
-CHAR_UUID    = 'abcdef01-1234-5678-1234-56789abcdef0'
+SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
+CHAR_UUID = "abcdef01-1234-5678-1234-56789abcdef0"
 
 # Path to helper script for restarting services
 RESTART_SCRIPT_PATH = "/usr/local/bin/restart_robot_networking.sh"
@@ -54,17 +54,17 @@ RESTART_SCRIPT_PATH = "/usr/local/bin/restart_robot_networking.sh"
 # --- Robot name helper ---
 def load_robot_name():
     root = os.environ.get(
-        'INNATE_OS_ROOT',
-        os.path.join(os.path.expanduser('~'), 'innate-os'),
+        "INNATE_OS_ROOT",
+        os.path.join(os.path.expanduser("~"), "innate-os"),
     )
-    info_path = os.path.join(root, 'data', 'robot_info.json')
+    info_path = os.path.join(root, "data", "robot_info.json")
     try:
-        with open(info_path, 'r') as f:
+        with open(info_path, "r") as f:
             data = json.load(f)
-        return data.get('robot_name', 'MARS')
+        return data.get("robot_name", "MARS")
     except Exception as e:
         logger.warning(f"Failed to load robot_info.json, using default name: {e}")
-        return 'MARS'
+        return "MARS"
 
 
 ROBOT_NAME = load_robot_name()
@@ -72,20 +72,21 @@ ROBOT_NAME = load_robot_name()
 
 # --- D-Bus error helpers ---
 class InvalidArgsException(dbus.exceptions.DBusException):
-    _dbus_error_name = 'org.freedesktop.DBus.Error.InvalidArgs'
+    _dbus_error_name = "org.freedesktop.DBus.Error.InvalidArgs"
 
 
 class NotSupportedException(dbus.exceptions.DBusException):
-    _dbus_error_name = 'org.bluez.Error.NotSupported'
+    _dbus_error_name = "org.bluez.Error.NotSupported"
 
 
 # --- GATT Application / Service base classes ---
+
 
 class Application(dbus.service.Object):
     """Implements ObjectManager.GetManagedObjects for our GATT tree."""
 
     def __init__(self, bus):
-        self.path = '/'
+        self.path = "/"
         self.bus = bus
         self.services = []
         super().__init__(bus, self.path)
@@ -99,7 +100,7 @@ class Application(dbus.service.Object):
     def get_services(self):
         return self.services
 
-    @dbus.service.method(DBUS_OM_IFACE, out_signature='a{oa{sa{sv}}}')
+    @dbus.service.method(DBUS_OM_IFACE, out_signature="a{oa{sa{sv}}}")
     def GetManagedObjects(self):
         response = {}
         for service in self.services:
@@ -113,7 +114,7 @@ class Service(dbus.service.Object):
     """org.bluez.GattService1 implementation."""
 
     def __init__(self, bus, index, uuid, primary):
-        self.path = f'/com/innate/ble/service{index}'
+        self.path = f"/com/innate/ble/service{index}"
         self.bus = bus
         self.uuid = uuid
         self.primary = primary
@@ -132,18 +133,16 @@ class Service(dbus.service.Object):
     def get_properties(self):
         return {
             GATT_SERVICE_IFACE: {
-                'UUID': self.uuid,
-                'Primary': dbus.Boolean(self.primary),
-                'Characteristics': dbus.Array(
+                "UUID": self.uuid,
+                "Primary": dbus.Boolean(self.primary),
+                "Characteristics": dbus.Array(
                     [c.get_path() for c in self._characteristics],
-                    signature='o',
+                    signature="o",
                 ),
             }
         }
 
-    @dbus.service.method(DBUS_PROP_IFACE,
-                         in_signature='s',
-                         out_signature='a{sv}')
+    @dbus.service.method(DBUS_PROP_IFACE, in_signature="s", out_signature="a{sv}")
     def GetAll(self, interface):
         if interface != GATT_SERVICE_IFACE:
             raise InvalidArgsException()
@@ -154,7 +153,7 @@ class Characteristic(dbus.service.Object):
     """Base org.bluez.GattCharacteristic1 implementation."""
 
     def __init__(self, bus, index, uuid, flags, service):
-        self.path = service.path + '/char' + str(index)
+        self.path = service.path + "/char" + str(index)
         self.bus = bus
         self.uuid = uuid
         self.service = service
@@ -164,31 +163,26 @@ class Characteristic(dbus.service.Object):
     def get_properties(self):
         return {
             GATT_CHRC_IFACE: {
-                'Service': self.service.get_path(),
-                'UUID': self.uuid,
-                'Flags': self.flags,
+                "Service": self.service.get_path(),
+                "UUID": self.uuid,
+                "Flags": self.flags,
             }
         }
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
-    @dbus.service.method(DBUS_PROP_IFACE,
-                         in_signature='s',
-                         out_signature='a{sv}')
+    @dbus.service.method(DBUS_PROP_IFACE, in_signature="s", out_signature="a{sv}")
     def GetAll(self, interface):
         if interface != GATT_CHRC_IFACE:
             raise InvalidArgsException()
         return self.get_properties()[GATT_CHRC_IFACE]
 
-    @dbus.service.method(GATT_CHRC_IFACE,
-                         in_signature='a{sv}',
-                         out_signature='ay')
+    @dbus.service.method(GATT_CHRC_IFACE, in_signature="a{sv}", out_signature="ay")
     def ReadValue(self, options):
         raise NotSupportedException()
 
-    @dbus.service.method(GATT_CHRC_IFACE,
-                         in_signature='aya{sv}')
+    @dbus.service.method(GATT_CHRC_IFACE, in_signature="aya{sv}")
     def WriteValue(self, value, options):
         raise NotSupportedException()
 
@@ -200,13 +194,14 @@ class Characteristic(dbus.service.Object):
     def StopNotify(self):
         raise NotSupportedException()
 
-    @dbus.service.signal(DBUS_PROP_IFACE, signature='sa{sv}as')
+    @dbus.service.signal(DBUS_PROP_IFACE, signature="sa{sv}as")
     def PropertiesChanged(self, interface, changed, invalidated):
         # dbus.service handles the actual signal emission
         pass
 
 
 # --- WiFi Provisioning Characteristic ---
+
 
 class ProvisioningCharacteristic(Characteristic):
     """
@@ -220,7 +215,7 @@ class ProvisioningCharacteristic(Characteristic):
             bus,
             index,
             CHAR_UUID,
-            ['read', 'write', 'write-without-response', 'notify'],
+            ["read", "write", "write-without-response", "notify"],
             service,
         )
         self.notifying = False
@@ -234,10 +229,12 @@ class ProvisioningCharacteristic(Characteristic):
         logger.info(f"Checking for IP change. Current: {self._current_ip_address}, New: {new_ip}")
 
         if new_ip != self._current_ip_address:
-            logger.warning(f"IP address changed from {self._current_ip_address} to {new_ip}. Triggering service restarts.")
+            logger.warning(
+                f"IP address changed from {self._current_ip_address} to {new_ip}. Triggering service restarts."
+            )
             try:
                 result = subprocess.run(
-                    ['sudo', RESTART_SCRIPT_PATH],
+                    ["sudo", RESTART_SCRIPT_PATH],
                     check=True,
                     capture_output=True,
                     text=True,
@@ -261,7 +258,7 @@ class ProvisioningCharacteristic(Characteristic):
     # --- old command handlers, ported 1:1 ---
 
     def handle_get_status(self, data):
-        command = data.get('command')
+        command = data.get("command")
         logger.info(f"Handling {command} command")
 
         success_list, networks, error_msg_list = nmcli_get_wifi_connections()
@@ -287,13 +284,13 @@ class ProvisioningCharacteristic(Characteristic):
             }
 
     def handle_update_network(self, data):
-        command = data.get('command')
+        command = data.get("command")
         logger.info(f"Handling {command} command")
 
-        network_data = data.get('data', {})
-        ssid = network_data.get('ssid')
-        password = network_data.get('password')
-        priority = network_data.get('priority', 10)
+        network_data = data.get("data", {})
+        ssid = network_data.get("ssid")
+        password = network_data.get("password")
+        priority = network_data.get("priority", 10)
 
         if not ssid:
             return {"command": command, "status": "error", "message": "SSID required"}
@@ -344,10 +341,10 @@ class ProvisioningCharacteristic(Characteristic):
             }
 
     def handle_remove_network(self, data):
-        command = data.get('command')
+        command = data.get("command")
         logger.info(f"Handling {command} command")
 
-        ssid = data.get('data', {}).get('ssid')
+        ssid = data.get("data", {}).get("ssid")
         if not ssid:
             return {"command": command, "status": "error", "message": "SSID required for removal"}
 
@@ -366,7 +363,7 @@ class ProvisioningCharacteristic(Characteristic):
             return {"command": command, "status": "error", "message": error_msg}
 
     def handle_scan_wifi(self, data):
-        command = data.get('command')
+        command = data.get("command")
         logger.info(f"Handling {command} command")
 
         success, ssids, error_msg = nmcli_scan_for_visible_ssids()
@@ -381,10 +378,10 @@ class ProvisioningCharacteristic(Characteristic):
             }
 
     def handle_connect_network(self, data):
-        command = data.get('command')
+        command = data.get("command")
         logger.info(f"Handling {command} command")
 
-        ssid = data.get('data', {}).get('ssid')
+        ssid = data.get("data", {}).get("ssid")
         if not ssid:
             return {"command": command, "status": "error", "message": "SSID required for connection"}
 
@@ -428,9 +425,7 @@ class ProvisioningCharacteristic(Characteristic):
 
     # --- GATT Read/Write/Notify ---
 
-    @dbus.service.method(GATT_CHRC_IFACE,
-                         in_signature='a{sv}',
-                         out_signature='ay')
+    @dbus.service.method(GATT_CHRC_IFACE, in_signature="a{sv}", out_signature="ay")
     def ReadValue(self, options):
         logger.info("ReadValue -> read_status")
         success, networks, error_msg = nmcli_get_wifi_connections()
@@ -444,12 +439,11 @@ class ProvisioningCharacteristic(Characteristic):
         if error_msg:
             response["message"] = error_msg
 
-        response_bytes = json.dumps(response).encode('utf-8')
+        response_bytes = json.dumps(response).encode("utf-8")
         self._value = [dbus.Byte(b) for b in response_bytes]
         return self._value
 
-    @dbus.service.method(GATT_CHRC_IFACE,
-                         in_signature='aya{sv}')
+    @dbus.service.method(GATT_CHRC_IFACE, in_signature="aya{sv}")
     def WriteValue(self, value, options):
         logger.debug(f"WriteValue raw: {value} options={options}")
         response = None
@@ -457,12 +451,12 @@ class ProvisioningCharacteristic(Characteristic):
 
         try:
             value_bytes = bytes(value)
-            value_str = value_bytes.decode('utf-8')
+            value_str = value_bytes.decode("utf-8")
             logger.info(f"WriteValue received: {value_str}")
 
             try:
                 data = json.loads(value_str)
-                command = data.get('command')
+                command = data.get("command")
                 cmd_for_log = command or "unknown"
             except json.JSONDecodeError:
                 logger.error(f"Failed to decode JSON: {value_str}")
@@ -472,15 +466,15 @@ class ProvisioningCharacteristic(Characteristic):
                     "message": "Invalid JSON format",
                 }
             else:
-                if command == 'get_status':
+                if command == "get_status":
                     response = self.handle_get_status(data)
-                elif command == 'update_network':
+                elif command == "update_network":
                     response = self.handle_update_network(data)
-                elif command == 'remove_network':
+                elif command == "remove_network":
                     response = self.handle_remove_network(data)
-                elif command == 'connect_network':
+                elif command == "connect_network":
                     response = self.handle_connect_network(data)
-                elif command == 'scan_wifi':
+                elif command == "scan_wifi":
                     response = self.handle_scan_wifi(data)
                 else:
                     response = self.handle_unknown_command(command)
@@ -494,13 +488,13 @@ class ProvisioningCharacteristic(Characteristic):
             }
 
         if response is not None:
-            response_bytes = json.dumps(response).encode('utf-8')
+            response_bytes = json.dumps(response).encode("utf-8")
             self._value = [dbus.Byte(b) for b in response_bytes]
             logger.info(f"Sending response: {response}")
             if self.notifying:
                 self.PropertiesChanged(
                     GATT_CHRC_IFACE,
-                    {'Value': self._value},
+                    {"Value": self._value},
                     [],
                 )
 
@@ -514,7 +508,7 @@ class ProvisioningCharacteristic(Characteristic):
         if self._value:
             self.PropertiesChanged(
                 GATT_CHRC_IFACE,
-                {'Value': self._value},
+                {"Value": self._value},
                 [],
             )
 
@@ -529,16 +523,17 @@ class ProvisioningCharacteristic(Characteristic):
 
 # --- Advertisement object ---
 
+
 class SimpleAdvertisement(dbus.service.Object):
     """
     LEAdvertisement1 implementation.
     Type='peripheral', advertises SERVICE_UUID and robot name.
     """
 
-    PATH_BASE = '/com/innate/ble/advertisement'
+    PATH_BASE = "/com/innate/ble/advertisement"
 
     def __init__(self, bus, index, service_uuids, local_name):
-        self.path = f'{self.PATH_BASE}{index}'
+        self.path = f"{self.PATH_BASE}{index}"
         self.bus = bus
         self.service_uuids = service_uuids or []
         self.local_name = local_name
@@ -549,38 +544,35 @@ class SimpleAdvertisement(dbus.service.Object):
 
     def get_properties(self):
         props = {
-            'Type': 'peripheral',
-            'IncludeTxPower': dbus.Boolean(True),
+            "Type": "peripheral",
+            "IncludeTxPower": dbus.Boolean(True),
         }
         if self.service_uuids:
-            props['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
+            props["ServiceUUIDs"] = dbus.Array(self.service_uuids, signature="s")
         if self.local_name:
-            props['LocalName'] = dbus.String(self.local_name)
+            props["LocalName"] = dbus.String(self.local_name)
         return {LE_ADV_IFACE: props}
 
-    @dbus.service.method(DBUS_PROP_IFACE,
-                         in_signature='s',
-                         out_signature='a{sv}')
+    @dbus.service.method(DBUS_PROP_IFACE, in_signature="s", out_signature="a{sv}")
     def GetAll(self, interface):
         if interface != LE_ADV_IFACE:
             raise InvalidArgsException()
         return self.get_properties()[LE_ADV_IFACE]
 
-    @dbus.service.method(LE_ADV_IFACE,
-                         in_signature='',
-                         out_signature='')
+    @dbus.service.method(LE_ADV_IFACE, in_signature="", out_signature="")
     def Release(self):
         logger.info("Advertisement released")
 
 
 # --- Adapter discovery ---
 
+
 def find_adapter(bus):
     """
     Find adapter that exposes both GattManager1 and LEAdvertisingManager1.
     """
     om = dbus.Interface(
-        bus.get_object(BLUEZ_SERVICE_NAME, '/'),
+        bus.get_object(BLUEZ_SERVICE_NAME, "/"),
         DBUS_OM_IFACE,
     )
     objects = om.GetManagedObjects()
@@ -591,6 +583,7 @@ def find_adapter(bus):
 
 
 # --- Main ---
+
 
 def main():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -608,14 +601,14 @@ def main():
 
     # Set alias, power, discoverable
     logger.info(f"Setting adapter alias to '{ROBOT_NAME}'")
-    adapter_props.Set('org.bluez.Adapter1', 'Alias', dbus.String(ROBOT_NAME))
-    adapter_props.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
-    adapter_props.Set('org.bluez.Adapter1', 'Discoverable', dbus.Boolean(True))
+    adapter_props.Set("org.bluez.Adapter1", "Alias", dbus.String(ROBOT_NAME))
+    adapter_props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True))
+    adapter_props.Set("org.bluez.Adapter1", "Discoverable", dbus.Boolean(True))
 
     # Log current adapter properties for sanity
-    cur_alias = adapter_props.Get('org.bluez.Adapter1', 'Alias')
-    cur_name  = adapter_props.Get('org.bluez.Adapter1', 'Name')
-    disc      = adapter_props.Get('org.bluez.Adapter1', 'Discoverable')
+    cur_alias = adapter_props.Get("org.bluez.Adapter1", "Alias")
+    cur_name = adapter_props.Get("org.bluez.Adapter1", "Name")
+    disc = adapter_props.Get("org.bluez.Adapter1", "Discoverable")
     logger.info(f"Adapter Name='{cur_name}', Alias='{cur_alias}', Discoverable={disc}")
 
     gatt_manager = dbus.Interface(adapter_obj, GATT_MANAGER_IFACE)
@@ -675,5 +668,5 @@ def main():
     mainloop.run()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

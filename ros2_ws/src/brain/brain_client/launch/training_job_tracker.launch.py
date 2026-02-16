@@ -9,9 +9,7 @@ from pathlib import Path
 
 def generate_launch_description():
     # Load environment variables from .env file if it exists
-    innate_os_root = os.environ.get(
-        "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-    )
+    innate_os_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
     env_file_path = Path(innate_os_root) / ".env"
     if env_file_path.exists():
         with open(env_file_path) as f:
@@ -61,15 +59,9 @@ def generate_launch_description():
                 parameters=[
                     {
                         "download_dir": LaunchConfiguration("download_dir"),
-                        "poll_interval_running": LaunchConfiguration(
-                            "poll_interval_running"
-                        ),
-                        "poll_interval_submitted": LaunchConfiguration(
-                            "poll_interval_submitted"
-                        ),
-                        "poll_interval_uploading": LaunchConfiguration(
-                            "poll_interval_uploading"
-                        ),
+                        "poll_interval_running": LaunchConfiguration("poll_interval_running"),
+                        "poll_interval_submitted": LaunchConfiguration("poll_interval_submitted"),
+                        "poll_interval_uploading": LaunchConfiguration("poll_interval_uploading"),
                     }
                 ],
             ),

@@ -40,7 +40,7 @@ class Dynamixel:
     ADDR_ID = 7
     ADDR_MIN_POSITION_LIMIT = 52  # 4 bytes, Min Position Limit (was 48)
     ADDR_MAX_POSITION_LIMIT = 48  # 4 bytes, Max Position Limit (was 52)
-    ADDR_CURRENT_LIMIT = 38       # 2 bytes, Current Limit
+    ADDR_CURRENT_LIMIT = 38  # 2 bytes, Current Limit
 
     @dataclass
     class Config:
@@ -111,19 +111,13 @@ class Dynamixel:
         # print(f'set pwm of motor {motor_id} to {pwm_value}')
         if dxl_comm_result != COMM_SUCCESS:
             if tries <= 1:
-                raise ConnectionError(
-                    f"dxl_comm_result: {self.packetHandler.getTxRxResult(dxl_comm_result)}"
-                )
+                raise ConnectionError(f"dxl_comm_result: {self.packetHandler.getTxRxResult(dxl_comm_result)}")
             else:
-                print(
-                    f"dynamixel pwm setting failure trying again with {tries - 1} tries"
-                )
+                print(f"dynamixel pwm setting failure trying again with {tries - 1} tries")
                 self.set_pwm_value(motor_id, pwm_value, tries=tries - 1)
         elif dxl_error != 0:
             print(f"dxl error {dxl_error}")
-            raise ConnectionError(
-                f"dynamixel error: {self.packetHandler.getTxRxResult(dxl_error)}"
-            )
+            raise ConnectionError(f"dynamixel error: {self.packetHandler.getTxRxResult(dxl_error)}")
 
     def read_temperature(self, motor_id: int):
         return self._read_value(motor_id, ReadAttribute.TEMPERATURE, 1)
@@ -204,9 +198,7 @@ class Dynamixel:
         elif dxl_error != 0:
             error_msg = self.packetHandler.getRxPacketError(dxl_error)
             print(f"dxl error {dxl_error}: {error_msg}")
-            raise ConnectionError(
-                f"dynamixel error for motor {motor_id}: {error_msg} (error code: {dxl_error})"
-            )
+            raise ConnectionError(f"dynamixel error for motor {motor_id}: {error_msg} (error code: {dxl_error})")
 
     def set_operating_mode(self, motor_id: int, operating_mode: OperatingMode):
         dxl_comm_result, dxl_error = self.packetHandler.write1ByteTxRx(
@@ -224,7 +216,7 @@ class Dynamixel:
         """
         if not 0 <= limit <= 885:
             raise ValueError(f"PWM limit must be between 0 and 885, got {limit}")
-        
+
         self._disable_torque(motor_id)
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
             self.portHandler, motor_id, self.ADDR_PWM_LIMIT, limit
@@ -238,21 +230,15 @@ class Dynamixel:
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
     def set_P(self, motor_id: int, P: int):
-        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, self.POSITION_P, P
-        )
+        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(self.portHandler, motor_id, self.POSITION_P, P)
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
     def set_I(self, motor_id: int, I: int):
-        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, self.POSITION_I, I
-        )
+        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(self.portHandler, motor_id, self.POSITION_I, I)
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
     def set_D(self, motor_id: int, D: int):
-        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, self.POSITION_D, D
-        )
+        dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(self.portHandler, motor_id, self.POSITION_D, D)
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
     def read_home_offset(self, motor_id: int):
@@ -315,23 +301,15 @@ class Dynamixel:
         if dxl_comm_result != COMM_SUCCESS:
             if tries <= 1:
                 # print("%s" % self.packetHandler.getTxRxResult(dxl_comm_result))
-                raise ConnectionError(
-                    f"dxl_comm_result {dxl_comm_result} for servo {motor_id} value {value}"
-                )
+                raise ConnectionError(f"dxl_comm_result {dxl_comm_result} for servo {motor_id} value {value}")
             else:
-                print(
-                    f"dynamixel read failure for servo {motor_id} trying again with {tries - 1} tries"
-                )
+                print(f"dynamixel read failure for servo {motor_id} trying again with {tries - 1} tries")
                 time.sleep(0.02)
                 return self._read_value(motor_id, attribute, num_bytes, tries=tries - 1)
-        elif (
-            dxl_error != 0
-        ):  # # print("%s" % self.packetHandler.getRxPacketError(dxl_error))
+        elif dxl_error != 0:  # # print("%s" % self.packetHandler.getRxPacketError(dxl_error))
             # raise ConnectionError(f'dxl_error {dxl_error} binary ' + "{0:b}".format(37))
             if tries == 0 and dxl_error != 128:
-                raise Exception(
-                    f"Failed to read value from motor {motor_id} error is {dxl_error}"
-                )
+                raise Exception(f"Failed to read value from motor {motor_id} error is {dxl_error}")
             else:
                 return self._read_value(motor_id, attribute, num_bytes, tries=tries - 1)
         return value
@@ -381,10 +359,10 @@ class Dynamixel:
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
-__all__ = ['Dynamixel', 'OperatingMode', 'ReadAttribute']
+
+__all__ = ["Dynamixel", "OperatingMode", "ReadAttribute"]
 
 # For direct Python imports and ROS relay script
-for name in ['Dynamixel', 'OperatingMode', 'ReadAttribute']:
+for name in ["Dynamixel", "OperatingMode", "ReadAttribute"]:
     if name in locals():
         globals()[name] = locals()[name]
-

@@ -133,11 +133,11 @@ class SkillLoader:
     def reload_skill_by_name(self, skill_name: str, directories: list[str]) -> type[Skill] | None:
         """
         Reload a specific skill by name from the given directories.
-        
+
         Args:
             skill_name: The name of the skill to reload
             directories: List of directories to search for the skill
-            
+
         Returns:
             The reloaded skill class, or None if not found
         """
@@ -145,11 +145,12 @@ class SkillLoader:
             directory_path = Path(directory)
             if not directory_path.exists():
                 continue
-                
+
             # Search for python files that might contain this skill
-            python_files = [f for f in directory_path.glob("*.py") 
-                          if f.name != "__init__.py" and not f.name.startswith("_")]
-            
+            python_files = [
+                f for f in directory_path.glob("*.py") if f.name != "__init__.py" and not f.name.startswith("_")
+            ]
+
             for py_file in python_files:
                 try:
                     # Try to load skills from this file
@@ -159,18 +160,18 @@ class SkillLoader:
                         return discovered[skill_name]
                 except Exception as e:
                     self.logger.debug(f"Error checking {py_file} for skill {skill_name}: {e}")
-        
+
         self.logger.warning(f"Could not find skill '{skill_name}' in any directory")
         return None
 
     def reload_skills_by_names(self, skill_names: list[str], directories: list[str]) -> dict[str, type[Skill]]:
         """
         Reload specific skills by name.
-        
+
         Args:
             skill_names: List of skill names to reload
             directories: List of directories to search
-            
+
         Returns:
             Dictionary of reloaded skill classes
         """

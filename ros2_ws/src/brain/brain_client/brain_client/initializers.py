@@ -30,9 +30,7 @@ def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
 
     # Define directories to scan for skills
     # Using the unified skills directory at the root plus ~/skills
-    innate_root = os.environ.get(
-        "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-    )
+    innate_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
     skills_directories = [
         os.path.join(innate_root, "skills"),
         os.path.join(os.path.expanduser("~"), "skills"),
@@ -49,12 +47,8 @@ def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
     # Handle special case for navigation skill based on simulator mode
     if simulator_mode and "navigate_to_position_sim" in discovered_skills:
         # In simulator mode, use the sim version for navigate_to_position
-        logger.info(
-            "Simulator mode: using NavigateToPositionSim for navigate_to_position"
-        )
-        discovered_skills["navigate_to_position"] = discovered_skills[
-            "navigate_to_position_sim"
-        ]
+        logger.info("Simulator mode: using NavigateToPositionSim for navigate_to_position")
+        discovered_skills["navigate_to_position"] = discovered_skills["navigate_to_position_sim"]
         # Remove the _sim variant so it doesn't appear as a separate skill
         del discovered_skills["navigate_to_position_sim"]
     elif "navigate_to_position_sim" in discovered_skills:
@@ -76,9 +70,7 @@ def initialize_skills(logger, simulator_mode: bool = False) -> Dict[str, Any]:
     return skills_dict
 
 
-def initialize_agents(
-    logger, skills_dict: Optional[Dict[str, Any]] = None
-) -> Tuple[Dict[str, Any], Optional[Any]]:
+def initialize_agents(logger, skills_dict: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Optional[Any]]:
     """
     Initialize all agents using dynamic loading.
 
@@ -95,9 +87,7 @@ def initialize_agents(
 
     # Define directories to scan for agents
     # Using the unified agents directory at the root plus ~/agents
-    innate_root = os.environ.get(
-        "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-    )
+    innate_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
     agents_directories = [
         os.path.join(innate_root, "agents"),
         os.path.join(os.path.expanduser("~"), "agents"),
@@ -109,9 +99,7 @@ def initialize_agents(
     agents_directory = agents_directories[0]  # Keep for icon loading
 
     # Load all agents dynamically from all directories
-    discovered_agent_classes = agent_loader.load_agents_from_directories(
-        agents_directories
-    )
+    discovered_agent_classes = agent_loader.load_agents_from_directories(agents_directories)
 
     # Create agent instances with skill validation and icon loading
     agents = agent_loader.create_agent_instances(

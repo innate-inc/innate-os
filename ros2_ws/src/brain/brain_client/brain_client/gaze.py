@@ -45,12 +45,14 @@ class FaceDetector:
         faces = []
         for face in self._session.face_detection(frame):
             x1, y1, x2, y2 = face.location
-            faces.append({
-                "center_x": (x1 + x2) / 2 / w,
-                "center_y": (y1 + y2) / 2 / h,
-                "width": (x2 - x1) / w,
-                "height": (y2 - y1) / h,
-            })
+            faces.append(
+                {
+                    "center_x": (x1 + x2) / 2 / w,
+                    "center_y": (y1 + y2) / 2 / h,
+                    "width": (x2 - x1) / w,
+                    "height": (y2 - y1) / h,
+                }
+            )
         return faces
 
 
@@ -59,15 +61,15 @@ class GazeController:
 
     # Hardware limits
     MIN_TILT = -25  # degrees (looking down)
-    MAX_TILT = 15   # degrees (looking up)
+    MAX_TILT = 15  # degrees (looking up)
 
     # Camera parameters
     CAMERA_HFOV = 100.0  # horizontal FOV degrees
-    CAMERA_VFOV = 50.0   # vertical FOV degrees
+    CAMERA_VFOV = 50.0  # vertical FOV degrees
 
     # Pan parameters (from original)
-    PAN_GAIN = 0.4       # rad/s per unit offset
-    PAN_COOLDOWN = 0.5   # seconds between pan adjustments
+    PAN_GAIN = 0.4  # rad/s per unit offset
+    PAN_COOLDOWN = 0.5  # seconds between pan adjustments
     PAN_THRESHOLD = 5.0  # degrees - only pan if error exceeds this
 
     def __init__(
@@ -196,9 +198,7 @@ class ROSPersonTracker:
     def _on_image(self, msg):
         """Store latest camera frame."""
         try:
-            frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(
-                msg.height, msg.width, -1
-            )
+            frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
             if msg.encoding == "rgb8":
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             with self._frame_lock:

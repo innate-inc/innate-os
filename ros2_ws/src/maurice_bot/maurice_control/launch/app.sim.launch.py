@@ -5,9 +5,7 @@ import os
 
 def generate_launch_description():
     # Use environment variable if set, otherwise construct from HOME
-    maurice_root = os.environ.get(
-        "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
-    )
+    maurice_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
     data_directory = os.path.join(maurice_root, "data")
 
     # Default hardware revision for new robots

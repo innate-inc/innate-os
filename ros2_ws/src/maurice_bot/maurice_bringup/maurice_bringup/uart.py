@@ -12,32 +12,42 @@ from geometry_msgs.msg import TransformStamped
 CRC8_POLY = 0x8C
 CRC8_INIT = 0x00
 
+
 class UartManager:
     SOM_MARKER = bytes([0x69, 0x69])  # Fixed 2-byte start-of-message
 
     # Command IDs (sent from main computer to microcontroller)
-    CMD_MOVE   = 0x01
-    CMD_LED    = 0x02
+    CMD_MOVE = 0x01
+    CMD_LED = 0x02
     CMD_STATUS = 0x03
     CMD_CALIBRATE = 0x04
 
     # Response IDs (microcontroller replies with CMD+0x80)
-    RESP_MOVE   = 0x81  # Position update
-    RESP_LED    = 0x82  # LED status feedback
+    RESP_MOVE = 0x81  # Position update
+    RESP_LED = 0x82  # LED status feedback
     RESP_STATUS = 0x83  # Health (status) feedback
-    RESP_CALIBRATE = 0x84 # Calibration status feedback
+    RESP_CALIBRATE = 0x84  # Calibration status feedback
 
-    def __init__(self, node: Node, port='/dev/ttyTHS1', baud_rate=115200, timeout=0.1, update_frequency=30.0, debug=False, speed_command_timeout=5.0):
+    def __init__(
+        self,
+        node: Node,
+        port="/dev/ttyTHS1",
+        baud_rate=115200,
+        timeout=0.1,
+        update_frequency=30.0,
+        debug=False,
+        speed_command_timeout=5.0,
+    ):
         self.node = node
         self.debug = debug
         self.logger = self.node.get_logger()
-        
+
         # Add speed command timeout (in seconds)
         self.speed_command_timeout = speed_command_timeout  # Default 5 seconds timeout
-        
+
         # Add timestamp for last speed command
         self.last_speed_command_time = 0.0
-        
+
         # -------------------------
         # Stored command values
         # -------------------------
@@ -55,11 +65,11 @@ class UartManager:
         # -------------------------
         # Initialize zero transform for odom->base_link using a dedicated method.
         self.current_transform = self._initialize_transform()
-        self.current_led_status = None                # Latest LED status (dictionary)
-        self.battery_voltage = 0.0                      # Latest battery voltage
-        self.motor_temperature = 0.0                    # Latest motor temperature
-        self.fault_code = 0                           # Latest fault code
-        self.calibration_status = None                # Latest calibration status (0: Success, 1: In Progress, 2: Failure)
+        self.current_led_status = None  # Latest LED status (dictionary)
+        self.battery_voltage = 0.0  # Latest battery voltage
+        self.motor_temperature = 0.0  # Latest motor temperature
+        self.fault_code = 0  # Latest fault code
+        self.calibration_status = None  # Latest calibration status (0: Success, 1: In Progress, 2: Failure)
 
         # -------------------------
         # UART configuration
@@ -120,7 +130,7 @@ class UartManager:
         protocol_msg = bytes([cmd_id]) + data  # 7 bytes: command ID + data
         crc = self._calculate_crc(protocol_msg)
         packet = self.SOM_MARKER + protocol_msg + bytes([crc])
-        
+
         self.ser.write(packet)
 
     def _send_speed_command(self):
@@ -130,7 +140,7 @@ class UartManager:
             forward_speed, turn_rate = (0.0, 0.0)
         else:
             forward_speed, turn_rate = self.latest_speed
-            
+
         speed_int = int(forward_speed * 100)
         turn_int = int(turn_rate * 100)
         # Pack: 2 bytes forward speed, 2 bytes turn rate, 2 bytes reserved (0)
@@ -172,11 +182,11 @@ class UartManager:
                 self._send_status_request()
                 self._read_response()  # Process health feedback
                 self.status_requested = False
-            
+
             # Send calibration request only if one was triggered
             if self.calibration_requested:
                 self._send_calibrate_command()
-                self._read_response() # Process calibration feedback
+                self._read_response()  # Process calibration feedback
                 self.calibration_requested = False
 
             time.sleep(1 / self.update_frequency)  # 50Hz loop
@@ -186,10 +196,10 @@ class UartManager:
         Each time this function is called, it appends all available bytes from the serial port to
         self._rx_buffer. Then it uses a finite state machine (FSM) to process as many complete packets
         as possible.
-        
+
         Packet format:
           [SOM (2 bytes)] + [protocol (7 bytes: response ID + data)] + [CRC (1 byte)]
-          
+
         Once the second SOM is found and it's time to read the protocol portion, it only reads
         if enough bytes are available.
         """
@@ -203,12 +213,12 @@ class UartManager:
             # Define FSM states.
             WAIT_FOR_FIRST_SOM = 0
             WAIT_FOR_SECOND_SOM = 1
-            READ_PROTOCOL = 2    # Read 7 bytes: response ID (1) + data (6)
-            READ_CRC = 3         # Read 1 byte for CRC
+            READ_PROTOCOL = 2  # Read 7 bytes: response ID (1) + data (6)
+            READ_CRC = 3  # Read 1 byte for CRC
 
             state = WAIT_FOR_FIRST_SOM
             packet = bytearray()  # Temporary storage for the current packet
-            index = 0             # Current index in self._rx_buffer
+            index = 0  # Current index in self._rx_buffer
 
             while index < len(self._rx_buffer):
                 if state == WAIT_FOR_FIRST_SOM:
@@ -232,7 +242,7 @@ class UartManager:
                 elif state == READ_PROTOCOL:
                     bytes_needed = 7 - (len(packet) - 2)
                     if (len(self._rx_buffer) - index) >= bytes_needed:
-                        packet.extend(self._rx_buffer[index:index + bytes_needed])
+                        packet.extend(self._rx_buffer[index : index + bytes_needed])
                         index += bytes_needed
                         state = READ_CRC
                     else:
@@ -272,7 +282,7 @@ class UartManager:
         # Add debug logging for received message
         if self.debug:
             self.logger.debug(f"Received UART message - ID: 0x{msg_id:02X}, Data: {data.hex(' ')}")
-        
+
         if msg_id == self.RESP_MOVE:
             try:
                 x, y, theta = struct.unpack(">hhh", data)
@@ -287,26 +297,21 @@ class UartManager:
             self.current_transform.transform.translation.y = y / 1000.0
             self.current_transform.transform.translation.z = 0.0
             import math
+
             theta_rad = theta / 100.0
             self.current_transform.transform.rotation.x = 0.0
             self.current_transform.transform.rotation.y = 0.0
             self.current_transform.transform.rotation.z = math.sin(theta_rad / 2.0)
             self.current_transform.transform.rotation.w = math.cos(theta_rad / 2.0)
             if self.debug:
-                self.logger.debug(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
+                self.logger.debug(f"Position Update - X: {x / 100.0}, Y: {y / 100.0}, θ: {theta_rad} rad")
         elif msg_id == self.RESP_LED:
             try:
                 mode, red, green, blue, interval = struct.unpack(">B B B B H", data)
             except struct.error as e:
                 self.logger.error(f"Failed to unpack LED response: {e}")
                 return
-            self.current_led_status = {
-                "mode": mode,
-                "red": red,
-                "green": green,
-                "blue": blue,
-                "interval": interval
-            }
+            self.current_led_status = {"mode": mode, "red": red, "green": green, "blue": blue, "interval": interval}
             if self.debug:
                 self.logger.debug(f"LED Status - Mode: {mode}, RGB: ({red},{green},{blue}), Interval: {interval}ms")
         elif msg_id == self.RESP_STATUS:
@@ -325,7 +330,7 @@ class UartManager:
         elif msg_id == self.RESP_CALIBRATE:
             try:
                 # Status (1 byte), Reserved (5 bytes)
-                status, _, _, _, _, _ = struct.unpack(">BBBBBB", data) # Unpack as 6 bytes, use only the first
+                status, _, _, _, _, _ = struct.unpack(">BBBBBB", data)  # Unpack as 6 bytes, use only the first
             except struct.error as e:
                 self.logger.error(f"Failed to unpack calibration response: {e}")
                 return
@@ -337,7 +342,7 @@ class UartManager:
                 status_str = "In Progress"
             elif status == 2:
                 status_str = "Failure"
-            
+
             if self.debug:
                 self.logger.debug(f"Calibration Status: {status_str} ({status})")
             self.logger.info(f"Calibration Status: {status_str} ({status})")
@@ -379,5 +384,5 @@ class UartManager:
     def __del__(self):
         self.running = False
         time.sleep(0.1)  # Give the communication loop time to exit
-        if hasattr(self, 'ser') and self.ser:
+        if hasattr(self, "ser") and self.ser:
             self.ser.close()

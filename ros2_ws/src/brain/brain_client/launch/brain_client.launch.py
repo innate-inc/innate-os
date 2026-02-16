@@ -48,9 +48,7 @@ def generate_launch_description():
         default_value="False",
         description="Flag to enable sending depth images",
     )
-    vertical_fov_arg = DeclareLaunchArgument(
-        "vertical_fov", default_value="80.0", description="Vertical field of view"
-    )
+    vertical_fov_arg = DeclareLaunchArgument("vertical_fov", default_value="80.0", description="Vertical field of view")
     horizontal_resolution_arg = DeclareLaunchArgument(
         "horizontal_resolution",
         default_value="1280",
@@ -151,9 +149,7 @@ def generate_launch_description():
                 "cartesia_voice_id": LaunchConfiguration("cartesia_voice_id"),
                 "openai_realtime_model": LaunchConfiguration("openai_realtime_model"),
                 "openai_realtime_url": LaunchConfiguration("openai_realtime_url"),
-                "openai_transcribe_model": LaunchConfiguration(
-                    "openai_transcribe_model"
-                ),
+                "openai_transcribe_model": LaunchConfiguration("openai_transcribe_model"),
             }
         ],
         output="screen",

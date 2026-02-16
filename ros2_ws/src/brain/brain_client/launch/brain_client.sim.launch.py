@@ -40,17 +40,13 @@ def generate_launch_description():
     amcl_pose_topic_arg = DeclareLaunchArgument(
         "amcl_pose_topic", default_value="/amcl_pose", description="AMCL pose topic"
     )
-    map_topic_arg = DeclareLaunchArgument(
-        "map_topic", default_value="/map", description="Map topic"
-    )
+    map_topic_arg = DeclareLaunchArgument("map_topic", default_value="/map", description="Map topic")
     send_depth_arg = DeclareLaunchArgument(
         "send_depth",
         default_value="False",
         description="Flag to enable sending depth images",
     )
-    vertical_fov_arg = DeclareLaunchArgument(
-        "vertical_fov", default_value="80.0", description="Vertical field of view"
-    )
+    vertical_fov_arg = DeclareLaunchArgument("vertical_fov", default_value="80.0", description="Vertical field of view")
     horizontal_resolution_arg = DeclareLaunchArgument(
         "horizontal_resolution",
         default_value="640",
@@ -64,9 +60,7 @@ def generate_launch_description():
         default_value="0.0",
         description="Camera x position relative to robot base",
     )
-    height_cam_arg = DeclareLaunchArgument(
-        "height_cam", default_value="0.2", description="Camera height above ground"
-    )
+    height_cam_arg = DeclareLaunchArgument("height_cam", default_value="0.2", description="Camera height above ground")
     pose_image_interval_arg = DeclareLaunchArgument(
         "pose_image_interval",
         default_value="0.5",

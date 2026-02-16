@@ -4,6 +4,7 @@ Agent Type Definitions
 
 Base class and types for robot agents.
 """
+
 from abc import ABC, abstractmethod
 from typing import List, Optional
 

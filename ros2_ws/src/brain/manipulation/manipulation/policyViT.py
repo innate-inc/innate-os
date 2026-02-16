@@ -24,12 +24,12 @@ from InnateACT.policy import ViTPolicy
 
 # Define the policy configuration
 policy_config = {
-    'lr': 5e-5,
-    'weight_decay': 1e-4,
-    'num_queries': 50,
-    'camera_names': ['camera_1', 'camera_2'],
-    'state_dim': 6,
-    'action_dim': 8
+    "lr": 5e-5,
+    "weight_decay": 1e-4,
+    "num_queries": 50,
+    "camera_names": ["camera_1", "camera_2"],
+    "state_dim": 6,
+    "action_dim": 8,
 }
 
 ####################################################
@@ -42,40 +42,41 @@ CHUNK_SIZE = 30
 # Add after the ViTPolicy import:
 from manipulation.ensemble import ACTTemporalEnsembler
 
+
 class InferenceNode(Node):
     def __init__(self):
-        super().__init__('inference_node')
+        super().__init__("inference_node")
         self.get_logger().info("Inference node started.")
         self.bridge = CvBridge()
         self.image_size = (640, 480)
 
         # Set device and load the policy model
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.policy = ViTPolicy(policy_config).to(self.device).half()
-        
+
         # Load checkpoint and stats
-        checkpoint_path = '/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Axel_wednesday_20250517_1828/policy_epoch_9895_seed_100.ckpt'
+        checkpoint_path = "/home/vignesh/maurice-prod/ros2_ws/src/brain/manipulation/ckpts/Axel_wednesday_20250517_1828/policy_epoch_9895_seed_100.ckpt"
         checkpoint_path = os.path.expanduser(checkpoint_path)
         checkpoint_dir = os.path.dirname(checkpoint_path)
-        stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pkl')
-        metadata_path = os.path.join(checkpoint_dir, 'metadata.json')
-        
+        stats_path = os.path.join(checkpoint_dir, "dataset_stats.pkl")
+        metadata_path = os.path.join(checkpoint_dir, "metadata.json")
+
         try:
-            with open(stats_path, 'rb') as f:
+            with open(stats_path, "rb") as f:
                 self.norm_stats = pickle.load(f)
             self.get_logger().info("Normalization stats loaded.")
         except Exception as e:
             self.get_logger().error(f"Failed to load normalization stats: {e}")
             self.norm_stats = None
-            
+
         try:
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path, "r") as f:
                 self.metadata = json.load(f)
             self.get_logger().info("Metadata loaded successfully.")
         except Exception as e:
             self.get_logger().error(f"Failed to load metadata: {e}")
             self.metadata = None
-            
+
         try:
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             self.policy.load_state_dict(state_dict)
@@ -86,11 +87,7 @@ class InferenceNode(Node):
             self.get_logger().error(f"Failed to load policy checkpoint: {e}")
 
         # Set up sensor QoS profile
-        image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
+        image_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=10)
 
         # Variables to hold the latest sensor data
         self.latest_image1 = None
@@ -98,16 +95,16 @@ class InferenceNode(Node):
         self.latest_joint_state = None
 
         # Subscribers
-        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
-        self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
-        self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
+        self.create_subscription(Image, "/mars/main_camera/image", self.image1_callback, image_qos)
+        self.create_subscription(Image, "/mars/arm/image_raw", self.image2_callback, image_qos)
+        self.create_subscription(JointState, "/mars/arm/state", self.joint_state_callback, 10)
 
         # Publishers
-        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.arm_state_pub = self.create_publisher(Float64MultiArray, '/mars/arm/commands', 10)
+        self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.arm_state_pub = self.create_publisher(Float64MultiArray, "/mars/arm/commands", 10)
 
         # Timer for inference loop
-        self.timer = self.create_timer(1/30.0, self.inference_loop)
+        self.timer = self.create_timer(1 / 30.0, self.inference_loop)
         self.action_buffer = []
 
         # If using temporal ensembling, create an ensembler instance
@@ -119,13 +116,13 @@ class InferenceNode(Node):
 
     def image1_callback(self, msg: Image):
         try:
-            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
         except Exception as e:
             self.get_logger().error(f"Error converting image1: {e}")
 
     def image2_callback(self, msg: Image):
         try:
-            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            self.latest_image2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
         except Exception as e:
             self.get_logger().error(f"Error converting image2: {e}")
 
@@ -167,7 +164,7 @@ class InferenceNode(Node):
         # Run the policy network
         with torch.no_grad():
             start_time = time.time()
-            
+
             # Initialize compiled model on first inference
             if self.compiled_policy is None:
                 self.get_logger().info("Compiling the policy model with float16 support...")
@@ -176,30 +173,26 @@ class InferenceNode(Node):
                     self.get_logger().info("Warming up model before tracing...")
                     example_qpos = qpos_tensor.clone().detach().half()
                     example_images = images.clone().detach().half()
-                    
+
                     # Run a few forward passes to warm up the model
                     for _ in range(3):
                         _ = self.policy(example_qpos, example_images)
-                    
+
                     # Now trace the model with float16 inputs
                     self.get_logger().info("Tracing model...")
                     scripted = torch.jit.trace(self.policy, (example_qpos, example_images))
-                    
+
                     # Then compile for low overhead with float16 support
                     self.get_logger().info("Compiling model...")
-                    self.compiled_policy = torch.compile(
-                        scripted,
-                        backend="inductor",
-                        mode="reduce-overhead"
-                    )
+                    self.compiled_policy = torch.compile(scripted, backend="inductor", mode="reduce-overhead")
                     self.get_logger().info("Model compilation with float16 support successful!")
                 except Exception as e:
                     self.get_logger().error(f"Model compilation failed: {e}")
                     self.compiled_policy = self.policy  # Fallback to original model
-            
+
             # Use the compiled model for inference
             output = self.compiled_policy(qpos_tensor, images)
-            
+
             self.get_logger().info(f"Policy time: {time.time() - start_time:.3f} seconds")
             if self.norm_stats is not None and "action_mean" in self.norm_stats:
                 action_mean = torch.tensor(self.norm_stats["action_mean"], dtype=torch.float16, device=self.device)
@@ -244,6 +237,7 @@ class InferenceNode(Node):
         arm_msg.data = next_action[:6]
         self.arm_state_pub.publish(arm_msg)
 
+
 def main(args=None):
     rclpy.init(args=args)
     node = InferenceNode()
@@ -255,5 +249,6 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
 
-if __name__ == '__main__':
-    main() 
+
+if __name__ == "__main__":
+    main()

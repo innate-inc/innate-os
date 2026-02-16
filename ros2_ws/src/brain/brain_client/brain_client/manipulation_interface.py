@@ -414,7 +414,7 @@ class ManipulationInterface:
 
         # Clamp percent to 0-100
         percent = max(0.0, min(100.0, percent))
-        
+
         # Interpolate between closed and open based on percent
         positions[5] = self.GRIPPER_CLOSED + (self.GRIPPER_OPEN - self.GRIPPER_CLOSED) * (percent / 100.0)
         return self.move_to_joint_positions(positions, duration=duration, wait_for_completion=False)

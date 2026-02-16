@@ -9,16 +9,16 @@ from pathlib import Path
 
 def generate_launch_description():
     # Load environment variables from .env file if it exists
-    innate_os_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
+    innate_os_root = os.environ.get("INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os"))
     env_file_path = Path(innate_os_root) / ".env"
     if env_file_path.exists():
         with open(env_file_path) as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
                     os.environ[key.strip()] = value.strip()
-    
+
     # Get logging environment variables
     env_vars = get_logging_env_vars()
 
@@ -69,4 +69,3 @@ def generate_launch_description():
             ),
         ]
     )
-
