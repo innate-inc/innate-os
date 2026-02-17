@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -36,11 +37,14 @@ import cv2
 import numpy as np
 import rclpy
 from maurice_msgs.action import RunStereoCalibration
+from maurice_msgs.srv import GotoJS
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, Float64MultiArray
+from std_srvs.srv import Trigger
 from cv_bridge import CvBridge
 import message_filters
 
@@ -51,6 +55,20 @@ from maurice_cam.calibration_utils import (
     save_calibration,
     prompt_save,
 )
+
+# ---------------------------------------------------------------------------
+# Stereo calibration arm-control constants
+# ---------------------------------------------------------------------------
+
+# "Board handoff" pose:
+# all joints at 0, except joint3 tilted +9 degrees upward, gripper open.
+PREPARE_BOARD_JOINTS_RAD = [0.0, 0.0, math.radians(9.0), 0.0, 0.0, 0.85]
+GRIPPER_OPEN_RAD = 0.85
+GRIPPER_CLOSED_RAD = 0.0
+PREPARE_MOVE_TIME_SEC = 2.5
+GRIPPER_ACTION_TIME_SEC = 1.0
+DEFAULT_PREPARE_SERVICE_NAME = "/mars/main_camera/prepare_stereo_calibration"
+DEFAULT_STOP_SERVICE_NAME = "/mars/main_camera/stop_stereo_calibration"
 
 
 @dataclass
@@ -114,6 +132,10 @@ class StereoCalibrator(Node):
         self.declare_parameter('interactive', True)  # CLI mode (stdin prompts)
         self.declare_parameter('auto_start', True)  # Start capture/playback at boot of this node
         self.declare_parameter('run_action_name', '/mars/main_camera/run_stereo_calibration')
+        self.declare_parameter('prepare_service_name', DEFAULT_PREPARE_SERVICE_NAME)
+        self.declare_parameter('stop_service_name', DEFAULT_STOP_SERVICE_NAME)
+        self.declare_parameter('prepare_move_time_sec', PREPARE_MOVE_TIME_SEC)
+        self.declare_parameter('gripper_action_time_sec', GRIPPER_ACTION_TIME_SEC)
 
         # Get parameters
         self.left_topic = self.get_parameter('left_topic').value
@@ -138,6 +160,16 @@ class StereoCalibrator(Node):
         self.interactive = bool(self.get_parameter('interactive').value)
         self.auto_start = bool(self.get_parameter('auto_start').value)
         self.run_action_name = str(self.get_parameter('run_action_name').value)
+        self.prepare_service_name = str(
+            self.get_parameter('prepare_service_name').value
+        )
+        self.stop_service_name = str(self.get_parameter('stop_service_name').value)
+        self.prepare_move_time_sec = float(
+            self.get_parameter('prepare_move_time_sec').value
+        )
+        self.gripper_action_time_sec = float(
+            self.get_parameter('gripper_action_time_sec').value
+        )
 
         # Create ChArUco board
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(self.dictionary_id)
@@ -176,8 +208,14 @@ class StereoCalibrator(Node):
         self._cancel_requested = False
         self._active_goal = None
         self._active_goal_lock = threading.Lock()
+        self._playback_proc = None
+        self._playback_proc_lock = threading.Lock()
         self._last_output_path = ""
         self._last_rms = {"left": 0.0, "right": 0.0, "stereo": 0.0}
+
+        # Re-entrant callback group so services/cancel callbacks can run while
+        # the long-running action execute callback is active.
+        self._control_cb_group = ReentrantCallbackGroup()
 
         # Image storage directory - inside data directory so images persist
         self.tmp_image_dir = self.data_directory / 'stereo_calibration_images'
@@ -197,6 +235,30 @@ class StereoCalibrator(Node):
             execute_callback=self._execute_run_calibration,
             goal_callback=self._goal_callback,
             cancel_callback=self._cancel_callback,
+            callback_group=self._control_cb_group,
+        )
+
+        # Arm control client used by prepare/start calibration flows.
+        self._arm_goto_client = self.create_client(
+            GotoJS,
+            '/mars/arm/goto_js',
+            callback_group=self._control_cb_group,
+        )
+
+        # Service for app step 1: move arm to "insert board" pose.
+        self._prepare_service = self.create_service(
+            Trigger,
+            self.prepare_service_name,
+            self._prepare_board_service_callback,
+            callback_group=self._control_cb_group,
+        )
+
+        # Optional convenience service for stop button in app.
+        self._stop_service = self.create_service(
+            Trigger,
+            self.stop_service_name,
+            self._stop_calibration_service_callback,
+            callback_group=self._control_cb_group,
         )
 
         if self.interactive and self.auto_start:
@@ -248,6 +310,12 @@ class StereoCalibrator(Node):
             self.get_logger().info(
                 f"Mode: MANAGED (waiting for action goals on '{self.run_action_name}')"
             )
+            self.get_logger().info(
+                f"Prepare service available on '{self.prepare_service_name}'"
+            )
+            self.get_logger().info(
+                f"Stop service available on '{self.stop_service_name}'"
+            )
 
     def _reset_calibration_session(self):
         """Reset all capture/calibration buffers for a new run."""
@@ -278,8 +346,8 @@ class StereoCalibrator(Node):
 
     def _cancel_callback(self, goal_handle):
         """Allow cancellation of the current run."""
-        self._cancel_requested = True
-        self.get_logger().info("Calibration cancel requested")
+        del goal_handle
+        self._request_stop_active_run("Calibration cancel requested")
         return CancelResponse.ACCEPT
 
     def _publish_action_feedback(self, goal_handle, phase: str, message: str):
@@ -295,6 +363,132 @@ class StereoCalibrator(Node):
         }
         feedback.message = json.dumps(feedback_payload, separators=(",", ":"), ensure_ascii=True)
         goal_handle.publish_feedback(feedback)
+
+    def _terminate_playback_process(self) -> bool:
+        """Terminate active rosbag playback process if it is running."""
+        with self._playback_proc_lock:
+            proc = self._playback_proc
+
+        if proc is None or proc.poll() is not None:
+            return False
+
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5.0)
+            except Exception:
+                proc.kill()
+            return True
+        except Exception as e:
+            self.get_logger().warn(f"Failed to terminate playback process: {e}")
+            return False
+
+    def _request_stop_active_run(self, reason: str):
+        """Request stop for active run and terminate playback promptly."""
+        self._cancel_requested = True
+        terminated = self._terminate_playback_process()
+        if terminated:
+            self.get_logger().info(f"{reason}; playback process terminated")
+        else:
+            self.get_logger().info(f"{reason}; cancellation flag set")
+
+    def _call_arm_goto_js(
+        self,
+        joint_positions: list[float],
+        duration_sec: float,
+    ) -> tuple[bool, str]:
+        """Call /mars/arm/goto_js with a 6-DOF target."""
+        if len(joint_positions) != 6:
+            return False, f"Expected 6 joints, got {len(joint_positions)}"
+
+        if not self._arm_goto_client.wait_for_service(timeout_sec=2.0):
+            return False, "/mars/arm/goto_js service not available"
+
+        req = GotoJS.Request()
+        req.data = Float64MultiArray()
+        req.data.data = [float(v) for v in joint_positions]
+        req.time = float(duration_sec)
+
+        try:
+            future = self._arm_goto_client.call_async(req)
+        except Exception as e:
+            return False, f"Failed to call /mars/arm/goto_js: {e}"
+
+        timeout_sec = max(2.0, float(duration_sec) + 5.0)
+        end_time = time.time() + timeout_sec
+        while rclpy.ok() and not future.done() and time.time() < end_time:
+            time.sleep(0.05)
+
+        if not future.done():
+            return False, f"/mars/arm/goto_js timed out after {timeout_sec:.1f}s"
+
+        try:
+            result = future.result()
+        except Exception as e:
+            return False, f"/mars/arm/goto_js failed: {e}"
+
+        if result is None:
+            return False, "/mars/arm/goto_js returned no result"
+        if not result.success:
+            return False, "/mars/arm/goto_js reported failure"
+        return True, "ok"
+
+    def _move_arm_to_prepare_pose(self, gripper_open: bool) -> tuple[bool, str]:
+        """Move arm to board handoff pose with open/closed gripper."""
+        target = list(PREPARE_BOARD_JOINTS_RAD)
+        target[5] = GRIPPER_OPEN_RAD if gripper_open else GRIPPER_CLOSED_RAD
+        duration = (
+            self.prepare_move_time_sec if gripper_open else self.gripper_action_time_sec
+        )
+        success, message = self._call_arm_goto_js(target, duration)
+        if success:
+            grip_state = "open" if gripper_open else "closed"
+            self.get_logger().info(
+                f"Arm moved to calibration handoff pose (gripper {grip_state})"
+            )
+        return success, message
+
+    def _close_gripper_for_calibration(self) -> tuple[bool, str]:
+        """Close gripper to hold board before playback starts."""
+        return self._move_arm_to_prepare_pose(gripper_open=False)
+
+    def _prepare_board_service_callback(self, request, response):
+        """Service callback to place arm in board insertion pose."""
+        del request
+
+        with self._active_goal_lock:
+            if self._active_goal is not None:
+                response.success = False
+                response.message = "Calibration is running; stop it before prepare."
+                return response
+
+        success, message = self._move_arm_to_prepare_pose(gripper_open=True)
+        response.success = bool(success)
+        if success:
+            response.message = (
+                "Arm ready for board insertion "
+                "(joint3 +9deg, gripper open)."
+            )
+        else:
+            response.message = f"Failed to move to board insertion pose: {message}"
+        return response
+
+    def _stop_calibration_service_callback(self, request, response):
+        """Service callback for stop button while action is running."""
+        del request
+
+        with self._active_goal_lock:
+            active = self._active_goal is not None
+
+        if not active:
+            response.success = True
+            response.message = "No active calibration run."
+            return response
+
+        self._request_stop_active_run("Stop service requested")
+        response.success = True
+        response.message = "Stop requested."
+        return response
 
     def _execute_run_calibration(self, goal_handle):
         """Execute a managed stereo calibration run for app/API clients."""
@@ -333,6 +527,25 @@ class StereoCalibrator(Node):
             )
 
             setup_head_and_arm(self)
+            self._publish_action_feedback(
+                goal_handle,
+                "PREPARE",
+                "Closing gripper on calibration board",
+            )
+
+            grip_success, grip_message = self._close_gripper_for_calibration()
+            if not grip_success:
+                restore_head_and_arm(self)
+                self._capture_enabled = False
+                msg = f"Failed to close gripper before playback: {grip_message}"
+                self.get_logger().error(msg)
+                goal_handle.abort()
+                result = RunStereoCalibration.Result()
+                result.success = False
+                result.message = msg
+                result.images_captured = int(self.images_captured)
+                return result
+
             playback_ok = self._playback_loop(
                 bag_path_override=bag_path,
                 playback_rate=playback_rate,
@@ -514,19 +727,18 @@ class StereoCalibrator(Node):
         # Wait a moment for subscriptions to connect
         time.sleep(2.0)
 
+        proc = None
         try:
             proc = subprocess.Popen(
                 ['ros2', 'bag', 'play', '-r', str(rate), str(bag_path)],
             )
+            with self._playback_proc_lock:
+                self._playback_proc = proc
 
             last_feedback_time = 0.0
             while True:
                 if self._cancel_requested:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5.0)
-                    except Exception:
-                        proc.kill()
+                    self._terminate_playback_process()
                     self.get_logger().info('Playback terminated due to cancellation')
                     return False
 
@@ -551,6 +763,10 @@ class StereoCalibrator(Node):
         except Exception as e:
             self.get_logger().error(f'Failed to play bag: {e}')
             return False
+        finally:
+            with self._playback_proc_lock:
+                if proc is not None and self._playback_proc is proc:
+                    self._playback_proc = None
 
         self.get_logger().info(
             f'Bag playback finished — captured {self.images_captured} images'
