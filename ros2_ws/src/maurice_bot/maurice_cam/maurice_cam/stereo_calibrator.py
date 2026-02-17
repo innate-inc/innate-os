@@ -31,6 +31,8 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
 from typing import Optional
 
 import cv2
@@ -127,7 +129,8 @@ class StereoCalibrator(Node):
         self.declare_parameter('use_legacy_pattern', True)  # Enable for calib.io boards (OpenCV 4.6.0+)
         self.declare_parameter('debug', False)  # Enable debug mosaic after each capture
         self.declare_parameter('playback', True)  # Playback mode: replay a rosbag
-        self.declare_parameter('bag_path', '/home/jetson1/innate-os/data/calibration_bag')     # Path to rosbag for playback
+        _default_bag_path = str(Path(get_package_share_directory('maurice_cam')) / 'calib')
+        self.declare_parameter('bag_path', _default_bag_path)     # Path to rosbag for playback
         self.declare_parameter('playback_rate', 1.5)
         self.declare_parameter('interactive', True)  # CLI mode (stdin prompts)
         self.declare_parameter('auto_start', True)  # Start capture/playback at boot of this node

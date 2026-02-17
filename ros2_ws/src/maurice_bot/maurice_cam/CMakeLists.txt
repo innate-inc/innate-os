@@ -278,6 +278,11 @@ install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
 
+# Install calibration data (rosbag for stereo calibration)
+install(DIRECTORY calib/
+  DESTINATION share/${PROJECT_NAME}/calib
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
