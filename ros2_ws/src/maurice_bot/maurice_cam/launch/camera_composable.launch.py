@@ -17,9 +17,10 @@ Usage:
 """
 
 from launch import LaunchDescription
+from launch.conditions import IfCondition
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
 
@@ -41,6 +42,12 @@ def generate_launch_description():
             'stereo_depth_estimator.yaml'
         ]),
         description='Path to camera pipeline config file'
+    )
+
+    start_calibration_manager_arg = DeclareLaunchArgument(
+        'start_calibration_manager',
+        default_value='true',
+        description='Start managed stereo calibration action server node'
     )
 
     # ── Nodes ─────────────────────────────────────────────────────────────────
@@ -114,8 +121,26 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
+    stereo_calibration_manager = Node(
+        package='maurice_cam',
+        executable='stereo_calibrator',
+        name='stereo_calibration_manager',
+        output='screen',
+        parameters=[
+            {
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'interactive': False,
+                'auto_start': False,
+                'playback': False,
+            }
+        ],
+        condition=IfCondition(LaunchConfiguration('start_calibration_manager')),
+    )
+
     return LaunchDescription([
         use_sim_time_arg,
         camera_config_arg,
+        start_calibration_manager_arg,
         camera_container,
+        stereo_calibration_manager,
     ])

@@ -190,6 +190,7 @@ def save_calibration(node):
         node.get_logger().info(f'Calibration saved to: {output_path}')
         import sys
         sys.stdout.flush()
+        return str(output_path)
     except Exception as e:
         node.get_logger().error(f'Error saving calibration: {e}')
         raise
