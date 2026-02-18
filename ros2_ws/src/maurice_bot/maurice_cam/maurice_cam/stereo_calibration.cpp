@@ -30,6 +30,13 @@ std::shared_ptr<StereoCalibration> StereoCalibration::loadFromFile(const std::fi
     throw std::runtime_error("Failed to open calibration file: " + yaml_path.string());
   }
 
+  // Version check — file must declare version 2
+  int version = 0;
+  fs["version"] >> version;
+  if (version != 2) {
+    throw std::runtime_error("Calibration file version must be 2, got " + std::to_string(version) + ": " + yaml_path.string());
+  }
+
   auto cal = std::shared_ptr<StereoCalibration>(new StereoCalibration());
   cal->file_path_ = yaml_path;
 

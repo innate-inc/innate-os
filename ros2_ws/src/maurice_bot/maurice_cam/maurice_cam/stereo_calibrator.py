@@ -1196,6 +1196,7 @@ class StereoCalibrator(Node):
             'image_width': self.image_width,
             'image_height': self.image_height,
             'rms_error': ret_stereo,
+            'version': 2,
         }
 
         # Generate visualization images
@@ -1259,10 +1260,8 @@ def main(args=None):
 
     try:
         node.destroy_node()
-    except Exception:
-        pass
-    if rclpy.ok():
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

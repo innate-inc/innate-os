@@ -170,6 +170,7 @@ def save_calibration(node):
         if not fs.isOpened():
             raise RuntimeError(f'Failed to open file for writing: {output_path}')
 
+        fs.write('version', 2)
         fs.write('model', 'pinhole')
         fs.write('image_width', node.calibration_data['image_width'])
         fs.write('image_height', node.calibration_data['image_height'])
@@ -239,12 +240,11 @@ def prompt_save(node):
     # Restore head and arm to original state
     restore_head_and_arm(node)
 
-    # Signal shutdown
     node.get_logger().info('Calibration complete. Shutting down...')
+
+    # Shut down rclpy so that rclpy.spin() on the main thread unblocks.
+    # This is safe to call from any thread — spin() will raise and main() handles cleanup.
     try:
         rclpy.shutdown()
-    except Exception as e:
-        node.get_logger().warn(f'Error during shutdown: {e}')
-    finally:
-        import sys
-        sys.exit(0)
+    except Exception:
+        pass
