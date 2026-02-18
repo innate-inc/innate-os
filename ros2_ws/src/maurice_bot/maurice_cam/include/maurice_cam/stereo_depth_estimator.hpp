@@ -98,6 +98,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_color_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rectified_compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
 
   // ── General Parameters ─────────────────────────────────────────────────
   std::string data_directory_;
@@ -107,6 +108,7 @@ private:
   std::string left_rectified_color_topic_;
   std::string left_rectified_compressed_topic_;
   std::string pointcloud_topic_;
+  std::string pointcloud_color_topic_;
   std::string frame_id_;
   int max_disparity_;
   int process_every_n_frames_;
