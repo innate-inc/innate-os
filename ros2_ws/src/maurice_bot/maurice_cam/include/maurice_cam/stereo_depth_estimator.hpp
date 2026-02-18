@@ -48,24 +48,23 @@ public:
   ~StereoDepthEstimator();
 
 private:
-  // ── VPI Stereo (depth_estimator/vpi_stereo.cpp) ─────────────────────────
+  // ── VPI Pipeline (depth_estimator/vpi_stereo.cpp) ───────────────────────
   bool initializeVPI();
   void cleanupVPI();
-  bool submitSGM(const cv::Mat& left_rect, const cv::Mat& right_rect);
-  void syncSGM();
+  bool submitSGM();           // submit SGM using remap VPIImages (async)
+  void syncVPI();             // vpiStreamSync — wait for all GPU work
   cv::Mat extractDisparity();
-  void cleanupSGMWraps();
 
-  // ── Rectification (depth_estimator/rectification.cpp) ──────────────────
-  void scaleToCalibRes(const cv::Mat& left_in, const cv::Mat& right_in,
-                       cv::Mat& left_out, cv::Mat& right_out);
-  void rectifyMono(const cv::Mat& left_scaled, const cv::Mat& right_scaled,
-                   cv::Mat& left_rect, cv::Mat& right_rect);
-  void rectifyColor(const cv::Mat& left_scaled, cv::Mat& left_color_rect);
-#ifdef USE_VPI_REMAP
+  // ── VPI Rectification (depth_estimator/rectification.cpp) ──────────────
   bool initVPIRemap();
   void cleanupVPIRemap();
-#endif
+  void scaleToCalibRes(const cv::Mat& left_in, const cv::Mat& right_in,
+                       cv::Mat& left_out, cv::Mat& right_out);
+  bool submitRemap(const cv::Mat& left_gray, const cv::Mat& right_gray);
+  bool submitColorRemap(const cv::Mat& left_bgr);
+  void lockRectifiedMono(cv::Mat& left_rect, cv::Mat& right_rect);
+  cv::Mat lockRectifiedColor();
+  void cleanupFrameWraps();
 
   // ── Publishing (depth_estimator/publishing.cpp) ────────────────────────
   void publishMonoRectified(const cv::Mat& left_rect, const cv::Mat& right_rect,
@@ -167,26 +166,24 @@ private:
   cv::Mat map1_left_, map2_left_;
   cv::Mat map1_right_, map2_right_;
 
-  // VPI resources
+  // VPI resources (persistent — created at init, destroyed at shutdown)
   VPIStream vpi_stream_{nullptr};
   VPIImage vpi_disparity_{nullptr};
   VPIImage vpi_confidence_{nullptr};
   VPIPayload stereo_payload_{nullptr};
 
-  // Per-frame VPI image wraps (created in submitSGM, destroyed in cleanupSGMWraps)
-  VPIImage vpi_left_wrap_{nullptr};
-  VPIImage vpi_right_wrap_{nullptr};
-
-#ifdef USE_VPI_REMAP
-  // VPI remap resources (persistent across frames)
+  // VPI remap resources (remap outputs feed directly to SGM — zero-copy)
   VPIPayload vpi_remap_left_{nullptr};
   VPIPayload vpi_remap_right_{nullptr};
   VPIPayload vpi_remap_color_{nullptr};
   VPIImage   vpi_rect_left_out_{nullptr};
   VPIImage   vpi_rect_right_out_{nullptr};
   VPIImage   vpi_rect_color_out_{nullptr};
-  bool       vpi_remap_ready_{false};
-#endif
+
+  // Per-frame VPI input wrappers (created each frame, destroyed after sync)
+  VPIImage vpi_frame_in_left_{nullptr};
+  VPIImage vpi_frame_in_right_{nullptr};
+  VPIImage vpi_frame_in_color_{nullptr};
 
   bool vpi_initialized_{false};
   bool calibration_loaded_{false};

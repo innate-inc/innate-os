@@ -70,25 +70,8 @@ void StereoDepthEstimator::cleanupVPI()
 // =============================================================================
 // Wrap rectified mono images and submit SGM to CUDA (async)
 // =============================================================================
-bool StereoDepthEstimator::submitSGM(const cv::Mat& left_rect, const cv::Mat& right_rect)
+bool StereoDepthEstimator::submitSGM()
 {
-  VPIStatus status;
-
-  status = vpiImageCreateWrapperOpenCVMat(left_rect, VPI_IMAGE_FORMAT_U8,
-                                           VPI_BACKEND_CUDA, &vpi_left_wrap_);
-  if (status != VPI_SUCCESS) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap left rectified image");
-    return false;
-  }
-
-  status = vpiImageCreateWrapperOpenCVMat(right_rect, VPI_IMAGE_FORMAT_U8,
-                                           VPI_BACKEND_CUDA, &vpi_right_wrap_);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap_); vpi_left_wrap_ = nullptr;
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap right rectified image");
-    return false;
-  }
-
   VPIStereoDisparityEstimatorParams params;
   vpiInitStereoDisparityEstimatorParams(&params);
   params.maxDisparity = max_disparity_;
@@ -98,13 +81,12 @@ bool StereoDepthEstimator::submitSGM(const cv::Mat& left_rect, const cv::Mat& ri
   params.p2 = p2_;
   params.uniqueness = static_cast<float>(uniqueness_);
 
-  vpiStreamSync(vpi_stream_);
-  status = vpiSubmitStereoDisparityEstimator(vpi_stream_, VPI_BACKEND_CUDA, stereo_payload_,
-                                              vpi_left_wrap_, vpi_right_wrap_,
-                                              vpi_disparity_, vpi_confidence_, &params);
+  VPIStatus status = vpiSubmitStereoDisparityEstimator(
+      vpi_stream_, VPI_BACKEND_CUDA, stereo_payload_,
+      vpi_rect_left_out_, vpi_rect_right_out_,
+      vpi_disparity_, vpi_confidence_, &params);
   if (status != VPI_SUCCESS) {
-    cleanupSGMWraps();
-    RCLCPP_ERROR(this->get_logger(), "Failed to compute stereo disparity");
+    RCLCPP_ERROR(this->get_logger(), "Failed to submit stereo disparity");
     return false;
   }
 
@@ -114,7 +96,7 @@ bool StereoDepthEstimator::submitSGM(const cv::Mat& left_rect, const cv::Mat& ri
 // =============================================================================
 // Wait for the GPU to finish the SGM computation
 // =============================================================================
-void StereoDepthEstimator::syncSGM()
+void StereoDepthEstimator::syncVPI()
 {
   vpiStreamSync(vpi_stream_);
 }
@@ -170,15 +152,6 @@ cv::Mat StereoDepthEstimator::extractDisparity()
   }
 
   return disp;
-}
-
-// =============================================================================
-// Destroy temporary per-frame VPI image wrappers
-// =============================================================================
-void StereoDepthEstimator::cleanupSGMWraps()
-{
-  if (vpi_left_wrap_)  { vpiImageDestroy(vpi_left_wrap_);  vpi_left_wrap_  = nullptr; }
-  if (vpi_right_wrap_) { vpiImageDestroy(vpi_right_wrap_); vpi_right_wrap_ = nullptr; }
 }
 
 } // namespace maurice_cam

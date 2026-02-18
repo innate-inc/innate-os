@@ -133,22 +133,19 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
     throw;
   }
 
-#ifdef USE_VPI_REMAP
-  // Initialize VPI remap for GPU-accelerated rectification
-  if (initVPIRemap()) {
-    vpi_remap_ready_ = true;
-  } else {
-    RCLCPP_WARN(this->get_logger(), "VPI remap init failed — falling back to OpenCV remap");
+  // Initialize VPI remap (GPU-accelerated rectification)
+  if (!initVPIRemap()) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI remap");
+    throw std::runtime_error("VPI remap initialization failed");
   }
-#endif
 
-  // Initialize VPI
+  // Initialize VPI SGM pipeline
   if (!initializeVPI()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI");
+    RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI SGM");
     throw std::runtime_error("VPI initialization failed");
   }
   vpi_initialized_ = true;
-  RCLCPP_INFO(this->get_logger(), "VPI initialized successfully (SGM CUDA, diagonals=%d)", include_diagonals_);
+  RCLCPP_INFO(this->get_logger(), "VPI initialized (remap + SGM CUDA, diagonals=%d)", include_diagonals_);
 
   // Create publishers (lazy publishing — only publish when subscribed)
   auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
@@ -188,9 +185,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 StereoDepthEstimator::~StereoDepthEstimator()
 {
   RCLCPP_INFO(this->get_logger(), "Shutting down Stereo Depth Estimator...");
-#ifdef USE_VPI_REMAP
+  if (vpi_stream_) vpiStreamSync(vpi_stream_);
   cleanupVPIRemap();
-#endif
   cleanupVPI();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator shutdown complete");
 }
@@ -300,74 +296,74 @@ void StereoDepthEstimator::processFrame(
   const bool pub_unfiltered      = disparity_unfiltered_pub_->get_subscription_count() > 0;
   const bool pub_disparity       = disparity_pub_->get_subscription_count() > 0;
   const bool pub_depth           = depth_pub_->get_subscription_count() > 0;
-  const auto t_sub = clock::now();
 
   const bool has_color     = left_input.channels() == 3;
   const bool need_color_rect = has_color &&
       (pub_left_color || pub_left_compressed || pub_pointcloud_color);
 
-  // ── Scale to calibration resolution ────────────────────────────────────
+  // ── Scale to calibration resolution (CPU) ──────────────────────────────
   cv::Mat left_scaled, right_scaled;
   scaleToCalibRes(left_input, right_input, left_scaled, right_scaled);
-  const auto t_scale = clock::now();
 
-  // ── Rectify mono (gray + remap) ────────────────────────────────────────
-  cv::Mat left_rect, right_rect;
-  rectifyMono(left_scaled, right_scaled, left_rect, right_rect);
-  const auto t_rect = clock::now();
+  // ── Convert to grayscale (CPU) ─────────────────────────────────────────
+  cv::Mat left_gray, right_gray;
+  if (left_scaled.channels() == 3) {
+    cv::cvtColor(left_scaled,  left_gray,  cv::COLOR_BGR2GRAY);
+    cv::cvtColor(right_scaled, right_gray, cv::COLOR_BGR2GRAY);
+  } else {
+    left_gray  = left_scaled;
+    right_gray = right_scaled;
+  }
+  const auto t_prep = clock::now();
 
-  // ── Submit SGM to GPU (async) ──────────────────────────────────────────
-  if (!submitSGM(left_rect, right_rect)) return;
+  // ── GPU pipeline: remap → SGM → colour remap (all async, single stream) ──
+  if (!submitRemap(left_gray, right_gray)) { cleanupFrameWraps(); return; }
+  if (!submitSGM()) { cleanupFrameWraps(); return; }
+  if (need_color_rect) submitColorRemap(left_scaled);
   const auto t_submit = clock::now();
 
-  // ── CPU work while GPU computes ────────────────────────────────────────
+  // ── Sync GPU — single wait for entire remap + SGM chain ────────────────
+  syncVPI();
+  const auto t_sync = clock::now();
+
+  // ── Lock rectified outputs for CPU publishing ──────────────────────────
+  cv::Mat left_rect, right_rect;
+  lockRectifiedMono(left_rect, right_rect);
   cv::Mat left_color_rect;
-  if (need_color_rect) rectifyColor(left_scaled, left_color_rect);
-  const auto t_color_remap = clock::now();
-
-  if (pub_left_rect || pub_right_rect)
-    publishMonoRectified(left_rect, right_rect, timestamp, pub_left_rect, pub_right_rect);
-  const auto t_mono_pub = clock::now();
-
-  if (pub_left_color || pub_left_compressed)
-    publishColorRectified(left_color_rect, left_rect, has_color, timestamp,
-                          pub_left_color, pub_left_compressed);
-  const auto t_color_pub = clock::now();
-
-  // ── Sync GPU ───────────────────────────────────────────────────────────
-  syncSGM();
-  const auto t_sgm = clock::now();
+  if (need_color_rect) left_color_rect = lockRectifiedColor();
+  const auto t_lock = clock::now();
 
   // ── Extract disparity from VPI ─────────────────────────────────────────
   cv::Mat disparity_float = extractDisparity();
-  if (disparity_float.empty()) { cleanupSGMWraps(); return; }
+  if (disparity_float.empty()) { cleanupFrameWraps(); return; }
   const auto t_extract = clock::now();
+
+  // ── Cleanup per-frame VPI input wrappers ───────────────────────────────
+  cleanupFrameWraps();
 
   // ── Publish unfiltered disparity ───────────────────────────────────────
   if (pub_unfiltered) publishDisparityMsg(disparity_float, timestamp, disparity_unfiltered_pub_);
-  const auto t_unfilt = clock::now();
 
   // ── Filter chain ───────────────────────────────────────────────────────
   cv::Mat disparity_lowres;
   FilterTimings ft;
   applyFilterChain(disparity_float, disparity_lowres, ft,
-                            static_cast<float>(focal_length_), static_cast<float>(baseline_));
+                   static_cast<float>(focal_length_), static_cast<float>(baseline_));
   const auto t_filter = clock::now();
 
-  // ── Publish filtered disparity ─────────────────────────────────────────
+  // ── Publish ────────────────────────────────────────────────────────────
   if (pub_disparity) publishDisparityMsg(disparity_float, timestamp, disparity_pub_);
-
-  // ── Depth ──────────────────────────────────────────────────────────────
   if (pub_depth) publishDepth(disparity_float, timestamp);
-  const auto t_depth = clock::now();
+  if (pub_left_rect || pub_right_rect)
+    publishMonoRectified(left_rect, right_rect, timestamp, pub_left_rect, pub_right_rect);
+  if (pub_left_color || pub_left_compressed)
+    publishColorRectified(left_color_rect, left_rect, has_color, timestamp,
+                          pub_left_color, pub_left_compressed);
+  const auto t_pub = clock::now();
 
   // ── Point clouds ───────────────────────────────────────────────────────
   if (pub_pointcloud)       publishPointCloudXYZ(disparity_lowres, timestamp);
   if (pub_pointcloud_color) publishPointCloudColor(disparity_lowres, left_color_rect, timestamp);
-  const auto t_pc = clock::now();
-
-  // ── Cleanup per-frame VPI wraps ────────────────────────────────────────
-  cleanupSGMWraps();
   const auto t_end = clock::now();
 
   // ── Pipeline timing (1 Hz) ─────────────────────────────────────────────
@@ -376,17 +372,14 @@ void StereoDepthEstimator::processFrame(
   };
 
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-    "Pipeline %.1fms | sub %.1f | scale %.1f | rectify %.1f | sgm_submit %.1f | "
-    "color_remap %.1f | mono_pub %.1f | color_pub %.1f | sgm_sync %.1f | "
-    "extract %.1f | unfilt %.1f | filter %.1f | depth %.1f | pc %.1f | "
+    "Pipeline %.1fms | prep %.1f | gpu_submit %.1f | gpu_sync %.1f | "
+    "lock %.1f | extract %.1f | filter %.1f | pub %.1f | pc %.1f | "
     "subs[L:%d R:%d C:%d J:%d PC:%d PCC:%d D:%d Di:%d Du:%d col:%d]",
     ms(t_end - t_start),
-    ms(t_sub - t_start), ms(t_scale - t_sub), ms(t_rect - t_scale),
-    ms(t_submit - t_rect), ms(t_color_remap - t_submit),
-    ms(t_mono_pub - t_color_remap), ms(t_color_pub - t_mono_pub),
-    ms(t_sgm - t_color_pub), ms(t_extract - t_sgm),
-    ms(t_unfilt - t_extract), ms(t_filter - t_unfilt),
-    ms(t_depth - t_filter), ms(t_pc - t_depth),
+    ms(t_prep - t_start), ms(t_submit - t_prep),
+    ms(t_sync - t_submit), ms(t_lock - t_sync),
+    ms(t_extract - t_lock), ms(t_filter - t_extract),
+    ms(t_pub - t_filter), ms(t_end - t_pub),
     (int)pub_left_rect, (int)pub_right_rect, (int)pub_left_color,
     (int)pub_left_compressed, (int)pub_pointcloud, (int)pub_pointcloud_color,
     (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered, (int)has_color);
@@ -394,7 +387,7 @@ void StereoDepthEstimator::processFrame(
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
     "Filter detail %.1fms | down %.1f | clamp %.1f | domain %.1f | speckle %.1f | "
     "edge %.1f | median %.1f | bilateral %.1f | hole %.1f | temporal %.1f | up %.1f",
-    ms(t_filter - t_unfilt),
+    ms(t_filter - t_extract),
     ft.downsample_ms, ft.depth_clamp_ms, ft.domain_transform_ms,
     ft.speckle_ms, ft.edge_inv_ms, ft.median_ms, ft.bilateral_ms,
     ft.hole_fill_ms, ft.temporal_ms, ft.upsample_ms);
@@ -422,7 +415,7 @@ int main(int argc, char** argv)
 #endif
 
 // =============================================================================
-// PIPELINE ARCHITECTURE
+// PIPELINE ARCHITECTURE — ZERO-COPY VPI GPU CHAIN
 // =============================================================================
 //
 //   ┌─────────────────────────────────┐   ┌──────────────────────────────────┐
@@ -441,105 +434,95 @@ int main(int argc, char** argv)
 //              │           processFrame()               │
 //              └────────────────┬───────────────────────┘
 //                               │
-//                               ▼
-//                ┌──────────────────────────────┐
-//                │      scaleToCalibRes()       │
-//                │  input res → calib res       │
-//                └──────────────┬───────────────┘
+//         ┌─────────────────────┴─────────────────────────┐
+//         │              CPU PREP                          │
+//         │                                                │
+//         │  scaleToCalibRes()  → left_scaled, right_scaled│
+//         │  cvtColor(BGR2GRAY) → left_gray, right_gray    │
+//         └─────────────────────┬─────────────────────────┘
+//                               │
+//  ╔════════════════════════════╧═══════════════════════════════════════════╗
+//  ║    GPU PIPELINE — single VPIStream, all ops async, one sync          ║
+//  ║                                                                       ║
+//  ║  submitRemap(left_gray, right_gray)                                   ║
+//  ║    ┌──────────────────┐     ┌──────────────────┐                      ║
+//  ║    │ vpiSubmitRemap L │────▶│ vpiSubmitRemap R │                      ║
+//  ║    │ host→CUDA upload │     │ host→CUDA upload │                      ║
+//  ║    └────────┬─────────┘     └────────┬─────────┘                      ║
+//  ║             │                        │                                ║
+//  ║             ▼                        ▼                                ║
+//  ║    ┌──────────────────┐     ┌──────────────────┐                      ║
+//  ║    │vpi_rect_left_out_│     │vpi_rect_right_out│  persistent          ║
+//  ║    │   (VPIImage U8)  │     │   (VPIImage U8)  │  GPU images          ║
+//  ║    └────────┬─────────┘     └────────┬─────────┘                      ║
+//  ║             │     ZERO-COPY          │                                ║
+//  ║             └──────────┬─────────────┘                                ║
+//  ║                        │                                              ║
+//  ║  submitSGM()           ▼                                              ║
+//  ║    ┌───────────────────────────────────┐                              ║
+//  ║    │ vpiSubmitStereoDisparityEstimator │                              ║
+//  ║    │   reads rect VPIImages directly   │                              ║
+//  ║    │   (no GPU↔CPU roundtrip!)         │                              ║
+//  ║    └───────────────┬───────────────────┘                              ║
+//  ║                    │                                                  ║
+//  ║                    ▼                                                  ║
+//  ║    ┌──────────────────┐   ┌──────────────────┐                        ║
+//  ║    │  vpi_disparity_  │   │ vpi_confidence_  │                        ║
+//  ║    │  (VPIImage S16)  │   │  (VPIImage U16)  │                        ║
+//  ║    └──────────────────┘   └──────────────────┘                        ║
+//  ║                                                                       ║
+//  ║  submitColorRemap(left_bgr)  [optional — only if colour subscribers]  ║
+//  ║    ┌──────────────────┐     ┌───────────────────┐                     ║
+//  ║    │ vpiSubmitRemap C │────▶│vpi_rect_color_out_│                     ║
+//  ║    │ host→CUDA upload │     │  (VPIImage BGR8)  │                     ║
+//  ║    └──────────────────┘     └───────────────────┘                     ║
+//  ╚════════════════════════════╤═══════════════════════════════════════════╝
 //                               │
 //                               ▼
-//                ┌──────────────────────────────┐
-//                │       rectifyMono()          │
-//                │  BGR→gray + cv::remap        │
-//                └──────────────┬───────────────┘
+//                    ┌─────────────────────┐
+//                    │      syncVPI()      │  ◄── single wait for entire chain
+//                    │  vpiStreamSync()    │
+//                    └──────────┬──────────┘
 //                               │
-//              ┌────────────────┼──────────────────────────────┐
-//              │                │                              │
-//              ▼                ▼                              ▼
-//  ┌────────────────┐  ┌───────────────┐          ┌────────────────────┐
-//  │  submitSGM()   │  │ rectifyColor()│          │publishMonoRectified│
-//  │  VPI SGM→CUDA  │  │ cv::remap BGR │          │  (CPU, parallel)   │
-//  │  (async)       │  │ (CPU overlap) │          └─────┬──────┬───────┘
-//  └───────┬────────┘  └──────┬────────┘                │      │
-//          │                  │  left_color_rect         ▼      ▼
-//          │                  │              ┌─────────────┐ ┌──────────────┐
-//          │          ┌───────┤              │.../left/    │ │.../right/    │
-//          │          │       │              │ image_rect  │ │ image_rect   │
-//          │          │       │              │  (mono8)    │ │  (mono8)     │
-//          │          │       │              └─────────────┘ └──────────────┘
-//          │          │       │
-//          │          │       ├──────────────────────────────────┐
-//          │          │       │                                  │
-//          │          │       ▼                                  ▼
-//          │          │  ┌───────────────────────────┐  ┌───────────────────────────┐
-//          │          │  │  publishColorRectified()  │  │  publishColorRectified()  │
-//          │          │  │       (BGR Image)         │  │     (JPEG compress)       │
-//          │          │  └─────────────┬─────────────┘  └─────────────┬─────────────┘
-//          │          │               ▼                              ▼
-//          │          │  ┌───────────────────────────┐  ┌───────────────────────────┐
-//          │          │  │.../left/image_rect_color  │  │.../left/image_rect_color/ │
-//          │          │  │         (bgr8)            │  │  compressed  (jpeg)       │
-//          │          │  └───────────────────────────┘  └───────────────────────────┘
-//          │          │
-//          ▼          │ (color_rect saved for pointcloud)
-//  ┌───────────────┐  │
-//  │   syncSGM()   │  │  ◄── wait for CUDA
-//  └───────┬───────┘  │
-//          ▼          │
-//  ┌──────────────────┐
-//  │extractDisparity() │
-//  │ S16 Q10.5 → F32  │
-//  │ + border zeroing  │
-//  └────────┬─────────┘
-//           │          │
-//           ├──────────│──────────────────────────────┐
-//           │          │ (raw disparity)              │
-//           ▼          │                              ▼
-//  ┌──────────────────────┐               ┌───────────────────────────┐
-//  │ publishDisparityMsg()│               │ .../disparity_unfiltered  │
-//  │    (unfiltered)      │──────────────▶│    (DisparityImage)       │
-//  └──────────────────────┘               └───────────────────────────┘
-//           │          │
-//           ▼          │
-//  ┌────────────────────────────────────────────────────────────────┐
-//  │                    applyFilterChain()                          │
-//  │                                                                │
-//  │  ┌────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐       │
-//  │  │downsamp│─▶│  median   │─▶│bilateral │─▶│ hole fill │──┐    │
-//  │  └────────┘  └──────────┘  └──────────┘  └───────────┘  │    │
-//  │                                                          ▼    │
-//  │  ┌────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐  │    │
-//  │  │upsample│◀─│ temporal │◀─│ domain   │◀─│  speckle  │◀─┘    │
-//  │  │        │  │          │  │ transform│  │           │       │
-//  │  └────────┘  └──────────┘  └──────────┘  └───────────┘       │
-//  │      ▲                                                        │
-//  │      └── also: depth_clamp, edge_invalidation (order param)   │
-//  └───────────────────────┬────────────────────────────────────────┘
-//           disparity_float│          │ left_color_rect
-//           disparity_lowres          │
-//          ┌───────────────┼──────────┴────────────┐
-//          │               │                       │
-//          ▼               ▼                       ▼
-//  ┌──────────────┐  ┌───────────┐   ┌──────────────────────────────────┐
-//  │publishDisp.. │  │publishDep.│   │    publishPointCloudXYZ()       │
-//  │  (filtered)  │  │ f*b / d   │   │      (disparity_lowres only)    │
-//  └──────┬───────┘  └─────┬─────┘   └──────────────┬───────────────────┘
-//         │                │                         │
-//         │                │         ┌───────────────────────────────────┐
-//         │                │         │  publishPointCloudColor()        │
-//         │                │         │  (disparity_lowres + color_rect) │
-//         │                │         └──────────────┬────────────────────┘
-//         ▼                ▼                  ▼                ▼
-//  ┌──────────────┐  ┌───────────┐  ┌─────────────┐ ┌───────────────┐
-//  │.../disparity │  │.../depth  │  │.../points   │ │.../points_    │
-//  │(DisparityImg)│  │ (16SC1 mm)│  │(PointCloud2 │ │    color      │
-//  └──────────────┘  └───────────┘  │   XYZ)      │ │(PointCloud2   │
-//                                   └─────────────┘ │  XYZRGB)      │
-//                                                    └───────────────┘
+//              ┌────────────────┼───────────────────────┐
+//              │                │                       │
+//              ▼                ▼                       ▼
+//    ┌─────────────────┐ ┌──────────────┐  ┌────────────────────┐
+//    │lockRectifiedMono│ │lockRectified │  │ extractDisparity() │
+//    │  lock→clone→    │ │   Color()    │  │  S16 Q10.5 → F32  │
+//    │  unlock (L+R)   │ │ lock→clone   │  │  + border zeroing  │
+//    └────────┬────────┘ └──────┬───────┘  └─────────┬──────────┘
+//             │                 │                    │
+//     ┌───────┴────────┐       │          ┌─────────┴─────────┐
+//     │                │       │          │                   │
+//     ▼                ▼       │          ▼                   ▼
+// ┌───────────┐ ┌───────────┐ │  ┌──────────────────┐ ┌─────────────────┐
+// │.../left/  │ │.../right/ │ │  │ publishDisparity │ │ applyFilter     │
+// │image_rect │ │image_rect │ │  │   (unfiltered)   │ │  Chain()        │
+// │ (mono8)   │ │ (mono8)   │ │  └──────────────────┘ └────────┬────────┘
+// └───────────┘ └───────────┘ │                                │
+//                             │     ┌──────────────────────────┤
+//     ┌───────────────────────┘     │                          │
+//     │                             │                          │
+//     ▼                             ▼                          ▼
+// ┌──────────────┐  ┌──────────┐ ┌──────────────┐ ┌────────────────────┐
+// │publishColor  │  │publishDep│ │publishDisp   │ │publishPointCloud   │
+// │Rectified()   │  │(f*b / d) │ │ (filtered)   │ │ XYZ / Color        │
+// └──────┬───────┘  └────┬─────┘ └──────┬───────┘ └─────────┬──────────┘
+//        │               │              │                    │
+//        ▼               ▼              ▼                    ▼
+// ┌──────────────┐ ┌──────────┐ ┌──────────────┐ ┌───────────────────┐
+// │.../left/     │ │.../depth │ │.../disparity │ │.../points         │
+// │image_rect_   │ │(16SC1 mm)│ │(DisparityImg)│ │.../points_color   │
+// │color (+jpeg) │ └──────────┘ └──────────────┘ │(PointCloud2)      │
+// └──────────────┘                                └───────────────────┘
+//
+// KEY OPTIMIZATION: remap output VPIImages feed directly to SGM on the GPU.
+// No intermediate vpiImageLockData / vpiImageCreateWrapper per frame for SGM.
+// Only 1× vpiStreamSync per frame (was 3× with old per-op sync approach).
+// Per-frame input wrappers are lightweight (host ptr → CUDA DMA, no alloc).
 //
 // All topics under /mars/main_camera/ namespace (configurable via params).
 // All publishers are lazy — only publish when ≥1 subscriber is connected.
-// GPU/CPU overlap: colour rectification + mono publishing runs while SGM
-// executes on CUDA, hiding ~2-3ms of CPU work behind the GPU fence.
 // Filter chain order is configurable via the "filter_order" parameter.
 // =============================================================================
