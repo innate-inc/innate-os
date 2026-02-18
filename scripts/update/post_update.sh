@@ -160,7 +160,7 @@ log "Git fsync settings configured"
 log "Stopping services to begin update..."
 
 # Stop systemd services first (if they exist)
-for service in zenoh-router.service ros-app.service ble-provisioner.service; do
+for service in jetson-perf.service zenoh-router.service ros-app.service ble-provisioner.service; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
         log "Stopping $service"
         systemctl stop "$service"
@@ -604,7 +604,7 @@ fi
 log "Enabling and starting services..."
 
 # List of services to enable/start
-SERVICES=("zenoh-router.service" "ros-app.service")
+SERVICES=("jetson-perf.service" "zenoh-router.service" "ros-app.service")
 
 # Add ble-provisioner if the service file exists
 if [ -f "/etc/systemd/system/ble-provisioner.service" ]; then
