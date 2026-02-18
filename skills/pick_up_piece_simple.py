@@ -8,6 +8,9 @@ Orientation strategy by rank/column:
   Ranks 7-8:  pitch=1.09 (tilted, 1.57-0.48), yaw=0
   Ranks 1-3, cols A-D:  pitch=1.57, yaw=-1.57 (rotated left)
   Ranks 1-3, cols E-H:  pitch=1.57, yaw=+1.57 (rotated right)
+
+Shortcut: ranks 5-6 can reach ranks 7-8 directly with tilted
+orientation, skipping the relay handoff.
 """
 
 import json
@@ -87,7 +90,7 @@ class PickUpPieceSimple(Skill):
             return None
 
     def _square_to_position(self, square, calibration):
-        """Convert chess notation (e.g. 'E4') to (x, y) robot coordinates."""
+        """Convert chess notation (e.g. 'E4') to (x, y, z) robot coordinates."""
         if len(square) != 2:
             return None
         file_char = square[0].upper()
@@ -110,7 +113,8 @@ class PickUpPieceSimple(Skill):
 
         x = (1 - u) * (1 - v) * bl["x"] + u * (1 - v) * br["x"] + (1 - u) * v * tl["x"] + u * v * tr["x"]
         y = (1 - u) * (1 - v) * bl["y"] + u * (1 - v) * br["y"] + (1 - u) * v * tl["y"] + u * v * tr["y"]
-        return x, y
+        z = (1 - u) * (1 - v) * bl.get("z", 0) + u * (1 - v) * br.get("z", 0) + (1 - u) * v * tl.get("z", 0) + u * v * tr.get("z", 0)
+        return x, y, z
 
     def _orientation_for_square(self, square):
         """Return (pitch, yaw) for reaching a given square.
@@ -225,9 +229,18 @@ class PickUpPieceSimple(Skill):
         self._move_arm(0.15, 0.1, 0.1, pitch, yaw, 2, wait=2.0)
 
     def _needs_relay(self, src_square, dst_square):
-        """Check if move crosses the rank 6/7 boundary requiring a relay."""
+        """Check if move crosses the rank 6/7 boundary requiring a relay.
+
+        Ranks 5-6 can reach 7-8 directly with tilted orientation,
+        so no relay is needed for that transition.
+        """
         src_rank = int(src_square[1])
         dst_rank = int(dst_square[1])
+        # Ranks 5-6 <-> 7-8 can be done directly with tilted pitch
+        if src_rank in (5, 6) and dst_rank >= 7:
+            return False
+        if dst_rank in (5, 6) and src_rank >= 7:
+            return False
         return (src_rank <= 6) != (dst_rank <= 6)
 
     def _relay_position(self, src_square, dst_square, calibration):
@@ -235,7 +248,7 @@ class PickUpPieceSimple(Skill):
 
         Uses the file of whichever square is in ranks 1-6 so the relay
         stays close to the reachable side of the board.
-        Returns (relay_square_str, (x, y)) or (relay_square_str, None).
+        Returns (relay_square_str, (x, y, z)) or (relay_square_str, None).
         """
         src_rank = int(src_square[1])
         if src_rank <= 6:
@@ -390,16 +403,16 @@ class PickUpPieceSimple(Skill):
         if dst_pos is None:
             return f"Invalid target square '{place_square}'", SkillResult.FAILURE
 
-        src_x, src_y = src_pos
-        dst_x, dst_y = dst_pos
-        pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
+        src_x, src_y, src_board_z = src_pos
+        dst_x, dst_y, dst_board_z = dst_pos
+        base_pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
         src_pitch, src_yaw = self._orientation_for_square(square)
         dst_pitch, dst_yaw = self._orientation_for_square(place_square)
 
         self.logger.info(
-            f"[PickUpPieceSimple] Pick {square} ({src_x:.4f},{src_y:.4f}) "
+            f"[PickUpPieceSimple] Pick {square} ({src_x:.4f},{src_y:.4f},z={src_board_z:.4f}) "
             f"pitch={src_pitch:.2f} yaw={src_yaw:.2f} -> "
-            f"Place {place_square} ({dst_x:.4f},{dst_y:.4f}) "
+            f"Place {place_square} ({dst_x:.4f},{dst_y:.4f},z={dst_board_z:.4f}) "
             f"pitch={dst_pitch:.2f} yaw={dst_yaw:.2f}"
         )
 
@@ -411,20 +424,22 @@ class PickUpPieceSimple(Skill):
             relay_sq, relay_pos = self._relay_position(square, place_square, calibration)
             if relay_pos is None:
                 return "Failed to compute relay position", SkillResult.FAILURE
-            relay_x, relay_y = relay_pos
+            relay_x, relay_y, relay_board_z = relay_pos
+            relay_pick_height = base_pick_height + relay_board_z
 
-            self.logger.info(f"[PickUpPieceSimple] Relay through {relay_sq} ({relay_x:.4f},{relay_y:.4f})")
+            self.logger.info(f"[PickUpPieceSimple] Relay through {relay_sq} ({relay_x:.4f},{relay_y:.4f},z={relay_board_z:.4f})")
 
             # Leg 1: pick from source, place at relay (keep source orientation)
             # Tilted caution if source is rank 7-8
             leg1_tilted = src_rank >= 7
+            src_pick_height = base_pick_height + src_board_z
             self._send_feedback(f"Relay leg 1: {square} -> {relay_sq}")
             err = self._do_pick_place(
                 src_x,
                 src_y,
                 relay_x,
                 relay_y,
-                pick_height,
+                src_pick_height,
                 src_pitch,
                 src_yaw,
                 src_pitch,
@@ -442,13 +457,14 @@ class PickUpPieceSimple(Skill):
             # Leg 2: pick from relay, place at destination (destination orientation)
             # Tilted caution if destination is rank 7-8
             leg2_tilted = dst_rank >= 7
+            dst_pick_height = base_pick_height + dst_board_z
             self._send_feedback(f"Relay leg 2: {relay_sq} -> {place_square}")
             err = self._do_pick_place(
                 relay_x,
                 relay_y,
                 dst_x,
                 dst_y,
-                pick_height,
+                relay_pick_height,
                 dst_pitch,
                 dst_yaw,
                 dst_pitch,
@@ -462,7 +478,16 @@ class PickUpPieceSimple(Skill):
                 return f"Relay leg 2 failed: {err}", SkillResult.FAILURE
         else:
             # ── Direct move (no orientation change needed) ──
-            any_tilted = src_rank >= 7 or dst_rank >= 7
+            # Ranks 5-6 <-> 7-8: use tilted orientation for both ends
+            cross_56_78 = (src_rank in (5, 6) and dst_rank >= 7) or (dst_rank in (5, 6) and src_rank >= 7)
+            if cross_56_78:
+                src_pitch, src_yaw = self.PITCH_TILTED, self.YAW_CENTER
+                dst_pitch, dst_yaw = self.PITCH_TILTED, self.YAW_CENTER
+                self.logger.info(
+                    f"[PickUpPieceSimple] Rank {src_rank}->{dst_rank}: direct tilted (no relay)"
+                )
+            any_tilted = src_rank >= 7 or dst_rank >= 7 or cross_56_78
+            pick_height = base_pick_height + src_board_z
             err = self._do_pick_place(
                 src_x,
                 src_y,
