@@ -35,6 +35,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("image_height", 480);  // Single camera image height
   this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
   this->declare_parameter<std::string>("pointcloud_topic", "/mars/main_camera/points");
+  this->declare_parameter<std::string>("pointcloud_color_topic", "/mars/main_camera/points_color");
   this->declare_parameter<int>("pointcloud_decimation", 2);  // 2 = half resolution point cloud
   
   // VPI Stereo Disparity Estimator - Creation parameters (set at payload creation)
@@ -67,6 +68,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
   if (process_every_n_frames_ < 1) process_every_n_frames_ = 1;
   pointcloud_topic_ = this->get_parameter("pointcloud_topic").as_string();
+  pointcloud_color_topic_ = this->get_parameter("pointcloud_color_topic").as_string();
   pointcloud_decimation_ = this->get_parameter("pointcloud_decimation").as_int();
   if (pointcloud_decimation_ < 1) pointcloud_decimation_ = 1;
   
@@ -155,6 +157,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   left_rectified_color_pub_ = this->create_publisher<sensor_msgs::msg::Image>(left_rectified_color_topic_, sensor_qos);
   left_rectified_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(left_rectified_compressed_topic_, sensor_qos);
   pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, sensor_qos);
+  pointcloud_color_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_color_topic_, sensor_qos);
   
   RCLCPP_INFO(this->get_logger(), "Publishers created (lazy publishing - only publish when subscribed)");
   RCLCPP_INFO(this->get_logger(), "  Depth: %s", depth_topic_.c_str());
@@ -165,6 +168,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "  Left rect color: %s", left_rectified_color_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Left rect compressed: %s", left_rectified_compressed_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "  Point cloud: %s (decimation: %d)", pointcloud_topic_.c_str(), pointcloud_decimation_);
+  RCLCPP_INFO(this->get_logger(), "  Point cloud color: %s", pointcloud_color_topic_.c_str());
 
   logFilterConfig();
 
@@ -346,6 +350,25 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   using clock = std::chrono::steady_clock;
   const auto t_frame_start = clock::now();
 
+  // ===== Subscription checks (all in one place) =====
+  const bool pub_left_rect = left_rectified_pub_->get_subscription_count() > 0;
+  const bool pub_right_rect = right_rectified_pub_->get_subscription_count() > 0;
+  const bool pub_left_rect_color = left_rectified_color_pub_->get_subscription_count() > 0;
+  const bool pub_left_rect_compressed = left_rectified_compressed_pub_->get_subscription_count() > 0;
+  const bool pub_pointcloud = pointcloud_pub_->get_subscription_count() > 0;
+  const bool pub_pointcloud_color = pointcloud_color_pub_->get_subscription_count() > 0;
+  const bool pub_unfiltered = disparity_unfiltered_pub_->get_subscription_count() > 0;
+  const bool pub_disparity = disparity_pub_->get_subscription_count() > 0;
+  const bool pub_depth = depth_pub_->get_subscription_count() > 0;
+  const auto t_sub_check = clock::now();
+
+  // ===== Derived action flags =====
+  const bool has_color_input = left_input.channels() == 3;
+  const bool need_mono_rect_pub = pub_left_rect || pub_right_rect;
+  const bool need_color_rect = has_color_input &&
+      (pub_left_rect_color || pub_left_rect_compressed || pub_pointcloud_color);
+  const bool need_any_pointcloud = pub_pointcloud || pub_pointcloud_color;
+
   // ===== STEP 1: Scale to calibration resolution =====
   // Input images are already in the correct orientation (matching calibration)
   cv::Mat left_scaled, right_scaled;
@@ -371,25 +394,18 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   const auto t_rectify = clock::now();
 
   // ===== STEP 4: Publish rectified images if subscribed =====
-  const bool pub_left_rect = left_rectified_pub_->get_subscription_count() > 0;
-  const bool pub_right_rect = right_rectified_pub_->get_subscription_count() > 0;
-  const bool pub_left_rect_color = left_rectified_color_pub_->get_subscription_count() > 0;
-  const bool pub_left_rect_compressed = left_rectified_compressed_pub_->get_subscription_count() > 0;
-  const bool pub_pointcloud = pointcloud_pub_->get_subscription_count() > 0;
-  const bool has_color_input = left_scaled.channels() == 3;
-
   // Rectify the color image at calibration resolution if anyone needs it
-  // (color rect topic, compressed rect topic, or point cloud coloring).
+  // (color rect topic, compressed rect topic, or color point cloud).
+  // The default pointcloud (xyz-only) does NOT need color rectification.
   // This must use the same rectification maps as the mono images so that
   // color pixels align with the disparity.
   cv::Mat left_color_rect;  // calib-resolution, BGR, rectified
-  const bool need_color_rect = has_color_input &&
-      (pub_left_rect_color || pub_left_rect_compressed || pub_pointcloud);
   if (need_color_rect) {
     cv::remap(left_scaled, left_color_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
   }
+  const auto t_color_remap = clock::now();
 
-  if (pub_left_rect || pub_right_rect) {
+  if (need_mono_rect_pub) {
     // Upscale rectified images to input resolution
     cv::Mat left_rect_full, right_rect_full;
     cv::resize(left_rect, left_rect_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
@@ -423,8 +439,10 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
       right_rectified_pub_->publish(std::move(right_rect_msg));
     }
   }
+  const auto t_mono_pub = clock::now();
 
   // Publish color rectified + compressed if subscribed
+  auto t_color_pub = clock::now();
   if (pub_left_rect_color || pub_left_rect_compressed) {
     cv::Mat left_color_rect_src;
     if (has_color_input) {
@@ -449,6 +467,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
       memcpy(color_msg->data.data(), left_color_rect_full.data, color_msg->data.size());
       left_rectified_color_pub_->publish(std::move(color_msg));
     }
+    t_color_pub = clock::now();
 
     if (pub_left_rect_compressed) {
       // Encode to JPEG using TurboJPEG
@@ -583,7 +602,6 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   const auto t_border = clock::now();
 
   // ===== STEP 7a: Publish unfiltered disparity if subscribed =====
-  const bool pub_unfiltered = disparity_unfiltered_pub_->get_subscription_count() > 0;
   if (pub_unfiltered) {
     publishDisparityMsg(disparity_float, timestamp, disparity_unfiltered_pub_);
   }
@@ -596,7 +614,6 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   const auto t_filter = clock::now();
 
   // ===== STEP 7c: Publish filtered disparity if subscribed =====
-  const bool pub_disparity = disparity_pub_->get_subscription_count() > 0;
   if (pub_disparity) {
     publishDisparityMsg(disparity_float, timestamp, disparity_pub_);
   }
@@ -632,8 +649,6 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   cv::resize(depth_calib, depth_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
   const auto t_depth = clock::now();
 
-  const bool pub_depth = depth_pub_->get_subscription_count() > 0;
-
   // ===== STEP 9: Generate point cloud directly from filtered disparity =====
   // Use the disparity at its current resolution (quarter after filter downsample).
   // This keeps the point count low and avoids an expensive upscale+decimate round-trip.
@@ -641,7 +656,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   auto t_pc_alloc = t_pc_resize;
   auto t_pc_fill = t_pc_resize;
   auto t_pc_pub = t_pc_resize;
-  if (pub_pointcloud) {
+  if (need_any_pointcloud) {
     const int disp_w = disparity_lowres.cols;
     const int disp_h = disparity_lowres.rows;
 
@@ -657,10 +672,10 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     const float f_depth = static_cast<float>(focal_length_);  // calib-res, matches disparity units
     const float baseline = static_cast<float>(baseline_);
 
-    // Downsample rectified colour image to match disparity resolution.
+    // Downsample rectified colour image to match disparity resolution (only for color PC).
     // Must use the rectified image (not raw input) so colours align with disparity.
     cv::Mat color_for_pc;
-    const bool has_color = need_color_rect && !left_color_rect.empty();
+    const bool has_color = pub_pointcloud_color && need_color_rect && !left_color_rect.empty();
     if (has_color) {
       cv::resize(left_color_rect, color_for_pc, cv::Size(disp_w, disp_h), 0, 0, cv::INTER_AREA);
     }
@@ -670,65 +685,108 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     const int pc_width  = disp_w / pointcloud_decimation_;
     const int pc_height = disp_h / pointcloud_decimation_;
     const int step = pointcloud_decimation_;
-
-    auto cloud_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
-    cloud_msg->header.stamp = timestamp;
-    cloud_msg->header.frame_id = frame_id_;
-    cloud_msg->height = pc_height;
-    cloud_msg->width = pc_width;
-    cloud_msg->is_dense = false;
-    cloud_msg->is_bigendian = false;
-
-    sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
-    modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
-    modifier.resize(pc_width * pc_height);
     t_pc_alloc = clock::now();
 
-    sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
-    sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
-    sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
-    sensor_msgs::PointCloud2Iterator<float> iter_rgb(*cloud_msg, "rgb");
+    // --- Default pointcloud: xyz only (no rgb overhead) ---
+    if (pub_pointcloud) {
+      auto cloud_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
+      cloud_msg->header.stamp = timestamp;
+      cloud_msg->header.frame_id = frame_id_;
+      cloud_msg->height = pc_height;
+      cloud_msg->width = pc_width;
+      cloud_msg->is_dense = false;
+      cloud_msg->is_bigendian = false;
 
-    for (int v = 0; v < pc_height; ++v) {
-      for (int u = 0; u < pc_width; ++u, ++iter_x, ++iter_y, ++iter_z, ++iter_rgb) {
-        const int px = u * step;
-        const int py = v * step;
-        const float d = disparity_lowres.at<float>(py, px);
+      sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
+      modifier.setPointCloud2FieldsByString(1, "xyz");
+      modifier.resize(pc_width * pc_height);
 
-        if (d > 0.0f && std::isfinite(d)) {
-          float z = f_depth * baseline / d;
-          if (z > 0.0f && z <= MAX_DEPTH_M) {
-            *iter_x = (static_cast<float>(px) - cx) * z / fx;
-            *iter_y = (static_cast<float>(py) - cy) * z / fy;
-            *iter_z = z;
+      sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
+      sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
+      sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
 
-            if (has_color) {
-              const cv::Vec3b& bgr = color_for_pc.at<cv::Vec3b>(py, px);
-              uint32_t rgb_packed = (static_cast<uint32_t>(bgr[2]) << 16) |
-                                    (static_cast<uint32_t>(bgr[1]) << 8) |
-                                    (static_cast<uint32_t>(bgr[0]));
-              float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
-              *iter_rgb = rgb_float;
-            } else {
-              uint32_t rgb_packed = 0x00808080;
-              float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
-              *iter_rgb = rgb_float;
+      for (int v = 0; v < pc_height; ++v) {
+        for (int u = 0; u < pc_width; ++u, ++iter_x, ++iter_y, ++iter_z) {
+          const int px = u * step;
+          const int py = v * step;
+          const float d = disparity_lowres.at<float>(py, px);
+
+          if (d > 0.0f && std::isfinite(d)) {
+            float z = f_depth * baseline / d;
+            if (z > 0.0f && z <= MAX_DEPTH_M) {
+              *iter_x = (static_cast<float>(px) - cx) * z / fx;
+              *iter_y = (static_cast<float>(py) - cy) * z / fy;
+              *iter_z = z;
+              continue;
             }
-            continue;
           }
+          *iter_x = std::numeric_limits<float>::quiet_NaN();
+          *iter_y = std::numeric_limits<float>::quiet_NaN();
+          *iter_z = std::numeric_limits<float>::quiet_NaN();
         }
-        // Invalid point
-        *iter_x = std::numeric_limits<float>::quiet_NaN();
-        *iter_y = std::numeric_limits<float>::quiet_NaN();
-        *iter_z = std::numeric_limits<float>::quiet_NaN();
-        uint32_t rgb_packed = 0x00000000;
-        float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
-        *iter_rgb = rgb_float;
       }
+      pointcloud_pub_->publish(std::move(cloud_msg));
+    }
+
+    // --- Color pointcloud: xyz + rgb ---
+    if (pub_pointcloud_color) {
+      auto cloud_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
+      cloud_msg->header.stamp = timestamp;
+      cloud_msg->header.frame_id = frame_id_;
+      cloud_msg->height = pc_height;
+      cloud_msg->width = pc_width;
+      cloud_msg->is_dense = false;
+      cloud_msg->is_bigendian = false;
+
+      sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
+      modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
+      modifier.resize(pc_width * pc_height);
+
+      sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
+      sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
+      sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
+      sensor_msgs::PointCloud2Iterator<float> iter_rgb(*cloud_msg, "rgb");
+
+      for (int v = 0; v < pc_height; ++v) {
+        for (int u = 0; u < pc_width; ++u, ++iter_x, ++iter_y, ++iter_z, ++iter_rgb) {
+          const int px = u * step;
+          const int py = v * step;
+          const float d = disparity_lowres.at<float>(py, px);
+
+          if (d > 0.0f && std::isfinite(d)) {
+            float z = f_depth * baseline / d;
+            if (z > 0.0f && z <= MAX_DEPTH_M) {
+              *iter_x = (static_cast<float>(px) - cx) * z / fx;
+              *iter_y = (static_cast<float>(py) - cy) * z / fy;
+              *iter_z = z;
+
+              if (has_color) {
+                const cv::Vec3b& bgr = color_for_pc.at<cv::Vec3b>(py, px);
+                uint32_t rgb_packed = (static_cast<uint32_t>(bgr[2]) << 16) |
+                                      (static_cast<uint32_t>(bgr[1]) << 8) |
+                                      (static_cast<uint32_t>(bgr[0]));
+                float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
+                *iter_rgb = rgb_float;
+              } else {
+                uint32_t rgb_packed = 0x00808080;
+                float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
+                *iter_rgb = rgb_float;
+              }
+              continue;
+            }
+          }
+          *iter_x = std::numeric_limits<float>::quiet_NaN();
+          *iter_y = std::numeric_limits<float>::quiet_NaN();
+          *iter_z = std::numeric_limits<float>::quiet_NaN();
+          uint32_t rgb_packed = 0x00000000;
+          float rgb_float; std::memcpy(&rgb_float, &rgb_packed, sizeof(float));
+          *iter_rgb = rgb_float;
+        }
+      }
+      pointcloud_color_pub_->publish(std::move(cloud_msg));
     }
     t_pc_fill = clock::now();
 
-    pointcloud_pub_->publish(std::move(cloud_msg));
     t_pc_pub = clock::now();
   }
 
@@ -753,15 +811,21 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     return std::chrono::duration<double, std::milli>(d).count();
   };
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-    "Pipeline %.1fms | scale %.1f | gray %.1f | rectify %.1f | pub_rect %.1f | "
+    "Pipeline %.1fms | sub_check %.1f | scale %.1f | gray %.1f | rectify %.1f | "
+    "color_remap %.1f | mono_pub %.1f | color_pub %.1f | jpeg_pub %.1f | "
     "vpi_wrap %.1f | sgm_submit %.1f | sgm_sync %.1f | "
     "lock+copy %.1f | border %.1f | unfilt_pub %.1f | filter %.1f | depth %.1f | "
-    "pc_resize %.1f | pc_alloc %.1f | pc_fill %.1f | pc_pub %.1f | depth_pub %.1f",
+    "pc_resize %.1f | pc_alloc %.1f | pc_fill %.1f | pc_pub %.1f | depth_pub %.1f | "
+    "subs[L:%d R:%d C:%d J:%d PC:%d PCC:%d D:%d Di:%d Du:%d col:%d]",
     ms(t_frame_end - t_frame_start),
-    ms(t_scale - t_frame_start),
+    ms(t_sub_check - t_frame_start),
+    ms(t_scale - t_sub_check),
     ms(t_gray - t_scale),
     ms(t_rectify - t_gray),
-    ms(t_pub_rect - t_rectify),
+    ms(t_color_remap - t_rectify),
+    ms(t_mono_pub - t_color_remap),
+    ms(t_color_pub - t_mono_pub),
+    ms(t_pub_rect - t_color_pub),
     ms(t_vpi_wrap - t_pub_rect),
     ms(t_sgm_submit - t_vpi_wrap),
     ms(t_sgm - t_sgm_submit),
@@ -774,7 +838,10 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     ms(t_pc_alloc - t_pc_resize),
     ms(t_pc_fill - t_pc_alloc),
     ms(t_pc_pub - t_pc_fill),
-    ms(t_frame_end - t_pc_pub));
+    ms(t_frame_end - t_pc_pub),
+    (int)pub_left_rect, (int)pub_right_rect, (int)pub_left_rect_color,
+    (int)pub_left_rect_compressed, (int)pub_pointcloud, (int)pub_pointcloud_color,
+    (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered, (int)has_color_input);
 
   // Detailed filter breakdown (throttled separately)
   const auto& ft = filter_timings;
