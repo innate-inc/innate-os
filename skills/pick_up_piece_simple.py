@@ -30,7 +30,7 @@ class PickUpPieceSimple(Skill):
 
     # Orientation constants
     FIXED_ROLL = 0.0
-    PITCH_DOWN = 1.57  # straight down
+    PITCH_DOWN = 1.45  # nearly straight down (compensates for slight arm slouch)
     PITCH_TILTED = 1.57 - 0.48  # tilted for far ranks (7-8)
     YAW_CENTER = 0.0
     YAW_LEFT = 1.57  # rotated left for ranks 1-3, cols A-D
@@ -230,8 +230,8 @@ class PickUpPieceSimple(Skill):
         return None
 
     def _go_to_safe_pose(self, pitch, yaw):
-        """Return arm to the resting safe pose."""
-        self._move_arm(0.15, 0.1, 0.1, pitch, yaw, 2, wait=2.0)
+        """Return arm to the resting safe pose (low x, high z, pitch=0 to stay out of camera view)."""
+        self._move_arm(0.10, 0.1, 0.15, 0.0, 0.0, 2, wait=2.0)
 
     def _needs_relay(self, src_square, dst_square):
         """Check if move crosses the rank 6/7 boundary requiring a relay.
