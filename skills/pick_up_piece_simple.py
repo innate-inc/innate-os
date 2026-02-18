@@ -62,6 +62,10 @@ class PickUpPieceSimple(Skill):
     # Relay rank for intermediary handoff when crossing rank 6/7 boundary
     RELAY_RANK = 5
 
+    # Discard zone: squares to the right of column H for captured pieces
+    DISCARD_SQUARES_RIGHT = 2  # how many square-widths right of H
+    DISCARD_RANK = 4.5  # midpoint between rank 4 and 5
+
     def __init__(self, logger):
         super().__init__(logger)
         self._cancelled = False
@@ -76,7 +80,8 @@ class PickUpPieceSimple(Skill):
             "Pick up a piece from one square and place it on another without "
             "using Gemini vision or base driving.  Uses arm orientation changes "
             "to reach all ranks.  Parameters: square (source, e.g. 'E2'), "
-            "place_square (target, e.g. 'E4'), piece (str, e.g. 'pawn'), speed (float)."
+            "place_square (target, e.g. 'E4'), piece (str, e.g. 'pawn'), "
+            "is_capture (bool, True if capturing an opponent piece), speed (float)."
         )
 
     # ── Helpers ───────────────────────────────────────────────────────
@@ -243,6 +248,33 @@ class PickUpPieceSimple(Skill):
             return False
         return (src_rank <= 6) != (dst_rank <= 6)
 
+    def _discard_position(self, calibration):
+        """Compute the (x, y, z) discard zone for captured pieces.
+
+        Located DISCARD_SQUARES_RIGHT square-widths to the right of column H,
+        at rank DISCARD_RANK level.  Orientation is straight down, center yaw
+        (same as ranks 4-6).
+        """
+        tr = calibration.get("top_right")
+        tl = calibration.get("top_left")
+        br = calibration.get("bottom_right")
+        bl = calibration.get("bottom_left")
+        if not all([tl, tr, bl, br]):
+            return None
+
+        # One square width in the y direction (A->H = 7 squares)
+        sq_y = ((bl["y"] - br["y"]) + (tl["y"] - tr["y"])) / 2.0 / 7.0
+        # Offset: move right (negative y) by DISCARD_SQUARES_RIGHT squares
+        y_offset = -sq_y * self.DISCARD_SQUARES_RIGHT
+
+        # Interpolate along rank axis: v = (rank - 1) / 7
+        v = (self.DISCARD_RANK - 1) / 7.0
+        # Use u = 1.0 (column H) then shift by y_offset
+        x = (1 - v) * br["x"] + v * tr["x"]
+        y = (1 - v) * br["y"] + v * tr["y"] + y_offset
+        z = (1 - v) * br.get("z", 0) + v * tr.get("z", 0)
+        return x, y, z
+
     def _relay_position(self, src_square, dst_square, calibration):
         """Compute a relay square on rank 5 for intermediary handoff.
 
@@ -372,9 +404,13 @@ class PickUpPieceSimple(Skill):
 
     TALL_PIECES = {"king", "queen"}
 
-    def execute(self, square: str, place_square: str, piece: str = "pawn", speed: float = 1.0):
+    def execute(self, square: str, place_square: str, piece: str = "pawn", is_capture: bool = False, speed: float = 1.0):
         """
         Pick up a piece from square and place it on place_square.
+
+        If is_capture is True, first removes the opponent's piece from
+        place_square to a discard zone (right of column H, near rank 4-5),
+        then moves our piece from square to place_square.
 
         When a move crosses the rank 6/7 boundary the arm cannot reach
         ranks 7-8 with a vertical gripper, so we relay through an
@@ -386,6 +422,7 @@ class PickUpPieceSimple(Skill):
             square: Source square in chess notation (e.g. 'A4')
             place_square: Target square (e.g. 'D5')
             piece: Piece type ('king', 'queen', 'rook', 'bishop', 'knight', 'pawn')
+            is_capture: If True, remove opponent piece from place_square first
             speed: Speed multiplier (1.0 = normal)
         """
         self._speed = max(0.1, min(speed, 3.0))
@@ -417,7 +454,50 @@ class PickUpPieceSimple(Skill):
             f"pitch={src_pitch:.2f} yaw={src_yaw:.2f} -> "
             f"Place {place_square} ({dst_x:.4f},{dst_y:.4f},z={dst_board_z:.4f}) "
             f"pitch={dst_pitch:.2f} yaw={dst_yaw:.2f}"
+            f"{' [CAPTURE]' if is_capture else ''}"
         )
+
+        # ── Capture: remove opponent piece to discard zone first ──
+        if is_capture:
+            discard_pos = self._discard_position(calibration)
+            if discard_pos is None:
+                return "Failed to compute discard position", SkillResult.FAILURE
+            disc_x, disc_y, disc_z = discard_pos
+            # Use short pick height for captured piece (we don't know its type)
+            cap_pick_height = self.HEIGHT_PICK_SHORT + dst_board_z
+            cap_pitch, cap_yaw = self._orientation_for_square(place_square)
+            # Discard zone is at ranks 4-5 level -> straight down, center yaw
+            disc_pitch, disc_yaw = self.PITCH_DOWN, self.YAW_CENTER
+            disc_safe = self.HEIGHT_SAFE
+
+            self.logger.info(
+                f"[PickUpPieceSimple] Capture: removing piece from {place_square} "
+                f"to discard ({disc_x:.4f},{disc_y:.4f},z={disc_z:.4f})"
+            )
+            self._send_feedback(f"Capturing: removing piece from {place_square}...")
+
+            # If target square is in ranks 7-8, use tilted approach
+            cap_rank = int(place_square[1])
+            cap_tilted = cap_rank >= 7
+            err = self._do_pick_place(
+                dst_x,
+                dst_y,
+                disc_x,
+                disc_y,
+                cap_pick_height,
+                cap_pitch,
+                cap_yaw,
+                disc_pitch,
+                disc_yaw,
+                place_square,
+                "discard",
+                safe_height=self.HEIGHT_SAFE_TILTED if cap_tilted else disc_safe,
+                caution=self.TILTED_SPEED_FACTOR if cap_tilted else 1.0,
+            )
+            if err:
+                return f"Capture discard failed: {err}", SkillResult.FAILURE
+            if self._cancelled:
+                return "Cancelled", SkillResult.CANCELLED
 
         src_rank = int(square[1])
         dst_rank = int(place_square[1])
