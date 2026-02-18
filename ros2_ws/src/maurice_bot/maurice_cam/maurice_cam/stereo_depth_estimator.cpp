@@ -133,6 +133,15 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
     throw;
   }
 
+#ifdef USE_VPI_REMAP
+  // Initialize VPI remap for GPU-accelerated rectification
+  if (initVPIRemap()) {
+    vpi_remap_ready_ = true;
+  } else {
+    RCLCPP_WARN(this->get_logger(), "VPI remap init failed — falling back to OpenCV remap");
+  }
+#endif
+
   // Initialize VPI
   if (!initializeVPI()) {
     RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI");
@@ -179,6 +188,9 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 StereoDepthEstimator::~StereoDepthEstimator()
 {
   RCLCPP_INFO(this->get_logger(), "Shutting down Stereo Depth Estimator...");
+#ifdef USE_VPI_REMAP
+  cleanupVPIRemap();
+#endif
   cleanupVPI();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator shutdown complete");
 }
@@ -408,3 +420,126 @@ int main(int argc, char** argv)
   return 0;
 }
 #endif
+
+// =============================================================================
+// PIPELINE ARCHITECTURE
+// =============================================================================
+//
+//   ┌─────────────────────────────────┐   ┌──────────────────────────────────┐
+//   │ /mars/main_camera/left/image_raw│   │ /mars/main_camera/right/image_raw│
+//   └───────────────┬─────────────────┘   └───────────────┬──────────────────┘
+//                   │                                     │
+//                   └──────────────┬──────────────────────┘
+//                                  │  ApproximateTime sync
+//                                  ▼
+//                    ┌─────────────────────────────┐
+//                    │        syncCallback()        │
+//                    │  decode left/right + gate FPS│
+//                    └──────────────┬──────────────┘
+//                                   ▼
+//              ┌────────────────────────────────────────┐
+//              │           processFrame()               │
+//              └────────────────┬───────────────────────┘
+//                               │
+//                               ▼
+//                ┌──────────────────────────────┐
+//                │      scaleToCalibRes()       │
+//                │  input res → calib res       │
+//                └──────────────┬───────────────┘
+//                               │
+//                               ▼
+//                ┌──────────────────────────────┐
+//                │       rectifyMono()          │
+//                │  BGR→gray + cv::remap        │
+//                └──────────────┬───────────────┘
+//                               │
+//              ┌────────────────┼──────────────────────────────┐
+//              │                │                              │
+//              ▼                ▼                              ▼
+//  ┌────────────────┐  ┌───────────────┐          ┌────────────────────┐
+//  │  submitSGM()   │  │ rectifyColor()│          │publishMonoRectified│
+//  │  VPI SGM→CUDA  │  │ cv::remap BGR │          │  (CPU, parallel)   │
+//  │  (async)       │  │ (CPU overlap) │          └─────┬──────┬───────┘
+//  └───────┬────────┘  └──────┬────────┘                │      │
+//          │                  │  left_color_rect         ▼      ▼
+//          │                  │              ┌─────────────┐ ┌──────────────┐
+//          │          ┌───────┤              │.../left/    │ │.../right/    │
+//          │          │       │              │ image_rect  │ │ image_rect   │
+//          │          │       │              │  (mono8)    │ │  (mono8)     │
+//          │          │       │              └─────────────┘ └──────────────┘
+//          │          │       │
+//          │          │       ├──────────────────────────────────┐
+//          │          │       │                                  │
+//          │          │       ▼                                  ▼
+//          │          │  ┌───────────────────────────┐  ┌───────────────────────────┐
+//          │          │  │  publishColorRectified()  │  │  publishColorRectified()  │
+//          │          │  │       (BGR Image)         │  │     (JPEG compress)       │
+//          │          │  └─────────────┬─────────────┘  └─────────────┬─────────────┘
+//          │          │               ▼                              ▼
+//          │          │  ┌───────────────────────────┐  ┌───────────────────────────┐
+//          │          │  │.../left/image_rect_color  │  │.../left/image_rect_color/ │
+//          │          │  │         (bgr8)            │  │  compressed  (jpeg)       │
+//          │          │  └───────────────────────────┘  └───────────────────────────┘
+//          │          │
+//          ▼          │ (color_rect saved for pointcloud)
+//  ┌───────────────┐  │
+//  │   syncSGM()   │  │  ◄── wait for CUDA
+//  └───────┬───────┘  │
+//          ▼          │
+//  ┌──────────────────┐
+//  │extractDisparity() │
+//  │ S16 Q10.5 → F32  │
+//  │ + border zeroing  │
+//  └────────┬─────────┘
+//           │          │
+//           ├──────────│──────────────────────────────┐
+//           │          │ (raw disparity)              │
+//           ▼          │                              ▼
+//  ┌──────────────────────┐               ┌───────────────────────────┐
+//  │ publishDisparityMsg()│               │ .../disparity_unfiltered  │
+//  │    (unfiltered)      │──────────────▶│    (DisparityImage)       │
+//  └──────────────────────┘               └───────────────────────────┘
+//           │          │
+//           ▼          │
+//  ┌────────────────────────────────────────────────────────────────┐
+//  │                    applyFilterChain()                          │
+//  │                                                                │
+//  │  ┌────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐       │
+//  │  │downsamp│─▶│  median   │─▶│bilateral │─▶│ hole fill │──┐    │
+//  │  └────────┘  └──────────┘  └──────────┘  └───────────┘  │    │
+//  │                                                          ▼    │
+//  │  ┌────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐  │    │
+//  │  │upsample│◀─│ temporal │◀─│ domain   │◀─│  speckle  │◀─┘    │
+//  │  │        │  │          │  │ transform│  │           │       │
+//  │  └────────┘  └──────────┘  └──────────┘  └───────────┘       │
+//  │      ▲                                                        │
+//  │      └── also: depth_clamp, edge_invalidation (order param)   │
+//  └───────────────────────┬────────────────────────────────────────┘
+//           disparity_float│          │ left_color_rect
+//           disparity_lowres          │
+//          ┌───────────────┼──────────┴────────────┐
+//          │               │                       │
+//          ▼               ▼                       ▼
+//  ┌──────────────┐  ┌───────────┐   ┌──────────────────────────────────┐
+//  │publishDisp.. │  │publishDep.│   │    publishPointCloudXYZ()       │
+//  │  (filtered)  │  │ f*b / d   │   │      (disparity_lowres only)    │
+//  └──────┬───────┘  └─────┬─────┘   └──────────────┬───────────────────┘
+//         │                │                         │
+//         │                │         ┌───────────────────────────────────┐
+//         │                │         │  publishPointCloudColor()        │
+//         │                │         │  (disparity_lowres + color_rect) │
+//         │                │         └──────────────┬────────────────────┘
+//         ▼                ▼                  ▼                ▼
+//  ┌──────────────┐  ┌───────────┐  ┌─────────────┐ ┌───────────────┐
+//  │.../disparity │  │.../depth  │  │.../points   │ │.../points_    │
+//  │(DisparityImg)│  │ (16SC1 mm)│  │(PointCloud2 │ │    color      │
+//  └──────────────┘  └───────────┘  │   XYZ)      │ │(PointCloud2   │
+//                                   └─────────────┘ │  XYZRGB)      │
+//                                                    └───────────────┘
+//
+// All topics under /mars/main_camera/ namespace (configurable via params).
+// All publishers are lazy — only publish when ≥1 subscriber is connected.
+// GPU/CPU overlap: colour rectification + mono publishing runs while SGM
+// executes on CUDA, hiding ~2-3ms of CPU work behind the GPU fence.
+// Filter chain order is configurable via the "filter_order" parameter.
+// =============================================================================

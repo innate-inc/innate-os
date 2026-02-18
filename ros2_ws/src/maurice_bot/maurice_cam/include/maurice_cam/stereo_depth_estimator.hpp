@@ -62,6 +62,10 @@ private:
   void rectifyMono(const cv::Mat& left_scaled, const cv::Mat& right_scaled,
                    cv::Mat& left_rect, cv::Mat& right_rect);
   void rectifyColor(const cv::Mat& left_scaled, cv::Mat& left_color_rect);
+#ifdef USE_VPI_REMAP
+  bool initVPIRemap();
+  void cleanupVPIRemap();
+#endif
 
   // ── Publishing (depth_estimator/publishing.cpp) ────────────────────────
   void publishMonoRectified(const cv::Mat& left_rect, const cv::Mat& right_rect,
@@ -172,6 +176,17 @@ private:
   // Per-frame VPI image wraps (created in submitSGM, destroyed in cleanupSGMWraps)
   VPIImage vpi_left_wrap_{nullptr};
   VPIImage vpi_right_wrap_{nullptr};
+
+#ifdef USE_VPI_REMAP
+  // VPI remap resources (persistent across frames)
+  VPIPayload vpi_remap_left_{nullptr};
+  VPIPayload vpi_remap_right_{nullptr};
+  VPIPayload vpi_remap_color_{nullptr};
+  VPIImage   vpi_rect_left_out_{nullptr};
+  VPIImage   vpi_rect_right_out_{nullptr};
+  VPIImage   vpi_rect_color_out_{nullptr};
+  bool       vpi_remap_ready_{false};
+#endif
 
   bool vpi_initialized_{false};
   bool calibration_loaded_{false};
