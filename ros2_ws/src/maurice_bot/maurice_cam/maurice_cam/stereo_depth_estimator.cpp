@@ -496,6 +496,8 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     return;
   }
 
+  const auto t_vpi_wrap = clock::now();
+
   // ===== STEP 6: Compute stereo disparity using VPI SGM (CUDA) =====
   VPIStereoDisparityEstimatorParams stereo_params;
   vpiInitStereoDisparityEstimatorParams(&stereo_params);
@@ -508,6 +510,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   // Note: windowSize is ignored on CUDA (uses 9x7 window internally)
   // Note: p2Alpha and numPasses are OFA-only, not used on CUDA
 
+  vpiStreamSync(vpi_stream_);
   status = vpiSubmitStereoDisparityEstimator(vpi_stream_, VPI_BACKEND_CUDA, stereo_payload_,
                                               vpi_left_wrap, vpi_right_wrap,
                                               vpi_disparity_, vpi_confidence_, &stereo_params);
@@ -517,6 +520,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     RCLCPP_ERROR(this->get_logger(), "Failed to compute stereo disparity");
     return;
   }
+  const auto t_sgm_submit = clock::now();
 
   // Synchronize
   vpiStreamSync(vpi_stream_);
@@ -749,16 +753,21 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     return std::chrono::duration<double, std::milli>(d).count();
   };
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-    "Pipeline %.1fms | scale %.1f | gray %.1f | rectify %.1f | SGM %.1f | "
-    "lock+copy %.1f | border %.1f | filter %.1f | depth %.1f | "
+    "Pipeline %.1fms | scale %.1f | gray %.1f | rectify %.1f | pub_rect %.1f | "
+    "vpi_wrap %.1f | sgm_submit %.1f | sgm_sync %.1f | "
+    "lock+copy %.1f | border %.1f | unfilt_pub %.1f | filter %.1f | depth %.1f | "
     "pc_resize %.1f | pc_alloc %.1f | pc_fill %.1f | pc_pub %.1f | depth_pub %.1f",
     ms(t_frame_end - t_frame_start),
     ms(t_scale - t_frame_start),
     ms(t_gray - t_scale),
     ms(t_rectify - t_gray),
-    ms(t_sgm - t_pub_rect),
+    ms(t_pub_rect - t_rectify),
+    ms(t_vpi_wrap - t_pub_rect),
+    ms(t_sgm_submit - t_vpi_wrap),
+    ms(t_sgm - t_sgm_submit),
     ms(t_lock_copy - t_sgm),
     ms(t_border - t_lock_copy),
+    ms(t_convert - t_border),
     ms(t_filter - t_convert),
     ms(t_depth - t_filter),
     ms(t_pc_resize - t_depth),
