@@ -79,7 +79,8 @@ arm_camera_driver:
     # max_disparity: search range in pixels. Objects closer than
     #   depth = focal_length * baseline / max_disparity won't be seen.
     #   CUDA snaps to 64, 128, or 256. Higher = see closer objects but slower.
-    max_disparity: 128
+    # For our camera, 64 is a little over .25m. We're filtering that out anyway, so for performance, limit here.
+    max_disparity: 64
 
     # include_diagonals: SGM path directions.
     #   0 = 4 paths (horizontal + vertical only) — faster, noisier
