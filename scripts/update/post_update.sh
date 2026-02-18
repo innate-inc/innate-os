@@ -433,7 +433,7 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     cd "$REPO_DIR/ros2_ws"
 
     # Run as the actual user, not root
-    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
+    # sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
 
     if [ $? -eq 0 ]; then
         log "ROS2 workspace rebuilt successfully"

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
+#include <vector>
 #include <filesystem>
 
 #include "rclcpp/rclcpp.hpp"
@@ -46,30 +48,55 @@ public:
   ~StereoDepthEstimator();
 
 private:
-  // ── Setup ──────────────────────────────────────────────────────────────
+  // ── VPI Stereo (depth_estimator/vpi_stereo.cpp) ─────────────────────────
   bool initializeVPI();
   void cleanupVPI();
+  bool submitSGM(const cv::Mat& left_rect, const cv::Mat& right_rect);
+  void syncSGM();
+  cv::Mat extractDisparity();
+  void cleanupSGMWraps();
 
-  // ── Processing ─────────────────────────────────────────────────────────
+  // ── Rectification (depth_estimator/rectification.cpp) ──────────────────
+  void scaleToCalibRes(const cv::Mat& left_in, const cv::Mat& right_in,
+                       cv::Mat& left_out, cv::Mat& right_out);
+  void rectifyMono(const cv::Mat& left_scaled, const cv::Mat& right_scaled,
+                   cv::Mat& left_rect, cv::Mat& right_rect);
+  void rectifyColor(const cv::Mat& left_scaled, cv::Mat& left_color_rect);
+
+  // ── Publishing (depth_estimator/publishing.cpp) ────────────────────────
+  void publishMonoRectified(const cv::Mat& left_rect, const cv::Mat& right_rect,
+                            const rclcpp::Time& ts, bool pub_left, bool pub_right);
+  void publishColorRectified(const cv::Mat& color_rect, const cv::Mat& mono_rect,
+                             bool has_color_input, const rclcpp::Time& ts,
+                             bool pub_color, bool pub_compressed);
+  void publishDisparityMsg(const cv::Mat& disparity_float, const rclcpp::Time& ts,
+                           rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr& pub);
+  void publishDepth(const cv::Mat& disparity_float, const rclcpp::Time& ts);
+
+  // ── Point Cloud (depth_estimator/pointcloud.cpp) ───────────────────────
+  void publishPointCloudXYZ(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
+  void publishPointCloudColor(const cv::Mat& disparity_lowres, const cv::Mat& color_rect,
+                              const rclcpp::Time& ts);
+
+  // ── Callback / Pipeline ────────────────────────────────────────────────
   void syncCallback(
     const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
     const sensor_msgs::msg::Image::ConstSharedPtr& right_msg);
   void processFrame(const cv::Mat& left_img, const cv::Mat& right_img,
                     const rclcpp::Time& timestamp);
-  void publishDisparityMsg(const cv::Mat& disparity_float,
-                           const rclcpp::Time& timestamp,
-                           rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr& pub);
 
-  // ── Disparity Filters ──────────────────────────────────────────────────
+  // ── Disparity Filter Chain (filters/*.cpp) ──────────────────────────
   struct FilterTimings {
     double downsample_ms{0}, upsample_ms{0};
     double depth_clamp_ms{0}, domain_transform_ms{0}, speckle_ms{0};
     double edge_inv_ms{0}, median_ms{0}, bilateral_ms{0};
     double hole_fill_ms{0}, temporal_ms{0};
   };
-  void initFilterParams();
-  void logFilterConfig();
-  void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres, FilterTimings& timings);
+  void initFilterParams();      // filters/filter_chain.cpp
+  void logFilterConfig() const; // filters/filter_chain.cpp
+  void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres,
+                        FilterTimings& timings, float focal_length, float baseline);
+  // Individual filters (filters/simple_filters.cpp, filters/advanced_filters.cpp)
   void applyMedian(cv::Mat& img);
   void applyBilateral(cv::Mat& img);
   void fillHoles(cv::Mat& img);
@@ -142,6 +169,10 @@ private:
   VPIImage vpi_confidence_{nullptr};
   VPIPayload stereo_payload_{nullptr};
 
+  // Per-frame VPI image wraps (created in submitSGM, destroyed in cleanupSGMWraps)
+  VPIImage vpi_left_wrap_{nullptr};
+  VPIImage vpi_right_wrap_{nullptr};
+
   bool vpi_initialized_{false};
   bool calibration_loaded_{false};
   int frame_count_{0};
@@ -149,44 +180,36 @@ private:
   rclcpp::Time last_stats_time_;
 
   // ── Filter Parameters ──────────────────────────────────────────────────
-  // 0. Downsample
-  bool filter_downsample_enabled_;
-  int filter_downsample_factor_;
-  // 1. Median
-  bool median_enabled_;
-  int median_kernel_size_;
-  // 2. Bilateral
-  bool bilateral_enabled_;
-  int bilateral_diameter_;
-  double bilateral_sigma_color_, bilateral_sigma_space_;
-  // 3. Hole filling
-  bool hole_filling_enabled_;
-  int hole_fill_radius_;
-  int hole_fill_strategy_;  // 0=fill_from_left, 1=farthest, 2=nearest
-  // 4. Depth clamping
-  bool depth_clamp_enabled_;
-  double min_depth_meters_, max_depth_meters_;
-  // 5. Edge invalidation
-  bool edge_inv_enabled_;
-  int edge_inv_width_;
-  double edge_canny_low_, edge_canny_high_;
-  // 6. Speckle
-  bool speckle_enabled_;
-  int speckle_max_size_;
-  double speckle_max_diff_;
-  // 7. Domain transform
-  bool dt_enabled_;
-  int dt_iterations_, dt_delta_;
-  double dt_alpha_;
-  // 8. Temporal
-  bool temporal_enabled_;
-  double temporal_alpha_;
-  int temporal_delta_;                     // edge-preserving threshold (disparity units)
-  int temporal_persistence_;               // 0=disabled, 1..8 = RS persistence modes
+  bool filter_downsample_enabled_{false};
+  int filter_downsample_factor_{4};
+  bool median_enabled_{false};
+  int median_kernel_size_{5};
+  bool bilateral_enabled_{false};
+  int bilateral_diameter_{5};
+  double bilateral_sigma_color_{10.0}, bilateral_sigma_space_{10.0};
+  bool hole_filling_enabled_{false};
+  int hole_fill_radius_{2};
+  int hole_fill_strategy_{1};
+  bool depth_clamp_enabled_{false};
+  double min_depth_meters_{0.25}, max_depth_meters_{5.0};
+  bool edge_inv_enabled_{false};
+  int edge_inv_width_{3};
+  double edge_canny_low_{10.0}, edge_canny_high_{30.0};
+  bool speckle_enabled_{false};
+  int speckle_max_size_{200};
+  double speckle_max_diff_{1.0};
+  bool dt_enabled_{false};
+  int dt_iterations_{2}, dt_delta_{20};
+  double dt_alpha_{0.5};
+  bool temporal_enabled_{false};
+  double temporal_alpha_{0.4};
+  int temporal_delta_{20};
+  int temporal_persistence_{3};
   cv::Mat prev_disparity_frame_;
-  std::vector<uint8_t> temporal_history_;  // per-pixel 8-frame validity ring
-  // Filter execution order
+  std::vector<uint8_t> temporal_history_;
   std::vector<std::string> filter_order_;
+
+
 };
 
 } // namespace maurice_cam
