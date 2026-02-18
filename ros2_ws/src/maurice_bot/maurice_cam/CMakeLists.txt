@@ -1,9 +1,14 @@
 cmake_minimum_required(VERSION 3.8)
-project(maurice_cam)
+project(maurice_cam LANGUAGES CXX CUDA)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
+
+# CUDA settings for Jetson Orin Nano (Ampere, SM 8.7)
+find_package(CUDAToolkit REQUIRED)
+set(CMAKE_CUDA_ARCHITECTURES 87)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3")
 
 # Find dependencies
 find_package(ament_cmake REQUIRED)
@@ -128,11 +133,13 @@ if(VPI_FOUND)
     maurice_cam/filters/filter_chain.cpp
     maurice_cam/filters/simple_filters.cpp
     maurice_cam/filters/advanced_filters.cpp
+    maurice_cam/filters/domain_transform.cu
     maurice_cam/stereo_calibration.cpp
   )
+  set_target_properties(stereo_depth_estimator_component PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   target_compile_definitions(stereo_depth_estimator_component PRIVATE BUILDING_COMPONENT_LIBRARY)
   target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
-  target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
+  target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES} CUDA::cudart)
   if(nlohmann_json_FOUND)
     target_link_libraries(stereo_depth_estimator_component nlohmann_json::nlohmann_json)
   elseif(NLOHMANN_JSON_FOUND)
@@ -216,10 +223,12 @@ if(VPI_FOUND)
     maurice_cam/filters/filter_chain.cpp
     maurice_cam/filters/simple_filters.cpp
     maurice_cam/filters/advanced_filters.cpp
+    maurice_cam/filters/domain_transform.cu
     maurice_cam/stereo_calibration.cpp
   )
+  set_target_properties(stereo_depth_estimator PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
-  target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
+  target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES} CUDA::cudart)
   if(nlohmann_json_FOUND)
     target_link_libraries(stereo_depth_estimator nlohmann_json::nlohmann_json)
   elseif(NLOHMANN_JSON_FOUND)

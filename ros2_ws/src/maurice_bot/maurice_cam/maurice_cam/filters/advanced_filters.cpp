@@ -1,4 +1,4 @@
-// Advanced disparity filters: domain-transform smoothing and temporal filtering.
+// Advanced disparity filters: CUDA domain-transform smoothing and temporal filtering.
 
 #include "maurice_cam/stereo_depth_estimator.hpp"
 
@@ -6,70 +6,37 @@
 #include <cmath>
 #include <cstdint>
 
+// CUDA domain transform kernel (domain_transform.cu)
+extern "C" void cuda_domain_transform_filter(
+    float* h_img, int width, int height,
+    float sigma_s, float sigma_r, int iterations);
+extern "C" void cuda_domain_transform_cleanup();
+
 namespace maurice_cam
 {
 
 // =============================================================================
-// Domain-transform edge-preserving filter
+// Domain-transform edge-preserving filter (GPU-accelerated)
+//
+// Based on: "Domain Transform for Edge-Aware Image and Video Processing"
+//           Gastal & Oliveira, SIGGRAPH 2011
+//
+// Self-guided variant: disparity is both the guide and the signal.
+// Invalid pixels (≤ 0) break the recursive chain.
 // =============================================================================
 void StereoDepthEstimator::applyDomainTransform(cv::Mat& img)
 {
-  for (int i = 0; i < dt_iterations_; ++i) {
-    dtPass(img, true);
-    dtPass(img, false);
-  }
+  CV_Assert(img.type() == CV_32FC1 && img.isContinuous());
+  cuda_domain_transform_filter(
+      img.ptr<float>(),
+      img.cols, img.rows,
+      static_cast<float>(dt_sigma_s_),
+      static_cast<float>(dt_sigma_r_),
+      dt_iterations_);
 }
 
-// Fast exp approximation (Schraudolph 1999) — ~4× faster than std::exp,
-// accurate to ~0.3% in the range [-4, 0] which is our operating range.
-static inline float fast_expf(float x) {
-  union { float f; int32_t i; } u;
-  u.i = static_cast<int32_t>(12102203.0f * x + 1065353216.0f);
-  return u.f;
-}
-
-void StereoDepthEstimator::dtPass(cv::Mat& img, bool horizontal)
-{
-  const float a = static_cast<float>(dt_alpha_);
-  const float inv_d = -1.0f / static_cast<float>(dt_delta_);
-
-  if (horizontal) {
-    const int rows = img.rows, cols = img.cols;
-    for (int y = 0; y < rows; ++y) {
-      float* r = img.ptr<float>(y);
-      for (int x = 1; x < cols; ++x) {
-        if (r[x] <= 0 || r[x - 1] <= 0) continue;
-        float w = a * fast_expf(std::abs(r[x] - r[x - 1]) * inv_d);
-        r[x] = r[x] * (1.f - w) + r[x - 1] * w;
-      }
-      for (int x = cols - 2; x >= 0; --x) {
-        if (r[x] <= 0 || r[x + 1] <= 0) continue;
-        float w = a * fast_expf(std::abs(r[x] - r[x + 1]) * inv_d);
-        r[x] = r[x] * (1.f - w) + r[x + 1] * w;
-      }
-    }
-  } else {
-    // Transpose → horizontal pass → transpose back (cache-friendly)
-    cv::Mat t;
-    cv::transpose(img, t);
-    const int rows = t.rows, cols = t.cols;
-    for (int y = 0; y < rows; ++y) {
-      float* r = t.ptr<float>(y);
-      for (int x = 1; x < cols; ++x) {
-        if (r[x] <= 0 || r[x - 1] <= 0) continue;
-        float w = a * fast_expf(std::abs(r[x] - r[x - 1]) * inv_d);
-        r[x] = r[x] * (1.f - w) + r[x - 1] * w;
-      }
-      for (int x = cols - 2; x >= 0; --x) {
-        if (r[x] <= 0 || r[x + 1] <= 0) continue;
-        float w = a * fast_expf(std::abs(r[x] - r[x + 1]) * inv_d);
-        r[x] = r[x] * (1.f - w) + r[x + 1] * w;
-      }
-    }
-    cv::transpose(t, img);
-  }
-}
-
+// =============================================================================
+// dtPass() removed — domain transform runs entirely on GPU (domain_transform.cu)
 // =============================================================================
 // Temporal filter (IIR blend + RealSense-style persistence)
 // =============================================================================

@@ -76,15 +76,18 @@ void StereoDepthEstimator::initFilterParams()
   speckle_max_size_ = std::max(1, static_cast<int>(this->get_parameter("speckle.max_size").as_int()));
   speckle_max_diff_ = std::max(0.0, this->get_parameter("speckle.max_diff").as_double());
 
-  // 7. Domain Transform
+  // 7. Domain Transform  (Gastal & Oliveira, SIGGRAPH 2011 — RF mode)
+  //    sigma_s = spatial filter σ  (larger → smoother over larger distances)
+  //    sigma_r = range filter σ    (larger → less edge-preserving)
+  //    iterations = number of H+V recursive passes (paper recommends 3)
   this->declare_parameter<bool>("domain_transform.enabled", false);
-  this->declare_parameter<int>("domain_transform.iterations", 2);
-  this->declare_parameter<double>("domain_transform.alpha", 0.5);
-  this->declare_parameter<int>("domain_transform.delta", 20);
+  this->declare_parameter<int>("domain_transform.iterations", 3);
+  this->declare_parameter<double>("domain_transform.sigma_s", 30.0);
+  this->declare_parameter<double>("domain_transform.sigma_r", 5.0);
   dt_enabled_ = this->get_parameter("domain_transform.enabled").as_bool();
   dt_iterations_ = std::clamp(static_cast<int>(this->get_parameter("domain_transform.iterations").as_int()), 1, 5);
-  dt_alpha_ = std::clamp(this->get_parameter("domain_transform.alpha").as_double(), 0.25, 1.0);
-  dt_delta_ = std::clamp(static_cast<int>(this->get_parameter("domain_transform.delta").as_int()), 1, 50);
+  dt_sigma_s_ = std::clamp(this->get_parameter("domain_transform.sigma_s").as_double(), 1.0, 200.0);
+  dt_sigma_r_ = std::clamp(this->get_parameter("domain_transform.sigma_r").as_double(), 0.1, 100.0);
 
   // 8. Temporal
   this->declare_parameter<bool>("temporal.enabled", false);
@@ -140,8 +143,8 @@ void StereoDepthEstimator::logFilterConfig() const
       speckle_enabled_ ? "  size=" + std::to_string(speckle_max_size_) : "");
   log("Domain Transform", dt_enabled_,
       dt_enabled_ ? "  iter=" + std::to_string(dt_iterations_)
-        + " a=" + std::to_string(dt_alpha_)
-        + " d=" + std::to_string(dt_delta_) : "");
+        + " σ_s=" + std::to_string(dt_sigma_s_)
+        + " σ_r=" + std::to_string(dt_sigma_r_) : "");
   log("Temporal", temporal_enabled_,
       temporal_enabled_ ? "  alpha=" + std::to_string(temporal_alpha_)
         + " delta=" + std::to_string(temporal_delta_)

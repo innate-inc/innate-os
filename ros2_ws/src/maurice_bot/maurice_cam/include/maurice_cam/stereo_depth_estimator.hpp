@@ -107,7 +107,6 @@ private:
   void invalidateEdges(cv::Mat& img);
   void filterSpeckles(cv::Mat& img);
   void applyDomainTransform(cv::Mat& img);
-  void dtPass(cv::Mat& img, bool horizontal);
   void applyTemporal(cv::Mat& img);
 
   // ── Sync ───────────────────────────────────────────────────────────────
@@ -211,8 +210,8 @@ private:
   int speckle_max_size_{200};
   double speckle_max_diff_{1.0};
   bool dt_enabled_{false};
-  int dt_iterations_{2}, dt_delta_{20};
-  double dt_alpha_{0.5};
+  int dt_iterations_{3};
+  double dt_sigma_s_{30.0}, dt_sigma_r_{5.0};
   bool temporal_enabled_{false};
   double temporal_alpha_{0.4};
   int temporal_delta_{20};

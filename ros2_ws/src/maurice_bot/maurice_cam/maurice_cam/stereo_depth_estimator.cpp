@@ -182,12 +182,16 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 // =============================================================================
 // Destructor
 // =============================================================================
+// CUDA domain transform cleanup (filters/domain_transform.cu)
+extern "C" void cuda_domain_transform_cleanup();
+
 StereoDepthEstimator::~StereoDepthEstimator()
 {
   RCLCPP_INFO(this->get_logger(), "Shutting down Stereo Depth Estimator...");
   if (vpi_stream_) vpiStreamSync(vpi_stream_);
   cleanupVPIRemap();
   cleanupVPI();
+  cuda_domain_transform_cleanup();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator shutdown complete");
 }
 

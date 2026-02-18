@@ -207,17 +207,20 @@ arm_camera_driver:
     speckle.max_diff: 1.0
 
     # ── 7. Domain Transform ───────────────────────────────────────────────
-    # Recursive edge-preserving smoothing (like bilateral but much faster).
+    # Domain Transform recursive edge-preserving filter (CUDA GPU).
+    # Gastal & Oliveira, SIGGRAPH 2011 — RF mode.
     # Smooths disparity along surfaces while respecting depth discontinuities.
-    #   iterations: number of forward+backward passes. 1–3 is typical.
-    #     More = smoother but diminishing returns and more CPU.
-    #   alpha: blending weight per step (0.25–1.0). Lower = stronger smoothing.
-    #   delta: edge threshold — disparity jumps larger than this (pixels) are
-    #     treated as edges and not smoothed across. Lower = more edges preserved.
+    #   iterations: number of H+V recursive passes (paper recommends 3).
+    #     More = smoother; σ decreases per iteration for convergence (Eq. 14).
+    #   sigma_s: spatial standard deviation — controls smoothing extent.
+    #     Larger → smoother over larger distances. Range [1, 200].
+    #   sigma_r: range standard deviation — edge sensitivity.
+    #     Larger → less edge-preserving, more smoothing across edges.
+    #     Smaller → sharper edges preserved. Range [0.1, 100].
     domain_transform.enabled: true
-    domain_transform.iterations: 2
-    domain_transform.alpha: 0.5
-    domain_transform.delta: 20
+    domain_transform.iterations: 3
+    domain_transform.sigma_s: 30.0
+    domain_transform.sigma_r: 5.0
 
     # ── 8. Temporal ───────────────────────────────────────────────────────
     # IIR (exponential moving average) blend with the previous frame.
