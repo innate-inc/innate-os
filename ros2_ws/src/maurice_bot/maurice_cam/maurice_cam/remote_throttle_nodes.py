@@ -56,6 +56,10 @@ _TOPICS = [
     ('/mars/main_camera/points',
      '/mars/main_camera/remote/points',
      'throttle_pointcloud'),
+
+    ('/mars/main_camera/points_color',
+     '/mars/main_camera/remote/points_color',
+     'throttle_pointcloud_color'),
 ]
 
 
