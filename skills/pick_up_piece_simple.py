@@ -231,7 +231,7 @@ class PickUpPieceSimple(Skill):
 
     def _go_to_safe_pose(self, pitch, yaw):
         """Return arm to the resting safe pose (low x, high z, pitch=0 to stay out of camera view)."""
-        self._move_arm(0.10, 0.1, 0.15, 0.0, 0.0, 2, wait=2.0)
+        self._move_arm(0.1, 0.25, 0.15, 0.0, 1.57, 0.0, wait=2.0)
 
     def _needs_relay(self, src_square, dst_square):
         """Check if move crosses the rank 6/7 boundary requiring a relay.

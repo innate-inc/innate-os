@@ -162,7 +162,7 @@ class DetectOpponentMove(Skill):
             duration=2.0,
         )
         if success:
-            time.sleep(2.5)
+            time.sleep(1.5)
         return success
 
     def _go_to_safe_pose(self):
@@ -178,7 +178,7 @@ class DetectOpponentMove(Skill):
         )
         if self.head:
             self.head.set_position(self.HEAD_TILT_NEUTRAL)
-        time.sleep(2.5)
+        time.sleep(1.5)
 
     # ── Image capture ─────────────────────────────────────────────────
 
@@ -188,7 +188,7 @@ class DetectOpponentMove(Skill):
         Returns (main_b64, wrist_b64). Either may be None.
         """
         # Give the camera a moment to refresh after arm settles
-        time.sleep(0.5)
+        time.sleep(0.3)
         main_b64 = self.main_image
         wrist_b64 = self.wrist_image
 
@@ -274,11 +274,11 @@ class DetectOpponentMove(Skill):
 
         try:
             response = self.gemini_client.models.generate_content(
-                model="gemini-3-pro-preview",
+                model="gemini-3-flash-preview",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                    thinking_config=types.ThinkingConfig(thinking_budget=512),
                 ),
             )
             result = json.loads(response.text.strip())
@@ -317,11 +317,10 @@ class DetectOpponentMove(Skill):
 
         try:
             response = self.gemini_client.models.generate_content(
-                model="gemini-3-pro-preview",
+                model="gemini-3-flash-preview",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_budget=1024),
                 ),
             )
             result = json.loads(response.text.strip())
