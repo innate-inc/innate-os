@@ -1,12 +1,9 @@
-// Image preprocessing: scale to calibration resolution, mono/color rectification.
-// Supports both OpenCV cv::remap and VPI GPU-accelerated remap (via USE_VPI_REMAP).
+// Image preprocessing: scale to calibration resolution, VPI GPU-accelerated rectification.
 
 #include "maurice_cam/stereo_depth_estimator.hpp"
 
-#ifdef USE_VPI_REMAP
 #include <vpi/WarpMap.h>
 #include <vpi/algo/Remap.h>
-#endif
 
 namespace maurice_cam
 {
@@ -25,7 +22,6 @@ void StereoDepthEstimator::scaleToCalibRes(
 // =============================================================================
 // VPI Remap implementation — GPU-accelerated rectification
 // =============================================================================
-#ifdef USE_VPI_REMAP
 
 // ---------------------------------------------------------------------------
 // Convert OpenCV remap maps (CV_32FC1 x + y) into a VPI dense warp map
@@ -179,8 +175,6 @@ static cv::Mat vpiRemapSync(VPIStream stream, VPIPayload payload,
   return result;
 }
 
-#endif // USE_VPI_REMAP
-
 // =============================================================================
 // Convert to grayscale (if colour) then apply stereo rectification maps
 // =============================================================================
@@ -197,18 +191,8 @@ void StereoDepthEstimator::rectifyMono(
     right_gray = right_scaled;
   }
 
-#ifdef USE_VPI_REMAP
-  if (vpi_remap_ready_) {
-    left_rect  = vpiRemapSync(vpi_stream_, vpi_remap_left_,  left_gray,  vpi_rect_left_out_,  VPI_IMAGE_FORMAT_U8);
-    right_rect = vpiRemapSync(vpi_stream_, vpi_remap_right_, right_gray, vpi_rect_right_out_, VPI_IMAGE_FORMAT_U8);
-  } else {
-    cv::remap(left_gray,  left_rect,  map1_left_,  map2_left_,  cv::INTER_LINEAR);
-    cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
-  }
-#else
-  cv::remap(left_gray,  left_rect,  map1_left_,  map2_left_,  cv::INTER_LINEAR);
-  cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
-#endif
+  left_rect  = vpiRemapSync(vpi_stream_, vpi_remap_left_,  left_gray,  vpi_rect_left_out_,  VPI_IMAGE_FORMAT_U8);
+  right_rect = vpiRemapSync(vpi_stream_, vpi_remap_right_, right_gray, vpi_rect_right_out_, VPI_IMAGE_FORMAT_U8);
 }
 
 // =============================================================================
@@ -217,14 +201,7 @@ void StereoDepthEstimator::rectifyMono(
 void StereoDepthEstimator::rectifyColor(
     const cv::Mat& left_scaled, cv::Mat& left_color_rect)
 {
-#ifdef USE_VPI_REMAP
-  if (vpi_remap_ready_)
-    left_color_rect = vpiRemapSync(vpi_stream_, vpi_remap_color_, left_scaled, vpi_rect_color_out_, VPI_IMAGE_FORMAT_BGR8);
-  else
-    cv::remap(left_scaled, left_color_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
-#else
-  cv::remap(left_scaled, left_color_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
-#endif
+  left_color_rect = vpiRemapSync(vpi_stream_, vpi_remap_color_, left_scaled, vpi_rect_color_out_, VPI_IMAGE_FORMAT_BGR8);
 }
 
 } // namespace maurice_cam
