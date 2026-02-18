@@ -76,7 +76,7 @@ class PickUpPieceSimple(Skill):
             "Pick up a piece from one square and place it on another without "
             "using Gemini vision or base driving.  Uses arm orientation changes "
             "to reach all ranks.  Parameters: square (source, e.g. 'E2'), "
-            "place_square (target, e.g. 'E4'), is_pawn (bool), speed (float)."
+            "place_square (target, e.g. 'E4'), piece (str, e.g. 'pawn'), speed (float)."
         )
 
     # ── Helpers ───────────────────────────────────────────────────────
