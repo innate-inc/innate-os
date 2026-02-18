@@ -414,6 +414,9 @@ class BrainClientNode(Node):
             String, "/input_manager/active_inputs", 10
         )
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
+        self.task_status_pub = self.create_publisher(
+            String, "/brain/skill_status_update", 10
+        )
         self.tts_status_pub = self.create_publisher(String, "/tts/is_playing", 10)
         # Publisher for memory positions from the cloud agent's posegraph
         self.memory_positions_pub = self.create_publisher(
@@ -1557,6 +1560,27 @@ class BrainClientNode(Node):
         if sender == "robot" and text and text.strip():
             self._speak(text)
 
+    def _publish_task_status(
+        self,
+        primitive_name: str,
+        primitive_id: typing.Optional[str],
+        status: str,
+        reason: typing.Optional[str] = None,
+    ):
+        """Publish local task status updates for controller app UI."""
+        payload = {
+            "primitive_name": primitive_name,
+            "primitive_id": primitive_id,
+            "skill_name": primitive_name,
+            "skill_id": primitive_id,
+            "status": status,
+            "timestamp": time.time(),
+        }
+        if reason:
+            payload["reason"] = reason
+
+        self.task_status_pub.publish(String(data=json.dumps(payload)))
+
     def handle_vision_agent_output(self, payload: VisionAgentOutput):
         execute_next_task_immediately = True
 
@@ -1655,6 +1679,11 @@ class BrainClientNode(Node):
                     },
                 )
                 self.ws_bridge.send_message(status_msg)
+                self._publish_task_status(
+                    primitive_name=payload.next_task.type,
+                    primitive_id=payload.next_task.primitive_id,
+                    status="running",
+                )
                 self.primitive_running = {
                     "primitive_name": payload.next_task.type,
                     "primitive_id": payload.next_task.primitive_id,
@@ -1930,6 +1959,16 @@ class BrainClientNode(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().info("Primitive execution goal rejected.")
+            if self.primitive_running:
+                self._publish_task_status(
+                    primitive_name=self.primitive_running["primitive_name"],
+                    primitive_id=self.primitive_running["primitive_id"],
+                    status="failed",
+                    reason="Goal rejected by action server",
+                )
+            self.primitive_running = None
+            self._goal_handle = None
+            self._resume_gaze()
             return
         # Store the goal handle for potential cancellation, using the same naming as in the example
         self._goal_handle = goal_handle
@@ -1995,6 +2034,8 @@ class BrainClientNode(Node):
         # Determine the appropriate message type based on the result
         self.get_logger().info(f"Primitive result details: {result}")
         outgoing_msg = None
+        local_status = None
+        local_reason = None
         if result.success and result.success_type == SkillResult.SUCCESS.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_COMPLETED,
@@ -2003,6 +2044,7 @@ class BrainClientNode(Node):
                     "primitive_id": primitive_id,
                 },
             )
+            local_status = "completed"
         elif result.success_type == SkillResult.CANCELLED.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_INTERRUPTED,
@@ -2011,6 +2053,7 @@ class BrainClientNode(Node):
                     "primitive_id": primitive_id,
                 },
             )
+            local_status = "interrupted"
         elif not result.success or result.success_type == SkillResult.FAILURE.value:
             outgoing_msg = MessageIn(
                 type=MessageInType.PRIMITIVE_FAILED,
@@ -2020,6 +2063,8 @@ class BrainClientNode(Node):
                     "primitive_id": primitive_id,
                 },
             )
+            local_status = "failed"
+            local_reason = result.message
         else:
             # Log success status as well for debugging unknown cases
             self.get_logger().error(
@@ -2031,6 +2076,14 @@ class BrainClientNode(Node):
             self.ws_bridge.send_message(outgoing_msg)
             self.get_logger().info(
                 f"Sent primitive status message: {outgoing_msg.type.name}"
+            )
+
+        if local_status:
+            self._publish_task_status(
+                primitive_name=primitive_name,
+                primitive_id=primitive_id,
+                status=local_status,
+                reason=local_reason,
             )
 
         # --- THEN, check and execute pending task if previous was cancelled OR succeeded in the meantime ---
@@ -2052,6 +2105,11 @@ class BrainClientNode(Node):
                 },
             )
             self.ws_bridge.send_message(status_msg)
+            self._publish_task_status(
+                primitive_name=pending_task.type,
+                primitive_id=pending_task.primitive_id,
+                status="running",
+            )
             self.primitive_running = {
                 "primitive_name": pending_task.type,
                 "primitive_id": pending_task.primitive_id,
@@ -2666,6 +2724,11 @@ class BrainClientNode(Node):
                         "primitive_id": self.primitive_running["primitive_id"],
                     },
                 )
+            )
+            self._publish_task_status(
+                primitive_name=self.primitive_running["primitive_name"],
+                primitive_id=self.primitive_running["primitive_id"],
+                status="interrupted",
             )
             self._goal_handle = None  # Clear after requesting cancel
 
