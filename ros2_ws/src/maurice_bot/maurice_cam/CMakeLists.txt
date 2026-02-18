@@ -49,6 +49,9 @@ else()
   message(WARNING "This is expected for simulation builds. For hardware builds, install nvidia-vpi-dev package.")
 endif()
 
+# Use VPI Remap for GPU-accelerated stereo rectification (instead of OpenCV cv::remap)
+option(USE_VPI_REMAP "Use VPI GPU remap for stereo rectification" ON)
+
 # Set Python version
 set(PYTHON_VERSION "python3.10")
 
@@ -131,6 +134,9 @@ if(VPI_FOUND)
     maurice_cam/stereo_calibration.cpp
   )
   target_compile_definitions(stereo_depth_estimator_component PRIVATE BUILDING_COMPONENT_LIBRARY)
+  if(USE_VPI_REMAP)
+    target_compile_definitions(stereo_depth_estimator_component PRIVATE USE_VPI_REMAP)
+  endif()
   target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
   target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
   if(nlohmann_json_FOUND)
@@ -219,6 +225,9 @@ if(VPI_FOUND)
     maurice_cam/stereo_calibration.cpp
   )
   target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
+  if(USE_VPI_REMAP)
+    target_compile_definitions(stereo_depth_estimator PRIVATE USE_VPI_REMAP)
+  endif()
   target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
   if(nlohmann_json_FOUND)
     target_link_libraries(stereo_depth_estimator nlohmann_json::nlohmann_json)
