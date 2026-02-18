@@ -617,11 +617,11 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   }
 
   // ===== STEP 8: Generate and publish depth (only if subscribed) =====
+  const float MAX_DEPTH_M = 10.0f;
   if (pub_depth) {
     const float f_calib = static_cast<float>(focal_length_);
     const float abs_baseline = std::abs(static_cast<float>(baseline_));
     const float fb = f_calib * abs_baseline;  // focal_length * baseline in meters
-    const float MAX_DEPTH_M = 10.0f;
 
     cv::Mat depth_calib(calib_height_, calib_width_, CV_16SC1);
     for (int y = 0; y < calib_height_; y++) {
