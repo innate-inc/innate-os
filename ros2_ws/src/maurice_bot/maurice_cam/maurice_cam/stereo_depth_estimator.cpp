@@ -616,35 +616,47 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     publishDisparityMsg(disparity_float, timestamp, disparity_pub_);
   }
 
-  // ===== STEP 8: Generate depth from filtered disparity =====
-  // Direct depth computation: depth_mm = f * baseline / disparity * 1000
-  // Much faster than reprojectImageTo3D which computes full X,Y,Z per pixel.
-  const float f_calib = static_cast<float>(focal_length_);
-  const float abs_baseline = std::abs(static_cast<float>(baseline_));
-  const float fb = f_calib * abs_baseline;  // focal_length * baseline in meters
-  const float MAX_DEPTH_M = 10.0f;
+  // ===== STEP 8: Generate and publish depth (only if subscribed) =====
+  if (pub_depth) {
+    const float f_calib = static_cast<float>(focal_length_);
+    const float abs_baseline = std::abs(static_cast<float>(baseline_));
+    const float fb = f_calib * abs_baseline;  // focal_length * baseline in meters
+    const float MAX_DEPTH_M = 10.0f;
 
-  cv::Mat depth_calib(calib_height_, calib_width_, CV_16SC1);
-  for (int y = 0; y < calib_height_; y++) {
-    const float* disp_row = disparity_float.ptr<float>(y);
-    int16_t* depth_row = depth_calib.ptr<int16_t>(y);
-    for (int x = 0; x < calib_width_; x++) {
-      const float d = disp_row[x];
-      if (d > 0.0f) {
-        float z = fb / d;  // depth in meters
-        if (z > 0.0f && z <= MAX_DEPTH_M) {
-          depth_row[x] = static_cast<int16_t>(std::clamp(z * 1000.0f, -32768.0f, 32767.0f));
+    cv::Mat depth_calib(calib_height_, calib_width_, CV_16SC1);
+    for (int y = 0; y < calib_height_; y++) {
+      const float* disp_row = disparity_float.ptr<float>(y);
+      int16_t* depth_row = depth_calib.ptr<int16_t>(y);
+      for (int x = 0; x < calib_width_; x++) {
+        const float d = disp_row[x];
+        if (d > 0.0f) {
+          float z = fb / d;  // depth in meters
+          if (z > 0.0f && z <= MAX_DEPTH_M) {
+            depth_row[x] = static_cast<int16_t>(std::clamp(z * 1000.0f, -32768.0f, 32767.0f));
+          } else {
+            depth_row[x] = 0;
+          }
         } else {
           depth_row[x] = 0;
         }
-      } else {
-        depth_row[x] = 0;
       }
     }
-  }
 
-  cv::Mat depth_full;
-  cv::resize(depth_calib, depth_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
+    cv::Mat depth_full;
+    cv::resize(depth_calib, depth_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
+
+    auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
+    depth_msg->header.stamp = timestamp;
+    depth_msg->header.frame_id = frame_id_;
+    depth_msg->height = image_height_;
+    depth_msg->width = image_width_;
+    depth_msg->encoding = "16SC1";
+    depth_msg->is_bigendian = false;
+    depth_msg->step = image_width_ * sizeof(int16_t);
+    depth_msg->data.resize(depth_msg->height * depth_msg->step);
+    memcpy(depth_msg->data.data(), depth_full.data, depth_msg->data.size());
+    depth_pub_->publish(std::move(depth_msg));
+  }
   const auto t_depth = clock::now();
 
   // ===== STEP 9: Generate point cloud directly from filtered disparity =====
@@ -786,21 +798,6 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     t_pc_fill = clock::now();
 
     t_pc_pub = clock::now();
-  }
-
-  // ===== STEP 10: Publish depth if subscribed =====
-  if (pub_depth) {
-    auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
-    depth_msg->header.stamp = timestamp;
-    depth_msg->header.frame_id = frame_id_;
-    depth_msg->height = image_height_;
-    depth_msg->width = image_width_;
-    depth_msg->encoding = "16SC1";
-    depth_msg->is_bigendian = false;
-    depth_msg->step = image_width_ * sizeof(int16_t);
-    depth_msg->data.resize(depth_msg->height * depth_msg->step);
-    memcpy(depth_msg->data.data(), depth_full.data, depth_msg->data.size());
-    depth_pub_->publish(std::move(depth_msg));
   }
   const auto t_frame_end = clock::now();
 
