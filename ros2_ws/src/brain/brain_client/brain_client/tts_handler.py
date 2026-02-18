@@ -4,10 +4,14 @@ Text-to-Speech handler using Cartesia API.
 Generates speech audio and plays it through the robot's audio system.
 """
 
+import array
+import json
 import os
+import struct
 import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Optional, Dict, Any
 
 import rclpy
@@ -28,6 +32,10 @@ class TTSHandler:
     
     # Default voice ID (Katie - Friendly Fixer)
     DEFAULT_VOICE_ID = "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
+
+    # Volume is stored in robot_info.json (same file as app.cpp uses)
+    ROBOT_INFO_FILE = Path.home() / "innate-os" / "data" / "robot_info.json"
+    DEFAULT_VOLUME = 50  # percent (0-100)
 
     def __init__(
         self,
@@ -68,6 +76,75 @@ class TTSHandler:
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
         return self._cartesia_client is not None
+
+    def _get_volume_fraction(self) -> float:
+        """Read volume from config file. Returns a fraction 0.0-1.0."""
+        try:
+            if self.ROBOT_INFO_FILE.exists():
+                data = json.loads(self.ROBOT_INFO_FILE.read_text())
+                pct = int(data.get("volume_percent", self.DEFAULT_VOLUME))
+                return max(0, min(100, pct)) / 100.0
+        except Exception:
+            pass
+        return self.DEFAULT_VOLUME / 100.0
+
+    @staticmethod
+    def _find_wav_data_offset(wav_data: bytes) -> int:
+        """Find the offset where PCM sample data begins in a WAV file.
+
+        Walks the RIFF/WAVE chunk structure to locate the 'data' chunk.
+        Returns the byte offset of the first sample, or 44 as a fallback.
+        """
+        if len(wav_data) < 12:
+            return 44
+        # Skip RIFF header (12 bytes: 'RIFF' + size + 'WAVE')
+        pos = 12
+        while pos + 8 <= len(wav_data):
+            chunk_id = wav_data[pos:pos + 4]
+            chunk_size = struct.unpack_from("<I", wav_data, pos + 4)[0]
+            if chunk_id == b"data":
+                return pos + 8  # samples start right after chunk header
+            pos += 8 + chunk_size
+        return 44  # fallback
+
+    @staticmethod
+    def _scale_wav_bytes(wav_data: bytes, volume: float) -> bytes:
+        """Scale PCM samples in a complete WAV byte buffer.
+
+        Parses the WAV header to find the actual data offset.
+        Falls back to returning unscaled audio on any error.
+        """
+        if volume >= 1.0:
+            return wav_data
+        try:
+            data_offset = TTSHandler._find_wav_data_offset(wav_data)
+            header = wav_data[:data_offset]
+            pcm = wav_data[data_offset:]
+            if len(pcm) < 2:
+                return wav_data
+            # Ensure even length for 16-bit samples
+            usable = len(pcm) & ~1
+            samples = array.array("h")  # signed 16-bit
+            samples.frombytes(pcm[:usable])
+            scaled = array.array("h", (max(-32768, min(32767, int(s * volume))) for s in samples))
+            return header + scaled.tobytes() + pcm[usable:]
+        except Exception:
+            return wav_data  # fallback: play unscaled rather than fail
+
+    @staticmethod
+    def _scale_pcm_chunk(chunk: bytes, volume: float) -> bytes:
+        """Scale raw pcm_s16le bytes (no header). Length must be even."""
+        if volume >= 1.0 or len(chunk) < 2:
+            return chunk
+        # Ensure even length
+        usable = len(chunk) & ~1
+        samples = array.array("h")
+        samples.frombytes(chunk[:usable])
+        scaled = array.array("h", (max(-32768, min(32767, int(s * volume))) for s in samples))
+        result = scaled.tobytes()
+        if usable < len(chunk):
+            result += chunk[usable:]  # leftover odd byte
+        return result
     
     def _publish_tts_status(self, status: str):
         """Publish TTS playback status to /tts/is_playing topic."""
@@ -132,6 +209,9 @@ class TTSHandler:
             
             # If response is an iterator of chunks, stream directly into aplay.
             # Otherwise, fall back to the existing temp-file approach.
+            volume = self._get_volume_fraction()
+            self.logger.debug(f"🔊 Volume: {int(volume * 100)}%")
+
             if hasattr(response, '__iter__') and not isinstance(response, (bytes, bytearray)):
                 self.logger.debug("🔊 Streaming TTS audio to aplay via stdin")
                 player = subprocess.Popen(
@@ -143,11 +223,20 @@ class TTSHandler:
                 )
 
                 try:
+                    header_remaining = 44  # WAV header bytes to pass through unscaled
                     for chunk in response:
                         if not chunk:
                             continue
+                        # Scale PCM data but pass WAV header through unchanged
+                        if header_remaining > 0:
+                            hdr_part = chunk[:header_remaining]
+                            pcm_part = chunk[header_remaining:]
+                            header_remaining -= len(hdr_part)
+                            out = hdr_part + self._scale_pcm_chunk(pcm_part, volume)
+                        else:
+                            out = self._scale_pcm_chunk(chunk, volume)
                         try:
-                            player.stdin.write(chunk)
+                            player.stdin.write(out)
                             player.stdin.flush()
                         except BrokenPipeError:
                             # aplay exited early; stop streaming
@@ -183,7 +272,7 @@ class TTSHandler:
                     success = False
             else:
                 # Response is already bytes: use the original temp-file playback path.
-                audio_data = response
+                audio_data = self._scale_wav_bytes(response, volume)
                 
                 # Save to temporary file
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
