@@ -119,13 +119,25 @@ class HeadEmotion(Skill):
         self.logger.info(f"[HeadEmotion] Playing '{emotion}' ({entry['description']}) x{repeat}")
         self._send_feedback(f"Expressing: {emotion}")
 
+        interpolation_rate = 30.0  # Hz
+        dt = 1.0 / interpolation_rate
+
         for r in range(repeat):
-            for angle in sequence:
+            current_angle = 0.0
+            for target_angle in sequence:
                 if self._cancelled:
                     self.head.set_position(0)
                     return "Cancelled", SkillResult.CANCELLED
-                self.head.set_position(angle)
-                time.sleep(delay)
+                steps = max(1, int(round(delay * interpolation_rate)))
+                for i in range(1, steps + 1):
+                    if self._cancelled:
+                        self.head.set_position(0)
+                        return "Cancelled", SkillResult.CANCELLED
+                    t = i / steps
+                    interp = current_angle + (target_angle - current_angle) * t
+                    self.head.set_position(int(round(interp)))
+                    time.sleep(dt)
+                current_angle = float(target_angle)
             if r < repeat - 1:
                 time.sleep(0.2)
 
