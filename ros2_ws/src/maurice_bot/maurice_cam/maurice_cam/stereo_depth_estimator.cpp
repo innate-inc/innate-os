@@ -393,12 +393,56 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
   const auto t_rectify = clock::now();
 
-  // ===== STEP 4: Publish rectified images if subscribed =====
+  // ===== STEP 4: Wrap rectified images for VPI and submit SGM (CUDA) =====
+  // Submit GPU work FIRST, then do CPU work (color remap, publishing) while GPU runs.
+  VPIImage vpi_left_wrap = nullptr;
+  VPIImage vpi_right_wrap = nullptr;
+  VPIStatus status;
+
+  status = vpiImageCreateWrapperOpenCVMat(left_rect, VPI_IMAGE_FORMAT_U8,
+                                           VPI_BACKEND_CUDA, &vpi_left_wrap);
+  if (status != VPI_SUCCESS) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to wrap left rectified image");
+    return;
+  }
+
+  status = vpiImageCreateWrapperOpenCVMat(right_rect, VPI_IMAGE_FORMAT_U8,
+                                           VPI_BACKEND_CUDA, &vpi_right_wrap);
+  if (status != VPI_SUCCESS) {
+    vpiImageDestroy(vpi_left_wrap);
+    RCLCPP_ERROR(this->get_logger(), "Failed to wrap right rectified image");
+    return;
+  }
+
+  const auto t_vpi_wrap = clock::now();
+
+  VPIStereoDisparityEstimatorParams stereo_params;
+  vpiInitStereoDisparityEstimatorParams(&stereo_params);
+  stereo_params.maxDisparity = max_disparity_;
+  stereo_params.confidenceThreshold = confidence_threshold_;
+  stereo_params.minDisparity = min_disparity_;
+  stereo_params.p1 = p1_;
+  stereo_params.p2 = p2_;
+  stereo_params.uniqueness = static_cast<float>(uniqueness_);
+
+  vpiStreamSync(vpi_stream_);
+  status = vpiSubmitStereoDisparityEstimator(vpi_stream_, VPI_BACKEND_CUDA, stereo_payload_,
+                                              vpi_left_wrap, vpi_right_wrap,
+                                              vpi_disparity_, vpi_confidence_, &stereo_params);
+  if (status != VPI_SUCCESS) {
+    vpiImageDestroy(vpi_left_wrap);
+    vpiImageDestroy(vpi_right_wrap);
+    RCLCPP_ERROR(this->get_logger(), "Failed to compute stereo disparity");
+    return;
+  }
+  const auto t_sgm_submit = clock::now();
+
+  // ===== STEP 5: CPU work while GPU computes disparity =====
+  // Color remap + rectified image publishing overlaps with SGM on the GPU.
+
   // Rectify the color image at calibration resolution if anyone needs it
   // (color rect topic, compressed rect topic, or color point cloud).
   // The default pointcloud (xyz-only) does NOT need color rectification.
-  // This must use the same rectification maps as the mono images so that
-  // color pixels align with the disparity.
   cv::Mat left_color_rect;  // calib-resolution, BGR, rectified
   if (need_color_rect) {
     cv::remap(left_scaled, left_color_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
@@ -495,53 +539,7 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   }
   const auto t_pub_rect = clock::now();
 
-  // ===== STEP 5: Wrap rectified images for VPI (CUDA) =====
-  VPIImage vpi_left_wrap = nullptr;
-  VPIImage vpi_right_wrap = nullptr;
-  VPIStatus status;
-
-  status = vpiImageCreateWrapperOpenCVMat(left_rect, VPI_IMAGE_FORMAT_U8,
-                                           VPI_BACKEND_CUDA, &vpi_left_wrap);
-  if (status != VPI_SUCCESS) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap left rectified image");
-    return;
-  }
-
-  status = vpiImageCreateWrapperOpenCVMat(right_rect, VPI_IMAGE_FORMAT_U8,
-                                           VPI_BACKEND_CUDA, &vpi_right_wrap);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap right rectified image");
-    return;
-  }
-
-  const auto t_vpi_wrap = clock::now();
-
-  // ===== STEP 6: Compute stereo disparity using VPI SGM (CUDA) =====
-  VPIStereoDisparityEstimatorParams stereo_params;
-  vpiInitStereoDisparityEstimatorParams(&stereo_params);
-  stereo_params.maxDisparity = max_disparity_;
-  stereo_params.confidenceThreshold = confidence_threshold_;
-  stereo_params.minDisparity = min_disparity_;
-  stereo_params.p1 = p1_;
-  stereo_params.p2 = p2_;
-  stereo_params.uniqueness = static_cast<float>(uniqueness_);
-  // Note: windowSize is ignored on CUDA (uses 9x7 window internally)
-  // Note: p2Alpha and numPasses are OFA-only, not used on CUDA
-
-  vpiStreamSync(vpi_stream_);
-  status = vpiSubmitStereoDisparityEstimator(vpi_stream_, VPI_BACKEND_CUDA, stereo_payload_,
-                                              vpi_left_wrap, vpi_right_wrap,
-                                              vpi_disparity_, vpi_confidence_, &stereo_params);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    vpiImageDestroy(vpi_right_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to compute stereo disparity");
-    return;
-  }
-  const auto t_sgm_submit = clock::now();
-
-  // Synchronize
+  // ===== STEP 6: Synchronize GPU (SGM should be done or nearly done) =====
   vpiStreamSync(vpi_stream_);
   const auto t_sgm = clock::now();
 
@@ -812,8 +810,9 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
   };
   RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
     "Pipeline %.1fms | sub_check %.1f | scale %.1f | gray %.1f | rectify %.1f | "
+    "vpi_wrap %.1f | sgm_submit %.1f | "
     "color_remap %.1f | mono_pub %.1f | color_pub %.1f | jpeg_pub %.1f | "
-    "vpi_wrap %.1f | sgm_submit %.1f | sgm_sync %.1f | "
+    "sgm_sync %.1f | "
     "lock+copy %.1f | border %.1f | unfilt_pub %.1f | filter %.1f | depth %.1f | "
     "pc_resize %.1f | pc_alloc %.1f | pc_fill %.1f | pc_pub %.1f | depth_pub %.1f | "
     "subs[L:%d R:%d C:%d J:%d PC:%d PCC:%d D:%d Di:%d Du:%d col:%d]",
@@ -822,13 +821,13 @@ void StereoDepthEstimator::processFrame(const cv::Mat& left_input, const cv::Mat
     ms(t_scale - t_sub_check),
     ms(t_gray - t_scale),
     ms(t_rectify - t_gray),
-    ms(t_color_remap - t_rectify),
+    ms(t_vpi_wrap - t_rectify),
+    ms(t_sgm_submit - t_vpi_wrap),
+    ms(t_color_remap - t_sgm_submit),
     ms(t_mono_pub - t_color_remap),
     ms(t_color_pub - t_mono_pub),
     ms(t_pub_rect - t_color_pub),
-    ms(t_vpi_wrap - t_pub_rect),
-    ms(t_sgm_submit - t_vpi_wrap),
-    ms(t_sgm - t_sgm_submit),
+    ms(t_sgm - t_pub_rect),
     ms(t_lock_copy - t_sgm),
     ms(t_border - t_lock_copy),
     ms(t_convert - t_border),
