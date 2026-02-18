@@ -133,14 +133,11 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
     throw;
   }
 
-#ifdef USE_VPI_REMAP
   // Initialize VPI remap for GPU-accelerated rectification
-  if (initVPIRemap()) {
-    vpi_remap_ready_ = true;
-  } else {
-    RCLCPP_WARN(this->get_logger(), "VPI remap init failed — falling back to OpenCV remap");
+  if (!initVPIRemap()) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI remap");
+    throw std::runtime_error("VPI remap initialization failed");
   }
-#endif
 
   // Initialize VPI
   if (!initializeVPI()) {
@@ -188,9 +185,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 StereoDepthEstimator::~StereoDepthEstimator()
 {
   RCLCPP_INFO(this->get_logger(), "Shutting down Stereo Depth Estimator...");
-#ifdef USE_VPI_REMAP
   cleanupVPIRemap();
-#endif
   cleanupVPI();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator shutdown complete");
 }
