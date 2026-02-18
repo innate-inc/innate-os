@@ -8,7 +8,7 @@ Before=zenoh-router.service ros-app.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -c '/usr/sbin/nvpmodel -m 2; /usr/bin/jetson_clocks'
+ExecStart=/bin/bash -c '/usr/sbin/nvpmodel -m 2 && echo done_nvpmodel_m2; /usr/bin/jetson_clocks && echo done_jetson_clocks'
 # ExecStop=/usr/bin/jetson_clocks --restore
 
 [Install]
