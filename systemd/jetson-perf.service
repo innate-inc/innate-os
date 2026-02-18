@@ -1,0 +1,15 @@
+[Unit]
+Description=Jetson Max Performance (nvpmodel + jetson_clocks)
+# Run early at boot before any ROS services need the clocks
+DefaultDependencies=no
+After=sysinit.target
+Before=zenoh-router.service ros-app.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c '/usr/sbin/nvpmodel -m 2; /usr/bin/jetson_clocks'
+# ExecStop=/usr/bin/jetson_clocks --restore
+
+[Install]
+WantedBy=multi-user.target
