@@ -12,6 +12,7 @@
 #include <maurice_msgs/srv/set_robot_name.hpp>
 #include <maurice_msgs/srv/trigger_update.hpp>
 #include <maurice_msgs/srv/shutdown.hpp>
+#include <maurice_msgs/srv/set_volume.hpp>
 
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
@@ -406,6 +407,11 @@ class AppControl : public rclcpp::Node {
         shutdown_srv_ = this->create_service<maurice_msgs::srv::Shutdown>(
             "/shutdown", std::bind(&AppControl::shutdown_callback, this, std::placeholders::_1, std::placeholders::_2));
 
+        // Service for setting system volume
+        set_volume_srv_ = this->create_service<maurice_msgs::srv::SetVolume>(
+            "/set_volume",
+            std::bind(&AppControl::set_volume_callback, this, std::placeholders::_1, std::placeholders::_2));
+
         RCLCPP_INFO(this->get_logger(), "AppControl node started. [C++]");
     }
 
@@ -475,7 +481,8 @@ class AppControl : public rclcpp::Node {
         json default_robot_info = {{"robot_name", "MARS"},
                                    {"robot_id", nullptr},
                                    {"hardware_revision", default_hw_rev},
-                                   {"color_variant", "black"}};
+                                   {"color_variant", "black"},
+                                   {"volume_percent", 50}};
 
         json robot_info;
 
@@ -707,6 +714,7 @@ class AppControl : public rclcpp::Node {
             }
             data_to_publish_dict["hardware_revision"] = robot_info.value("hardware_revision", default_hw_rev);
             data_to_publish_dict["color_variant"] = robot_info.value("color_variant", "black");
+            data_to_publish_dict["volume_percent"] = robot_info.value("volume_percent", 50);
 
             // Read minimum_app_version from os_config.json
             if (app_config_.contains("minimum_app_version")) {
@@ -896,6 +904,40 @@ class AppControl : public rclcpp::Node {
         }
     }
 
+    /**
+     * Service callback to set the system speaker volume.
+     * Stores volume_percent in robot_info.json.
+     * The TTS handler reads this file and attenuates PCM audio accordingly.
+     */
+    void set_volume_callback(const std::shared_ptr<maurice_msgs::srv::SetVolume::Request> request,
+                             std::shared_ptr<maurice_msgs::srv::SetVolume::Response> response) {
+        int vol = request->volume_percent;
+        if (vol < 0 || vol > 100) {
+            response->success = false;
+            response->message = "Volume must be between 0 and 100";
+            return;
+        }
+
+        try {
+            json robot_info = get_robot_info();
+            robot_info["volume_percent"] = vol;
+
+            if (!set_robot_info(robot_info)) {
+                response->success = false;
+                response->message = "Failed to save robot_info.json";
+                return;
+            }
+
+            response->success = true;
+            response->message = "Volume set to " + std::to_string(vol) + "%";
+            RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+        } catch (const std::exception& e) {
+            response->success = false;
+            response->message = std::string("Failed to set volume: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+        }
+    }
+
     // Member variables
     json app_config_;
 
@@ -926,6 +968,7 @@ class AppControl : public rclcpp::Node {
     rclcpp::Service<maurice_msgs::srv::SetRobotName>::SharedPtr set_robot_name_srv_;
     rclcpp::Service<maurice_msgs::srv::TriggerUpdate>::SharedPtr trigger_update_srv_;
     rclcpp::Service<maurice_msgs::srv::Shutdown>::SharedPtr shutdown_srv_;
+    rclcpp::Service<maurice_msgs::srv::SetVolume>::SharedPtr set_volume_srv_;
 };
 
 }  // namespace maurice_control

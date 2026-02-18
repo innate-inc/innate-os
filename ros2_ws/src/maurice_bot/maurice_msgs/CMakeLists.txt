@@ -38,6 +38,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GridLocalize.srv"
   "srv/TriggerUpdate.srv"
   "srv/Shutdown.srv"
+  "srv/SetVolume.srv"
   DEPENDENCIES
     std_msgs
     std_srvs

@@ -1,0 +1,12 @@
+# SetVolume Service
+# Sets the system speaker volume
+
+# Request
+# volume_percent: Volume level from 0 to 100
+int32 volume_percent
+
+---
+
+# Response
+bool success
+string message
