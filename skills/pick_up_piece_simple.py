@@ -38,8 +38,8 @@ class PickUpPieceSimple(Skill):
 
     # Heights in meters
     HEIGHT_SAFE = 0.15  # 20cm safe travel height
-    HEIGHT_PICK = 0.08  # 8cm pick height for tall pieces
-    HEIGHT_PICK_PAWN = 0.05  # 5cm pick height for pawns
+    HEIGHT_PICK_TALL = 0.06  # 8cm pick height for tall pieces (king, queen)
+    HEIGHT_PICK_SHORT = 0.04  # 4cm pick height for short pieces (everything else)
 
     # Gripper parameters
     GRIPPER_OPEN_PERCENT = 50
@@ -370,7 +370,9 @@ class PickUpPieceSimple(Skill):
 
     # ── Main logic ────────────────────────────────────────────────────
 
-    def execute(self, square: str, place_square: str, is_pawn: bool = True, speed: float = 1.0):
+    TALL_PIECES = {"king", "queen"}
+
+    def execute(self, square: str, place_square: str, piece: str = "pawn", speed: float = 1.0):
         """
         Pick up a piece from square and place it on place_square.
 
@@ -383,7 +385,7 @@ class PickUpPieceSimple(Skill):
         Args:
             square: Source square in chess notation (e.g. 'A4')
             place_square: Target square (e.g. 'D5')
-            is_pawn: If True, use lower pick height for pawns
+            piece: Piece type ('king', 'queen', 'rook', 'bishop', 'knight', 'pawn')
             speed: Speed multiplier (1.0 = normal)
         """
         self._speed = max(0.1, min(speed, 3.0))
@@ -405,7 +407,8 @@ class PickUpPieceSimple(Skill):
 
         src_x, src_y, src_board_z = src_pos
         dst_x, dst_y, dst_board_z = dst_pos
-        base_pick_height = self.HEIGHT_PICK_PAWN if is_pawn else self.HEIGHT_PICK
+        is_tall = piece.strip().lower() in self.TALL_PIECES
+        base_pick_height = self.HEIGHT_PICK_TALL if is_tall else self.HEIGHT_PICK_SHORT
         src_pitch, src_yaw = self._orientation_for_square(square)
         dst_pitch, dst_yaw = self._orientation_for_square(place_square)
 

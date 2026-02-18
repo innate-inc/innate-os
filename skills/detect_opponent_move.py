@@ -126,19 +126,6 @@ class DetectOpponentMove(Skill):
             self.logger.error(f"[DetectOpponentMove] Failed to load game state: {e}")
             return None
 
-    def _save_game_state(self, fen: str, move_history: list, last_move: str, robot_color: str):
-        """Persist game state to JSON."""
-        turn = "white" if " w " in fen else "black"
-        state = {
-            "fen": fen,
-            "move_history": move_history,
-            "last_detected_move": last_move,
-            "turn": turn,
-            "robot_color": robot_color,
-        }
-        GAME_STATE_FILE.write_text(json.dumps(state, indent=2))
-        self.logger.info(f"[DetectOpponentMove] State saved: {GAME_STATE_FILE}")
-
     def _init_game_state(self, robot_color: str) -> dict:
         """Create a fresh game state with the standard starting position."""
         fen = chess.STARTING_FEN
@@ -342,25 +329,6 @@ class DetectOpponentMove(Skill):
             self.logger.error(f"[DetectOpponentMove] Gemini stage 2 failed: {e}")
             return None
 
-    # ── Validation & application ──────────────────────────────────────
-
-    def _validate_and_apply(self, board: chess.Board, move_uci: str) -> tuple:
-        """Validate a UCI move and apply it.
-
-        Returns (new_fen, san_str) or raises ValueError.
-        """
-        try:
-            move = chess.Move.from_uci(move_uci)
-        except ValueError as err:
-            raise ValueError(f"Invalid UCI notation: {move_uci}") from err
-
-        if move not in board.legal_moves:
-            raise ValueError(f"Move {move_uci} is not legal. Legal moves: {[m.uci() for m in board.legal_moves]}")
-
-        san = board.san(move)
-        board.push(move)
-        return board.fen(), san
-
     # ── Main execute ──────────────────────────────────────────────────
 
     def execute(self, robot_color: str = "white"):
@@ -451,23 +419,25 @@ class DetectOpponentMove(Skill):
                     reasoning = result2.get("reasoning", reasoning)
                     self.logger.info(f"[DetectOpponentMove] Stage 2 override: move={move_uci} conf={confidence:.2f}")
 
-        # ── 7. Validate and apply ──
-        self._send_feedback(f"Detected move: {move_uci} (confidence: {confidence:.0%})")
-
-        try:
-            new_fen, san = self._validate_and_apply(board, move_uci)
-        except ValueError as e:
+        # ── 7. Validate move is legal (but don't apply — agent calls update_chess_state) ──
+        if move_uci not in legal_moves:
             self._go_to_safe_pose()
-            return f"Move validation failed: {e}", SkillResult.FAILURE
+            return (
+                f"Detected move {move_uci} is not legal. "
+                f"Legal moves: {legal_moves}",
+                SkillResult.FAILURE,
+            )
 
-        # ── 8. Save state ──
-        move_history.append(move_uci)
-        self._save_game_state(new_fen, move_history, move_uci, robot_color)
+        san = board.san(chess.Move.from_uci(move_uci))
 
-        # ── 9. Return to safe pose ──
+        # ── 8. Return to safe pose ──
         self._go_to_safe_pose()
 
-        msg = f"Opponent played {san} ({move_uci}). Confidence: {confidence:.0%}. {reasoning}"
+        msg = (
+            f"Detected opponent move: {san} ({move_uci}). "
+            f"Confidence: {confidence:.0%}. {reasoning}. "
+            f"Call update_chess_state(move_uci=\"{move_uci}\") to apply it."
+        )
         self._send_feedback(msg)
         return msg, SkillResult.SUCCESS
 
