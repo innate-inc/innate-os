@@ -13,6 +13,9 @@ from brain_client.skill_types import Skill, SkillResult
 
 GAME_STATE_FILE = Path.home() / "chess_game_state.json"
 
+# Handicap: White starts without the a1 rook (no queenside castling)
+HANDICAP_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/1NBQKBNR w Kkq - 0 1"
+
 
 class ResetChessGame(Skill):
     """Reset the chess game state to the standard starting position."""
@@ -43,7 +46,7 @@ class ResetChessGame(Skill):
             return f"Invalid robot_color '{robot_color}'. Must be 'white' or 'black'.", SkillResult.FAILURE
 
         state = {
-            "fen": chess.STARTING_FEN,
+            "fen": HANDICAP_FEN,
             "move_history": [],
             "last_detected_move": None,
             "turn": "white",

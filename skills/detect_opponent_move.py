@@ -28,6 +28,9 @@ from brain_client.skill_types import (
 
 # ── Paths ─────────────────────────────────────────────────────────────
 GAME_STATE_FILE = Path.home() / "chess_game_state.json"
+
+# Handicap: White starts without the a1 rook (no queenside castling)
+HANDICAP_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/1NBQKBNR w Kkq - 0 1"
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
 CAPTURES_DIR = Path.home() / "innate-os/captures/detect_move"
 
@@ -127,10 +130,9 @@ class DetectOpponentMove(Skill):
             return None
 
     def _init_game_state(self, robot_color: str) -> dict:
-        """Create a fresh game state with the standard starting position."""
-        fen = chess.STARTING_FEN
+        """Create a fresh game state with the handicap starting position."""
         state = {
-            "fen": fen,
+            "fen": HANDICAP_FEN,
             "move_history": [],
             "last_detected_move": None,
             "turn": "white",
