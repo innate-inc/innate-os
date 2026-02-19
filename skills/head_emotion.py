@@ -8,66 +8,56 @@ import time
 from brain_client.skill_types import Skill, SkillResult, Interface, InterfaceType
 
 
+# Each pose is (angle_degrees, duration_seconds). Duration is the time to
+# interpolate from the previous pose to this one.
 EMOTIONS = {
     "happy": {
         "description": "Quick upward nods",
-        "sequence": [5, -5, 10, -5, 10, 0],
-        "delay": 0.15,
+        "sequence": [(5, 0.12), (-5, 0.12), (10, 0.15), (-5, 0.12), (10, 0.15), (0, 0.18)],
     },
     "sad": {
         "description": "Slow droop downward",
-        "sequence": [0, -5, -10, -15, -20, -25, -25],
-        "delay": 0.4,
+        "sequence": [(0, 0.3), (-5, 0.35), (-10, 0.4), (-15, 0.4), (-20, 0.45), (-25, 0.5), (-25, 0.3)],
     },
     "excited": {
         "description": "Rapid enthusiastic bouncing",
-        "sequence": [10, -10, 15, -15, 10, -10, 15, 0],
-        "delay": 0.1,
+        "sequence": [(10, 0.08), (-10, 0.08), (15, 0.1), (-15, 0.1), (10, 0.08), (-10, 0.08), (15, 0.1), (0, 0.12)],
     },
     "thinking": {
         "description": "Slow tilt up, pause, slight nod down",
-        "sequence": [5, 10, 15, 15, 15, 10, 5, -5, 0],
-        "delay": 0.35,
+        "sequence": [(5, 0.3), (10, 0.35), (15, 0.4), (15, 0.6), (15, 0.6), (10, 0.3), (5, 0.25), (-5, 0.2), (0, 0.3)],
     },
     "disappointed": {
         "description": "Slow shake-like droop then hold",
-        "sequence": [0, -5, -3, -10, -8, -15, -20, -20],
-        "delay": 0.3,
+        "sequence": [(0, 0.25), (-5, 0.3), (-3, 0.2), (-10, 0.3), (-8, 0.2), (-15, 0.35), (-20, 0.4), (-20, 0.3)],
     },
     "surprised": {
         "description": "Quick jolt up then settle",
-        "sequence": [15, 15, 10, 5, 0],
-        "delay": 0.12,
+        "sequence": [(15, 0.08), (15, 0.15), (10, 0.15), (5, 0.15), (0, 0.2)],
     },
     "confused": {
         "description": "Tilt up, down, up hesitantly",
-        "sequence": [5, -5, 8, -8, 3, -3, 0],
-        "delay": 0.25,
+        "sequence": [(5, 0.2), (-5, 0.25), (8, 0.25), (-8, 0.25), (3, 0.2), (-3, 0.2), (0, 0.25)],
     },
     "angry": {
         "description": "Sharp downward jab, hold low, return",
-        "sequence": [-10, -25, -25, -25, -15, -5, 0],
-        "delay": 0.15,
+        "sequence": [(-10, 0.1), (-25, 0.1), (-25, 0.2), (-25, 0.2), (-15, 0.15), (-5, 0.15), (0, 0.18)],
     },
     "sleepy": {
         "description": "Gradual droop with small recovery bobs",
-        "sequence": [0, -5, -3, -10, -8, -15, -12, -20, -25, -25],
-        "delay": 0.5,
+        "sequence": [(0, 0.4), (-5, 0.5), (-3, 0.3), (-10, 0.5), (-8, 0.3), (-15, 0.5), (-12, 0.3), (-20, 0.5), (-25, 0.6), (-25, 0.4)],
     },
     "proud": {
         "description": "Slow confident rise and hold high",
-        "sequence": [0, 5, 10, 15, 15, 15, 10, 5, 0],
-        "delay": 0.3,
+        "sequence": [(0, 0.25), (5, 0.3), (10, 0.3), (15, 0.35), (15, 0.4), (15, 0.4), (10, 0.3), (5, 0.25), (0, 0.25)],
     },
     "agreeing": {
         "description": "Nodding yes",
-        "sequence": [-10, 5, -10, 5, -10, 5, 0],
-        "delay": 0.18,
+        "sequence": [(-10, 0.15), (5, 0.15), (-10, 0.15), (5, 0.15), (-10, 0.15), (5, 0.15), (0, 0.2)],
     },
     "disagreeing": {
         "description": "Slow deliberate shake no via tilt",
-        "sequence": [-5, 5, -8, 8, -5, 5, 0],
-        "delay": 0.2,
+        "sequence": [(-5, 0.18), (5, 0.18), (-8, 0.2), (8, 0.2), (-5, 0.18), (5, 0.18), (0, 0.2)],
     },
 }
 
@@ -114,7 +104,6 @@ class HeadEmotion(Skill):
         repeat = max(1, min(int(repeat), 5))
         entry = EMOTIONS[emotion]
         sequence = entry["sequence"]
-        delay = entry["delay"]
 
         self.logger.info(f"[HeadEmotion] Playing '{emotion}' ({entry['description']}) x{repeat}")
         self._send_feedback(f"Expressing: {emotion}")
@@ -124,11 +113,11 @@ class HeadEmotion(Skill):
 
         for r in range(repeat):
             current_angle = 0.0
-            for target_angle in sequence:
+            for target_angle, duration in sequence:
                 if self._cancelled:
                     self.head.set_position(0)
                     return "Cancelled", SkillResult.CANCELLED
-                steps = max(1, int(round(delay * interpolation_rate)))
+                steps = max(1, int(round(duration * interpolation_rate)))
                 for i in range(1, steps + 1):
                     if self._cancelled:
                         self.head.set_position(0)
