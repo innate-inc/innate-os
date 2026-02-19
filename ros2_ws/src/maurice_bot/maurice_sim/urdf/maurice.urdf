@@ -350,6 +350,15 @@
     </visual>
   </link>
 
+  <!-- Camera Optical Frame (at left camera, used for depth/pointcloud) -->
+  <!-- Optical frame convention: Z forward, X right, Y down -->
+  <joint name="fixed_camera_optical_frame" type="fixed">
+    <parent link="head_camera_left"/>
+    <child link="camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+  </joint>
+  <link name="camera_optical_frame"/>
+
   <!-- Head Camera Right Link -->
   <joint name="fixed_head_camera_right" type="fixed">
     <parent link="head"/>
@@ -370,5 +379,10 @@
       <material name="matt_black"/>
     </visual>
   </link>
-
+<joint name="fixed_right_camera_optical_frame" type="fixed">
+  <parent link="head_camera_right"/>
+  <child link="right_camera_optical_frame"/>
+  <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+</joint>
+<link name="right_camera_optical_frame"/>
 </robot>

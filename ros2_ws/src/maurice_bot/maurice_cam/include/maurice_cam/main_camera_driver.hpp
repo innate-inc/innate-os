@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -20,6 +21,9 @@
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
+
+#include "maurice_cam/stereo_calibration.hpp"
 
 #include <opencv2/opencv.hpp>
 
@@ -233,16 +237,34 @@ private:
    */
   void applyAutoExposure(const cv::Mat& frame);
 
+  /**
+   * @brief Timer callback: check if stereo calibration file changed and reload.
+   */
+  void checkCalibrationFile();
+
   // ROS 2 publishers
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_pub_;   // Left camera raw
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_pub_;  // Right camera raw
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr stereo_pub_;
+
+  // Camera info publishers + calibration
+  rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_pub_;
+  std::shared_ptr<StereoCalibration> stereo_calib_;
+  sensor_msgs::msg::CameraInfo left_info_msg_;
+  sensor_msgs::msg::CameraInfo right_info_msg_;
+  bool calibration_loaded_{false};
+  std::mutex calib_mutex_;
+  rclcpp::TimerBase::SharedPtr calib_watch_timer_;
+  std::filesystem::file_time_type calib_last_write_;
 
   // Frame processing thread
   std::thread frame_thread_;
   std::atomic<bool> frame_thread_running_{false};
 
   // Camera parameters
+  std::string data_directory_;
   std::string camera_device_;
   int capture_width_;      // Capture resolution (full FOV)
   int capture_height_;
@@ -254,12 +276,16 @@ private:
   int publish_stereo_height_;
   double fps_;
   std::string frame_id_;
+  std::string right_frame_id_;
   int jpeg_quality_;
 
   // Compressed image publishing settings
   bool publish_compressed_{true};
   int compressed_frame_interval_{3};  // Publish compressed every N frames
   int compressed_frame_counter_{0};
+
+  // Stereo image publishing (combined left+right for legacy compatibility)
+  bool publish_stereo_{false};
 
   // V4L2 control interface
   int camera_fd_{-1};

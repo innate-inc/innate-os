@@ -15,9 +15,19 @@
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>image_transport</depend>
   <depend>cv_bridge</depend>
+  <depend>tf2_ros</depend>
+  <depend>geometry_msgs</depend>
+  <depend>depth_image_proc</depend>
+  <depend>pcl_ros</depend>
+  <depend>image_proc</depend>
+  <depend>stereo_image_proc</depend>
+  <depend>stereo_msgs</depend>
+  <depend>message_filters</depend>
   <depend>OpenCV</depend>
+  <depend>maurice_msgs</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>

@@ -1,398 +1,297 @@
+// Stereo Depth Estimator — orchestrator.
+//
+// All heavy lifting lives in sibling files under depth_estimator/ and filters/:
+//   depth_estimator/calibration.cpp   — camera_info subscription & calibration init
+//   depth_estimator/vpi_stereo.cpp    — VPI init/cleanup, submit, sync, extract
+//   depth_estimator/rectification.cpp — scale, mono/colour rectification
+//   depth_estimator/publishing.cpp    — disparity, depth, rectified image publishing
+//   depth_estimator/pointcloud.cpp    — xyz and xyzrgb point cloud generation
+//   filters/filter_chain.cpp          — filter chain init, log, orchestration
+//   filters/simple_filters.cpp        — median, bilateral, hole-fill, clamp, edge, speckle
+//   filters/advanced_filters.cpp      — domain-transform, temporal
+//
+// This file contains:  constructor, destructor, syncCallback, processFrame, main.
+
 #include "maurice_cam/stereo_depth_estimator.hpp"
-#include <nlohmann/json.hpp>
-#include <fstream>
 
 using namespace std::chrono_literals;
-
-// Macro to check VPI status and log errors
-#define CHECK_VPI_STATUS(status, msg) \
-  if ((status) != VPI_SUCCESS) { \
-    char vpi_err[256]; \
-    vpiGetLastStatusMessage(vpi_err, sizeof(vpi_err)); \
-    RCLCPP_ERROR(this->get_logger(), "%s: %s", msg, vpi_err); \
-    return false; \
-  }
 
 namespace maurice_cam
 {
 
+// =============================================================================
+// Constructor — parameter declaration, calibration, publishers, subscribers
+// =============================================================================
 StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 : Node("stereo_depth_estimator", options)
 {
   // Declare parameters with defaults
-  this->declare_parameter<std::string>("data_directory", "/home/jetson1/innate-os/data");
-  this->declare_parameter<std::string>("stereo_topic", "/mars/main_camera/stereo");
+  this->declare_parameter<std::string>("left_camera_info_topic", "/mars/main_camera/left/camera_info");
+  this->declare_parameter<std::string>("right_camera_info_topic", "/mars/main_camera/right/camera_info");
+  this->declare_parameter<std::string>("left_topic", "/mars/main_camera/left/image_raw");
+  this->declare_parameter<std::string>("right_topic", "/mars/main_camera/right/image_raw");
   this->declare_parameter<std::string>("depth_topic", "/mars/main_camera/depth");
   this->declare_parameter<std::string>("disparity_topic", "/mars/main_camera/disparity");
-  this->declare_parameter<std::string>("rectified_topic", "/mars/main_camera/stereo_rectified");
+  this->declare_parameter<std::string>("disparity_unfiltered_topic", "/mars/main_camera/disparity_unfiltered");
+  this->declare_parameter<std::string>("left_rectified_topic", "/mars/main_camera/left/image_rect");
+  this->declare_parameter<std::string>("right_rectified_topic", "/mars/main_camera/right/image_rect");
+  this->declare_parameter<std::string>("left_rectified_color_topic", "/mars/main_camera/left/image_rect_color");
+  this->declare_parameter<std::string>("left_rectified_compressed_topic", "/mars/main_camera/left/image_rect_color/compressed");
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
-  this->declare_parameter<int>("max_disparity", 80);
-  this->declare_parameter<bool>("publish_disparity", false);
-  this->declare_parameter<bool>("publish_rectified", false);
-  this->declare_parameter<int>("stereo_width", 1280);  // Input at 1280x480 (640x480 per camera)
-  this->declare_parameter<int>("stereo_height", 480);
-  this->declare_parameter<int>("process_every_n_frames", 1);  // 1 = process every frame
-  this->declare_parameter<bool>("publish_pointcloud", true);
+  this->declare_parameter<int>("jpeg_quality", 80);
+  this->declare_parameter<int>("image_width", 640);
+  this->declare_parameter<int>("image_height", 480);
+  this->declare_parameter<double>("max_fps", 10.0);
   this->declare_parameter<std::string>("pointcloud_topic", "/mars/main_camera/points");
-  this->declare_parameter<int>("pointcloud_decimation", 2);  // 2 = half resolution point cloud
-  
-  // Block Matching parameters (from Python script that worked best)
-  this->declare_parameter<int>("bm_window_size", 11);       // Match Python script
-  this->declare_parameter<int>("bm_quality", 8);            // Max quality (0-8)
-  this->declare_parameter<int>("bm_conf_threshold", 16000); // Confidence threshold (lower = more details)
+  this->declare_parameter<std::string>("pointcloud_color_topic", "/mars/main_camera/points_color");
+  this->declare_parameter<int>("pointcloud_decimation", 2);
+  this->declare_parameter<std::string>("footprint_cloud_topic", "/footprint/camera_optical");
+  this->declare_parameter<std::string>("footprint_overlay_topic", "/mars/main_camera/left/image_rect_footprint");
+  this->declare_parameter<std::string>("footprint_mask_topic", "/mars/main_camera/left/footprint_mask");
+  this->declare_parameter<std::string>("footprint_cutout_topic", "/mars/main_camera/left/image_rect_cutout");
+
+  // VPI creation parameters
+  this->declare_parameter<int>("max_disparity", 64);
+  this->declare_parameter<int>("include_diagonals", 1);
+
+  // VPI runtime parameters (CUDA backend)
+  this->declare_parameter<int>("confidence_threshold", 32767);
+  this->declare_parameter<int>("min_disparity", 0);
+  this->declare_parameter<int>("p1", 3);
+  this->declare_parameter<int>("p2", 48);
+  this->declare_parameter<double>("uniqueness", 0.15);
+  this->declare_parameter<int>("disparity_border_margin", 10);
 
   // Get parameter values
-  data_directory_ = this->get_parameter("data_directory").as_string();
-  stereo_topic_ = this->get_parameter("stereo_topic").as_string();
+  left_camera_info_topic_ = this->get_parameter("left_camera_info_topic").as_string();
+  right_camera_info_topic_ = this->get_parameter("right_camera_info_topic").as_string();
+  left_topic_ = this->get_parameter("left_topic").as_string();
+  right_topic_ = this->get_parameter("right_topic").as_string();
   depth_topic_ = this->get_parameter("depth_topic").as_string();
   disparity_topic_ = this->get_parameter("disparity_topic").as_string();
-  rectified_topic_ = this->get_parameter("rectified_topic").as_string();
+  disparity_unfiltered_topic_ = this->get_parameter("disparity_unfiltered_topic").as_string();
+  left_rectified_topic_ = this->get_parameter("left_rectified_topic").as_string();
+  right_rectified_topic_ = this->get_parameter("right_rectified_topic").as_string();
+  left_rectified_color_topic_ = this->get_parameter("left_rectified_color_topic").as_string();
+  left_rectified_compressed_topic_ = this->get_parameter("left_rectified_compressed_topic").as_string();
   frame_id_ = this->get_parameter("frame_id").as_string();
-  max_disparity_ = this->get_parameter("max_disparity").as_int();
-  publish_disparity_ = this->get_parameter("publish_disparity").as_bool();
-  publish_rectified_ = this->get_parameter("publish_rectified").as_bool();
-  stereo_width_ = this->get_parameter("stereo_width").as_int();
-  stereo_height_ = this->get_parameter("stereo_height").as_int();
-  process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
-  if (process_every_n_frames_ < 1) process_every_n_frames_ = 1;
-  publish_pointcloud_ = this->get_parameter("publish_pointcloud").as_bool();
+  jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
+  image_width_ = this->get_parameter("image_width").as_int();
+  image_height_ = this->get_parameter("image_height").as_int();
+  max_fps_ = this->get_parameter("max_fps").as_double();
+  if (max_fps_ < 0.0) max_fps_ = 0.0;
+  min_process_interval_ = (max_fps_ > 0.0)
+      ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / max_fps_))
+      : std::chrono::steady_clock::duration::zero();
   pointcloud_topic_ = this->get_parameter("pointcloud_topic").as_string();
+  pointcloud_color_topic_ = this->get_parameter("pointcloud_color_topic").as_string();
   pointcloud_decimation_ = this->get_parameter("pointcloud_decimation").as_int();
   if (pointcloud_decimation_ < 1) pointcloud_decimation_ = 1;
-  
-  bm_window_size_ = this->get_parameter("bm_window_size").as_int();
-  bm_quality_ = this->get_parameter("bm_quality").as_int();
-  bm_conf_threshold_ = this->get_parameter("bm_conf_threshold").as_int();
+  footprint_cloud_topic_ = this->get_parameter("footprint_cloud_topic").as_string();
+  footprint_overlay_topic_ = this->get_parameter("footprint_overlay_topic").as_string();
+  footprint_mask_topic_ = this->get_parameter("footprint_mask_topic").as_string();
+  footprint_cutout_topic_ = this->get_parameter("footprint_cutout_topic").as_string();
 
-  // Calculate single image dimensions (input resolution)
-  image_width_ = stereo_width_ / 2;
-  image_height_ = stereo_height_;
+  max_disparity_ = this->get_parameter("max_disparity").as_int();
+  include_diagonals_ = this->get_parameter("include_diagonals").as_int();
+  if (max_disparity_ < 1) max_disparity_ = 1;
+  if (max_disparity_ > 256) max_disparity_ = 256;
 
-  RCLCPP_INFO(this->get_logger(), "=== Maurice Stereo Depth Estimator (Block Matching) ===");
-  RCLCPP_INFO(this->get_logger(), "Data directory: %s", data_directory_.c_str());
-  RCLCPP_INFO(this->get_logger(), "Stereo topic: %s", stereo_topic_.c_str());
+  confidence_threshold_ = this->get_parameter("confidence_threshold").as_int();
+  min_disparity_ = this->get_parameter("min_disparity").as_int();
+  p1_ = this->get_parameter("p1").as_int();
+  p2_ = this->get_parameter("p2").as_int();
+  uniqueness_ = this->get_parameter("uniqueness").as_double();
+  disparity_border_margin_ = this->get_parameter("disparity_border_margin").as_int();
+
+  if (p2_ >= 256) {
+    RCLCPP_WARN(this->get_logger(), "CUDA requires p2 < 256, clamping %d -> 255", p2_);
+    p2_ = 255;
+  }
+
+  // Initialize disparity filter parameters
+  initFilterParams();
+
+  RCLCPP_INFO(this->get_logger(), "=== Maurice Stereo Depth Estimator (VPI SGM CUDA) ===");
+  RCLCPP_INFO(this->get_logger(), "Left camera info: %s", left_camera_info_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Right camera info: %s", right_camera_info_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Left topic: %s", left_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Right topic: %s", right_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "Depth topic: %s", depth_topic_.c_str());
-  RCLCPP_INFO(this->get_logger(), "Input stereo dimensions: %dx%d", stereo_width_, stereo_height_);
-  RCLCPP_INFO(this->get_logger(), "Input single image: %dx%d", image_width_, image_height_);
+  RCLCPP_INFO(this->get_logger(), "Input image dimensions: %dx%d", image_width_, image_height_);
   RCLCPP_INFO(this->get_logger(), "Max disparity: %d", max_disparity_);
-  RCLCPP_INFO(this->get_logger(), "Block Matching: window=%d, quality=%d, confThreshold=%d", 
-              bm_window_size_, bm_quality_, bm_conf_threshold_);
-  if (process_every_n_frames_ > 1) {
-    RCLCPP_INFO(this->get_logger(), "Process rate: 1/%d frames", process_every_n_frames_);
+  RCLCPP_INFO(this->get_logger(), "SGM params: diagonals=%d, p1=%d, p2=%d, confThreshold=%d, uniqueness=%.2f",
+              include_diagonals_, p1_, p2_, confidence_threshold_, uniqueness_);
+  if (max_fps_ > 0.0) {
+    RCLCPP_INFO(this->get_logger(), "Max processing rate: %.1f Hz", max_fps_);
+  } else {
+    RCLCPP_INFO(this->get_logger(), "Max processing rate: unlimited");
   }
 
-  // Find calibration config directory and load calibration
-  try {
-    auto calib_dir = findCalibrationConfigDir();
-    auto calib_file = calib_dir / "stereo_calib.yaml";
-    
-    if (!loadCalibration(calib_file)) {
-      throw std::runtime_error("Failed to load calibration from: " + calib_file.string());
-    }
-    calibration_loaded_ = true;
-    RCLCPP_INFO(this->get_logger(), "Loaded calibration from: %s", calib_file.string().c_str());
-    RCLCPP_INFO(this->get_logger(), "Calibration resolution: %dx%d", calib_width_, calib_height_);
-    RCLCPP_INFO(this->get_logger(), "Depth scale factor: %.2f (input -> calib)", depth_scale_);
-  } catch (const std::exception& e) {
-    RCLCPP_ERROR(this->get_logger(), "Calibration error: %s", e.what());
-    throw;
+  // Subscribe to camera_info topics for calibration.
+  // VPI initialisation is deferred until both CameraInfo messages arrive.
+  {
+    auto info_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+    left_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+        left_camera_info_topic_, info_qos,
+        std::bind(&StereoDepthEstimator::leftCameraInfoCallback, this, std::placeholders::_1));
+    right_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+        right_camera_info_topic_, info_qos,
+        std::bind(&StereoDepthEstimator::rightCameraInfoCallback, this, std::placeholders::_1));
   }
+  RCLCPP_INFO(this->get_logger(), "Waiting for camera_info on [%s] and [%s]",
+              left_camera_info_topic_.c_str(), right_camera_info_topic_.c_str());
 
-  // Initialize VPI
-  if (!initializeVPI()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI");
-    throw std::runtime_error("VPI initialization failed");
-  }
-  vpi_initialized_ = true;
-  RCLCPP_INFO(this->get_logger(), "VPI initialized successfully (Block Matching on CUDA)");
+  // Subscribe to footprint pointcloud (for overlay projection onto rectified image)
+  footprint_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+      footprint_cloud_topic_, rclcpp::SensorDataQoS(),
+      [this](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(footprint_mutex_);
+        latest_footprint_cloud_ = msg;
+      });
 
-  // Create publishers
-  depth_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    depth_topic_,
-    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-  );
+  // Create publishers (lazy publishing — only publish when subscribed)
+  auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+  depth_pub_                    = this->create_publisher<sensor_msgs::msg::Image>(depth_topic_, sensor_qos);
+  disparity_pub_                = this->create_publisher<stereo_msgs::msg::DisparityImage>(disparity_topic_, sensor_qos);
+  disparity_unfiltered_pub_     = this->create_publisher<stereo_msgs::msg::DisparityImage>(disparity_unfiltered_topic_, sensor_qos);
+  left_rectified_pub_           = this->create_publisher<sensor_msgs::msg::Image>(left_rectified_topic_, sensor_qos);
+  right_rectified_pub_          = this->create_publisher<sensor_msgs::msg::Image>(right_rectified_topic_, sensor_qos);
+  left_rectified_color_pub_     = this->create_publisher<sensor_msgs::msg::Image>(left_rectified_color_topic_, sensor_qos);
+  left_rectified_compressed_pub_= this->create_publisher<sensor_msgs::msg::CompressedImage>(left_rectified_compressed_topic_, sensor_qos);
+  pointcloud_pub_               = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_topic_, sensor_qos);
+  pointcloud_color_pub_         = this->create_publisher<sensor_msgs::msg::PointCloud2>(pointcloud_color_topic_, sensor_qos);
+  footprint_overlay_pub_        = this->create_publisher<sensor_msgs::msg::Image>(footprint_overlay_topic_, sensor_qos);
+  footprint_mask_pub_            = this->create_publisher<sensor_msgs::msg::Image>(footprint_mask_topic_, sensor_qos);
+  footprint_cutout_pub_           = this->create_publisher<sensor_msgs::msg::Image>(footprint_cutout_topic_, sensor_qos);
 
-  if (publish_disparity_) {
-    disparity_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-      disparity_topic_,
-      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-    );
-  }
+  RCLCPP_INFO(this->get_logger(), "Publishers created (lazy publishing - only publish when subscribed)");
+  RCLCPP_INFO(this->get_logger(), "  Point cloud: %s (decimation: %d)", pointcloud_topic_.c_str(), pointcloud_decimation_);
+  RCLCPP_INFO(this->get_logger(), "  Point cloud color: %s", pointcloud_color_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Footprint overlay: %s (from %s)",
+              footprint_overlay_topic_.c_str(), footprint_cloud_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Footprint mask: %s",
+              footprint_mask_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Footprint cutout: %s",
+              footprint_cutout_topic_.c_str());
 
-  if (publish_rectified_) {
-    rectified_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-      rectified_topic_,
-      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-    );
-    RCLCPP_INFO(this->get_logger(), "Rectified images enabled: %s", rectified_topic_.c_str());
-  }
+  logFilterConfig();
 
-  if (publish_pointcloud_) {
-    pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-      pointcloud_topic_,
-      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-    );
-    RCLCPP_INFO(this->get_logger(), "Point cloud enabled: %s (decimation: %d)",
-                pointcloud_topic_.c_str(), pointcloud_decimation_);
-  }
-
-  // Create subscription with zero-copy intra-process communication
-  stereo_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-    stereo_topic_,
-    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort),
-    [this](sensor_msgs::msg::Image::UniquePtr msg) {
-      this->stereoImageCallback(std::move(msg));
-    }
-  );
+  // Synchronized subscriptions for left and right images
+  auto qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+  left_sub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(
+      this, left_topic_, qos.get_rmw_qos_profile());
+  right_sub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(
+      this, right_topic_, qos.get_rmw_qos_profile());
+  sync_ = std::make_shared<Synchronizer>(SyncPolicy(5), *left_sub_, *right_sub_);
+  sync_->registerCallback(std::bind(&StereoDepthEstimator::syncCallback, this,
+      std::placeholders::_1, std::placeholders::_2));
 
   last_stats_time_ = this->now();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator initialized successfully");
 }
 
+// =============================================================================
+// Destructor
+// =============================================================================
 StereoDepthEstimator::~StereoDepthEstimator()
 {
   RCLCPP_INFO(this->get_logger(), "Shutting down Stereo Depth Estimator...");
+  cleanupVPIRemap();
   cleanupVPI();
   RCLCPP_INFO(this->get_logger(), "Stereo Depth Estimator shutdown complete");
 }
 
-std::filesystem::path StereoDepthEstimator::findCalibrationConfigDir()
+// =============================================================================
+// Synchronized callback — decode ROS images, gate frame rate, call pipeline
+// =============================================================================
+void StereoDepthEstimator::syncCallback(
+    const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
+    const sensor_msgs::msg::Image::ConstSharedPtr& right_msg)
 {
-  std::filesystem::path data_path(data_directory_);
-  std::filesystem::path robot_info_path = data_path / "robot_info.json";
+  // Try-lock: skip this frame if a recalibration is in progress.
+  std::unique_lock<std::mutex> lock(calib_mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) return;
 
-  // Try to read robot_info.json to get the robot model
-  std::string robot_model;
-  if (std::filesystem::exists(robot_info_path)) {
-    try {
-      std::ifstream file(robot_info_path);
-      nlohmann::json robot_info;
-      file >> robot_info;
-      
-      if (robot_info.contains("model")) {
-        robot_model = robot_info["model"].get<std::string>();
-        RCLCPP_INFO(this->get_logger(), "Found robot model: %s", robot_model.c_str());
-      }
-    } catch (const std::exception& e) {
-      RCLCPP_WARN(this->get_logger(), "Could not parse robot_info.json: %s", e.what());
-    }
-  }
-
-  // Look for calibration_config_* directories
-  for (const auto& entry : std::filesystem::directory_iterator(data_path)) {
-    if (entry.is_directory()) {
-      std::string dirname = entry.path().filename().string();
-      if (dirname.find("calibration_config") != std::string::npos) {
-        // If we have a robot model, prefer matching directory
-        if (!robot_model.empty() && dirname.find(robot_model) != std::string::npos) {
-          RCLCPP_INFO(this->get_logger(), "Found matching calibration dir: %s", dirname.c_str());
-          return entry.path();
-        }
-        // Otherwise use the first calibration_config directory found
-        if (robot_model.empty()) {
-          RCLCPP_INFO(this->get_logger(), "Using calibration dir: %s", dirname.c_str());
-          return entry.path();
-        }
-      }
-    }
-  }
-
-  // If we have a robot model but didn't find exact match, use any calibration_config dir
-  for (const auto& entry : std::filesystem::directory_iterator(data_path)) {
-    if (entry.is_directory()) {
-      std::string dirname = entry.path().filename().string();
-      if (dirname.find("calibration_config") != std::string::npos) {
-        RCLCPP_WARN(this->get_logger(), "No exact match for model %s, using: %s", 
-                    robot_model.c_str(), dirname.c_str());
-        return entry.path();
-      }
-    }
-  }
-
-  throw std::runtime_error("No calibration_config directory found in: " + data_directory_);
-}
-
-bool StereoDepthEstimator::loadCalibration(const std::filesystem::path& calib_path)
-{
-  if (!std::filesystem::exists(calib_path)) {
-    RCLCPP_ERROR(this->get_logger(), "Calibration file not found: %s", calib_path.string().c_str());
-    return false;
-  }
-
-  cv::FileStorage fs(calib_path.string(), cv::FileStorage::READ);
-  if (!fs.isOpened()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to open calibration file: %s", calib_path.string().c_str());
-    return false;
-  }
-
-  // Read calibration parameters
-  fs["K1"] >> K1_;
-  fs["D1"] >> D1_;
-  fs["K2"] >> K2_;
-  fs["D2"] >> D2_;
-  fs["R"] >> R_;
-  fs["T"] >> T_;
-  fs["R1"] >> R1_;
-  fs["R2"] >> R2_;
-  fs["P1"] >> P1_;
-  fs["P2"] >> P2_;
-  fs["Q"] >> Q_;
-
-  // Read calibration image dimensions
-  fs["image_width"] >> calib_width_;
-  fs["image_height"] >> calib_height_;
-
-  fs.release();
-
-  // Validate required matrices
-  if (K1_.empty() || K2_.empty() || R1_.empty() || R2_.empty() || 
-      P1_.empty() || P2_.empty() || Q_.empty()) {
-    RCLCPP_ERROR(this->get_logger(), "Missing required calibration matrices");
-    return false;
-  }
-
-  // Calculate depth scale factor (input resolution -> calibration resolution)
-  depth_scale_ = static_cast<double>(calib_width_) / static_cast<double>(image_width_);
-  
-  RCLCPP_INFO(this->get_logger(), "Scale: input %dx%d -> calib %dx%d (scale=%.3f)",
-              image_width_, image_height_, calib_width_, calib_height_, depth_scale_);
-
-  // Extract baseline and focal length from Q matrix
-  // Q[2,3] = focal length, Q[3,2] = -1/Tx where Tx = baseline
-  focal_length_ = Q_.at<double>(2, 3);
-  double neg_inv_tx = Q_.at<double>(3, 2);
-  if (std::abs(neg_inv_tx) > 1e-6) {
-    baseline_ = std::abs(1.0 / neg_inv_tx);
-  } else {
-    baseline_ = std::abs(T_.at<double>(0, 0));
-    RCLCPP_WARN(this->get_logger(), "Q[3,2] near zero, using T vector for baseline");
-  }
-
-  RCLCPP_INFO(this->get_logger(), "Stereo parameters: focal=%.2f px, baseline=%.4f m (%.1f mm)",
-              focal_length_, baseline_, baseline_ * 1000.0);
-
-  // Compute OpenCV rectification maps at CALIBRATION resolution
-  // Maps are computed for unrotated images (calibration coordinate system)
-  cv::initUndistortRectifyMap(K1_, D1_, R1_, P1_, 
-                               cv::Size(calib_width_, calib_height_),
-                               CV_32FC1, map1_left_, map2_left_);
-  cv::initUndistortRectifyMap(K2_, D2_, R2_, P2_,
-                               cv::Size(calib_width_, calib_height_),
-                               CV_32FC1, map1_right_, map2_right_);
-  RCLCPP_INFO(this->get_logger(), "Rectification maps computed at %dx%d", calib_width_, calib_height_);
-
-  return true;
-}
-
-bool StereoDepthEstimator::initializeVPI()
-{
-  VPIStatus status;
-
-  // Create VPI stream with CUDA backend
-  status = vpiStreamCreate(VPI_BACKEND_CUDA, &vpi_stream_);
-  CHECK_VPI_STATUS(status, "Failed to create VPI stream");
-
-  // Create disparity output image at calibration resolution
-  // S16 format, Q10.5 fixed point (divide by 32 to get pixels)
-  // Include CPU backend for reading results back
-  status = vpiImageCreate(calib_width_, calib_height_, VPI_IMAGE_FORMAT_S16,
-                          VPI_BACKEND_CUDA | VPI_BACKEND_CPU, &vpi_disparity_);
-  CHECK_VPI_STATUS(status, "Failed to create disparity image");
-
-  // Create confidence map
-  status = vpiImageCreate(calib_width_, calib_height_, VPI_IMAGE_FORMAT_U16,
-                          VPI_BACKEND_CUDA | VPI_BACKEND_CPU, &vpi_confidence_);
-  CHECK_VPI_STATUS(status, "Failed to create confidence image");
-
-  // Create stereo disparity estimator payload for Block Matching
-  VPIStereoDisparityEstimatorCreationParams stereo_params;
-  vpiInitStereoDisparityEstimatorCreationParams(&stereo_params);
-  stereo_params.maxDisparity = max_disparity_;
-  // Block Matching doesn't use diagonal paths (that's SGM)
-  stereo_params.includeDiagonals = 0;
-
-  status = vpiCreateStereoDisparityEstimator(VPI_BACKEND_CUDA, calib_width_, calib_height_,
-                                              VPI_IMAGE_FORMAT_U8, &stereo_params, &stereo_payload_);
-  CHECK_VPI_STATUS(status, "Failed to create stereo disparity estimator");
-
-  RCLCPP_INFO(this->get_logger(), "VPI Block Matching created at %dx%d, maxDisp=%d",
-              calib_width_, calib_height_, max_disparity_);
-  return true;
-}
-
-void StereoDepthEstimator::cleanupVPI()
-{
-  // Wait for pending operations
-  if (vpi_stream_) {
-    vpiStreamSync(vpi_stream_);
-  }
-
-  // Destroy payload
-  if (stereo_payload_) vpiPayloadDestroy(stereo_payload_);
-
-  // Destroy images
-  if (vpi_disparity_) vpiImageDestroy(vpi_disparity_);
-  if (vpi_confidence_) vpiImageDestroy(vpi_confidence_);
-
-  // Destroy stream
-  if (vpi_stream_) vpiStreamDestroy(vpi_stream_);
-
-  vpi_stream_ = nullptr;
-  stereo_payload_ = nullptr;
-  vpi_disparity_ = nullptr;
-  vpi_confidence_ = nullptr;
-}
-
-void StereoDepthEstimator::stereoImageCallback(sensor_msgs::msg::Image::UniquePtr msg)
-{
   if (!vpi_initialized_ || !calibration_loaded_) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
                          "VPI or calibration not ready, skipping frame");
     return;
   }
 
-  // Frame rate control - only process 1 out of every N frames
-  input_frame_count_++;
-  if ((input_frame_count_ % process_every_n_frames_) != 0) {
-    return;  // Skip this frame
+  // Frame rate control — advance deadline by interval (not snap to now)
+  // so leftover time carries forward for accurate average rate.
+  if (min_process_interval_.count() > 0) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_process_time_ < min_process_interval_) return;
+    last_process_time_ += min_process_interval_;
+    // If we fell behind by more than one interval, reset to prevent burst
+    if (now - last_process_time_ > min_process_interval_)
+      last_process_time_ = now;
   }
+  input_frame_count_++;
 
-  // Validate image dimensions
-  if (static_cast<int>(msg->width) != stereo_width_ || 
-      static_cast<int>(msg->height) != stereo_height_) {
+  // Validate dimensions
+  if (static_cast<int>(left_msg->width) != image_width_ ||
+      static_cast<int>(left_msg->height) != image_height_) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                         "Image size mismatch: got %dx%d, expected %dx%d",
-                         msg->width, msg->height, stereo_width_, stereo_height_);
+        "Left image size mismatch: got %dx%d, expected %dx%d",
+        left_msg->width, left_msg->height, image_width_, image_height_);
+    return;
+  }
+  if (static_cast<int>(right_msg->width) != image_width_ ||
+      static_cast<int>(right_msg->height) != image_height_) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+        "Right image size mismatch: got %dx%d, expected %dx%d",
+        right_msg->width, right_msg->height, image_width_, image_height_);
     return;
   }
 
-  // Wrap ROS message data as cv::Mat (zero-copy)
-  cv::Mat stereo_frame;
-  if (msg->encoding == "bgr8") {
-    stereo_frame = cv::Mat(msg->height, msg->width, CV_8UC3, msg->data.data(), msg->step);
-  } else if (msg->encoding == "rgb8") {
-    cv::Mat rgb(msg->height, msg->width, CV_8UC3, msg->data.data(), msg->step);
-    cv::cvtColor(rgb, stereo_frame, cv::COLOR_RGB2BGR);
-  } else if (msg->encoding == "mono8") {
-    stereo_frame = cv::Mat(msg->height, msg->width, CV_8UC1, msg->data.data(), msg->step);
+  // Decode left image
+  cv::Mat left_frame;
+  if (left_msg->encoding == "bgr8") {
+    left_frame = cv::Mat(left_msg->height, left_msg->width, CV_8UC3,
+                         const_cast<uint8_t*>(left_msg->data.data()), left_msg->step).clone();
+  } else if (left_msg->encoding == "rgb8") {
+    cv::Mat rgb(left_msg->height, left_msg->width, CV_8UC3,
+                const_cast<uint8_t*>(left_msg->data.data()), left_msg->step);
+    cv::cvtColor(rgb, left_frame, cv::COLOR_RGB2BGR);
+  } else if (left_msg->encoding == "mono8") {
+    left_frame = cv::Mat(left_msg->height, left_msg->width, CV_8UC1,
+                         const_cast<uint8_t*>(left_msg->data.data()), left_msg->step).clone();
   } else {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                         "Unsupported encoding: %s", msg->encoding.c_str());
+                         "Unsupported left encoding: %s", left_msg->encoding.c_str());
     return;
   }
 
-  // Process the frame
-  try {
-    processFrame(stereo_frame, rclcpp::Time(msg->header.stamp));
-    frame_count_++;
+  // Decode right image
+  cv::Mat right_frame;
+  if (right_msg->encoding == "bgr8") {
+    right_frame = cv::Mat(right_msg->height, right_msg->width, CV_8UC3,
+                          const_cast<uint8_t*>(right_msg->data.data()), right_msg->step).clone();
+  } else if (right_msg->encoding == "rgb8") {
+    cv::Mat rgb(right_msg->height, right_msg->width, CV_8UC3,
+                const_cast<uint8_t*>(right_msg->data.data()), right_msg->step);
+    cv::cvtColor(rgb, right_frame, cv::COLOR_RGB2BGR);
+  } else if (right_msg->encoding == "mono8") {
+    right_frame = cv::Mat(right_msg->height, right_msg->width, CV_8UC1,
+                          const_cast<uint8_t*>(right_msg->data.data()), right_msg->step).clone();
+  } else {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                         "Unsupported right encoding: %s", right_msg->encoding.c_str());
+    return;
+  }
 
-    // Print stats every 100 frames
+  try {
+    processFrame(left_frame, right_frame, rclcpp::Time(left_msg->header.stamp));
+    frame_count_++;
     if (frame_count_ % 100 == 0) {
       auto now = this->now();
       double elapsed = (now - last_stats_time_).seconds();
-      double fps = 100.0 / elapsed;
       RCLCPP_INFO(this->get_logger(), "Depth estimation: %.1f FPS, %d frames processed",
-                  fps, frame_count_);
+                  100.0 / elapsed, frame_count_);
       last_stats_time_ = now;
     }
   } catch (const std::exception& e) {
@@ -401,272 +300,149 @@ void StereoDepthEstimator::stereoImageCallback(sensor_msgs::msg::Image::UniquePt
   }
 }
 
-void StereoDepthEstimator::processFrame(const cv::Mat& stereo_frame, const rclcpp::Time& timestamp)
+// =============================================================================
+// Pipeline orchestrator — calls helpers, owns timing
+// =============================================================================
+void StereoDepthEstimator::processFrame(
+    const cv::Mat& left_input, const cv::Mat& right_input,
+    const rclcpp::Time& timestamp)
 {
-  // ===== STEP 0: Unrotate entire stereo frame to match calibration coordinate system =====
-  // Calibration was done on unrotated images, but camera driver rotates 180° (camera mounted upside down).
-  // We unrotate for rectification, then rotate back to get the correct view.
-  cv::Mat stereo_unrotated;
-  cv::rotate(stereo_frame, stereo_unrotated, cv::ROTATE_180);
+  using clock = std::chrono::steady_clock;
+  const auto t_start = clock::now();
 
-  // ===== STEP 1: Split stereo frame into left and right images =====
-  // After unrotation, first half = original LEFT camera, second half = original RIGHT camera
-  cv::Mat left_img = stereo_unrotated(cv::Rect(0, 0, image_width_, image_height_));
-  cv::Mat right_img = stereo_unrotated(cv::Rect(image_width_, 0, image_width_, image_height_));
+  // ── Subscriber checks ──────────────────────────────────────────────────
+  const bool pub_left_rect       = left_rectified_pub_->get_subscription_count() > 0;
+  const bool pub_right_rect      = right_rectified_pub_->get_subscription_count() > 0;
+  const bool pub_left_color      = left_rectified_color_pub_->get_subscription_count() > 0;
+  const bool pub_left_compressed = left_rectified_compressed_pub_->get_subscription_count() > 0;
+  const bool pub_pointcloud      = pointcloud_pub_->get_subscription_count() > 0;
+  const bool pub_pointcloud_color= pointcloud_color_pub_->get_subscription_count() > 0;
+  const bool pub_unfiltered      = disparity_unfiltered_pub_->get_subscription_count() > 0;
+  const bool pub_disparity       = disparity_pub_->get_subscription_count() > 0;
+  const bool pub_depth           = depth_pub_->get_subscription_count() > 0;
+  const bool pub_footprint_overlay = footprint_overlay_pub_->get_subscription_count() > 0;
+  const bool pub_footprint_mask    = footprint_mask_pub_->get_subscription_count() > 0;
+  const bool pub_footprint_cutout  = footprint_cutout_pub_->get_subscription_count() > 0;
+  const auto t_sub = clock::now();
 
-  // ===== STEP 2: Downscale to calibration resolution =====
+  const bool has_color     = left_input.channels() == 3;
+  const bool need_color_rect = has_color &&
+      (pub_left_color || pub_left_compressed || pub_pointcloud_color
+       || pub_footprint_overlay || pub_footprint_cutout);
+
+  // ── Scale to calibration resolution ────────────────────────────────────
   cv::Mat left_scaled, right_scaled;
-  cv::resize(left_img, left_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
-  cv::resize(right_img, right_scaled, cv::Size(calib_width_, calib_height_), 0, 0, cv::INTER_LINEAR);
+  scaleToCalibRes(left_input, right_input, left_scaled, right_scaled);
+  const auto t_scale = clock::now();
 
-  // ===== STEP 3: Convert to grayscale =====
-  cv::Mat left_gray, right_gray;
-  if (stereo_frame.channels() == 3) {
-    cv::cvtColor(left_scaled, left_gray, cv::COLOR_BGR2GRAY);
-    cv::cvtColor(right_scaled, right_gray, cv::COLOR_BGR2GRAY);
-  } else {
-    left_gray = left_scaled;
-    right_gray = right_scaled;
-  }
-
-  // ===== STEP 4: Rectify using OpenCV =====
-  // After unrotation, left_img is the actual LEFT camera, right_img is the actual RIGHT camera
-  // Use map1_left_ for left and map1_right_ for right
-  // NOTE: Keep rectified images in calibration coordinate system for stereo matching
-  // (epipolar lines must be horizontal). We'll rotate the final depth output instead.
+  // ── Rectify mono (gray + remap) ────────────────────────────────────────
   cv::Mat left_rect, right_rect;
-  cv::remap(left_gray, left_rect, map1_left_, map2_left_, cv::INTER_LINEAR);
-  cv::remap(right_gray, right_rect, map1_right_, map2_right_, cv::INTER_LINEAR);
+  rectifyMono(left_scaled, right_scaled, left_rect, right_rect);
+  const auto t_rect = clock::now();
 
-  // Publish rectified left image if enabled (before wrapping for VPI)
-  // Left image overlaps with the depth output
-  // Rotate it back to correct view for publishing
-  if (publish_rectified_ && rectified_pub_) {
-    // Upscale left rectified image to input resolution
-    cv::Mat left_rect_full;
-    cv::resize(left_rect, left_rect_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
-    
-    // Rotate back to correct view for publishing
-    cv::rotate(left_rect_full, left_rect_full, cv::ROTATE_180);
-    
-    auto rectified_msg = std::make_unique<sensor_msgs::msg::Image>();
-    rectified_msg->header.stamp = timestamp;
-    rectified_msg->header.frame_id = frame_id_;
-    rectified_msg->height = image_height_;
-    rectified_msg->width = image_width_;
-    rectified_msg->encoding = "mono8";
-    rectified_msg->is_bigendian = false;
-    rectified_msg->step = image_width_;
-    rectified_msg->data.resize(rectified_msg->height * rectified_msg->step);
-    memcpy(rectified_msg->data.data(), left_rect_full.data, rectified_msg->data.size());
-    
-    rectified_pub_->publish(std::move(rectified_msg));
+  // ── Submit SGM to GPU (async) ──────────────────────────────────────────
+  if (!submitSGM(left_rect, right_rect)) return;
+  const auto t_submit = clock::now();
+
+  // ── CPU work while GPU computes ────────────────────────────────────────
+  cv::Mat left_color_rect;
+  if (need_color_rect) rectifyColor(left_scaled, left_color_rect);
+  const auto t_color_remap = clock::now();
+
+  if (pub_left_rect || pub_right_rect)
+    publishMonoRectified(left_rect, right_rect, timestamp, pub_left_rect, pub_right_rect);
+  const auto t_mono_pub = clock::now();
+
+  if (pub_left_color || pub_left_compressed)
+    publishColorRectified(left_color_rect, left_rect, has_color, timestamp,
+                          pub_left_color, pub_left_compressed);
+  const auto t_color_pub = clock::now();
+
+  // ── Footprint mask (always computed — filter chain needs it) ───────
+  computeFootprintMaskCalib();
+  if (pub_footprint_overlay)
+    publishFootprintOverlay(left_color_rect, timestamp);
+  if (pub_footprint_mask)
+    publishFootprintMask(timestamp);
+  if (pub_footprint_cutout)
+    publishFootprintCutout(left_color_rect, timestamp);
+  const auto t_footprint = clock::now();
+
+  // ── Sync GPU ───────────────────────────────────────────────────────────
+  syncSGM();
+  const auto t_sgm = clock::now();
+
+  // ── Extract disparity from VPI ─────────────────────────────────────────
+  cv::Mat disparity_float = extractDisparity();
+  if (disparity_float.empty()) { cleanupSGMWraps(); return; }
+  const auto t_extract = clock::now();
+
+  // ── Publish unfiltered disparity ───────────────────────────────────────
+  if (pub_unfiltered) publishDisparityMsg(disparity_float, timestamp, disparity_unfiltered_pub_);
+  const auto t_unfilt = clock::now();
+
+  // ── Footprint mask on disparity (always, before filter chain) ────────
+  cv::Mat disparity_lowres;
+  FilterTimings ft;
+  {
+    const auto t_fp0 = clock::now();
+    applyFootprintMask(disparity_float);
+    ft.footprint_mask_ms = std::chrono::duration<double, std::milli>(
+        clock::now() - t_fp0).count();
   }
 
-  // ===== STEP 5: Wrap rectified images for VPI =====
-  VPIImage vpi_left_wrap = nullptr;
-  VPIImage vpi_right_wrap = nullptr;
-  VPIStatus status;
+  // ── Filter chain ───────────────────────────────────────────────────────
+  applyFilterChain(disparity_float, disparity_lowres, ft,
+                            static_cast<float>(focal_length_), static_cast<float>(baseline_));
+  const auto t_filter = clock::now();
 
-  status = vpiImageCreateWrapperOpenCVMat(left_rect, VPI_IMAGE_FORMAT_U8,
-                                           VPI_BACKEND_CUDA, &vpi_left_wrap);
-  if (status != VPI_SUCCESS) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap left rectified image");
-    return;
-  }
+  // ── Publish filtered disparity ─────────────────────────────────────────
+  if (pub_disparity) publishDisparityMsg(disparity_float, timestamp, disparity_pub_);
 
-  status = vpiImageCreateWrapperOpenCVMat(right_rect, VPI_IMAGE_FORMAT_U8,
-                                           VPI_BACKEND_CUDA, &vpi_right_wrap);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to wrap right rectified image");
-    return;
-  }
+  // ── Depth ──────────────────────────────────────────────────────────────
+  if (pub_depth) publishDepth(disparity_float, timestamp);
+  const auto t_depth = clock::now();
 
-  // ===== STEP 6: Compute stereo disparity using VPI Block Matching =====
-  VPIStereoDisparityEstimatorParams stereo_params;
-  vpiInitStereoDisparityEstimatorParams(&stereo_params);
-  stereo_params.maxDisparity = max_disparity_;
-  stereo_params.windowSize = bm_window_size_;
-  stereo_params.quality = bm_quality_;
-  stereo_params.confidenceThreshold = bm_conf_threshold_;
+  // ── Point clouds ───────────────────────────────────────────────────────
+  if (pub_pointcloud)       publishPointCloudXYZ(disparity_lowres, timestamp);
+  if (pub_pointcloud_color) publishPointCloudColor(disparity_lowres, left_color_rect, timestamp);
+  const auto t_pc = clock::now();
 
-  status = vpiSubmitStereoDisparityEstimator(vpi_stream_, VPI_BACKEND_CUDA, stereo_payload_,
-                                              vpi_left_wrap, vpi_right_wrap,
-                                              vpi_disparity_, vpi_confidence_, &stereo_params);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    vpiImageDestroy(vpi_right_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to compute stereo disparity");
-    return;
-  }
+  // ── Cleanup per-frame VPI wraps ────────────────────────────────────────
+  cleanupSGMWraps();
+  const auto t_end = clock::now();
 
-  // Synchronize
-  vpiStreamSync(vpi_stream_);
+  // ── Pipeline timing (1 Hz) ─────────────────────────────────────────────
+  auto ms = [](std::chrono::steady_clock::duration d) {
+    return std::chrono::duration<double, std::milli>(d).count();
+  };
 
-  // ===== STEP 7: Lock disparity and convert to depth using reprojectImageTo3D =====
-  VPIImageData disparity_data;
-  status = vpiImageLockData(vpi_disparity_, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &disparity_data);
-  if (status != VPI_SUCCESS) {
-    vpiImageDestroy(vpi_left_wrap);
-    vpiImageDestroy(vpi_right_wrap);
-    RCLCPP_ERROR(this->get_logger(), "Failed to lock disparity image");
-    return;
-  }
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+    "Pipeline %.1fms | sub %.1f | scale %.1f | rectify %.1f | sgm_submit %.1f | "
+    "color_remap %.1f | mono_pub %.1f | color_pub %.1f | footprint %.1f | sgm_sync %.1f | "
+    "extract %.1f | unfilt %.1f | filter %.1f | depth %.1f | pc %.1f | "
+    "subs[L:%d R:%d C:%d J:%d PC:%d PCC:%d D:%d Di:%d Du:%d FP:%d FM:%d FC:%d col:%d]",
+    ms(t_end - t_start),
+    ms(t_sub - t_start), ms(t_scale - t_sub), ms(t_rect - t_scale),
+    ms(t_submit - t_rect), ms(t_color_remap - t_submit),
+    ms(t_mono_pub - t_color_remap), ms(t_color_pub - t_mono_pub),
+    ms(t_footprint - t_color_pub), ms(t_sgm - t_footprint),
+    ms(t_extract - t_sgm),
+    ms(t_unfilt - t_extract), ms(t_filter - t_unfilt),
+    ms(t_depth - t_filter), ms(t_pc - t_depth),
+    (int)pub_left_rect, (int)pub_right_rect, (int)pub_left_color,
+    (int)pub_left_compressed, (int)pub_pointcloud, (int)pub_pointcloud_color,
+    (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered,
+    (int)pub_footprint_overlay, (int)pub_footprint_mask,
+    (int)pub_footprint_cutout, (int)has_color);
 
-  // VPI disparity is in Q10.5 format (divide by 32 to get pixels)
-  const float DISPARITY_SCALE = 32.0f;
-
-  // Copy VPI disparity to OpenCV Mat and convert to float pixels
-  const int16_t* disp_ptr = reinterpret_cast<const int16_t*>(disparity_data.buffer.pitch.planes[0].data);
-  const int disp_pitch = disparity_data.buffer.pitch.planes[0].pitchBytes / sizeof(int16_t);
-  
-  cv::Mat disparity_float(calib_height_, calib_width_, CV_32FC1);
-  for (int y = 0; y < calib_height_; y++) {
-    const int16_t* disp_row = disp_ptr + y * disp_pitch;
-    float* float_row = disparity_float.ptr<float>(y);
-    for (int x = 0; x < calib_width_; x++) {
-      // Convert from Q10.5 to float pixels
-      float_row[x] = static_cast<float>(disp_row[x]) / DISPARITY_SCALE;
-    }
-  }
-
-  vpiImageUnlock(vpi_disparity_);
-
-  // Use cv::reprojectImageTo3D like Python script - uses full Q matrix
-  cv::Mat points_3d;
-  cv::reprojectImageTo3D(disparity_float, points_3d, Q_, true);  // handleMissingValues=true
-
-  // Extract depth (Z coordinate) and convert to uint16 millimeters
-  cv::Mat depth_calib(calib_height_, calib_width_, CV_16UC1);
-  const float MAX_DEPTH_M = 10.0f;  // Same as Python script
-  
-  for (int y = 0; y < calib_height_; y++) {
-    const cv::Vec3f* pt_row = points_3d.ptr<cv::Vec3f>(y);
-    uint16_t* depth_row = depth_calib.ptr<uint16_t>(y);
-    for (int x = 0; x < calib_width_; x++) {
-      float z = pt_row[x][2];  // Z coordinate is depth
-      if (z > 0 && z <= MAX_DEPTH_M && std::isfinite(z)) {
-        // Convert meters to millimeters
-        depth_row[x] = static_cast<uint16_t>(std::clamp(z * 1000.0f, 1.0f, 65535.0f));
-      } else {
-        depth_row[x] = 0;  // Invalid depth
-      }
-    }
-  }
-
-  // Prepare disparity visualization if needed
-  cv::Mat disp_vis_calib;
-  if (publish_disparity_ && disparity_pub_) {
-    disp_vis_calib = cv::Mat(calib_height_, calib_width_, CV_8UC1);
-    float disp_vis_scale = 255.0f / static_cast<float>(max_disparity_);
-    for (int y = 0; y < calib_height_; y++) {
-      const float* disp_row = disparity_float.ptr<float>(y);
-      uint8_t* vis_row = disp_vis_calib.ptr<uint8_t>(y);
-      for (int x = 0; x < calib_width_; x++) {
-        vis_row[x] = static_cast<uint8_t>(
-          std::clamp(disp_row[x] * disp_vis_scale, 0.0f, 255.0f));
-      }
-    }
-  }
-
-  // ===== STEP 8: Upscale depth to input resolution =====
-  cv::Mat depth_full;
-  cv::resize(depth_calib, depth_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
-  
-  // Rotate depth image back 180° to get the correct view (camera is mounted upside down)
-  cv::rotate(depth_full, depth_full, cv::ROTATE_180);
-
-  // ===== STEP 9: Create and publish depth message =====
-  auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
-  depth_msg->header.stamp = timestamp;
-  depth_msg->header.frame_id = frame_id_;
-  depth_msg->height = image_height_;
-  depth_msg->width = image_width_;
-  depth_msg->encoding = "16UC1";
-  depth_msg->is_bigendian = false;
-  depth_msg->step = image_width_ * sizeof(uint16_t);
-  depth_msg->data.resize(depth_msg->height * depth_msg->step);
-  memcpy(depth_msg->data.data(), depth_full.data, depth_msg->data.size());
-
-  // Generate point cloud if enabled (before moving depth_msg)
-  if (publish_pointcloud_ && pointcloud_pub_) {
-    // Scale camera intrinsics from calibration to input resolution
-    const float scale_up = 1.0f / static_cast<float>(depth_scale_);
-    const float fx = static_cast<float>(P1_.at<double>(0, 0)) * scale_up;
-    const float fy = static_cast<float>(P1_.at<double>(1, 1)) * scale_up;
-    const float cx = static_cast<float>(P1_.at<double>(0, 2)) * scale_up;
-    const float cy = static_cast<float>(P1_.at<double>(1, 2)) * scale_up;
-
-    const int pc_width = image_width_ / pointcloud_decimation_;
-    const int pc_height = image_height_ / pointcloud_decimation_;
-    const int step = pointcloud_decimation_;
-
-    auto cloud_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
-    cloud_msg->header.stamp = timestamp;
-    cloud_msg->header.frame_id = frame_id_;
-    cloud_msg->height = pc_height;
-    cloud_msg->width = pc_width;
-    cloud_msg->is_dense = false;
-    cloud_msg->is_bigendian = false;
-
-    sensor_msgs::PointCloud2Modifier modifier(*cloud_msg);
-    modifier.setPointCloud2FieldsByString(1, "xyz");
-    modifier.resize(pc_width * pc_height);
-
-    sensor_msgs::PointCloud2Iterator<float> iter_x(*cloud_msg, "x");
-    sensor_msgs::PointCloud2Iterator<float> iter_y(*cloud_msg, "y");
-    sensor_msgs::PointCloud2Iterator<float> iter_z(*cloud_msg, "z");
-
-    const uint16_t* depth_data = reinterpret_cast<const uint16_t*>(depth_full.data);
-
-    for (int v = 0; v < pc_height; ++v) {
-      for (int u = 0; u < pc_width; ++u, ++iter_x, ++iter_y, ++iter_z) {
-        int img_u = u * step;
-        int img_v = v * step;
-        uint16_t depth_mm = depth_data[img_v * image_width_ + img_u];
-
-        if (depth_mm > 0) {
-          float z = static_cast<float>(depth_mm) * 0.001f;
-          *iter_x = (static_cast<float>(img_u) - cx) * z / fx;
-          *iter_y = (static_cast<float>(img_v) - cy) * z / fy;
-          *iter_z = z;
-        } else {
-          *iter_x = std::numeric_limits<float>::quiet_NaN();
-          *iter_y = std::numeric_limits<float>::quiet_NaN();
-          *iter_z = std::numeric_limits<float>::quiet_NaN();
-        }
-      }
-    }
-
-    pointcloud_pub_->publish(std::move(cloud_msg));
-  }
-
-  // Publish depth
-  depth_pub_->publish(std::move(depth_msg));
-
-  // Publish disparity visualization if enabled
-  if (publish_disparity_ && disparity_pub_ && !disp_vis_calib.empty()) {
-    // Upscale disparity visualization to input resolution
-    cv::Mat disp_vis_full;
-    cv::resize(disp_vis_calib, disp_vis_full, cv::Size(image_width_, image_height_), 0, 0, cv::INTER_NEAREST);
-
-    auto disp_msg = std::make_unique<sensor_msgs::msg::Image>();
-    disp_msg->header.stamp = timestamp;
-    disp_msg->header.frame_id = frame_id_;
-    disp_msg->height = image_height_;
-    disp_msg->width = image_width_;
-    disp_msg->encoding = "mono8";
-    disp_msg->is_bigendian = false;
-    disp_msg->step = image_width_;
-    disp_msg->data.resize(disp_msg->height * disp_msg->step);
-    memcpy(disp_msg->data.data(), disp_vis_full.data, disp_msg->data.size());
-    disparity_pub_->publish(std::move(disp_msg));
-  }
-
-  // Cleanup temporary wrapped images
-  vpiImageDestroy(vpi_left_wrap);
-  vpiImageDestroy(vpi_right_wrap);
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+    "Filter detail %.1fms | fp_mask %.1f | down %.1f | clamp %.1f | domain %.1f | speckle %.1f | "
+    "edge %.1f | median %.1f | bilateral %.1f | hole %.1f | temporal %.1f | up %.1f",
+    ms(t_filter - t_unfilt),
+    ft.footprint_mask_ms, ft.downsample_ms, ft.depth_clamp_ms, ft.domain_transform_ms,
+    ft.speckle_ms, ft.edge_inv_ms, ft.median_ms, ft.bilateral_ms,
+    ft.hole_fill_ms, ft.temporal_ms, ft.upsample_ms);
 }
 
 } // namespace maurice_cam
@@ -678,7 +454,6 @@ RCLCPP_COMPONENTS_REGISTER_NODE(maurice_cam::StereoDepthEstimator)
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
-  
   try {
     auto node = std::make_shared<maurice_cam::StereoDepthEstimator>();
     rclcpp::spin(node);
@@ -686,8 +461,130 @@ int main(int argc, char** argv)
     RCLCPP_ERROR(rclcpp::get_logger("main"), "Exception: %s", e.what());
     return 1;
   }
-  
   rclcpp::shutdown();
   return 0;
 }
 #endif
+
+// =============================================================================
+// PIPELINE ARCHITECTURE
+// =============================================================================
+//
+//   ┌─────────────────────────────────┐   ┌──────────────────────────────────┐
+//   │ /mars/main_camera/left/image_raw│   │ /mars/main_camera/right/image_raw│
+//   └───────────────┬─────────────────┘   └───────────────┬──────────────────┘
+//                   │                                     │
+//                   └──────────────┬──────────────────────┘
+//                                  │  ApproximateTime sync
+//                                  ▼
+//                    ┌─────────────────────────────┐
+//                    │        syncCallback()        │
+//                    │  decode left/right + gate FPS│
+//                    └──────────────┬──────────────┘
+//                                   ▼
+//              ┌────────────────────────────────────────┐
+//              │           processFrame()               │
+//              └────────────────┬───────────────────────┘
+//                               │
+//                               ▼
+//                ┌──────────────────────────────┐
+//                │      scaleToCalibRes()       │
+//                │  input res → calib res       │
+//                └──────────────┬───────────────┘
+//                               │
+//                               ▼
+//                ┌──────────────────────────────┐
+//                │       rectifyMono()          │
+//                │  BGR→gray + cv::remap        │
+//                └──────────────┬───────────────┘
+//                               │
+//              ┌────────────────┼──────────────────────────────┐
+//              │                │                              │
+//              ▼                ▼                              ▼
+//  ┌────────────────┐  ┌───────────────┐          ┌────────────────────┐
+//  │  submitSGM()   │  │ rectifyColor()│          │publishMonoRectified│
+//  │  VPI SGM→CUDA  │  │ cv::remap BGR │          │  (CPU, parallel)   │
+//  │  (async)       │  │ (CPU overlap) │          └─────┬──────┬───────┘
+//  └───────┬────────┘  └──────┬────────┘                │      │
+//          │                  │  left_color_rect         ▼      ▼
+//          │                  │              ┌─────────────┐ ┌──────────────┐
+//          │          ┌───────┤              │.../left/    │ │.../right/    │
+//          │          │       │              │ image_rect  │ │ image_rect   │
+//          │          │       │              │  (mono8)    │ │  (mono8)     │
+//          │          │       │              └─────────────┘ └──────────────┘
+//          │          │       │
+//          │          │       ├──────────────────────────────────┐
+//          │          │       │                                  │
+//          │          │       ▼                                  ▼
+//          │          │  ┌───────────────────────────┐  ┌───────────────────────────┐
+//          │          │  │  publishColorRectified()  │  │  publishColorRectified()  │
+//          │          │  │       (BGR Image)         │  │     (JPEG compress)       │
+//          │          │  └─────────────┬─────────────┘  └─────────────┬─────────────┘
+//          │          │               ▼                              ▼
+//          │          │  ┌───────────────────────────┐  ┌───────────────────────────┐
+//          │          │  │.../left/image_rect_color  │  │.../left/image_rect_color/ │
+//          │          │  │         (bgr8)            │  │  compressed  (jpeg)       │
+//          │          │  └───────────────────────────┘  └───────────────────────────┘
+//          │          │
+//          ▼          │ (color_rect saved for pointcloud)
+//  ┌───────────────┐  │
+//  │   syncSGM()   │  │  ◄── wait for CUDA
+//  └───────┬───────┘  │
+//          ▼          │
+//  ┌──────────────────┐
+//  │extractDisparity() │
+//  │ S16 Q10.5 → F32  │
+//  │ + border zeroing  │
+//  └────────┬─────────┘
+//           │          │
+//           ├──────────│──────────────────────────────┐
+//           │          │ (raw disparity)              │
+//           ▼          │                              ▼
+//  ┌──────────────────────┐               ┌───────────────────────────┐
+//  │ publishDisparityMsg()│               │ .../disparity_unfiltered  │
+//  │    (unfiltered)      │──────────────▶│    (DisparityImage)       │
+//  └──────────────────────┘               └───────────────────────────┘
+//           │          │
+//           ▼          │
+//  ┌────────────────────────────────────────────────────────────────┐
+//  │                    applyFilterChain()                          │
+//  │                                                                │
+//  │  ┌────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐       │
+//  │  │downsamp│─▶│  median   │─▶│bilateral │─▶│ hole fill │──┐    │
+//  │  └────────┘  └──────────┘  └──────────┘  └───────────┘  │    │
+//  │                                                          ▼    │
+//  │  ┌────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐  │    │
+//  │  │upsample│◀─│ temporal │◀─│ domain   │◀─│  speckle  │◀─┘    │
+//  │  │        │  │          │  │ transform│  │           │       │
+//  │  └────────┘  └──────────┘  └──────────┘  └───────────┘       │
+//  │      ▲                                                        │
+//  │      └── also: depth_clamp, edge_invalidation (order param)   │
+//  └───────────────────────┬────────────────────────────────────────┘
+//           disparity_float│          │ left_color_rect
+//           disparity_lowres          │
+//          ┌───────────────┼──────────┴────────────┐
+//          │               │                       │
+//          ▼               ▼                       ▼
+//  ┌──────────────┐  ┌───────────┐   ┌──────────────────────────────────┐
+//  │publishDisp.. │  │publishDep.│   │    publishPointCloudXYZ()       │
+//  │  (filtered)  │  │ f*b / d   │   │      (disparity_lowres only)    │
+//  └──────┬───────┘  └─────┬─────┘   └──────────────┬───────────────────┘
+//         │                │                         │
+//         │                │         ┌───────────────────────────────────┐
+//         │                │         │  publishPointCloudColor()        │
+//         │                │         │  (disparity_lowres + color_rect) │
+//         │                │         └──────────────┬────────────────────┘
+//         ▼                ▼                  ▼                ▼
+//  ┌──────────────┐  ┌───────────┐  ┌─────────────┐ ┌───────────────┐
+//  │.../disparity │  │.../depth  │  │.../points   │ │.../points_    │
+//  │(DisparityImg)│  │ (16SC1 mm)│  │(PointCloud2 │ │    color      │
+//  └──────────────┘  └───────────┘  │   XYZ)      │ │(PointCloud2   │
+//                                   └─────────────┘ │  XYZRGB)      │
+//                                                    └───────────────┘
+//
+// All topics under /mars/main_camera/ namespace (configurable via params).
+// All publishers are lazy — only publish when ≥1 subscriber is connected.
+// GPU/CPU overlap: colour rectification + mono publishing runs while SGM
+// executes on CUDA, hiding ~2-3ms of CPU work behind the GPU fence.
+// Filter chain order is configurable via the "filter_order" parameter.
+// =============================================================================

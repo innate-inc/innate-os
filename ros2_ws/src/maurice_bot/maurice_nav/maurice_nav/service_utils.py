@@ -80,7 +80,7 @@ def send_lifecycle_transition(service_clients: dict, logger, node_name: str, tra
         logger,
         f'/{node_name}/change_state',
         change_state_request,
-        timeout_sec=8.0
+        timeout_sec=10.0
     )
     
     return result is not None and result.success

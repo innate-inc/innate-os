@@ -1,0 +1,27 @@
+{
+	"servers": {
+		"ros-mcp": {
+			"type": "stdio",
+			"command": "ros-mcp",
+			"args": [
+				// "ros_mcp==3.0.1"
+			],
+			"env": {
+				"ROSBRIDGE_IP": "${input:rosbridge_host}",
+				"ROSBRIDGE_PORT": "${input:rosbridge_port}"
+			}
+		}
+	},
+	"inputs": [
+		{
+			"id": "rosbridge_host",
+			"type": "promptString",
+			"description": "Rosbridge WebSocket Host"
+		},
+		{
+			"id": "rosbridge_port",
+			"type": "promptString",
+			"description": "Rosbridge WebSocket Port"
+		}
+	]
+}

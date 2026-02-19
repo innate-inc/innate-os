@@ -13,6 +13,11 @@ find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(image_transport REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(message_filters REQUIRED)
+find_package(stereo_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
 
 # Find OpenCV
 find_package(OpenCV REQUIRED)
@@ -55,10 +60,18 @@ include_directories(include)
 # =============================================================================
 
 # Main camera driver component library
-add_library(main_camera_driver_component SHARED maurice_cam/main_camera_driver.cpp)
+add_library(main_camera_driver_component SHARED
+  maurice_cam/main_camera_driver.cpp
+  maurice_cam/stereo_calibration.cpp
+)
 target_compile_definitions(main_camera_driver_component PRIVATE BUILDING_COMPONENT_LIBRARY)
 target_include_directories(main_camera_driver_component PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
 target_link_libraries(main_camera_driver_component ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+if(nlohmann_json_FOUND)
+  target_link_libraries(main_camera_driver_component nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(main_camera_driver_component PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
 ament_target_dependencies(main_camera_driver_component 
   rclcpp 
   rclcpp_components
@@ -106,10 +119,20 @@ rclcpp_components_register_nodes(webrtc_streamer_component "maurice_cam::WebRTCS
 
 # Stereo depth estimator component library (requires VPI)
 if(VPI_FOUND)
-  add_library(stereo_depth_estimator_component SHARED maurice_cam/stereo_depth_estimator.cpp)
+  add_library(stereo_depth_estimator_component SHARED
+    maurice_cam/stereo_depth_estimator.cpp
+    maurice_cam/depth_estimator/calibration.cpp
+    maurice_cam/depth_estimator/vpi_stereo.cpp
+    maurice_cam/depth_estimator/rectification.cpp
+    maurice_cam/depth_estimator/publishing.cpp
+    maurice_cam/depth_estimator/pointcloud.cpp
+    maurice_cam/filters/filter_chain.cpp
+    maurice_cam/filters/simple_filters.cpp
+    maurice_cam/filters/advanced_filters.cpp
+  )
   target_compile_definitions(stereo_depth_estimator_component PRIVATE BUILDING_COMPONENT_LIBRARY)
-  target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR})
-  target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY})
+  target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
+  target_link_libraries(stereo_depth_estimator_component ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
   if(nlohmann_json_FOUND)
     target_link_libraries(stereo_depth_estimator_component nlohmann_json::nlohmann_json)
   elseif(NLOHMANN_JSON_FOUND)
@@ -119,18 +142,29 @@ if(VPI_FOUND)
     rclcpp 
     rclcpp_components
     sensor_msgs
+    stereo_msgs
+    message_filters
   )
   rclcpp_components_register_nodes(stereo_depth_estimator_component "maurice_cam::StereoDepthEstimator")
 endif()
+
 
 # =============================================================================
 # STANDALONE EXECUTABLES (for running nodes individually)
 # =============================================================================
 
 # Create main camera driver executable
-add_executable(main_camera_driver maurice_cam/main_camera_driver.cpp)
+add_executable(main_camera_driver
+  maurice_cam/main_camera_driver.cpp
+  maurice_cam/stereo_calibration.cpp
+)
 target_include_directories(main_camera_driver PRIVATE ${TURBOJPEG_INCLUDE_DIRS})
 target_link_libraries(main_camera_driver ${OpenCV_LIBS} ${TURBOJPEG_LIBRARIES})
+if(nlohmann_json_FOUND)
+  target_link_libraries(main_camera_driver nlohmann_json::nlohmann_json)
+elseif(NLOHMANN_JSON_FOUND)
+  target_include_directories(main_camera_driver PRIVATE ${NLOHMANN_JSON_INCLUDE_DIRS})
+endif()
 ament_target_dependencies(main_camera_driver 
   rclcpp 
   rclcpp_components
@@ -173,9 +207,19 @@ ament_target_dependencies(webrtc_streamer_node
 
 # Create stereo depth estimator executable (requires VPI)
 if(VPI_FOUND)
-  add_executable(stereo_depth_estimator maurice_cam/stereo_depth_estimator.cpp)
-  target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR})
-  target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY})
+  add_executable(stereo_depth_estimator
+    maurice_cam/stereo_depth_estimator.cpp
+    maurice_cam/depth_estimator/calibration.cpp
+    maurice_cam/depth_estimator/vpi_stereo.cpp
+    maurice_cam/depth_estimator/rectification.cpp
+    maurice_cam/depth_estimator/publishing.cpp
+    maurice_cam/depth_estimator/pointcloud.cpp
+    maurice_cam/filters/filter_chain.cpp
+    maurice_cam/filters/simple_filters.cpp
+    maurice_cam/filters/advanced_filters.cpp
+  )
+  target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
+  target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})
   if(nlohmann_json_FOUND)
     target_link_libraries(stereo_depth_estimator nlohmann_json::nlohmann_json)
   elseif(NLOHMANN_JSON_FOUND)
@@ -185,9 +229,10 @@ if(VPI_FOUND)
     rclcpp
     rclcpp_components
     sensor_msgs
+    stereo_msgs
+    message_filters
   )
 endif()
-
 
 # =============================================================================
 # INSTALLATION
@@ -240,6 +285,16 @@ install(PROGRAMS
 # Install launch files
 install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
+)
+
+# Install config files
+install(DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
+# Install calibration data (rosbag for stereo calibration)
+install(DIRECTORY calib/
+  DESTINATION share/${PROJECT_NAME}/calib
 )
 
 if(BUILD_TESTING)

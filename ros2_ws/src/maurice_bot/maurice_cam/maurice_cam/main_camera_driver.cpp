@@ -10,6 +10,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
 : Node("main_camera_driver", options)
 {
   // Declare parameters with defaults
+  this->declare_parameter<std::string>("data_directory", "/home/jetson1/innate-os/data");
   this->declare_parameter<std::string>("camera_symlink", "3D");
   this->declare_parameter<int>("width", 1280);  // Capture at 1280x480 (640x480 per side)
   this->declare_parameter<int>("height", 480);
@@ -19,9 +20,11 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("publish_stereo_height", 480);
   this->declare_parameter<double>("fps", 30.0);
   this->declare_parameter<std::string>("frame_id", "camera_optical_frame");
+  this->declare_parameter<std::string>("right_frame_id", "right_camera_optical_frame");
   this->declare_parameter<int>("jpeg_quality", 80);
   this->declare_parameter<bool>("publish_compressed", true);
   this->declare_parameter<int>("compressed_frame_interval", 3);
+  this->declare_parameter<bool>("publish_stereo", false);  // Combined stereo image for legacy compatibility
   this->declare_parameter<int>("exposure", -1);  // -1 means use current value
   this->declare_parameter<int>("gain", -1);      // -1 means use current value
   this->declare_parameter<bool>("disable_auto_exposure", false);
@@ -34,6 +37,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("auto_exposure_update_interval", 3);
 
   // Get parameter values
+  data_directory_ = this->get_parameter("data_directory").as_string();
   std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
   capture_width_ = this->get_parameter("width").as_int();
   capture_height_ = this->get_parameter("height").as_int();
@@ -43,9 +47,11 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   publish_stereo_height_ = this->get_parameter("publish_stereo_height").as_int();
   fps_ = this->get_parameter("fps").as_double();
   frame_id_ = this->get_parameter("frame_id").as_string();
+  right_frame_id_ = this->get_parameter("right_frame_id").as_string();
   jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
   publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
   compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
+  publish_stereo_ = this->get_parameter("publish_stereo").as_bool();
   
   // Get V4L2 control parameters
   exposure_setting_ = this->get_parameter("exposure").as_int();
@@ -133,33 +139,55 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "JPEG Quality: %d", jpeg_quality_);
 
   // Initialize publishers
-  image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    "/mars/main_camera/image",
+  left_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+    "/mars/main_camera/left/image_raw",
+    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+  );
+
+  right_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+    "/mars/main_camera/right/image_raw",
     rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
   );
 
   if (publish_compressed_) {
     compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-      "/mars/main_camera/image/compressed",
+      "/mars/main_camera/left/image_raw/compressed",
       rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
     );
   }
 
-  stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-    "/mars/main_camera/stereo",
-    rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
-  );
+  if (publish_stereo_) {
+    stereo_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+      "/mars/main_camera/stereo",
+      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+    );
+  }
 
   RCLCPP_INFO(this->get_logger(), "Publishers created:");
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image (left camera, %dx%d)", publish_left_width_, publish_left_height_);
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/left/image_raw (%dx%d)", left_width_, left_height_);
+  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/right/image_raw (%dx%d)", left_width_, left_height_);
   if (publish_compressed_) {
-    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/image/compressed (left camera, %dx%d)", publish_left_width_, publish_left_height_);
+    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/left/image_raw/compressed (%dx%d)", left_width_, left_height_);
   }
-  RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (stereo, %dx%d)", publish_stereo_width_, publish_stereo_height_);
+  if (publish_stereo_) {
+    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (%dx%d)", publish_stereo_width_, publish_stereo_height_);
+  }
 
   // Initialize TurboJPEG encoder
   jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
   RCLCPP_INFO(this->get_logger(), "TurboJPEG encoder initialized");
+
+  // Create camera_info publishers (always — calibration may arrive later via file watch)
+  auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+  left_info_pub_  = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+    "/mars/main_camera/left/camera_info", sensor_qos);
+  right_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+    "/mars/main_camera/right/camera_info", sensor_qos);
+
+  // Load stereo calibration (initial attempt + watch for changes every 3s)
+  checkCalibrationFile();
+  calib_watch_timer_ = this->create_wall_timer(3s,
+    std::bind(&MainCameraDriver::checkCalibrationFile, this));
 
   // Initialize camera
   if (initializeCamera()) {
@@ -558,13 +586,55 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
     // Scale to requested size
     cv::resize(left_view, left_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
   }
+
+  // -------------------------
+  // (A4) Right ROI view and msg
+  // -------------------------
+  cv::Rect right_roi(left_width_, 0, left_width_, left_height_);
+  cv::Mat right_view = stereo_out(right_roi);
+  
+  auto right_msg = std::make_unique<sensor_msgs::msg::Image>();
+  right_msg->header.stamp = current_time;
+  right_msg->header.frame_id = right_frame_id_;
+  right_msg->height = publish_left_height_;
+  right_msg->width = publish_left_width_;
+  right_msg->encoding = "bgr8";
+  right_msg->is_bigendian = false;
+  right_msg->step = publish_left_width_ * 3;
+  right_msg->data.resize(right_msg->height * right_msg->step);
+  
+  cv::Mat right_out(
+    publish_left_height_, publish_left_width_, CV_8UC3,
+    right_msg->data.data(),
+    right_msg->step
+  );
+  
+  if (left_width_ == publish_left_width_ && left_height_ == publish_left_height_) {
+    right_view.copyTo(right_out);
+  } else {
+    cv::resize(right_view, right_out, cv::Size(publish_left_width_, publish_left_height_), 0, 0, cv::INTER_LINEAR);
+  }
   
   // -------------------------
   // Publish with std::move() for zero-copy intra-process communication
   // Inter-process subscribers (via DDS) still receive serialized copies automatically
   // -------------------------
-  stereo_pub_->publish(std::move(stereo_msg));
-  image_pub_->publish(std::move(left_msg));
+  if (publish_stereo_) {
+    stereo_pub_->publish(std::move(stereo_msg));
+  }
+  left_pub_->publish(std::move(left_msg));
+  right_pub_->publish(std::move(right_msg));
+
+  // Publish camera_info with same timestamp
+  {
+    std::lock_guard<std::mutex> lock(calib_mutex_);
+    if (calibration_loaded_) {
+      left_info_msg_.header.stamp = current_time;
+      right_info_msg_.header.stamp = current_time;
+      left_info_pub_->publish(left_info_msg_);
+      right_info_pub_->publish(right_info_msg_);
+    }
+  }
   
   // Conditionally create and publish compressed image at specified interval
   if (publish_compressed_) {
@@ -577,16 +647,15 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
       left_compressed_msg->header.frame_id = frame_id_;
       left_compressed_msg->format = "jpeg";
       
-      // Encode from the left buffer using TurboJPEG for faster compression
-      // Ensure left_out is BGR format (CV_8UC3)
+      // Encode from the left view using TurboJPEG
       try {
-        if (left_out.type() == CV_8UC3 && left_out.channels() == 3) {
-          jpeg_encoder_->encodeBGR(left_out, jpeg_quality_, left_compressed_msg->data);
+        if (left_view.type() == CV_8UC3 && left_view.channels() == 3) {
+          jpeg_encoder_->encodeBGR(left_view, jpeg_quality_, left_compressed_msg->data);
           compressed_pub_->publish(std::move(left_compressed_msg));
         } else {
           RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                                "Left image format invalid for JPEG encoding: type=%d, channels=%d",
-                               left_out.type(), left_out.channels());
+                               left_view.type(), left_view.channels());
         }
       } catch (const std::exception& e) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
@@ -664,6 +733,63 @@ void MainCameraDriver::printFrameStats()
   RCLCPP_INFO(this->get_logger(), 
     "Frame Stats - FPS: %.1f (target: %.1f) | Jitter: %.1f ms | Error: %.1f ms | Samples: %zu | Exposure: %d | Gain: %d",
     current_fps, fps_, jitter_ms, timing_error_ms, frame_timestamps_.size(), current_exposure_, current_gain_);
+}
+
+void MainCameraDriver::checkCalibrationFile()
+{
+  try {
+    // Always load from scratch (re-discovers calibration dir + file)
+    auto cal = StereoCalibration::load(data_directory_);
+
+    // Check if anything actually changed (skip rebuild if identical file & mtime)
+    auto new_write = std::filesystem::last_write_time(cal->filePath());
+    if (calibration_loaded_ && stereo_calib_
+        && cal->filePath() == stereo_calib_->filePath()
+        && new_write == calib_last_write_) {
+      return;
+    }
+
+    auto left_info  = cal->buildLeftCameraInfo(frame_id_);
+    auto right_info = cal->buildRightCameraInfo(right_frame_id_);
+
+    {
+      std::lock_guard<std::mutex> lock(calib_mutex_);
+      stereo_calib_   = cal;
+      left_info_msg_  = left_info;
+      right_info_msg_ = right_info;
+      calib_last_write_ = new_write;
+      calibration_loaded_ = true;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Stereo calibration (re)loaded: %s",
+                cal->filePath().string().c_str());
+  } catch (const std::exception& e) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+      "Calibration file watch: %s", e.what());
+    
+    // Set uncalibrated camera_info (all zeros) if previously loaded (e.g., file was deleted)
+    // Per ROS convention: K[0] == 0.0 indicates an uncalibrated camera
+    {
+      std::lock_guard<std::mutex> lock(calib_mutex_);
+      if (calibration_loaded_) {
+        stereo_calib_ = nullptr;
+        
+        // Create zeroed-out camera_info messages to indicate uncalibrated state
+        left_info_msg_ = sensor_msgs::msg::CameraInfo();
+        left_info_msg_.header.frame_id = frame_id_;
+        left_info_msg_.width = publish_left_width_;
+        left_info_msg_.height = publish_left_height_;
+        
+        right_info_msg_ = sensor_msgs::msg::CameraInfo();
+        right_info_msg_.header.frame_id = right_frame_id_;
+        right_info_msg_.width = publish_left_width_;
+        right_info_msg_.height = publish_left_height_;
+        
+        // Keep calibration_loaded_ = true so we continue publishing the zeroed messages
+        RCLCPP_INFO(this->get_logger(), "Calibration cleared - publishing uncalibrated camera_info (K[0]=0)");
+      }
+    }
+  }
 }
 
 // AutoExposureController Implementation

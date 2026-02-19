@@ -72,6 +72,7 @@ ros-humble-rosgraph-msgs
 ros-humble-tf2
 ros-humble-tf2-ros
 ros-humble-tf2-geometry-msgs
+ros-humble-tf-transformations
 
 # ROS2 Humble packages - Navigation
 ros-humble-navigation2
@@ -84,6 +85,7 @@ ros-humble-nav2-velocity-smoother
 ros-humble-nav2-bt-navigator
 ros-humble-nav2-behaviors
 ros-humble-nav2-lifecycle-manager
+ros-humble-spatio-temporal-voxel-layer
 
 # ROS2 Humble packages - SLAM
 ros-humble-slam-toolbox-humble-lifecycle
@@ -99,6 +101,7 @@ ros-humble-camera-calibration
 ros-humble-compressed-image-transport
 ros-humble-vision-msgs
 ros-humble-rplidar-ros
+ros-humble-pcl-ros
 
 # ROS2 Humble packages - Hardware/Manipulation
 ros-humble-dynamixel-sdk
@@ -123,3 +126,8 @@ ros-humble-joint-state-publisher-gui
 ros-humble-topic-tools
 ros-humble-xacro
 ros-humble-bondpy
+libhdf5-dev
+
+# ROS2 Humble packages - Simulation (optional)
+# ros-humble-stage-ros
+

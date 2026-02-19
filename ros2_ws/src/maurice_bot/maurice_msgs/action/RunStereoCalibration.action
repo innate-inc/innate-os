@@ -1,0 +1,22 @@
+# Goal
+bool use_playback
+string bag_path
+float32 playback_rate
+int32 num_images
+int32 min_corners
+bool save_calibration
+---
+# Result
+bool success
+string message
+int32 images_captured
+float32 left_rms
+float32 right_rms
+float32 stereo_rms
+string output_path
+---
+# Feedback
+string phase
+int32 images_captured
+int32 capture_attempts
+string message

@@ -1,0 +1,245 @@
+# ============================================================================
+# MAIN CAMERA DRIVER
+# ============================================================================
+main_camera_driver:
+  ros__parameters:
+    camera_symlink: "3D"
+    width: 2560
+    height: 720
+    publish_left_width: 640
+    publish_left_height: 480
+    publish_stereo_width: 1280
+    publish_stereo_height: 480
+    fps: 15.0
+    frame_id: "camera_optical_frame"
+    jpeg_quality: 80
+    publish_compressed: true
+    compressed_frame_interval: 6
+    publish_stereo: false
+    exposure: -1
+    gain: -1
+    disable_auto_exposure: false
+    default_gain: 110
+    enable_auto_exposure: false
+    target_brightness: 128.0
+    ae_kp: 0.8
+    auto_exposure_update_interval: 3
+
+# ============================================================================
+# ARM CAMERA DRIVER
+# ============================================================================
+arm_camera_driver:
+  ros__parameters:
+    camera_symlink: "Arducam"
+    width: 640
+    height: 480
+    fps: 30.0
+    pixel_format: "YUYV"
+    publish_compressed: true
+    compressed_frame_interval: 6
+
+# ============================================================================
+# STEREO DEPTH ESTIMATOR (VPI SGM on CUDA)
+#
+# Full pipeline in one composable node:
+#   Stereo pair → Rectify → VPI SGM → Filter chain → Depth + PointCloud
+#
+# All outputs are lazy — only computed/published when something subscribes.
+# Everything runs in-process via shared_ptr (zero-copy) with the camera driver.
+# ============================================================================
+/**:
+  ros__parameters:
+    data_directory: "/home/jetson1/innate-os/data"
+    frame_id: "camera_optical_frame"
+
+    # Input image size (single eye, not the combined stereo frame)
+    image_width: 640
+    image_height: 480
+
+    # Maximum processing rate (Hz). 0 = unlimited (process every incoming frame).
+    max_fps: 8.0
+
+    # ── Topics ────────────────────────────────────────────────────────────
+    left_topic: "/mars/main_camera/left/image_raw"
+    right_topic: "/mars/main_camera/right/image_raw"
+    depth_topic: "/mars/main_camera/depth/image_rect_raw"     # 16SC1 mm
+    disparity_topic: "/mars/main_camera/disparity"             # filtered DisparityImage
+    disparity_unfiltered_topic: "/mars/main_camera/disparity_unfiltered"  # raw VPI output
+    left_rectified_topic: "/mars/main_camera/left/image_rect"  # mono8 rectified
+    right_rectified_topic: "/mars/main_camera/right/image_rect"
+    pointcloud_topic: "/mars/main_camera/points"               # XYZRGB PointCloud2
+
+    # Point cloud resolution = (disparity_resolution / pointcloud_decimation).
+    # With filter_downsample.factor=2 and pointcloud_decimation=1 you get 320×240 = 76k pts.
+    # Set to 2 for 160×120 = 19k pts, etc. Higher = faster publish, fewer points.
+    pointcloud_decimation: 1
+
+    # ── VPI SGM — Creation parameters (changing these rebuilds the CUDA payload) ──
+    #
+    # max_disparity: search range in pixels. Objects closer than
+    #   depth = focal_length * baseline / max_disparity won't be seen.
+    #   CUDA snaps to 64, 128, or 256. Higher = see closer objects but slower.
+    # For our camera, 64 is a little over .25m. We're filtering that out anyway, so for performance, limit here.
+    max_disparity: 64
+
+    # include_diagonals: SGM path directions.
+    #   0 = 4 paths (horizontal + vertical only) — faster, noisier
+    #   1 = 8 paths (+ 4 diagonals) — slower, much smoother
+    include_diagonals: 1
+
+    # ── VPI SGM — Runtime parameters (hot-tunable, no rebuild) ────────────
+    #
+    # confidence_threshold: discard matches below this confidence.
+    #   Range 0–65535. Lower = keep more (noisy) detail, higher = stricter.
+    #   ~32000 is a good balance; 0 keeps everything.
+    confidence_threshold: 20000
+
+    # min_disparity: ignore disparities below this (pixels). 0 = no lower limit.
+    #   Increase to ignore very far objects.
+    min_disparity: 0
+
+    # p1: SGM smoothness penalty for ±1 disparity step between neighbours.
+    #   Small value = more detail but more noise. Range 1–255.
+    p1: 8
+
+    # p2: SGM smoothness penalty for disparity jumps >1 between neighbours.
+    #   Must be ≥ p1 and < 256. Larger = smoother surfaces, less edge detail.
+    #   Typical ratio p2/p1 ≈ 4–10.
+    p2: 120
+
+    # uniqueness: ratio test to reject ambiguous matches.
+    #   0.0 = disabled, 1.0 = very strict (rejects most matches).
+    #   0.5–0.8 is typical. Higher = fewer false matches but more holes.
+    uniqueness: -1.0
+
+    # disparity_border_margin: zero out this many pixels from all image edges.
+    #   Stereo matching is unreliable at borders. 10–30 is reasonable.
+    disparity_border_margin: 60 
+
+    # ── Disparity Filter Chain ────────────────────────────────────────────
+    #
+    # Filters run IN THIS ORDER on the raw VPI disparity before depth/pointcloud.
+    # Reorder, add, or remove entries freely. Duplicate entries are allowed
+    # (e.g. median twice). A filter only runs if it's both listed here AND
+    # has its .enabled flag set to true.
+    #
+    # Available filter names:
+    #   median, bilateral, hole_filling, depth_clamp,
+    #   edge_invalidation, speckle, domain_transform, temporal
+    filter_order: 
+      - depth_clamp
+      # - median
+      # - bilateral
+      - domain_transform
+      - speckle
+      # - temporal
+      - edge_invalidation
+      - speckle
+
+    # ── 0. Downsample ─────────────────────────────────────────────────────
+    # Shrink the disparity map before running filters, then upscale after.
+    # Uses INTER_AREA (block-averaging) on the way down — free noise reduction.
+    # factor=4 on a 640×480 calib image → filters run on 160×120 (16× faster).
+    # The point cloud is also built from this smaller resolution.
+    filter_downsample.enabled: true
+    filter_downsample.factor: 2       # 1=off, 2=half, 4=quarter, 8=eighth
+
+    # ── 1. Median ─────────────────────────────────────────────────────────
+    # Classic median filter — kills salt-and-pepper noise (random single-pixel
+    # spikes) without blurring edges much. Kernel must be odd.
+    # 3 = light, 5 = moderate, 7+ = aggressive (gets slow above 5).
+    median.enabled: true
+    median.kernel_size: 5
+
+    # ── 2. Bilateral ──────────────────────────────────────────────────────
+    # Edge-preserving Gaussian smoothing. Smooths flat regions while keeping
+    # sharp depth boundaries. Expensive — only enable if you need it.
+    #   diameter: neighbourhood size (pixels). -1 = auto from sigma_space.
+    #   sigma_color: how different two disparity values can be and still blend.
+    #     Smaller = stronger edge preservation.
+    #   sigma_space: spatial reach of the Gaussian. Larger = wider smoothing.
+    bilateral.enabled: true
+    bilateral.diameter: 7
+    bilateral.sigma_color: 10.0
+    bilateral.sigma_space: 10.0
+
+    # ── 3. Hole Filling ───────────────────────────────────────────────────
+    # Fills invalid (zero) pixels from the nearest valid neighbours in all
+    # four directions (left, right, up, down).
+    #   mode: search radius preset.
+    #     0 = off, 1 = 2px, 2 = 4px, 3 = 8px, 4 = 16px, 5 = unlimited
+    #   strategy: which neighbour to pick when multiple are found.
+    #     0 = fill_from_left — use the first valid neighbour (left priority)
+    #     1 = farthest_from_around — smallest disparity = farthest depth (safest,
+    #         avoids foreground bleeding into background). RealSense default.
+    #     2 = nearest_from_around — largest disparity = nearest depth.
+    hole_filling.enabled: true
+    hole_filling.mode: 1
+    hole_filling.strategy: 1
+
+    # ── 4. Depth Clamping ─────────────────────────────────────────────────
+    # Converts disparity → depth (metres) and zeroes out anything outside
+    # [min, max]. Cheap and very effective at removing background clutter
+    # and near-camera noise. Run this early to save work for later filters.
+    depth_clamp.enabled: true
+    depth_clamp.min_depth_meters: 0.25  # closer than 1 cm → invalid
+    depth_clamp.max_depth_meters: 2.0   # farther than 2 m → invalid
+
+    # ── 5. Edge Invalidation ──────────────────────────────────────────────
+    # Detects depth edges with Canny, dilates them, and zeroes out disparity
+    # on the edge band. Kills "flying pixels" — the smeared halo between
+    # foreground and background at object boundaries.
+    #   width: dilation radius (pixels). Larger = wider kill zone.
+    #   canny_low/high: Canny hysteresis thresholds on the normalised disparity.
+    #     Lower = more sensitive (detects weaker edges). Typical: low 5–20, high 30–60.
+    edge_invalidation.enabled: true
+    edge_invalidation.width: 7
+    edge_invalidation.canny_low: 15.0 
+    edge_invalidation.canny_high: 45.0
+
+    # ── 6. Speckle Removal ────────────────────────────────────────────────
+    # Flood-fills connected regions of similar disparity. Any region smaller
+    # than max_size pixels is zeroed out. Good for removing small floating blobs.
+    #   max_size: regions with fewer pixels than this are removed.
+    #   max_diff: max disparity difference between neighbours to be "connected".
+    #     Smaller = stricter grouping (more blobs killed). In disparity pixels.
+    speckle.enabled: true
+    speckle.max_size: 300
+    speckle.max_diff: 1.0
+
+    # ── 7. Domain Transform ───────────────────────────────────────────────
+    # Recursive edge-preserving smoothing (like bilateral but much faster).
+    # Smooths disparity along surfaces while respecting depth discontinuities.
+    #   iterations: number of forward+backward passes. 1–3 is typical.
+    #     More = smoother but diminishing returns and more CPU.
+    #   alpha: blending weight per step (0.25–1.0). Lower = stronger smoothing.
+    #   delta: edge threshold — disparity jumps larger than this (pixels) are
+    #     treated as edges and not smoothed across. Lower = more edges preserved.
+    domain_transform.enabled: true
+    domain_transform.iterations: 2
+    domain_transform.alpha: 0.5
+    domain_transform.delta: 20
+
+    # ── 8. Temporal ───────────────────────────────────────────────────────
+    # IIR (exponential moving average) blend with the previous frame.
+    # Stabilises the depth over time — reduces flicker/jitter at the cost
+    # of slight motion lag.
+    #   alpha: weight of the CURRENT frame. 1.0 = no filter, 0.0 = infinite.
+    #     0.3–0.5 is a good range. Lower = smoother/laggier.
+    #   delta: edge-preserving threshold. If the frame-to-frame disparity change
+    #     at a pixel exceeds delta, the filter resets to the new value instead of
+    #     blending. Prevents motion smearing. Range [1–100], default 20.
+    #   persistence: governs hole-filling from historical frames.
+    #     0 = disabled (holes stay as holes)
+    #     1 = valid in 8/8       (strictest — pixel must be valid in all 8 frames)
+    #     2 = valid in 2/last 3
+    #     3 = valid in 2/last 4  (RealSense default — good balance)
+    #     4 = valid in 2/8
+    #     5 = valid in 1/last 2
+    #     6 = valid in 1/last 5
+    #     7 = valid in 1/8       (aggressive filling)
+    #     8 = persist indefinitely (most aggressive, frozen holes)
+    temporal.enabled: true
+    temporal.alpha: 0.4
+    temporal.delta: 20
+    temporal.persistence: 1

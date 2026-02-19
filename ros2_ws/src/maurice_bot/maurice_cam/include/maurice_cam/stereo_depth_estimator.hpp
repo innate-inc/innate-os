@@ -1,14 +1,24 @@
 #pragma once
 
+#include <array>
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
-#include <filesystem>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
+#include "stereo_msgs/msg/disparity_image.hpp"
+
+#include <message_filters/subscriber.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/synchronizer.h>
 
 #include <opencv2/opencv.hpp>
 
@@ -21,140 +31,230 @@ namespace maurice_cam
 {
 
 /**
- * @brief Stereo Depth Estimator component node using NVIDIA VPI
- * 
- * This node subscribes to stereo image topic using zero-copy intra-process
- * communication, performs GPU-accelerated stereo matching using VPI Block
- * Matching algorithm, and publishes the depth image.
- * 
- * Key features:
- * - Scales input to calibration resolution for processing
- * - Uses VPI Block Matching (faster than SGM, good quality)
- * - No post-filtering (cleanest results per testing)
- * - Scales depth back to input resolution for publishing
+ * @brief Stereo depth estimator with integrated disparity filtering and
+ *        point cloud generation.
+ *
+ * Pipeline (single node, zero-copy):
+ *   left/right raw → VPI SGM (CUDA) → disparity filtering → depth + point cloud
+ *
+ * Filter chain (each stage independently toggleable):
+ *   Median → Bilateral → Hole Fill → Depth Clamp → Edge Invalidation
+ *   → Speckle Removal → Domain Transform → Temporal Smoothing
  */
 class StereoDepthEstimator : public rclcpp::Node
 {
 public:
-  /**
-   * @brief Constructor
-   * @param options Node options for component composition
-   */
   explicit StereoDepthEstimator(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
-
-  /**
-   * @brief Destructor
-   */
   ~StereoDepthEstimator();
 
 private:
-  /**
-   * @brief Find calibration config directory based on robot_info.json
-   * @return Path to calibration config directory
-   */
-  std::filesystem::path findCalibrationConfigDir();
-
-  /**
-   * @brief Load stereo calibration parameters from YAML file
-   * @param calib_path Path to the calibration YAML file
-   * @return true if successful, false otherwise
-   */
-  bool loadCalibration(const std::filesystem::path& calib_path);
-
-  /**
-   * @brief Initialize VPI resources (streams, payloads, images)
-   * @return true if successful, false otherwise
-   */
+  // ── VPI Stereo (depth_estimator/vpi_stereo.cpp) ─────────────────────────
   bool initializeVPI();
-
-  /**
-   * @brief Cleanup VPI resources
-   */
   void cleanupVPI();
+  bool submitSGM(const cv::Mat& left_rect, const cv::Mat& right_rect);
+  void syncSGM();
+  cv::Mat extractDisparity();
+  void cleanupSGMWraps();
 
-  /**
-   * @brief Callback for stereo image subscription
-   * @param msg Incoming stereo image message (zero-copy unique_ptr)
-   */
-  void stereoImageCallback(sensor_msgs::msg::Image::UniquePtr msg);
+  // ── Rectification (depth_estimator/rectification.cpp) ──────────────────
+  void scaleToCalibRes(const cv::Mat& left_in, const cv::Mat& right_in,
+                       cv::Mat& left_out, cv::Mat& right_out);
+  void rectifyMono(const cv::Mat& left_scaled, const cv::Mat& right_scaled,
+                   cv::Mat& left_rect, cv::Mat& right_rect);
+  void rectifyColor(const cv::Mat& left_scaled, cv::Mat& left_color_rect);
+  bool initVPIRemap();
+  void cleanupVPIRemap();
 
-  /**
-   * @brief Process stereo frame: rectify, compute disparity, compute depth
-   * @param stereo_frame Input stereo frame (side-by-side left and right)
-   * @param timestamp Timestamp for the output message
-   */
-  void processFrame(const cv::Mat& stereo_frame, const rclcpp::Time& timestamp);
+  // ── Publishing (depth_estimator/publishing.cpp) ────────────────────────
+  void publishMonoRectified(const cv::Mat& left_rect, const cv::Mat& right_rect,
+                            const rclcpp::Time& ts, bool pub_left, bool pub_right);
+  void publishColorRectified(const cv::Mat& color_rect, const cv::Mat& mono_rect,
+                             bool has_color_input, const rclcpp::Time& ts,
+                             bool pub_color, bool pub_compressed);
+  void publishDisparityMsg(const cv::Mat& disparity_float, const rclcpp::Time& ts,
+                           rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr& pub);
+  void publishDepth(const cv::Mat& disparity_float, const rclcpp::Time& ts);
 
-  // ROS 2 publishers and subscribers
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr stereo_sub_;
+  // ── Point Cloud (depth_estimator/pointcloud.cpp) ───────────────────────
+  void publishPointCloudXYZ(const cv::Mat& disparity_lowres, const rclcpp::Time& ts);
+  void publishPointCloudColor(const cv::Mat& disparity_lowres, const cv::Mat& color_rect,
+                              const rclcpp::Time& ts);
+  // ── Footprint Overlay, Mask & Cutout (depth_estimator/publishing.cpp) ──
+  void computeFootprintMaskCalib();
+  void publishFootprintOverlay(const cv::Mat& color_rect, const rclcpp::Time& ts);
+  void publishFootprintMask(const rclcpp::Time& ts);
+  void publishFootprintCutout(const cv::Mat& color_rect, const rclcpp::Time& ts);
+  void applyFootprintMask(cv::Mat& disparity);
+  // ── Callback / Pipeline ────────────────────────────────────────────────
+  void syncCallback(
+    const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
+    const sensor_msgs::msg::Image::ConstSharedPtr& right_msg);
+  void processFrame(const cv::Mat& left_img, const cv::Mat& right_img,
+                    const rclcpp::Time& timestamp);
+
+  // ── Camera Info Calibration ────────────────────────────────────────────
+  void leftCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
+  void rightCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
+  bool initCalibrationFromCameraInfo();
+
+  // ── Disparity Filter Chain (filters/*.cpp) ──────────────────────────
+  struct FilterTimings {
+    double footprint_mask_ms{0};
+    double downsample_ms{0}, upsample_ms{0};
+    double depth_clamp_ms{0}, domain_transform_ms{0}, speckle_ms{0};
+    double edge_inv_ms{0}, median_ms{0}, bilateral_ms{0};
+    double hole_fill_ms{0}, temporal_ms{0};
+  };
+  void initFilterParams();      // filters/filter_chain.cpp
+  void logFilterConfig() const; // filters/filter_chain.cpp
+  void applyFilterChain(cv::Mat& disparity, cv::Mat& disparity_lowres,
+                        FilterTimings& timings, float focal_length, float baseline);
+  // Individual filters (filters/simple_filters.cpp, filters/advanced_filters.cpp)
+  void applyMedian(cv::Mat& img);
+  void applyBilateral(cv::Mat& img);
+  void fillHoles(cv::Mat& img);
+  void clampByDepth(cv::Mat& img, float f, float t);
+  void invalidateEdges(cv::Mat& img);
+  void filterSpeckles(cv::Mat& img);
+  void applyDomainTransform(cv::Mat& img);
+  void dtPass(cv::Mat& img, bool horizontal);
+  void applyTemporal(cv::Mat& img);
+
+  // ── Sync ───────────────────────────────────────────────────────────────
+  using SyncPolicy = message_filters::sync_policies::ApproximateTime<
+    sensor_msgs::msg::Image, sensor_msgs::msg::Image>;
+  using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
+
+  std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> left_sub_;
+  std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> right_sub_;
+  std::shared_ptr<Synchronizer> sync_;
+
+  // Camera info subscribers (persistent — detect recalibration)
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
+  sensor_msgs::msg::CameraInfo::ConstSharedPtr left_camera_info_;
+  sensor_msgs::msg::CameraInfo::ConstSharedPtr right_camera_info_;
+  std::mutex calib_mutex_;  // guards VPI teardown/init vs processFrame
+
+  // Footprint pointcloud subscriber (for overlay projection)
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr footprint_sub_;
+  sensor_msgs::msg::PointCloud2::ConstSharedPtr latest_footprint_cloud_;
+  std::mutex footprint_mutex_;
+
+  // ── Publishers ─────────────────────────────────────────────────────────
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr disparity_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr rectified_pub_;
+  rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;
+  rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_unfiltered_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_rectified_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_rectified_color_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr left_rectified_compressed_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_overlay_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_mask_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr footprint_cutout_pub_;
 
-  // Node parameters
-  std::string data_directory_;
-  std::string stereo_topic_;
-  std::string depth_topic_;
-  std::string disparity_topic_;
-  std::string rectified_topic_;
+  // ── General Parameters ─────────────────────────────────────────────────
+  std::string left_camera_info_topic_, right_camera_info_topic_;
+  std::string left_topic_, right_topic_;
+  std::string depth_topic_, disparity_topic_, disparity_unfiltered_topic_;
+  std::string left_rectified_topic_, right_rectified_topic_;
+  std::string left_rectified_color_topic_;
+  std::string left_rectified_compressed_topic_;
   std::string pointcloud_topic_;
+  std::string pointcloud_color_topic_;
+  std::string footprint_cloud_topic_;
+  std::string footprint_overlay_topic_;
+  std::string footprint_mask_topic_;
+  std::string footprint_cutout_topic_;
   std::string frame_id_;
   int max_disparity_;
-  bool publish_disparity_;
-  bool publish_rectified_;
-  bool publish_pointcloud_;
-  int process_every_n_frames_;  // Process 1 out of every N frames
-  int pointcloud_decimation_;   // Decimate point cloud (1=full, 2=half, 4=quarter)
+  double max_fps_{10.0};
+  std::chrono::steady_clock::duration min_process_interval_{};
+  int pointcloud_decimation_;
 
-  // Block Matching parameters (from Python script that worked best)
-  int bm_window_size_;          // Block matching window size (default: 11)
-  int bm_quality_;              // Quality level 0-8 (default: 8 = max quality)
-  int bm_conf_threshold_;       // Confidence threshold (default: 16000, lower = more details)
+  // VPI SGM parameters
+  int include_diagonals_;
+  int confidence_threshold_;
+  int min_disparity_;
+  int p1_, p2_;
+  double uniqueness_;
+  int disparity_border_margin_;
 
-  // Image dimensions - input (from camera)
-  int stereo_width_;   // Full stereo image width (left + right) from camera
-  int stereo_height_;  // Full stereo image height from camera
-  int image_width_;    // Single camera image width (stereo_width / 2)
-  int image_height_;   // Single camera image height
+  // Image dimensions
+  int image_width_, image_height_;       // input (from camera)
+  int calib_width_, calib_height_;       // calibration (processing)
+  double depth_scale_;
 
-  // Image dimensions - calibration (processing resolution)
-  int calib_width_;    // Calibration image width (from YAML)
-  int calib_height_;   // Calibration image height (from YAML)
-  double depth_scale_; // Scale factor: calib_width / image_width
+  // Calibration (from camera_info topics)
+  cv::Mat P1_;  // left projection matrix (3×4), for point cloud intrinsics
+  double baseline_, focal_length_;
+  int jpeg_quality_{80};
 
-  // Calibration parameters (loaded from YAML)
-  cv::Mat K1_, D1_;  // Left camera intrinsics and distortion
-  cv::Mat K2_, D2_;  // Right camera intrinsics and distortion
-  cv::Mat R_, T_;    // Rotation and translation between cameras
-  cv::Mat R1_, R2_;  // Rectification transforms
-  cv::Mat P1_, P2_;  // Projection matrices
-  cv::Mat Q_;        // Disparity-to-depth mapping matrix
-  double baseline_;  // Baseline distance (meters)
-  double focal_length_; // Focal length in pixels (after rectification)
-
-  // OpenCV rectification maps (at calibration resolution)
+  // Rectification maps (calibration resolution)
   cv::Mat map1_left_, map2_left_;
   cv::Mat map1_right_, map2_right_;
 
   // VPI resources
   VPIStream vpi_stream_{nullptr};
-  
-  // VPI images (at calibration resolution)
   VPIImage vpi_disparity_{nullptr};
   VPIImage vpi_confidence_{nullptr};
-
-  // VPI stereo payload
   VPIPayload stereo_payload_{nullptr};
 
-  // Processing state
+  // Per-frame VPI image wraps (created in submitSGM, destroyed in cleanupSGMWraps)
+  VPIImage vpi_left_wrap_{nullptr};
+  VPIImage vpi_right_wrap_{nullptr};
+
+  // VPI remap resources (persistent across frames)
+  VPIPayload vpi_remap_left_{nullptr};
+  VPIPayload vpi_remap_right_{nullptr};
+  VPIPayload vpi_remap_color_{nullptr};
+  VPIImage   vpi_rect_left_out_{nullptr};
+  VPIImage   vpi_rect_right_out_{nullptr};
+  VPIImage   vpi_rect_color_out_{nullptr};
+
   bool vpi_initialized_{false};
   bool calibration_loaded_{false};
-
-  // Frame statistics and rate control
   int frame_count_{0};
-  int input_frame_count_{0};  // Total input frames received
+  int input_frame_count_{0};
   rclcpp::Time last_stats_time_;
+  std::chrono::steady_clock::time_point last_process_time_{};
+
+  // ── Filter Parameters ──────────────────────────────────────────────────
+  bool filter_downsample_enabled_{false};
+  int filter_downsample_factor_{4};
+  bool median_enabled_{false};
+  int median_kernel_size_{5};
+  bool bilateral_enabled_{false};
+  int bilateral_diameter_{5};
+  double bilateral_sigma_color_{10.0}, bilateral_sigma_space_{10.0};
+  bool hole_filling_enabled_{false};
+  int hole_fill_radius_{2};
+  int hole_fill_strategy_{1};
+  bool depth_clamp_enabled_{false};
+  double min_depth_meters_{0.25}, max_depth_meters_{5.0};
+  bool edge_inv_enabled_{false};
+  int edge_inv_width_{3};
+  double edge_canny_low_{10.0}, edge_canny_high_{30.0};
+  bool speckle_enabled_{false};
+  int speckle_max_size_{200};
+  double speckle_max_diff_{1.0};
+  bool dt_enabled_{false};
+  int dt_iterations_{2}, dt_delta_{20};
+  double dt_alpha_{0.5};
+  bool temporal_enabled_{false};
+  double temporal_alpha_{0.4};
+  int temporal_delta_{20};
+  int temporal_persistence_{3};
+  cv::Mat prev_disparity_frame_;
+  std::vector<uint8_t> temporal_history_;
+  std::vector<std::string> filter_order_;
+
+  // Per-frame footprint mask at calibration resolution (255 = robot body, 0 = free)
+  cv::Mat footprint_mask_calib_;
+
+
 };
 
 } // namespace maurice_cam

@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
@@ -43,7 +45,7 @@ public:
     RCLCPP_INFO(this->get_logger(), "DynamicFootprint node initialized");
 
     this->declare_parameter<double>("padding", 0.03);
-    this->declare_parameter<double>("update_frequency", 5.0);
+    this->declare_parameter<double>("update_frequency", 15.0);
     this->declare_parameter<bool>("debug", false);
 
     const double update_freq = this->get_parameter("update_frequency").as_double();
@@ -57,6 +59,9 @@ public:
     
     // Create publisher for robot height
     height_publisher_ = this->create_publisher<std_msgs::msg::Float64>("/footprint/height", 10);
+
+    // Create publisher for arm collision points in camera optical frame
+    camera_footprint_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/footprint/camera_optical", 10);
 
     // Only create debug publishers if debug mode is enabled
     if (debug_mode) {
@@ -167,6 +172,7 @@ private:
   tf2_ros::TransformListener tf_listener_;
   rclcpp::Publisher<geometry_msgs::msg::Polygon>::SharedPtr footprint_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr height_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr camera_footprint_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_points_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr collision_boxes_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr robot_hull_publisher_;
@@ -319,6 +325,121 @@ private:
     process_collision_boxes();
   }
 
+  // ===========================================================================
+  // Helper utilities for footprint projection
+  // ===========================================================================
+
+  /**
+   * Check if a link name belongs to the arm kinematic chain.
+   */
+  static bool isArmLink(const std::string & name)
+  {
+    // link1-link5 are arm joints, link61/link62 are gripper fingers
+    static const std::array<std::string, 7> arm_links = {
+      "link1", "link2", "link3", "link4", "link5", "link61", "link62"
+    };
+    for (const auto & a : arm_links) {
+      if (name == a) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Apply a pre-looked-up TF transform to a batch of 3D points.
+   */
+  static std::vector<geometry_msgs::msg::Point> applyTransform(
+      const std::vector<geometry_msgs::msg::Point>& points,
+      const geometry_msgs::msg::TransformStamped& tf)
+  {
+    std::vector<geometry_msgs::msg::Point> out;
+    out.reserve(points.size());
+    for (const auto & p : points) {
+      geometry_msgs::msg::PointStamped ps_in, ps_out;
+      ps_in.point = p;
+      tf2::doTransform(ps_in, ps_out, tf);
+      out.push_back(ps_out.point);
+    }
+    return out;
+  }
+
+  /**
+   * Project 3D points onto the XY plane and return the 2D convex hull.
+   */
+  static std::vector<Point2> projectXYConvexHull(
+      const std::vector<geometry_msgs::msg::Point>& pts_3d)
+  {
+    std::vector<Point2> pts_2d;
+    pts_2d.reserve(pts_3d.size());
+    for (const auto & p : pts_3d) {
+      pts_2d.push_back(Point2{p.x, p.y});
+    }
+    return convex_hull(std::move(pts_2d));
+  }
+
+  /**
+   * Build a Polygon message from 2D hull points.
+   */
+  static geometry_msgs::msg::Polygon toPolygonMsg(const std::vector<Point2>& hull)
+  {
+    geometry_msgs::msg::Polygon msg;
+    msg.points.reserve(hull.size());
+    for (const auto & p : hull) {
+      geometry_msgs::msg::Point32 pt;
+      pt.x = static_cast<float>(p.x);
+      pt.y = static_cast<float>(p.y);
+      pt.z = 0.0f;
+      msg.points.push_back(pt);
+    }
+    return msg;
+  }
+
+  /**
+   * Publish arm collision corners as a PointCloud2 in camera_optical_frame.
+   */
+  void publishCameraFootprint(
+      const std::vector<geometry_msgs::msg::Point>& corners_base_link)
+  {
+    if (corners_base_link.empty()) return;
+    try {
+      const auto tf = tf_buffer_.lookupTransform(
+          "camera_optical_frame", "base_link",
+          tf2::TimePointZero, tf2::durationFromSec(0.1));
+
+      const auto cam_pts = applyTransform(corners_base_link, tf);
+
+      auto cloud = std::make_unique<sensor_msgs::msg::PointCloud2>();
+      cloud->header.stamp    = this->get_clock()->now();
+      cloud->header.frame_id = "camera_optical_frame";
+      cloud->height = 1;
+      cloud->width  = static_cast<uint32_t>(cam_pts.size());
+      cloud->is_dense = true;
+      cloud->is_bigendian = false;
+
+      sensor_msgs::PointCloud2Modifier mod(*cloud);
+      mod.setPointCloud2FieldsByString(1, "xyz");
+      mod.resize(cam_pts.size());
+
+      sensor_msgs::PointCloud2Iterator<float> ix(*cloud, "x");
+      sensor_msgs::PointCloud2Iterator<float> iy(*cloud, "y");
+      sensor_msgs::PointCloud2Iterator<float> iz(*cloud, "z");
+
+      for (const auto & p : cam_pts) {
+        *ix = static_cast<float>(p.x);
+        *iy = static_cast<float>(p.y);
+        *iz = static_cast<float>(p.z);
+        ++ix; ++iy; ++iz;
+      }
+
+      camera_footprint_publisher_->publish(std::move(cloud));
+      RCLCPP_DEBUG(this->get_logger(),
+                   "Published /footprint/camera_optical with %zu points",
+                   cam_pts.size());
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                           "Camera footprint TF lookup failed: %s", ex.what());
+    }
+  }
+
   /**
    * Process collision boxes from each link and transform to base_link frame
    */
@@ -332,6 +453,10 @@ private:
 
     std::vector<Point2> all_points_xy;
     all_points_xy.reserve(512);
+    std::vector<geometry_msgs::msg::Point> all_corners_3d;  // 3D corners (all links)
+    all_corners_3d.reserve(512);
+    std::vector<geometry_msgs::msg::Point> arm_corners_3d;   // 3D corners (arm only) for camera projection
+    arm_corners_3d.reserve(256);
     double max_z = 0.0;  // Track maximum height of collision geometry
     geometry_msgs::msg::PointStamped tallest_point;  // Track the tallest point
     tallest_point.header.frame_id = "base_link";
@@ -413,6 +538,10 @@ private:
               max_z = transformed.point.z;
               tallest_point = transformed;
               tallest_point.header.stamp = this->get_clock()->now();
+            }
+            all_corners_3d.push_back(transformed.point);
+            if (isArmLink(link_name)) {
+              arm_corners_3d.push_back(transformed.point);
             }
             transformed.point.z = 0.0;
             all_points_xy.push_back(Point2{transformed.point.x, transformed.point.y});
@@ -516,6 +645,9 @@ private:
           footprint_publisher_->publish(polygon_msg);
           RCLCPP_DEBUG(this->get_logger(), "Published /footprint convex hull with %zu vertices", hull.size());
         }
+
+        // Publish arm-only footprint projected into camera optical frame
+        publishCameraFootprint(arm_corners_3d);
 
         // Publish the max height of the robot collision geometry
         {

@@ -131,7 +131,7 @@ def extract_video(bag_path, output_file, fps=30):
     
     # Find compressed image topics
     image_topics = {topic: msg_type for topic, msg_type in topics_and_types.items() 
-                   if 'mars/main_camera/image/compressed' in topic or 'mars/arm/image_raw/compressed' in topic}
+                   if 'mars/main_camera/left/image_raw/compressed' in topic or 'mars/arm/image_raw/compressed' in topic}
     
     if not image_topics:
         print("No mars/main_camera/image/compressed or mars/arm/image_raw/compressed topics found in the bag file.")

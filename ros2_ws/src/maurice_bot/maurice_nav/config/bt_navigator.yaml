@@ -5,6 +5,7 @@ bt_navigator:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     filter_duration: 0.3
+    wait_for_service_timeout: 10000
 
     # Use your custom Behavior Tree XML for navigate-to-pose
     # These paths will be overridden in launch files with package-relative paths
