@@ -121,6 +121,7 @@ rclcpp_components_register_nodes(webrtc_streamer_component "maurice_cam::WebRTCS
 if(VPI_FOUND)
   add_library(stereo_depth_estimator_component SHARED
     maurice_cam/stereo_depth_estimator.cpp
+    maurice_cam/depth_estimator/calibration.cpp
     maurice_cam/depth_estimator/vpi_stereo.cpp
     maurice_cam/depth_estimator/rectification.cpp
     maurice_cam/depth_estimator/publishing.cpp
@@ -128,7 +129,6 @@ if(VPI_FOUND)
     maurice_cam/filters/filter_chain.cpp
     maurice_cam/filters/simple_filters.cpp
     maurice_cam/filters/advanced_filters.cpp
-    maurice_cam/stereo_calibration.cpp
   )
   target_compile_definitions(stereo_depth_estimator_component PRIVATE BUILDING_COMPONENT_LIBRARY)
   target_include_directories(stereo_depth_estimator_component PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
@@ -209,6 +209,7 @@ ament_target_dependencies(webrtc_streamer_node
 if(VPI_FOUND)
   add_executable(stereo_depth_estimator
     maurice_cam/stereo_depth_estimator.cpp
+    maurice_cam/depth_estimator/calibration.cpp
     maurice_cam/depth_estimator/vpi_stereo.cpp
     maurice_cam/depth_estimator/rectification.cpp
     maurice_cam/depth_estimator/publishing.cpp
@@ -216,7 +217,6 @@ if(VPI_FOUND)
     maurice_cam/filters/filter_chain.cpp
     maurice_cam/filters/simple_filters.cpp
     maurice_cam/filters/advanced_filters.cpp
-    maurice_cam/stereo_calibration.cpp
   )
   target_include_directories(stereo_depth_estimator PRIVATE ${VPI_INCLUDE_DIR} ${TURBOJPEG_INCLUDE_DIRS})
   target_link_libraries(stereo_depth_estimator ${OpenCV_LIBS} ${VPI_LIBRARY} ${TURBOJPEG_LIBRARIES})

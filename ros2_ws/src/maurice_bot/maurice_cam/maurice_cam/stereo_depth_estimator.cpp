@@ -1,6 +1,7 @@
 // Stereo Depth Estimator — orchestrator.
 //
 // All heavy lifting lives in sibling files under depth_estimator/ and filters/:
+//   depth_estimator/calibration.cpp   — camera_info subscription & calibration init
 //   depth_estimator/vpi_stereo.cpp    — VPI init/cleanup, submit, sync, extract
 //   depth_estimator/rectification.cpp — scale, mono/colour rectification
 //   depth_estimator/publishing.cpp    — disparity, depth, rectified image publishing
@@ -25,7 +26,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
 : Node("stereo_depth_estimator", options)
 {
   // Declare parameters with defaults
-  this->declare_parameter<std::string>("data_directory", "/home/jetson1/innate-os/data");
+  this->declare_parameter<std::string>("left_camera_info_topic", "/mars/main_camera/left/camera_info");
+  this->declare_parameter<std::string>("right_camera_info_topic", "/mars/main_camera/right/camera_info");
   this->declare_parameter<std::string>("left_topic", "/mars/main_camera/left/image_raw");
   this->declare_parameter<std::string>("right_topic", "/mars/main_camera/right/image_raw");
   this->declare_parameter<std::string>("depth_topic", "/mars/main_camera/depth");
@@ -57,7 +59,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("disparity_border_margin", 10);
 
   // Get parameter values
-  data_directory_ = this->get_parameter("data_directory").as_string();
+  left_camera_info_topic_ = this->get_parameter("left_camera_info_topic").as_string();
+  right_camera_info_topic_ = this->get_parameter("right_camera_info_topic").as_string();
   left_topic_ = this->get_parameter("left_topic").as_string();
   right_topic_ = this->get_parameter("right_topic").as_string();
   depth_topic_ = this->get_parameter("depth_topic").as_string();
@@ -103,7 +106,8 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   initFilterParams();
 
   RCLCPP_INFO(this->get_logger(), "=== Maurice Stereo Depth Estimator (VPI SGM CUDA) ===");
-  RCLCPP_INFO(this->get_logger(), "Data directory: %s", data_directory_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Left camera info: %s", left_camera_info_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Right camera info: %s", right_camera_info_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "Left topic: %s", left_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "Right topic: %s", right_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "Depth topic: %s", depth_topic_.c_str());
@@ -117,41 +121,19 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(this->get_logger(), "Max processing rate: unlimited");
   }
 
-  // Load stereo calibration
-  try {
-    stereo_calib_ = StereoCalibration::load(data_directory_);
-    calib_width_  = stereo_calib_->calibWidth();
-    calib_height_ = stereo_calib_->calibHeight();
-    focal_length_ = stereo_calib_->focalLength();
-    baseline_     = stereo_calib_->baseline();
-    depth_scale_  = static_cast<double>(calib_width_) / static_cast<double>(image_width_);
-    stereo_calib_->getRectificationMaps(map1_left_, map2_left_, map1_right_, map2_right_);
-    calibration_loaded_ = true;
-
-    RCLCPP_INFO(this->get_logger(), "Loaded calibration from: %s", stereo_calib_->filePath().string().c_str());
-    RCLCPP_INFO(this->get_logger(), "Calibration resolution: %dx%d", calib_width_, calib_height_);
-    RCLCPP_INFO(this->get_logger(), "Scale: input %dx%d -> calib %dx%d (scale=%.3f)",
-                image_width_, image_height_, calib_width_, calib_height_, depth_scale_);
-    RCLCPP_INFO(this->get_logger(), "Stereo parameters: focal=%.2f px, baseline=%.4f m (%.1f mm)",
-                focal_length_, baseline_, baseline_ * 1000.0);
-  } catch (const std::exception& e) {
-    RCLCPP_ERROR(this->get_logger(), "Calibration error: %s", e.what());
-    throw;
+  // Subscribe to camera_info topics for calibration.
+  // VPI initialisation is deferred until both CameraInfo messages arrive.
+  {
+    auto info_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+    left_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+        left_camera_info_topic_, info_qos,
+        std::bind(&StereoDepthEstimator::leftCameraInfoCallback, this, std::placeholders::_1));
+    right_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+        right_camera_info_topic_, info_qos,
+        std::bind(&StereoDepthEstimator::rightCameraInfoCallback, this, std::placeholders::_1));
   }
-
-  // Initialize VPI remap for GPU-accelerated rectification
-  if (!initVPIRemap()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI remap");
-    throw std::runtime_error("VPI remap initialization failed");
-  }
-
-  // Initialize VPI
-  if (!initializeVPI()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to initialize VPI");
-    throw std::runtime_error("VPI initialization failed");
-  }
-  vpi_initialized_ = true;
-  RCLCPP_INFO(this->get_logger(), "VPI initialized successfully (SGM CUDA, diagonals=%d)", include_diagonals_);
+  RCLCPP_INFO(this->get_logger(), "Waiting for camera_info on [%s] and [%s]",
+              left_camera_info_topic_.c_str(), right_camera_info_topic_.c_str());
 
   // Create publishers (lazy publishing — only publish when subscribed)
   auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
@@ -203,6 +185,10 @@ void StereoDepthEstimator::syncCallback(
     const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
     const sensor_msgs::msg::Image::ConstSharedPtr& right_msg)
 {
+  // Try-lock: skip this frame if a recalibration is in progress.
+  std::unique_lock<std::mutex> lock(calib_mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) return;
+
   if (!vpi_initialized_ || !calibration_loaded_) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                          "VPI or calibration not ready, skipping frame");

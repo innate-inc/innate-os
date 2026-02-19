@@ -3,19 +3,18 @@
 #include <array>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <filesystem>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "stereo_msgs/msg/disparity_image.hpp"
-
-#include "maurice_cam/stereo_calibration.hpp"
 
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -88,6 +87,11 @@ private:
   void processFrame(const cv::Mat& left_img, const cv::Mat& right_img,
                     const rclcpp::Time& timestamp);
 
+  // ── Camera Info Calibration ────────────────────────────────────────────
+  void leftCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
+  void rightCameraInfoCallback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg);
+  bool initCalibrationFromCameraInfo();
+
   // ── Disparity Filter Chain (filters/*.cpp) ──────────────────────────
   struct FilterTimings {
     double downsample_ms{0}, upsample_ms{0};
@@ -119,6 +123,13 @@ private:
   std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> right_sub_;
   std::shared_ptr<Synchronizer> sync_;
 
+  // Camera info subscribers (persistent — detect recalibration)
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_info_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr right_info_sub_;
+  sensor_msgs::msg::CameraInfo::ConstSharedPtr left_camera_info_;
+  sensor_msgs::msg::CameraInfo::ConstSharedPtr right_camera_info_;
+  std::mutex calib_mutex_;  // guards VPI teardown/init vs processFrame
+
   // ── Publishers ─────────────────────────────────────────────────────────
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
   rclcpp::Publisher<stereo_msgs::msg::DisparityImage>::SharedPtr disparity_pub_;
@@ -131,7 +142,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_color_pub_;
 
   // ── General Parameters ─────────────────────────────────────────────────
-  std::string data_directory_;
+  std::string left_camera_info_topic_, right_camera_info_topic_;
   std::string left_topic_, right_topic_;
   std::string depth_topic_, disparity_topic_, disparity_unfiltered_topic_;
   std::string left_rectified_topic_, right_rectified_topic_;
@@ -158,8 +169,8 @@ private:
   int calib_width_, calib_height_;       // calibration (processing)
   double depth_scale_;
 
-  // Calibration (shared utility class)
-  std::shared_ptr<StereoCalibration> stereo_calib_;
+  // Calibration (from camera_info topics)
+  cv::Mat P1_;  // left projection matrix (3×4), for point cloud intrinsics
   double baseline_, focal_length_;
   int jpeg_quality_{80};
 

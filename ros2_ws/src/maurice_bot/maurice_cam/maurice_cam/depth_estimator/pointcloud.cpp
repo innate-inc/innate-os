@@ -22,10 +22,10 @@ void StereoDepthEstimator::publishPointCloudXYZ(
   // Scale pixel-coordinate intrinsics to the downsampled grid.
   // Depth focal length stays at calibration-res (disparity values are in those units).
   const float s  = static_cast<float>(dw) / static_cast<float>(calib_width_);
-  const float fx = static_cast<float>(stereo_calib_->P1().at<double>(0, 0)) * s;
-  const float fy = static_cast<float>(stereo_calib_->P1().at<double>(1, 1)) * s;
-  const float cx = static_cast<float>(stereo_calib_->P1().at<double>(0, 2)) * s;
-  const float cy = static_cast<float>(stereo_calib_->P1().at<double>(1, 2)) * s;
+  const float fx = static_cast<float>(P1_.at<double>(0, 0)) * s;
+  const float fy = static_cast<float>(P1_.at<double>(1, 1)) * s;
+  const float cx = static_cast<float>(P1_.at<double>(0, 2)) * s;
+  const float cy = static_cast<float>(P1_.at<double>(1, 2)) * s;
   const float f_depth  = static_cast<float>(focal_length_);
   const float baseline = static_cast<float>(baseline_);
 
@@ -85,10 +85,10 @@ void StereoDepthEstimator::publishPointCloudColor(
   const float MAX_DEPTH_M = 10.0f;
 
   const float s  = static_cast<float>(dw) / static_cast<float>(calib_width_);
-  const float fx = static_cast<float>(stereo_calib_->P1().at<double>(0, 0)) * s;
-  const float fy = static_cast<float>(stereo_calib_->P1().at<double>(1, 1)) * s;
-  const float cx = static_cast<float>(stereo_calib_->P1().at<double>(0, 2)) * s;
-  const float cy = static_cast<float>(stereo_calib_->P1().at<double>(1, 2)) * s;
+  const float fx = static_cast<float>(P1_.at<double>(0, 0)) * s;
+  const float fy = static_cast<float>(P1_.at<double>(1, 1)) * s;
+  const float cx = static_cast<float>(P1_.at<double>(0, 2)) * s;
+  const float cy = static_cast<float>(P1_.at<double>(1, 2)) * s;
   const float f_depth  = static_cast<float>(focal_length_);
   const float baseline = static_cast<float>(baseline_);
 
