@@ -39,7 +39,7 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("jpeg_quality", 80);
   this->declare_parameter<int>("image_width", 640);
   this->declare_parameter<int>("image_height", 480);
-  this->declare_parameter<int>("process_every_n_frames", 1);
+  this->declare_parameter<double>("max_fps", 10.0);
   this->declare_parameter<std::string>("pointcloud_topic", "/mars/main_camera/points");
   this->declare_parameter<std::string>("pointcloud_color_topic", "/mars/main_camera/points_color");
   this->declare_parameter<int>("pointcloud_decimation", 2);
@@ -71,8 +71,12 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   jpeg_quality_ = this->get_parameter("jpeg_quality").as_int();
   image_width_ = this->get_parameter("image_width").as_int();
   image_height_ = this->get_parameter("image_height").as_int();
-  process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
-  if (process_every_n_frames_ < 1) process_every_n_frames_ = 1;
+  max_fps_ = this->get_parameter("max_fps").as_double();
+  if (max_fps_ < 0.0) max_fps_ = 0.0;
+  min_process_interval_ = (max_fps_ > 0.0)
+      ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / max_fps_))
+      : std::chrono::steady_clock::duration::zero();
   pointcloud_topic_ = this->get_parameter("pointcloud_topic").as_string();
   pointcloud_color_topic_ = this->get_parameter("pointcloud_color_topic").as_string();
   pointcloud_decimation_ = this->get_parameter("pointcloud_decimation").as_int();
@@ -107,8 +111,10 @@ StereoDepthEstimator::StereoDepthEstimator(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Max disparity: %d", max_disparity_);
   RCLCPP_INFO(this->get_logger(), "SGM params: diagonals=%d, p1=%d, p2=%d, confThreshold=%d, uniqueness=%.2f",
               include_diagonals_, p1_, p2_, confidence_threshold_, uniqueness_);
-  if (process_every_n_frames_ > 1) {
-    RCLCPP_INFO(this->get_logger(), "Process rate: 1/%d frames", process_every_n_frames_);
+  if (max_fps_ > 0.0) {
+    RCLCPP_INFO(this->get_logger(), "Max processing rate: %.1f Hz", max_fps_);
+  } else {
+    RCLCPP_INFO(this->get_logger(), "Max processing rate: unlimited");
   }
 
   // Load stereo calibration
@@ -203,9 +209,17 @@ void StereoDepthEstimator::syncCallback(
     return;
   }
 
-  // Frame rate control
+  // Frame rate control — advance deadline by interval (not snap to now)
+  // so leftover time carries forward for accurate average rate.
+  if (min_process_interval_.count() > 0) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_process_time_ < min_process_interval_) return;
+    last_process_time_ += min_process_interval_;
+    // If we fell behind by more than one interval, reset to prevent burst
+    if (now - last_process_time_ > min_process_interval_)
+      last_process_time_ = now;
+  }
   input_frame_count_++;
-  if ((input_frame_count_ % process_every_n_frames_) != 0) return;
 
   // Validate dimensions
   if (static_cast<int>(left_msg->width) != image_width_ ||
@@ -370,7 +384,7 @@ void StereoDepthEstimator::processFrame(
     return std::chrono::duration<double, std::milli>(d).count();
   };
 
-  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
     "Pipeline %.1fms | sub %.1f | scale %.1f | rectify %.1f | sgm_submit %.1f | "
     "color_remap %.1f | mono_pub %.1f | color_pub %.1f | sgm_sync %.1f | "
     "extract %.1f | unfilt %.1f | filter %.1f | depth %.1f | pc %.1f | "
@@ -386,7 +400,7 @@ void StereoDepthEstimator::processFrame(
     (int)pub_left_compressed, (int)pub_pointcloud, (int)pub_pointcloud_color,
     (int)pub_depth, (int)pub_disparity, (int)pub_unfiltered, (int)has_color);
 
-  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+  RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
     "Filter detail %.1fms | down %.1f | clamp %.1f | domain %.1f | speckle %.1f | "
     "edge %.1f | median %.1f | bilateral %.1f | hole %.1f | temporal %.1f | up %.1f",
     ms(t_filter - t_unfilt),

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -140,7 +141,8 @@ private:
   std::string pointcloud_color_topic_;
   std::string frame_id_;
   int max_disparity_;
-  int process_every_n_frames_;
+  double max_fps_{10.0};
+  std::chrono::steady_clock::duration min_process_interval_{};
   int pointcloud_decimation_;
 
   // VPI SGM parameters
@@ -188,6 +190,7 @@ private:
   int frame_count_{0};
   int input_frame_count_{0};
   rclcpp::Time last_stats_time_;
+  std::chrono::steady_clock::time_point last_process_time_{};
 
   // ── Filter Parameters ──────────────────────────────────────────────────
   bool filter_downsample_enabled_{false};

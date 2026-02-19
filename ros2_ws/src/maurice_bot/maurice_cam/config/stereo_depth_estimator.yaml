@@ -56,8 +56,8 @@ arm_camera_driver:
     image_width: 640
     image_height: 480
 
-    # Skip frames to reduce CPU/GPU load. 1 = process every frame, 2 = every other, etc.
-    process_every_n_frames: 1
+    # Maximum processing rate (Hz). 0 = unlimited (process every incoming frame).
+    max_fps: 8.0
 
     # ── Topics ────────────────────────────────────────────────────────────
     left_topic: "/mars/main_camera/left/image_raw"
