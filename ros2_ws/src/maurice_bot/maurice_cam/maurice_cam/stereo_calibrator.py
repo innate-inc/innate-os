@@ -56,6 +56,7 @@ from maurice_cam.calibration_utils import (
     setup_head_and_arm,
     save_calibration,
     prompt_save,
+    find_calibration_dir,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,6 +72,7 @@ PREPARE_MOVE_TIME_SEC = 2.5
 GRIPPER_ACTION_TIME_SEC = 1.0
 DEFAULT_PREPARE_SERVICE_NAME = "/mars/main_camera/prepare_stereo_calibration"
 DEFAULT_STOP_SERVICE_NAME = "/mars/main_camera/stop_stereo_calibration"
+DEFAULT_DELETE_SERVICE_NAME = "/mars/main_camera/delete_stereo_calibration"
 
 
 @dataclass
@@ -137,6 +139,7 @@ class StereoCalibrator(Node):
         self.declare_parameter('run_action_name', '/mars/main_camera/run_stereo_calibration')
         self.declare_parameter('prepare_service_name', DEFAULT_PREPARE_SERVICE_NAME)
         self.declare_parameter('stop_service_name', DEFAULT_STOP_SERVICE_NAME)
+        self.declare_parameter('delete_service_name', DEFAULT_DELETE_SERVICE_NAME)
         self.declare_parameter('prepare_move_time_sec', PREPARE_MOVE_TIME_SEC)
         self.declare_parameter('gripper_action_time_sec', GRIPPER_ACTION_TIME_SEC)
 
@@ -167,6 +170,7 @@ class StereoCalibrator(Node):
             self.get_parameter('prepare_service_name').value
         )
         self.stop_service_name = str(self.get_parameter('stop_service_name').value)
+        self.delete_service_name = str(self.get_parameter('delete_service_name').value)
         self.prepare_move_time_sec = float(
             self.get_parameter('prepare_move_time_sec').value
         )
@@ -264,6 +268,14 @@ class StereoCalibrator(Node):
             callback_group=self._control_cb_group,
         )
 
+        # Service to delete existing calibration file.
+        self._delete_service = self.create_service(
+            Trigger,
+            self.delete_service_name,
+            self._delete_calibration_service_callback,
+            callback_group=self._control_cb_group,
+        )
+
         if self.interactive and self.auto_start:
             # Set up head and arm for interactive calibration.
             setup_head_and_arm(self)
@@ -318,6 +330,9 @@ class StereoCalibrator(Node):
             )
             self.get_logger().info(
                 f"Stop service available on '{self.stop_service_name}'"
+            )
+            self.get_logger().info(
+                f"Delete service available on '{self.delete_service_name}'"
             )
 
     def _reset_calibration_session(self):
@@ -487,6 +502,46 @@ class StereoCalibrator(Node):
         self._request_stop_active_run("Stop service requested")
         response.success = True
         response.message = "Stop requested."
+        return response
+
+    def _delete_calibration_service_callback(self, request, response):
+        """Service callback to delete existing calibration file."""
+        del request
+
+        with self._active_goal_lock:
+            if self._active_goal is not None:
+                response.success = False
+                response.message = "Cannot delete calibration while calibration is running."
+                return response
+
+        # Find calibration directory using same logic as save_calibration
+        calib_dir = find_calibration_dir(self)
+        if calib_dir is None:
+            response.success = False
+            response.message = "No calibration directory found"
+            return response
+
+        # Use same filename as save_calibration
+        calib_file = calib_dir / 'stereo_calib.yaml'
+        
+        if not calib_file.exists():
+            response.success = False
+            response.message = f"Calibration file not found: {calib_file}"
+            return response
+
+        try:
+            # Rename to backup instead of deleting
+            timestamp = int(time.time())
+            backup_file = calib_file.parent / f"{calib_file.stem}.backup.{timestamp}{calib_file.suffix}"
+            calib_file.rename(backup_file)
+            self.get_logger().info(f"Backed up calibration file: {calib_file} -> {backup_file}")
+            response.success = True
+            response.message = f"Successfully backed up calibration file to: {backup_file}"
+        except Exception as e:
+            self.get_logger().error(f"Failed to backup calibration file: {e}")
+            response.success = False
+            response.message = f"Failed to backup calibration file: {e}"
+        
         return response
 
     def _execute_run_calibration(self, goal_handle):

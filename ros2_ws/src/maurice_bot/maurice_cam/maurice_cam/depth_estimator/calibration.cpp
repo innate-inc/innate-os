@@ -42,6 +42,14 @@ bool StereoDepthEstimator::initCalibrationFromCameraInfo()
   const auto& left  = *left_camera_info_;
   const auto& right = *right_camera_info_;
 
+  // Check if cameras are calibrated (K[0] == 0.0 indicates uncalibrated)
+  if (left.k[0] == 0.0 || right.k[0] == 0.0) {
+    RCLCPP_WARN(this->get_logger(), 
+                "Camera is uncalibrated (K[0] == 0.0). Depth estimation disabled.");
+    calibration_loaded_ = false;
+    return false;
+  }
+
   calib_width_  = static_cast<int>(left.width);
   calib_height_ = static_cast<int>(left.height);
   depth_scale_  = static_cast<double>(calib_width_) / static_cast<double>(image_width_);

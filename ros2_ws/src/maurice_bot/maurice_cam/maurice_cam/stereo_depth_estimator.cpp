@@ -215,7 +215,7 @@ void StereoDepthEstimator::syncCallback(
   if (!lock.owns_lock()) return;
 
   if (!vpi_initialized_ || !calibration_loaded_) {
-    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
                          "VPI or calibration not ready, skipping frame");
     return;
   }

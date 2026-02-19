@@ -743,7 +743,8 @@ void MainCameraDriver::checkCalibrationFile()
 
     // Check if anything actually changed (skip rebuild if identical file & mtime)
     auto new_write = std::filesystem::last_write_time(cal->filePath());
-    if (calibration_loaded_ && cal->filePath() == stereo_calib_->filePath()
+    if (calibration_loaded_ && stereo_calib_
+        && cal->filePath() == stereo_calib_->filePath()
         && new_write == calib_last_write_) {
       return;
     }
@@ -765,6 +766,29 @@ void MainCameraDriver::checkCalibrationFile()
   } catch (const std::exception& e) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
       "Calibration file watch: %s", e.what());
+    
+    // Set uncalibrated camera_info (all zeros) if previously loaded (e.g., file was deleted)
+    // Per ROS convention: K[0] == 0.0 indicates an uncalibrated camera
+    {
+      std::lock_guard<std::mutex> lock(calib_mutex_);
+      if (calibration_loaded_) {
+        stereo_calib_ = nullptr;
+        
+        // Create zeroed-out camera_info messages to indicate uncalibrated state
+        left_info_msg_ = sensor_msgs::msg::CameraInfo();
+        left_info_msg_.header.frame_id = frame_id_;
+        left_info_msg_.width = publish_left_width_;
+        left_info_msg_.height = publish_left_height_;
+        
+        right_info_msg_ = sensor_msgs::msg::CameraInfo();
+        right_info_msg_.header.frame_id = right_frame_id_;
+        right_info_msg_.width = publish_left_width_;
+        right_info_msg_.height = publish_left_height_;
+        
+        // Keep calibration_loaded_ = true so we continue publishing the zeroed messages
+        RCLCPP_INFO(this->get_logger(), "Calibration cleared - publishing uncalibrated camera_info (K[0]=0)");
+      }
+    }
   }
 }
 
