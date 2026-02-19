@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -236,6 +237,11 @@ private:
    */
   void applyAutoExposure(const cv::Mat& frame);
 
+  /**
+   * @brief Timer callback: check if stereo calibration file changed and reload.
+   */
+  void checkCalibrationFile();
+
   // ROS 2 publishers
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr left_pub_;   // Left camera raw
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr right_pub_;  // Right camera raw
@@ -249,6 +255,9 @@ private:
   sensor_msgs::msg::CameraInfo left_info_msg_;
   sensor_msgs::msg::CameraInfo right_info_msg_;
   bool calibration_loaded_{false};
+  std::mutex calib_mutex_;
+  rclcpp::TimerBase::SharedPtr calib_watch_timer_;
+  std::filesystem::file_time_type calib_last_write_;
 
   // Frame processing thread
   std::thread frame_thread_;

@@ -177,28 +177,17 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   jpeg_encoder_ = std::make_unique<JpegTurboEncoder>();
   RCLCPP_INFO(this->get_logger(), "TurboJPEG encoder initialized");
 
-  // Load stereo calibration and create camera_info publishers
-  try {
-    stereo_calib_ = StereoCalibration::load(data_directory_);
-    left_info_msg_  = stereo_calib_->buildLeftCameraInfo(frame_id_);
-    right_info_msg_ = stereo_calib_->buildRightCameraInfo(right_frame_id_);
-    calibration_loaded_ = true;
+  // Create camera_info publishers (always — calibration may arrive later via file watch)
+  auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
+  left_info_pub_  = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+    "/mars/main_camera/left/camera_info", sensor_qos);
+  right_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+    "/mars/main_camera/right/camera_info", sensor_qos);
 
-    auto sensor_qos = rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort);
-    left_info_pub_  = this->create_publisher<sensor_msgs::msg::CameraInfo>(
-      "/mars/main_camera/left/camera_info", sensor_qos);
-    right_info_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
-      "/mars/main_camera/right/camera_info", sensor_qos);
-
-    RCLCPP_INFO(this->get_logger(), "Stereo calibration loaded from: %s",
-                stereo_calib_->filePath().string().c_str());
-    RCLCPP_INFO(this->get_logger(), "  Calibration resolution: %dx%d",
-                stereo_calib_->calibWidth(), stereo_calib_->calibHeight());
-    RCLCPP_INFO(this->get_logger(), "  Publishing camera_info on left + right topics");
-  } catch (const std::exception& e) {
-    RCLCPP_WARN(this->get_logger(),
-      "Could not load stereo calibration: %s — camera_info will NOT be published", e.what());
-  }
+  // Load stereo calibration (initial attempt + watch for changes every 3s)
+  checkCalibrationFile();
+  calib_watch_timer_ = this->create_wall_timer(3s,
+    std::bind(&MainCameraDriver::checkCalibrationFile, this));
 
   // Initialize camera
   if (initializeCamera()) {
@@ -637,11 +626,14 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   right_pub_->publish(std::move(right_msg));
 
   // Publish camera_info with same timestamp
-  if (calibration_loaded_) {
-    left_info_msg_.header.stamp = current_time;
-    right_info_msg_.header.stamp = current_time;
-    left_info_pub_->publish(left_info_msg_);
-    right_info_pub_->publish(right_info_msg_);
+  {
+    std::lock_guard<std::mutex> lock(calib_mutex_);
+    if (calibration_loaded_) {
+      left_info_msg_.header.stamp = current_time;
+      right_info_msg_.header.stamp = current_time;
+      left_info_pub_->publish(left_info_msg_);
+      right_info_pub_->publish(right_info_msg_);
+    }
   }
   
   // Conditionally create and publish compressed image at specified interval
@@ -741,6 +733,39 @@ void MainCameraDriver::printFrameStats()
   RCLCPP_INFO(this->get_logger(), 
     "Frame Stats - FPS: %.1f (target: %.1f) | Jitter: %.1f ms | Error: %.1f ms | Samples: %zu | Exposure: %d | Gain: %d",
     current_fps, fps_, jitter_ms, timing_error_ms, frame_timestamps_.size(), current_exposure_, current_gain_);
+}
+
+void MainCameraDriver::checkCalibrationFile()
+{
+  try {
+    // Always load from scratch (re-discovers calibration dir + file)
+    auto cal = StereoCalibration::load(data_directory_);
+
+    // Check if anything actually changed (skip rebuild if identical file & mtime)
+    auto new_write = std::filesystem::last_write_time(cal->filePath());
+    if (calibration_loaded_ && cal->filePath() == stereo_calib_->filePath()
+        && new_write == calib_last_write_) {
+      return;
+    }
+
+    auto left_info  = cal->buildLeftCameraInfo(frame_id_);
+    auto right_info = cal->buildRightCameraInfo(right_frame_id_);
+
+    {
+      std::lock_guard<std::mutex> lock(calib_mutex_);
+      stereo_calib_   = cal;
+      left_info_msg_  = left_info;
+      right_info_msg_ = right_info;
+      calib_last_write_ = new_write;
+      calibration_loaded_ = true;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Stereo calibration (re)loaded: %s",
+                cal->filePath().string().c_str());
+  } catch (const std::exception& e) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 10000,
+      "Calibration file watch: %s", e.what());
+  }
 }
 
 // AutoExposureController Implementation
