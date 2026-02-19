@@ -32,7 +32,7 @@ GAME_STATE_FILE = Path.home() / "chess_game_state.json"
 # Handicap: White starts without the a1 rook (no queenside castling)
 HANDICAP_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/1NBQKBNR w Kkq - 0 1"
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
-CAPTURES_DIR = Path.home() / "innate-os/captures/detect_move"
+DATA_DIR = Path.home() / "innate-os/data/detect_move"
 
 
 def _load_env_file(env_path: Path) -> dict:
@@ -194,12 +194,12 @@ class DetectOpponentMove(Skill):
 
         # Save captures for debugging
         try:
-            CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
             ts = int(time.time())
             if main_b64:
-                (CAPTURES_DIR / f"main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
+                (DATA_DIR / f"main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
             if wrist_b64:
-                (CAPTURES_DIR / f"wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
+                (DATA_DIR / f"wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
         except Exception as e:
             self.logger.warning(f"[DetectOpponentMove] Failed to save captures: {e}")
 
@@ -230,16 +230,27 @@ class DetectOpponentMove(Skill):
     def _save_gemini_inputs(self, label: str, prompt: str, main_b64: str | None, wrist_b64: str | None):
         """Save the prompt and images sent to Gemini for debugging."""
         try:
-            CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
             ts = int(time.time())
-            (CAPTURES_DIR / f"{label}_prompt_{ts}.txt").write_text(prompt)
+            (DATA_DIR / f"{label}_prompt_{ts}.txt").write_text(prompt)
             if main_b64:
-                (CAPTURES_DIR / f"{label}_main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
+                (DATA_DIR / f"{label}_main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
             if wrist_b64:
-                (CAPTURES_DIR / f"{label}_wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
-            self.logger.info(f"[DetectOpponentMove] Saved {label} inputs to {CAPTURES_DIR}")
+                (DATA_DIR / f"{label}_wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
+            self.logger.info(f"[DetectOpponentMove] Saved {label} inputs to {DATA_DIR}")
         except Exception as e:
             self.logger.warning(f"[DetectOpponentMove] Failed to save {label} inputs: {e}")
+
+    def _save_gemini_response(self, label: str, result: dict):
+        """Save the Gemini response JSON for debugging."""
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            ts = int(time.time())
+            (DATA_DIR / f"{label}_response_{ts}.json").write_text(
+                json.dumps(result, indent=2)
+            )
+        except Exception as e:
+            self.logger.warning(f"[DetectOpponentMove] Failed to save {label} response: {e}")
 
     # ── Gemini calls ──────────────────────────────────────────────────
 
@@ -283,6 +294,7 @@ class DetectOpponentMove(Skill):
             )
             result = json.loads(response.text.strip())
             self.logger.info(f"[DetectOpponentMove] Stage 1 result: {result}")
+            self._save_gemini_response("stage1", result)
             return result
         except Exception as e:
             self.logger.error(f"[DetectOpponentMove] Gemini stage 1 failed: {e}")
@@ -325,6 +337,7 @@ class DetectOpponentMove(Skill):
             )
             result = json.loads(response.text.strip())
             self.logger.info(f"[DetectOpponentMove] Stage 2 result: {result}")
+            self._save_gemini_response("stage2", result)
             return result
         except Exception as e:
             self.logger.error(f"[DetectOpponentMove] Gemini stage 2 failed: {e}")
