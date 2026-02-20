@@ -13,20 +13,26 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
 
     // Parameters
     this->declare_parameter<std::string>("camera_symlink", "Arducam");
-    this->declare_parameter<int>("width", 640);
-    this->declare_parameter<int>("height", 480);
+    this->declare_parameter<int>("capture_width", 1920);
+    this->declare_parameter<int>("capture_height", 1080);
+    this->declare_parameter<int>("publish_width", 640);
+    this->declare_parameter<int>("publish_height", 480);
     this->declare_parameter<double>("fps", 30.0);
-    this->declare_parameter<std::string>("pixel_format", "YUYV");
+    this->declare_parameter<std::string>("pixel_format", "MJPG");
     this->declare_parameter<bool>("publish_compressed", false);
     this->declare_parameter<int>("compressed_frame_interval", 5);
+    this->declare_parameter<int>("hires_compressed_frame_interval", 1);
 
     // Get parameters
     std::string camera_symlink = this->get_parameter("camera_symlink").as_string();
-    width_ = this->get_parameter("width").as_int();
-    height_ = this->get_parameter("height").as_int();
+    capture_width_ = this->get_parameter("capture_width").as_int();
+    capture_height_ = this->get_parameter("capture_height").as_int();
+    publish_width_ = this->get_parameter("publish_width").as_int();
+    publish_height_ = this->get_parameter("publish_height").as_int();
     fps_ = this->get_parameter("fps").as_double();
     publish_compressed_ = this->get_parameter("publish_compressed").as_bool();
     compressed_frame_interval_ = this->get_parameter("compressed_frame_interval").as_int();
+    hires_compressed_frame_interval_ = this->get_parameter("hires_compressed_frame_interval").as_int();
 
     // Find camera symlink by pattern matching
     std::string camera_pattern = camera_symlink;
@@ -84,9 +90,10 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(this->get_logger(), "Camera pattern: %s", camera_pattern.c_str());
     RCLCPP_INFO(this->get_logger(), "Camera symlink: %s", symlink_path.c_str());
     RCLCPP_INFO(this->get_logger(), "Resolved device: %s", device_path_.c_str());
-    RCLCPP_INFO(this->get_logger(), "Resolution: %dx%d", width_, height_);
+    RCLCPP_INFO(this->get_logger(), "Capture resolution: %dx%d", capture_width_, capture_height_);
+    RCLCPP_INFO(this->get_logger(), "Publish resolution: %dx%d", publish_width_, publish_height_);
     RCLCPP_INFO(this->get_logger(), "FPS: %.1f", fps_);
-    RCLCPP_INFO(this->get_logger(), "Pixel Format: YUYV (via GStreamer)");
+    RCLCPP_INFO(this->get_logger(), "Pixel Format: MJPG (via GStreamer)");
 
     // Create publishers with sensor data QoS profile
     rclcpp::QoS qos = rclcpp::SensorDataQoS()
@@ -94,11 +101,15 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
         .best_effort()
         .durability_volatile();
 
+    // Standard (downscaled) topics
     image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/mars/arm/image_raw", qos);
-    
     if (publish_compressed_) {
         compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/mars/arm/image_raw/compressed", qos);
     }
+
+    // High-res (native 1080p) topics
+    hires_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/mars/arm/image_raw_hires", qos);
+    hires_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>("/mars/arm/image_raw_hires/compressed", qos);
 
     // Initialize camera with retry logic
     const int max_retries = 3;
@@ -181,10 +192,10 @@ bool ArmCameraDriver::initializeCamera() {
         RCLCPP_INFO(this->get_logger(), "  Actual resolution: %dx%d", actual_width, actual_height);
         RCLCPP_INFO(this->get_logger(), "  Actual FPS: %.1f", actual_fps);
 
-        if (actual_width != width_ || actual_height != height_) {
+        if (actual_width != capture_width_ || actual_height != capture_height_) {
             RCLCPP_WARN(this->get_logger(), 
                 "Resolution mismatch! Requested: %dx%d, Got: %dx%d",
-                width_, height_, actual_width, actual_height);
+                capture_width_, capture_height_, actual_width, actual_height);
         }
     }
 
@@ -192,9 +203,10 @@ bool ArmCameraDriver::initializeCamera() {
 }
 
 std::string ArmCameraDriver::createGStreamerPipeline() {
-    // GStreamer pipeline for YUYV capture
+    // GStreamer pipeline for MJPG capture at native high-res
     // v4l2src: capture from V4L2 device
-    // video/x-raw,format=YUY2: YUYV format (YUY2 is GStreamer's name for YUYV)
+    // image/jpeg: MJPG format from sensor (hardware compressed)
+    // jpegdec: decode JPEG to raw
     // videoconvert: convert to BGR for OpenCV
     // appsink: output to application
     //   max-buffers=1: only keep newest frame
@@ -203,10 +215,10 @@ std::string ArmCameraDriver::createGStreamerPipeline() {
     
     std::string pipeline = 
         "v4l2src device=" + device_path_ + " io-mode=2 do-timestamp=true ! "
-        "video/x-raw,format=YUY2,width=" + std::to_string(width_) + 
-        ",height=" + std::to_string(height_) + 
+        "image/jpeg,width=" + std::to_string(capture_width_) + 
+        ",height=" + std::to_string(capture_height_) + 
         ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! "
-        "videoconvert ! video/x-raw,format=BGR ! "
+        "jpegdec ! videoconvert ! video/x-raw,format=BGR ! "
         "appsink max-buffers=1 drop=true sync=false";
     
     return pipeline;
@@ -274,21 +286,59 @@ void ArmCameraDriver::frameProcessingLoop() {
 void ArmCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
     auto current_time = this->now();
     
-    // Create raw image message
-    auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
-    img_msg->header.stamp = current_time;
-    img_msg->header.frame_id = "arm_camera";
-    img_msg->height = frame.rows;
-    img_msg->width = frame.cols;
-    img_msg->encoding = "bgr8";
-    img_msg->is_bigendian = false;
-    img_msg->step = frame.cols * 3;
-    img_msg->data.assign(frame.data, frame.data + (frame.rows * img_msg->step));
+    // --- High-res (native 1080p) raw image ---
+    {
+        auto hires_msg = std::make_unique<sensor_msgs::msg::Image>();
+        hires_msg->header.stamp = current_time;
+        hires_msg->header.frame_id = "arm_camera";
+        hires_msg->height = frame.rows;
+        hires_msg->width = frame.cols;
+        hires_msg->encoding = "bgr8";
+        hires_msg->is_bigendian = false;
+        hires_msg->step = frame.cols * 3;
+        hires_msg->data.assign(frame.data, frame.data + (frame.rows * hires_msg->step));
+        hires_image_pub_->publish(std::move(hires_msg));
+    }
 
-    // Publish with std::move() for zero-copy intra-process communication
-    image_pub_->publish(std::move(img_msg));
+    // --- High-res compressed ---
+    hires_compressed_frame_counter_++;
+    if (hires_compressed_frame_counter_ >= hires_compressed_frame_interval_) {
+        hires_compressed_frame_counter_ = 0;
 
-    // Conditionally publish compressed image at specified interval
+        auto hires_comp = std::make_unique<sensor_msgs::msg::CompressedImage>();
+        hires_comp->header.stamp = current_time;
+        hires_comp->header.frame_id = "arm_camera";
+        hires_comp->format = "jpeg";
+
+        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 95};
+        if (cv::imencode(".jpg", frame, hires_comp->data, params)) {
+            hires_compressed_pub_->publish(std::move(hires_comp));
+        }
+    }
+
+    // --- Downscaled standard resolution ---
+    cv::Mat small;
+    if (frame.cols != publish_width_ || frame.rows != publish_height_) {
+        cv::resize(frame, small, cv::Size(publish_width_, publish_height_), 0, 0, cv::INTER_AREA);
+    } else {
+        small = frame;  // no resize needed
+    }
+
+    // Standard raw image
+    {
+        auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
+        img_msg->header.stamp = current_time;
+        img_msg->header.frame_id = "arm_camera";
+        img_msg->height = small.rows;
+        img_msg->width = small.cols;
+        img_msg->encoding = "bgr8";
+        img_msg->is_bigendian = false;
+        img_msg->step = small.cols * 3;
+        img_msg->data.assign(small.data, small.data + (small.rows * img_msg->step));
+        image_pub_->publish(std::move(img_msg));
+    }
+
+    // Standard compressed
     if (publish_compressed_) {
         compressed_frame_counter_++;
         if (compressed_frame_counter_ >= compressed_frame_interval_) {
@@ -300,7 +350,7 @@ void ArmCameraDriver::processAndPublishFrame(const cv::Mat& frame) {
             compressed_msg->format = "jpeg";
 
             std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
-            if (cv::imencode(".jpg", frame, compressed_msg->data, params)) {
+            if (cv::imencode(".jpg", small, compressed_msg->data, params)) {
                 compressed_pub_->publish(std::move(compressed_msg));
             } else {
                 RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
