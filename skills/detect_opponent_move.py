@@ -72,11 +72,9 @@ class DetectOpponentMove(Skill):
     main_image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
     wrist_image = RobotState(RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64)
 
-    # Observation pose: arm roughly centred above the board, looking down
-    OBS_X = 0.20
-    OBS_Y = -0.03
+    # Observation pose: X/Y come from board calibration; Z and angles are fixed
     OBS_Z = 0.18
-    OBS_PITCH = 1.57  # straight down
+    OBS_PITCH = 1.37  # straight down
     OBS_YAW = 0.0
     FIXED_ROLL = 0.0
 
@@ -91,6 +89,7 @@ class DetectOpponentMove(Skill):
         super().__init__(logger)
         self._cancelled = False
         self._init_gemini()
+        self._load_board_center()
 
     def _init_gemini(self):
         env_vars = _load_env_file(Path(__file__).parent / ".env.scan")
@@ -101,6 +100,29 @@ class DetectOpponentMove(Skill):
             self.logger.info("[DetectOpponentMove] Gemini configured")
         else:
             self.logger.warning("[DetectOpponentMove] GEMINI_API_KEY not set in .env.scan")
+
+    def _load_board_center(self):
+        """Compute board centre X/Y from calibration corners."""
+        self.obs_x = None
+        self.obs_y = None
+        try:
+            if CALIBRATION_FILE.exists():
+                cal = json.loads(CALIBRATION_FILE.read_text())
+                corners = [cal["top_left"], cal["top_right"],
+                           cal["bottom_left"], cal["bottom_right"]]
+                self.obs_x = sum(c["x"] for c in corners) / 4.0
+                self.obs_y = sum(c["y"] for c in corners) / 4.0
+                self.logger.info(
+                    f"[DetectOpponentMove] Board center from calibration: "
+                    f"x={self.obs_x:.4f}, y={self.obs_y:.4f}"
+                )
+            else:
+                self.logger.error(
+                    "[DetectOpponentMove] board_calibration.json not found — "
+                    "run board calibration first"
+                )
+        except Exception as e:
+            self.logger.error(f"[DetectOpponentMove] Failed to load calibration: {e}")
 
     # ── Metadata ──────────────────────────────────────────────────────
 
@@ -146,6 +168,10 @@ class DetectOpponentMove(Skill):
 
     def _move_to_observation_pose(self) -> bool:
         """Move arm above the board centre and tilt head down."""
+        if self.obs_x is None or self.obs_y is None:
+            self.logger.error("[DetectOpponentMove] No board calibration — cannot position arm")
+            return False
+
         # Open gripper fully so it doesn't occlude the wrist camera
         self.manipulation.open_gripper(100)
         time.sleep(0.5)
@@ -157,8 +183,8 @@ class DetectOpponentMove(Skill):
 
         self._send_feedback("Moving arm to observation pose...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=self.OBS_X,
-            y=self.OBS_Y,
+            x=self.obs_x,
+            y=self.obs_y,
             z=self.OBS_Z,
             roll=self.FIXED_ROLL,
             pitch=self.OBS_PITCH,
@@ -267,9 +293,7 @@ class DetectOpponentMove(Skill):
         prompt = (
             "You are analyzing a physical chess board to detect the opponent's last move.\n\n"
             f"{board_context}\n"
-            "I am providing camera images of the board:\n"
-            "- Image 1: Wide-angle main camera view of the board.\n"
-            "- Image 2: Close-up overhead wrist camera view of the board.\n\n"
+            "I am providing a close-up overhead wrist camera image of the board.\n\n"
             "Compare the CURRENT FEN state (the state BEFORE the opponent moved) "
             "with what you see in the images (the state AFTER the opponent moved).\n"
             "Identify which piece moved and where it went.\n\n"
@@ -280,13 +304,11 @@ class DetectOpponentMove(Skill):
         )
 
         contents = [prompt]
-        if main_b64:
-            contents.append(types.Part.from_bytes(data=base64.b64decode(main_b64), mime_type="image/jpeg"))
         if wrist_b64:
             contents.append(types.Part.from_bytes(data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
 
         # Save what we're sending to Gemini for debugging
-        self._save_gemini_inputs("stage1", prompt, main_b64, wrist_b64)
+        self._save_gemini_inputs("stage1", prompt, None, wrist_b64)
 
         try:
             response = self.gemini_client.models.generate_content(
@@ -316,7 +338,7 @@ class DetectOpponentMove(Skill):
             "You are analyzing a physical chess board to confirm which move was played.\n\n"
             f"{board_context}\n"
             f"The most likely moves are: {', '.join(candidates)}\n\n"
-            "I am providing two camera images (wide + close-up overhead).\n"
+            "I am providing a close-up overhead wrist camera image of the board.\n"
             "Look carefully at which squares changed and which piece is now where.\n\n"
             "Return ONLY JSON:\n"
             '{"move_uci": "<from_square><to_square>", "confidence": 0.0-1.0, '
@@ -324,13 +346,11 @@ class DetectOpponentMove(Skill):
         )
 
         contents = [prompt]
-        if main_b64:
-            contents.append(types.Part.from_bytes(data=base64.b64decode(main_b64), mime_type="image/jpeg"))
         if wrist_b64:
             contents.append(types.Part.from_bytes(data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
 
         # Save what we're sending to Gemini for debugging
-        self._save_gemini_inputs("stage2", prompt, main_b64, wrist_b64)
+        self._save_gemini_inputs("stage2", prompt, None, wrist_b64)
 
         try:
             response = self.gemini_client.models.generate_content(
