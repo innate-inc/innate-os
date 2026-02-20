@@ -71,33 +71,7 @@ def _build_training_params(
     return (params or None), None
 
 
-def _load_dotenv() -> Path | None:
-    """Load the first ``.env`` found walking up from cwd, then ``~/innate-os/.env``.
-
-    Already-set env vars are NOT overwritten.
-    Returns the path that was loaded, or ``None`` if no ``.env`` was found.
-    """
-    candidates: list[Path] = []
-    d = Path.cwd()
-    while True:
-        candidates.append(d / ".env")
-        if d.parent == d:
-            break
-        d = d.parent
-    candidates.append(Path.home() / "innate-os" / ".env")
-
-    for path in candidates:
-        if path.is_file():
-            for line in path.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip().strip("\"'")
-                os.environ.setdefault(key, value)
-            return path
-    return None
+from dotenv import find_dotenv, load_dotenv
 
 
 def _require_absolute(skill_dir: str) -> str | None:
@@ -114,8 +88,9 @@ class TrainingNode(Node):
 
     def __init__(self) -> None:
         super().__init__("innate_training")
-        env_path = _load_dotenv()
-        if env_path is not None:
+        env_path = find_dotenv(usecwd=True)
+        if env_path:
+            load_dotenv(env_path)
             self.get_logger().info(f"Loaded .env from {env_path}")
         else:
             self.get_logger().info("No .env file found")

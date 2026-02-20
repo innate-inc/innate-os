@@ -8,6 +8,7 @@ dependencies = [
     "click>=8.0",
     "zstandard>=0.20",
     "innate-auth-client",
+    "python-dotenv==1.2.1",
 ]
 
 [project.scripts]

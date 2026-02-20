@@ -52,35 +52,9 @@ from typing import Any
 
 import click
 
+from dotenv import load_dotenv
 
-def _load_dotenv() -> None:
-    """Load the first .env found: cwd, parent dir, ~/innate-os/.env.
-
-    Already-set env vars are NOT overwritten.
-    """
-    candidates: list[Path] = []
-    d = Path.cwd()
-    while True:
-        candidates.append(d / ".env")
-        if d.parent == d:
-            break
-        d = d.parent
-    candidates.append(Path.home() / "innate-os" / ".env")
-
-    for path in candidates:
-        if path.is_file():
-            for line in path.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, value = line.partition("=")
-                key = key.strip()
-                value = value.strip().strip("\"'")
-                os.environ.setdefault(key, value)
-            return  # stop after the first file found
-
-
-_load_dotenv()
+load_dotenv()
 
 logging.basicConfig(
     level=getattr(
