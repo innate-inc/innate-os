@@ -272,7 +272,7 @@ class ManipulationInterface:
 
             if blocking:
                 # Wait for the service to respond (motion completion)
-                rclpy.spin_until_future_complete(self.node, future, timeout_sec=duration)
+                rclpy.spin_until_future_complete(self.node, future, timeout_sec=duration + 1.0)
                 if future.result() is not None:
                     result = future.result()
                     if not result.success:

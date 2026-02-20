@@ -3,9 +3,9 @@
 Skill that detects the opponent's last chess move by comparing the known
 board state (FEN) against what the cameras currently see.
 
-Uses two images (main camera wide view + wrist camera overhead close-up)
-and asks Gemini to identify which legal move was played.  The board state
-is persisted in ~/chess_game_state.json.
+Uses a high-res 1080p wrist camera image (one-shot capture) and asks
+Gemini to identify which legal move was played.  The board state is
+persisted in ~/chess_game_state.json.
 """
 
 import base64
@@ -14,22 +14,25 @@ import time
 from pathlib import Path
 
 import chess
+import cv2
+import numpy as np
 from google import genai
 from google.genai import types
 
 from brain_client.skill_types import (
     Interface,
     InterfaceType,
-    RobotState,
-    RobotStateType,
     Skill,
     SkillResult,
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────
 GAME_STATE_FILE = Path.home() / "chess_game_state.json"
+
+# Handicap: White starts without the a1 rook (no queenside castling)
+HANDICAP_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/1NBQKBNR w Kkq - 0 1"
 CALIBRATION_FILE = Path.home() / "board_calibration.json"
-CAPTURES_DIR = Path.home() / "innate-os/captures/detect_move"
+DATA_DIR = Path.home() / "innate-os/data/detect_move"
 
 
 def _load_env_file(env_path: Path) -> dict:
@@ -66,20 +69,23 @@ class DetectOpponentMove(Skill):
 
     manipulation = Interface(InterfaceType.MANIPULATION)
     head = Interface(InterfaceType.HEAD)
-    main_image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
-    wrist_image = RobotState(RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64)
 
-    # Observation pose: arm roughly centred above the board, looking down
-    OBS_X = 0.20
-    OBS_Y = -0.03
+    # Observation pose: X/Y come from board calibration; Z and angles are fixed
     OBS_Z = 0.18
-    OBS_PITCH = 1.57  # straight down
+    OBS_PITCH = 1.37  # straight down
     OBS_YAW = 0.0
     FIXED_ROLL = 0.0
 
     # Head tilt for looking at the board (degrees, negative = down)
     HEAD_TILT_DOWN = -20
     HEAD_TILT_NEUTRAL = 0
+
+    # Fisheye correction for Arducam UC684 (~70° FOV)
+    # Approximate radial distortion coefficients [k1, k2, p1, p2, k3]
+    # Tune k1 (negative = barrel distortion removal): more negative = stronger correction
+    UNDISTORT_K1 = -0.35
+    UNDISTORT_K2 = 0.12
+    UNDISTORT_BALANCE = 0.0  # 0 = crop all black edges, 1 = keep everything
 
     # Confidence threshold: below this triggers a second Gemini call
     CONFIDENCE_THRESHOLD = 0.7
@@ -88,6 +94,7 @@ class DetectOpponentMove(Skill):
         super().__init__(logger)
         self._cancelled = False
         self._init_gemini()
+        self._load_board_center()
 
     def _init_gemini(self):
         env_vars = _load_env_file(Path(__file__).parent / ".env.scan")
@@ -98,6 +105,29 @@ class DetectOpponentMove(Skill):
             self.logger.info("[DetectOpponentMove] Gemini configured")
         else:
             self.logger.warning("[DetectOpponentMove] GEMINI_API_KEY not set in .env.scan")
+
+    def _load_board_center(self):
+        """Compute board centre X/Y from calibration corners."""
+        self.obs_x = None
+        self.obs_y = None
+        try:
+            if CALIBRATION_FILE.exists():
+                cal = json.loads(CALIBRATION_FILE.read_text())
+                corners = [cal["top_left"], cal["top_right"],
+                           cal["bottom_left"], cal["bottom_right"]]
+                self.obs_x = sum(c["x"] for c in corners) / 4.0
+                self.obs_y = sum(c["y"] for c in corners) / 4.0
+                self.logger.info(
+                    f"[DetectOpponentMove] Board center from calibration: "
+                    f"x={self.obs_x:.4f}, y={self.obs_y:.4f}"
+                )
+            else:
+                self.logger.error(
+                    "[DetectOpponentMove] board_calibration.json not found — "
+                    "run board calibration first"
+                )
+        except Exception as e:
+            self.logger.error(f"[DetectOpponentMove] Failed to load calibration: {e}")
 
     # ── Metadata ──────────────────────────────────────────────────────
 
@@ -126,24 +156,10 @@ class DetectOpponentMove(Skill):
             self.logger.error(f"[DetectOpponentMove] Failed to load game state: {e}")
             return None
 
-    def _save_game_state(self, fen: str, move_history: list, last_move: str, robot_color: str):
-        """Persist game state to JSON."""
-        turn = "white" if " w " in fen else "black"
-        state = {
-            "fen": fen,
-            "move_history": move_history,
-            "last_detected_move": last_move,
-            "turn": turn,
-            "robot_color": robot_color,
-        }
-        GAME_STATE_FILE.write_text(json.dumps(state, indent=2))
-        self.logger.info(f"[DetectOpponentMove] State saved: {GAME_STATE_FILE}")
-
     def _init_game_state(self, robot_color: str) -> dict:
-        """Create a fresh game state with the standard starting position."""
-        fen = chess.STARTING_FEN
+        """Create a fresh game state with the handicap starting position."""
         state = {
-            "fen": fen,
+            "fen": HANDICAP_FEN,
             "move_history": [],
             "last_detected_move": None,
             "turn": "white",
@@ -157,6 +173,14 @@ class DetectOpponentMove(Skill):
 
     def _move_to_observation_pose(self) -> bool:
         """Move arm above the board centre and tilt head down."""
+        if self.obs_x is None or self.obs_y is None:
+            self.logger.error("[DetectOpponentMove] No board calibration — cannot position arm")
+            return False
+
+        # Open gripper fully so it doesn't occlude the wrist camera
+        self.manipulation.open_gripper(100)
+        time.sleep(0.5)
+
         # Tilt head down to look at the board
         if self.head:
             self.head.set_position(self.HEAD_TILT_DOWN)
@@ -164,16 +188,17 @@ class DetectOpponentMove(Skill):
 
         self._send_feedback("Moving arm to observation pose...")
         success = self.manipulation.move_to_cartesian_pose(
-            x=self.OBS_X,
-            y=self.OBS_Y,
+            x=self.obs_x,
+            y=self.obs_y,
             z=self.OBS_Z,
             roll=self.FIXED_ROLL,
             pitch=self.OBS_PITCH,
             yaw=self.OBS_YAW,
             duration=2.0,
+            blocking=True,
         )
         if success:
-            time.sleep(2.5)
+            time.sleep(0.5)  # let camera auto-exposure settle
         return success
 
     def _go_to_safe_pose(self):
@@ -189,32 +214,87 @@ class DetectOpponentMove(Skill):
         )
         if self.head:
             self.head.set_position(self.HEAD_TILT_NEUTRAL)
-        time.sleep(2.5)
+        time.sleep(1.5)
 
     # ── Image capture ─────────────────────────────────────────────────
 
-    def _capture_images(self) -> tuple:
-        """Grab latest main + wrist camera images.
+    def _undistort_image(self, img_b64: str) -> str:
+        """Apply approximate barrel-distortion correction to a base64 JPEG.
 
-        Returns (main_b64, wrist_b64). Either may be None.
+        Uses OpenCV's undistort with estimated coefficients for the
+        Arducam UC684 lens.  Returns corrected image as base64 JPEG.
+        """
+        raw = base64.b64decode(img_b64)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            self.logger.warning("[DetectOpponentMove] Failed to decode image for undistort")
+            return img_b64
+
+        h, w = img.shape[:2]
+
+        # Approximate intrinsic matrix (estimate focal length from image width)
+        # For ~70° horizontal FOV: fx ≈ w / (2 * tan(35°)) ≈ w * 0.714
+        fx = fy = w * 0.714
+        cx, cy = w / 2.0, h / 2.0
+        camera_matrix = np.array([
+            [fx, 0, cx],
+            [0, fy, cy],
+            [0,  0,  1],
+        ], dtype=np.float64)
+
+        dist_coeffs = np.array([
+            self.UNDISTORT_K1,
+            self.UNDISTORT_K2,
+            0.0,   # p1 (tangential)
+            0.0,   # p2 (tangential)
+            0.0,   # k3
+        ], dtype=np.float64)
+
+        # Compute optimal new camera matrix (alpha=BALANCE: 0=crop, 1=keep all)
+        new_matrix, roi = cv2.getOptimalNewCameraMatrix(
+            camera_matrix, dist_coeffs, (w, h), self.UNDISTORT_BALANCE
+        )
+
+        undistorted = cv2.undistort(img, camera_matrix, dist_coeffs, None, new_matrix)
+
+        # Crop to valid ROI if available
+        rx, ry, rw, rh = roi
+        if rw > 0 and rh > 0:
+            undistorted = undistorted[ry:ry+rh, rx:rx+rw]
+
+        # Re-encode to JPEG at high quality
+        _, buf = cv2.imencode(".jpg", undistorted, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        return base64.b64encode(buf.tobytes()).decode("utf-8")
+
+    def _capture_images(self) -> tuple:
+        """Capture a single high-res 1080p frame from the wrist camera.
+
+        Returns (main_b64, wrist_b64). main_b64 is always None (wrist only).
         """
         # Give the camera a moment to refresh after arm settles
-        time.sleep(0.5)
-        main_b64 = self.main_image
-        wrist_b64 = self.wrist_image
+        time.sleep(0.3)
 
-        # Save captures for debugging
+        self.logger.info("[DetectOpponentMove] Capturing high-res wrist frame...")
+        wrist_b64 = self.capture_hires_wrist_frame(timeout_sec=3.0)
+
+        if wrist_b64:
+            self.logger.info("[DetectOpponentMove] Got high-res wrist frame, applying undistort...")
+            wrist_b64 = self._undistort_image(wrist_b64)
+            self.logger.info("[DetectOpponentMove] Undistort complete")
+        else:
+            self.logger.warning("[DetectOpponentMove] Failed to capture high-res wrist frame")
+
+        # Save capture for debugging
         try:
-            CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
             ts = int(time.time())
-            if main_b64:
-                (CAPTURES_DIR / f"main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
             if wrist_b64:
-                (CAPTURES_DIR / f"wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
+                (DATA_DIR / f"wrist_hires_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
         except Exception as e:
-            self.logger.warning(f"[DetectOpponentMove] Failed to save captures: {e}")
+            self.logger.warning(f"[DetectOpponentMove] Failed to save capture: {e}")
 
-        return main_b64, wrist_b64
+        return None, wrist_b64
 
     # ── Board context builder ─────────────────────────────────────────
 
@@ -241,16 +321,27 @@ class DetectOpponentMove(Skill):
     def _save_gemini_inputs(self, label: str, prompt: str, main_b64: str | None, wrist_b64: str | None):
         """Save the prompt and images sent to Gemini for debugging."""
         try:
-            CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
             ts = int(time.time())
-            (CAPTURES_DIR / f"{label}_prompt_{ts}.txt").write_text(prompt)
+            (DATA_DIR / f"{label}_prompt_{ts}.txt").write_text(prompt)
             if main_b64:
-                (CAPTURES_DIR / f"{label}_main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
+                (DATA_DIR / f"{label}_main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
             if wrist_b64:
-                (CAPTURES_DIR / f"{label}_wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
-            self.logger.info(f"[DetectOpponentMove] Saved {label} inputs to {CAPTURES_DIR}")
+                (DATA_DIR / f"{label}_wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
+            self.logger.info(f"[DetectOpponentMove] Saved {label} inputs to {DATA_DIR}")
         except Exception as e:
             self.logger.warning(f"[DetectOpponentMove] Failed to save {label} inputs: {e}")
+
+    def _save_gemini_response(self, label: str, result: dict):
+        """Save the Gemini response JSON for debugging."""
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            ts = int(time.time())
+            (DATA_DIR / f"{label}_response_{ts}.json").write_text(
+                json.dumps(result, indent=2)
+            )
+        except Exception as e:
+            self.logger.warning(f"[DetectOpponentMove] Failed to save {label} response: {e}")
 
     # ── Gemini calls ──────────────────────────────────────────────────
 
@@ -262,9 +353,7 @@ class DetectOpponentMove(Skill):
         prompt = (
             "You are analyzing a physical chess board to detect the opponent's last move.\n\n"
             f"{board_context}\n"
-            "I am providing camera images of the board:\n"
-            "- Image 1: Wide-angle main camera view of the board.\n"
-            "- Image 2: Close-up overhead wrist camera view of the board.\n\n"
+            "I am providing a close-up overhead wrist camera image of the board.\n\n"
             "Compare the CURRENT FEN state (the state BEFORE the opponent moved) "
             "with what you see in the images (the state AFTER the opponent moved).\n"
             "Identify which piece moved and where it went.\n\n"
@@ -275,17 +364,15 @@ class DetectOpponentMove(Skill):
         )
 
         contents = [prompt]
-        if main_b64:
-            contents.append(types.Part.from_bytes(data=base64.b64decode(main_b64), mime_type="image/jpeg"))
         if wrist_b64:
             contents.append(types.Part.from_bytes(data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
 
         # Save what we're sending to Gemini for debugging
-        self._save_gemini_inputs("stage1", prompt, main_b64, wrist_b64)
+        self._save_gemini_inputs("stage1", prompt, None, wrist_b64)
 
         try:
             response = self.gemini_client.models.generate_content(
-                model="gemini-3-pro-preview",
+                model="gemini-3.1-pro-preview",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -294,6 +381,7 @@ class DetectOpponentMove(Skill):
             )
             result = json.loads(response.text.strip())
             self.logger.info(f"[DetectOpponentMove] Stage 1 result: {result}")
+            self._save_gemini_response("stage1", result)
             return result
         except Exception as e:
             self.logger.error(f"[DetectOpponentMove] Gemini stage 1 failed: {e}")
@@ -310,7 +398,7 @@ class DetectOpponentMove(Skill):
             "You are analyzing a physical chess board to confirm which move was played.\n\n"
             f"{board_context}\n"
             f"The most likely moves are: {', '.join(candidates)}\n\n"
-            "I am providing two camera images (wide + close-up overhead).\n"
+            "I am providing a close-up overhead wrist camera image of the board.\n"
             "Look carefully at which squares changed and which piece is now where.\n\n"
             "Return ONLY JSON:\n"
             '{"move_uci": "<from_square><to_square>", "confidence": 0.0-1.0, '
@@ -318,48 +406,28 @@ class DetectOpponentMove(Skill):
         )
 
         contents = [prompt]
-        if main_b64:
-            contents.append(types.Part.from_bytes(data=base64.b64decode(main_b64), mime_type="image/jpeg"))
         if wrist_b64:
             contents.append(types.Part.from_bytes(data=base64.b64decode(wrist_b64), mime_type="image/jpeg"))
 
         # Save what we're sending to Gemini for debugging
-        self._save_gemini_inputs("stage2", prompt, main_b64, wrist_b64)
+        self._save_gemini_inputs("stage2", prompt, None, wrist_b64)
 
         try:
             response = self.gemini_client.models.generate_content(
-                model="gemini-3-pro-preview",
+                model="gemini-3-flash-preview",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                    thinking_config=types.ThinkingConfig(thinking_budget=512),
                 ),
             )
             result = json.loads(response.text.strip())
             self.logger.info(f"[DetectOpponentMove] Stage 2 result: {result}")
+            self._save_gemini_response("stage2", result)
             return result
         except Exception as e:
             self.logger.error(f"[DetectOpponentMove] Gemini stage 2 failed: {e}")
             return None
-
-    # ── Validation & application ──────────────────────────────────────
-
-    def _validate_and_apply(self, board: chess.Board, move_uci: str) -> tuple:
-        """Validate a UCI move and apply it.
-
-        Returns (new_fen, san_str) or raises ValueError.
-        """
-        try:
-            move = chess.Move.from_uci(move_uci)
-        except ValueError as err:
-            raise ValueError(f"Invalid UCI notation: {move_uci}") from err
-
-        if move not in board.legal_moves:
-            raise ValueError(f"Move {move_uci} is not legal. Legal moves: {[m.uci() for m in board.legal_moves]}")
-
-        san = board.san(move)
-        board.push(move)
-        return board.fen(), san
 
     # ── Main execute ──────────────────────────────────────────────────
 
@@ -401,7 +469,7 @@ class DetectOpponentMove(Skill):
         self._send_feedback("Capturing images...")
         main_b64, wrist_b64 = self._capture_images()
 
-        if not main_b64 and not wrist_b64:
+        if not wrist_b64:
             self._go_to_safe_pose()
             return "No camera images available", SkillResult.FAILURE
 
@@ -451,23 +519,25 @@ class DetectOpponentMove(Skill):
                     reasoning = result2.get("reasoning", reasoning)
                     self.logger.info(f"[DetectOpponentMove] Stage 2 override: move={move_uci} conf={confidence:.2f}")
 
-        # ── 7. Validate and apply ──
-        self._send_feedback(f"Detected move: {move_uci} (confidence: {confidence:.0%})")
-
-        try:
-            new_fen, san = self._validate_and_apply(board, move_uci)
-        except ValueError as e:
+        # ── 7. Validate move is legal (but don't apply — agent calls update_chess_state) ──
+        if move_uci not in legal_moves:
             self._go_to_safe_pose()
-            return f"Move validation failed: {e}", SkillResult.FAILURE
+            return (
+                f"Detected move {move_uci} is not legal. "
+                f"Legal moves: {legal_moves}",
+                SkillResult.FAILURE,
+            )
 
-        # ── 8. Save state ──
-        move_history.append(move_uci)
-        self._save_game_state(new_fen, move_history, move_uci, robot_color)
+        san = board.san(chess.Move.from_uci(move_uci))
 
-        # ── 9. Return to safe pose ──
+        # ── 8. Return to safe pose ──
         self._go_to_safe_pose()
 
-        msg = f"Opponent played {san} ({move_uci}). Confidence: {confidence:.0%}. {reasoning}"
+        msg = (
+            f"Detected opponent move: {san} ({move_uci}). "
+            f"Confidence: {confidence:.0%}. {reasoning}. "
+            f"Call update_chess_state(move_uci=\"{move_uci}\") to apply it."
+        )
         self._send_feedback(msg)
         return msg, SkillResult.SUCCESS
 

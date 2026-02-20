@@ -16,16 +16,28 @@ def generate_launch_description():
         description='Camera symlink pattern (searches for symlinks containing this pattern in /dev/v4l/by-id/)'
     )
     
-    width_arg = DeclareLaunchArgument(
-        'width',
-        default_value='640',
-        description='Camera capture width'
+    capture_width_arg = DeclareLaunchArgument(
+        'capture_width',
+        default_value='1920',
+        description='Camera capture width (native sensor resolution)'
     )
     
-    height_arg = DeclareLaunchArgument(
-        'height',
+    capture_height_arg = DeclareLaunchArgument(
+        'capture_height',
+        default_value='1080',
+        description='Camera capture height (native sensor resolution)'
+    )
+    
+    publish_width_arg = DeclareLaunchArgument(
+        'publish_width',
+        default_value='640',
+        description='Standard topic publish width (downscaled)'
+    )
+    
+    publish_height_arg = DeclareLaunchArgument(
+        'publish_height',
         default_value='480',
-        description='Camera capture height'
+        description='Standard topic publish height (downscaled)'
     )
     
     fps_arg = DeclareLaunchArgument(
@@ -36,7 +48,7 @@ def generate_launch_description():
     
     pixel_format_arg = DeclareLaunchArgument(
         'pixel_format',
-        default_value='YUYV',
+        default_value='MJPG',
         description='Camera pixel format'
     )
     
@@ -49,7 +61,13 @@ def generate_launch_description():
     compressed_frame_interval_arg = DeclareLaunchArgument(
         'compressed_frame_interval',
         default_value='6',
-        description='Publish compressed image every N frames'
+        description='Publish standard compressed image every N frames'
+    )
+    
+    hires_compressed_frame_interval_arg = DeclareLaunchArgument(
+        'hires_compressed_frame_interval',
+        default_value='1',
+        description='Publish high-res compressed image every N frames'
     )
     
     use_sim_time_arg = DeclareLaunchArgument(
@@ -67,12 +85,15 @@ def generate_launch_description():
         parameters=[
             {
                 'camera_symlink': LaunchConfiguration('camera_symlink'),
-                'width': LaunchConfiguration('width'),
-                'height': LaunchConfiguration('height'),
+                'capture_width': LaunchConfiguration('capture_width'),
+                'capture_height': LaunchConfiguration('capture_height'),
+                'publish_width': LaunchConfiguration('publish_width'),
+                'publish_height': LaunchConfiguration('publish_height'),
                 'fps': LaunchConfiguration('fps'),
                 'pixel_format': LaunchConfiguration('pixel_format'),
                 'publish_compressed': LaunchConfiguration('publish_compressed'),
                 'compressed_frame_interval': LaunchConfiguration('compressed_frame_interval'),
+                'hires_compressed_frame_interval': LaunchConfiguration('hires_compressed_frame_interval'),
                 'use_sim_time': LaunchConfiguration('use_sim_time')
             }
         ],
@@ -83,12 +104,15 @@ def generate_launch_description():
     
     return LaunchDescription([
         camera_symlink_arg,
-        width_arg,
-        height_arg,
+        capture_width_arg,
+        capture_height_arg,
+        publish_width_arg,
+        publish_height_arg,
         fps_arg,
         pixel_format_arg,
         publish_compressed_arg,
         compressed_frame_interval_arg,
+        hires_compressed_frame_interval_arg,
         use_sim_time_arg,
         arm_camera_driver_node
     ])

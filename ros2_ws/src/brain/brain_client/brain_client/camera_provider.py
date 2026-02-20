@@ -16,6 +16,7 @@ import rclpy
 import rclpy.executors
 from rclpy.node import Node
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
+from rclpy.subscription import Subscription
 from sensor_msgs.msg import CompressedImage
 
 
@@ -44,7 +45,7 @@ class CameraProvider(Node):
 
         self.create_subscription(
             CompressedImage,
-            "/mars/main_camera/image/compressed",
+            "/mars/main_camera/left/image_raw/compressed",
             self._main_camera_cb,
             image_qos,
         )
@@ -114,6 +115,43 @@ class CameraProvider(Node):
     def last_wrist_camera_raw(self) -> bytes | None:
         """Return the latest wrist camera JPEG bytes, or None."""
         return self._wrist_camera_raw
+
+    # ---- one-shot high-res capture ----
+
+    def capture_hires_wrist_frame(self, timeout_sec: float = 3.0) -> str | None:
+        """Subscribe to the high-res wrist topic, grab one frame, unsubscribe.
+
+        Returns base64-encoded JPEG string, or None on timeout.
+        """
+        result_holder: list[bytes] = []
+        event = threading.Event()
+
+        def _cb(msg: CompressedImage):
+            if not event.is_set():
+                result_holder.append(bytes(msg.data))
+                event.set()
+
+        image_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        sub: Subscription = self.create_subscription(
+            CompressedImage,
+            "/mars/arm/image_raw_hires/compressed",
+            _cb,
+            image_qos,
+        )
+
+        try:
+            event.wait(timeout=timeout_sec)
+        finally:
+            self.destroy_subscription(sub)
+
+        if result_holder:
+            return base64.b64encode(result_holder[0]).decode("utf-8")
+        return None
 
     # ---- cleanup ----
 
