@@ -1,6 +1,7 @@
 """
 Download run results (outputs/checkpoints).
 """
+
 from __future__ import annotations
 
 import logging
@@ -69,7 +70,9 @@ def download_results(
             stage=ProgressStage.DOWNLOADING,
             message=f"[{idx}/{total}] Downloading {filename}…",
             file_progress=FileProgress(
-                filename=filename, index=idx, total=total,
+                filename=filename,
+                index=idx,
+                total=total,
             ),
             skill_id=skill_id,
             run_id=run_id,
@@ -77,7 +80,8 @@ def download_results(
 
         try:
             for fname, received, file_total in client.download_signed_url(
-                signed_url, str(local_path),
+                signed_url,
+                str(local_path),
             ):
                 yield ProgressUpdate(
                     stage=ProgressStage.DOWNLOADING,
@@ -86,8 +90,11 @@ def download_results(
                         f"{received / 1e6:.1f}/{file_total / 1e6:.1f} MB"
                     ),
                     file_progress=FileProgress(
-                        filename=filename, index=idx, total=total,
-                        bytes_done=received, bytes_total=file_total,
+                        filename=filename,
+                        index=idx,
+                        total=total,
+                        bytes_done=received,
+                        bytes_total=file_total,
                     ),
                     skill_id=skill_id,
                     run_id=run_id,
@@ -103,7 +110,10 @@ def download_results(
                 stage=ProgressStage.DOWNLOADING,
                 message=f"[{idx}/{total}] Downloaded {filename}",
                 file_progress=FileProgress(
-                    filename=filename, index=idx, total=total, done=True,
+                    filename=filename,
+                    index=idx,
+                    total=total,
+                    done=True,
                 ),
                 skill_id=skill_id,
                 run_id=run_id,
@@ -113,7 +123,10 @@ def download_results(
                 stage=ProgressStage.ERROR,
                 message=f"[{idx}/{total}] Download failed for {filename}: {e}",
                 file_progress=FileProgress(
-                    filename=filename, index=idx, total=total, error=str(e),
+                    filename=filename,
+                    index=idx,
+                    total=total,
+                    error=str(e),
                 ),
                 skill_id=skill_id,
                 run_id=run_id,

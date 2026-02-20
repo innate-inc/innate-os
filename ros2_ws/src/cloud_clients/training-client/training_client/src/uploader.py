@@ -9,6 +9,7 @@ Each file goes through:
   2. upload to signed PUT URL
   3. verify via HEAD on signed download URL
 """
+
 from __future__ import annotations
 
 import logging
@@ -66,12 +67,17 @@ def upload_data_files(
         source_path = source_dir / name
         zst_name = name + ".zst"
         download_url = download_urls.get(zst_name) or download_urls.get(name)
-        if download_url and _is_already_uploaded(client, source_path, download_url, config):
+        if download_url and _is_already_uploaded(
+            client, source_path, download_url, config
+        ):
             yield ProgressUpdate(
                 stage=ProgressStage.UPLOADING,
                 message=f"[{idx}/{total}] {name} already uploaded, skipping",
                 file_progress=FileProgress(
-                    filename=name, index=idx, total=total, done=True,
+                    filename=name,
+                    index=idx,
+                    total=total,
+                    done=True,
                 ),
             )
         else:
@@ -99,7 +105,9 @@ def upload_data_files(
             yield ProgressUpdate(
                 stage=ProgressStage.COMPRESSING,
                 message=f"[{first_idx}/{total}] Compressing {first_name}…",
-                file_progress=FileProgress(filename=first_name, index=first_idx, total=total),
+                file_progress=FileProgress(
+                    filename=first_name, index=first_idx, total=total
+                ),
             )
             pending_future = pool.submit(_compress_one, source_dir / first_name, config)
 
@@ -113,7 +121,10 @@ def upload_data_files(
                     stage=ProgressStage.ERROR,
                     message=f"[{idx}/{total}] Compression failed for {name}: {e}",
                     file_progress=FileProgress(
-                        filename=name, index=idx, total=total, error=str(e),
+                        filename=name,
+                        index=idx,
+                        total=total,
+                        error=str(e),
                     ),
                     error=str(e),
                 )
@@ -126,9 +137,13 @@ def upload_data_files(
                 yield ProgressUpdate(
                     stage=ProgressStage.COMPRESSING,
                     message=f"[{next_idx}/{total}] Compressing {next_name}…",
-                    file_progress=FileProgress(filename=next_name, index=next_idx, total=total),
+                    file_progress=FileProgress(
+                        filename=next_name, index=next_idx, total=total
+                    ),
                 )
-                pending_future = pool.submit(_compress_one, source_dir / next_name, config)
+                pending_future = pool.submit(
+                    _compress_one, source_dir / next_name, config
+                )
                 pending_idx, pending_name = next_idx, next_name
             else:
                 pending_future = None
@@ -151,14 +166,17 @@ def upload_data_files(
                 stage=ProgressStage.UPLOADING,
                 message=f"[{idx}/{total}] Uploading {name} ({zst_size / 1e6:.1f} MB)…",
                 file_progress=FileProgress(
-                    filename=name, index=idx, total=total,
+                    filename=name,
+                    index=idx,
+                    total=total,
                     bytes_total=zst_size,
                 ),
             )
 
             try:
                 for fname, sent, total_bytes in client.upload_to_signed_url(
-                    upload_url, str(zst_path),
+                    upload_url,
+                    str(zst_path),
                 ):
                     yield ProgressUpdate(
                         stage=ProgressStage.UPLOADING,
@@ -167,8 +185,11 @@ def upload_data_files(
                             f"{sent / 1e6:.1f}/{total_bytes / 1e6:.1f} MB"
                         ),
                         file_progress=FileProgress(
-                            filename=name, index=idx, total=total,
-                            bytes_done=sent, bytes_total=total_bytes,
+                            filename=name,
+                            index=idx,
+                            total=total,
+                            bytes_done=sent,
+                            bytes_total=total_bytes,
                         ),
                     )
             except Exception as e:
@@ -176,7 +197,10 @@ def upload_data_files(
                     stage=ProgressStage.ERROR,
                     message=f"[{idx}/{total}] Upload failed for {name}: {e}",
                     file_progress=FileProgress(
-                        filename=name, index=idx, total=total, error=str(e),
+                        filename=name,
+                        index=idx,
+                        total=total,
+                        error=str(e),
                     ),
                     error=str(e),
                 )
@@ -186,8 +210,12 @@ def upload_data_files(
                 stage=ProgressStage.UPLOADING,
                 message=f"[{idx}/{total}] Uploaded {name}",
                 file_progress=FileProgress(
-                    filename=name, index=idx, total=total,
-                    bytes_done=zst_size, bytes_total=zst_size, done=True,
+                    filename=name,
+                    index=idx,
+                    total=total,
+                    bytes_done=zst_size,
+                    bytes_total=zst_size,
+                    done=True,
                 ),
             )
 
@@ -199,9 +227,7 @@ def upload_data_files(
 
     for idx, name in enumerate(filenames, start=1):
         zst_name = name + ".zst"
-        zst_path = (source_dir / name).with_suffix(
-            (source_dir / name).suffix + ".zst"
-        )
+        zst_path = (source_dir / name).with_suffix((source_dir / name).suffix + ".zst")
         download_url = download_urls.get(zst_name) or download_urls.get(name)
 
         if not download_url:

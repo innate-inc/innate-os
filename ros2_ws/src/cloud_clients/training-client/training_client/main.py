@@ -6,6 +6,7 @@ Import and use in your own scripts::
     from training_client.main import create_manager
     manager = create_manager("https://server.example.com", "my-token")
 """
+
 from __future__ import annotations
 
 from typing import Any

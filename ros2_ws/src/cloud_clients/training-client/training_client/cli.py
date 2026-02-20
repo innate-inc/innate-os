@@ -83,12 +83,20 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 logging.basicConfig(
-    level=getattr(logging, os.environ.get("LOG_LEVEL", "WARNING").upper(), logging.WARNING),
+    level=getattr(
+        logging, os.environ.get("LOG_LEVEL", "WARNING").upper(), logging.WARNING
+    ),
     format="%(levelname)s %(name)s: %(message)s",
 )
 
 from training_client.src.skill_manager import SkillManager, read_skill_id
-from training_client.src.types import ClientConfig, DEFAULT_AUTH_ISSUER_URL, DEFAULT_SERVER_URL, ProgressStage, ProgressUpdate
+from training_client.src.types import (
+    ClientConfig,
+    DEFAULT_AUTH_ISSUER_URL,
+    DEFAULT_SERVER_URL,
+    ProgressStage,
+    ProgressUpdate,
+)
 
 
 def _make_manager(ctx: click.Context) -> SkillManager:
@@ -125,17 +133,29 @@ def _same_except_bytes(a: ProgressUpdate | None, b: ProgressUpdate) -> bool:
     """
     if a is None:
         return False
-    if (a.stage, a.skill_id, a.run_id, a.error) != \
-       (b.stage, b.skill_id, b.run_id, b.error):
+    if (a.stage, a.skill_id, a.run_id, a.error) != (
+        b.stage,
+        b.skill_id,
+        b.run_id,
+        b.error,
+    ):
         return False
     fa, fb = a.file_progress, b.file_progress
     if fa is None or fb is None:
         return False
-    return (fa.filename, fa.index, fa.total, fa.bytes_total, fa.done, fa.error) == \
-           (fb.filename, fb.index, fb.total, fb.bytes_total, fb.done, fb.error)
+    return (fa.filename, fa.index, fa.total, fa.bytes_total, fa.done, fa.error) == (
+        fb.filename,
+        fb.index,
+        fb.total,
+        fb.bytes_total,
+        fb.done,
+        fb.error,
+    )
 
 
-def _print_progress(updates: Generator[ProgressUpdate, None, Any]) -> ProgressUpdate | None:
+def _print_progress(
+    updates: Generator[ProgressUpdate, None, Any],
+) -> ProgressUpdate | None:
     """Consume a progress generator, printing each update to stdout."""
     result: ProgressUpdate | None = None
     overwriting = False
@@ -165,18 +185,30 @@ def _print_progress(updates: Generator[ProgressUpdate, None, Any]) -> ProgressUp
 
 
 @click.group()
-@click.option("--server", "-s", envvar="TRAINING_SERVER_URL",
-              default=DEFAULT_SERVER_URL,
-              show_default=True,
-              help="Orchestrator URL (or set TRAINING_SERVER_URL)")
-@click.option("--token", "-t", required=True, envvar="INNATE_SERVICE_KEY",
-              help="Auth token / service key (or set INNATE_SERVICE_KEY)")
-@click.option("--issuer", envvar="INNATE_AUTH_ISSUER_URL",
-              default=DEFAULT_AUTH_ISSUER_URL,
-              show_default=True,
-              help="OIDC issuer URL (or set INNATE_AUTH_ISSUER_URL). "
-                   "--token is exchanged for a JWT via this issuer. "
-                   "Set to empty string to use --token as a plain bearer (dev only).")
+@click.option(
+    "--server",
+    "-s",
+    envvar="TRAINING_SERVER_URL",
+    default=DEFAULT_SERVER_URL,
+    show_default=True,
+    help="Orchestrator URL (or set TRAINING_SERVER_URL)",
+)
+@click.option(
+    "--token",
+    "-t",
+    required=True,
+    envvar="INNATE_SERVICE_KEY",
+    help="Auth token / service key (or set INNATE_SERVICE_KEY)",
+)
+@click.option(
+    "--issuer",
+    envvar="INNATE_AUTH_ISSUER_URL",
+    default=DEFAULT_AUTH_ISSUER_URL,
+    show_default=True,
+    help="OIDC issuer URL (or set INNATE_AUTH_ISSUER_URL). "
+    "--token is exchanged for a JWT via this issuer. "
+    "Set to empty string to use --token as a plain bearer (dev only).",
+)
 @click.pass_context
 def cli(ctx: click.Context, server: str, token: str, issuer: str) -> None:
     """Innate Training Client — submit and manage training skills & runs."""
@@ -213,7 +245,9 @@ def submit(ctx: click.Context, skill_dir: str, name: str | None) -> None:
 
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option("--skill", default=None, help="Explicit skill ID (overrides server-skill.json)")
+@click.option(
+    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
+)
 @click.pass_context
 def upload(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
     """Upload data files to an existing skill."""
@@ -229,7 +263,9 @@ def upload(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
 @click.argument("run_id", type=int)
-@click.option("--skill", default=None, help="Explicit skill ID (overrides server-skill.json)")
+@click.option(
+    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
+)
 @click.pass_context
 def status(ctx: click.Context, skill_dir: str, run_id: int, skill: str | None) -> None:
     """Show current status of a run."""
@@ -260,17 +296,22 @@ def status(ctx: click.Context, skill_dir: str, run_id: int, skill: str | None) -
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
 @click.argument("run_id", type=int)
-@click.option("--skill", default=None, help="Explicit skill ID (overrides server-skill.json)")
-@click.option("--interval", type=float, default=20.0,
-              help="Poll interval in seconds")
+@click.option(
+    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
+)
+@click.option("--interval", type=float, default=20.0, help="Poll interval in seconds")
 @click.pass_context
-def watch(ctx: click.Context, skill_dir: str, run_id: int, skill: str | None, interval: float) -> None:
+def watch(
+    ctx: click.Context, skill_dir: str, run_id: int, skill: str | None, interval: float
+) -> None:
     """Poll run status until completion."""
     ctx.obj["interval"] = interval
     manager = _make_manager(ctx)
     skill_id = _resolve_skill_id(skill_dir, skill)
 
-    click.echo(f"Watching run {skill_id}/{run_id} (poll every {interval}s, Ctrl+C to stop)")
+    click.echo(
+        f"Watching run {skill_id}/{run_id} (poll every {interval}s, Ctrl+C to stop)"
+    )
     try:
         gen = manager.watch(skill_id, run_id, interval=interval)
         _print_progress(gen)
@@ -284,11 +325,19 @@ def watch(ctx: click.Context, skill_dir: str, run_id: int, skill: str | None, in
 @cli.command()
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
 @click.argument("run_id", type=int)
-@click.option("--skill", default=None, help="Explicit skill ID (overrides server-skill.json)")
-@click.option("--dest", type=click.Path(), default=None,
-              help="Destination dir (default: SKILL_DIR)")
+@click.option(
+    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
+)
+@click.option(
+    "--dest",
+    type=click.Path(),
+    default=None,
+    help="Destination dir (default: SKILL_DIR)",
+)
 @click.pass_context
-def download(ctx: click.Context, skill_dir: str, run_id: int, skill: str | None, dest: str | None) -> None:
+def download(
+    ctx: click.Context, skill_dir: str, run_id: int, skill: str | None, dest: str | None
+) -> None:
     """Download results for a completed run."""
     manager = _make_manager(ctx)
     skill_id = _resolve_skill_id(skill_dir, skill)
@@ -323,7 +372,9 @@ def list_skills(ctx: click.Context) -> None:
 
 @cli.command("runs")
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option("--skill", default=None, help="Explicit skill ID (overrides server-skill.json)")
+@click.option(
+    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
+)
 @click.pass_context
 def list_runs(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
     """List all runs for a skill."""
@@ -350,8 +401,12 @@ def list_runs(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
 
 @cli.command("run")
 @click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option("--skill", default=None, help="Explicit skill ID (overrides server-skill.json)")
-@click.option("--preset", default=None, help="Server-side preset name (e.g. act-default)")
+@click.option(
+    "--skill", default=None, help="Explicit skill ID (overrides server-skill.json)"
+)
+@click.option(
+    "--preset", default=None, help="Server-side preset name (e.g. act-default)"
+)
 @click.option("--repo", default=None, help="GitHub repo (owner/repo)")
 @click.option("--ref", default=None, help="Git ref (branch/tag/commit)")
 @click.option("--command", "-c", multiple=True, help="Training command parts")
@@ -359,11 +414,18 @@ def list_runs(ctx: click.Context, skill_dir: str, skill: str | None) -> None:
 @click.option("--gpu-type", default=None, help="GPU type (e.g. H100)")
 @click.option("--min-gpus", type=int, default=None)
 @click.option("--max-gpus", type=int, default=None)
-@click.option("--budget", type=float, default=None, help="Max total cost USD (optional)")
-@click.option("--checkpoint-patterns", "-p", multiple=True,
-              help="Glob patterns for files to upload (e.g. 'checkpoints/**/*.pt')")
-@click.option("--env", "-e", multiple=True,
-              help="Environment variables as KEY=VALUE (repeatable)")
+@click.option(
+    "--budget", type=float, default=None, help="Max total cost USD (optional)"
+)
+@click.option(
+    "--checkpoint-patterns",
+    "-p",
+    multiple=True,
+    help="Glob patterns for files to upload (e.g. 'checkpoints/**/*.pt')",
+)
+@click.option(
+    "--env", "-e", multiple=True, help="Environment variables as KEY=VALUE (repeatable)"
+)
 @click.pass_context
 def create_run(
     ctx: click.Context,
@@ -431,7 +493,9 @@ def create_run(
         env_dict = {}
         for item in env:
             if "=" not in item:
-                raise click.BadParameter(f"Expected KEY=VALUE, got: {item!r}", param_hint="--env")
+                raise click.BadParameter(
+                    f"Expected KEY=VALUE, got: {item!r}", param_hint="--env"
+                )
             k, v = item.split("=", 1)
             env_dict[k] = v
         params["env"] = env_dict

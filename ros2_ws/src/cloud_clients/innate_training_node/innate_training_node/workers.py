@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 
+import rclpy.logging
 from innate_cloud_msgs.msg import TransferProgress
 
 from training_client.src.skill_manager import SkillManager
@@ -19,6 +20,7 @@ from training_client.src.types import ProgressStage, ProgressUpdate
 from .job_store import JobStore
 
 logger = logging.getLogger(__name__)
+_ros = rclpy.logging.get_logger("innate_training")
 
 
 class Poller:
@@ -124,9 +126,9 @@ def do_upload(
     try:
         for update in manager.upload_files(skill_id, skill_dir):
             store.update_transfer(TransferProgress.UPLOAD, skill_id, -1, update)
-        logger.info("Upload complete for skill %s", skill_id)
+        _ros.info(f"Upload finished for {skill_id} from {skill_dir}")
     except Exception as e:
-        logger.error("Upload failed for %s: %s", skill_id, e)
+        _ros.error(f"Upload failed for {skill_id}: {e}")
         store.update_transfer(
             TransferProgress.UPLOAD,
             skill_id,
@@ -183,9 +185,9 @@ def do_download(
             store.put_job(manager.run_status(skill_id, run_id))
         except Exception:
             pass
-        logger.info("Download complete for %s/%s → %s", skill_id, run_id, dest_dir)
+        _ros.info(f"Download finished for {skill_id}/{run_id} → {dest_dir}")
     except Exception as e:
-        logger.error("Download failed for %s/%s: %s", skill_id, run_id, e)
+        _ros.error(f"Download failed for {skill_id}/{run_id}: {e}")
         store.update_transfer(
             TransferProgress.DOWNLOAD,
             skill_id,

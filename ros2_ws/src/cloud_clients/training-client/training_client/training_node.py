@@ -23,6 +23,7 @@ Parameters:
 This node requires rclpy (ROS 2 Humble). It is NOT imported by the rest of the
 training_client library, so the core library works without ROS installed.
 """
+
 from __future__ import annotations
 
 import json
@@ -70,8 +71,12 @@ class TrainingNode(LifecycleNode):
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         server_url = self.get_parameter("server_url").get_parameter_value().string_value
         auth_token = self.get_parameter("auth_token").get_parameter_value().string_value
-        auth_issuer_url = self.get_parameter("auth_issuer_url").get_parameter_value().string_value
-        poll_interval = self.get_parameter("poll_interval").get_parameter_value().double_value
+        auth_issuer_url = (
+            self.get_parameter("auth_issuer_url").get_parameter_value().string_value
+        )
+        poll_interval = (
+            self.get_parameter("poll_interval").get_parameter_value().double_value
+        )
 
         if not server_url or not auth_token:
             self.get_logger().error("server_url and auth_token parameters are required")
@@ -128,7 +133,9 @@ class TrainingNode(LifecycleNode):
             response.message = "source_dir parameter not set"
             return response
 
-        skill_name = self.get_parameter("skill_name").get_parameter_value().string_value or None
+        skill_name = (
+            self.get_parameter("skill_name").get_parameter_value().string_value or None
+        )
         repo = self.get_parameter("repo").get_parameter_value().string_value
         ref = self.get_parameter("ref").get_parameter_value().string_value
         command = self.get_parameter("command").get_parameter_value().string_array_value
@@ -173,17 +180,25 @@ class TrainingNode(LifecycleNode):
         self._worker_thread.start()
 
         response.success = True
-        response.message = f"Download started for run {self._active_skill_id}/{self._active_run_id}"
+        response.message = (
+            f"Download started for run {self._active_skill_id}/{self._active_run_id}"
+        )
         return response
 
     # ── Worker threads ──────────────────────────────────────────────
 
-    def _run_submit(self, source_dir: str, skill_name: str | None, params: dict[str, Any]) -> None:
+    def _run_submit(
+        self, source_dir: str, skill_name: str | None, params: dict[str, Any]
+    ) -> None:
         try:
             gen = self._manager.submit(source_dir, name=skill_name)
             final_update = self._consume_progress(gen)
 
-            if final_update and hasattr(final_update, "skill_id") and final_update.skill_id:
+            if (
+                final_update
+                and hasattr(final_update, "skill_id")
+                and final_update.skill_id
+            ):
                 self._active_skill_id = final_update.skill_id
 
                 # Create a run with training params
@@ -220,7 +235,9 @@ class TrainingNode(LifecycleNode):
 
     # ── Publishing helpers ──────────────────────────────────────────
 
-    def _consume_progress(self, gen: Generator[ProgressUpdate, None, None]) -> ProgressUpdate | None:
+    def _consume_progress(
+        self, gen: Generator[ProgressUpdate, None, None]
+    ) -> ProgressUpdate | None:
         """Iterate a progress generator, publishing each update. Return final value."""
         result: ProgressUpdate | None = None
         try:

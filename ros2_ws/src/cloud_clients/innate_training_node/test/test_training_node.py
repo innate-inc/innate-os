@@ -21,6 +21,7 @@ Usage (in a sourced workspace):
 
 Requires: ``pip install click``
 """
+
 from __future__ import annotations
 
 import json

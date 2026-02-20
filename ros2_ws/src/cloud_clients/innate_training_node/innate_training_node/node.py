@@ -10,6 +10,7 @@ Services: ``~/submit_skill``, ``~/upload_skill``, ``~/create_run``,
 
 On startup fetches all existing jobs; auto-downloads ``done`` runs.
 """
+
 from __future__ import annotations
 
 import json
@@ -36,7 +37,6 @@ from training_client.src.types import (
 
 from .job_store import JobStore, build_skill_status
 from .workers import Poller, do_upload, maybe_auto_download
-
 
 # TODO: fetch from discovery URL once available.
 KNOWN_PRESETS: set[str] = {"act-default"}
@@ -282,6 +282,7 @@ class TrainingNode(Node):
             return res
 
         self._store.register_dir(skill_id, req.skill_dir)
+        self.get_logger().info(f"Upload started for {skill_id} from {req.skill_dir}")
         threading.Thread(
             target=do_upload,
             args=(self._mgr, self._store, skill_id, req.skill_dir),
@@ -353,6 +354,9 @@ class TrainingNode(Node):
 
         self._store.register_dir(skill_id, req.skill_dir)
         self._store.mark_download_started(skill_id, req.run_id)
+        self.get_logger().info(
+            f"Download started for {skill_id}/{req.run_id} → {req.skill_dir}"
+        )
         maybe_auto_download(self._mgr, self._store, skill_id, req.run_id, req.skill_dir)
         res.success, res.message = True, f"Download started → {req.skill_dir}"
         return res

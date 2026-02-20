@@ -10,6 +10,7 @@ On recovery:
   .zst exists      →  already done, skip
   neither          →  compress from scratch
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,6 +39,7 @@ def _detect_threads(configured: int) -> int:
     except Exception:
         pass
     return 4  # safe fallback
+
 
 def compress_file(
     source: Path,
@@ -69,11 +71,21 @@ def compress_file(
 
     real_threads = _detect_threads(threads)
 
-    cmd = ["zstd", f"-T{real_threads // 2}", f"-{level}", "-f", str(source), "-o", str(tmp_path)]
+    cmd = [
+        "zstd",
+        f"-T{real_threads // 2}",
+        f"-{level}",
+        "-f",
+        str(source),
+        "-o",
+        str(tmp_path),
+    ]
     logger.info("Compressing %s → %s", source, tmp_path)
 
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=3600)
+        result = subprocess.run(
+            cmd, check=True, capture_output=True, text=True, timeout=3600
+        )
     except subprocess.CalledProcessError as e:
         tmp_path.unlink(missing_ok=True)
         raise CompressionError(f"zstd failed: {e.stderr}") from e
@@ -84,10 +96,12 @@ def compress_file(
     # Atomic rename: if we crash between here and the rename, recovery
     # will see the .tmp and re-compress.
     os.rename(tmp_path, zst_path)
-    logger.info("Compressed %s (%.1f MB → %.1f MB)",
-                source.name,
-                source.stat().st_size / 1e6,
-                zst_path.stat().st_size / 1e6)
+    logger.info(
+        "Compressed %s (%.1f MB → %.1f MB)",
+        source.name,
+        source.stat().st_size / 1e6,
+        zst_path.stat().st_size / 1e6,
+    )
     return zst_path
 
 
@@ -111,11 +125,7 @@ def decompress_file(source: Path, dest: Path | None = None) -> Path:
 def cleanup_compressed(source_dir: Path, filenames: list[str]) -> None:
     """Remove .zst files for the given source filenames."""
     for name in filenames:
-        zst = (source_dir / name).with_suffix(
-            (source_dir / name).suffix + ".zst"
-        )
+        zst = (source_dir / name).with_suffix((source_dir / name).suffix + ".zst")
         zst.unlink(missing_ok=True)
-        tmp = (source_dir / name).with_suffix(
-            (source_dir / name).suffix + ".zst.tmp"
-        )
+        tmp = (source_dir / name).with_suffix((source_dir / name).suffix + ".zst.tmp")
         tmp.unlink(missing_ok=True)
