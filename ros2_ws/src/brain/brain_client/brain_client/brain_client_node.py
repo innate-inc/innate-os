@@ -86,7 +86,7 @@ class BrainClientNode(Node):
         # Parameters
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
         self.declare_parameter("token", "MY_HARDCODED_TOKEN")
-        self.declare_parameter("image_topic", "/mars/main_camera/image/compressed")
+        self.declare_parameter("image_topic", "/mars/main_camera/left/image_raw/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
 
         # New parameters for optional depth processing:
@@ -348,9 +348,15 @@ class BrainClientNode(Node):
             CompressedImage, self.image_topic, self.image_callback, image_qos
         )
 
-        # Subscribe to the map topic
+        # Subscribe to the map topic (map_server publishes RELIABLE + TRANSIENT_LOCAL)
+        map_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.map_sub = self.create_subscription(
-            OccupancyGrid, self.map_topic, self.map_callback, 1
+            OccupancyGrid, self.map_topic, self.map_callback, map_qos
         )
 
         # Optionally subscribe to the depth image topic if required.
@@ -1040,6 +1046,10 @@ class BrainClientNode(Node):
             }
         else:
             # No map available in non-mapfree mode
+            self.get_logger().warn(
+                f"[NavPayload] No map data. use_mapfree={use_mapfree}, last_map={self.last_map is not None}, "
+                f"nav_mode={self.cur_nav_mode}"
+            )
             return None
 
         # Add robot_coords

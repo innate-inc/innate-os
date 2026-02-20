@@ -44,7 +44,7 @@ class CameraProvider(Node):
 
         self.create_subscription(
             CompressedImage,
-            "/mars/main_camera/image/compressed",
+            "/mars/main_camera/left/image_raw/compressed",
             self._main_camera_cb,
             image_qos,
         )

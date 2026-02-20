@@ -146,6 +146,10 @@ class DetectOpponentMove(Skill):
 
     def _move_to_observation_pose(self) -> bool:
         """Move arm above the board centre and tilt head down."""
+        # Open gripper fully so it doesn't occlude the wrist camera
+        self.manipulation.open_gripper(100)
+        time.sleep(0.5)
+
         # Tilt head down to look at the board
         if self.head:
             self.head.set_position(self.HEAD_TILT_DOWN)
@@ -160,9 +164,10 @@ class DetectOpponentMove(Skill):
             pitch=self.OBS_PITCH,
             yaw=self.OBS_YAW,
             duration=2.0,
+            blocking=True,
         )
         if success:
-            time.sleep(1.5)
+            time.sleep(0.5)  # let camera auto-exposure settle
         return success
 
     def _go_to_safe_pose(self):
@@ -285,11 +290,11 @@ class DetectOpponentMove(Skill):
 
         try:
             response = self.gemini_client.models.generate_content(
-                model="gemini-3-flash-preview",
+                model="gemini-3.1-pro-preview",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_budget=512),
+                    thinking_config=types.ThinkingConfig(thinking_budget=1024),
                 ),
             )
             result = json.loads(response.text.strip())
@@ -333,6 +338,7 @@ class DetectOpponentMove(Skill):
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(thinking_budget=512),
                 ),
             )
             result = json.loads(response.text.strip())
