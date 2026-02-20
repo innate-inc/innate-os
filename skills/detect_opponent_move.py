@@ -3,9 +3,9 @@
 Skill that detects the opponent's last chess move by comparing the known
 board state (FEN) against what the cameras currently see.
 
-Uses two images (main camera wide view + wrist camera overhead close-up)
-and asks Gemini to identify which legal move was played.  The board state
-is persisted in ~/chess_game_state.json.
+Uses a high-res 1080p wrist camera image (one-shot capture) and asks
+Gemini to identify which legal move was played.  The board state is
+persisted in ~/chess_game_state.json.
 """
 
 import base64
@@ -14,14 +14,14 @@ import time
 from pathlib import Path
 
 import chess
+import cv2
+import numpy as np
 from google import genai
 from google.genai import types
 
 from brain_client.skill_types import (
     Interface,
     InterfaceType,
-    RobotState,
-    RobotStateType,
     Skill,
     SkillResult,
 )
@@ -69,8 +69,6 @@ class DetectOpponentMove(Skill):
 
     manipulation = Interface(InterfaceType.MANIPULATION)
     head = Interface(InterfaceType.HEAD)
-    main_image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
-    wrist_image = RobotState(RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64)
 
     # Observation pose: X/Y come from board calibration; Z and angles are fixed
     OBS_Z = 0.18
@@ -81,6 +79,13 @@ class DetectOpponentMove(Skill):
     # Head tilt for looking at the board (degrees, negative = down)
     HEAD_TILT_DOWN = -20
     HEAD_TILT_NEUTRAL = 0
+
+    # Fisheye correction for Arducam UC684 (~70° FOV)
+    # Approximate radial distortion coefficients [k1, k2, p1, p2, k3]
+    # Tune k1 (negative = barrel distortion removal): more negative = stronger correction
+    UNDISTORT_K1 = -0.35
+    UNDISTORT_K2 = 0.12
+    UNDISTORT_BALANCE = 0.0  # 0 = crop all black edges, 1 = keep everything
 
     # Confidence threshold: below this triggers a second Gemini call
     CONFIDENCE_THRESHOLD = 0.7
@@ -213,28 +218,83 @@ class DetectOpponentMove(Skill):
 
     # ── Image capture ─────────────────────────────────────────────────
 
-    def _capture_images(self) -> tuple:
-        """Grab latest main + wrist camera images.
+    def _undistort_image(self, img_b64: str) -> str:
+        """Apply approximate barrel-distortion correction to a base64 JPEG.
 
-        Returns (main_b64, wrist_b64). Either may be None.
+        Uses OpenCV's undistort with estimated coefficients for the
+        Arducam UC684 lens.  Returns corrected image as base64 JPEG.
+        """
+        raw = base64.b64decode(img_b64)
+        arr = np.frombuffer(raw, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            self.logger.warning("[DetectOpponentMove] Failed to decode image for undistort")
+            return img_b64
+
+        h, w = img.shape[:2]
+
+        # Approximate intrinsic matrix (estimate focal length from image width)
+        # For ~70° horizontal FOV: fx ≈ w / (2 * tan(35°)) ≈ w * 0.714
+        fx = fy = w * 0.714
+        cx, cy = w / 2.0, h / 2.0
+        camera_matrix = np.array([
+            [fx, 0, cx],
+            [0, fy, cy],
+            [0,  0,  1],
+        ], dtype=np.float64)
+
+        dist_coeffs = np.array([
+            self.UNDISTORT_K1,
+            self.UNDISTORT_K2,
+            0.0,   # p1 (tangential)
+            0.0,   # p2 (tangential)
+            0.0,   # k3
+        ], dtype=np.float64)
+
+        # Compute optimal new camera matrix (alpha=BALANCE: 0=crop, 1=keep all)
+        new_matrix, roi = cv2.getOptimalNewCameraMatrix(
+            camera_matrix, dist_coeffs, (w, h), self.UNDISTORT_BALANCE
+        )
+
+        undistorted = cv2.undistort(img, camera_matrix, dist_coeffs, None, new_matrix)
+
+        # Crop to valid ROI if available
+        rx, ry, rw, rh = roi
+        if rw > 0 and rh > 0:
+            undistorted = undistorted[ry:ry+rh, rx:rx+rw]
+
+        # Re-encode to JPEG at high quality
+        _, buf = cv2.imencode(".jpg", undistorted, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        return base64.b64encode(buf.tobytes()).decode("utf-8")
+
+    def _capture_images(self) -> tuple:
+        """Capture a single high-res 1080p frame from the wrist camera.
+
+        Returns (main_b64, wrist_b64). main_b64 is always None (wrist only).
         """
         # Give the camera a moment to refresh after arm settles
         time.sleep(0.3)
-        main_b64 = self.main_image
-        wrist_b64 = self.wrist_image
 
-        # Save captures for debugging
+        self.logger.info("[DetectOpponentMove] Capturing high-res wrist frame...")
+        wrist_b64 = self.capture_hires_wrist_frame(timeout_sec=3.0)
+
+        if wrist_b64:
+            self.logger.info("[DetectOpponentMove] Got high-res wrist frame, applying undistort...")
+            wrist_b64 = self._undistort_image(wrist_b64)
+            self.logger.info("[DetectOpponentMove] Undistort complete")
+        else:
+            self.logger.warning("[DetectOpponentMove] Failed to capture high-res wrist frame")
+
+        # Save capture for debugging
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             ts = int(time.time())
-            if main_b64:
-                (DATA_DIR / f"main_{ts}.jpg").write_bytes(base64.b64decode(main_b64))
             if wrist_b64:
-                (DATA_DIR / f"wrist_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
+                (DATA_DIR / f"wrist_hires_{ts}.jpg").write_bytes(base64.b64decode(wrist_b64))
         except Exception as e:
-            self.logger.warning(f"[DetectOpponentMove] Failed to save captures: {e}")
+            self.logger.warning(f"[DetectOpponentMove] Failed to save capture: {e}")
 
-        return main_b64, wrist_b64
+        return None, wrist_b64
 
     # ── Board context builder ─────────────────────────────────────────
 
@@ -409,7 +469,7 @@ class DetectOpponentMove(Skill):
         self._send_feedback("Capturing images...")
         main_b64, wrist_b64 = self._capture_images()
 
-        if not main_b64 and not wrist_b64:
+        if not wrist_b64:
             self._go_to_safe_pose()
             return "No camera images available", SkillResult.FAILURE
 

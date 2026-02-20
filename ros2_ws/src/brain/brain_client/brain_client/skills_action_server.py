@@ -711,6 +711,9 @@ class SkillsActionServer(Node):
         skill.set_feedback_callback(_publish_feedback)
 
         try:
+            # Inject one-shot high-res capture callable
+            skill.capture_hires_wrist_frame = self._camera_node.capture_hires_wrist_frame
+
             # Initial robot state injection
             self._update_skill_robot_state(skill)
 
