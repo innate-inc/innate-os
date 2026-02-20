@@ -2,7 +2,7 @@
 name = "innate-auth-client"
 version = "0.1.0"
 description = "Innate auth client library: OIDC JWT acquisition and timed renewal for robots."
-requires-python = ">=3.10"
+# requires-python = ">=3.10"
 dependencies = []
 
 [project.scripts]

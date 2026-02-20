@@ -10,7 +10,7 @@ from typing import Any, Generator
 
 import requests
 
-from innate_auth_verifier import AuthProvider
+from auth_client import AuthProvider
 from .types import ClientConfig, SkillInfo, RunInfo
 
 logger = logging.getLogger(__name__)

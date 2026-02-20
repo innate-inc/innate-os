@@ -5,7 +5,7 @@ import logging
 from typing import Optional, Dict, Any
 import httpx
 
-from innate_auth_verifier import AuthProvider
+from auth_client import AuthProvider
 
 logger = logging.getLogger(__name__)
 
