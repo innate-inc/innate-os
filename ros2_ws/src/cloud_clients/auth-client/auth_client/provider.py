@@ -1,0 +1,194 @@
+"""OIDC robot authentication client.
+
+Handles service-key → JWT exchange via OpenID Connect discovery,
+with JWT timing introspection for proactive scheduled renewal.
+
+Usage::
+
+    from auth_client import AuthProvider
+
+    auth = AuthProvider(issuer_url="https://auth-v1.innate.bot", service_key="sk_...")
+    token = auth.token              # lazily discovers + fetches on first access
+    print(auth.expires_at)          # datetime of JWT expiration
+
+    # To force a renewal on the next access:
+    auth.token_needs_renewal = True
+    token = auth.token              # fetches a fresh JWT
+
+Based on ``innate_auth_verifier.client.AuthProvider``, extended with
+JWT timing introspection for proactive renewal scheduling.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import threading
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
+
+
+class AuthError(Exception):
+    """Raised when authentication or token renewal fails."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        self.status_code: int | None = status_code
+        super().__init__(message)
+
+
+def _decode_jwt_payload(token: str) -> dict[str, object]:
+    """Decode the payload of a JWT *without* signature verification.
+
+    Only used to extract timing claims (``iat``, ``exp``) from our own
+    freshly-received tokens — never for trust decisions.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise AuthError(f"Malformed JWT: expected 3 parts, got {len(parts)}")
+
+    payload_b64 = parts[1]
+    # Restore padding stripped by JWT spec
+    padding = 4 - len(payload_b64) % 4
+    if padding != 4:
+        payload_b64 += "=" * padding
+
+    raw: dict[str, object] = json.loads(base64.urlsafe_b64decode(payload_b64))
+    return raw
+
+
+class AuthProvider:
+    """Exchanges an innate service key for a JWT and handles renewal.
+
+    OIDC discovery is deferred until the first token request.  The
+    provider also parses the JWT to extract ``iat`` and ``exp`` claims,
+    enabling callers to schedule proactive renewal (e.g. at half-life).
+
+    Thread-safe: concurrent access is serialised by an internal lock.
+    """
+
+    def __init__(self, issuer_url: str, service_key: str) -> None:
+        self._issuer_url: str = issuer_url.rstrip("/")
+        self._service_key: str = service_key
+        self._token: str | None = None
+        self._token_endpoint: str | None = None
+        self._issued_at: datetime | None = None
+        self._expires_at: datetime | None = None
+        self._lock: threading.Lock = threading.Lock()
+        self.token_needs_renewal: bool = True  # force fetch on first access
+
+    # ── Public API ──────────────────────────────────────────────────
+
+    @property
+    def token(self) -> str:
+        """Return the current JWT, discovering + fetching as needed."""
+        if self.token_needs_renewal or self._token is None:
+            return self._renew()
+        return self._token
+
+    @property
+    def expires_at(self) -> datetime | None:
+        """``exp`` claim of the current JWT, or ``None`` if not yet fetched."""
+        return self._expires_at
+
+    def seconds_until_renewal(self) -> float | None:
+        """Seconds from now until the recommended renewal time (half-life).
+
+        Returns ``None`` if no token has been fetched, or a negative
+        value if renewal is overdue.
+        """
+        if self._issued_at is None or self._expires_at is None:
+            return None
+        half_life = (self._expires_at - self._issued_at) / 2
+        renewal = self._issued_at + half_life
+        return (renewal - datetime.now(timezone.utc)).total_seconds()
+
+    # ── Internals ───────────────────────────────────────────────────
+
+    def _renew(self) -> str:
+        """Discover (if needed) and fetch a fresh JWT."""
+        with self._lock:
+            # Double-check after acquiring the lock — another thread may
+            # have already renewed while we were waiting.
+            if not self.token_needs_renewal and self._token is not None:
+                return self._token
+
+            if self._token_endpoint is None:
+                self._token_endpoint = self._discover_token_endpoint()
+
+            logger.debug("Renewing JWT from %s", self._token_endpoint)
+            try:
+                req = urllib.request.Request(
+                    self._token_endpoint,
+                    data=b"",  # POST
+                    headers={"Authorization": f"Bearer {self._service_key}"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data: dict[str, object] = json.loads(resp.read())
+            except urllib.error.HTTPError as exc:
+                raise AuthError(
+                    f"Token exchange failed: HTTP {exc.code}",
+                    status_code=exc.code,
+                ) from exc
+            except urllib.error.URLError as exc:
+                raise AuthError(f"Token exchange request failed: {exc}") from exc
+
+            jwt_token: str | None = data.get("token")
+            if not jwt_token:
+                raise AuthError(
+                    "Auth response missing 'token' field; "
+                    f"got keys: {list(data.keys())}",
+                )
+
+            # Parse timing claims from the freshly-received JWT
+            self._parse_token_timing(jwt_token)
+
+            self._token = jwt_token
+            self.token_needs_renewal = False
+            logger.info(
+                "JWT renewed successfully (expires %s)",
+                self._expires_at,
+            )
+            return jwt_token
+
+    def _parse_token_timing(self, token: str) -> None:
+        """Extract ``iat`` and ``exp`` from the JWT payload."""
+        try:
+            payload = _decode_jwt_payload(token)
+            iat = payload.get("iat")
+            exp = payload.get("exp")
+            if isinstance(iat, (int, float)):
+                self._issued_at = datetime.fromtimestamp(iat, tz=timezone.utc)
+            else:
+                self._issued_at = None
+            if isinstance(exp, (int, float)):
+                self._expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+            else:
+                self._expires_at = None
+        except Exception:
+            logger.warning("Failed to parse JWT timing claims", exc_info=True)
+            self._issued_at = None
+            self._expires_at = None
+
+    def _discover_token_endpoint(self) -> str:
+        """Fetch the OIDC discovery document and extract the token endpoint."""
+        url = f"{self._issuer_url}/.well-known/openid-configuration"
+        logger.debug("Discovering OIDC config from %s", url)
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                discovery: dict[str, object] = json.loads(resp.read())
+        except urllib.error.URLError as exc:
+            raise AuthError(f"OIDC discovery failed at {url}: {exc}") from exc
+
+        endpoint: str | None = discovery.get("token_endpoint")
+        if not endpoint:
+            raise AuthError(
+                "OIDC discovery response missing 'token_endpoint'; "
+                f"got keys: {list(discovery.keys())}",
+            )
+
+        logger.debug("Discovered token endpoint: %s", endpoint)
+        return endpoint
