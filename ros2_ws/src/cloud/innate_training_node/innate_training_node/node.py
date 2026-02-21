@@ -5,10 +5,9 @@ ROS 2 node for Innate training job management.
 Publishes ``~/job_statuses`` (transient-local, default every 3 s) with
 all tracked runs **and** active upload/download transfer snapshots.
 
-Services: ``~/submit_skill``, ``~/upload_skill``, ``~/create_run``,
-``~/download_results``.
+Services: ``~/submit_skill``, ``~/create_run``, ``~/download_results``.
 
-On startup fetches all existing jobs; auto-downloads ``done`` runs.
+On startup fetches all existing jobs; auto-downloads + activates ``done`` runs.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from innate_cloud_msgs.msg import TrainingJobList, TrainingParams, TransferProgress
-from innate_cloud_msgs.srv import CreateRun, DownloadResults, SubmitSkill, UploadSkill
+from innate_cloud_msgs.srv import CreateRun, DownloadResults, SubmitSkill
 
 from training_client.src.skill_manager import SkillManager, read_skill_id
 from training_client.src.types import (
@@ -143,7 +142,6 @@ class TrainingNode(Node):
 
         # ── Services ────────────────────────────────────────────────
         self.create_service(SubmitSkill, "~/submit_skill", self._on_submit)
-        self.create_service(UploadSkill, "~/upload_skill", self._on_upload)
         self.create_service(CreateRun, "~/create_run", self._on_create_run)
         self.create_service(DownloadResults, "~/download_results", self._on_download)
 
@@ -211,6 +209,7 @@ class TrainingNode(Node):
     def _on_submit(
         self, req: SubmitSkill.Request, res: SubmitSkill.Response
     ) -> SubmitSkill.Response:
+        """Submit (create-or-reuse) a skill **and** start uploading its data."""
         err = _require_absolute(req.skill_dir)
         if err:
             res.success, res.message = False, err
@@ -231,42 +230,23 @@ class TrainingNode(Node):
 
             self._store.put_skill(skill)
             self._store.register_dir(skill.skill_id, req.skill_dir)
+
+            # Start upload in a background thread.
+            self.get_logger().info(
+                f"Upload started for {skill.skill_id} from {req.skill_dir}"
+            )
+            threading.Thread(
+                target=do_upload,
+                args=(self._mgr, self._store, skill.skill_id, req.skill_dir),
+                daemon=True,
+                name=f"ul-{skill.skill_id[:8]}",
+            ).start()
+
             res.success, res.skill_id = True, skill.skill_id
-            res.message = f"Skill {skill.skill_id} created"
+            res.message = f"Skill {skill.skill_id} submitted — upload started"
         except Exception as e:
             self.get_logger().error(f"submit failed: {e}")
             res.success, res.message = False, str(e)
-        return res
-
-    # ── Service: upload_skill ───────────────────────────────────────
-
-    def _on_upload(
-        self, req: UploadSkill.Request, res: UploadSkill.Response
-    ) -> UploadSkill.Response:
-        err = _require_absolute(req.skill_dir)
-        if err:
-            res.success, res.message = False, err
-            return res
-
-        skill_id = read_skill_id(req.skill_dir)
-        if not skill_id:
-            res.success, res.message = (
-                False,
-                f"No training_skill_id in {req.skill_dir}/metadata.json — submit first",
-            )
-            return res
-
-        self._store.register_dir(skill_id, req.skill_dir)
-        self.get_logger().info(f"Upload started for {skill_id} from {req.skill_dir}")
-        threading.Thread(
-            target=do_upload,
-            args=(self._mgr, self._store, skill_id, req.skill_dir),
-            daemon=True,
-            name=f"ul-{skill_id[:8]}",
-        ).start()
-
-        res.success = True
-        res.message = f"Upload started for {skill_id} from {req.skill_dir}"
         return res
 
     # ── Service: create_run ─────────────────────────────────────────
@@ -328,7 +308,6 @@ class TrainingNode(Node):
             return res
 
         self._store.register_dir(skill_id, req.skill_dir)
-        self._store.mark_download_started(skill_id, req.run_id)
         self.get_logger().info(
             f"Download started for {skill_id}/{req.run_id} → {req.skill_dir}"
         )

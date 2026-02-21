@@ -193,11 +193,12 @@ class SkillManager:
             try:
                 skill = self.client.get_skill(existing_id)
             except APIError as e:
-                if e.status_code == 404:
+                if e.status_code in (403, 404):
                     logger.warning(
-                        "Skill %s from metadata.json not found on server "
-                        "(HTTP 404) — creating a new skill",
+                        "Skill %s from metadata.json not accessible on server "
+                        "(HTTP %d) — creating a new skill",
                         existing_id,
+                        e.status_code,
                     )
                     skill = self.client.create_skill(name=skill_name)
                     write_skill_id(source_dir, skill.skill_id)

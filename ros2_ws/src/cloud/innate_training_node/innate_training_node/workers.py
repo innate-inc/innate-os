@@ -3,6 +3,9 @@
 All functions in this module run on daemon threads and communicate with
 the rest of the node exclusively through :class:`JobStore` and the
 ``rclpy`` logger.
+
+Downloads automatically activate the run (set checkpoint + stats in
+``metadata.json``) once the transfer completes.
 """
 
 from __future__ import annotations
@@ -185,6 +188,19 @@ def do_download(
             store.put_job(manager.run_status(skill_id, run_id))
         except Exception:
             pass
+
+        # Activate: set checkpoint + stats_file in metadata.json.
+        try:
+            result = manager.activate_run(dest_dir, run_id)
+            _ros.info(
+                f"Activated run {skill_id}/{run_id}: "
+                f"checkpoint={result['checkpoint']} stats_file={result['stats_file']}"
+            )
+        except Exception as e:
+            _ros.warning(
+                f"Download OK but activation failed for {skill_id}/{run_id}: {e}"
+            )
+
         _ros.info(f"Download finished for {skill_id}/{run_id} → {dest_dir}")
     except Exception as e:
         _ros.error(f"Download failed for {skill_id}/{run_id}: {e}")

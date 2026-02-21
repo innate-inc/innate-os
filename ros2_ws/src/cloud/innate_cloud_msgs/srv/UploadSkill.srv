@@ -1,6 +1,0 @@
-# Upload data files for a skill identified by its local directory.
-
-string skill_dir            # absolute path to skill directory
----
-bool success
-string message

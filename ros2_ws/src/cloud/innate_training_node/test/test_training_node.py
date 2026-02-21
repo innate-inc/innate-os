@@ -2,7 +2,7 @@
 """
 CLI test client for the innate_training ROS 2 node.
 
-Exercises all four services and subscribes to job_statuses.
+Exercises all three services and subscribes to job_statuses.
 Designed to run side-by-side with the node so you can watch
 status updates flow in real time.
 
@@ -14,7 +14,6 @@ Usage (in a sourced workspace):
 
     # Terminal 2 — run commands
     python3 test/test_training_node.py submit /path/to/skill --name my_skill
-    python3 test/test_training_node.py upload /path/to/skill
     python3 test/test_training_node.py run /path/to/skill --preset default
     python3 test/test_training_node.py download /path/to/skill <run_id>
     python3 test/test_training_node.py watch
@@ -41,7 +40,7 @@ from innate_cloud_msgs.msg import (
     TrainingSkillStatus,
     TransferProgress,
 )
-from innate_cloud_msgs.srv import CreateRun, DownloadResults, SubmitSkill, UploadSkill
+from innate_cloud_msgs.srv import CreateRun, DownloadResults, SubmitSkill
 
 # ── Pretty-print helpers ────────────────────────────────────────────
 
@@ -195,26 +194,6 @@ def submit(skill_dir: str, name: str) -> None:
         elif res.success:
             click.secho(f"✓ Skill created: {res.skill_id}", fg="green")
             click.echo(f"  {res.message}")
-        else:
-            click.secho(f"✗ {res.message}", fg="red")
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-@cli.command()
-@click.argument("skill_dir")
-def upload(skill_dir: str) -> None:
-    """Upload data files for a skill identified by its local directory."""
-    node = _make_node()
-    try:
-        req = UploadSkill.Request()
-        req.skill_dir = skill_dir
-        res = _call_service(node, UploadSkill, "upload_skill", req)
-        if res is None:
-            click.secho("✗ No response (timeout?)", fg="red")
-        elif res.success:
-            click.secho(f"✓ {res.message}", fg="green")
         else:
             click.secho(f"✗ {res.message}", fg="red")
     finally:

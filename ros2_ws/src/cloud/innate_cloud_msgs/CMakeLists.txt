@@ -16,7 +16,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TrainingSkillStatus.msg"
   "msg/TrainingJobList.msg"
   "srv/SubmitSkill.srv"
-  "srv/UploadSkill.srv"
   "srv/CreateRun.srv"
   "srv/DownloadResults.srv"
   DEPENDENCIES builtin_interfaces

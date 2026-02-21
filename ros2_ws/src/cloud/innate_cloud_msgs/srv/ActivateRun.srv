@@ -1,0 +1,9 @@
+# Activate a trained run: set checkpoint and stats_file in metadata.json.
+
+string skill_dir            # absolute path to skill directory
+int32 run_id
+---
+bool success
+string checkpoint           # relative path to the selected checkpoint
+string stats_file           # relative path to the selected stats file
+string message
