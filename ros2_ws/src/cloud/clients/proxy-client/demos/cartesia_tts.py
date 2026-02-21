@@ -1,11 +1,11 @@
 """Demo: Cartesia TTS via the service proxy — speak text and play it.
 
-Usage::
+Usage (from ros2_ws/src/cloud/clients/proxy-client)::
 
-    PYTHONPATH=clients/proxy-client python -m demos.cartesia_tts "Hello!"
-    PYTHONPATH=clients/proxy-client python -m demos.cartesia_tts
+    python -m demos.cartesia_tts "Hello!"
+    python -m demos.cartesia_tts
 
-Env vars (see .env.template):
+Env vars:
     INNATE_PROXY_URL    — proxy service URL
     INNATE_AUTH_URL     — auth service URL (for OIDC JWT exchange)
     INNATE_SERVICE_KEY  — robot service key
@@ -21,7 +21,7 @@ import sys
 import tempfile
 from typing import List, Optional
 
-from proxy_client import ProxyClient
+from innate_proxy import ProxyClient
 
 VOICE_ID = "79f8b5fb-2cc8-479a-80df-29f7a7cf1a3e"
 

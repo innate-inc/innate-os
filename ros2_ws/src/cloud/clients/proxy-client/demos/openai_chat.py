@@ -1,11 +1,11 @@
 """Demo: OpenAI chat completions via the service proxy.
 
-Usage::
+Usage (from ros2_ws/src/cloud/clients/proxy-client)::
 
-    PYTHONPATH=clients/proxy-client python -m demos.openai_chat "What is 2+2?"
-    PYTHONPATH=clients/proxy-client python -m demos.openai_chat
+    python -m demos.openai_chat "What is 2+2?"
+    python -m demos.openai_chat
 
-Env vars (see .env.template):
+Env vars:
     INNATE_PROXY_URL    — proxy service URL
     INNATE_AUTH_URL     — auth service URL (for OIDC JWT exchange)
     INNATE_SERVICE_KEY  — robot service key
@@ -19,7 +19,7 @@ import os
 import sys
 from typing import Any, Dict
 
-from proxy_client import ProxyClient
+from innate_proxy import ProxyClient
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
