@@ -23,7 +23,7 @@ from typing import Dict, Any
 
 from brain_client.input_loader import InputLoader
 from brain_client.input_types import InputDevice
-from brain_client.client.proxy_client import ProxyClient
+from innate_proxy import ProxyClient
 from brain_client.logging_config import UniversalLogger
 
 

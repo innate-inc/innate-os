@@ -31,6 +31,9 @@
   <depend>maurice_bringup</depend>
   <depend>maurice_msgs</depend>
 
+  <!-- Cloud client packages (colcon-built) -->
+  <exec_depend>innate_proxy</exec_depend>
+
   <!-- Python dependencies (installed via pip-requirements.txt) -->
 
   <exec_depend>rosidl_default_runtime</exec_depend>

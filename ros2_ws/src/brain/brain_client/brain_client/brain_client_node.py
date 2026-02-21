@@ -174,7 +174,7 @@ class BrainClientNode(Node):
         }
 
         # Initialize unified proxy client (credentials from env, config from params)
-        from brain_client.client.proxy_client import ProxyClient
+        from innate_proxy import ProxyClient
 
         try:
             self.proxy = ProxyClient(config=proxy_config)

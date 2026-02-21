@@ -29,11 +29,6 @@ set(srv_files
   "srv/GetDatasetInfo.srv"
   "srv/SetDirectiveOnStartup.srv"
   "srv/LoadEpisode.srv"
-  "srv/SubmitTrainingJob.srv"
-  "srv/GetTrainingJobStatus.srv"
-  "srv/GetTrainingJobStatusByName.srv"
-  "srv/ListTrainingJobs.srv"
-  "srv/DownloadTrainingModel.srv"
   "srv/ReloadSkillsAgents.srv"
 )
 

@@ -17,8 +17,8 @@ from typing import Optional, Dict, Any
 import rclpy
 import subprocess
 
-from brain_client.client.proxy_client import ProxyClient
-from brain_client.client.adapters.cartesia_adapter import ProxyCartesiaClient
+from innate_proxy import ProxyClient
+from innate_proxy.adapters.cartesia import ProxyCartesiaClient
 from brain_client.logging_config import UniversalLogger
 
 

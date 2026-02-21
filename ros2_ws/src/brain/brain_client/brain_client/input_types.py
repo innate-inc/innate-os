@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Callable
 from enum import Enum
 
-from brain_client.client.proxy_client import ProxyClient
+from innate_proxy import ProxyClient
 from brain_client.logging_config import UniversalLogger
 
 

@@ -1,9 +1,0 @@
-# Request
-string job_id
----
-# Response
-bool success
-string status_json         # JSON string with job status, timestamps, etc.
-string error_message       # Error message if failed
-
-

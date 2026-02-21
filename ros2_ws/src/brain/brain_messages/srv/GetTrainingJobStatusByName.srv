@@ -1,8 +1,0 @@
-# Request
-string primitive_name       # Primitive name to query (e.g., "minecraft_wave")
----
-# Response
-bool success
-string status_json         # JSON string with job status, timestamps, etc.
-string error_message       # Error message if failed
-
