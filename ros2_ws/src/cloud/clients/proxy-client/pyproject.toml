@@ -12,7 +12,7 @@ dependencies = [
 
 [build-system]
 requires = ["setuptools>=64"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["innate_proxy*"]
+include = ["innate_proxy*", "proxy_demos*"]

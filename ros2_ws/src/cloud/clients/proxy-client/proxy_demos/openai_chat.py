@@ -1,9 +1,9 @@
 """Demo: OpenAI chat completions via the service proxy.
 
-Usage (from ros2_ws/src/cloud/clients/proxy-client)::
+Usage (from repo root)::
 
-    python -m demos.openai_chat "What is 2+2?"
-    python -m demos.openai_chat
+    python -m proxy_demos.openai_chat "What is 2+2?"
+    python -m proxy_demos.openai_chat
 
 Env vars:
     INNATE_PROXY_URL    — proxy service URL

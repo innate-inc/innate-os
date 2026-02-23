@@ -1,9 +1,9 @@
 """Demo: Cartesia TTS via the service proxy — speak text and play it.
 
-Usage (from ros2_ws/src/cloud/clients/proxy-client)::
+Usage (from repo root)::
 
-    python -m demos.cartesia_tts "Hello!"
-    python -m demos.cartesia_tts
+    python -m proxy_demos.cartesia_tts "Hello!"
+    python -m proxy_demos.cartesia_tts
 
 Env vars:
     INNATE_PROXY_URL    — proxy service URL
