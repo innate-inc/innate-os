@@ -24,6 +24,7 @@
 #include <thread>
 #include <future>
 #include <sstream>
+#include <iomanip>
 #include <cstdint>
 #include <set>
 #include <array>
@@ -173,7 +174,8 @@ public:
         
         // Initialize command buffers with current positions
         RCLCPP_INFO(this->get_logger(), "Initializing command buffers with current positions");
-        auto [initial_positions, initial_velocities] = robot_->readState();
+        auto [initial_positions, initial_velocities, initial_loads] = robot_->readState();
+        (void)initial_loads;
         latest_arm_command_ = std::vector<int>(initial_positions.begin(), initial_positions.begin() + 6);
         latest_head_command_ = initial_positions[6];
         RCLCPP_INFO(this->get_logger(), "Command buffers initialized (arm: 6 joints, head: 1 joint)");
@@ -517,20 +519,24 @@ private:
     
     // Timer callback for unified control loop (replaces thread-based loop)
     void controlTimerCallback() {
-        auto loop_start = std::chrono::steady_clock::now();
+        // ts[0..8]: loop_start, lock_acquired, read_done, effort_done,
+        //           pub_arm_done, pub_head_js_done, gain_sched_done, cmd_write_done, loop_end
+        std::array<std::chrono::steady_clock::time_point, 9> ts;
+        ts[0] = std::chrono::steady_clock::now();
+        ts.fill(ts[0]);
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            ts[1] = std::chrono::steady_clock::now();
             
-            // ========== READ STATE ==========
-            auto [positions, velocities] = robot_->readState();
+            // ========== READ STATE (position + velocity + load in one bulk read) ==========
+            auto [positions, velocities, loads] = robot_->readState();
+            ts[2] = std::chrono::steady_clock::now();
             
-            // Read motor load/effort for all 7 servos
+            // Convert raw load to effort percentage (-100% to 100%)
             std::vector<double> efforts;
-            for (int id = 1; id <= 7; ++id) {
-                int16_t load = dynamixel_->readPresentLoad(id);
-                // Convert load to percentage (-100% to 100%)
+            for (int load : loads)
                 efforts.push_back(static_cast<double>(load) / 10.0);
-            }
+            ts[3] = std::chrono::steady_clock::now();
             
             // ========== PUBLISH ARM STATE ==========
             // Convert to radians
@@ -565,6 +571,7 @@ private:
                 std::lock_guard<std::mutex> js_lock(joint_state_mutex_);
                 latest_joint_positions_ = arm_state_msg_.position;
             }
+            ts[4] = std::chrono::steady_clock::now();
             
             // ========== PUBLISH HEAD POSITION ==========
             int head_encoder = positions[6];  // Index 6 = servo 7
@@ -589,6 +596,7 @@ private:
             all_efforts.push_back(efforts[6]);
             joint_state_msg_.effort = all_efforts;
             joint_state_pub_->publish(joint_state_msg_);    // /joint_states (for robot_state_publisher)
+            ts[5] = std::chrono::steady_clock::now();
             
             // ========== GAIN SCHEDULING ==========
             if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {
@@ -638,9 +646,8 @@ private:
                     dynamixel_->syncWritePID(gs_pid_data);
                     auto pid_us = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - pid_start).count();
-                    gs_pid_write_us_sum_ += pid_us;
-                    gs_pid_write_count_++;
-                    RCLCPP_INFO(this->get_logger(),
+                    timing_stats_[8].add(pid_us);
+                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
                         "GainSched ext=%.2f (h=%.3fm) | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
                         extension, horiz_reach,
                         gs_last_applied_[0].kp, gs_last_applied_[0].ki, gs_last_applied_[0].kd,
@@ -648,6 +655,7 @@ private:
                         gs_last_applied_[2].kp, gs_last_applied_[2].ki, gs_last_applied_[2].kd);
                 }
             }
+            ts[6] = std::chrono::steady_clock::now();
             
             // ========== SEND COMMANDS IF AVAILABLE ==========
             if (has_arm_command_.load() || has_head_command_.load()) {
@@ -671,26 +679,53 @@ private:
                 // Send the combined command
                 robot_->setGoalPos(full_command);
             }
+            ts[7] = std::chrono::steady_clock::now();
             
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Control timer error: %s", e.what());
         }
-        auto loop_us = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - loop_start).count();
-        loop_us_sum_ += loop_us;
-        loop_us_max_ = std::max(loop_us_max_, loop_us);
-        loop_timing_count_++;
-        if (loop_timing_count_ >= 200) {  // log every ~2s at 100Hz
-            long avg_loop = loop_us_sum_ / loop_timing_count_;
-            long avg_pid = gs_pid_write_count_ > 0 ? gs_pid_write_us_sum_ / gs_pid_write_count_ : 0;
-            RCLCPP_INFO(this->get_logger(),
-                "LoopTiming: avg=%ldus max=%ldus | syncWritePID: avg=%ldus (%ld calls)",
-                avg_loop, loop_us_max_, avg_pid, gs_pid_write_count_);
-            loop_us_sum_ = 0; loop_us_max_ = 0; loop_timing_count_ = 0;
-            gs_pid_write_us_sum_ = 0; gs_pid_write_count_ = 0;
-        }
+
+        ts[8] = std::chrono::steady_clock::now();
+        recordLoopTiming(ts);
     }
     
+    void recordLoopTiming(std::array<std::chrono::steady_clock::time_point, 9>& ts) {
+        // Fix up timestamps if exception caused early exit
+        for (size_t i = 1; i < ts.size(); ++i)
+            if (ts[i] < ts[i - 1]) ts[i] = ts[i - 1];
+
+        // Compute per-section durations (indices 0=total, 1-7=sections, 9=misc)
+        std::array<long, 10> us{};
+        us[0] = std::chrono::duration_cast<std::chrono::microseconds>(ts[8] - ts[0]).count();
+        for (size_t i = 1; i <= 7; ++i)
+            us[i] = std::chrono::duration_cast<std::chrono::microseconds>(ts[i] - ts[i - 1]).count();
+        us[9] = std::chrono::duration_cast<std::chrono::microseconds>(ts[8] - ts[7]).count();
+
+        // Accumulate (skip index 8 = event-based syncWritePID)
+        for (size_t i = 0; i < timing_stats_.size(); ++i)
+            if (i != 8) timing_stats_[i].add(us[i]);
+
+        // Log avg|max and percentage breakdown every 2s
+        long avg_total = timing_stats_[0].avg();
+
+        std::ostringstream msg;
+        msg << "LoopTiming(us avg|max, n=" << timing_stats_[0].samples << "):";
+        for (size_t i = 0; i < timing_stats_.size(); ++i)
+            msg << ' ' << timing_stats_[i].name << '=' << timing_stats_[i].avg() << '|' << timing_stats_[i].max_us;
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "%s", msg.str().c_str());
+
+        std::ostringstream pct;
+        pct << std::fixed << std::setprecision(1) << "LoopTiming(%):";
+        for (size_t i : {1u, 2u, 3u, 4u, 5u, 6u, 7u, 9u})
+            pct << ' ' << timing_stats_[i].name << '='
+                << (avg_total > 0 ? 100.0 * timing_stats_[i].avg() / avg_total : 0.0);
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "%s", pct.str().c_str());
+
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+            "SerialBus(us): readState_txrx=%ld  write_txrx=%ld",
+            robot_->last_read_txrx_us, robot_->last_write_txrx_us);
+    }
+
     void healthMonitorCallback() {
         maurice_msgs::msg::ArmStatus status_msg;
         status_msg.is_ok = true;
@@ -1589,6 +1624,23 @@ private:
     
     // Gain scheduling
     struct GainProfile { int kp = 0, ki = 0, kd = 0; };
+    struct TimingAccumulator {
+        const char* name = "";
+        long sum_us = 0;
+        long max_us = 0;
+        long samples = 0;
+
+        void add(long us) {
+            sum_us += us;
+            max_us = std::max(max_us, us);
+            ++samples;
+        }
+
+        long avg() const {
+            return samples > 0 ? (sum_us / samples) : 0;
+        }
+    };
+
     static constexpr int kGainScheduleInterval = 20;  // control cycles between updates (~200ms at 100Hz)
     bool gs_enabled_ = false;
     std::array<GainProfile, 3> gs_near_;          // near profiles for joints 2, 3, 4
@@ -1597,9 +1649,19 @@ private:
     int gs_cycle_counter_ = 0;
     bool gs_was_far_ = false;  // tracks last state for threshold crossing log
 
-    // Control loop timing instrumentation
-    long loop_us_sum_ = 0, loop_us_max_ = 0, loop_timing_count_ = 0;
-    long gs_pid_write_us_sum_ = 0, gs_pid_write_count_ = 0;
+    // Control loop timing instrumentation (throttled detailed breakdown)
+    std::array<TimingAccumulator, 10> timing_stats_{{
+        TimingAccumulator{"total"},
+        TimingAccumulator{"lock_wait"},
+        TimingAccumulator{"readState"},
+        TimingAccumulator{"readEffort"},
+        TimingAccumulator{"pubArm"},
+        TimingAccumulator{"pubHead+JS"},
+        TimingAccumulator{"gainSched"},
+        TimingAccumulator{"cmdWrite"},
+        TimingAccumulator{"syncWritePID"},
+        TimingAccumulator{"misc"}
+    }};
 
     static constexpr int kLoadWarningThreshold = 800;  // ~80% load (0.1% units)
     static constexpr int kTemperatureWarningC = 70;
