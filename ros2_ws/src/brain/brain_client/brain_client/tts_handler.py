@@ -9,7 +9,6 @@ import os
 import queue
 import threading
 import time
-from pathlib import Path
 from typing import Optional, Dict, Any
 
 import rclpy
@@ -30,10 +29,6 @@ class TTSHandler:
     
     # Default voice ID (Katie - Friendly Fixer)
     DEFAULT_VOICE_ID = "9fdaae0b-f885-4813-b589-3c07cf9d5fea"
-
-    # Volume is stored in robot_info.json (same file as app.cpp uses)
-    ROBOT_INFO_FILE = Path.home() / "innate-os" / "data" / "robot_info.json"
-    DEFAULT_VOLUME = 50  # percent (0-100)
 
     def __init__(
         self,
@@ -123,18 +118,6 @@ class TTSHandler:
     def is_available(self) -> bool:
         """Check if TTS is available and configured."""
         return self._cartesia_client is not None
-
-    def _get_paplay_volume(self) -> int:
-        """Read volume from config file. Returns PulseAudio scale (0–65536)."""
-        try:
-            if self.ROBOT_INFO_FILE.exists():
-                data = json.loads(self.ROBOT_INFO_FILE.read_text())
-                pct = int(data.get("volume_percent", self.DEFAULT_VOLUME))
-                pct = max(0, min(100, pct))
-                return int(pct / 100.0 * 65536)
-        except Exception:
-            pass
-        return int(self.DEFAULT_VOLUME / 100.0 * 65536)
     
     def _publish_tts_status(self, status: str):
         """Publish TTS playback status to /tts/is_playing topic."""
@@ -186,11 +169,10 @@ class TTSHandler:
                 "id": self.voice_id,
             }
 
-            # paplay handles WAV parsing + volume natively — no manual
-            # header stripping or PCM scaling needed.
-            pa_vol = self._get_paplay_volume()
+            # Volume is managed system-wide by app.cpp via
+            # pactl set-sink-volume, so paplay just uses the default.
             player = subprocess.Popen(
-                ["paplay", f"--volume={pa_vol}"],
+                ["paplay"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
