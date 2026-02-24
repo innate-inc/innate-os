@@ -16,7 +16,7 @@ def generate_launch_description():
     # Declare new launch arguments
     websocket_uri_arg = DeclareLaunchArgument(
         "websocket_uri",
-        default_value=get_env("BRAIN_WEBSOCKET_URI", "wss://brain.innate.bot"),
+        default_value=get_env("BRAIN_WEBSOCKET_URI", "wss://agent-v1.innate.bot"),
         description="Websocket URI",
     )
     token_arg = DeclareLaunchArgument(

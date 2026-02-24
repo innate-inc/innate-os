@@ -156,6 +156,45 @@ sudo -u "$ACTUAL_USER" git config --global core.fsync added,reference
 sudo -u "$ACTUAL_USER" git config --global core.fsyncMethod fsync
 log "Git fsync settings configured"
 
+# -----------------------------------------------------------------------------
+# 0. Migrate .env file (comment out deprecated URLs)
+# -----------------------------------------------------------------------------
+ENV_FILE="$REPO_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+    NEEDS_ENV_MIGRATION=false
+
+    # Check for old/deprecated URL values
+    if grep -q '^INNATE_PROXY_URL=https://robot-services\.innate\.bot' "$ENV_FILE" || \
+       grep -q '^BRAIN_WEBSOCKET_URI=wss://brain\.innate\.bot' "$ENV_FILE" || \
+       grep -q '^TELEMETRY_URL=https://logs\.innate\.bot' "$ENV_FILE"; then
+        NEEDS_ENV_MIGRATION=true
+    fi
+
+    if [ "$NEEDS_ENV_MIGRATION" = true ]; then
+        log "Migrating .env file (commenting out deprecated URLs)..."
+
+        # Backup .env
+        cp "$ENV_FILE" "$ACTUAL_HOME/.env.backup"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.env.backup"
+        log "  Backed up .env to $ACTUAL_HOME/.env.backup"
+
+        # Comment out deprecated values
+        sed -i 's|^INNATE_PROXY_URL=https://robot-services\.innate\.bot|# INNATE_PROXY_URL=https://robot-services.innate.bot|' "$ENV_FILE"
+        sed -i 's|^BRAIN_WEBSOCKET_URI=wss://brain\.innate\.bot|# BRAIN_WEBSOCKET_URI=wss://brain.innate.bot|' "$ENV_FILE"
+        sed -i 's|^TELEMETRY_URL=https://logs\.innate\.bot|# TELEMETRY_URL=https://logs.innate.bot|' "$ENV_FILE"
+
+        # Add reference comment at the bottom of .env
+        if ! grep -q 'Refer to .env.template for examples' "$ENV_FILE"; then
+            echo "" >> "$ENV_FILE"
+            echo "# Refer to .env.template for examples" >> "$ENV_FILE"
+        fi
+
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$ENV_FILE"
+        log "  Deprecated URLs commented out in .env"
+        log "  Variables unset from environment"
+    fi
+fi
+
 # Stop running services before updating (keep app.cpp alive during build)
 log "Stopping services to begin update..."
 
