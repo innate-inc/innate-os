@@ -108,7 +108,7 @@ def extract_chat_dialogue(bag_path, output_file):
 
 def extract_video(bag_path, output_file, fps=30):
     """
-    Extract images from /mars/main_camera/image/compressed topic and create an MP4 video.
+    Extract images from /mars/main_camera/left/image_raw/compressed topic and create an MP4 video.
     
     Args:
         bag_path (str): Path to the ROS bag directory
@@ -134,7 +134,7 @@ def extract_video(bag_path, output_file, fps=30):
                    if 'mars/main_camera/left/image_raw/compressed' in topic or 'mars/arm/image_raw/compressed' in topic}
     
     if not image_topics:
-        print("No mars/main_camera/image/compressed or mars/arm/image_raw/compressed topics found in the bag file.")
+        print("No mars/main_camera/left/image_raw/compressed or mars/arm/image_raw/compressed topics found in the bag file.")
         print("Available topics:", list(topics_and_types.keys()))
         return
     

@@ -21,9 +21,9 @@ WebRTCStreamer::WebRTCStreamer(const rclcpp::NodeOptions& options)
 
     // Declare parameters
     this->declare_parameter("use_compressed_images", false);
-    this->declare_parameter("live_main_camera_topic", "/mars/main_camera/image");
+    this->declare_parameter("live_main_camera_topic", "/mars/main_camera/left/image_raw");
     this->declare_parameter("live_arm_camera_topic", "/mars/arm/image_raw");
-    this->declare_parameter("replay_main_camera_topic", "/brain/recorder/replay/main_camera/image");
+    this->declare_parameter("replay_main_camera_topic", "/brain/recorder/replay/main_camera/left/image_raw");
     this->declare_parameter("replay_arm_camera_topic", "/brain/recorder/replay/arm_camera/image_raw");
 
     // Get parameters

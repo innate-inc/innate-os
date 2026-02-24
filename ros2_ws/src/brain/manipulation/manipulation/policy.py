@@ -150,7 +150,7 @@ class InferenceNode(Node):
         self.end_position = [0.853, -0.457, 1.295, -0.933, -0.049, 0.0]
         
         # Subscribers for images and joint state with sensor QoS
-        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/mars/main_camera/left/image_raw', self.image1_callback, image_qos)
         self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
         self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
 

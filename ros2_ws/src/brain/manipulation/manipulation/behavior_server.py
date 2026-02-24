@@ -133,7 +133,7 @@ class BehaviorServer(Node):
         )
         
         # Subscribers
-        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/mars/main_camera/left/image_raw', self.image1_callback, image_qos)
         self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
         self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
         
@@ -922,7 +922,7 @@ class BehaviorServer(Node):
         
         # Check if we have received any data at all
         if self.latest_image1 is None:
-            self.get_logger().warn("Camera 1 (/mars/main_camera/image) has never received data")
+            self.get_logger().warn("Camera 1 (/mars/main_camera/left/image_raw) has never received data")
             return False
         
         if self.latest_image2 is None:

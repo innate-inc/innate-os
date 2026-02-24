@@ -98,7 +98,7 @@ class InferenceNode(Node):
         self.latest_joint_state = None
 
         # Subscribers
-        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/mars/main_camera/left/image_raw', self.image1_callback, image_qos)
         self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
         self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
 

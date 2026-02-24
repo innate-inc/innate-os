@@ -34,7 +34,7 @@ class MauriceBotNode(Node):
         self.declare_parameter('cameras.base.aspect_ratio', 4.44)
         self.declare_parameter('cameras.base.resolution.width', 1280)
         self.declare_parameter('cameras.base.resolution.height', 800)
-        self.declare_parameter('cameras.base.topic', '/mars/main_camera/image')
+        self.declare_parameter('cameras.base.topic', '/mars/main_camera/left/image_raw')
 
         self.declare_parameter('cameras.arm.vertical_fov', 150.0)
         self.declare_parameter('cameras.arm.aspect_ratio', 1.33)

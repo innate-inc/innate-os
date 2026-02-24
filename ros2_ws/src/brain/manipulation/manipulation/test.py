@@ -34,7 +34,7 @@ class ImageCapture(Node):
         )
         
         # Subscribers for images with sensor QoS (same topics as policy.py)
-        self.create_subscription(Image, '/mars/main_camera/image', self.image1_callback, image_qos)
+        self.create_subscription(Image, '/mars/main_camera/left/image_raw', self.image1_callback, image_qos)
         self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
         
         self.get_logger().info("Waiting for first images from both live cameras...")
@@ -141,7 +141,7 @@ class ImageCapture(Node):
             
             # Bottom row: Live images
             axes[1, 0].imshow(live_img1_rgb)
-            axes[1, 0].set_title('Live Camera 1 (/mars/main_camera/image)')
+            axes[1, 0].set_title('Live Camera 1 (/mars/main_camera/left/image_raw)')
             axes[1, 0].axis('off')
             
             axes[1, 1].imshow(live_img2_rgb)

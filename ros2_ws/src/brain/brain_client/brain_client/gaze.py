@@ -163,7 +163,7 @@ class GazeController:
 class ROSPersonTracker:
     """ROS2 person tracker - simple interface for agents."""
 
-    def __init__(self, node, camera_topic: str = "/mars/main_camera/image"):
+    def __init__(self, node, camera_topic: str = "/mars/main_camera/left/image_raw"):
         self._node = node
         self._frame = None
         self._frame_lock = threading.Lock()
