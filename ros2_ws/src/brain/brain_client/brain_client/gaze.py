@@ -163,10 +163,35 @@ class GazeController:
 class ROSPersonTracker:
     """ROS2 person tracker - simple interface for agents."""
 
-    def __init__(self, node, camera_topic: str = "/mars/main_camera/image"):
+    # Face event cooldowns (seconds)
+    FACE_EVENT_COOLDOWN = 10.0  # Min time between "person detected" events
+    APPROACH_COOLDOWN = 15.0    # Min time between "person approaching" events
+    APPROACH_THRESHOLD = 1.5    # Face must grow by 50% to trigger approach event
+
+    def __init__(
+        self,
+        node,
+        camera_topic: str = "/mars/main_camera/image",
+        on_vision_event: Optional[Callable[[str, dict], None]] = None,
+    ):
+        """
+        Initialize person tracker.
+
+        Args:
+            node: ROS2 node
+            camera_topic: Camera topic to subscribe to
+            on_vision_event: Optional callback for vision events. Called with:
+                - event_type: "face.detected", "face.approaching", "face.left"
+                - event_data: dict with detection info (size, position, etc.)
+
+                Future event types may include:
+                - "object.detected", "object.left" (general object detection)
+                - "motion.detected" (scene change detection)
+        """
         self._node = node
         self._frame = None
         self._frame_lock = threading.Lock()
+        self._on_vision_event = on_vision_event
 
         # Hardware interfaces
         self._head = HeadInterface(node, node.get_logger())
@@ -185,6 +210,12 @@ class ROSPersonTracker:
         # Face tracking state
         self._last_face_time = 0.0
         self._face_timeout = 5.0
+
+        # Face event state
+        self._had_face = False
+        self._last_face_size = 0.0
+        self._last_person_detected_event = 0.0
+        self._last_approach_event = 0.0
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -254,17 +285,58 @@ class ROSPersonTracker:
             if frame is not None:
                 shape = (frame.shape[0], frame.shape[1])
                 faces = self._detector.detect(frame)
+                now = time.time()
 
                 if faces:
                     # Track largest face
                     best = max(faces, key=lambda f: f["width"] * f["height"])
                     self._gaze.track_face(best, shape)
-                    self._last_face_time = time.time()
-                elif time.time() - self._last_face_time > self._face_timeout:
-                    # Return to neutral after timeout
-                    with self._gaze._lock:
-                        self._gaze._target_tilt = 0.0
-                    self._last_face_time = time.time()
+                    self._last_face_time = now
+
+                    # Calculate face size (area as fraction of frame)
+                    face_size = best["width"] * best["height"]
+
+                    # Emit vision events
+                    if self._on_vision_event:
+                        # New person detected (no face -> face)
+                        if not self._had_face:
+                            if now - self._last_person_detected_event > self.FACE_EVENT_COOLDOWN:
+                                self._on_vision_event("face.detected", {
+                                    "count": len(faces),
+                                    "size": face_size,
+                                    "position": (best["center_x"], best["center_y"]),
+                                })
+                                self._last_person_detected_event = now
+                                self._last_face_size = face_size
+
+                        # Person approaching (face getting significantly larger)
+                        elif self._last_face_size > 0:
+                            size_ratio = face_size / self._last_face_size
+                            if size_ratio > self.APPROACH_THRESHOLD:
+                                if now - self._last_approach_event > self.APPROACH_COOLDOWN:
+                                    self._on_vision_event("face.approaching", {
+                                        "count": len(faces),
+                                        "size": face_size,
+                                        "previous_size": self._last_face_size,
+                                        "growth_ratio": size_ratio,
+                                    })
+                                    self._last_approach_event = now
+                                    self._last_face_size = face_size
+
+                    self._had_face = True
+
+                else:
+                    # No faces detected
+                    if self._had_face and now - self._last_face_time > self._face_timeout:
+                        # Person left
+                        if self._on_vision_event:
+                            self._on_vision_event("face.left", {})
+                        self._had_face = False
+                        self._last_face_size = 0.0
+
+                        # Return to neutral
+                        with self._gaze._lock:
+                            self._gaze._target_tilt = 0.0
 
             elapsed = time.time() - loop_start
             if elapsed < dt:

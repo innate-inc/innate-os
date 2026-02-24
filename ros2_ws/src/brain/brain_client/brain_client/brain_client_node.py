@@ -1183,7 +1183,10 @@ class BrainClientNode(Node):
         if wants_gaze and self._gaze_tracker is None:
             try:
                 TrackerClass = _get_gaze_tracker_class()
-                self._gaze_tracker = TrackerClass(self)
+                self._gaze_tracker = TrackerClass(
+                    self,
+                    on_vision_event=self._handle_vision_event,
+                )
                 self._gaze_tracker.start()
                 self.get_logger().info(
                     f"👁️ Gaze tracker started for directive '{self.current_directive.id}'"
@@ -1193,6 +1196,45 @@ class BrainClientNode(Node):
                 self._gaze_tracker = None
         elif not wants_gaze and self._gaze_tracker is not None:
             self._stop_gaze_tracker()
+
+    def _handle_vision_event(self, event_type: str, event_data: dict):
+        """
+        Handle vision events from gaze tracker and forward to BASIC.
+
+        This enables agents to react to visual events like people approaching.
+
+        Currently supports face.* events. Future versions may support:
+        - object.detected / object.left (general object detection)
+        - motion.detected (scene change detection)
+        """
+        if not self.is_brain_active:
+            return
+
+        # Format message for BASIC based on event type
+        if event_type == "face.detected":
+            count = event_data.get("count", 1)
+            if count == 1:
+                text = "[Vision] I see a person in front of me."
+            else:
+                text = f"[Vision] I see {count} people in front of me."
+        elif event_type == "face.approaching":
+            text = "[Vision] The person is getting closer to me."
+        elif event_type == "face.left":
+            text = "[Vision] The person has left my field of view."
+        else:
+            # Unknown event type - log but don't send
+            self.get_logger().debug(f"👁️ Unhandled vision event: {event_type}")
+            return
+
+        self.get_logger().info(f"👁️ Vision event: {event_type} -> {text}")
+
+        # Send as chat_in message to BASIC
+        payload = {"text": text}
+        if image_b64 := self._encode_current_image():
+            payload["image_b64"] = image_b64
+
+        outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
+        self.ws_bridge.send_message(outgoing_msg)
 
     def _stop_gaze_tracker(self):
         """Stop and clean up gaze tracker."""
