@@ -2,12 +2,12 @@
 """
 PID Hot-Reload Watcher with Real-Time Joint State Plot.
 
-Watches pid_tuning.yaml for changes and applies new PID/profile values
-to the running arm node in real-time. Also plots joint positions as a
+Watches arm_config.yaml for changes and applies new PID/profile/gain-scheduling
+values to the running arm node in real-time. Also plots joint positions as a
 live ASCII chart in the terminal (requires: pip install plotext).
 
 Usage:
-    python3 pid_hot_reload.py [path/to/pid_tuning.yaml] [--no-plot]
+    python3 pid_hot_reload.py [path/to/arm_config.yaml] [--no-plot]
 """
 
 import json
@@ -127,14 +127,14 @@ def draw_plot(collector, status_line=""):
 # =====================================================================
 def find_config_path():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    source_path = os.path.join(script_dir, "..", "config", "pid_tuning.yaml")
+    source_path = os.path.join(script_dir, "..", "config", "arm_config.yaml")
     if os.path.exists(source_path):
         return os.path.abspath(source_path)
     try:
         from ament_index_python.packages import get_package_share_directory
 
         pkg_dir = get_package_share_directory("maurice_arm")
-        installed_path = os.path.join(pkg_dir, "config", "pid_tuning.yaml")
+        installed_path = os.path.join(pkg_dir, "config", "arm_config.yaml")
         if os.path.exists(installed_path):
             return installed_path
     except Exception:
@@ -147,24 +147,26 @@ def load_pid_config(path):
         raw = yaml.safe_load(f)
     if raw is None:
         return {}
+    ros_params = raw.get("maurice_arm", {}).get("ros__parameters", {})
     params = {}
-    for joint_key, gains in raw.items():
-        if joint_key == "gain_scheduling":
-            # Pass gain scheduling as JSON string (same format as arm_config.yaml)
-            gs_json = {"enabled": True}
-            for profile in ("near", "far"):
-                if profile in gains and isinstance(gains[profile], dict):
-                    gs_json[profile] = {}
-                    for jkey, jgains in gains[profile].items():
-                        if isinstance(jgains, dict):
-                            gs_json[profile][jkey] = {k: int(v) for k, v in jgains.items() if k in ("kp", "ki", "kd")}
-            params["gain_scheduling"] = json.dumps(gs_json)
-            continue
-        if not isinstance(gains, dict):
-            continue
-        for field in ("kp", "ki", "kd", "profile_velocity", "profile_acceleration"):
-            if field in gains:
-                params[f"{joint_key}_{field}"] = int(gains[field])
+
+    # Parse joints JSON string → extract PID + profile per joint
+    joints_str = ros_params.get("joints", "{}")
+    joints = json.loads(joints_str)
+    for joint_key, joint_data in joints.items():
+        pid = joint_data.get("pid_gains", {})
+        for field in ("kp", "ki", "kd"):
+            if field in pid:
+                params[f"{joint_key}_{field}"] = int(pid[field])
+        for field in ("profile_velocity", "profile_acceleration"):
+            if field in joint_data:
+                params[f"{joint_key}_{field}"] = int(joint_data[field])
+
+    # gain_scheduling is already a JSON string in the YAML (literal block |)
+    gs_str = ros_params.get("gain_scheduling", "").strip()
+    if gs_str:
+        params["gain_scheduling"] = gs_str
+
     return params
 
 
@@ -244,7 +246,7 @@ def main():
     config_path = os.path.abspath(args[0]) if args else find_config_path()
 
     if config_path is None or not os.path.exists(config_path):
-        print("Error: pid_tuning.yaml not found. Provide path as argument.")
+        print("Error: arm_config.yaml not found. Provide path as argument.")
         sys.exit(1)
 
     use_plot = HAS_PLOT and HAS_ROS and not no_plot

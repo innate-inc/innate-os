@@ -91,6 +91,7 @@ public:
         // Setup ARM publishers/subscribers/services
         RCLCPP_INFO(this->get_logger(), "Setting up ARM publishers/subscribers/services");
         arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/mars/arm/state", 10);
+        arm_command_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/mars/arm/command_state", 10);
         arm_status_pub_ = this->create_publisher<maurice_msgs::msg::ArmStatus>("/mars/arm/status", 10);
         // Use best_effort QoS to match UDP receiver publisher for low-latency teleoperation
         auto cmd_qos = rclcpp::QoS(1).best_effort();
@@ -392,6 +393,23 @@ private:
             }
         }
         
+        // If gain scheduling is active, push hot-reloaded PID for joints 2-4
+        // into gs_near_ and gs_far_ so the control loop doesn't immediately
+        // overwrite them with stale interpolated values.
+        if (gs_enabled_) {
+            for (int jn : pid_changed_joints) {
+                if (jn >= 2 && jn <= 4) {
+                    int gi = jn - 2;  // gs index 0,1,2 = joints 2,3,4
+                    const auto& c = joint_configs_[jn - 1];
+                    gs_near_[gi] = {c.kp, c.ki, c.kd};
+                    gs_far_[gi]  = {c.kp, c.ki, c.kd};
+                    RCLCPP_INFO(this->get_logger(),
+                        "Hot-reload: updated gain_scheduling near+far for joint %d to P=%d I=%d D=%d",
+                        jn, c.kp, c.ki, c.kd);
+                }
+            }
+        }
+        
         try {
             std::lock_guard<std::mutex> lock(dynamixel_mutex_);
             
@@ -682,6 +700,19 @@ private:
                 
                 // Send the combined command
                 robot_->setGoalPos(full_command);
+                
+                // Publish commanded positions (in radians, external convention) for PID debugging
+                sensor_msgs::msg::JointState cmd_msg;
+                cmd_msg.header.stamp = this->now();
+                cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
+                cmd_msg.position.resize(6);
+                for (int i = 0; i < 6; ++i) {
+                    double rad = ((full_command[i] - 2048) * 2 * M_PI) / 4096.0;
+                    // Reverse the direction flip for joints 2,3,4,6
+                    if (i == 1 || i == 2 || i == 3 || i == 5) rad = -rad;
+                    cmd_msg.position[i] = rad;
+                }
+                arm_command_state_pub_->publish(cmd_msg);
             }
             ts[7] = std::chrono::steady_clock::now();
             
@@ -1571,6 +1602,7 @@ private:
     
     // ARM members
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_command_state_pub_;
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
