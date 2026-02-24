@@ -6,13 +6,27 @@
 
 namespace maurice_arm {
 
+// ── Dynamixel Operating Modes ──────────────────────────────────────────
+// Mode 0 = Current Control          (x330 ONLY — XL430/XC430 lack current hw)
+// Mode 1 = Velocity Control         (all X-series)
+// Mode 3 = Position Control 0-360°  (all X-series)
+// Mode 4 = Extended Position / Multi-turn (all X-series)
+// Mode 5 = Current-based Position   (x330 ONLY — XL430/XC430 lack current hw)
+// Mode 16 = PWM                     (all X-series)
+//
+// x330 series (XL330-M288, XC330-M288) have Current Limit (addr 38) and
+// Goal Current (addr 102) registers. x430 series do NOT — attempting to set
+// mode 0 or 5 on an XL430/XC430 will be rejected by the servo.
+//
+// Also: addr 126 = "Present Current" (mA) on x330, "Present Load" (0.1%) on x430.
+// ───────────────────────────────────────────────────────────────────────
 enum class OperatingMode {
-    CURRENT = 0,
-    VELOCITY = 1,
-    POSITION = 3,
-    EXTENDED_POSITION = 4,
-    CURRENT_CONTROLLED_POSITION = 5,
-    PWM = 16
+    CURRENT = 0,                      // x330 only
+    VELOCITY = 1,                     // all
+    POSITION = 3,                     // all
+    EXTENDED_POSITION = 4,            // all
+    CURRENT_CONTROLLED_POSITION = 5,  // x330 only
+    PWM = 16                          // all
 };
 
 class Dynamixel {
