@@ -10,13 +10,14 @@ from innate_proxy import ProxyClient
 
 proxy = ProxyClient(config={"cartesia_voice_id": "..."})
 
-# TTS
-audio = proxy.cartesia.tts.bytes(
+# TTS (streaming)
+for chunk in proxy.cartesia.tts.bytes_stream(
     model_id="sonic-3",
     transcript="Hello!",
     voice={"mode": "id", "id": proxy.config["cartesia_voice_id"]},
     output_format={"container": "wav", "encoding": "pcm_s16le", "sample_rate": 44100},
-)
+):
+    process_audio(chunk)
 
 # Chat completions (async)
 resp = await proxy.openai.chat.completions(
@@ -97,14 +98,15 @@ proxy.config           # your app config dict
 Low-level request (you usually don't need this — use the adapters):
 
 ```python
-resp = proxy.request("cartesia", "/tts/bytes", method="POST", json={...})
+with proxy.request_stream("cartesia", "/tts/bytes", json=body) as resp:
+    for chunk in resp.iter_bytes(): ...
 resp = await proxy.request_async("openai", "/v1/chat/completions", json={...})
 ```
 
 ### Cartesia adapter
 
 ```python
-proxy.cartesia.tts.bytes(model_id, transcript, voice, output_format) -> bytes
+proxy.cartesia.tts.bytes_stream(model_id, transcript, voice, output_format) -> Iterator[bytes]
 ```
 
 ### OpenAI adapter
@@ -127,7 +129,8 @@ ws = await proxy.openai.realtime.connect(model, on_message)
 from httpx import HTTPStatusError
 
 try:
-    audio = proxy.cartesia.tts.bytes(...)
+    for chunk in proxy.cartesia.tts.bytes_stream(...):
+        process_audio(chunk)
 except HTTPStatusError as e:
     if e.response.status_code == 401:
         print("Auth failed — check INNATE_SERVICE_KEY")

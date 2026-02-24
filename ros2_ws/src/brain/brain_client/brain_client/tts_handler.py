@@ -4,11 +4,9 @@ Text-to-Speech handler using Cartesia API.
 Generates speech audio and plays it through the robot's audio system.
 """
 
-import array
 import json
 import os
-import struct
-import tempfile
+import queue
 import threading
 import time
 from pathlib import Path
@@ -24,7 +22,7 @@ from brain_client.logging_config import UniversalLogger
 
 class TTSHandler:
     """
-    Handles text-to-speech conversion using Cartesia API and audio playback via aplay.
+    Handles text-to-speech conversion using Cartesia API and audio playback via paplay.
     
     Requires a ProxyClient instance for accessing Cartesia services.
     Voice ID is read from proxy.config["cartesia_voice_id"].
@@ -73,10 +71,25 @@ class TTSHandler:
         try:
             self._cartesia_client = self._proxy.cartesia
             self.logger.info(f"✅ Cartesia TTS initialized via proxy (voice: {self.voice_id})")
+            # Pre-warm the TCP+TLS connection to the proxy so the first
+            # TTS request doesn't pay the cold-start penalty (~1-2s).
+            threading.Thread(target=self._warmup_connection, daemon=True).start()
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize Cartesia client: {e}")
             self.logger.error("TTS proxy not properly initialized in BrainClientNode")
             self._cartesia_client = None
+
+    def _warmup_connection(self):
+        """Open a TCP+TLS connection to the proxy so httpx can reuse it."""
+        try:
+            t0 = time.perf_counter()
+            client = self._proxy.get_sync_client()
+            # Any request to the proxy host warms the connection pool.
+            client.head(self._proxy.proxy_url)
+            dt = (time.perf_counter() - t0) * 1000
+            self.logger.info(f"⏱️ Proxy connection pre-warmed in {dt:.0f}ms")
+        except Exception as e:
+            self.logger.debug(f"Proxy warmup failed (non-fatal): {e}")
     
     def _start_speaker_keepalive(self):
         """Start a background silence stream via PulseAudio to keep the speaker active.
@@ -111,74 +124,17 @@ class TTSHandler:
         """Check if TTS is available and configured."""
         return self._cartesia_client is not None
 
-    def _get_volume_fraction(self) -> float:
-        """Read volume from config file. Returns a fraction 0.0-1.0."""
+    def _get_paplay_volume(self) -> int:
+        """Read volume from config file. Returns PulseAudio scale (0–65536)."""
         try:
             if self.ROBOT_INFO_FILE.exists():
                 data = json.loads(self.ROBOT_INFO_FILE.read_text())
                 pct = int(data.get("volume_percent", self.DEFAULT_VOLUME))
-                return max(0, min(100, pct)) / 100.0
+                pct = max(0, min(100, pct))
+                return int(pct / 100.0 * 65536)
         except Exception:
             pass
-        return self.DEFAULT_VOLUME / 100.0
-
-    @staticmethod
-    def _find_wav_data_offset(wav_data: bytes) -> int:
-        """Find the offset where PCM sample data begins in a WAV file.
-
-        Walks the RIFF/WAVE chunk structure to locate the 'data' chunk.
-        Returns the byte offset of the first sample, or 44 as a fallback.
-        """
-        if len(wav_data) < 12:
-            return 44
-        # Skip RIFF header (12 bytes: 'RIFF' + size + 'WAVE')
-        pos = 12
-        while pos + 8 <= len(wav_data):
-            chunk_id = wav_data[pos:pos + 4]
-            chunk_size = struct.unpack_from("<I", wav_data, pos + 4)[0]
-            if chunk_id == b"data":
-                return pos + 8  # samples start right after chunk header
-            pos += 8 + chunk_size
-        return 44  # fallback
-
-    @staticmethod
-    def _scale_wav_bytes(wav_data: bytes, volume: float) -> bytes:
-        """Scale PCM samples in a complete WAV byte buffer.
-
-        Parses the WAV header to find the actual data offset.
-        Falls back to returning unscaled audio on any error.
-        """
-        if volume >= 1.0:
-            return wav_data
-        try:
-            data_offset = TTSHandler._find_wav_data_offset(wav_data)
-            header = wav_data[:data_offset]
-            pcm = wav_data[data_offset:]
-            if len(pcm) < 2:
-                return wav_data
-            # Ensure even length for 16-bit samples
-            usable = len(pcm) & ~1
-            samples = array.array("h")  # signed 16-bit
-            samples.frombytes(pcm[:usable])
-            scaled = array.array("h", (max(-32768, min(32767, int(s * volume))) for s in samples))
-            return header + scaled.tobytes() + pcm[usable:]
-        except Exception:
-            return wav_data  # fallback: play unscaled rather than fail
-
-    @staticmethod
-    def _scale_pcm_chunk(chunk: bytes, volume: float) -> bytes:
-        """Scale raw pcm_s16le bytes (no header). Length must be even."""
-        if volume >= 1.0 or len(chunk) < 2:
-            return chunk
-        # Ensure even length
-        usable = len(chunk) & ~1
-        samples = array.array("h")
-        samples.frombytes(chunk[:usable])
-        scaled = array.array("h", (max(-32768, min(32767, int(s * volume))) for s in samples))
-        result = scaled.tobytes()
-        if usable < len(chunk):
-            result += chunk[usable:]  # leftover odd byte
-        return result
+        return int(self.DEFAULT_VOLUME / 100.0 * 65536)
     
     def _publish_tts_status(self, status: str):
         """Publish TTS playback status to /tts/is_playing topic."""
@@ -220,133 +176,115 @@ class TTSHandler:
         # Notify that TTS is starting
         self._publish_tts_status("true")
 
+        t_start = time.perf_counter()
+        text_len = len(text)
         try:
-            self.logger.debug(f"🗣️ Generating speech for: '{text[:50]}{'...' if len(text) > 50 else ''}'")
-            
-            # Set up voice configuration
+            self.logger.info(f"🗣️ TTS start ({text_len} chars): '{text[:60]}{'...' if text_len > 60 else ''}'")
+
             voice = voice_config or {
                 "mode": "id",
                 "id": self.voice_id,
             }
-            
-            # Generate speech using Cartesia via proxy (sync)
-            response = self._cartesia_client.tts.bytes(
-                model_id="sonic-3",  # Latest Cartesia model
-                transcript=text,
-                voice=voice,
-                output_format={
-                    "container": "wav",
-                    "encoding": "pcm_s16le",
-                    "sample_rate": 44100
-                },
+
+            # paplay handles WAV parsing + volume natively — no manual
+            # header stripping or PCM scaling needed.
+            pa_vol = self._get_paplay_volume()
+            player = subprocess.Popen(
+                ["paplay", f"--volume={pa_vol}"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
-            
-            # If response is an iterator of chunks, stream directly into aplay.
-            # Otherwise, fall back to the existing temp-file approach.
-            volume = self._get_volume_fraction()
-            self.logger.debug(f"🔊 Volume: {int(volume * 100)}%")
 
-            if hasattr(response, '__iter__') and not isinstance(response, (bytes, bytearray)):
-                self.logger.debug("🔊 Streaming TTS audio to aplay via stdin")
-                player = subprocess.Popen(
-                    ["aplay", "-"],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    text=False,
-                )
+            # Queue + writer thread decouples the network download from
+            # blocking pipe writes, exactly like the demo.
+            q: queue.Queue[bytes | None] = queue.Queue()
 
+            def _writer() -> None:
+                assert player.stdin is not None
+                while True:
+                    chunk = q.get()
+                    if chunk is None:
+                        break
+                    try:
+                        player.stdin.write(chunk)
+                    except BrokenPipeError:
+                        break
                 try:
-                    header_remaining = 44  # WAV header bytes to pass through unscaled
-                    for chunk in response:
-                        if not chunk:
-                            continue
-                        # Scale PCM data but pass WAV header through unchanged
-                        if header_remaining > 0:
-                            hdr_part = chunk[:header_remaining]
-                            pcm_part = chunk[header_remaining:]
-                            header_remaining -= len(hdr_part)
-                            out = hdr_part + self._scale_pcm_chunk(pcm_part, volume)
-                        else:
-                            out = self._scale_pcm_chunk(chunk, volume)
-                        try:
-                            player.stdin.write(out)
-                            player.stdin.flush()
-                        except BrokenPipeError:
-                            # aplay exited early; stop streaming
-                            self.logger.warn("🔊 aplay pipe closed early during streaming")
-                            break
+                    player.stdin.close()
+                except Exception:
+                    pass
 
-                    # Close stdin to signal end of stream and wait for aplay to finish
-                    try:
-                        if player.stdin:
-                            player.stdin.close()
-                    except Exception:
-                        pass
+            writer = threading.Thread(target=_writer, daemon=True)
+            writer.start()
 
-                    player.wait()
-                    if player.returncode == 0:
-                        self.logger.debug("✅ Speech playback completed successfully (streaming)")
-                        success = True
-                    else:
-                        self.logger.error(f"❌ Audio playback failed (streaming), return code {player.returncode}")
-                        success = False
-                except Exception as stream_error:
-                    self.logger.error(f"❌ Streaming TTS playback failed: {stream_error}")
-                    # Ensure the process is cleaned up
-                    try:
-                        if player.stdin and not player.stdin.closed:
-                            player.stdin.close()
-                    except Exception:
-                        pass
-                    try:
-                        player.kill()
-                    except Exception:
-                        pass
-                    success = False
-            else:
-                # Response is already bytes: use the original temp-file playback path.
-                audio_data = self._scale_wav_bytes(response, volume)
-                
-                # Save to temporary file
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    temp_file.write(audio_data)
-                    temp_filename = temp_file.name
-                
-                # Play the audio using aplay
-                self.logger.debug(f"🔊 Playing audio file: {temp_filename}")
-                result = subprocess.run(
-                    ["aplay", temp_filename],
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-                
-                if result.returncode == 0:
-                    self.logger.debug("✅ Speech playback completed successfully")
+            try:
+                total_bytes = 0
+                chunk_count = 0
+                t_first_chunk = None
+
+                t_api = time.perf_counter()
+                for chunk in self._cartesia_client.tts.bytes_stream(
+                    model_id="sonic-3",
+                    transcript=text,
+                    voice=voice,
+                    output_format={
+                        "container": "wav",
+                        "encoding": "pcm_s16le",
+                        "sample_rate": 44100,
+                    },
+                ):
+                    if not chunk:
+                        continue
+                    chunk_count += 1
+                    total_bytes += len(chunk)
+                    if t_first_chunk is None:
+                        t_first_chunk = time.perf_counter()
+                        self.logger.info(
+                            f"⏱️ TTS first byte in {(t_first_chunk - t_api)*1000:.0f}ms"
+                        )
+                    q.put(chunk)
+
+                t_stream_done = time.perf_counter()
+
+                # Signal writer to close stdin and wait for paplay to finish
+                q.put(None)
+                writer.join()
+                player.wait()
+                t_play_done = time.perf_counter()
+
+                if player.returncode == 0:
+                    ttfb_ms = (t_first_chunk - t_api) * 1000 if t_first_chunk else 0
+                    self.logger.info(
+                        f"✅ TTS done ({text_len} chars): "
+                        f"TTFB={ttfb_ms:.0f}ms "
+                        f"stream={(t_stream_done - t_api)*1000:.0f}ms "
+                        f"total={(t_play_done - t_start)*1000:.0f}ms "
+                        f"({total_bytes/1024:.0f}KB, {chunk_count} chunks)"
+                    )
                     success = True
                 else:
-                    self.logger.error(f"❌ Audio playback failed: {result.stderr}")
+                    stderr = player.stderr.read().decode(errors="replace").strip() if player.stderr else ""
+                    self.logger.error(f"❌ paplay failed (rc={player.returncode}): {stderr}")
                     success = False
-                
+            except Exception as e:
+                self.logger.error(f"❌ Streaming TTS failed: {e}")
+                q.put(None)
+                writer.join(timeout=2)
+                try:
+                    player.kill()
+                except Exception:
+                    pass
+                success = False
+
         except Exception as e:
             self.logger.error(f"❌ TTS generation failed: {e}")
             success = False
         finally:
-            # Clean up temporary file
-            try:
-                if 'temp_filename' in locals():
-                    os.unlink(temp_filename)
-            except Exception as cleanup_error:
-                self.logger.warn(f"⚠️ Failed to cleanup temp file: {cleanup_error}")
-            
-            # Release the lock
             with self.play_lock:
                 self.is_playing = False
-            
-            # Notify that TTS is done
             self._publish_tts_status("false")
-                
+
         return success
 
     def speak_text_async(self, text: str, voice_config: Optional[Dict[str, Any]] = None) -> None:

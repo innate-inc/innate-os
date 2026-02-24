@@ -12,7 +12,7 @@ Usage::
     from innate_proxy import ProxyClient
 
     proxy = ProxyClient(config={"cartesia_voice_id": "..."})
-    proxy.cartesia.tts.bytes(...)
+    proxy.cartesia.tts.bytes_stream(...)
     proxy.openai.realtime.connect_sync(...)
 """
 
@@ -103,7 +103,7 @@ class ProxyClient:
             )
         return self._sync_client
 
-    def request(
+    def request_stream(
         self,
         service_name: str,
         endpoint: str,
@@ -111,8 +111,15 @@ class ProxyClient:
         json: Optional[Dict[str, Any]] = None,
         data: Optional[bytes] = None,
         params: Optional[Dict[str, Any]] = None,
-    ) -> httpx.Response:
-        """Make a synchronous request through the proxy."""
+    ):
+        """Return a context manager that yields an ``httpx.Response`` with streaming.
+
+        Usage::
+
+            with proxy.request_stream("cartesia", "/tts/bytes", json=body) as resp:
+                for chunk in resp.iter_bytes():
+                    ...
+        """
         if not self.is_available():
             raise RuntimeError(
                 "ProxyClient is not configured. "
@@ -128,16 +135,7 @@ class ProxyClient:
         elif data is not None:
             kwargs["content"] = data
 
-        response = client.request(**kwargs)
-
-        if self._auth is not None and self._is_token_expired(response):
-            logger.info("JWT expired — renewing and retrying %s %s", method, url)
-            self._auth.token_needs_renewal = True
-            client.headers.update(self._get_auth_headers())
-            response = client.request(**kwargs)
-
-        response.raise_for_status()
-        return response
+        return client.stream(**kwargs)
 
     # -- Async HTTP -----------------------------------------------------------
 
