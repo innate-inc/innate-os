@@ -2,7 +2,7 @@ maurice_arm:
   ros__parameters:
     # Device detection automatic - looks for 7 servos at 1M baud
     baud_rate: 1000000
-    control_frequency: 100.0
+    control_frequency: 200.0
     trajectory_rate_hz: 100.0
     # joint_7 is the head servo. Its position_limits define the head angle range (radians).
     # Head position is inverted: negative head angle = positive servo angle (direction_reversed: true)

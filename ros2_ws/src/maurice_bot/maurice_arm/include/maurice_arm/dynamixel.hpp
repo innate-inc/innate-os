@@ -42,6 +42,7 @@ public:
     // Each entry: {servo_id, kd, ki, kp}
     void syncWritePID(const std::vector<std::tuple<int, int, int, int>>& pid_data);
     void setHomeOffset(int motor_id, int home_position);
+    void setReturnDelayTime(int motor_id, int value);  // value * 2 = delay in µs
     void setProfileVelocity(int motor_id, int velocity);
     void setProfileAcceleration(int motor_id, int acceleration);
     // Write profile acceleration + velocity to multiple servos in a single GroupSyncWrite packet
@@ -69,6 +70,7 @@ private:
     dynamixel::PacketHandler* packet_handler_;
     
     // Control table addresses
+    static constexpr int ADDR_RETURN_DELAY_TIME = 9;
     static constexpr int ADDR_TORQUE_ENABLE = 64;
     static constexpr int ADDR_GOAL_POSITION = 116;
     static constexpr int ADDR_PWM_LIMIT = 36;

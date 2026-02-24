@@ -442,6 +442,10 @@ private:
             dynamixel_->disableTorque(config.servo_id);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             
+            // Set Return Delay Time: 100 * 2µs = 200µs (default 250 = 500µs)
+            dynamixel_->setReturnDelayTime(config.servo_id, 100);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            
             // Set position limits
             int min_encoder = static_cast<int>((config.min_pos_rad / (2 * M_PI)) * 4096 + 2048);
             int max_encoder = static_cast<int>((config.max_pos_rad / (2 * M_PI)) * 4096 + 2048);

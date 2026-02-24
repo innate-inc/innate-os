@@ -333,5 +333,14 @@ uint8_t Dynamixel::readPresentTemperature(int motor_id) {
     return temperature;
 }
 
+void Dynamixel::setReturnDelayTime(int motor_id, int value) {
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->write1ByteTxRx(
+        port_handler_, motor_id, ADDR_RETURN_DELAY_TIME, value, &dxl_error);
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to set return delay time for motor " + std::to_string(motor_id));
+    }
+}
+
 } // namespace maurice_arm
 
