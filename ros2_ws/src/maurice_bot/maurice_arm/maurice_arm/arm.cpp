@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <set>
 #include <array>
+#include <deque>
 
 using json = nlohmann::json;
 
@@ -52,6 +53,7 @@ public:
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
         control_frequency_ = this->get_parameter("control_frequency").as_double();
+        RCLCPP_INFO(this->get_logger(), "Command interpolation: cubic Hermite spline (1 sample latency)");
         auto joint_names_param = this->get_parameter("joints").as_string_array();
         
         // Load joint configurations from sub-parameters (nav2 style)
@@ -734,40 +736,70 @@ private:
             }
             ts[6] = std::chrono::steady_clock::now();
             
-            // ========== SEND COMMANDS IF AVAILABLE ==========
-            if (has_arm_command_.load() || has_head_command_.load()) {
-                // Assemble full 7-servo command from latest commanded values
-                std::vector<int> full_command(7);
+            // ========== CUBIC HERMITE SPLINE INTERPOLATION (always runs at 200Hz) ==========
+            // Runs 1 command behind: when command N arrives, we interpolate [N-1, N].
+            // Catmull-Rom tangents from surrounding points give C1 continuity.
+            {
+                bool has_spline = false;
+                std::array<double, 6> result_rad{};
                 
-                // Get 6 arm positions from latest arm command
                 {
                     std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-                    std::copy(latest_arm_command_.begin(), latest_arm_command_.end(), full_command.begin());
-                    has_arm_command_ = false;
+                    if (spline_active_) {
+                        auto now = std::chrono::steady_clock::now();
+                        double elapsed = std::chrono::duration<double>(now - spline_t0_).count();
+                        double u = (spline_duration_ > 1e-6) ? std::clamp(elapsed / spline_duration_, 0.0, 1.0) : 1.0;
+                        
+                        // Hermite basis functions
+                        double u2 = u * u, u3 = u2 * u;
+                        double h00 =  2*u3 - 3*u2 + 1;  // value at p0
+                        double h10 =    u3 - 2*u2 + u;  // tangent at p0
+                        double h01 = -2*u3 + 3*u2;       // value at p1
+                        double h11 =    u3 -   u2;       // tangent at p1
+                        
+                        for (int j = 0; j < 6; ++j)
+                            result_rad[j] = h00 * spline_p0_[j] + h10 * spline_m0_[j]
+                                          + h01 * spline_p1_[j] + h11 * spline_m1_[j];
+                        has_spline = true;
+                    }
                 }
                 
-                // Get 1 head position from latest head command
-                {
+                if (has_spline) {
+                    std::vector<double> cmd_vec(result_rad.begin(), result_rad.end());
+                    std::vector<int> arm_encoder = applyLimitsAndConvertToEncoder(cmd_vec);
+                    
+                    std::vector<int> full_command(7);
+                    std::copy(arm_encoder.begin(), arm_encoder.end(), full_command.begin());
+                    {
+                        std::lock_guard<std::mutex> head_lock(head_command_mutex_);
+                        full_command[6] = latest_head_command_;
+                        has_head_command_ = false;
+                    }
+                    
+                    robot_->setGoalPos(full_command);
+                    
+                    // Publish interpolated command (in radians, external convention)
+                    sensor_msgs::msg::JointState cmd_msg;
+                    cmd_msg.header.stamp = this->now();
+                    cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
+                    cmd_msg.position.resize(6);
+                    for (int i = 0; i < 6; ++i) {
+                        double rad = ((full_command[i] - 2048) * 2 * M_PI) / 4096.0;
+                        if (i == 1 || i == 2 || i == 3 || i == 5) rad = -rad;
+                        cmd_msg.position[i] = rad;
+                    }
+                    arm_command_state_pub_->publish(cmd_msg);
+                } else if (has_head_command_.load()) {
+                    // No arm commands yet — just handle head
                     std::lock_guard<std::mutex> head_lock(head_command_mutex_);
-                    full_command[6] = latest_head_command_;
+                    int head_enc = latest_head_command_;
                     has_head_command_ = false;
+                    // Read current arm positions and only move head
+                    std::vector<int> full_command(latest_arm_command_);
+                    full_command.resize(7);
+                    full_command[6] = head_enc;
+                    robot_->setGoalPos(full_command);
                 }
-                
-                // Send the combined command
-                robot_->setGoalPos(full_command);
-                
-                // Publish commanded positions (in radians, external convention) for PID debugging
-                sensor_msgs::msg::JointState cmd_msg;
-                cmd_msg.header.stamp = this->now();
-                cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
-                cmd_msg.position.resize(6);
-                for (int i = 0; i < 6; ++i) {
-                    double rad = ((full_command[i] - 2048) * 2 * M_PI) / 4096.0;
-                    // Reverse the direction flip for joints 2,3,4,6
-                    if (i == 1 || i == 2 || i == 3 || i == 5) rad = -rad;
-                    cmd_msg.position[i] = rad;
-                }
-                arm_command_state_pub_->publish(cmd_msg);
             }
             ts[7] = std::chrono::steady_clock::now();
             
@@ -974,21 +1006,73 @@ private:
     
     void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
         try {
-            // Commands come in EXTERNAL convention (same as published joint states)
-            std::vector<double> command_data(msg->data.begin(), msg->data.end());
-            
-            // Validate that we have exactly 6 arm joints
-            if (command_data.size() != 6) {
-                RCLCPP_ERROR(this->get_logger(), "Action size must match number of servos. Expected 6, got %zu", command_data.size());
+            if (msg->data.size() != 6) {
+                RCLCPP_ERROR(this->get_logger(), "Action size must match number of servos. Expected 6, got %zu", msg->data.size());
                 return;
             }
             
-            std::vector<int> command_encoder = applyLimitsAndConvertToEncoder(command_data);
+            auto now = std::chrono::steady_clock::now();
             
-            // Store only the 6 arm positions - timer will add head position
             std::lock_guard<std::mutex> lock(arm_command_mutex_);
-            latest_arm_command_ = command_encoder;
-            has_arm_command_ = true;
+            
+            // Accumulate into current bucket
+            for (int i = 0; i < 6; ++i)
+                bucket_sum_[i] += msg->data[i];
+            bucket_count_++;
+            
+            // Check if 20ms (50Hz) has elapsed since last emitted point
+            double elapsed_ms = std::chrono::duration<double, std::milli>(now - bucket_start_).count();
+            if (elapsed_ms < 20.0 && cmd_history_.size() >= 1) {
+                return;  // still accumulating — don't emit yet
+            }
+            
+            // Emit averaged sample as one spline point
+            CmdSample s;
+            s.t = now;
+            for (int i = 0; i < 6; ++i)
+                s.pos[i] = bucket_sum_[i] / bucket_count_;
+            
+            // Reset bucket
+            bucket_sum_.fill(0.0);
+            bucket_count_ = 0;
+            bucket_start_ = now;
+            
+            // Push to history for spline
+            cmd_history_.push_back(s);
+            if (cmd_history_.size() > 4) cmd_history_.pop_front();
+            
+            // Need ≥2 points to define a segment
+            if (cmd_history_.size() >= 2) {
+                size_t n = cmd_history_.size();
+                const auto& s0 = cmd_history_[n - 2];
+                const auto& s1 = cmd_history_[n - 1];
+                
+                spline_t0_ = s0.t;
+                spline_duration_ = std::chrono::duration<double>(s1.t - s0.t).count();
+                spline_p0_ = s0.pos;
+                spline_p1_ = s1.pos;
+                
+                // Catmull-Rom tangent at s0
+                if (n >= 3) {
+                    const auto& sm1 = cmd_history_[n - 3];
+                    double dt_span = std::chrono::duration<double>(s1.t - sm1.t).count();
+                    if (dt_span > 1e-6) {
+                        for (int j = 0; j < 6; ++j)
+                            spline_m0_[j] = (s1.pos[j] - sm1.pos[j]) / dt_span * spline_duration_;
+                    } else {
+                        for (int j = 0; j < 6; ++j)
+                            spline_m0_[j] = s1.pos[j] - s0.pos[j];
+                    }
+                } else {
+                    for (int j = 0; j < 6; ++j)
+                        spline_m0_[j] = s1.pos[j] - s0.pos[j];
+                }
+                
+                for (int j = 0; j < 6; ++j)
+                    spline_m1_[j] = s1.pos[j] - s0.pos[j];
+                
+                spline_active_ = true;
+            }
             
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in arm command callback: %s", e.what());
@@ -1697,6 +1781,24 @@ private:
     std::vector<int> latest_arm_command_;
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
+    
+    // Cubic Hermite spline interpolation (all guarded by arm_command_mutex_)
+    struct CmdSample {
+        std::chrono::steady_clock::time_point t;
+        std::array<double, 6> pos;  // radians, external convention
+    };
+    std::deque<CmdSample> cmd_history_;           // last 4 samples for tangent estimation
+    bool spline_active_{false};                   // true once ≥2 commands received
+    std::chrono::steady_clock::time_point spline_t0_;  // segment start time
+    double spline_duration_{0.0};                 // seconds between p0 and p1
+    std::array<double, 6> spline_p0_{};           // segment start position
+    std::array<double, 6> spline_p1_{};           // segment end position
+    std::array<double, 6> spline_m0_{};           // tangent at p0 (scaled by duration)
+    std::array<double, 6> spline_m1_{};           // tangent at p1 (scaled by duration)
+    // 50Hz rate-limiter: accumulate samples in 20ms buckets, average, emit as one point
+    std::array<double, 6> bucket_sum_{};           // running sum within current bucket
+    int bucket_count_{0};                          // samples in current bucket
+    std::chrono::steady_clock::time_point bucket_start_{std::chrono::steady_clock::now()};
     
     
     // Joint state tracking for planning
