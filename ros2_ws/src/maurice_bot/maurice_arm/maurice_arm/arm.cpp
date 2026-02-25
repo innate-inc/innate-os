@@ -297,6 +297,13 @@ private:
                 config.kd = joint["pid_gains"]["kd"];
                 if (joint["pid_gains"].contains("ff1")) config.ff1 = joint["pid_gains"]["ff1"];
                 if (joint["pid_gains"].contains("ff2")) config.ff2 = joint["pid_gains"]["ff2"];
+                // All gains are 2-byte values: clamp to [0, 16383]
+                constexpr int kMaxGain = 16383;
+                config.kp  = std::clamp(config.kp,  0, kMaxGain);
+                config.ki  = std::clamp(config.ki,  0, kMaxGain);
+                config.kd  = std::clamp(config.kd,  0, kMaxGain);
+                config.ff1 = std::clamp(config.ff1, 0, kMaxGain);
+                config.ff2 = std::clamp(config.ff2, 0, kMaxGain);
                 RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d, ff1=%d, ff2=%d", config.kp, config.ki, config.kd, config.ff1, config.ff2);
                 
                 if (joint.contains("profile_velocity")) {
@@ -411,6 +418,10 @@ private:
                 
                 std::string suffix = name.substr(underscore2 + 1);
                 int value = static_cast<int>(param.as_int());
+                // All PID/FF gains are 2-byte: clamp to [0, 16383]
+                if (suffix == "kp" || suffix == "ki" || suffix == "kd" || suffix == "ff1" || suffix == "ff2") {
+                    value = std::clamp(value, 0, 16383);
+                }
                 
                 if (suffix == "kp") {
                     joint_configs_[joint_num - 1].kp = value;
@@ -585,7 +596,7 @@ private:
             }
         }
         
-        // Write all PID + feedforward gains in a single SyncWrite packet (addr 76-85)
+        // Write all PID + feedforward gains in a single SyncWrite packet (addr 80-91)
         std::vector<std::tuple<int, int, int, int, int, int>> pid_data;
         for (const auto& config : joint_configs_) {
             pid_data.emplace_back(config.servo_id, config.ff2, config.ff1, config.kd, config.ki, config.kp);
@@ -684,6 +695,20 @@ private:
             joint_state_msg_.effort = all_efforts;
             joint_state_pub_->publish(joint_state_msg_);    // /joint_states (for robot_state_publisher)
             ts[5] = std::chrono::steady_clock::now();
+            
+            // ========== PERIODIC GAIN DUMP (every 2s) ==========
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "Gains: J1[P=%d I=%d D=%d F1=%d F2=%d] J2[P=%d I=%d D=%d F1=%d F2=%d] "
+                "J3[P=%d I=%d D=%d F1=%d F2=%d] J4[P=%d I=%d D=%d F1=%d F2=%d] "
+                "J5[P=%d I=%d D=%d F1=%d F2=%d] J6[P=%d I=%d D=%d F1=%d F2=%d] "
+                "J7[P=%d I=%d D=%d F1=%d F2=%d]",
+                joint_configs_[0].kp, joint_configs_[0].ki, joint_configs_[0].kd, joint_configs_[0].ff1, joint_configs_[0].ff2,
+                joint_configs_[1].kp, joint_configs_[1].ki, joint_configs_[1].kd, joint_configs_[1].ff1, joint_configs_[1].ff2,
+                joint_configs_[2].kp, joint_configs_[2].ki, joint_configs_[2].kd, joint_configs_[2].ff1, joint_configs_[2].ff2,
+                joint_configs_[3].kp, joint_configs_[3].ki, joint_configs_[3].kd, joint_configs_[3].ff1, joint_configs_[3].ff2,
+                joint_configs_[4].kp, joint_configs_[4].ki, joint_configs_[4].kd, joint_configs_[4].ff1, joint_configs_[4].ff2,
+                joint_configs_[5].kp, joint_configs_[5].ki, joint_configs_[5].kd, joint_configs_[5].ff1, joint_configs_[5].ff2,
+                joint_configs_[6].kp, joint_configs_[6].ki, joint_configs_[6].kd, joint_configs_[6].ff1, joint_configs_[6].ff2);
             
             // ========== GAIN SCHEDULING ==========
             if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {

@@ -16,8 +16,8 @@ maurice_arm:
     #   kp = Proportional gain (stiffness)
     #   ki = Integral gain (steady-state error correction)
     #   kd = Derivative gain (damping / overshoot reduction)
-    #   ff1 = Velocity feedforward (optional, addr 78, default 0)
-    #   ff2 = Acceleration feedforward (optional, addr 76, default 0)
+    #   ff1 = Velocity feedforward (optional, addr 90, default 0)
+    #   ff2 = Acceleration feedforward (optional, addr 88, default 0)
     #
     # Profile (0 = unlimited):
     #   profile_velocity     = max velocity (rev/min units)
@@ -81,9 +81,10 @@ maurice_arm:
               "pwm_limits": 885,
               "control_mode": 3,
               "pid_gains": {
-                  "kp": 2000,
+                  "kp": 0,
                   "ki": 0,
-                  "kd": 0
+                  "kd": 0,
+                  "ff1": 15000
               }
           },
           "joint_4": {

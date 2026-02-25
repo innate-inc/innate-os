@@ -52,8 +52,8 @@ public:
     void setP(int motor_id, int p);
     void setI(int motor_id, int i);
     void setD(int motor_id, int d);
-    // Write FF2, FF1, D, I, P gains to multiple servos in a single GroupSyncWrite packet
-    // Addresses 76-85 are contiguous: FF2(2) + FF1(2) + D(2) + I(2) + P(2) = 10 bytes
+    // Write D, I, P, FF2, FF1 gains to multiple servos in a single GroupSyncWrite packet
+    // Addresses 80-91: D(2) + I(2) + P(2) + reserved(2) + FF2(2) + FF1(2) = 12 bytes
     // Each entry: {servo_id, ff2, ff1, kd, ki, kp}
     void syncWritePID(const std::vector<std::tuple<int, int, int, int, int, int>>& pid_data);
     void setHomeOffset(int motor_id, int home_position);
@@ -90,11 +90,12 @@ private:
     static constexpr int ADDR_GOAL_POSITION = 116;
     static constexpr int ADDR_PWM_LIMIT = 36;
     static constexpr int OPERATING_MODE_ADDR = 11;
-    static constexpr int ADDR_FEEDFORWARD_2ND = 76;  // Acceleration feedforward gain (2 bytes)
-    static constexpr int ADDR_FEEDFORWARD_1ST = 78;  // Velocity feedforward gain (2 bytes)
     static constexpr int POSITION_D = 80;
     static constexpr int POSITION_I = 82;
     static constexpr int POSITION_P = 84;
+    // addr 86-87 reserved (gap)
+    static constexpr int ADDR_FEEDFORWARD_2ND = 88;  // Acceleration feedforward gain (2 bytes)
+    static constexpr int ADDR_FEEDFORWARD_1ST = 90;  // Velocity feedforward gain (2 bytes)
     static constexpr int ADDR_MIN_POSITION_LIMIT = 52;
     static constexpr int ADDR_MAX_POSITION_LIMIT = 48;
     static constexpr int ADDR_CURRENT_LIMIT = 38;
