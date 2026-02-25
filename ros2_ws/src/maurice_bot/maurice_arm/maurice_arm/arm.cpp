@@ -48,30 +48,14 @@ public:
         this->declare_parameter("control_frequency", 100.0);
         this->declare_parameter("trajectory_rate_hz", 30.0);
         this->declare_parameter("max_jerk", 0.0);  // rad/s³, 0 = disabled
-        this->declare_parameter("joints", "{}");
+        this->declare_parameter("joints", std::vector<std::string>{});
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
         control_frequency_ = this->get_parameter("control_frequency").as_double();
-        std::string joints_str = this->get_parameter("joints").as_string();
+        auto joint_names_param = this->get_parameter("joints").as_string_array();
         
-        // Parse joints configuration (motor_type validated per-joint)
-        parseJointConfig(joints_str);
-        
-        // Declare per-joint PID and profile parameters for hot-reload tuning
-        for (size_t i = 0; i < joint_configs_.size(); ++i) {
-            std::string prefix = "joint_" + std::to_string(i + 1) + "_";
-            this->declare_parameter(prefix + "kp", joint_configs_[i].kp);
-            this->declare_parameter(prefix + "ki", joint_configs_[i].ki);
-            this->declare_parameter(prefix + "kd", joint_configs_[i].kd);
-            this->declare_parameter(prefix + "ff1", joint_configs_[i].ff1);
-            this->declare_parameter(prefix + "ff2", joint_configs_[i].ff2);
-            this->declare_parameter(prefix + "profile_velocity", joint_configs_[i].profile_velocity);
-            this->declare_parameter(prefix + "profile_acceleration", joint_configs_[i].profile_acceleration);
-        }
-        
-        // Parse gain scheduling from JSON string parameter
-        this->declare_parameter("gain_scheduling", std::string("{}"));
-        parseGainScheduling(this->get_parameter("gain_scheduling").as_string());
+        // Load joint configurations from sub-parameters (nav2 style)
+        loadJointConfigs(joint_names_param);
         
         // Use fixed device path
         std::string device_name = "/dev/ttyACM0";
@@ -235,157 +219,145 @@ private:
         return motor_type.find("330") != std::string::npos;
     }
     
-    void parseJointConfig(const std::string& json_str) {
-        RCLCPP_INFO(this->get_logger(), "Parsing joint configuration...");
-        auto joints = json::parse(json_str);
-        
-        // Parse all 7 joints (1-6 arm, 7 head)
-        for (int i = 1; i <= 7; ++i) {
-            std::string joint_key = "joint_" + std::to_string(i);
-            if (joints.contains(joint_key)) {
-                auto joint = joints[joint_key];
-                JointConfig config;
-                config.servo_id = joint["servo_id"];
-                config.min_pos_rad = joint["position_limits"]["min"];
-                config.max_pos_rad = joint["position_limits"]["max"];
-                config.pwm_limit = joint["pwm_limits"];
-                config.control_mode = joint["control_mode"];
-                
-                if (joint.contains("motor_type")) {
-                    config.motor_type = joint["motor_type"];
-                    
-                    // x430 motors don't support current modes (0, 5)
-                    if (!isX330(config.motor_type) &&
-                        (config.control_mode == 0 || config.control_mode == 5)) {
-                        throw std::runtime_error(
-                            "Joint " + std::to_string(i) + " (" + config.motor_type +
-                            "): control_mode " + std::to_string(config.control_mode) +
-                            " requires current hw — only x330 motors support modes 0/5");
-                    }
-                }
-                
-                // x330 motors: default current_limit to hw max, allow override
-                // x430 motors: no current hw, leave at 0
-                if (isX330(config.motor_type)) {
-                    config.current_limit = kX330MaxCurrentLimit;
-                    if (joint.contains("current_limit")) {
-                        int override = joint["current_limit"];
-                        if (override <= 0 || override > kX330MaxCurrentLimit) {
-                            throw std::runtime_error(
-                                "Joint " + std::to_string(i) + ": current_limit " +
-                                std::to_string(override) + " out of range [1, " +
-                                std::to_string(kX330MaxCurrentLimit) + "]");
-                        }
-                        config.current_limit = override;
-                    }
-                } else if (joint.contains("current_limit")) {
-                    throw std::runtime_error(
-                        "Joint " + std::to_string(i) + " (" + config.motor_type +
-                        "): current_limit not supported — no current control hw");
-                }
-                
-                RCLCPP_INFO(this->get_logger(), "Joint %d: servo_id=%d, motor=%s, limits=[%.3f, %.3f] rad, pwm=%d, mode=%d, current=%d",
-                    i, config.servo_id, config.motor_type.empty() ? "(unset)" : config.motor_type.c_str(),
-                    config.min_pos_rad, config.max_pos_rad, config.pwm_limit, config.control_mode, config.current_limit);
-                
-                if (joint.contains("homing_offset")) {
-                    config.homing_offset = joint["homing_offset"];
-                    RCLCPP_INFO(this->get_logger(), "  Homing offset: %d", config.homing_offset);
-                }
-                
-                config.kp = joint["pid_gains"]["kp"];
-                config.ki = joint["pid_gains"]["ki"];
-                config.kd = joint["pid_gains"]["kd"];
-                if (joint["pid_gains"].contains("ff1")) config.ff1 = joint["pid_gains"]["ff1"];
-                if (joint["pid_gains"].contains("ff2")) config.ff2 = joint["pid_gains"]["ff2"];
-                // All gains are 2-byte values: clamp to [0, 16383]
-                constexpr int kMaxGain = 16383;
-                config.kp  = std::clamp(config.kp,  0, kMaxGain);
-                config.ki  = std::clamp(config.ki,  0, kMaxGain);
-                config.kd  = std::clamp(config.kd,  0, kMaxGain);
-                config.ff1 = std::clamp(config.ff1, 0, kMaxGain);
-                config.ff2 = std::clamp(config.ff2, 0, kMaxGain);
-                RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d, ff1=%d, ff2=%d", config.kp, config.ki, config.kd, config.ff1, config.ff2);
-                
-                if (joint.contains("profile_velocity")) {
-                    config.profile_velocity = joint["profile_velocity"];
-                    RCLCPP_INFO(this->get_logger(), "  Profile velocity: %d", config.profile_velocity);
-                }
-                if (joint.contains("profile_acceleration")) {
-                    config.profile_acceleration = joint["profile_acceleration"];
-                    RCLCPP_INFO(this->get_logger(), "  Profile acceleration: %d", config.profile_acceleration);
-                }
-                
-                // Parse head-specific config for joint 7
-                // Head angle limits are derived from position_limits (not duplicated in config)
-                if (i == 7 && joint.contains("head_config")) {
-                    auto head = joint["head_config"];
-                    config.head_ai_position_deg = head["ai_position_deg"];
-                    config.head_direction_reversed = head["direction_reversed"];
-                    
-                    // Compute head angle limits from position_limits (accounting for direction reversal)
-                    constexpr double RAD_TO_DEG = 180.0 / M_PI;
-                    if (config.head_direction_reversed) {
-                        config.head_min_angle_deg = -config.max_pos_rad * RAD_TO_DEG;
-                        config.head_max_angle_deg = -config.min_pos_rad * RAD_TO_DEG;
-                    } else {
-                        config.head_min_angle_deg = config.min_pos_rad * RAD_TO_DEG;
-                        config.head_max_angle_deg = config.max_pos_rad * RAD_TO_DEG;
-                    }
-                    
-                    RCLCPP_INFO(this->get_logger(), "  Head config: range=[%.1f, %.1f] deg (from position_limits), AI pos=%.1f deg, reversed=%s",
-                        config.head_min_angle_deg, config.head_max_angle_deg, config.head_ai_position_deg,
-                        config.head_direction_reversed ? "true" : "false");
-                }
-                
-                joint_configs_.push_back(config);
-            }
+    // Gain profile: 5 PID+FF values per joint
+    struct GainProfile {
+        int kp = 0, ki = 0, kd = 0, ff1 = 0, ff2 = 0;
+        bool operator==(const GainProfile& o) const {
+            return kp == o.kp && ki == o.ki && kd == o.kd && ff1 == o.ff1 && ff2 == o.ff2;
         }
-        RCLCPP_INFO(this->get_logger(), "Parsed %zu joint configurations", joint_configs_.size());
+        bool operator!=(const GainProfile& o) const { return !(*this == o); }
+    };
+    
+    static GainProfile parseGainsArray(const std::vector<int64_t>& arr) {
+        constexpr int kMaxGain = 16383;
+        GainProfile g;
+        if (arr.size() >= 1) g.kp  = std::clamp(static_cast<int>(arr[0]), 0, kMaxGain);
+        if (arr.size() >= 2) g.ki  = std::clamp(static_cast<int>(arr[1]), 0, kMaxGain);
+        if (arr.size() >= 3) g.kd  = std::clamp(static_cast<int>(arr[2]), 0, kMaxGain);
+        if (arr.size() >= 4) g.ff1 = std::clamp(static_cast<int>(arr[3]), 0, kMaxGain);
+        if (arr.size() >= 5) g.ff2 = std::clamp(static_cast<int>(arr[4]), 0, kMaxGain);
+        return g;
     }
     
-    void parseGainScheduling(const std::string& json_str) {
-        try {
-            auto gs = json::parse(json_str);
-            gs_enabled_ = gs.value("enabled", false);
+    void loadJointConfigs(const std::vector<std::string>& joint_names) {
+        RCLCPP_INFO(this->get_logger(), "Loading %zu joint configurations...", joint_names.size());
+        
+        for (size_t i = 0; i < joint_names.size(); ++i) {
+            const std::string& jn = joint_names[i];  // e.g. "joint_1"
+            JointConfig config;
             
-            // Initialize with current joint defaults
-            for (int i = 0; i < 4; i++) {
-                auto& jc = joint_configs_[i];  // joints 1, 2, 3, 4
-                gs_near_[i] = {jc.kp, jc.ki, jc.kd, jc.ff1, jc.ff2};
-                gs_far_[i] = {jc.kp, jc.ki, jc.kd, jc.ff1, jc.ff2};
+            // Declare and read sub-parameters (nav2 style: joint_N.param)
+            this->declare_parameter(jn + ".servo_id", 0);
+            this->declare_parameter(jn + ".position_limits", std::vector<double>{});
+            this->declare_parameter(jn + ".pwm_limit", 885);
+            this->declare_parameter(jn + ".control_mode", 3);
+            this->declare_parameter(jn + ".motor_type", std::string(""));
+            this->declare_parameter(jn + ".current_limit", 0);
+            this->declare_parameter(jn + ".homing_offset", 0);
+            this->declare_parameter(jn + ".profile_velocity", 0);
+            this->declare_parameter(jn + ".profile_acceleration", 0);
+            this->declare_parameter(jn + ".gains_near", std::vector<int64_t>{});
+            this->declare_parameter(jn + ".gains_far", std::vector<int64_t>{});
+            
+            config.servo_id = static_cast<int>(this->get_parameter(jn + ".servo_id").as_int());
+            auto pos_limits = this->get_parameter(jn + ".position_limits").as_double_array();
+            if (pos_limits.size() >= 2) {
+                config.min_pos_rad = pos_limits[0];
+                config.max_pos_rad = pos_limits[1];
+            }
+            config.pwm_limit = static_cast<int>(this->get_parameter(jn + ".pwm_limit").as_int());
+            config.control_mode = static_cast<int>(this->get_parameter(jn + ".control_mode").as_int());
+            config.motor_type = this->get_parameter(jn + ".motor_type").as_string();
+            
+            // Validate motor_type vs control_mode
+            if (!config.motor_type.empty() && !isX330(config.motor_type) &&
+                (config.control_mode == 0 || config.control_mode == 5)) {
+                throw std::runtime_error(
+                    jn + " (" + config.motor_type +
+                    "): control_mode " + std::to_string(config.control_mode) +
+                    " requires current hw — only x330 motors support modes 0/5");
             }
             
-            const std::array<std::string, 2> profiles = {"near", "far"};
-            for (const auto& profile : profiles) {
-                if (!gs.contains(profile)) continue;
-                auto& arr = (profile == "near") ? gs_near_ : gs_far_;
-                for (int j : {1, 2, 3, 4}) {
-                    std::string key = "joint_" + std::to_string(j);
-                    if (!gs[profile].contains(key)) continue;
-                    auto& jg = gs[profile][key];
-                    int idx = j - 1;
-                    arr[idx].kp = jg.value("kp", arr[idx].kp);
-                    arr[idx].ki = jg.value("ki", arr[idx].ki);
-                    arr[idx].kd = jg.value("kd", arr[idx].kd);
-                    arr[idx].ff1 = jg.value("ff1", arr[idx].ff1);
-                    arr[idx].ff2 = jg.value("ff2", arr[idx].ff2);
+            // Current limit: x330 defaults to hw max, x430 has no current hw
+            int cl = static_cast<int>(this->get_parameter(jn + ".current_limit").as_int());
+            if (isX330(config.motor_type)) {
+                config.current_limit = (cl > 0) ? cl : kX330MaxCurrentLimit;
+                if (config.current_limit > kX330MaxCurrentLimit) {
+                    throw std::runtime_error(jn + ": current_limit out of range [1, " +
+                        std::to_string(kX330MaxCurrentLimit) + "]");
                 }
+            } else if (cl > 0) {
+                throw std::runtime_error(jn + " (" + config.motor_type +
+                    "): current_limit not supported — no current control hw");
             }
             
-            RCLCPP_INFO(this->get_logger(), "Gain scheduling %s | near: J1[%d,%d,%d] J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d] | far: J1[%d,%d,%d] J2[%d,%d,%d] J3[%d,%d,%d] J4[%d,%d,%d]",
-                gs_enabled_ ? "ENABLED" : "DISABLED",
-                gs_near_[0].kp, gs_near_[0].ki, gs_near_[0].kd,
-                gs_near_[1].kp, gs_near_[1].ki, gs_near_[1].kd,
-                gs_near_[2].kp, gs_near_[2].ki, gs_near_[2].kd,
-                gs_near_[3].kp, gs_near_[3].ki, gs_near_[3].kd,
-                gs_far_[0].kp, gs_far_[0].ki, gs_far_[0].kd,
-                gs_far_[1].kp, gs_far_[1].ki, gs_far_[1].kd,
-                gs_far_[2].kp, gs_far_[2].ki, gs_far_[2].kd,
-                gs_far_[3].kp, gs_far_[3].ki, gs_far_[3].kd);
-        } catch (const json::exception& e) {
-            RCLCPP_WARN(this->get_logger(), "Failed to parse gain_scheduling JSON: %s", e.what());
+            config.homing_offset = static_cast<int>(this->get_parameter(jn + ".homing_offset").as_int());
+            config.profile_velocity = static_cast<int>(this->get_parameter(jn + ".profile_velocity").as_int());
+            config.profile_acceleration = static_cast<int>(this->get_parameter(jn + ".profile_acceleration").as_int());
+            
+            RCLCPP_INFO(this->get_logger(), "Joint %zu (%s): servo_id=%d, motor=%s, limits=[%.3f, %.3f] rad, pwm=%d, mode=%d, current=%d",
+                i + 1, jn.c_str(), config.servo_id,
+                config.motor_type.empty() ? "(unset)" : config.motor_type.c_str(),
+                config.min_pos_rad, config.max_pos_rad, config.pwm_limit, config.control_mode, config.current_limit);
+            if (config.homing_offset != 0)
+                RCLCPP_INFO(this->get_logger(), "  Homing offset: %d", config.homing_offset);
+            
+            // Gains: gains_near = [kp, ki, kd, ff1, ff2], gains_far = [] means same as near
+            auto near_arr = this->get_parameter(jn + ".gains_near").as_integer_array();
+            GainProfile near_gains = parseGainsArray(near_arr);
+            
+            GainProfile far_gains = near_gains;  // default: far == near (gain scheduling no-ops)
+            try {
+                auto far_arr = this->get_parameter(jn + ".gains_far").as_integer_array();
+                if (!far_arr.empty()) {
+                    far_gains = parseGainsArray(far_arr);
+                }
+            } catch (...) {}  // empty [] in YAML may not parse as integer array
+            
+            // Set joint config gains from near (initial operating gains)
+            config.kp  = near_gains.kp;
+            config.ki  = near_gains.ki;
+            config.kd  = near_gains.kd;
+            config.ff1 = near_gains.ff1;
+            config.ff2 = near_gains.ff2;
+            
+            // Store gain scheduling profiles
+            gs_near_[i] = near_gains;
+            gs_far_[i]  = far_gains;
+            gs_last_applied_[i] = near_gains;
+            
+            RCLCPP_INFO(this->get_logger(), "  Gains near: [%d, %d, %d, %d, %d]  far: [%d, %d, %d, %d, %d]%s",
+                near_gains.kp, near_gains.ki, near_gains.kd, near_gains.ff1, near_gains.ff2,
+                far_gains.kp, far_gains.ki, far_gains.kd, far_gains.ff1, far_gains.ff2,
+                (near_gains != far_gains) ? "  (gain scheduling active)" : "");
+            if (config.profile_velocity > 0 || config.profile_acceleration > 0)
+                RCLCPP_INFO(this->get_logger(), "  Profile: vel=%d, accel=%d", config.profile_velocity, config.profile_acceleration);
+            
+            // Head-specific config for joint 7 (index 6)
+            if (i == 6) {
+                this->declare_parameter(jn + ".head_config.ai_position_deg", 0.0);
+                this->declare_parameter(jn + ".head_config.direction_reversed", false);
+                
+                config.head_ai_position_deg = this->get_parameter(jn + ".head_config.ai_position_deg").as_double();
+                config.head_direction_reversed = this->get_parameter(jn + ".head_config.direction_reversed").as_bool();
+                
+                constexpr double RAD_TO_DEG = 180.0 / M_PI;
+                if (config.head_direction_reversed) {
+                    config.head_min_angle_deg = -config.max_pos_rad * RAD_TO_DEG;
+                    config.head_max_angle_deg = -config.min_pos_rad * RAD_TO_DEG;
+                } else {
+                    config.head_min_angle_deg = config.min_pos_rad * RAD_TO_DEG;
+                    config.head_max_angle_deg = config.max_pos_rad * RAD_TO_DEG;
+                }
+                
+                RCLCPP_INFO(this->get_logger(), "  Head config: range=[%.1f, %.1f] deg, AI pos=%.1f deg, reversed=%s",
+                    config.head_min_angle_deg, config.head_max_angle_deg, config.head_ai_position_deg,
+                    config.head_direction_reversed ? "true" : "false");
+            }
+            
+            joint_configs_.push_back(config);
         }
+        RCLCPP_INFO(this->get_logger(), "Loaded %zu joint configurations", joint_configs_.size());
     }
     
     rcl_interfaces::msg::SetParametersResult onParameterChange(
@@ -399,13 +371,7 @@ private:
         std::set<int> profile_changed_joints;
         
         for (const auto& param : parameters) {
-            std::string name = param.get_name();
-            
-            // Handle gain scheduling JSON string
-            if (name == "gain_scheduling") {
-                parseGainScheduling(param.as_string());
-                continue;
-            }
+            const std::string& name = param.get_name();
             
             // max_jerk is read on-the-fly from the parameter server each trajectory,
             // so just log the change — no servo write needed.
@@ -414,68 +380,53 @@ private:
                 continue;
             }
             
-            // Match pattern: joint_N_<suffix>
-            if (name.size() >= 10 && name.substr(0, 6) == "joint_") {
-                size_t underscore2 = name.find('_', 6);
-                if (underscore2 == std::string::npos) continue;
+            // Match pattern: joint_N.<suffix>
+            if (name.size() >= 8 && name.substr(0, 6) == "joint_") {
+                size_t dot = name.find('.', 6);
+                if (dot == std::string::npos) continue;
                 
                 int joint_num = 0;
                 try {
-                    joint_num = std::stoi(name.substr(6, underscore2 - 6));
+                    joint_num = std::stoi(name.substr(6, dot - 6));
                 } catch (...) { continue; }
                 
                 if (joint_num < 1 || joint_num > static_cast<int>(joint_configs_.size())) continue;
+                int ji = joint_num - 1;
                 
-                std::string suffix = name.substr(underscore2 + 1);
-                int value = static_cast<int>(param.as_int());
-                // All PID/FF gains are 2-byte: clamp to [0, 16383]
-                if (suffix == "kp" || suffix == "ki" || suffix == "kd" || suffix == "ff1" || suffix == "ff2") {
-                    value = std::clamp(value, 0, 16383);
-                }
+                std::string suffix = name.substr(dot + 1);
                 
-                if (suffix == "kp") {
-                    joint_configs_[joint_num - 1].kp = value;
+                if (suffix == "gains_near") {
+                    auto arr = param.as_integer_array();
+                    GainProfile g = parseGainsArray(arr);
+                    gs_near_[ji] = g;
+                    // Update current joint config with near gains
+                    joint_configs_[ji].kp  = g.kp;
+                    joint_configs_[ji].ki  = g.ki;
+                    joint_configs_[ji].kd  = g.kd;
+                    joint_configs_[ji].ff1 = g.ff1;
+                    joint_configs_[ji].ff2 = g.ff2;
                     pid_changed_joints.insert(joint_num);
-                } else if (suffix == "ki") {
-                    joint_configs_[joint_num - 1].ki = value;
-                    pid_changed_joints.insert(joint_num);
-                } else if (suffix == "kd") {
-                    joint_configs_[joint_num - 1].kd = value;
-                    pid_changed_joints.insert(joint_num);
-                } else if (suffix == "ff1") {
-                    joint_configs_[joint_num - 1].ff1 = value;
-                    pid_changed_joints.insert(joint_num);
-                } else if (suffix == "ff2") {
-                    joint_configs_[joint_num - 1].ff2 = value;
-                    pid_changed_joints.insert(joint_num);
+                    RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_near = [%d, %d, %d, %d, %d]",
+                        joint_num, g.kp, g.ki, g.kd, g.ff1, g.ff2);
+                } else if (suffix == "gains_far") {
+                    try {
+                        auto arr = param.as_integer_array();
+                        gs_far_[ji] = arr.empty() ? gs_near_[ji] : parseGainsArray(arr);
+                    } catch (...) {
+                        gs_far_[ji] = gs_near_[ji];  // empty [] in YAML
+                    }
+                    RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_far = [%d, %d, %d, %d, %d]",
+                        joint_num, gs_far_[ji].kp, gs_far_[ji].ki, gs_far_[ji].kd, gs_far_[ji].ff1, gs_far_[ji].ff2);
                 } else if (suffix == "profile_velocity") {
-                    joint_configs_[joint_num - 1].profile_velocity = value;
+                    joint_configs_[ji].profile_velocity = static_cast<int>(param.as_int());
                     profile_changed_joints.insert(joint_num);
+                    RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.profile_velocity = %d",
+                        joint_num, joint_configs_[ji].profile_velocity);
                 } else if (suffix == "profile_acceleration") {
-                    joint_configs_[joint_num - 1].profile_acceleration = value;
+                    joint_configs_[ji].profile_acceleration = static_cast<int>(param.as_int());
                     profile_changed_joints.insert(joint_num);
-                } else {
-                    continue;
-                }
-                
-                RCLCPP_INFO(this->get_logger(), "Hot-reload: joint %d %s = %d",
-                    joint_num, suffix.c_str(), value);
-            }
-        }
-        
-        // If gain scheduling is active, push hot-reloaded PID for joints 1-4
-        // into gs_near_ and gs_far_ so the control loop doesn't immediately
-        // overwrite them with stale interpolated values.
-        if (gs_enabled_) {
-            for (int jn : pid_changed_joints) {
-                if (jn >= 1 && jn <= 4) {
-                    int gi = jn - 1;  // gs index 0,1,2,3 = joints 1,2,3,4
-                    const auto& c = joint_configs_[jn - 1];
-                    gs_near_[gi] = {c.kp, c.ki, c.kd, c.ff1, c.ff2};
-                    gs_far_[gi]  = {c.kp, c.ki, c.kd, c.ff1, c.ff2};
-                    RCLCPP_INFO(this->get_logger(),
-                        "Hot-reload: updated gain_scheduling near+far for joint %d to P=%d I=%d D=%d",
-                        jn, c.kp, c.ki, c.kd);
+                    RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.profile_acceleration = %d",
+                        joint_num, joint_configs_[ji].profile_acceleration);
                 }
             }
         }
@@ -721,7 +672,8 @@ private:
                 joint_configs_[6].kp, joint_configs_[6].ki, joint_configs_[6].kd, joint_configs_[6].ff1, joint_configs_[6].ff2);
             
             // ========== GAIN SCHEDULING ==========
-            if (gs_enabled_ && ++gs_cycle_counter_ >= kGainScheduleInterval) {
+            // Always runs; when near == far for a joint, no servo writes occur (no-op).
+            if (++gs_cycle_counter_ >= kGainScheduleInterval) {
                 gs_cycle_counter_ = 0;
                 
                 // Compute extension via 2D planar FK (shoulder XZ plane, Y-axis pitch joints)
@@ -754,16 +706,12 @@ private:
                     interp.ff1 = gs_near_[i].ff1 + static_cast<int>(extension * (gs_far_[i].ff1 - gs_near_[i].ff1));
                     interp.ff2 = gs_near_[i].ff2 + static_cast<int>(extension * (gs_far_[i].ff2 - gs_near_[i].ff2));
                     
-                    if (interp.kp != gs_last_applied_[i].kp ||
-                        interp.ki != gs_last_applied_[i].ki ||
-                        interp.kd != gs_last_applied_[i].kd ||
-                        interp.ff1 != gs_last_applied_[i].ff1 ||
-                        interp.ff2 != gs_last_applied_[i].ff2) {
+                    if (interp != gs_last_applied_[i]) {
                         gs_changed = true;
                         gs_last_applied_[i] = interp;
-                        joint_configs_[ji].kp = interp.kp;
-                        joint_configs_[ji].ki = interp.ki;
-                        joint_configs_[ji].kd = interp.kd;
+                        joint_configs_[ji].kp  = interp.kp;
+                        joint_configs_[ji].ki  = interp.ki;
+                        joint_configs_[ji].kd  = interp.kd;
                         joint_configs_[ji].ff1 = interp.ff1;
                         joint_configs_[ji].ff2 = interp.ff2;
                     }
@@ -1794,7 +1742,6 @@ private:
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
     
     // Gain scheduling
-    struct GainProfile { int kp = 0, ki = 0, kd = 0, ff1 = 0, ff2 = 0; };
     struct TimingAccumulator {
         const char* name = "";
         long sum_us = 0;
@@ -1813,12 +1760,10 @@ private:
     };
 
     static constexpr int kGainScheduleInterval = 20;  // control cycles between updates (~200ms at 100Hz)
-    bool gs_enabled_ = false;
-    std::array<GainProfile, 4> gs_near_;          // near profiles for joints 1, 2, 3, 4
-    std::array<GainProfile, 4> gs_far_;           // far profiles for joints 1, 2, 3, 4
-    std::array<GainProfile, 4> gs_last_applied_;  // last gains written (for change detection)
+    std::array<GainProfile, 7> gs_near_;          // near profiles for all joints
+    std::array<GainProfile, 7> gs_far_;           // far profiles (== near when gain scheduling disabled for that joint)
+    std::array<GainProfile, 7> gs_last_applied_;  // last gains written (for change detection)
     int gs_cycle_counter_ = 0;
-    bool gs_was_far_ = false;  // tracks last state for threshold crossing log
 
     // Control loop timing instrumentation (throttled detailed breakdown)
     std::array<TimingAccumulator, 10> timing_stats_{{
