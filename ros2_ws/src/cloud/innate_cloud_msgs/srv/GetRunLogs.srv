@@ -1,0 +1,9 @@
+# Fetch the last N lines of process output for a training run.
+
+string skill_id             # skill UUID
+int32 run_id                # run number within the skill
+int32 lines                 # max lines to return (server caps at 10000)
+---
+bool success
+string log_text             # last N lines as raw text (may be empty)
+string message

@@ -126,9 +126,7 @@ class Poller:
                     _ros.info(" | ".join(parts))
 
                     if new.error_message:
-                        _ros.warning(
-                            f"Run {sid}/{run_id} error: {new.error_message}"
-                        )
+                        _ros.warning(f"Run {sid}/{run_id} error: {new.error_message}")
 
                 if new.status == "done" and old.status != "done":
                     _ros.info(f"Run {sid}/{run_id} done → auto-download")
@@ -257,14 +255,11 @@ def do_download(
                 f"checkpoint={result['checkpoint']} stats_file={result['stats_file']}"
             )
         except Exception as e:
-            _ros.warning(
-                f"Download OK but activation failed for {sid}/{run_id}: {e}"
-            )
+            _ros.warning(f"Download OK but activation failed for {sid}/{run_id}: {e}")
 
         elapsed = time.monotonic() - t0
         _ros.info(
-            f"Download finished for {sid}/{run_id} → {dest_dir} "
-            f"({elapsed:.1f}s)"
+            f"Download finished for {sid}/{run_id} → {dest_dir} " f"({elapsed:.1f}s)"
         )
     except Exception as e:
         _ros.error(f"Download failed for {sid}/{run_id}: {e}")

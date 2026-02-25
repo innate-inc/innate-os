@@ -25,7 +25,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from innate_cloud_msgs.msg import TrainingJobList, TrainingParams, TransferProgress
-from innate_cloud_msgs.srv import CreateRun, DownloadResults, SubmitSkill
+from innate_cloud_msgs.srv import CreateRun, DownloadResults, GetRunLogs, SubmitSkill
 
 from training_client.src.skill_manager import SkillManager, read_skill_id
 from training_client.src.types import (
@@ -172,6 +172,7 @@ class TrainingNode(Node):
         self.create_service(SubmitSkill, "~/submit_skill", self._on_submit)
         self.create_service(CreateRun, "~/create_run", self._on_create_run)
         self.create_service(DownloadResults, "~/download_results", self._on_download)
+        self.create_service(GetRunLogs, "~/get_run_logs", self._on_get_run_logs)
 
         # ── Timer + poller ──────────────────────────────────────────
         self.create_timer(pub_sec, self._publish)
@@ -346,6 +347,34 @@ class TrainingNode(Node):
         )
         maybe_auto_download(self._mgr, self._store, skill_id, req.run_id, req.skill_dir)
         res.success, res.message = True, f"Download started → {req.skill_dir}"
+        return res
+
+    # ── Service: get_run_logs ─────────────────────────────────────────
+
+    def _on_get_run_logs(
+        self, req: GetRunLogs.Request, res: GetRunLogs.Response
+    ) -> GetRunLogs.Response:
+        """Fetch the last N lines of process output for a run."""
+        if not req.skill_id:
+            res.success, res.message = False, "skill_id is required"
+            return res
+        if req.run_id < 0:
+            res.success, res.message = False, "non-negative run_id required"
+            return res
+
+        lines = max(req.lines, 1) if req.lines > 0 else 50
+
+        try:
+            log_text = self._mgr.client.get_run_logs(
+                req.skill_id, req.run_id, lines=lines
+            )
+            res.success = True
+            res.log_text = log_text
+            n = len(log_text.splitlines()) if log_text else 0
+            res.message = f"{n} line(s) returned"
+        except Exception as e:
+            self.get_logger().error(f"get_run_logs failed: {e}")
+            res.success, res.message = False, str(e)
         return res
 
 

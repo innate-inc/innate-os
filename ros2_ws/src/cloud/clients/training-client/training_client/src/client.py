@@ -124,6 +124,17 @@ class OrchestratorClient:
         data = self._get(f"/skills/{skill_id}/runs/{run_id}")
         return RunInfo.from_api(data)
 
+    def get_run_logs(self, skill_id: str, run_id: int, lines: int = 50) -> str:
+        """GET /skills/{skill_id}/runs/{run_id}?include_log=N — last N lines as text.
+
+        Returns an empty string when no logs are available yet.
+        """
+        data = self._get(
+            f"/skills/{skill_id}/runs/{run_id}",
+            params={"include_log": str(lines)},
+        )
+        return data.get("log_text") or ""
+
     def list_runs(self, skill_id: str) -> list[RunInfo]:
         """GET /skills/{skill_id}/runs — all runs for a skill."""
         data = self._get(f"/skills/{skill_id}/runs")
