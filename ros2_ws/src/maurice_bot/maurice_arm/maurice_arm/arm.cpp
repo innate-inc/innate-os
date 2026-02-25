@@ -62,6 +62,8 @@ public:
             this->declare_parameter(prefix + "kp", joint_configs_[i].kp);
             this->declare_parameter(prefix + "ki", joint_configs_[i].ki);
             this->declare_parameter(prefix + "kd", joint_configs_[i].kd);
+            this->declare_parameter(prefix + "ff1", joint_configs_[i].ff1);
+            this->declare_parameter(prefix + "ff2", joint_configs_[i].ff2);
             this->declare_parameter(prefix + "profile_velocity", joint_configs_[i].profile_velocity);
             this->declare_parameter(prefix + "profile_acceleration", joint_configs_[i].profile_acceleration);
         }
@@ -293,7 +295,9 @@ private:
                 config.kp = joint["pid_gains"]["kp"];
                 config.ki = joint["pid_gains"]["ki"];
                 config.kd = joint["pid_gains"]["kd"];
-                RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d", config.kp, config.ki, config.kd);
+                if (joint["pid_gains"].contains("ff1")) config.ff1 = joint["pid_gains"]["ff1"];
+                if (joint["pid_gains"].contains("ff2")) config.ff2 = joint["pid_gains"]["ff2"];
+                RCLCPP_INFO(this->get_logger(), "  PID gains: kp=%d, ki=%d, kd=%d, ff1=%d, ff2=%d", config.kp, config.ki, config.kd, config.ff1, config.ff2);
                 
                 if (joint.contains("profile_velocity")) {
                     config.profile_velocity = joint["profile_velocity"];
@@ -340,8 +344,8 @@ private:
             // Initialize with current joint defaults
             for (int i = 0; i < 3; i++) {
                 auto& jc = joint_configs_[i + 1];  // joints 2, 3, 4
-                gs_near_[i] = {jc.kp, jc.ki, jc.kd};
-                gs_far_[i] = {jc.kp, jc.ki, jc.kd};
+                gs_near_[i] = {jc.kp, jc.ki, jc.kd, jc.ff1, jc.ff2};
+                gs_far_[i] = {jc.kp, jc.ki, jc.kd, jc.ff1, jc.ff2};
             }
             
             const std::array<std::string, 2> profiles = {"near", "far"};
@@ -356,6 +360,8 @@ private:
                     arr[idx].kp = jg.value("kp", arr[idx].kp);
                     arr[idx].ki = jg.value("ki", arr[idx].ki);
                     arr[idx].kd = jg.value("kd", arr[idx].kd);
+                    arr[idx].ff1 = jg.value("ff1", arr[idx].ff1);
+                    arr[idx].ff2 = jg.value("ff2", arr[idx].ff2);
                 }
             }
             
@@ -415,6 +421,12 @@ private:
                 } else if (suffix == "kd") {
                     joint_configs_[joint_num - 1].kd = value;
                     pid_changed_joints.insert(joint_num);
+                } else if (suffix == "ff1") {
+                    joint_configs_[joint_num - 1].ff1 = value;
+                    pid_changed_joints.insert(joint_num);
+                } else if (suffix == "ff2") {
+                    joint_configs_[joint_num - 1].ff2 = value;
+                    pid_changed_joints.insert(joint_num);
                 } else if (suffix == "profile_velocity") {
                     joint_configs_[joint_num - 1].profile_velocity = value;
                     profile_changed_joints.insert(joint_num);
@@ -438,8 +450,8 @@ private:
                 if (jn >= 2 && jn <= 4) {
                     int gi = jn - 2;  // gs index 0,1,2 = joints 2,3,4
                     const auto& c = joint_configs_[jn - 1];
-                    gs_near_[gi] = {c.kp, c.ki, c.kd};
-                    gs_far_[gi]  = {c.kp, c.ki, c.kd};
+                    gs_near_[gi] = {c.kp, c.ki, c.kd, c.ff1, c.ff2};
+                    gs_far_[gi]  = {c.kp, c.ki, c.kd, c.ff1, c.ff2};
                     RCLCPP_INFO(this->get_logger(),
                         "Hot-reload: updated gain_scheduling near+far for joint %d to P=%d I=%d D=%d",
                         jn, c.kp, c.ki, c.kd);
@@ -452,10 +464,10 @@ private:
             
             // SyncWrite PID for changed joints
             if (!pid_changed_joints.empty()) {
-                std::vector<std::tuple<int, int, int, int>> pid_data;
+                std::vector<std::tuple<int, int, int, int, int, int>> pid_data;
                 for (int jn : pid_changed_joints) {
                     const auto& c = joint_configs_[jn - 1];
-                    pid_data.emplace_back(c.servo_id, c.kd, c.ki, c.kp);
+                    pid_data.emplace_back(c.servo_id, c.ff2, c.ff1, c.kd, c.ki, c.kp);
                 }
                 dynamixel_->syncWritePID(pid_data);
                 RCLCPP_INFO(this->get_logger(), "Hot-reload: sync-wrote PID for %zu servo(s)", pid_data.size());
@@ -551,7 +563,7 @@ private:
             }
             
             // PID gains are set via syncWritePID after this loop
-            RCLCPP_INFO(this->get_logger(), "  PID gains: P=%d, I=%d, D=%d (will sync-write)", config.kp, config.ki, config.kd);
+            RCLCPP_INFO(this->get_logger(), "  Gains: P=%d, I=%d, D=%d, FF1=%d, FF2=%d (will sync-write)", config.kp, config.ki, config.kd, config.ff1, config.ff2);
             
             // Set profile velocity and acceleration (0 = no limit)
             if (config.profile_velocity > 0) {
@@ -573,10 +585,10 @@ private:
             }
         }
         
-        // Write all PID gains in a single SyncWrite packet
-        std::vector<std::tuple<int, int, int, int>> pid_data;
+        // Write all PID + feedforward gains in a single SyncWrite packet (addr 76-85)
+        std::vector<std::tuple<int, int, int, int, int, int>> pid_data;
         for (const auto& config : joint_configs_) {
-            pid_data.emplace_back(config.servo_id, config.kd, config.ki, config.kp);
+            pid_data.emplace_back(config.servo_id, config.ff2, config.ff1, config.kd, config.ki, config.kp);
         }
         RCLCPP_INFO(this->get_logger(), "SyncWrite PID gains for %zu servos", pid_data.size());
         dynamixel_->syncWritePID(pid_data);
@@ -696,7 +708,7 @@ private:
                 double extension = extension_linear * extension_linear;  // quadratic: stays near 'near' gains longer
                 
                 bool gs_changed = false;
-                std::vector<std::tuple<int, int, int, int>> gs_pid_data;
+                std::vector<std::tuple<int, int, int, int, int, int>> gs_pid_data;
                 
                 for (int i = 0; i < 3; i++) {
                     int ji = i + 1;  // joint_configs_ index (0-based): joints 2,3,4 = indices 1,2,3
@@ -704,17 +716,23 @@ private:
                     interp.kp = gs_near_[i].kp + static_cast<int>(extension * (gs_far_[i].kp - gs_near_[i].kp));
                     interp.ki = gs_near_[i].ki + static_cast<int>(extension * (gs_far_[i].ki - gs_near_[i].ki));
                     interp.kd = gs_near_[i].kd + static_cast<int>(extension * (gs_far_[i].kd - gs_near_[i].kd));
+                    interp.ff1 = gs_near_[i].ff1 + static_cast<int>(extension * (gs_far_[i].ff1 - gs_near_[i].ff1));
+                    interp.ff2 = gs_near_[i].ff2 + static_cast<int>(extension * (gs_far_[i].ff2 - gs_near_[i].ff2));
                     
                     if (interp.kp != gs_last_applied_[i].kp ||
                         interp.ki != gs_last_applied_[i].ki ||
-                        interp.kd != gs_last_applied_[i].kd) {
+                        interp.kd != gs_last_applied_[i].kd ||
+                        interp.ff1 != gs_last_applied_[i].ff1 ||
+                        interp.ff2 != gs_last_applied_[i].ff2) {
                         gs_changed = true;
                         gs_last_applied_[i] = interp;
                         joint_configs_[ji].kp = interp.kp;
                         joint_configs_[ji].ki = interp.ki;
                         joint_configs_[ji].kd = interp.kd;
+                        joint_configs_[ji].ff1 = interp.ff1;
+                        joint_configs_[ji].ff2 = interp.ff2;
                     }
-                    gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.kd, interp.ki, interp.kp);
+                    gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.ff2, interp.ff1, interp.kd, interp.ki, interp.kp);
                 }
                 if (gs_changed) {
                     auto pid_start = std::chrono::steady_clock::now();
@@ -1639,6 +1657,8 @@ private:
         int homing_offset = 0;
         int control_mode;
         int kp, ki, kd;
+        int ff1 = 0;  // Velocity feedforward gain (addr 78, range 0-16383)
+        int ff2 = 0;  // Acceleration feedforward gain (addr 76, range 0-16383)
         int profile_velocity = 0;
         int profile_acceleration = 0;
         // Head-specific fields (for joint 7)
@@ -1713,7 +1733,7 @@ private:
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
     
     // Gain scheduling
-    struct GainProfile { int kp = 0, ki = 0, kd = 0; };
+    struct GainProfile { int kp = 0, ki = 0, kd = 0, ff1 = 0, ff2 = 0; };
     struct TimingAccumulator {
         const char* name = "";
         long sum_us = 0;

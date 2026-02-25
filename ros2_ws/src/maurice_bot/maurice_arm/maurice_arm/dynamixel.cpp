@@ -149,21 +149,27 @@ void Dynamixel::setD(int motor_id, int d) {
     }
 }
 
-void Dynamixel::syncWritePID(const std::vector<std::tuple<int, int, int, int>>& pid_data) {
-    // Addresses 80-85: D(2 bytes) + I(2 bytes) + P(2 bytes) = 6 bytes contiguous
-    dynamixel::GroupSyncWrite syncWrite(port_handler_, packet_handler_, POSITION_D, 6);
+void Dynamixel::syncWritePID(const std::vector<std::tuple<int, int, int, int, int, int>>& pid_data) {
+    // Addresses 76-85: FF2(2) + FF1(2) + D(2) + I(2) + P(2) = 10 bytes contiguous
+    dynamixel::GroupSyncWrite syncWrite(port_handler_, packet_handler_, ADDR_FEEDFORWARD_2ND, 10);
     
-    for (const auto& [servo_id, kd, ki, kp] : pid_data) {
-        uint8_t param[6];
-        // D gain at offset 0 (addr 80), little-endian
-        param[0] = DXL_LOBYTE(static_cast<uint16_t>(kd));
-        param[1] = DXL_HIBYTE(static_cast<uint16_t>(kd));
-        // I gain at offset 2 (addr 82), little-endian
-        param[2] = DXL_LOBYTE(static_cast<uint16_t>(ki));
-        param[3] = DXL_HIBYTE(static_cast<uint16_t>(ki));
-        // P gain at offset 4 (addr 84), little-endian
-        param[4] = DXL_LOBYTE(static_cast<uint16_t>(kp));
-        param[5] = DXL_HIBYTE(static_cast<uint16_t>(kp));
+    for (const auto& [servo_id, ff2, ff1, kd, ki, kp] : pid_data) {
+        uint8_t param[10];
+        // FF2 (acceleration feedforward) at offset 0 (addr 76), little-endian
+        param[0] = DXL_LOBYTE(static_cast<uint16_t>(ff2));
+        param[1] = DXL_HIBYTE(static_cast<uint16_t>(ff2));
+        // FF1 (velocity feedforward) at offset 2 (addr 78), little-endian
+        param[2] = DXL_LOBYTE(static_cast<uint16_t>(ff1));
+        param[3] = DXL_HIBYTE(static_cast<uint16_t>(ff1));
+        // D gain at offset 4 (addr 80), little-endian
+        param[4] = DXL_LOBYTE(static_cast<uint16_t>(kd));
+        param[5] = DXL_HIBYTE(static_cast<uint16_t>(kd));
+        // I gain at offset 6 (addr 82), little-endian
+        param[6] = DXL_LOBYTE(static_cast<uint16_t>(ki));
+        param[7] = DXL_HIBYTE(static_cast<uint16_t>(ki));
+        // P gain at offset 8 (addr 84), little-endian
+        param[8] = DXL_LOBYTE(static_cast<uint16_t>(kp));
+        param[9] = DXL_HIBYTE(static_cast<uint16_t>(kp));
         
         if (!syncWrite.addParam(servo_id, param)) {
             throw std::runtime_error("Failed to add PID param for servo " + std::to_string(servo_id));

@@ -155,7 +155,7 @@ def load_pid_config(path):
     joints = json.loads(joints_str)
     for joint_key, joint_data in joints.items():
         pid = joint_data.get("pid_gains", {})
-        for field in ("kp", "ki", "kd"):
+        for field in ("kp", "ki", "kd", "ff1", "ff2"):
             if field in pid:
                 params[f"{joint_key}_{field}"] = int(pid[field])
         for field in ("profile_velocity", "profile_acceleration"):
