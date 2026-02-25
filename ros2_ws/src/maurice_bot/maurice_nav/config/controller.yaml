@@ -13,15 +13,19 @@
       required_movement_radius: 0.5
       movement_time_allowance: 10.0
     goal_checker:
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.16 # 10 deg
-      stateful: True
+      plugin: "maurice_nav::DynamicGoalChecker"
+      time_thresholds: [0.0, 0.40]
+      xy_tolerances: [0.25, 0.10]
+      yaw_tolerances: [0.16, 0.10] # 10 deg -> tighter final settle
+      linear_vel_tolerances: [1.0, 0.08]
+      angular_vel_tolerances: [1.5, 0.25]
     goal_checker_precise:
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.05
-      yaw_goal_tolerance: 0.08 # 5 deg
-      stateful: True
+      plugin: "maurice_nav::DynamicGoalChecker"
+      time_thresholds: [0.0, 0.30]
+      xy_tolerances: [0.05, 0.03]
+      yaw_tolerances: [0.08, 0.05] # 5 deg -> tighter final settle
+      linear_vel_tolerances: [1.0, 0.06]
+      angular_vel_tolerances: [1.5, 0.20]
     # MPPI controller parameters for the "FollowPath" plugin
     InnateFollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
