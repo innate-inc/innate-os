@@ -14,11 +14,9 @@ namespace maurice_arm {
 // Mode 5 = Current-based Position   (x330 ONLY — XL430/XC430 lack current hw)
 // Mode 16 = PWM                     (all X-series)
 //
-// x330 series (XL330-M288, XC330-M288) have Current Limit (addr 38) and
-// Goal Current (addr 102) registers. x430 series do NOT — attempting to set
-// mode 0 or 5 on an XL430/XC430 will be rejected by the servo.
-//
-// Also: addr 126 = "Present Current" (mA) on x330, "Present Load" (0.1%) on x430.
+// Each joint declares a motor_type string (e.g. "XC330-M288").
+// x330 → has current control (addr 38/102), addr 126 = mA
+// x430 → no current control, addr 126 = 0.1% load
 // ───────────────────────────────────────────────────────────────────────
 enum class OperatingMode {
     CURRENT = 0,                      // x330 only

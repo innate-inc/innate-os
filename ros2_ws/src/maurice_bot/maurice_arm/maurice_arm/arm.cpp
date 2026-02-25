@@ -53,7 +53,7 @@ public:
         control_frequency_ = this->get_parameter("control_frequency").as_double();
         std::string joints_str = this->get_parameter("joints").as_string();
         
-        // Parse joints configuration
+        // Parse joints configuration (motor_type validated per-joint)
         parseJointConfig(joints_str);
         
         // Declare per-joint PID and profile parameters for hot-reload tuning
@@ -224,6 +224,14 @@ public:
     }
     
 private:
+    // x330 motors (XL330, XC330) have current control hw (addr 38/102, modes 0/5)
+    // x430 motors do not. addr 38 max = 1750 mA for all x330.
+    static constexpr int kX330MaxCurrentLimit = 1750;
+    
+    static bool isX330(const std::string& motor_type) {
+        return motor_type.find("330") != std::string::npos;
+    }
+    
     void parseJointConfig(const std::string& json_str) {
         RCLCPP_INFO(this->get_logger(), "Parsing joint configuration...");
         auto joints = json::parse(json_str);
@@ -240,13 +248,42 @@ private:
                 config.pwm_limit = joint["pwm_limits"];
                 config.control_mode = joint["control_mode"];
                 
-                RCLCPP_INFO(this->get_logger(), "Joint %d: servo_id=%d, limits=[%.3f, %.3f] rad, pwm=%d, mode=%d",
-                    i, config.servo_id, config.min_pos_rad, config.max_pos_rad, config.pwm_limit, config.control_mode);
-                
-                if (joint.contains("current_limit")) {
-                    config.current_limit = joint["current_limit"];
-                    RCLCPP_INFO(this->get_logger(), "  Current limit: %d", config.current_limit);
+                if (joint.contains("motor_type")) {
+                    config.motor_type = joint["motor_type"];
+                    
+                    // x430 motors don't support current modes (0, 5)
+                    if (!isX330(config.motor_type) &&
+                        (config.control_mode == 0 || config.control_mode == 5)) {
+                        throw std::runtime_error(
+                            "Joint " + std::to_string(i) + " (" + config.motor_type +
+                            "): control_mode " + std::to_string(config.control_mode) +
+                            " requires current hw — only x330 motors support modes 0/5");
+                    }
                 }
+                
+                // x330 motors: default current_limit to hw max, allow override
+                // x430 motors: no current hw, leave at 0
+                if (isX330(config.motor_type)) {
+                    config.current_limit = kX330MaxCurrentLimit;
+                    if (joint.contains("current_limit")) {
+                        int override = joint["current_limit"];
+                        if (override <= 0 || override > kX330MaxCurrentLimit) {
+                            throw std::runtime_error(
+                                "Joint " + std::to_string(i) + ": current_limit " +
+                                std::to_string(override) + " out of range [1, " +
+                                std::to_string(kX330MaxCurrentLimit) + "]");
+                        }
+                        config.current_limit = override;
+                    }
+                } else if (joint.contains("current_limit")) {
+                    throw std::runtime_error(
+                        "Joint " + std::to_string(i) + " (" + config.motor_type +
+                        "): current_limit not supported — no current control hw");
+                }
+                
+                RCLCPP_INFO(this->get_logger(), "Joint %d: servo_id=%d, motor=%s, limits=[%.3f, %.3f] rad, pwm=%d, mode=%d, current=%d",
+                    i, config.servo_id, config.motor_type.empty() ? "(unset)" : config.motor_type.c_str(),
+                    config.min_pos_rad, config.max_pos_rad, config.pwm_limit, config.control_mode, config.current_limit);
                 
                 if (joint.contains("homing_offset")) {
                     config.homing_offset = joint["homing_offset"];
@@ -454,7 +491,8 @@ private:
         
         // Configure all servos (IDs 1-7) uniformly
         for (const auto& config : joint_configs_) {
-            RCLCPP_INFO(this->get_logger(), "Configuring servo %d", config.servo_id);
+            RCLCPP_INFO(this->get_logger(), "Configuring servo %d (%s)", config.servo_id,
+                config.motor_type.empty() ? "unknown" : config.motor_type.c_str());
             
             RCLCPP_INFO(this->get_logger(), "  Disabling torque on servo %d", config.servo_id);
             dynamixel_->disableTorque(config.servo_id);
@@ -477,7 +515,7 @@ private:
             dynamixel_->setPwmLimit(config.servo_id, config.pwm_limit);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             
-            // Set current limit if specified
+            // Set current limit if specified (x330 only — validated at parse time)
             if (config.current_limit > 0) {
                 RCLCPP_INFO(this->get_logger(), "  Setting current limit: %d", config.current_limit);
                 dynamixel_->setCurrentLimit(config.servo_id, config.current_limit);
@@ -563,10 +601,16 @@ private:
             auto [positions, velocities, loads] = robot_->readState();
             ts[2] = std::chrono::steady_clock::now();
             
-            // Convert raw load to effort percentage (-100% to 100%)
+            // Convert raw load/current to effort values
+            // current_limit > 0 means x330 (addr 126 = mA), else x430 (addr 126 = 0.1% load)
             std::vector<double> efforts;
-            for (int load : loads)
-                efforts.push_back(static_cast<double>(load) / 10.0);
+            for (size_t j = 0; j < loads.size() && j < joint_configs_.size(); ++j) {
+                if (joint_configs_[j].current_limit > 0) {
+                    efforts.push_back(static_cast<double>(loads[j]));        // mA
+                } else {
+                    efforts.push_back(static_cast<double>(loads[j]) / 10.0); // %
+                }
+            }
             ts[3] = std::chrono::steady_clock::now();
             
             // ========== PUBLISH ARM STATE ==========
@@ -1587,6 +1631,7 @@ private:
     
     struct JointConfig {
         int servo_id;
+        std::string motor_type;  // e.g. "XC330-M288", "XL430-W250" — "330" = has current hw
         double min_pos_rad;
         double max_pos_rad;
         int pwm_limit;
