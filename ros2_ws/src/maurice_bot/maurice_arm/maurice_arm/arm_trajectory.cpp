@@ -119,12 +119,13 @@ bool MauriceArmNode::planAndExecuteTrajectory(const std::vector<double>& target_
     for (size_t i = 0; i < interpolated_trajectory.size(); ++i) {
         const auto& point = interpolated_trajectory[i];
 
-        // Send command
+        // Send command via the control loop's pass-through path
         {
             std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-            std::vector<double> command_data = point;
-            latest_arm_command_ = applyLimitsAndConvertToEncoder(command_data);
-            has_arm_command_ = true;
+            for (size_t j = 0; j < 6 && j < point.size(); ++j) {
+                latest_target_[j] = point[j];
+            }
+            has_target_ = true;
         }
 
         // Sleep until next waypoint (except for last point)
@@ -202,9 +203,10 @@ bool MauriceArmNode::planAndExecuteMultiWaypointTrajectory(
 
         {
             std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-            std::vector<double> command_data = point;
-            latest_arm_command_ = applyLimitsAndConvertToEncoder(command_data);
-            has_arm_command_ = true;
+            for (size_t j = 0; j < 6 && j < point.size(); ++j) {
+                latest_target_[j] = point[j];
+            }
+            has_target_ = true;
         }
 
         if (i < full_trajectory.size() - 1) {
