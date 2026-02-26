@@ -17,7 +17,7 @@
       time_thresholds: [0.0, 0.40]
       xy_tolerances: [0.25, 0.10]
       yaw_tolerances: [0.16, 0.10] # 10 deg -> tighter final settle
-      linear_vel_tolerances: [1.0, 0.08]
+      linear_vel_tolerances: [0.5, 0.08]
       angular_vel_tolerances: [1.5, 0.25]
     goal_checker_precise:
       plugin: "maurice_nav::DynamicGoalChecker"
@@ -116,7 +116,7 @@
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0
+        cost_weight: 4.5
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
         threshold_to_consider: 0.5
@@ -145,5 +145,5 @@
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 15.0
         threshold_to_consider: 0.5
