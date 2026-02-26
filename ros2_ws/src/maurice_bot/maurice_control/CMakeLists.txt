@@ -46,7 +46,7 @@ add_executable(udp_leader_receiver maurice_control/udp_leader_receiver.cpp)
 
 ament_target_dependencies(udp_leader_receiver
   rclcpp
-  std_msgs
+  sensor_msgs
   std_srvs
 )
 

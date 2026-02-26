@@ -6,6 +6,8 @@
     trajectory_rate_hz: 100.0
     max_jerk: 150.0  # rad/s³ jerk limit for trajectories (0 = disabled)
 
+
+
     # =============================================================
     # Joint Configuration for Maurice Arm (nav2-style)
     # =============================================================
@@ -43,8 +45,11 @@
       position_limits: [-1.5708, 1.5708]
       pwm_limit: 885
       control_mode: 3
-      gains_near: [730, 0, 0, 100, 0]  # [kp, ki, kd, ff1, ff2]
-      gains_far: [100, 0, 100, 50, 0]  # [kp, ki, kd, ff1, ff2]
+      profile_velocity: 250
+      profile_acceleration: 120
+      gains_near: [730, 0, 0, 100, 0]    # [kp, ki, kd, ff1, ff2]
+      gains_far: [100, 0, 100, 50, 0]    # [kp, ki, kd, ff1, ff2]
+      gains_teleop: [300, 10, 1000, 0, 0] # November teleop gains
 
     joint_2:
       servo_id: 2
@@ -52,9 +57,10 @@
       position_limits: [-1.5708, 1.22]
       pwm_limit: 885
       control_mode: 3
-      profile_velocity: 0
-      profile_acceleration: 0
+      profile_velocity: 150
+      profile_acceleration: 50
       gains_near: [9900, 0, 100, 0, 0]
+      gains_teleop: [300, 200, 100, 0, 0] # November teleop gains
 
     joint_3:
       servo_id: 3
@@ -62,9 +68,10 @@
       position_limits: [-1.5708, 1.7453]
       pwm_limit: 885
       control_mode: 3
-      profile_velocity: 0
-      profile_acceleration: 0
+      profile_velocity: 200
+      profile_acceleration: 50
       gains_near: [1500, 0, 200, 1701, 0]
+      gains_teleop: [640, 100, 3600, 0, 0] # November teleop gains
 
     joint_4:
       servo_id: 4
@@ -72,9 +79,10 @@
       position_limits: [-1.9199, 1.7453]
       pwm_limit: 885
       control_mode: 3
-      profile_velocity: 0
-      profile_acceleration: 0
-      gains_near: [2000, 0, 160, 5000, 0]
+      profile_velocity: 100
+      profile_acceleration: 25
+      gains_near: [2000, 0, 160, 0, 0]
+      gains_teleop: [400, 400, 1000, 0, 0] # November teleop gains
 
     joint_5:
       servo_id: 5
@@ -82,7 +90,10 @@
       position_limits: [-1.5708, 1.5708]
       pwm_limit: 885
       control_mode: 3
+      profile_velocity: 100
+      profile_acceleration: 50
       gains_near: [2900, 0, 0, 0, 0]
+      gains_teleop: [400, 0, 0, 0, 0]     # November teleop gains
 
     joint_6:
       servo_id: 6
@@ -92,6 +103,7 @@
       current_limit: 100
       control_mode: 4
       gains_near: [400, 0, 0, 0, 0]
+      gains_teleop: [400, 0, 0, 0, 0]     # November teleop gains
 
     joint_7:
       servo_id: 7

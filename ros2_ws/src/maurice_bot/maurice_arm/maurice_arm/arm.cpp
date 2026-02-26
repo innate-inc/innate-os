@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
-#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/empty.hpp>
@@ -53,7 +52,6 @@ public:
         
         int baud_rate = this->get_parameter("baud_rate").as_int();
         control_frequency_ = this->get_parameter("control_frequency").as_double();
-        RCLCPP_INFO(this->get_logger(), "Command interpolation: cubic Hermite spline (1 sample latency)");
         auto joint_names_param = this->get_parameter("joints").as_string_array();
         
         // Load joint configurations from sub-parameters (nav2 style)
@@ -84,8 +82,9 @@ public:
         arm_status_pub_ = this->create_publisher<maurice_msgs::msg::ArmStatus>("/mars/arm/status", 10);
         // Use best_effort QoS to match UDP receiver publisher for low-latency teleoperation
         auto cmd_qos = rclcpp::QoS(1).best_effort();
-        arm_command_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
-            "/mars/arm/commands", cmd_qos,
+        // TODO: make sure it works with calibration bag
+        arm_command_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+            "/mars/arm/commands2", cmd_qos,
             std::bind(&MauriceArmNode::armCommandCallback, this, std::placeholders::_1));
         
         arm_torque_on_service_ = this->create_service<std_srvs::srv::Trigger>(
@@ -103,6 +102,12 @@ public:
         arm_reboot_service_ = this->create_service<std_srvs::srv::Trigger>(
             "/mars/arm/reboot",
             std::bind(&MauriceArmNode::armRebootServosCallback, this, std::placeholders::_1, std::placeholders::_2),
+            rmw_qos_profile_services_default,
+            service_callback_group_);
+        
+        arm_fix_error_service_ = this->create_service<std_srvs::srv::Trigger>(
+            "/mars/arm/fix_error",
+            std::bind(&MauriceArmNode::armFixErrorCallback, this, std::placeholders::_1, std::placeholders::_2),
             rmw_qos_profile_services_default,
             service_callback_group_);
         
@@ -230,6 +235,9 @@ private:
         bool operator!=(const GainProfile& o) const { return !(*this == o); }
     };
     
+    // Gain mode: SCHEDULED = interpolate near/far by extension, TELEOP = flat teleop gains
+    enum class GainMode { SCHEDULED, TELEOP };
+
     static GainProfile parseGainsArray(const std::vector<int64_t>& arr) {
         constexpr int kMaxGain = 16383;
         GainProfile g;
@@ -260,6 +268,7 @@ private:
             this->declare_parameter(jn + ".profile_acceleration", 0);
             this->declare_parameter(jn + ".gains_near", std::vector<int64_t>{});
             this->declare_parameter(jn + ".gains_far", std::vector<int64_t>{});
+            this->declare_parameter(jn + ".gains_teleop", std::vector<int64_t>{});
             
             config.servo_id = static_cast<int>(this->get_parameter(jn + ".servo_id").as_int());
             auto pos_limits = this->get_parameter(jn + ".position_limits").as_double_array();
@@ -316,6 +325,16 @@ private:
                 }
             } catch (...) {}  // empty [] in YAML may not parse as integer array
             
+            GainProfile teleop_gains{};  // teleop gains (November tuning)
+            bool has_teleop_gains = false;
+            try {
+                auto teleop_arr = this->get_parameter(jn + ".gains_teleop").as_integer_array();
+                if (!teleop_arr.empty()) {
+                    teleop_gains = parseGainsArray(teleop_arr);
+                    has_teleop_gains = true;
+                }
+            } catch (...) {}
+            
             // Set joint config gains from near (initial operating gains)
             config.kp  = near_gains.kp;
             config.ki  = near_gains.ki;
@@ -326,12 +345,16 @@ private:
             // Store gain scheduling profiles
             gs_near_[i] = near_gains;
             gs_far_[i]  = far_gains;
+            gs_teleop_[i] = has_teleop_gains ? teleop_gains : near_gains;
             gs_last_applied_[i] = near_gains;
             
             RCLCPP_INFO(this->get_logger(), "  Gains near: [%d, %d, %d, %d, %d]  far: [%d, %d, %d, %d, %d]%s",
                 near_gains.kp, near_gains.ki, near_gains.kd, near_gains.ff1, near_gains.ff2,
                 far_gains.kp, far_gains.ki, far_gains.kd, far_gains.ff1, far_gains.ff2,
                 (near_gains != far_gains) ? "  (gain scheduling active)" : "");
+            if (has_teleop_gains)
+                RCLCPP_INFO(this->get_logger(), "  Gains teleop: [%d, %d, %d, %d, %d]",
+                    teleop_gains.kp, teleop_gains.ki, teleop_gains.kd, teleop_gains.ff1, teleop_gains.ff2);
             if (config.profile_velocity > 0 || config.profile_acceleration > 0)
                 RCLCPP_INFO(this->get_logger(), "  Profile: vel=%d, accel=%d", config.profile_velocity, config.profile_acceleration);
             
@@ -419,6 +442,15 @@ private:
                     }
                     RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_far = [%d, %d, %d, %d, %d]",
                         joint_num, gs_far_[ji].kp, gs_far_[ji].ki, gs_far_[ji].kd, gs_far_[ji].ff1, gs_far_[ji].ff2);
+                } else if (suffix == "gains_teleop") {
+                    try {
+                        auto arr = param.as_integer_array();
+                        gs_teleop_[ji] = arr.empty() ? gs_near_[ji] : parseGainsArray(arr);
+                    } catch (...) {
+                        gs_teleop_[ji] = gs_near_[ji];
+                    }
+                    RCLCPP_INFO(this->get_logger(), "Hot-reload: joint_%d.gains_teleop = [%d, %d, %d, %d, %d]",
+                        joint_num, gs_teleop_[ji].kp, gs_teleop_[ji].ki, gs_teleop_[ji].kd, gs_teleop_[ji].ff1, gs_teleop_[ji].ff2);
                 } else if (suffix == "profile_velocity") {
                     joint_configs_[ji].profile_velocity = static_cast<int>(param.as_int());
                     profile_changed_joints.insert(joint_num);
@@ -472,104 +504,128 @@ private:
         configureServosLocked();
     }
 
+    // Retry a servo operation up to max_retries times with delay between attempts
+    template<typename Func>
+    void retryServoOp(int servo_id, const char* op_name, Func&& fn, int max_retries = 3) {
+        for (int attempt = 1; attempt <= max_retries; ++attempt) {
+            try {
+                fn();
+                return;
+            } catch (const std::exception& e) {
+                RCLCPP_WARN(this->get_logger(), "Servo %d %s attempt %d/%d failed: %s",
+                    servo_id, op_name, attempt, max_retries, e.what());
+                if (attempt == max_retries) throw;
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        }
+    }
+
+    // Configure a single servo by ID — shared by configureServosLocked and armFixErrorCallback
+    void configureServoByIdLocked(int servo_id, bool enable_torque = true) {
+        // Find the config for this servo
+        const JointConfig* config_ptr = nullptr;
+        size_t joint_index = 0;
+        for (size_t i = 0; i < joint_configs_.size(); ++i) {
+            if (joint_configs_[i].servo_id == servo_id) {
+                config_ptr = &joint_configs_[i];
+                joint_index = i;
+                break;
+            }
+        }
+        if (!config_ptr) {
+            throw std::runtime_error("No config found for servo ID " + std::to_string(servo_id));
+        }
+        const auto& config = *config_ptr;
+        
+        RCLCPP_INFO(this->get_logger(), "Configuring servo %d (%s)", config.servo_id,
+            config.motor_type.empty() ? "unknown" : config.motor_type.c_str());
+        
+        retryServoOp(config.servo_id, "disableTorque", [&]{ dynamixel_->disableTorque(config.servo_id); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        dynamixel_->setReturnDelayTime(config.servo_id, 100);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        int min_encoder = static_cast<int>((config.min_pos_rad / (2 * M_PI)) * 4096 + 2048);
+        int max_encoder = static_cast<int>((config.max_pos_rad / (2 * M_PI)) * 4096 + 2048);
+        dynamixel_->setMinPositionLimit(config.servo_id, min_encoder);
+        dynamixel_->setMaxPositionLimit(config.servo_id, max_encoder);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        dynamixel_->setPwmLimit(config.servo_id, config.pwm_limit);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        if (config.current_limit > 0) {
+            dynamixel_->setCurrentLimit(config.servo_id, config.current_limit);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        
+        OperatingMode mode;
+        switch (config.control_mode) {
+            case 0:  mode = OperatingMode::CURRENT; break;
+            case 1:  mode = OperatingMode::VELOCITY; break;
+            case 3:  mode = OperatingMode::POSITION; break;
+            case 4:  mode = OperatingMode::EXTENDED_POSITION; break;
+            case 5:  mode = OperatingMode::CURRENT_CONTROLLED_POSITION; break;
+            case 16: mode = OperatingMode::PWM; break;
+            default: throw std::runtime_error("Servo " + std::to_string(config.servo_id) + ": invalid control_mode");
+        }
+        dynamixel_->setOperatingMode(config.servo_id, mode);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        if (config.homing_offset != 0) {
+            dynamixel_->setHomeOffset(config.servo_id, config.homing_offset);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        
+        // Write PID gains for this servo
+        std::vector<std::tuple<int, int, int, int, int, int>> pid_data;
+        pid_data.emplace_back(config.servo_id, config.ff2, config.ff1, config.kd, config.ki, config.kp);
+        dynamixel_->syncWritePID(pid_data);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
+        if (config.profile_velocity > 0) {
+            dynamixel_->setProfileVelocity(config.servo_id, config.profile_velocity);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (config.profile_acceleration > 0) {
+            dynamixel_->setProfileAcceleration(config.servo_id, config.profile_acceleration);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        
+        // Reset gain scheduling tracking for this joint
+        gs_last_applied_[joint_index] = gs_near_[joint_index];
+        
+        if (enable_torque) {
+            RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", config.servo_id);
+            retryServoOp(config.servo_id, "enableTorque", [&]{ dynamixel_->enableTorque(config.servo_id); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Servo %d configured and torque %s",
+            config.servo_id, enable_torque ? "enabled" : "disabled");
+    }
+
     void configureServosLocked(bool enable_torque = true) {
         RCLCPP_INFO(this->get_logger(), "Configuring all 7 servos...");
         
-        // Configure all servos (IDs 1-7) uniformly
+        // Configure all servos (IDs 1-7) uniformly using shared per-servo logic
         for (const auto& config : joint_configs_) {
-            RCLCPP_INFO(this->get_logger(), "Configuring servo %d (%s)", config.servo_id,
-                config.motor_type.empty() ? "unknown" : config.motor_type.c_str());
-            
-            RCLCPP_INFO(this->get_logger(), "  Disabling torque on servo %d", config.servo_id);
-            dynamixel_->disableTorque(config.servo_id);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            
-            // Set Return Delay Time: 100 * 2µs = 200µs (default 250 = 500µs)
-            dynamixel_->setReturnDelayTime(config.servo_id, 100);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            
-            // Set position limits
-            int min_encoder = static_cast<int>((config.min_pos_rad / (2 * M_PI)) * 4096 + 2048);
-            int max_encoder = static_cast<int>((config.max_pos_rad / (2 * M_PI)) * 4096 + 2048);
-            RCLCPP_INFO(this->get_logger(), "  Setting position limits: [%d, %d] (encoder)", min_encoder, max_encoder);
-            dynamixel_->setMinPositionLimit(config.servo_id, min_encoder);
-            dynamixel_->setMaxPositionLimit(config.servo_id, max_encoder);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            
-            // Set PWM limit
-            RCLCPP_INFO(this->get_logger(), "  Setting PWM limit: %d", config.pwm_limit);
-            dynamixel_->setPwmLimit(config.servo_id, config.pwm_limit);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            
-            // Set current limit if specified (x330 only — validated at parse time)
-            if (config.current_limit > 0) {
-                RCLCPP_INFO(this->get_logger(), "  Setting current limit: %d", config.current_limit);
-                dynamixel_->setCurrentLimit(config.servo_id, config.current_limit);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-            
-            // Set operating mode
-            OperatingMode mode;
-            const char* mode_name;
-            switch (config.control_mode) {
-                case 0:  mode = OperatingMode::CURRENT;                      mode_name = "CURRENT"; break;
-                case 1:  mode = OperatingMode::VELOCITY;                     mode_name = "VELOCITY"; break;
-                case 3:  mode = OperatingMode::POSITION;                     mode_name = "POSITION"; break;
-                case 4:  mode = OperatingMode::EXTENDED_POSITION;            mode_name = "EXTENDED_POSITION"; break;
-                case 5:  mode = OperatingMode::CURRENT_CONTROLLED_POSITION;  mode_name = "CURRENT_CONTROLLED_POSITION"; break;
-                case 16: mode = OperatingMode::PWM;                          mode_name = "PWM"; break;
-                default:
-                    throw std::runtime_error(
-                        "Servo " + std::to_string(config.servo_id) +
-                        ": invalid control_mode " + std::to_string(config.control_mode) +
-                        " (valid: 0=Current, 1=Velocity, 3=Position, 4=ExtendedPosition, 5=CurrentControlledPosition, 16=PWM)");
-            }
-            
-            RCLCPP_INFO(this->get_logger(), "  Setting operating mode: %s (%d)", mode_name, config.control_mode);
-            dynamixel_->setOperatingMode(config.servo_id, mode);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            
-            // Set homing offset if specified (for head servo)
-            if (config.homing_offset != 0) {
-                RCLCPP_INFO(this->get_logger(), "  Setting homing offset: %d", config.homing_offset);
-                dynamixel_->setHomeOffset(config.servo_id, config.homing_offset);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-            
-            // PID gains are set via syncWritePID after this loop
-            RCLCPP_INFO(this->get_logger(), "  Gains: P=%d, I=%d, D=%d, FF1=%d, FF2=%d (will sync-write)", config.kp, config.ki, config.kd, config.ff1, config.ff2);
-            
-            // Set profile velocity and acceleration (0 = no limit)
-            if (config.profile_velocity > 0) {
-                RCLCPP_INFO(this->get_logger(), "  Setting profile velocity: %d", config.profile_velocity);
-                dynamixel_->setProfileVelocity(config.servo_id, config.profile_velocity);
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            }
-            if (config.profile_acceleration > 0) {
-                RCLCPP_INFO(this->get_logger(), "  Setting profile acceleration: %d", config.profile_acceleration);
-                dynamixel_->setProfileAcceleration(config.servo_id, config.profile_acceleration);
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            }
-            
-            // Enable torque (if requested)
-            if (enable_torque) {
-                RCLCPP_INFO(this->get_logger(), "  Enabling torque on servo %d", config.servo_id);
-                dynamixel_->enableTorque(config.servo_id);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
+          try {
+            configureServoByIdLocked(config.servo_id, enable_torque);
+          } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to configure servo %d, skipping: %s",
+                config.servo_id, e.what());
+          }
         }
-        
-        // Write all PID + feedforward gains in a single SyncWrite packet (addr 80-91)
-        std::vector<std::tuple<int, int, int, int, int, int>> pid_data;
-        for (const auto& config : joint_configs_) {
-            pid_data.emplace_back(config.servo_id, config.ff2, config.ff1, config.kd, config.ki, config.kp);
-        }
-        RCLCPP_INFO(this->get_logger(), "SyncWrite PID gains for %zu servos", pid_data.size());
-        dynamixel_->syncWritePID(pid_data);
         
         // Move head to default position
-        RCLCPP_INFO(this->get_logger(), "Moving head to default position (0.0 deg)");
-        moveHeadToAngleLocked(0.0);
+        try {
+            RCLCPP_INFO(this->get_logger(), "Moving head to default position (0.0 deg)");
+            moveHeadToAngleLocked(0.0);
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to move head to default position: %s", e.what());
+        }
     }
     
     // Timer callback for unified control loop (replaces thread-based loop)
@@ -674,97 +730,114 @@ private:
                 joint_configs_[6].kp, joint_configs_[6].ki, joint_configs_[6].kd, joint_configs_[6].ff1, joint_configs_[6].ff2);
             
             // ========== GAIN SCHEDULING ==========
-            // Always runs; when near == far for a joint, no servo writes occur (no-op).
+            // TELEOP mode: use flat teleop gains (no extension-based interpolation)
+            // SCHEDULED mode: interpolate near/far by arm extension (gravity compensation)
             if (++gs_cycle_counter_ >= kGainScheduleInterval) {
                 gs_cycle_counter_ = 0;
-                
-                // Compute extension via 2D planar FK (shoulder XZ plane, Y-axis pitch joints)
-                // Link offsets from URDF (joint-to-joint in parent frame XZ)
-                constexpr double L2_x = 0.02825, L2_z = 0.12125;  // joint2 → joint3
-                constexpr double L3_x = 0.1375,  L3_z = 0.0045;   // joint3 → joint4
-                constexpr double L45_x = 0.110838;                  // joint4 → EE (joint5 is X-roll, no XZ effect)
-                constexpr double kMaxReach = 0.37291;               // sum of link lengths
-                
-                double q2 = positions_rad[1], q3 = positions_rad[2], q4 = positions_rad[3];
-                double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
-                
-                double ee_x = L2_x*std::cos(a2)  + L2_z*std::sin(a2)
-                            + L3_x*std::cos(a23) + L3_z*std::sin(a23)
-                            + L45_x*std::cos(a234);
-                
-                double horiz_reach = std::abs(ee_x);  // horizontal projection — what actually creates gravity torque
-                double extension_linear = std::clamp((horiz_reach / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
-                double extension = extension_linear * extension_linear;  // quadratic: stays near 'near' gains longer
                 
                 bool gs_changed = false;
                 std::vector<std::tuple<int, int, int, int, int, int>> gs_pid_data;
                 
-                for (int i = 0; i < 4; i++) {
-                    int ji = i;  // joint_configs_ index (0-based): joints 1,2,3,4 = indices 0,1,2,3
-                    GainProfile interp;
-                    interp.kp = gs_near_[i].kp + static_cast<int>(extension * (gs_far_[i].kp - gs_near_[i].kp));
-                    interp.ki = gs_near_[i].ki + static_cast<int>(extension * (gs_far_[i].ki - gs_near_[i].ki));
-                    interp.kd = gs_near_[i].kd + static_cast<int>(extension * (gs_far_[i].kd - gs_near_[i].kd));
-                    interp.ff1 = gs_near_[i].ff1 + static_cast<int>(extension * (gs_far_[i].ff1 - gs_near_[i].ff1));
-                    interp.ff2 = gs_near_[i].ff2 + static_cast<int>(extension * (gs_far_[i].ff2 - gs_near_[i].ff2));
-                    
-                    if (interp != gs_last_applied_[i]) {
-                        gs_changed = true;
-                        gs_last_applied_[i] = interp;
-                        joint_configs_[ji].kp  = interp.kp;
-                        joint_configs_[ji].ki  = interp.ki;
-                        joint_configs_[ji].kd  = interp.kd;
-                        joint_configs_[ji].ff1 = interp.ff1;
-                        joint_configs_[ji].ff2 = interp.ff2;
+                if (gain_mode_ == GainMode::TELEOP) {
+                    // TELEOP: apply flat teleop gains for joints 1-6
+                    for (int i = 0; i < 6; i++) {
+                        const GainProfile& target = gs_teleop_[i];
+                        if (target != gs_last_applied_[i]) {
+                            gs_changed = true;
+                            gs_last_applied_[i] = target;
+                            joint_configs_[i].kp  = target.kp;
+                            joint_configs_[i].ki  = target.ki;
+                            joint_configs_[i].kd  = target.kd;
+                            joint_configs_[i].ff1 = target.ff1;
+                            joint_configs_[i].ff2 = target.ff2;
+                        }
+                        gs_pid_data.emplace_back(joint_configs_[i].servo_id, target.ff2, target.ff1, target.kd, target.ki, target.kp);
                     }
-                    gs_pid_data.emplace_back(joint_configs_[ji].servo_id, interp.ff2, interp.ff1, interp.kd, interp.ki, interp.kp);
-                }
-                if (gs_changed) {
-                    auto pid_start = std::chrono::steady_clock::now();
-                    dynamixel_->syncWritePID(gs_pid_data);
-                    auto pid_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - pid_start).count();
-                    timing_stats_[8].add(pid_us);
-                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
-                        "GainSched ext=%.2f (h=%.3fm) | J1 P=%d D=%d | J2 P=%d D=%d | J3 P=%d D=%d | J4 P=%d D=%d",
-                        extension, horiz_reach,
-                        gs_last_applied_[0].kp, gs_last_applied_[0].kd,
-                        gs_last_applied_[1].kp, gs_last_applied_[1].kd,
-                        gs_last_applied_[2].kp, gs_last_applied_[2].kd,
-                        gs_last_applied_[3].kp, gs_last_applied_[3].kd);
+                    if (gs_changed) {
+                        auto pid_start = std::chrono::steady_clock::now();
+                        dynamixel_->syncWritePID(gs_pid_data);
+                        auto pid_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - pid_start).count();
+                        timing_stats_[8].add(pid_us);
+                        RCLCPP_INFO(this->get_logger(),
+                            "TELEOP gains applied | J1 P=%d I=%d D=%d | J2 P=%d I=%d D=%d | J3 P=%d I=%d D=%d | J4 P=%d I=%d D=%d",
+                            gs_teleop_[0].kp, gs_teleop_[0].ki, gs_teleop_[0].kd,
+                            gs_teleop_[1].kp, gs_teleop_[1].ki, gs_teleop_[1].kd,
+                            gs_teleop_[2].kp, gs_teleop_[2].ki, gs_teleop_[2].kd,
+                            gs_teleop_[3].kp, gs_teleop_[3].ki, gs_teleop_[3].kd);
+                    }
+                } else {
+                    // SCHEDULED: interpolate near/far by arm extension for joints 1-4
+                    // Compute extension via 2D planar FK (shoulder XZ plane, Y-axis pitch joints)
+                    constexpr double L2_x = 0.02825, L2_z = 0.12125;  // joint2 → joint3
+                    constexpr double L3_x = 0.1375,  L3_z = 0.0045;   // joint3 → joint4
+                    constexpr double L45_x = 0.110838;                  // joint4 → EE
+                    constexpr double kMaxReach = 0.37291;
+                    
+                    double q2 = positions_rad[1], q3 = positions_rad[2], q4 = positions_rad[3];
+                    double a2 = q2, a23 = q2 + q3, a234 = q2 + q3 + q4;
+                    
+                    double ee_x = L2_x*std::cos(a2)  + L2_z*std::sin(a2)
+                                + L3_x*std::cos(a23) + L3_z*std::sin(a23)
+                                + L45_x*std::cos(a234);
+                    
+                    double horiz_reach = std::abs(ee_x);
+                    double extension_linear = std::clamp((horiz_reach / kMaxReach - 0.1) / 0.9, 0.0, 1.0);
+                    double extension = extension_linear * extension_linear;
+                    
+                    for (int i = 0; i < 4; i++) {
+                        GainProfile interp;
+                        interp.kp = gs_near_[i].kp + static_cast<int>(extension * (gs_far_[i].kp - gs_near_[i].kp));
+                        interp.ki = gs_near_[i].ki + static_cast<int>(extension * (gs_far_[i].ki - gs_near_[i].ki));
+                        interp.kd = gs_near_[i].kd + static_cast<int>(extension * (gs_far_[i].kd - gs_near_[i].kd));
+                        interp.ff1 = gs_near_[i].ff1 + static_cast<int>(extension * (gs_far_[i].ff1 - gs_near_[i].ff1));
+                        interp.ff2 = gs_near_[i].ff2 + static_cast<int>(extension * (gs_far_[i].ff2 - gs_near_[i].ff2));
+                        
+                        if (interp != gs_last_applied_[i]) {
+                            gs_changed = true;
+                            gs_last_applied_[i] = interp;
+                            joint_configs_[i].kp  = interp.kp;
+                            joint_configs_[i].ki  = interp.ki;
+                            joint_configs_[i].kd  = interp.kd;
+                            joint_configs_[i].ff1 = interp.ff1;
+                            joint_configs_[i].ff2 = interp.ff2;
+                        }
+                        gs_pid_data.emplace_back(joint_configs_[i].servo_id, interp.ff2, interp.ff1, interp.kd, interp.ki, interp.kp);
+                    }
+                    if (gs_changed) {
+                        auto pid_start = std::chrono::steady_clock::now();
+                        dynamixel_->syncWritePID(gs_pid_data);
+                        auto pid_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - pid_start).count();
+                        timing_stats_[8].add(pid_us);
+                        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                            "GainSched ext=%.2f (h=%.3fm) | J1 P=%d D=%d | J2 P=%d D=%d | J3 P=%d D=%d | J4 P=%d D=%d",
+                            extension, horiz_reach,
+                            gs_last_applied_[0].kp, gs_last_applied_[0].kd,
+                            gs_last_applied_[1].kp, gs_last_applied_[1].kd,
+                            gs_last_applied_[2].kp, gs_last_applied_[2].kd,
+                            gs_last_applied_[3].kp, gs_last_applied_[3].kd);
+                    }
                 }
             }
             ts[6] = std::chrono::steady_clock::now();
             
-            // ========== CUBIC HERMITE SPLINE INTERPOLATION (always runs at 200Hz) ==========
-            // Runs 1 command behind: when command N arrives, we interpolate [N-1, N].
-            // Catmull-Rom tangents from surrounding points give C1 continuity.
+            // ========== COMMAND PASS-THROUGH (runs at 200Hz) ==========
+            // Sends latest received target directly to servos.
+            // Smoothing is handled by servo Profile Velocity/Acceleration.
             {
-                bool has_spline = false;
+                bool has_cmd = false;
                 std::array<double, 6> result_rad{};
                 
                 {
                     std::lock_guard<std::mutex> arm_lock(arm_command_mutex_);
-                    if (spline_active_) {
-                        auto now = std::chrono::steady_clock::now();
-                        double elapsed = std::chrono::duration<double>(now - spline_t0_).count();
-                        double u = (spline_duration_ > 1e-6) ? std::clamp(elapsed / spline_duration_, 0.0, 1.0) : 1.0;
-                        
-                        // Hermite basis functions
-                        double u2 = u * u, u3 = u2 * u;
-                        double h00 =  2*u3 - 3*u2 + 1;  // value at p0
-                        double h10 =    u3 - 2*u2 + u;  // tangent at p0
-                        double h01 = -2*u3 + 3*u2;       // value at p1
-                        double h11 =    u3 -   u2;       // tangent at p1
-                        
-                        for (int j = 0; j < 6; ++j)
-                            result_rad[j] = h00 * spline_p0_[j] + h10 * spline_m0_[j]
-                                          + h01 * spline_p1_[j] + h11 * spline_m1_[j];
-                        has_spline = true;
+                    if (has_target_) {
+                        result_rad = latest_target_;
+                        has_cmd = true;
                     }
                 }
                 
-                if (has_spline) {
+                if (has_cmd) {
                     std::vector<double> cmd_vec(result_rad.begin(), result_rad.end());
                     std::vector<int> arm_encoder = applyLimitsAndConvertToEncoder(cmd_vec);
                     
@@ -778,7 +851,7 @@ private:
                     
                     robot_->setGoalPos(full_command);
                     
-                    // Publish interpolated command (in radians, external convention)
+                    // Publish smoothed command (in radians, external convention)
                     sensor_msgs::msg::JointState cmd_msg;
                     cmd_msg.header.stamp = this->now();
                     cmd_msg.name = {"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"};
@@ -794,7 +867,6 @@ private:
                     std::lock_guard<std::mutex> head_lock(head_command_mutex_);
                     int head_enc = latest_head_command_;
                     has_head_command_ = false;
-                    // Read current arm positions and only move head
                     std::vector<int> full_command(latest_arm_command_);
                     full_command.resize(7);
                     full_command[6] = head_enc;
@@ -1004,74 +1076,22 @@ private:
         return command_encoder;
     }
     
-    void armCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+    void armCommandCallback(const sensor_msgs::msg::JointState::SharedPtr msg) {
         try {
-            if (msg->data.size() != 6) {
-                RCLCPP_ERROR(this->get_logger(), "Action size must match number of servos. Expected 6, got %zu", msg->data.size());
+            if (msg->position.size() != 6) {
+                RCLCPP_ERROR(this->get_logger(), "Action size must match number of servos. Expected 6, got %zu", msg->position.size());
                 return;
             }
             
-            auto now = std::chrono::steady_clock::now();
-            
             std::lock_guard<std::mutex> lock(arm_command_mutex_);
-            
-            // Accumulate into current bucket
             for (int i = 0; i < 6; ++i)
-                bucket_sum_[i] += msg->data[i];
-            bucket_count_++;
+                latest_target_[i] = msg->position[i];
+            has_target_ = true;
             
-            // Check if 20ms (50Hz) has elapsed since last emitted point
-            double elapsed_ms = std::chrono::duration<double, std::milli>(now - bucket_start_).count();
-            if (elapsed_ms < 20.0 && cmd_history_.size() >= 1) {
-                return;  // still accumulating — don't emit yet
-            }
-            
-            // Emit averaged sample as one spline point
-            CmdSample s;
-            s.t = now;
-            for (int i = 0; i < 6; ++i)
-                s.pos[i] = bucket_sum_[i] / bucket_count_;
-            
-            // Reset bucket
-            bucket_sum_.fill(0.0);
-            bucket_count_ = 0;
-            bucket_start_ = now;
-            
-            // Push to history for spline
-            cmd_history_.push_back(s);
-            if (cmd_history_.size() > 4) cmd_history_.pop_front();
-            
-            // Need ≥2 points to define a segment
-            if (cmd_history_.size() >= 2) {
-                size_t n = cmd_history_.size();
-                const auto& s0 = cmd_history_[n - 2];
-                const auto& s1 = cmd_history_[n - 1];
-                
-                spline_t0_ = s0.t;
-                spline_duration_ = std::chrono::duration<double>(s1.t - s0.t).count();
-                spline_p0_ = s0.pos;
-                spline_p1_ = s1.pos;
-                
-                // Catmull-Rom tangent at s0
-                if (n >= 3) {
-                    const auto& sm1 = cmd_history_[n - 3];
-                    double dt_span = std::chrono::duration<double>(s1.t - sm1.t).count();
-                    if (dt_span > 1e-6) {
-                        for (int j = 0; j < 6; ++j)
-                            spline_m0_[j] = (s1.pos[j] - sm1.pos[j]) / dt_span * spline_duration_;
-                    } else {
-                        for (int j = 0; j < 6; ++j)
-                            spline_m0_[j] = s1.pos[j] - s0.pos[j];
-                    }
-                } else {
-                    for (int j = 0; j < 6; ++j)
-                        spline_m0_[j] = s1.pos[j] - s0.pos[j];
-                }
-                
-                for (int j = 0; j < 6; ++j)
-                    spline_m1_[j] = s1.pos[j] - s0.pos[j];
-                
-                spline_active_ = true;
+            // Switch to teleop gains when streaming commands arrive
+            if (gain_mode_ != GainMode::TELEOP) {
+                gain_mode_ = GainMode::TELEOP;
+                RCLCPP_INFO(this->get_logger(), "Gain mode -> TELEOP (streaming commands detected)");
             }
             
         } catch (const std::exception& e) {
@@ -1150,6 +1170,76 @@ private:
             response->success = false;
             response->message = std::string("Failed: ") + e.what();
             RCLCPP_ERROR(this->get_logger(), "Failed to reboot servos: %s", e.what());
+        }
+    }
+    
+    // Fix only the servo(s) that have a hardware error: reboot, reconfigure, torque on
+    void armFixErrorCallback(
+        const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        RCLCPP_INFO(this->get_logger(), "Service called: /mars/arm/fix_error");
+        try {
+            std::lock_guard<std::mutex> lock(dynamixel_mutex_);
+            
+            // Scan all servos and collect those with hardware errors
+            std::vector<int> error_servo_ids;
+            for (const auto& config : joint_configs_) {
+                uint8_t hw_status = dynamixel_->readHardwareErrorStatus(config.servo_id);
+                if (hw_status != 0) {
+                    RCLCPP_WARN(this->get_logger(), "Servo %d has hardware error: %s",
+                        config.servo_id, describeHardwareError(hw_status, config.servo_id).c_str());
+                    error_servo_ids.push_back(config.servo_id);
+                }
+            }
+            
+            // Build JSON array of error IDs for machine-readable response
+            json error_ids_json = json::array();
+            for (int id : error_servo_ids) {
+                error_ids_json.push_back(id);
+            }
+            
+            if (error_servo_ids.empty()) {
+                json result;
+                result["error_ids"] = error_ids_json;
+                result["status"] = "no_errors";
+                response->success = true;
+                response->message = result.dump();
+                RCLCPP_INFO(this->get_logger(), "No servos have hardware errors");
+                return;
+            }
+            
+            // Reboot only the errored servos
+            for (int servo_id : error_servo_ids) {
+                RCLCPP_INFO(this->get_logger(), "Rebooting servo %d...", servo_id);
+                dynamixel_->reboot(servo_id);
+            }
+            
+            // Wait for servos to come back online after reboot
+            RCLCPP_INFO(this->get_logger(), "Waiting for rebooted servos to come back online...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+            
+            // Reconfigure and torque-on only the rebooted servos
+            for (int servo_id : error_servo_ids) {
+                RCLCPP_INFO(this->get_logger(), "Reconfiguring servo %d...", servo_id);
+                configureServoByIdLocked(servo_id, true);
+            }
+            
+            // Build JSON response with error IDs and status
+            json result;
+            result["error_ids"] = error_ids_json;
+            result["status"] = "fixed";
+            
+            response->success = true;
+            response->message = result.dump();
+            RCLCPP_INFO(this->get_logger(), "Fixed %zu servo(s): %s",
+                error_servo_ids.size(), response->message.c_str());
+        } catch (const std::exception& e) {
+            response->success = false;
+            json err_result;
+            err_result["error_ids"] = json::array();
+            err_result["status"] = std::string("error: ") + e.what();
+            response->message = err_result.dump();
+            RCLCPP_ERROR(this->get_logger(), "Failed to fix error: %s", e.what());
         }
     }
     
@@ -1500,6 +1590,12 @@ private:
      * @return true if planning succeeded, false otherwise
      */
     bool planAndExecuteTrajectory(const std::vector<double>& target_positions, double trajectory_time) {
+        // Switch to scheduled gains for planned trajectories
+        if (gain_mode_ != GainMode::SCHEDULED) {
+            gain_mode_ = GainMode::SCHEDULED;
+            RCLCPP_INFO(this->get_logger(), "Gain mode -> SCHEDULED (trajectory execution)");
+        }
+        
         // Validate inputs - 6 joints (arm + gripper)
         if (target_positions.size() != 6) {
             RCLCPP_ERROR(this->get_logger(), "Target must have 6 joint positions, got %zu", target_positions.size());
@@ -1584,6 +1680,12 @@ private:
     bool planAndExecuteMultiWaypointTrajectory(
         const std::vector<std::vector<double>>& waypoints,
         const std::vector<double>& segment_durations) {
+        
+        // Switch to scheduled gains for planned trajectories
+        if (gain_mode_ != GainMode::SCHEDULED) {
+            gain_mode_ = GainMode::SCHEDULED;
+            RCLCPP_INFO(this->get_logger(), "Gain mode -> SCHEDULED (multi-waypoint trajectory)");
+        }
         
         if (waypoints.size() < 2) {
             RCLCPP_ERROR(this->get_logger(), "Need at least 2 waypoints for trajectory");
@@ -1770,10 +1872,11 @@ private:
     // ARM members
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_command_state_pub_;
-    rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr arm_command_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr arm_command_sub_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_on_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_torque_off_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_reboot_service_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_fix_error_service_;
     rclcpp::Service<maurice_msgs::srv::GotoJS>::SharedPtr arm_goto_js_service_;
     rclcpp::Service<maurice_msgs::srv::GotoJSTrajectory>::SharedPtr arm_goto_js_traj_service_;
     sensor_msgs::msg::JointState arm_state_msg_;  // 6-joint message for /mars/arm/state
@@ -1782,23 +1885,9 @@ private:
     std::mutex arm_command_mutex_;
     std::atomic<bool> has_arm_command_{false};
     
-    // Cubic Hermite spline interpolation (all guarded by arm_command_mutex_)
-    struct CmdSample {
-        std::chrono::steady_clock::time_point t;
-        std::array<double, 6> pos;  // radians, external convention
-    };
-    std::deque<CmdSample> cmd_history_;           // last 4 samples for tangent estimation
-    bool spline_active_{false};                   // true once ≥2 commands received
-    std::chrono::steady_clock::time_point spline_t0_;  // segment start time
-    double spline_duration_{0.0};                 // seconds between p0 and p1
-    std::array<double, 6> spline_p0_{};           // segment start position
-    std::array<double, 6> spline_p1_{};           // segment end position
-    std::array<double, 6> spline_m0_{};           // tangent at p0 (scaled by duration)
-    std::array<double, 6> spline_m1_{};           // tangent at p1 (scaled by duration)
-    // 50Hz rate-limiter: accumulate samples in 20ms buckets, average, emit as one point
-    std::array<double, 6> bucket_sum_{};           // running sum within current bucket
-    int bucket_count_{0};                          // samples in current bucket
-    std::chrono::steady_clock::time_point bucket_start_{std::chrono::steady_clock::now()};
+    // Direct pass-through (guarded by arm_command_mutex_)
+    std::array<double, 6> latest_target_{};
+    bool has_target_{false};
     
     
     // Joint state tracking for planning
@@ -1864,8 +1953,10 @@ private:
     static constexpr int kGainScheduleInterval = 20;  // control cycles between updates (~200ms at 100Hz)
     std::array<GainProfile, 7> gs_near_;          // near profiles for all joints
     std::array<GainProfile, 7> gs_far_;           // far profiles (== near when gain scheduling disabled for that joint)
+    std::array<GainProfile, 7> gs_teleop_;        // teleop profiles (November tuning, for teleoperation use)
     std::array<GainProfile, 7> gs_last_applied_;  // last gains written (for change detection)
     int gs_cycle_counter_ = 0;
+    GainMode gain_mode_{GainMode::SCHEDULED};     // starts in scheduled mode, switches to TELEOP on streaming commands
 
     // Control loop timing instrumentation (throttled detailed breakdown)
     std::array<TimingAccumulator, 10> timing_stats_{{

@@ -28,11 +28,15 @@ find_package(maurice_msgs REQUIRED)
 # Include directories
 include_directories(include)
 
-# Add arm node (dynamixel + robot + arm with head)
+# Add arm node (dynamixel + robot + arm split into logical modules)
 add_executable(arm
   maurice_arm/dynamixel.cpp
   maurice_arm/robot.cpp
-  maurice_arm/arm.cpp
+  maurice_arm/arm_node.cpp
+  maurice_arm/arm_config.cpp
+  maurice_arm/arm_control.cpp
+  maurice_arm/arm_services.cpp
+  maurice_arm/arm_trajectory.cpp
 )
 
 ament_target_dependencies(arm
