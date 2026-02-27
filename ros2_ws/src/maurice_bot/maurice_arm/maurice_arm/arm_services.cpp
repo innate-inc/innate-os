@@ -131,7 +131,6 @@ void MauriceArmNode::syncTargetToMotorPositions() {
             latest_target_[i] = rad;
         }
         has_target_ = false;
-    }
         latest_arm_command_ = std::vector<int>(positions.begin(), positions.begin() + 6);
     }
 }
