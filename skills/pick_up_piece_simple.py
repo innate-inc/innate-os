@@ -37,6 +37,7 @@ class PickUpPieceSimple(Skill):
     YAW_RIGHT = -1.57  # rotated right for ranks 1-3, cols E-H
 
     # Heights in meters
+    HEIGHT_SAFE_CLEARANCE = 0.25  # minimum z before any lateral move
     HEIGHT_SAFE = 0.15  # 20cm safe travel height
     HEIGHT_PICK_TALL = 0.06  # 8cm pick height for tall pieces (king, queen)
     HEIGHT_PICK_SHORT = 0.04  # 4cm pick height for short pieces (everything else)
@@ -153,9 +154,9 @@ class PickUpPieceSimple(Skill):
         """Wait for a gripper operation. Scales with speed but never below GRIPPER_MIN_WAIT."""
         time.sleep(max(seconds / self._speed, self.GRIPPER_MIN_WAIT))
 
-    def _move_arm(self, x, y, z, pitch, yaw, duration, gripper_position=None):
+    def _move_arm(self, x, y, z, pitch, yaw, duration, blocking=True, gripper_position=None):
         """Move arm to pose and optionally wait. Returns True on success."""
-        kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw, duration=self._d(duration), blocking=True)
+        kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw, duration=self._d(duration), blocking=blocking)
         if gripper_position is not None:
             kwargs["gripper_position"] = gripper_position
         success = self.manipulation.move_to_cartesian_pose(**kwargs)
@@ -233,8 +234,8 @@ class PickUpPieceSimple(Skill):
         Returns:
             bool: True on success, False otherwise.
         """
-        self._move_arm(0.1, 0.25, 0.3, 0.0, 1.57, 2.0, blocking=True)
-        return self._move_arm(0.1, 0.25, 0.15, 0.0, 1.57, 1.0, blocking=True)
+        self._move_arm(0.05, 0.08, 0.3, 0.0, 1.57, 2.0, blocking=True)
+        return self._move_arm(0.05, 0.08, 0.11, 0.0, 1.57, 1.0, blocking=True)
 
     def _needs_relay(self, src_square, dst_square):
         """Check if move crosses the rank 6/7 boundary requiring a relay.
@@ -432,6 +433,24 @@ class PickUpPieceSimple(Skill):
 
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
+
+        # Safety: if the arm is low, lift straight up before any lateral move
+        ee = self.manipulation.get_current_end_effector_pose()
+        if ee is not None:
+            cur_z = ee["position"]["z"]
+            if cur_z < self.HEIGHT_SAFE_CLEARANCE:
+                self.logger.info(
+                    f"[PickUpPieceSimple] Arm z={cur_z:.3f}m is below "
+                    f"{self.HEIGHT_SAFE_CLEARANCE}m – lifting to safe clearance"
+                )
+                self._send_feedback("Lifting arm to safe clearance...")
+                cur_x = ee["position"]["x"]
+                cur_y = ee["position"]["y"]
+                rpy = self.manipulation.get_current_orientation_rpy()
+                cur_pitch = rpy["pitch"] if rpy else 0.0
+                cur_yaw = rpy["yaw"] if rpy else 0.0
+                if not self._move_arm(cur_x, cur_y, self.HEIGHT_SAFE_CLEARANCE, cur_pitch, cur_yaw, 2.0):
+                    self.logger.warning("[PickUpPieceSimple] Failed to lift to safe clearance")
 
         calibration = self._load_calibration()
         if calibration is None:
