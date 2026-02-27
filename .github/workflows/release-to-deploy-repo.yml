@@ -62,16 +62,36 @@ jobs:
           echo "Pushing main branch to release repo..."
           git push release HEAD:main --force
           
-          # Delete old tag on remote, create new tag on HEAD, and push
-          echo "Updating tag $TAG on release repo..."
-          git push release :refs/tags/"$TAG" 2>/dev/null || true
-          git tag -d "$TAG" 2>/dev/null || true
-          git tag "$TAG"
-          git push release "$TAG"
+            # For staging tags, skip tagging the release repo but still sync main
+            if [[ "$TAG" == *-staging ]]; then
+              echo "Staging tag detected ($TAG): skipping remote tag update"
+              {
+                echo "### Release to Deploy Repo"
+                echo "- Tag: $TAG"
+                echo "- Main branch sync: completed"
+                echo "- Release repo tag update: skipped (staging tag)"
+                echo "- GitHub Release creation: skipped (staging tag)"
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              # Delete old tag on remote, create new tag on HEAD, and push
+              echo "Updating tag $TAG on release repo..."
+              git push release :refs/tags/"$TAG" 2>/dev/null || true
+              git tag -d "$TAG" 2>/dev/null || true
+              git tag "$TAG"
+              git push release "$TAG"
+              {
+                echo "### Release to Deploy Repo"
+                echo "- Tag: $TAG"
+                echo "- Main branch sync: completed"
+                echo "- Release repo tag update: completed"
+                echo "- GitHub Release creation: enabled"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
           
           echo "✓ Released $TAG to ${{ env.RELEASE_REPO }}"
 
       - name: Create GitHub Release (optional)
+        if: ${{ !endsWith(steps.tag.outputs.tag, '-staging') }}
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
