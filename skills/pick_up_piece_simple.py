@@ -231,9 +231,23 @@ class PickUpPieceSimple(Skill):
     def _go_to_safe_pose(self):
         """Return arm to the resting safe pose.
 
+        First lifts straight up to HEIGHT_SAFE_CLEARANCE from the current
+        position (no lateral movement) to avoid sweeping the board, then
+        moves to the final safe pose.
+
         Returns:
             bool: True on success, False otherwise.
         """
+        ee = self.manipulation.get_current_end_effector_pose()
+        if ee is not None:
+            cur_z = ee["position"]["z"]
+            if cur_z < self.HEIGHT_SAFE_CLEARANCE:
+                cur_x = ee["position"]["x"]
+                cur_y = ee["position"]["y"]
+                rpy = self.manipulation.get_current_orientation_rpy()
+                cur_pitch = rpy["pitch"] if rpy else 0.0
+                cur_yaw = rpy["yaw"] if rpy else 0.0
+                self._move_arm(cur_x, cur_y, self.HEIGHT_SAFE_CLEARANCE, cur_pitch, cur_yaw, 2.0)
         self._move_arm(0.05, 0.08, 0.3, 0.0, 1.57, 2.0, blocking=True)
         return self._move_arm(0.05, 0.08, 0.11, 0.0, 1.57, 1.0, blocking=True)
 
@@ -434,23 +448,8 @@ class PickUpPieceSimple(Skill):
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
 
-        # Safety: if the arm is low, lift straight up before any lateral move
-        ee = self.manipulation.get_current_end_effector_pose()
-        if ee is not None:
-            cur_z = ee["position"]["z"]
-            if cur_z < self.HEIGHT_SAFE_CLEARANCE:
-                self.logger.info(
-                    f"[PickUpPieceSimple] Arm z={cur_z:.3f}m is below "
-                    f"{self.HEIGHT_SAFE_CLEARANCE}m – lifting to safe clearance"
-                )
-                self._send_feedback("Lifting arm to safe clearance...")
-                cur_x = ee["position"]["x"]
-                cur_y = ee["position"]["y"]
-                rpy = self.manipulation.get_current_orientation_rpy()
-                cur_pitch = rpy["pitch"] if rpy else 0.0
-                cur_yaw = rpy["yaw"] if rpy else 0.0
-                if not self._move_arm(cur_x, cur_y, self.HEIGHT_SAFE_CLEARANCE, cur_pitch, cur_yaw, 2.0):
-                    self.logger.warning("[PickUpPieceSimple] Failed to lift to safe clearance")
+        # Safety: ensure arm starts from a safe pose (lifts first if low)
+        self._go_to_safe_pose()
 
         calibration = self._load_calibration()
         if calibration is None:
@@ -516,8 +515,10 @@ class PickUpPieceSimple(Skill):
                 caution=self.TILTED_SPEED_FACTOR if cap_tilted else 1.0,
             )
             if err:
+                self._go_to_safe_pose()
                 return f"Capture discard failed: {err}", SkillResult.FAILURE
             if self._cancelled:
+                self._go_to_safe_pose()
                 return "Cancelled", SkillResult.CANCELLED
 
         src_rank = int(square[1])
@@ -554,8 +555,10 @@ class PickUpPieceSimple(Skill):
                 caution=self.TILTED_SPEED_FACTOR if leg1_tilted else 1.0,
             )
             if err:
+                self._go_to_safe_pose()
                 return f"Relay leg 1 failed: {err}", SkillResult.FAILURE
             if self._cancelled:
+                self._go_to_safe_pose()
                 return "Cancelled", SkillResult.CANCELLED
 
             # Leg 2: pick from relay, place at destination (destination orientation)
@@ -579,6 +582,7 @@ class PickUpPieceSimple(Skill):
                 caution=self.TILTED_SPEED_FACTOR if leg2_tilted else 1.0,
             )
             if err:
+                self._go_to_safe_pose()
                 return f"Relay leg 2 failed: {err}", SkillResult.FAILURE
         else:
             # ── Direct move (no orientation change needed) ──
@@ -608,6 +612,7 @@ class PickUpPieceSimple(Skill):
                 caution=self.TILTED_SPEED_FACTOR if any_tilted else 1.0,
             )
             if err:
+                self._go_to_safe_pose()
                 return f"Move failed: {err}", SkillResult.FAILURE
 
         # ── Return to safe pose ──
