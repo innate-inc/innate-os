@@ -38,8 +38,8 @@ Robot::Robot(std::shared_ptr<Dynamixel> dynamixel, const std::vector<int>& servo
     state_reader_ = std::make_unique<GroupSyncRead>(
         dynamixel_->portHandler(),
         dynamixel_->packetHandler(),
-        ADDR_PRESENT_VELOCITY,  // Start at velocity (128)
-        8  // 8 bytes: 4 for velocity + 4 for position
+        ADDR_PRESENT_LOAD,  // Start at load (126)
+        10  // 10 bytes: 2 load + 4 velocity + 4 position
     );
     
     for (int id : servo_ids_) {
@@ -113,24 +113,31 @@ std::vector<int> Robot::readVelocity() {
     return velocities;
 }
 
-std::pair<std::vector<int>, std::vector<int>> Robot::readState(int tries) {
+std::tuple<std::vector<int>, std::vector<int>, std::vector<int>> Robot::readState(int tries) {
+    auto t0 = std::chrono::steady_clock::now();
     int result = state_reader_->txRxPacket();
+    last_read_txrx_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
     
     if (result != COMM_SUCCESS) {
         if (tries > 0) {
             return readState(tries - 1);
         } else {
             std::cerr << "Failed to read state!" << std::endl;
-            return {std::vector<int>(servo_ids_.size(), 0), 
-                    std::vector<int>(servo_ids_.size(), 0)};
+            auto z = std::vector<int>(servo_ids_.size(), 0);
+            return {z, z, z};
         }
     }
     
     std::vector<int> positions;
     std::vector<int> velocities;
+    std::vector<int> loads;
     
     for (int id : servo_ids_) {
-        // Read velocity (first 4 bytes at address 128)
+        // Load: 2 bytes at address 126 (signed 16-bit)
+        int16_t load = static_cast<int16_t>(state_reader_->getData(id, ADDR_PRESENT_LOAD, 2));
+        loads.push_back(static_cast<int>(load));
+        
+        // Velocity: 4 bytes at address 128
         uint32_t velocity = state_reader_->getData(id, ADDR_PRESENT_VELOCITY, 4);
         int signed_velocity = static_cast<int>(velocity);
         if (signed_velocity > (1LL << 31)) {
@@ -138,7 +145,7 @@ std::pair<std::vector<int>, std::vector<int>> Robot::readState(int tries) {
         }
         velocities.push_back(signed_velocity);
         
-        // Read position (next 4 bytes at address 132)
+        // Position: 4 bytes at address 132
         uint32_t position = state_reader_->getData(id, ADDR_PRESENT_POSITION, 4);
         int signed_position = static_cast<int>(position);
         if (signed_position > (1LL << 31)) {
@@ -147,7 +154,7 @@ std::pair<std::vector<int>, std::vector<int>> Robot::readState(int tries) {
         positions.push_back(signed_position);
     }
     
-    return {positions, velocities};
+    return {positions, velocities, loads};
 }
 
 void Robot::setGoalPos(const std::vector<int>& action) {
@@ -167,7 +174,9 @@ void Robot::setGoalPos(const std::vector<int>& action) {
     }
     
     // Send packet
+    auto t0 = std::chrono::steady_clock::now();
     pos_writer_->txPacket();
+    last_write_txrx_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
 }
 
 void Robot::rebootAllServos() {

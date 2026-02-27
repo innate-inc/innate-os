@@ -1,138 +1,134 @@
-maurice_arm:
+/maurice_arm:
   ros__parameters:
     # Device detection automatic - looks for 7 servos at 1M baud
     baud_rate: 1000000
-    control_frequency: 100.0
+    control_frequency: 200.0
     trajectory_rate_hz: 100.0
-    # joint_7 is the head servo. Its position_limits define the head angle range (radians).
-    # Head position is inverted: negative head angle = positive servo angle (direction_reversed: true)
-    joints: |
-      {
-          "joint_1": {
-              "servo_id": 1,
-              "position_limits": {
-                  "min": -1.5708,
-                  "max": 1.5708
-              },
-              "pwm_limits": 885,
-              "control_mode": 2,
-              "pid_gains": {
-                  "kp": 300,
-                  "ki": 0,
-                  "kd": 300
-              }
-          },
-          "joint_2": {
-              "servo_id": 2,
-              "profile_velocity": 200,
-              "profile_acceleration": 50,
-              "position_limits": {
-                  "min": -1.5708,
-                  "max": 1.22
-              },
-              "pwm_limits": 885,
-              "control_mode": 2,
-              "pid_gains": {
-                  "kp": 6000,
-                  "ki": 0,
-                  "kd": 12000
-              }
-          },
-          "joint_3": {
-              "servo_id": 3,
-              "position_limits": {
-                  "min": -1.5708,
-                  "max": 1.7453
-              },
-              "profile_velocity": 200,
-              "profile_acceleration": 50,
-              "pwm_limits": 885,
-              "control_mode": 2,
-              "pid_gains": {
-                  "kp": 4000,
-                  "ki": 0,
-                  "kd": 16000
-              }
-          },
-          "joint_4": {
-              "servo_id": 4,
-              "profile_velocity": 200,
-              "profile_acceleration": 50,
-              "position_limits": {
-                  "min": -1.9199,
-                  "max": 1.7453
-              },
-              "pwm_limits": 885,
-              "control_mode": 2,
-              "pid_gains": {
-                  "kp": 2000,
-                  "ki": 1000,
-                  "kd": 16000
-              }
-          },
-          "joint_5": {
-              "servo_id": 5,
-              "position_limits": {
-                  "min": -1.5708,
-                  "max": 1.5708
-              },
-              "pwm_limits": 885,
-              "control_mode": 2,
-              "pid_gains": {
-                  "kp": 400,
-                  "ki": 0,
-                  "kd": 0
-              }
-          },
-          "joint_6": {
-              "servo_id": 6,
-              "position_limits": {
-                  "min": -0.8727,
-                  "max": 0.3491
-              },
-              "pwm_limits": 885,
-              "current_limit": 100,
-              "control_mode": 4,
-              "pid_gains": {
-                  "kp": 400,
-                  "ki": 0,
-                  "kd": 0
-              }
-          },
-          "joint_7": {
-              "servo_id": 7,
-              "position_limits": {
-                  "min": -0.4363,
-                  "max": 0.4363
-              },
-              "pwm_limits": 885,
-              "current_limit": 500,
-              "control_mode": 3,
-              "homing_offset": 341,
-              "pid_gains": {
-                  "kp": 400,
-                  "ki": 1011,
-                  "kd": 0
-              },
-              "head_config": {
-                  "ai_position_deg": -20.0,
-                  "direction_reversed": true
-              }
-          }
-      }
-    # Gain scheduling: interpolates PID gains based on elbow extension
-    # "near" = arm folded (elbow +π/2), "far" = arm extended (elbow -π/2)
-    gain_scheduling: |
-      {
-          "enabled": true,
-          "near": {
-              "joint_2": {"kp": 1500, "ki": 0, "kd": 2000},
-              "joint_3": {"kp": 1500, "ki": 0, "kd": 2000},
-              "joint_4": {"kp": 800,  "ki": 1000, "kd": 4000}
-          },
-          "far": {
-              "joint_2": {"kp": 6000, "ki": 0, "kd": 12000},
-              "joint_3": {"kp": 8000, "ki": 0, "kd": 12000},
-              "joint_4": {"kp": 1500, "ki": 1000, "kd": 12000}
-          }
-      }
+    max_jerk: 150.0  # rad/s³ jerk limit for trajectories (0 = disabled)
+
+    # =============================================================
+    # Dynamixel Failure Leaky Integrator Config
+    # =============================================================
+    # Score accumulates per-motor each tick:
+    #   score += (A * |load| - C) * dt    (clamped >= 0)
+    # When score >= threshold, torque is disabled for cooldown_sec.
+    #
+    # A (stress_multiplier): scales the raw load value (PWM % or mA)
+    # C (stress_leak):       constant drain — score decays when load is low
+    #
+    # Example: A=1.0, C=50.0 means load must exceed 50 to accumulate.
+    stress_enabled: false         # master enable (false = disabled)
+    stress_threshold: 100.0       # score to trigger cooldown
+    stress_cooldown_sec: 2.0      # seconds of torque-off rest
+    stress_multiplier: 1.0        # A: multiplier on |load|
+    stress_leak: 0.0              # C: constant leak rate
+
+    # =============================================================
+    # Joint Configuration for Maurice Arm (nav2-style)
+    # =============================================================
+    # List of joints, then each joint's parameters as a sub-map.
+    #
+    # Gains arrays: [kp, ki, kd, ff1, ff2]  (range 0–16383 each)
+    #   gains_near = PID+FF gains when arm is retracted (low gravity torque)
+    #   gains_far  = PID+FF gains when arm is extended  (high gravity torque)
+    #   If gains_far is omitted, far = near → gain scheduling is a no-op.
+    #
+    # Gain scheduling always runs. It interpolates between near and far
+    # based on end-effector extension. If near == far, no servo writes occur.
+    #
+    # Profile (0 = unlimited):
+    #   profile_velocity     = max velocity (rev/min units)
+    #   profile_acceleration = max acceleration (rev/min² units)
+    #
+    # ── Servo Hardware Reference ──────────────────────────────────
+    # Motor          | Voltage     | Gears   | Current Modes 0,5 | Addr 126
+    # XL330-M288     | 3.7-6V (5V) | Plastic | ✅ (max 1750mA)   | Current (mA)
+    # XC330-M288     | 3.7-6V (5V) | Metal   | ✅ (max 1750mA)   | Current (mA)
+    # XL430-W250     | 6.5-12V     | Plastic | ❌ No              | Load (0.1%)
+    # XC430-W150/T240| 6.5-14.8V   | Metal   | ❌ No              | Load (0.1%)
+    # ──────────────────────────────────────────────────────────────
+    # Edit gains_near / gains_far below and save.
+    # If pid_hot_reload.py is running, changes apply INSTANTLY via
+    #   ros2 param load /maurice_arm <this file>
+    # =============================================================
+
+    joints: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7"]
+
+    joint_1:
+      servo_id: 1
+      motor_type: "XL430-W250"
+      position_limits: [-1.5708, 1.5708]
+      pwm_limit: 885
+      control_mode: 3
+      profile_velocity: 250
+      profile_acceleration: 120
+      gains_near: [730, 0, 0, 100, 0]    # [kp, ki, kd, ff1, ff2]
+      gains_far: [100, 0, 100, 50, 0]    # [kp, ki, kd, ff1, ff2]
+      gains_teleop: [300, 10, 1000, 0, 0] # November teleop gains
+
+    joint_2:
+      servo_id: 2
+      motor_type: "XC430-W150"
+      position_limits: [-1.5708, 1.22]
+      pwm_limit: 885
+      control_mode: 3
+      profile_velocity: 150
+      profile_acceleration: 50
+      gains_near: [9900, 0, 100, 0, 0]
+      gains_teleop: [300, 200, 100, 0, 0] # November teleop gains
+
+    joint_3:
+      servo_id: 3
+      motor_type: "XL430-W250"
+      position_limits: [-1.5708, 1.7453]
+      pwm_limit: 885
+      control_mode: 3
+      profile_velocity: 200
+      profile_acceleration: 50
+      gains_near: [1500, 0, 200, 1701, 0]
+      gains_teleop: [640, 100, 3600, 0, 0] # November teleop gains
+
+    joint_4:
+      servo_id: 4
+      motor_type: "XC330-M288"
+      position_limits: [-1.9199, 1.7453]
+      pwm_limit: 885
+      control_mode: 3
+      profile_velocity: 100
+      profile_acceleration: 50 
+      gains_near: [2000, 0, 160, 0, 0]
+      gains_teleop: [400, 400, 1000, 0, 0] # November teleop gains
+
+    joint_5:
+      servo_id: 5
+      motor_type: "XC330-M288"
+      position_limits: [-1.5708, 1.5708]
+      pwm_limit: 885
+      control_mode: 3
+      profile_velocity: 100
+      profile_acceleration: 50
+      gains_near: [2900, 0, 0, 0, 0]
+      gains_teleop: [400, 0, 0, 0, 0]     # November teleop gains
+
+    joint_6:
+      servo_id: 6
+      motor_type: "XC330-M288"
+      position_limits: [-0.8727, 0.3491]
+      pwm_limit: 885
+      current_limit: 100
+      control_mode: 4
+      gains_near: [400, 0, 0, 0, 0]
+      gains_teleop: [400, 0, 0, 0, 0]     # November teleop gains
+
+    joint_7:
+      servo_id: 7
+      motor_type: "XC330-M288"
+      position_limits: [-0.4363, 0.4363]
+      pwm_limit: 885
+      current_limit: 500
+      control_mode: 3
+      homing_offset: 341
+      gains_near: [400, 1011, 0, 0, 0]
+      head_config:
+        ai_position_deg: -20.0
+        direction_reversed: true

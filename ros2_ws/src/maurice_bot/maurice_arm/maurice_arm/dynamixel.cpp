@@ -149,21 +149,31 @@ void Dynamixel::setD(int motor_id, int d) {
     }
 }
 
-void Dynamixel::syncWritePID(const std::vector<std::tuple<int, int, int, int>>& pid_data) {
-    // Addresses 80-85: D(2 bytes) + I(2 bytes) + P(2 bytes) = 6 bytes contiguous
-    dynamixel::GroupSyncWrite syncWrite(port_handler_, packet_handler_, POSITION_D, 6);
+void Dynamixel::syncWritePID(const std::vector<std::tuple<int, int, int, int, int, int>>& pid_data) {
+    // Addresses 80-91: D(2) + I(2) + P(2) + reserved(2) + FF2(2) + FF1(2) = 12 bytes
+    // addr 86-87 is a reserved gap — we write 0x0000 there (harmless)
+    dynamixel::GroupSyncWrite syncWrite(port_handler_, packet_handler_, POSITION_D, 12);
     
-    for (const auto& [servo_id, kd, ki, kp] : pid_data) {
-        uint8_t param[6];
-        // D gain at offset 0 (addr 80), little-endian
+    for (const auto& [servo_id, ff2, ff1, kd, ki, kp] : pid_data) {
+        uint8_t param[12];
+        // Position D gain at offset 0 (addr 80)
         param[0] = DXL_LOBYTE(static_cast<uint16_t>(kd));
         param[1] = DXL_HIBYTE(static_cast<uint16_t>(kd));
-        // I gain at offset 2 (addr 82), little-endian
+        // Position I gain at offset 2 (addr 82)
         param[2] = DXL_LOBYTE(static_cast<uint16_t>(ki));
         param[3] = DXL_HIBYTE(static_cast<uint16_t>(ki));
-        // P gain at offset 4 (addr 84), little-endian
+        // Position P gain at offset 4 (addr 84)
         param[4] = DXL_LOBYTE(static_cast<uint16_t>(kp));
         param[5] = DXL_HIBYTE(static_cast<uint16_t>(kp));
+        // Reserved gap at offset 6 (addr 86-87)
+        param[6] = 0;
+        param[7] = 0;
+        // FF2 (acceleration feedforward) at offset 8 (addr 88)
+        param[8] = DXL_LOBYTE(static_cast<uint16_t>(ff2));
+        param[9] = DXL_HIBYTE(static_cast<uint16_t>(ff2));
+        // FF1 (velocity feedforward) at offset 10 (addr 90)
+        param[10] = DXL_LOBYTE(static_cast<uint16_t>(ff1));
+        param[11] = DXL_HIBYTE(static_cast<uint16_t>(ff1));
         
         if (!syncWrite.addParam(servo_id, param)) {
             throw std::runtime_error("Failed to add PID param for servo " + std::to_string(servo_id));
@@ -331,6 +341,15 @@ uint8_t Dynamixel::readPresentTemperature(int motor_id) {
     }
 
     return temperature;
+}
+
+void Dynamixel::setReturnDelayTime(int motor_id, int value) {
+    uint8_t dxl_error = 0;
+    int dxl_comm_result = packet_handler_->write1ByteTxRx(
+        port_handler_, motor_id, ADDR_RETURN_DELAY_TIME, value, &dxl_error);
+    if (dxl_comm_result != COMM_SUCCESS) {
+        throw std::runtime_error("Failed to set return delay time for motor " + std::to_string(motor_id));
+    }
 }
 
 } // namespace maurice_arm

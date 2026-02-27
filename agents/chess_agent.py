@@ -1,18 +1,18 @@
 from brain_client.agent_types import Agent
 
 
-class ChessPieceAgent(Agent):
+class ChessAgent(Agent):
     """
     Chess Piece Agent - picks up pieces from the board using calibration data.
     """
 
     @property
     def id(self) -> str:
-        return "chess_piece_agent"
+        return "chess_agent"
 
     @property
     def display_name(self) -> str:
-        return "Chess Piece Agent"
+        return "(BETA) Chess Agent"
 
     def get_skills(self) -> list[str]:
         """Return piece manipulation skills."""

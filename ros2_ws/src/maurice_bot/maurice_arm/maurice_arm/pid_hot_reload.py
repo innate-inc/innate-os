@@ -2,23 +2,19 @@
 """
 PID Hot-Reload Watcher with Real-Time Joint State Plot.
 
-Watches pid_tuning.yaml for changes and applies new PID/profile values
-to the running arm node in real-time. Also plots joint positions as a
-live ASCII chart in the terminal (requires: pip install plotext).
+Watches arm_config.yaml for changes and applies parameters to the running
+arm node via `ros2 param load`. Optionally plots joint positions in real-time.
 
 Usage:
-    python3 pid_hot_reload.py [path/to/pid_tuning.yaml] [--no-plot]
+    python3 pid_hot_reload.py [path/to/arm_config.yaml] [--no-plot]
 """
 
-import json
 import os
 import subprocess
 import sys
 import threading
 import time
 from collections import deque
-
-import yaml
 
 # Optional: real-time ASCII plotting
 try:
@@ -123,18 +119,21 @@ def draw_plot(collector, status_line=""):
 
 
 # =====================================================================
-#  Config file watcher + param loader (unchanged logic)
+#  Config file watcher + param loader
 # =====================================================================
+NODE_NAME = "/maurice_arm"
+
+
 def find_config_path():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    source_path = os.path.join(script_dir, "..", "config", "pid_tuning.yaml")
+    source_path = os.path.join(script_dir, "..", "config", "arm_config.yaml")
     if os.path.exists(source_path):
         return os.path.abspath(source_path)
     try:
         from ament_index_python.packages import get_package_share_directory
 
         pkg_dir = get_package_share_directory("maurice_arm")
-        installed_path = os.path.join(pkg_dir, "config", "pid_tuning.yaml")
+        installed_path = os.path.join(pkg_dir, "config", "arm_config.yaml")
         if os.path.exists(installed_path):
             return installed_path
     except Exception:
@@ -142,97 +141,22 @@ def find_config_path():
     return None
 
 
-def load_pid_config(path):
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-    if raw is None:
-        return {}
-    params = {}
-    for joint_key, gains in raw.items():
-        if joint_key == "gain_scheduling":
-            # Pass gain scheduling as JSON string (same format as arm_config.yaml)
-            gs_json = {"enabled": True}
-            for profile in ("near", "far"):
-                if profile in gains and isinstance(gains[profile], dict):
-                    gs_json[profile] = {}
-                    for jkey, jgains in gains[profile].items():
-                        if isinstance(jgains, dict):
-                            gs_json[profile][jkey] = {k: int(v) for k, v in jgains.items() if k in ("kp", "ki", "kd")}
-            params["gain_scheduling"] = json.dumps(gs_json)
-            continue
-        if not isinstance(gains, dict):
-            continue
-        for field in ("kp", "ki", "kd", "profile_velocity", "profile_acceleration"):
-            if field in gains:
-                params[f"{joint_key}_{field}"] = int(gains[field])
-    return params
-
-
-def apply_params(params, prev_params=None):
-    node_name = "/maurice_arm"
-    if prev_params is not None:
-        changed = {k: v for k, v in params.items() if prev_params.get(k) != v}
-    else:
-        changed = dict(params)
-    if not changed:
-        return 0, ""
-
-    # Separate gain_scheduling (JSON string) — ros2 param load can't
-    # round-trip JSON strings through YAML without corrupting them.
-    gs_value = changed.pop("gain_scheduling", None)
-    errors = []
-    total = 0
-
-    # Apply numeric params via ros2 param load (batch)
-    if changed:
-        ros2_params = {"/maurice_arm": {"ros__parameters": changed}}
-        tmp_path = "/tmp/pid_hot_reload_params.yaml"
-        with open(tmp_path, "w") as f:
-            yaml.dump(ros2_params, f)
-        cmd = ["ros2", "param", "load", node_name, tmp_path]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                total += len(changed)
-            else:
-                err = result.stderr.strip() or result.stdout.strip()
-                errors.append(f"param load: {err}")
-        except Exception as e:
-            errors.append(f"param load: {e}")
-
-    # Apply gain_scheduling via ros2 service call (bypasses the buggy
-    # yaml.safe_load in ros2 param set/load that corrupts JSON strings).
-    # type 4 = PARAMETER_STRING in rcl_interfaces.
-    if gs_value is not None:
-        # Escape single quotes in the JSON for YAML inline syntax
-        escaped = gs_value.replace("'", "''")
-        msg = (
-            "{parameters: [{name: 'gain_scheduling', "
-            f"value: {{type: 4, string_value: '{escaped}'}}}}]}}"
-        )
-        cmd = [
-            "ros2", "service", "call",
-            f"{node_name}/set_parameters",
-            "rcl_interfaces/srv/SetParameters",
-            msg,
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                total += 1
-            else:
-                err = result.stderr.strip() or result.stdout.strip()
-                errors.append(f"gain_scheduling: {err}")
-        except Exception as e:
-            errors.append(f"gain_scheduling: {e}")
-
-    all_changed = dict(changed)
-    if gs_value is not None:
-        all_changed["gain_scheduling"] = "(json)"
-    summary = ", ".join(f"{k}={v}" for k, v in sorted(all_changed.items()))
-    if errors:
-        summary += " | ERRORS: " + "; ".join(errors)
-    return total, summary
+def apply_config(config_path):
+    """Apply config by loading it directly as ROS 2 parameters.
+    
+    The YAML is now standard ros__parameters format (no JSON blobs),
+    so `ros2 param load` handles everything natively.
+    """
+    cmd = ["ros2", "param", "load", NODE_NAME, config_path]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return True, "params loaded"
+        else:
+            err = result.stderr.strip() or result.stdout.strip()
+            return False, f"param load failed: {err}"
+    except Exception as e:
+        return False, f"param load error: {e}"
 
 
 # =====================================================================
@@ -244,7 +168,7 @@ def main():
     config_path = os.path.abspath(args[0]) if args else find_config_path()
 
     if config_path is None or not os.path.exists(config_path):
-        print("Error: pid_tuning.yaml not found. Provide path as argument.")
+        print("Error: arm_config.yaml not found. Provide path as argument.")
         sys.exit(1)
 
     use_plot = HAS_PLOT and HAS_ROS and not no_plot
@@ -253,6 +177,7 @@ def main():
     print("║       Maurice Arm PID Hot-Reload Watcher        ║")
     print("╚══════════════════════════════════════════════════╝")
     print(f"  Watching: {config_path}")
+    print(f"  Method:   ros2 param load {NODE_NAME} <file>")
     if not HAS_PLOT:
         print("  (install plotext for live plot: pip install plotext)")
     if not HAS_ROS:
@@ -260,21 +185,13 @@ def main():
     print(f"  Plot: {'ON' if use_plot else 'OFF'}")
     print("  Press Ctrl+C to stop.\n")
 
-    # Load and apply initial config
-    try:
-        prev_params = load_pid_config(config_path)
-    except Exception as e:
-        print(f"Error reading config: {e}")
-        sys.exit(1)
-
-    n, summary = apply_params(prev_params)
-    status_line = f"Initial load: {n} params applied"
+    # Initial load
+    ok, summary = apply_config(config_path)
+    status_line = f"Initial load: {'OK' if ok else 'FAILED'} — {summary}"
     if not use_plot:
         print(f"[{time.strftime('%H:%M:%S')}] {status_line}")
-        if summary:
-            print(f"  {summary}\n")
 
-    # Start ROS2 subscriber for joint state data
+    # Start ROS2 subscriber for joint state plotting
     collector = None
     if use_plot:
         collector = JointStateCollector()
@@ -293,31 +210,12 @@ def main():
             current_mtime = os.path.getmtime(config_path)
             if current_mtime != last_mtime:
                 last_mtime = current_mtime
-                time.sleep(0.1)
-                try:
-                    new_params = load_pid_config(config_path)
-                    if new_params != prev_params:
-                        n, summary = apply_params(new_params, prev_params)
-                        ts = time.strftime("%H:%M:%S")
-                        if n > 0:
-                            status_line = f"[{ts}] Updated {n} param(s): {summary}"
-                        else:
-                            status_line = f"[{ts}] {summary}"
-                        prev_params = new_params
-                        if not use_plot:
-                            print(status_line)
-                    else:
-                        status_line = f"[{time.strftime('%H:%M:%S')}] Saved (no changes)"
-                        if not use_plot:
-                            print(status_line)
-                except yaml.YAMLError as e:
-                    status_line = f"YAML error: {e}"
-                    if not use_plot:
-                        print(status_line)
-                except Exception as e:
-                    status_line = f"Error: {e}"
-                    if not use_plot:
-                        print(status_line)
+                time.sleep(0.1)  # let editor finish writing
+                ok, summary = apply_config(config_path)
+                ts = time.strftime("%H:%M:%S")
+                status_line = f"[{ts}] {'OK' if ok else 'FAILED'}: {summary}"
+                if not use_plot:
+                    print(status_line)
 
             # --- Redraw plot ---
             if use_plot and collector:

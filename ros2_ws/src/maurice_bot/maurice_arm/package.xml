@@ -14,20 +14,14 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-dynamixel-sdk</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>moveit_py</exec_depend>
-  <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>kdl_parser_py</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>maurice_sim</exec_depend>
 
   <depend>rclcpp</depend>
-  <depend>moveit_ros_planning_interface</depend>
-  <depend>moveit_ros_planning</depend>
-  <depend>moveit_core</depend>
   
   <!-- Message dependencies -->
-  <depend>moveit_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>

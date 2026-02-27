@@ -17,7 +17,6 @@ find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(dynamixel_sdk REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(moveit_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -28,11 +27,15 @@ find_package(maurice_msgs REQUIRED)
 # Include directories
 include_directories(include)
 
-# Add arm node (dynamixel + robot + arm with head)
+# Add arm node (dynamixel + robot + arm split into logical modules)
 add_executable(arm
   maurice_arm/dynamixel.cpp
   maurice_arm/robot.cpp
-  maurice_arm/arm.cpp
+  maurice_arm/arm_node.cpp
+  maurice_arm/arm_config.cpp
+  maurice_arm/arm_control.cpp
+  maurice_arm/arm_services.cpp
+  maurice_arm/arm_trajectory.cpp
 )
 
 ament_target_dependencies(arm
@@ -44,7 +47,6 @@ ament_target_dependencies(arm
   dynamixel_sdk
   Eigen3
   maurice_msgs
-  moveit_msgs
   geometry_msgs
   trajectory_msgs
 )

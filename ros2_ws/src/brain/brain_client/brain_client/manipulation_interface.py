@@ -61,7 +61,7 @@ class ManipulationInterface:
         # Service client for joint space control. We create the client once
         # here, but deliberately avoid any blocking wait_for_service calls
         # to keep the executor responsive.
-        self._goto_js_client = self.node.create_client(GotoJS, "/mars/arm/goto_js")
+        self._goto_js_client = self.node.create_client(GotoJS, "/mars/arm/goto_js_v2")
         self._goto_js_traj_client = self.node.create_client(GotoJSTrajectory, "/mars/arm/goto_js_trajectory")
 
         # Service clients for torque control
@@ -253,12 +253,12 @@ class ManipulationInterface:
 
         # Ensure GotoJS client is available
         if self._goto_js_client is None:
-            self.logger.error("[ManipulationInterface] GotoJS client is not initialized")
+            self.logger.error("[ManipulationInterface] GotoJS v2 client is not initialized")
             return False
 
         # Non-blocking check for service readiness
         if not self._goto_js_client.service_is_ready():
-            self.logger.error("[ManipulationInterface] GotoJS service is not ready")
+            self.logger.error("[ManipulationInterface] GotoJS v2 service is not ready")
             return False
 
         # Build request
@@ -276,13 +276,13 @@ class ManipulationInterface:
                 if future.result() is not None:
                     result = future.result()
                     if not result.success:
-                        self.logger.error("[ManipulationInterface] GotoJS returned failure")
+                        self.logger.error("[ManipulationInterface] GotoJS v2 returned failure")
                         return False
                 else:
-                    self.logger.error("[ManipulationInterface] GotoJS call timed out")
+                    self.logger.error("[ManipulationInterface] GotoJS v2 call timed out")
                     return False
         except Exception as e:
-            self.logger.error(f"[ManipulationInterface] Exception calling GotoJS: {e}")
+            self.logger.error(f"[ManipulationInterface] Exception calling GotoJS v2: {e}")
             return False
 
         return True

@@ -6,11 +6,25 @@
 
 namespace maurice_arm {
 
+// ── Dynamixel Operating Modes ──────────────────────────────────────────
+// Mode 0 = Current Control          (x330 ONLY — XL430/XC430 lack current hw)
+// Mode 1 = Velocity Control         (all X-series)
+// Mode 3 = Position Control 0-360°  (all X-series)
+// Mode 4 = Extended Position / Multi-turn (all X-series)
+// Mode 5 = Current-based Position   (x330 ONLY — XL430/XC430 lack current hw)
+// Mode 16 = PWM                     (all X-series)
+//
+// Each joint declares a motor_type string (e.g. "XC330-M288").
+// x330 → has current control (addr 38/102), addr 126 = mA
+// x430 → no current control, addr 126 = 0.1% load
+// ───────────────────────────────────────────────────────────────────────
 enum class OperatingMode {
-    VELOCITY = 1,
-    POSITION = 3,
-    CURRENT_CONTROLLED_POSITION = 5,
-    PWM = 16
+    CURRENT = 0,                      // x330 only
+    VELOCITY = 1,                     // all
+    POSITION = 3,                     // all
+    EXTENDED_POSITION = 4,            // all
+    CURRENT_CONTROLLED_POSITION = 5,  // x330 only
+    PWM = 16                          // all
 };
 
 class Dynamixel {
@@ -38,10 +52,12 @@ public:
     void setP(int motor_id, int p);
     void setI(int motor_id, int i);
     void setD(int motor_id, int d);
-    // Write D, I, P gains to multiple servos in a single GroupSyncWrite packet
-    // Each entry: {servo_id, kd, ki, kp}
-    void syncWritePID(const std::vector<std::tuple<int, int, int, int>>& pid_data);
+    // Write D, I, P, FF2, FF1 gains to multiple servos in a single GroupSyncWrite packet
+    // Addresses 80-91: D(2) + I(2) + P(2) + reserved(2) + FF2(2) + FF1(2) = 12 bytes
+    // Each entry: {servo_id, ff2, ff1, kd, ki, kp}
+    void syncWritePID(const std::vector<std::tuple<int, int, int, int, int, int>>& pid_data);
     void setHomeOffset(int motor_id, int home_position);
+    void setReturnDelayTime(int motor_id, int value);  // value * 2 = delay in µs
     void setProfileVelocity(int motor_id, int velocity);
     void setProfileAcceleration(int motor_id, int acceleration);
     // Write profile acceleration + velocity to multiple servos in a single GroupSyncWrite packet
@@ -69,13 +85,17 @@ private:
     dynamixel::PacketHandler* packet_handler_;
     
     // Control table addresses
+    static constexpr int ADDR_RETURN_DELAY_TIME = 9;
     static constexpr int ADDR_TORQUE_ENABLE = 64;
     static constexpr int ADDR_GOAL_POSITION = 116;
     static constexpr int ADDR_PWM_LIMIT = 36;
     static constexpr int OPERATING_MODE_ADDR = 11;
+    static constexpr int POSITION_D = 80;
     static constexpr int POSITION_I = 82;
     static constexpr int POSITION_P = 84;
-    static constexpr int POSITION_D = 80;
+    // addr 86-87 reserved (gap)
+    static constexpr int ADDR_FEEDFORWARD_2ND = 88;  // Acceleration feedforward gain (2 bytes)
+    static constexpr int ADDR_FEEDFORWARD_1ST = 90;  // Velocity feedforward gain (2 bytes)
     static constexpr int ADDR_MIN_POSITION_LIMIT = 52;
     static constexpr int ADDR_MAX_POSITION_LIMIT = 48;
     static constexpr int ADDR_CURRENT_LIMIT = 38;
