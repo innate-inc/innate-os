@@ -153,14 +153,12 @@ class PickUpPieceSimple(Skill):
         """Wait for a gripper operation. Scales with speed but never below GRIPPER_MIN_WAIT."""
         time.sleep(max(seconds / self._speed, self.GRIPPER_MIN_WAIT))
 
-    def _move_arm(self, x, y, z, pitch, yaw, duration, wait=None, gripper_position=None):
+    def _move_arm(self, x, y, z, pitch, yaw, duration, gripper_position=None):
         """Move arm to pose and optionally wait. Returns True on success."""
-        kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw, duration=self._d(duration))
+        kwargs = dict(x=x, y=y, z=z, roll=self.FIXED_ROLL, pitch=pitch, yaw=yaw, duration=self._d(duration), blocking=True)
         if gripper_position is not None:
             kwargs["gripper_position"] = gripper_position
         success = self.manipulation.move_to_cartesian_pose(**kwargs)
-        if success and wait is not None:
-            self._w(wait)
         return success
 
     def _vertical_move(self, x, y, from_z, to_z, pitch, yaw, gripper_position=None, caution=1.0):
@@ -229,9 +227,14 @@ class PickUpPieceSimple(Skill):
                 return "Cancelled"
         return None
 
-    def _go_to_safe_pose(self, pitch, yaw):
-        """Return arm to the resting safe pose (low x, high z, pitch=0 to stay out of camera view)."""
-        self._move_arm(0.1, 0.25, 0.15, 0.0, 1.57, 0.0, wait=2.0)
+    def _go_to_safe_pose(self):
+        """Return arm to the resting safe pose.
+
+        Returns:
+            bool: True on success, False otherwise.
+        """
+        self._move_arm(0.1, 0.25, 0.3, 0.0, 1.57, 2.0, blocking=True)
+        return self._move_arm(0.1, 0.25, 0.15, 0.0, 1.57, 1.0, blocking=True)
 
     def _needs_relay(self, src_square, dst_square):
         """Check if move crosses the rank 6/7 boundary requiring a relay.
@@ -328,13 +331,12 @@ class PickUpPieceSimple(Skill):
         ) * (self.GRIPPER_OPEN_PERCENT / 100.0)
         closed_grip = self.manipulation.GRIPPER_CLOSED - self.GRIPPER_CLOSE_STRENGTH
 
-        # Phase-adjusted base durations for air moves (before _d scaling)
+        # Phase-adjusted base duration for air moves (before _d scaling)
         air_dur = 2.0 / (self.PHASE_AIR * caution)
-        air_wait = 2.5 / (self.PHASE_AIR * caution)
 
         # Move above source at safe height (FAST – in the air)
         self._send_feedback(f"Moving above {src_label}...")
-        if not self._move_arm(src_x, src_y, safe_height, src_pitch, src_yaw, air_dur, wait=air_wait):
+        if not self._move_arm(src_x, src_y, safe_height, src_pitch, src_yaw, air_dur):
             return f"Failed to move above {src_label}"
         if self._cancelled:
             return "Cancelled"
@@ -371,7 +373,7 @@ class PickUpPieceSimple(Skill):
         # Move above destination at safe height (FAST – in the air)
         self._send_feedback(f"Moving above {dst_label}...")
         if not self._move_arm(
-            dst_x, dst_y, safe_height, dst_pitch, dst_yaw, air_dur, wait=air_wait, gripper_position=grip_position
+            dst_x, dst_y, safe_height, dst_pitch, dst_yaw, air_dur, gripper_position=grip_position
         ):
             return f"Failed to move above {dst_label}"
         if self._cancelled:
@@ -591,7 +593,9 @@ class PickUpPieceSimple(Skill):
 
         # ── Return to safe pose ──
         self._send_feedback("Returning to safe pose...")
-        self._go_to_safe_pose(self.PITCH_DOWN, self.YAW_CENTER)
+        if not self._go_to_safe_pose():
+            self.logger.warning("[PickUpPieceSimple] Failed to reach safe pose after move")
+            self._send_feedback("Warning: failed to reach safe pose")
 
         msg = f"Moved piece from {square} to {place_square}"
         self._send_feedback(msg)
