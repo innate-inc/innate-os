@@ -84,8 +84,15 @@ class BehaviorServer(Node):
         # Use environment variable if set, otherwise construct from HOME
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         
-        # Primitives directory for loading checkpoints/data
-        self.primitives_directory = os.path.join(maurice_root, 'skills')
+        # Skill directories for loading checkpoints/data
+        self.primitives_directories = [
+            os.path.join(maurice_root, 'skills'),
+            os.path.join(os.path.expanduser('~'), 'skills'),
+        ]
+        # Preserve order while removing duplicates
+        self.primitives_directories = list(dict.fromkeys(self.primitives_directories))
+        for skills_dir in self.primitives_directories:
+            self.get_logger().info(f"Scanning behavior skill directory: {skills_dir}")
         
         # Get data directory from recorder config
         default_data_dir = os.path.join(maurice_root, 'data')
@@ -154,6 +161,49 @@ class BehaviorServer(Node):
         )
         
         self.get_logger().info("Behavior server ready - pure execution engine using primitives/ directory")
+
+    def _resolve_behavior_directory(self, behavior_name, behavior_config):
+        """Resolve the on-disk directory for a behavior.
+
+        Resolution order:
+        1) Explicit directory field in behavior_config
+        2) <skills_dir>/<behavior_name> in configured roots
+        3) Scan metadata.json where metadata['name'] == behavior_name
+        """
+        explicit_dir = behavior_config.get('directory')
+        if explicit_dir:
+            explicit_dir = os.path.expanduser(explicit_dir)
+            if os.path.isdir(explicit_dir):
+                return explicit_dir
+            self.get_logger().warn(f"Configured behavior directory does not exist: {explicit_dir}")
+
+        for skills_dir in self.primitives_directories:
+            candidate = os.path.join(skills_dir, behavior_name)
+            if os.path.isdir(candidate):
+                return candidate
+
+        for skills_dir in self.primitives_directories:
+            if not os.path.isdir(skills_dir):
+                continue
+            try:
+                for item in os.listdir(skills_dir):
+                    candidate_dir = os.path.join(skills_dir, item)
+                    metadata_path = os.path.join(candidate_dir, 'metadata.json')
+                    if not os.path.isdir(candidate_dir) or not os.path.exists(metadata_path):
+                        continue
+                    try:
+                        with open(metadata_path, 'r') as f:
+                            metadata = json.load(f)
+                        if metadata.get('name') == behavior_name:
+                            return candidate_dir
+                    except Exception as e:
+                        self.get_logger().warn(
+                            f"Failed reading metadata for candidate skill {candidate_dir}: {e}"
+                        )
+            except Exception as e:
+                self.get_logger().warn(f"Failed to scan skills directory {skills_dir}: {e}")
+
+        return None
     
     def cancel_behavior_callback(self, goal_handle_to_cancel):
         """Handle action cancel requests."""
@@ -264,10 +314,20 @@ class BehaviorServer(Node):
     def _execute_learned_behavior(self, goal_handle, behavior_name, behavior_config):
         """Execute a learned behavior using ACT policy."""
         try:
-            # Load from primitives/{behavior_name}/ directory
-            primitive_dir = os.path.join(self.primitives_directory, behavior_name)
+            primitive_dir = self._resolve_behavior_directory(behavior_name, behavior_config)
+            if not primitive_dir:
+                self.get_logger().error(f"Skill directory not found for behavior: {behavior_name}")
+                return "FAILURE", f"Skill directory not found for behavior: {behavior_name}"
+
             checkpoint_file = behavior_config['execution'].get('checkpoint')
-            checkpoint_path = os.path.join(primitive_dir, checkpoint_file)
+            if not checkpoint_file:
+                self.get_logger().error("Missing checkpoint in behavior execution config")
+                return "FAILURE", "Missing checkpoint in behavior execution config"
+            checkpoint_path = (
+                checkpoint_file
+                if os.path.isabs(checkpoint_file)
+                else os.path.join(primitive_dir, checkpoint_file)
+            )
             action_dim = behavior_config['execution'].get('action_dim', 8)
             duration = behavior_config['execution'].get('duration', 20.0)
             progress_threshold = behavior_config['execution'].get('progress_threshold', 2.0)
@@ -533,10 +593,16 @@ class BehaviorServer(Node):
         """Execute a replay-based behavior from H5 file."""
         self.get_logger().info(f"Executing replay behavior: {behavior_name}")
         
-        # Load from primitives/{behavior_name}/ directory
-        primitive_dir = os.path.join(self.primitives_directory, behavior_name)
+        primitive_dir = self._resolve_behavior_directory(behavior_name, behavior_config)
+        if not primitive_dir:
+            self.get_logger().error(f"Skill directory not found for behavior: {behavior_name}")
+            return "FAILURE", f"Skill directory not found for behavior: {behavior_name}"
+
         replay_file = behavior_config['execution'].get('replay_file')
-        file_path = os.path.join(primitive_dir, replay_file)
+        if not replay_file:
+            self.get_logger().error("Missing replay_file in behavior execution config")
+            return "FAILURE", "Missing replay_file in behavior execution config"
+        file_path = replay_file if os.path.isabs(replay_file) else os.path.join(primitive_dir, replay_file)
         start_pose = behavior_config['execution'].get('start_pose')
         end_pose = behavior_config['execution'].get('end_pose')
         start_pose_time = behavior_config['execution'].get('start_pose_time', 1)

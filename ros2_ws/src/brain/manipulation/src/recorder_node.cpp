@@ -6,12 +6,29 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
+#include <cctype>
 #include <hdf5.h>
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
 
 namespace manipulation {
+
+namespace {
+std::string trim_copy(const std::string& input) {
+    size_t start = 0;
+    while (start < input.size() && std::isspace(static_cast<unsigned char>(input[start]))) {
+        ++start;
+    }
+
+    size_t end = input.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(input[end - 1]))) {
+        --end;
+    }
+
+    return input.substr(start, end - start);
+}
+}
 
 RecorderNode::RecorderNode()
     : Node("recorder_node"),
@@ -427,6 +444,13 @@ std::string get_timestamp_string() {
 void RecorderNode::handle_new_physical_primitive(
     const std::shared_ptr<brain_messages::srv::ManipulationTask::Request> request,
     std::shared_ptr<brain_messages::srv::ManipulationTask::Response> response) {
+
+    const std::string trimmed_task_name = trim_copy(request->task_name);
+    if (trimmed_task_name.empty()) {
+        RCLCPP_ERROR(this->get_logger(), "Task name cannot be empty or whitespace-only.");
+        response->success = false;
+        return;
+    }
     
     if (state_ == State::EPISODE_ACTIVE || state_ == State::EPISODE_STOPPED) {
         RCLCPP_WARN(this->get_logger(), "New physical primitive requested during an %s episode; canceling current episode.",
@@ -444,7 +468,7 @@ void RecorderNode::handle_new_physical_primitive(
     // Use task_directory if provided, otherwise fall back to default behavior
     if (!request->task_directory.empty()) {
         // Expand ~ to home directory if present
-        std::string task_dir = request->task_directory;
+        std::string task_dir = trim_copy(request->task_directory);
         if (!task_dir.empty() && task_dir[0] == '~') {
             const char* home = std::getenv("HOME");
             if (home) {
@@ -452,9 +476,9 @@ void RecorderNode::handle_new_physical_primitive(
             }
         }
         RCLCPP_INFO(this->get_logger(), "Using specified task directory: %s", task_dir.c_str());
-        task_manager_->start_new_task_at_directory(request->task_name, task_dir, data_frequency_, "learned");
+        task_manager_->start_new_task_at_directory(trimmed_task_name, task_dir, data_frequency_, "learned");
     } else {
-        task_manager_->start_new_task(request->task_name, data_frequency_, "learned");
+        task_manager_->start_new_task(trimmed_task_name, data_frequency_, "learned");
     }
     
     if (task_manager_->has_metadata()) {
@@ -463,9 +487,9 @@ void RecorderNode::handle_new_physical_primitive(
         episode_count_ = 0;
     }
     
-    current_task_name_ = request->task_name;
+    current_task_name_ = trimmed_task_name;
     state_ = State::TASK_ACTIVE;
-    RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' (type: learned) started.", request->task_name.c_str());
+    RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' (type: learned) started.", trimmed_task_name.c_str());
     publish_status("active", "", current_task_name_);
     response->success = true;
 
