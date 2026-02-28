@@ -21,10 +21,12 @@ import rclpy
 
 # Import the action definition – ensure that it is built and available.
 from brain_messages.action import ExecuteBehavior, ExecuteSkill
-from brain_messages.srv import GetAvailableSkills, CreatePhysicalSkill
+from brain_messages.msg import AvailableSkills, SkillInfo
+from brain_messages.srv import CreatePhysicalSkill
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 
 # Import ROS message types for subscriptions
 from std_msgs.msg import String
@@ -36,6 +38,7 @@ from brain_client.manipulation_interface import ManipulationInterface
 from brain_client.mobility_interface import MobilityInterface
 
 # Import skill loader and types
+from brain_client.hot_reload_watcher import HotReloadWatcher
 from brain_client.skill_loader import SkillLoader
 from brain_client.skill_types import (
     InterfaceType,
@@ -150,11 +153,14 @@ class SkillsActionServer(Node):
             cancel_callback=self.cancel_callback,
         )
 
-        # Create unified service endpoint for getting all skills
-        self._get_skills_service = self.create_service(
-            GetAvailableSkills,
-            "/brain/get_available_skills",
-            self._handle_get_available_skills,
+        # Create unified latched topic for broadcasting available skills
+        self._skills_qos = QoSProfile(
+            depth=1,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+        )
+        self._skills_publisher = self.create_publisher(
+            AvailableSkills, "/brain/available_skills", self._skills_qos
         )
 
         # Create service for reloading skills
@@ -177,6 +183,118 @@ class SkillsActionServer(Node):
         self.get_logger().info(
             f"Total skills available: {len(self._code_skills) + len(self._physical_skills)}"
         )
+
+        # Publish initial skills list on the latched topic
+        self._publish_skills_list()
+
+        # Start hot reload watcher for skills directories
+        self._hot_reload_watcher = HotReloadWatcher(
+            logger=self.get_logger(),
+            skills_directories=self._skills_directories,
+            agents_directories=[],  # SAS doesn't handle agents
+            on_reload=self._on_skills_file_changed,
+            debounce_seconds=1.0,
+        )
+        self._hot_reload_watcher.start()
+
+    def _on_skills_file_changed(self, skill_names: list, _agent_names: list):
+        """Called by HotReloadWatcher when skill files change."""
+        self.get_logger().info(f"Hot reload triggered for skills: {skill_names}")
+        if skill_names:
+            self._reload_skills_selective(skill_names)
+        else:
+            self._reload_skills()
+        self._publish_skills_list()
+
+    def _build_skill_info(self, name: str, skill_type: str, guidelines: str,
+                          guidelines_when_running: str, inputs_json: str,
+                          in_training: bool = False, episode_count: int = 0,
+                          directory: str = "") -> SkillInfo:
+        """Create a SkillInfo message from skill data."""
+        msg = SkillInfo()
+        msg.name = name
+        msg.type = skill_type
+        msg.guidelines = guidelines
+        msg.guidelines_when_running = guidelines_when_running
+        msg.inputs_json = inputs_json
+        msg.in_training = in_training
+        msg.episode_count = episode_count
+        msg.directory = directory
+        return msg
+
+    def _publish_skills_list(self):
+        """Build and publish the full AvailableSkills message on the latched topic."""
+        msg = AvailableSkills()
+        skills = []
+
+        # Add code skills
+        for name, skill_instance in self._code_skills.items():
+            inputs = {}
+            if hasattr(skill_instance, "execute"):
+                signature = inspect.signature(skill_instance.execute)
+                for param_name, param in signature.parameters.items():
+                    if param_name == "self":
+                        continue
+                    param_type = "any"
+                    if param.annotation != inspect.Parameter.empty:
+                        if (
+                            isinstance(param.annotation, (types.UnionType, types.GenericAlias))
+                            or hasattr(param.annotation, "_name")
+                            and param.annotation._name in ["List", "Optional", "Dict", "Tuple", "Union"]
+                        ):
+                            param_type = str(param.annotation)
+                        elif hasattr(param.annotation, "__name__"):
+                            param_type = param.annotation.__name__
+                        else:
+                            param_type = str(param.annotation)
+                        param_type = param_type.replace("typing.", "")
+                    inputs[param_name] = param_type
+
+            skills.append(self._build_skill_info(
+                name=name,
+                skill_type="code",
+                guidelines=(skill_instance.guidelines() if hasattr(skill_instance, "guidelines") else ""),
+                guidelines_when_running=(
+                    skill_instance.guidelines_when_running()
+                    if hasattr(skill_instance, "guidelines_when_running")
+                    else ""
+                ),
+                inputs_json=json.dumps(inputs),
+            ))
+
+        # Add physical skills (ready)
+        for name, physical_data in self._physical_skills.items():
+            metadata = physical_data["metadata"]
+            episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
+            skills.append(self._build_skill_info(
+                name=metadata.get("name", name),
+                skill_type=metadata.get("type", "physical"),
+                guidelines=metadata.get("guidelines", ""),
+                guidelines_when_running=metadata.get("guidelines_when_running", ""),
+                inputs_json=json.dumps(metadata.get("inputs", {})),
+                in_training=False,
+                episode_count=episode_count,
+                directory=physical_data["directory"],
+            ))
+
+        # Add in-training skills
+        for name, physical_data in self._in_training_skills.items():
+            metadata = physical_data["metadata"]
+            episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
+            skills.append(self._build_skill_info(
+                name=metadata.get("name", name),
+                skill_type=metadata.get("type", "physical"),
+                guidelines=metadata.get("guidelines", ""),
+                guidelines_when_running=metadata.get("guidelines_when_running", ""),
+                inputs_json=json.dumps(metadata.get("inputs", {})),
+                in_training=True,
+                episode_count=episode_count,
+                directory=physical_data["directory"],
+            ))
+
+        msg.skills = skills
+        self._skills_publisher.publish(msg)
+        self.get_logger().info(f"Published {len(skills)} skills on /brain/available_skills")
 
     def _reload_skills(self):
         """Reload all skills from disk."""
@@ -212,6 +330,7 @@ class SkillsActionServer(Node):
         self.get_logger().info(
             f"Reloaded {len(self._code_skills)} code + {len(self._physical_skills)} physical skills"
         )
+        self._publish_skills_list()
 
     def _resolve_skills_directories(self) -> list[str]:
         """Build the ordered list of skill directories to scan."""
@@ -367,6 +486,7 @@ class SkillsActionServer(Node):
                     reloaded.append(skill_name)
         
         self.get_logger().info(f"Selectively reloaded {len(reloaded)} skills")
+        self._publish_skills_list()
         return reloaded
 
     def _is_code_skill(self, skill_name: str) -> bool:
@@ -473,100 +593,6 @@ class SkillsActionServer(Node):
                                 self.get_logger().warn(f"Skipped invalid physical skill: {skill_name}")
 
         return physical_skills, in_training_skills
-
-    def _handle_get_available_skills(self, request, response):
-        all_skills = []
-        include_in_training = request.include_in_training
-
-        # Add code skills
-        for name, skill_instance in self._code_skills.items():
-            # Extract parameter information using introspection
-            inputs = {}
-            if hasattr(skill_instance, "execute"):
-                signature = inspect.signature(skill_instance.execute)
-
-                for param_name, param in signature.parameters.items():
-                    if param_name == "self":
-                        continue
-
-                    # Get parameter type from annotation if available
-                    param_type = "any"
-                    if param.annotation != inspect.Parameter.empty:
-                        # Handle UnionType (e.g., int | str) and GenericAlias (e.g., list[int])
-                        if (
-                            isinstance(param.annotation, (types.UnionType, types.GenericAlias))
-                            or hasattr(param.annotation, "_name")
-                            and param.annotation._name in ["List", "Optional", "Dict", "Tuple", "Union"]
-                        ):  # Covers typing.List, typing.Optional etc.
-                            param_type = str(param.annotation)
-                        elif hasattr(param.annotation, "__name__"):
-                            param_type = param.annotation.__name__
-                        else:
-                            # Fallback for other complex types, str() might be a reasonable default
-                            param_type = str(param.annotation)
-                        # Clean up "typing." prefix if present
-                        param_type = param_type.replace("typing.", "")
-
-                    inputs[param_name] = f"{param_type}"
-
-            skill_info = {
-                "name": name,
-                "type": "code",
-                "guidelines": (skill_instance.guidelines() if hasattr(skill_instance, "guidelines") else ""),
-                "guidelines_when_running": (
-                    skill_instance.guidelines_when_running()
-                    if hasattr(skill_instance, "guidelines_when_running")
-                    else ""
-                ),
-                "inputs": inputs,
-            }
-            self.get_logger().info(f"Code skill '{name}' has inputs: {inputs}")
-            all_skills.append(skill_info)
-
-        # Add physical skills
-        for name, physical_data in self._physical_skills.items():
-            metadata = physical_data["metadata"]
-            # Fetch episode count dynamically (not cached)
-            episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
-            skill_info = {
-                "name": metadata.get("name", name),
-                "type": metadata.get("type", "physical"),
-                "guidelines": metadata.get("guidelines", ""),
-                "guidelines_when_running": metadata.get("guidelines_when_running", ""),
-                "inputs": metadata.get("inputs", {}),
-                "in_training": False,
-                "episode_count": episode_count,
-                "directory": physical_data["directory"],
-            }
-            self.get_logger().info(
-                f"Physical skill '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}"
-            )
-            all_skills.append(skill_info)
-
-        # Add in-training skills if requested
-        if include_in_training:
-            for name, physical_data in self._in_training_skills.items():
-                metadata = physical_data["metadata"]
-                # Fetch episode count dynamically (not cached)
-                episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
-                skill_info = {
-                    "name": metadata.get("name", name),
-                    "type": metadata.get("type", "physical"),
-                    "guidelines": metadata.get("guidelines", ""),
-                    "guidelines_when_running": metadata.get("guidelines_when_running", ""),
-                    "inputs": metadata.get("inputs", {}),
-                    "in_training": True,
-                    "episode_count": episode_count,
-                    "directory": physical_data["directory"],
-                }
-                self.get_logger().info(
-                    f"In-training skill '{name}' has inputs: {metadata.get('inputs', {})}, episodes: {episode_count}"
-                )
-                all_skills.append(skill_info)
-
-        response.skills_json = json.dumps(all_skills)
-        self.get_logger().info(f"Returned {len(all_skills)} skills to service caller")
-        return response
 
     def goal_callback(self, goal_request):
         self.get_logger().debug(f"Received goal for skill: '{goal_request.skill_type}'")
@@ -941,6 +967,8 @@ class SkillsActionServer(Node):
                 )
 
     def destroy(self):
+        if hasattr(self, '_hot_reload_watcher'):
+            self._hot_reload_watcher.stop()
         self._camera_node.shutdown()
         self._action_server.destroy()
         super().destroy_node()

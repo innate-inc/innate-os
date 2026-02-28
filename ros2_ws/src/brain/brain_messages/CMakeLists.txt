@@ -20,7 +20,6 @@ set(srv_files
   "srv/GetTaskMetadata.srv"
   "srv/UpdateTaskMetadata.srv"
   "srv/ResetBrain.srv"
-  "srv/GetAvailableSkills.srv"
   "srv/ChangeMap.srv"
   "srv/ChangeNavigationMode.srv"
   "srv/SaveMap.srv"
@@ -35,6 +34,8 @@ set(srv_files
 set(msg_files
   "msg/RecorderStatus.msg"
   "msg/ReplayStatus.msg"
+  "msg/SkillInfo.msg"
+  "msg/AvailableSkills.msg"
 )
 
 set(action_files
