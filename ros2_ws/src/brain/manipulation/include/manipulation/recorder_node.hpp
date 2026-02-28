@@ -173,7 +173,6 @@ private:
     int replay_frame_index_;
     int replay_total_frames_;
     double replay_fps_;
-    std::string replay_skill_id_;
     std::string replay_episode_id_;
     rclcpp::TimerBase::SharedPtr replay_timer_;
 

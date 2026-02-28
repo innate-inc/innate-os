@@ -5,4 +5,4 @@ int32 total_frames        # Total number of frames
 float32 current_time_sec  # Current playback time in seconds
 float32 total_time_sec    # Total duration in seconds
 string episode_id         # e.g., "episode_3"
-string skill_id           # Skill ID being replayed (e.g., local/pick-socks)
+string task_directory     # Absolute path to the skill directory being replayed

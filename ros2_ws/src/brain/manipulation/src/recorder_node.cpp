@@ -895,7 +895,6 @@ void RecorderNode::handle_load_episode(
 
         // Set replay metadata
         replay_frame_index_ = 0;
-        replay_skill_id_ = "";
         replay_episode_id_ = "episode_" + std::to_string(request->episode_id);
         replay_state_ = ReplayState::READY;
 
@@ -1064,7 +1063,7 @@ void RecorderNode::publish_replay_status() {
     msg.current_time_sec = replay_fps_ > 0 ? static_cast<float>(replay_frame_index_) / replay_fps_ : 0.0f;
     msg.total_time_sec = replay_fps_ > 0 ? static_cast<float>(replay_total_frames_) / replay_fps_ : 0.0f;
     msg.episode_id = replay_episode_id_;
-    msg.skill_id = replay_skill_id_;
+    msg.task_directory = task_manager_.get_current_task_dir();
     replay_status_pub_->publish(msg);
 }
 
