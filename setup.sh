@@ -27,6 +27,18 @@ uv venv --python 3.11
 echo "Installing dependencies from $REQUIREMENTS_FILE..."
 uv pip install -r "$REQUIREMENTS_FILE" --python .venv/bin/python
 
+# Install PyTorch nightly with CUDA 12.8 for Blackwell (RTX 50xx, sm_120) support
+# Stable torch builds top out at sm_90 and will fall back to CPU on RTX 5090
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
+if echo "${GPU_NAME}" | grep -qi "RTX 50\|B200\|B100\|blackwell"; then
+    echo "⚡ Blackwell GPU detected (${GPU_NAME}) - installing PyTorch nightly cu128..."
+    uv pip install --python .venv/bin/python --pre --reinstall torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/nightly/cu128
+    # Pin numpy to <2.3 (numba compatibility)
+    uv pip install --python .venv/bin/python "numpy<2.3"
+    echo "✅ PyTorch nightly cu128 installed"
+fi
+
 echo ""
 echo "Setup complete! Activate the environment with:"
 echo "  source .venv/bin/activate"
