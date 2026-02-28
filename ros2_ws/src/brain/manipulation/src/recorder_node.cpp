@@ -6,8 +6,6 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
-#include <regex>
-#include <cctype>
 #include <hdf5.h>
 #include <nlohmann/json.hpp>
 
@@ -78,14 +76,6 @@ RecorderNode::RecorderNode()
     // Initialize TaskManager
     task_manager_ = std::make_unique<TaskManager>(data_directory_);
 
-    // Add innate-os/skills as an additional skill directory to scan
-    const char* home = std::getenv("HOME");
-    if (home) {
-        std::string innate_os_skills = std::string(home) + "/innate-os/skills";
-        task_manager_->add_skill_directory(innate_os_skills);
-        RCLCPP_INFO(this->get_logger(), "Added additional skill directory: %s", innate_os_skills.c_str());
-    }
-
     // Initialize latest image storage
     for (const auto& topic : image_topics_) {
         latest_images_[topic] = nullptr;
@@ -139,12 +129,11 @@ RecorderNode::RecorderNode()
 
     // Create service clients
     head_ai_position_client_ = this->create_client<std_srvs::srv::Trigger>("/mars/head/set_ai_position");
-    reload_skills_client_ = this->create_client<std_srvs::srv::Trigger>("/brain/reload_primitives");
 
     // Create service servers
-    new_physical_primitive_srv_ = this->create_service<brain_messages::srv::ManipulationTask>(
-        "brain/recorder/new_physical_primitive",
-        std::bind(&RecorderNode::handle_new_physical_primitive, this, std::placeholders::_1, std::placeholders::_2));
+    activate_physical_primitive_srv_ = this->create_service<brain_messages::srv::ActivateManipulationTask>(
+        "brain/recorder/activate_physical_primitive",
+        std::bind(&RecorderNode::activate_physical_primitive, this, std::placeholders::_1, std::placeholders::_2));
     
     new_episode_srv_ = this->create_service<std_srvs::srv::Trigger>(
         "brain/recorder/new_episode",
@@ -166,27 +155,17 @@ RecorderNode::RecorderNode()
         "brain/recorder/end_task",
         std::bind(&RecorderNode::handle_end_task, this, std::placeholders::_1, std::placeholders::_2));
     
-    get_task_metadata_list_srv_ = this->create_service<brain_messages::srv::GetTaskMetadataList>(
-        "brain/recorder/get_task_metadata_list",
-        std::bind(&RecorderNode::handle_get_task_metadata_list, this, std::placeholders::_1, std::placeholders::_2));
-    
-    update_task_metadata_srv_ = this->create_service<brain_messages::srv::UpdateTaskMetadata>(
-        "brain/recorder/update_task_metadata",
-        std::bind(&RecorderNode::handle_update_task_metadata, this, std::placeholders::_1, std::placeholders::_2));
-    
     get_task_metadata_srv_ = this->create_service<brain_messages::srv::GetTaskMetadata>(
         "brain/recorder/get_task_metadata",
         std::bind(&RecorderNode::handle_get_task_metadata, this, std::placeholders::_1, std::placeholders::_2));
 
     RCLCPP_INFO(this->get_logger(), "Hosting services:");
-    RCLCPP_INFO(this->get_logger(), "  brain/recorder/new_physical_primitive");
+    RCLCPP_INFO(this->get_logger(), "  brain/recorder/activate_physical_primitive");
     RCLCPP_INFO(this->get_logger(), "  brain/recorder/new_episode");
     RCLCPP_INFO(this->get_logger(), "  brain/recorder/save_episode");
     RCLCPP_INFO(this->get_logger(), "  brain/recorder/cancel_episode");
     RCLCPP_INFO(this->get_logger(), "  brain/recorder/stop_episode");
     RCLCPP_INFO(this->get_logger(), "  brain/recorder/end_task");
-    RCLCPP_INFO(this->get_logger(), "  brain/recorder/get_task_metadata_list");
-    RCLCPP_INFO(this->get_logger(), "  brain/recorder/update_task_metadata");
     RCLCPP_INFO(this->get_logger(), "  brain/recorder/get_task_metadata");
 
     // Create status publisher
@@ -372,7 +351,7 @@ void RecorderNode::timer_callback() {
         if (timestep_count >= static_cast<size_t>(max_timesteps_)) {
             RCLCPP_INFO(this->get_logger(), "Timestep limit (%d) reached. Automatically stopping episode.", max_timesteps_);
             state_ = State::EPISODE_STOPPED;
-            publish_status("stopped", std::to_string(episode_count_), current_skill_id_);
+            publish_status("stopped", std::to_string(episode_count_));
             return;
         }
         
@@ -423,61 +402,9 @@ std::string RecorderNode::replay_state_to_string(ReplayState state) {
     }
 }
 
-bool RecorderNode::validate_skill_id(const std::string& skill_id) const {
-    static const std::regex pattern("^[a-z0-9_-]+/[a-z0-9_-]+$");
-    if (!std::regex_match(skill_id, pattern)) {
-        return false;
-    }
-    auto slash_pos = skill_id.find('/');
-    if (slash_pos == std::string::npos) {
-        return false;
-    }
-    std::string user = skill_id.substr(0, slash_pos);
-    return user == "local" || user == "innate";
-}
-
-std::string RecorderNode::normalize_skill_name_from_display(const std::string& name) const {
-    std::string normalized;
-    normalized.reserve(name.size());
-
-    bool previous_dash = false;
-    for (char ch : name) {
-        unsigned char uch = static_cast<unsigned char>(ch);
-        if (std::isalnum(uch)) {
-            normalized.push_back(static_cast<char>(std::tolower(uch)));
-            previous_dash = false;
-        } else if (std::isspace(uch) || ch == '-' || ch == '_') {
-            if (!normalized.empty() && !previous_dash) {
-                normalized.push_back('-');
-                previous_dash = true;
-            }
-        }
-    }
-
-    while (!normalized.empty() && normalized.back() == '-') {
-        normalized.pop_back();
-    }
-    return normalized;
-}
-
-std::string RecorderNode::resolve_skill_directory(const std::string& skill_id) const {
-    auto slash_pos = skill_id.find('/');
-    std::string user = skill_id.substr(0, slash_pos);
-    std::string skill_name = skill_id.substr(slash_pos + 1);
-
-    if (user == "local") {
-        return data_directory_ + "/" + skill_name;
-    }
-
-    const char* root_env = std::getenv("INNATE_OS_ROOT");
-    std::string innate_root = root_env ? std::string(root_env) : (std::string(std::getenv("HOME") ? std::getenv("HOME") : "") + "/innate-os");
-    return innate_root + "/skills/" + skill_name;
-}
-
-void RecorderNode::publish_status(const std::string& status, const std::string& episode_number,
-                                   const std::string& skill_id) {
+void RecorderNode::publish_status(const std::string& status, const std::string& episode_number) {
     auto msg = brain_messages::msg::RecorderStatus();
-    msg.skill_id = skill_id.empty() ? current_skill_id_ : skill_id;
+    msg.task_directory = current_task_dir_;
     msg.episode_number = episode_number;
     msg.status = status;
     status_pub_->publish(msg);
@@ -493,21 +420,14 @@ std::string get_timestamp_string() {
     return oss.str();
 }
 
-void RecorderNode::handle_new_physical_primitive(
-    const std::shared_ptr<brain_messages::srv::ManipulationTask::Request> request,
-    std::shared_ptr<brain_messages::srv::ManipulationTask::Response> response) {
-
-    const std::string trimmed_task_name = trim_copy(request->task_name);
-    if (trimmed_task_name.empty()) {
-        RCLCPP_ERROR(this->get_logger(), "Task name cannot be empty or whitespace-only.");
-        response->success = false;
-        return;
-    }
+void RecorderNode::activate_physical_primitive(
+    const std::shared_ptr<brain_messages::srv::ActivateManipulationTask::Request> request,
+    std::shared_ptr<brain_messages::srv::ActivateManipulationTask::Response> response) {
     
     if (state_ == State::EPISODE_ACTIVE || state_ == State::EPISODE_STOPPED) {
         RCLCPP_WARN(this->get_logger(), "New physical primitive requested during an %s episode; canceling current episode.",
                     state_to_string(state_).c_str());
-        publish_status("cancelled", std::to_string(episode_count_), current_skill_id_);
+        publish_status("cancelled", std::to_string(episode_count_));
         if (current_episode_) {
             current_episode_->clear();
         }
@@ -517,33 +437,18 @@ void RecorderNode::handle_new_physical_primitive(
     RCLCPP_INFO(this->get_logger(), "Setting head to AI position for new physical primitive setup");
     set_head_ai_position();
 
-    std::string skill_id = request->skill_id;
-    std::string display_name = request->name;
-
-    if (skill_id.empty()) {
-        std::string normalized_name = normalize_skill_name_from_display(display_name);
-        if (normalized_name.empty()) {
-            response->success = false;
-            RCLCPP_ERROR(this->get_logger(), "New physical primitive requires skill_id or name");
-            return;
-        }
-        skill_id = "local/" + normalized_name;
-    }
-
-    if (!validate_skill_id(skill_id)) {
+    std::string task_dir = request->task_directory;
+    if (task_dir.empty()) {
         response->success = false;
-        RCLCPP_ERROR(this->get_logger(), "Invalid skill_id format: %s", skill_id.c_str());
+        RCLCPP_ERROR(this->get_logger(), "New physical primitive requires task_directory");
         return;
     }
 
-    if (display_name.empty()) {
-        auto slash_pos = skill_id.find('/');
-        display_name = slash_pos == std::string::npos ? skill_id : skill_id.substr(slash_pos + 1);
-    }
+    // Derive display name from directory basename
+    std::string display_name = fs::path(task_dir).filename().string();
 
-    std::string task_dir = resolve_skill_directory(skill_id);
-    RCLCPP_INFO(this->get_logger(), "Resolved skill_id %s to directory: %s", skill_id.c_str(), task_dir.c_str());
-    task_manager_->start_new_task_at_directory(display_name, task_dir, data_frequency_, "learned");
+    RCLCPP_INFO(this->get_logger(), "Starting recording at directory: %s", task_dir.c_str());
+    task_manager_->start_new_task_at_directory(display_name, task_dir, data_frequency_);
     
     if (task_manager_->has_metadata()) {
         episode_count_ = task_manager_->get_number_of_episodes();
@@ -552,27 +457,11 @@ void RecorderNode::handle_new_physical_primitive(
     }
     
     current_task_name_ = display_name;
-    current_skill_id_ = skill_id;
+    current_task_dir_ = task_dir;
     state_ = State::TASK_ACTIVE;
-    RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' (id: %s, type: learned) started.", display_name.c_str(), skill_id.c_str());
-    publish_status("active", "", current_skill_id_);
+    RCLCPP_INFO(this->get_logger(), "New physical primitive '%s' started at %s.", display_name.c_str(), task_dir.c_str());
+    publish_status("active");
     response->success = true;
-
-    // Trigger skills reload so new skill appears in skills_action_server immediately
-    if (reload_skills_client_->service_is_ready()) {
-        auto reload_request = std::make_shared<std_srvs::srv::Trigger::Request>();
-        reload_skills_client_->async_send_request(reload_request,
-            [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
-                auto result = future.get();
-                if (result->success) {
-                    RCLCPP_INFO(this->get_logger(), "Skills reloaded after new primitive creation.");
-                } else {
-                    RCLCPP_WARN(this->get_logger(), "Failed to reload skills: %s", result->message.c_str());
-                }
-            });
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Reload skills service not available; new skill may not appear until manual reload.");
-    }
 }
 
 void RecorderNode::handle_new_episode(
@@ -581,7 +470,7 @@ void RecorderNode::handle_new_episode(
     
     if (state_ == State::IDLE) {
         RCLCPP_ERROR(this->get_logger(), "Cannot start a new episode unless a task is active.");
-        publish_status("failed - no active task", "", "");
+        publish_status("failed - no active task");
         response->success = false;
         response->message = "No active task. Please start a task first.";
         return;
@@ -590,7 +479,7 @@ void RecorderNode::handle_new_episode(
     if (state_ == State::EPISODE_ACTIVE || state_ == State::EPISODE_STOPPED) {
         RCLCPP_ERROR(this->get_logger(), "Cannot start a new episode while an episode is %s.", 
                      state_to_string(state_).c_str());
-        publish_status("failed - episode " + state_to_string(state_), std::to_string(episode_count_), current_skill_id_);
+        publish_status("failed - episode " + state_to_string(state_), std::to_string(episode_count_));
         response->success = false;
         response->message = "An episode is already " + state_to_string(state_) + ". Please save or cancel the current episode first.";
         return;
@@ -607,7 +496,7 @@ void RecorderNode::handle_new_episode(
     RCLCPP_INFO(this->get_logger(), "Task: %s, Episode: %s", current_task_name_.c_str(), episode_str.c_str());
     RCLCPP_INFO(this->get_logger(), "Recording at %d Hz", data_frequency_);
     
-    publish_status("active", episode_str, current_skill_id_);
+    publish_status("active", episode_str);
     response->success = true;
     response->message = "Episode started.";
 }
@@ -619,9 +508,9 @@ void RecorderNode::handle_save_episode(
     if ((state_ != State::EPISODE_ACTIVE && state_ != State::EPISODE_STOPPED) || !current_episode_) {
         RCLCPP_ERROR(this->get_logger(), "No active or stopped episode to save.");
         if (state_ == State::TASK_ACTIVE) {
-            publish_status("failed - no active/stopped episode to save", "", current_skill_id_);
+            publish_status("failed - no active/stopped episode to save");
         } else {
-            publish_status("failed - no active task", "", "");
+            publish_status("failed - no active task");
         }
         response->success = false;
         response->message = "No active or stopped episode to save.";
@@ -630,7 +519,7 @@ void RecorderNode::handle_save_episode(
 
     if (current_episode_->get_episode_length() == 0) {
         RCLCPP_ERROR(this->get_logger(), "Cannot save empty episode with no timesteps.");
-        publish_status("failed - empty episode", std::to_string(episode_count_), current_skill_id_);
+        publish_status("failed - empty episode", std::to_string(episode_count_));
         response->success = false;
         response->message = "Cannot save empty episode.";
         return;
@@ -659,7 +548,7 @@ void RecorderNode::handle_save_episode(
     RCLCPP_INFO(this->get_logger(), "Task: %s, Episode: %d", current_task_name_.c_str(), episode_count_);
     RCLCPP_INFO(this->get_logger(), "Duration: %.1fs, Timesteps: %zu", duration, timesteps);
     
-    publish_status("saved", std::to_string(episode_count_), current_skill_id_);
+    publish_status("saved", std::to_string(episode_count_));
     current_episode_.reset();
     state_ = State::TASK_ACTIVE;
     response->success = true;
@@ -673,9 +562,9 @@ void RecorderNode::handle_cancel_episode(
     if ((state_ != State::EPISODE_ACTIVE && state_ != State::EPISODE_STOPPED) || !current_episode_) {
         RCLCPP_ERROR(this->get_logger(), "No active or stopped episode to cancel.");
         if (state_ == State::TASK_ACTIVE) {
-            publish_status("failed - no active/stopped episode to cancel", "", current_skill_id_);
+            publish_status("failed - no active/stopped episode to cancel");
         } else {
-            publish_status("failed - no active task", "", "");
+            publish_status("failed - no active task");
         }
         response->success = false;
         response->message = "No active or stopped episode to cancel.";
@@ -687,7 +576,7 @@ void RecorderNode::handle_cancel_episode(
         episode_count_--;
     }
     RCLCPP_INFO(this->get_logger(), "Episode canceled; buffered data discarded.");
-    publish_status("cancelled", std::to_string(episode_count_), current_skill_id_);
+    publish_status("cancelled", std::to_string(episode_count_));
     current_episode_.reset();
     state_ = State::TASK_ACTIVE;
     response->success = true;
@@ -701,22 +590,22 @@ void RecorderNode::handle_stop_episode(
     if (state_ == State::EPISODE_ACTIVE) {
         state_ = State::EPISODE_STOPPED;
         RCLCPP_INFO(this->get_logger(), "Episode recording stopped. Waiting for save or cancel command.");
-        publish_status("stopped", std::to_string(episode_count_), current_skill_id_);
+        publish_status("stopped", std::to_string(episode_count_));
         response->success = true;
         response->message = "Episode recording stopped. Awaiting save or cancel.";
     } else if (state_ == State::EPISODE_STOPPED) {
         RCLCPP_WARN(this->get_logger(), "Stop episode requested, but episode is already stopped.");
-        publish_status("failed - episode already stopped", std::to_string(episode_count_), current_skill_id_);
+        publish_status("failed - episode already stopped", std::to_string(episode_count_));
         response->success = false;
         response->message = "Episode is already stopped.";
     } else if (state_ == State::TASK_ACTIVE) {
         RCLCPP_ERROR(this->get_logger(), "Stop episode requested, but no episode is active.");
-        publish_status("failed - no active episode", "", current_skill_id_);
+        publish_status("failed - no active episode");
         response->success = false;
         response->message = "No active episode to stop.";
     } else {
         RCLCPP_ERROR(this->get_logger(), "Stop episode requested, but no task is active.");
-        publish_status("failed - no active task", "", "");
+        publish_status("failed - no active task");
         response->success = false;
         response->message = "No active task or episode to stop.";
     }
@@ -729,7 +618,7 @@ void RecorderNode::handle_end_task(
     if (state_ == State::EPISODE_ACTIVE || state_ == State::EPISODE_STOPPED) {
         RCLCPP_WARN(this->get_logger(), "Ending task during an %s episode; canceling current episode first.",
                     state_to_string(state_).c_str());
-        publish_status("cancelled", std::to_string(episode_count_), current_skill_id_);
+        publish_status("cancelled", std::to_string(episode_count_));
         if (current_episode_) {
             current_episode_->clear();
         }
@@ -739,9 +628,9 @@ void RecorderNode::handle_end_task(
     task_manager_->end_task();
     state_ = State::IDLE;
     RCLCPP_INFO(this->get_logger(), "Task ended; recorder state set to IDLE.");
-    publish_status("idle", "", "");
+    publish_status("idle");
     current_task_name_.clear();
-    current_skill_id_.clear();
+    current_task_dir_.clear();
     episode_count_ = 0;
     response->success = true;
     response->message = "Task ended.";
@@ -763,67 +652,7 @@ void RecorderNode::handle_end_task(
     }
 }
 
-void RecorderNode::handle_get_task_metadata_list(
-    const std::shared_ptr<brain_messages::srv::GetTaskMetadataList::Request> /*request*/,
-    std::shared_ptr<brain_messages::srv::GetTaskMetadataList::Response> response) {
-    
-    RCLCPP_INFO(this->get_logger(), "Received request to get task metadata list.");
-    
-    try {
-        auto all_tasks_summary = task_manager_->get_all_tasks_summary();
-        
-        if (all_tasks_summary.empty()) {
-            RCLCPP_INFO(this->get_logger(), "No tasks found by TaskManager.");
-            response->success = true;
-            response->message = "No tasks recorded yet.";
-            response->json_metadata = "[]";
-            return;
-        }
 
-        nlohmann::json json_array = nlohmann::json::array();
-        for (const auto& task : all_tasks_summary) {
-            json_array.push_back(task);
-        }
-        
-        response->json_metadata = json_array.dump(2);
-        response->success = true;
-        response->message = "Successfully retrieved task metadata list.";
-        RCLCPP_INFO(this->get_logger(), "Successfully prepared task metadata list.");
-    } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to get task metadata list: %s", e.what());
-        response->success = false;
-        response->message = std::string("Error retrieving task metadata: ") + e.what();
-        response->json_metadata = "{}";
-    }
-}
-
-void RecorderNode::handle_update_task_metadata(
-    const std::shared_ptr<brain_messages::srv::UpdateTaskMetadata::Request> request,
-    std::shared_ptr<brain_messages::srv::UpdateTaskMetadata::Response> response) {
-    
-    RCLCPP_INFO(this->get_logger(), "Received request to update metadata for task directory: %s",
-                request->task_directory.c_str());
-    
-    try {
-        auto [success, message] = task_manager_->update_task_metadata_by_directory(
-            request->task_directory, request->json_metadata_update);
-        response->success = success;
-        response->message = message;
-        
-        if (success) {
-            RCLCPP_INFO(this->get_logger(), "Successfully updated metadata for task directory: %s",
-                        request->task_directory.c_str());
-        } else {
-            RCLCPP_ERROR(this->get_logger(), "Failed to update metadata for task directory %s: %s",
-                         request->task_directory.c_str(), message.c_str());
-        }
-    } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "Exception while updating task metadata for directory %s: %s",
-                     request->task_directory.c_str(), e.what());
-        response->success = false;
-        response->message = std::string("Error updating task metadata: ") + e.what();
-    }
-}
 
 void RecorderNode::handle_get_task_metadata(
     const std::shared_ptr<brain_messages::srv::GetTaskMetadata::Request> request,
@@ -1066,7 +895,7 @@ void RecorderNode::handle_load_episode(
 
         // Set replay metadata
         replay_frame_index_ = 0;
-        replay_skill_id_ = (request->task_directory == task_manager_->get_current_task_dir()) ? current_skill_id_ : "";
+        replay_skill_id_ = "";
         replay_episode_id_ = "episode_" + std::to_string(request->episode_id);
         replay_state_ = ReplayState::READY;
 

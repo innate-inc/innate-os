@@ -20,11 +20,9 @@
 
 #include "brain_messages/msg/recorder_status.hpp"
 #include "brain_messages/msg/replay_status.hpp"
-#include "brain_messages/srv/manipulation_task.hpp"
+#include "brain_messages/srv/activate_manipulation_task.hpp"
 #include "brain_messages/srv/get_task_metadata.hpp"
-#include "brain_messages/srv/get_task_metadata_list.hpp"
 #include "brain_messages/srv/load_episode.hpp"
-#include "brain_messages/srv/update_task_metadata.hpp"
 
 #include "manipulation/episode_data.hpp"
 #include "manipulation/task_manager.hpp"
@@ -63,9 +61,9 @@ private:
     void timer_callback();
 
     // Service handlers
-    void handle_new_physical_primitive(
-        const std::shared_ptr<brain_messages::srv::ManipulationTask::Request> request,
-        std::shared_ptr<brain_messages::srv::ManipulationTask::Response> response);
+    void activate_physical_primitive(
+        const std::shared_ptr<brain_messages::srv::ActivateManipulationTask::Request> request,
+        std::shared_ptr<brain_messages::srv::ActivateManipulationTask::Response> response);
     void handle_new_episode(
         const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
         std::shared_ptr<std_srvs::srv::Trigger::Response> response);
@@ -81,12 +79,6 @@ private:
     void handle_end_task(
         const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
         std::shared_ptr<std_srvs::srv::Trigger::Response> response);
-    void handle_get_task_metadata_list(
-        const std::shared_ptr<brain_messages::srv::GetTaskMetadataList::Request> request,
-        std::shared_ptr<brain_messages::srv::GetTaskMetadataList::Response> response);
-    void handle_update_task_metadata(
-        const std::shared_ptr<brain_messages::srv::UpdateTaskMetadata::Request> request,
-        std::shared_ptr<brain_messages::srv::UpdateTaskMetadata::Response> response);
     void handle_get_task_metadata(
         const std::shared_ptr<brain_messages::srv::GetTaskMetadata::Request> request,
         std::shared_ptr<brain_messages::srv::GetTaskMetadata::Response> response);
@@ -107,14 +99,10 @@ private:
 
     // Helper methods
     void check_all_topics_received();
-    void publish_status(const std::string& status, const std::string& episode_number = "", 
-                        const std::string& skill_id = "");
+    void publish_status(const std::string& status, const std::string& episode_number = "");
     void set_head_ai_position();
     std::string state_to_string(State state);
     std::string replay_state_to_string(ReplayState state);
-    std::string resolve_skill_directory(const std::string& skill_id) const;
-    bool validate_skill_id(const std::string& skill_id) const;
-    std::string normalize_skill_name_from_display(const std::string& name) const;
 
     // Replay helpers
     void start_replay_timer();
@@ -140,7 +128,7 @@ private:
     std::chrono::steady_clock::time_point episode_start_time_;
     std::chrono::system_clock::time_point episode_start_system_time_;
     std::string current_task_name_;
-    std::string current_skill_id_;
+    std::string current_task_dir_;
     int episode_count_;
 
     // Sensor data
@@ -165,19 +153,16 @@ private:
     rclcpp::Publisher<brain_messages::msg::RecorderStatus>::SharedPtr status_pub_;
 
     // Services
-    rclcpp::Service<brain_messages::srv::ManipulationTask>::SharedPtr new_physical_primitive_srv_;
+    rclcpp::Service<brain_messages::srv::ActivateManipulationTask>::SharedPtr activate_physical_primitive_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr new_episode_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_episode_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_episode_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_episode_srv_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr end_task_srv_;
-    rclcpp::Service<brain_messages::srv::GetTaskMetadataList>::SharedPtr get_task_metadata_list_srv_;
-    rclcpp::Service<brain_messages::srv::UpdateTaskMetadata>::SharedPtr update_task_metadata_srv_;
     rclcpp::Service<brain_messages::srv::GetTaskMetadata>::SharedPtr get_task_metadata_srv_;
 
     // Service clients
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr head_ai_position_client_;
-    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr reload_skills_client_;
 
     // Timer
     rclcpp::TimerBase::SharedPtr timer_;

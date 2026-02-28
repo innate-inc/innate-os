@@ -1,5 +1,59 @@
 # Skill Identity & Directory Design
 
+# Written by Karmanyaah
+
+- A skill directory contains metadata.json.
+
+
+## Physical Skills
+### Behavior Server
+
+Plays back trained skills
+
+- Receives skill_dir
+
+READ {METADATA.json}->.execution
+
+READ nom. {SKILL_DIR}/{RUN_NUM}/**/*.{pt,pth}
+(files specified in .execution)
+
+
+### Training Server
+
+- Receives skill_dir
+
+READ metadata.json
+RW .training_skill_id
+WRITE .execution
+
+READ {SKILL_DIR}/data/
+WRITE/CREATE {SKILL_DIR}/{RUN_NUM}/
+
+### Recorder Node
+
+
+Record and play back stuff
+
+READ/WRITE/CREATE {SKILL_DIR}/data/{dataset_metadata.json,episode_{NUM}.h5}
+
+## Both Physical and Code Skills
+
+### Skills Action Server
+
+Handles execution of both physical skills and code skills.
+
+
+
+### Brain Client
+
+
+# Agent Written stuff
+
+> **Note:** The original design below proposed using skill IDs (`user/name`) everywhere.
+> The actual implementation took a simpler approach: **absolute directory paths** are used
+> on all ROS interfaces, and skill creation (including ID → path resolution) was moved to
+> skills_action_server. See "Changes Implemented" at the bottom for what was actually built.
+
 ## Skill Types
 
 There are two fundamentally different kinds of skills:
@@ -10,9 +64,10 @@ A `.py` file in a skills directory. Contains a class inheriting from `Skill` wit
 ### Physical Skills
 A subdirectory containing `metadata.json`. Involve the robot's arm/body. Have a lifecycle:
 
-1. **Recording** (recorder_node) — human demonstrates by puppeteering the arm. Creates directory + `metadata.json` + episode H5 files under `data/`.
-2. **Training** (training_node → cloud) — episode data uploaded, neural network trained, checkpoint downloaded back.
-3. **Execution** (skills_action_server → behavior_server) — runs the trained policy or replays recorded motion.
+1. **Creation** (skills_action_server) — app calls `create_physical_skill` with a display name. Server creates the directory under `~/skills/` with a kebab-case name and writes `metadata.json`.
+2. **Recording** (recorder_node) — human demonstrates by puppeteering the arm. Recorder is activated with an absolute directory path and creates episode H5 files + `dataset_metadata.json` under `data/`.
+3. **Training** (training_node → cloud) — episode data uploaded, neural network trained, checkpoint downloaded back.
+4. **Execution** (skills_action_server → behavior_server) — runs the trained policy or replays recorded motion.
 
 Physical skill subtypes:
 - **Learned** (`"type": "learned"`) — ACT neural network policy inference
@@ -21,12 +76,17 @@ Physical skill subtypes:
 ### Directory structure of a physical skill
 ```
 pick-socks/
-├── metadata.json                    ← skill definition (name, type, execution config)
+├── metadata.json                    ← skill definition (name, type, execution config) — created by skills_action_server
 └── data/
-    ├── dataset_metadata.json        ← recording metadata (episode count, timestamps)
+    ├── dataset_metadata.json        ← recording metadata (episode count, timestamps) — created by recorder_node
     ├── episode_0.h5
     └── episode_1.h5
 ```
+
+### Ownership boundaries
+- **skills_action_server** owns `metadata.json` (creation, reading for skill discovery)
+- **recorder_node** owns `data/` subdirectory (`dataset_metadata.json` + episode H5 files)
+- **training_node** owns run output directories and `.execution`/`.training_skill_id` in metadata
 
 ### Execution call chain
 ```
@@ -40,6 +100,18 @@ brain_client (LLM) → /execute_skill → skills_action_server
                                            ┌─────────┴─────────┐
                                        Learned?            Replay?
                                        Run ACT policy      Play H5 actions
+```
+
+### Physical skill creation flow (app → robot)
+```
+App (CreateSkillScreen)
+  │
+  ├─ 1. callROSService(/brain/create_physical_skill, { name: "Pick Socks" })
+  │     → skills_action_server creates ~/skills/pick-socks/metadata.json
+  │     → returns { success, skill_directory: "/home/user/skills/pick-socks" }
+  │
+  └─ 2. callROSService(/brain/recorder/activate_physical_primitive, { task_directory: "/home/user/skills/pick-socks" })
+        → recorder_node activates recording for that directory
 ```
 
 ---
@@ -104,11 +176,12 @@ local/my-custom-skill        →  ~/skills/my-custom-skill.py
 | `/execute_skill` | `ExecuteSkill` | brain_client → skills_action_server | `skill_id` | **ID** (`user/name`) | Was `skill_type` (bare name). skills_action_server resolves to path internally |
 | `/behavior/execute` | `ExecuteBehavior` | skills_action_server → behavior_server | `skill_dir` | **Absolute path** | Was `behavior_name`. Internal interface — skills_action_server already knows the path, just pass it through. Fixes the ~/skills vs ~/innate-os/skills bug |
 
-### Services — Skill Discovery & Reload
+### Services — Skill Creation & Discovery
 
 | Interface | Type | Server | Param | Format | Notes |
 |-----------|------|--------|-------|--------|-------|
-| `/brain/get_available_skills` | `GetAvailableSkills` | skills_action_server | *(returns list)* | Response includes **id**, **name**, **abs path** per skill | Replaces the old `GetAvailablePrimitives` (already removed from code, only in old logs) |
+| `/brain/create_physical_skill` | `CreatePhysicalSkill` | skills_action_server | `name` | Display name | **NEW.** Creates dir + `metadata.json` under `~/skills/`. Returns `success`, `message`, `skill_directory` (abs path). Converts display name to kebab-case for directory name. |
+| `/brain/get_available_skills` | `GetAvailableSkills` | skills_action_server | *(returns list)* | Response includes **name**, **type**, **directory** (abs path), **episode_count** per skill | Physical skills include `directory` field; code skills do not |
 | `/brain/reload_primitives` | `Trigger` | skills_action_server | *(none)* | No change | Reloads all skills from disk |
 | `/brain/reload_skills` | `ReloadSkillsAgents` | skills_action_server | `skills[]` | **IDs** | Was bare names |
 | `/brain/reload_skills_agents` | `ReloadSkillsAgents` | brain_client | `skills[]` | **IDs** | Was bare names. Forwards to `/brain/reload_skills` |
@@ -118,11 +191,9 @@ local/my-custom-skill        →  ~/skills/my-custom-skill.py
 
 | Interface | Type | Param | Format | Notes |
 |-----------|------|-------|--------|-------|
-| `brain/recorder/new_physical_primitive` | `ManipulationTask` | `skill_id`, `name` | **ID** + optional display name | Was `task_name` + `task_directory`. ID must be `local/` or `innate/`. If only name given, derive ID as `local/<sanitized_name>`. If only ID given, name defaults to skill_name portion. Recorder resolves ID → abs path and creates the directory |
-| `brain/recorder/get_task_metadata` | `GetTaskMetadata` | `skill_id` | **ID** | Was `task_directory` (abs path). Recorder resolves internally |
-| `brain/recorder/update_task_metadata` | `UpdateTaskMetadata` | `skill_id` | **ID** | Was `task_directory` |
-| `brain/recorder/load_episode` | `LoadEpisode` | `skill_id`, `episode_id` | **ID** + int | Was `task_directory` + int |
-| `brain/recorder/get_task_metadata_list` | `GetTaskMetadataList` | *(none)* | No change | Returns all. Response should include **id** per task |
+| `brain/recorder/activate_physical_primitive` | `ActivateManipulationTask` | `task_directory` | **Absolute path** | Activates recording for an existing skill directory. Does NOT create the directory or `metadata.json` — that's done by `create_physical_skill` first. |
+| `brain/recorder/get_task_metadata` | `GetTaskMetadata` | `task_directory` | **Absolute path** | Returns enriched dataset metadata (episodes, timesteps, etc.) from `dataset_metadata.json` |
+| `brain/recorder/load_episode` | `LoadEpisode` | `task_directory`, `episode_id` | **Absolute path** + int | Loads an episode for replay |
 | `brain/recorder/new_episode` | `Trigger` | *(none)* | No change | Uses active task |
 | `brain/recorder/save_episode` | `Trigger` | *(none)* | No change | |
 | `brain/recorder/cancel_episode` | `Trigger` | *(none)* | No change | |
@@ -144,8 +215,8 @@ local/my-custom-skill        →  ~/skills/my-custom-skill.py
 
 | Topic | Type | Publisher | Fields | Notes |
 |-------|------|----------|--------|-------|
-| `/brain/recorder/status` | `RecorderStatus` | recorder_node | `skill_id`, `episode_number`, `status` | Was `current_task_name`. Change to **ID** |
-| `/brain/recorder/replay_status` | `ReplayStatus` | recorder_node | `skill_id`, `episode_id`, etc. | Was `task_name`. Change to **ID** |
+| `/brain/recorder/status` | `RecorderStatus` | recorder_node | `task_directory`, `episode_number`, `status` | Uses absolute path, not skill ID |
+| `/brain/recorder/replay_status` | `ReplayStatus` | recorder_node | `task_directory`, `episode_id`, etc. | Uses absolute path |
 | `~/job_statuses` | `TrainingJobList` | training_node | `training_skill_id`, `skill_name`, `skill_dir` | `training_skill_id` is the cloud server's UUID, separate from the local skill ID. `skill_dir` is the abs path. No change needed |
 
 ### Internal interfaces (not on ROS)
@@ -156,19 +227,62 @@ local/my-custom-skill        →  ~/skills/my-custom-skill.py
 | `register_primitives_and_directive` | brain_client → websocket | Each primitive includes **id**, **name** | LLM sees both; uses ID in tool calls |
 | Hot reload watcher | brain_client | Maps file changes to **IDs** | Derives `innate/<stem>` or `local/<stem>` based on which directory the file is in |
 
-### Unused / To Remove
+### Removed
 
 | Interface | Status |
 |-----------|--------|
-| `GetAvailablePrimitives.srv` | Already removed from code (only in old zenoh logs) |
-| `GetAvailableBehaviors.srv` | Definition exists but no node uses it — **delete** |
-| `/policy/execute` action | Legacy hardcoded inference node — **not launched in production** |
+| `GetAvailablePrimitives.srv` | Removed (only in old zenoh logs) |
+| `GetAvailableBehaviors.srv` | Removed from CMakeLists (file never existed on disk) |
+| `/policy/execute` action | Legacy hardcoded inference node — not launched in production |
+| `get_task_metadata_list` service | **Removed from recorder_node.** App now uses `get_available_skills` (skills_action_server) for the skill list and `get_task_metadata` for per-skill episode data. |
+| `update_task_metadata` service | **Removed from recorder_node.** metadata.json is owned by skills_action_server, not recorder. |
+| `skill_utils.cpp` / `skill_utils.hpp` | **Deleted.** ID↔path resolution functions (`validate_skill_id`, `resolve_skill_directory`, `skill_id_for_directory`, `normalize_skill_name_from_display`) are no longer used. Name→kebab-case conversion now lives in skills_action_server (Python). |
+| `ManipulationTask.srv` | **Renamed** to `ActivateManipulationTask.srv`. Request changed from `{skill_id, name, task_description, mobile_task}` to just `{task_directory}`. |
 
 ---
+
+## Changes Implemented
+
+Summary of the refactoring that was actually implemented (vs. the original design above):
+
+### Key design decision: directories instead of IDs on ROS interfaces
+
+The original design proposed using `skill_id` (e.g. `local/pick-socks`) on all recorder_node interfaces. The actual implementation uses **absolute directory paths** instead. Rationale:
+- Recorder only needs the path — it never resolves IDs
+- Skills_action_server already knows the path from `get_available_skills`
+- Fewer moving parts; no ID↔path resolution needed in C++
+
+### What changed
+
+**Skill creation split into two steps:**
+- `create_physical_skill` (skills_action_server, Python) — creates directory + `metadata.json`, returns abs path
+- `activate_physical_primitive` (recorder_node, C++) — activates recording at a given directory path
+
+**Recorder node simplified:**
+- Only owns `data/` subdirectory: `dataset_metadata.json` + episode H5 files
+- No longer creates `metadata.json`, no longer resolves skill IDs
+- Removed services: `get_task_metadata_list`, `update_task_metadata`
+- Removed: `skill_utils` dependency, `additional_skill_directories`, `reload_skills` client calls from `end_task`
+- `RecorderStatus` topic publishes `task_directory` (abs path) instead of `skill_id`
+
+**TaskManager simplified:**
+- Removed: `start_new_task`, `resume_task`, `create_primitive_metadata`, `get_all_tasks_summary`, `update_task_metadata_by_directory`, `add_skill_directory`
+- Kept: `start_new_task_at_directory`, `resume_task_at_directory`, `add_episode`, `end_task`, `get_task_metadata_by_directory`, `get_enriched_metadata_for_task`
+
+**App (innate-controller-app) updated:**
+- `CreateSkillScreen`: two-step flow — calls `create_physical_skill`, then `activate_physical_primitive` with returned directory
+- `PhysicalSkillScreen`: receives `directory` from navigation params, calls `getTaskMetadata(directory)` directly instead of fetching all summaries
+- `SkillsScreen`: passes `directory` from `get_available_skills` response when navigating to PhysicalSkill
+- `RobotCoreContext`: removed `getAllTasksSummary`, `updateTaskMetadata`, `fetchTaskSummaries`, `taskSummaries`, `isLoadingTaskSummaries`
+- `RecorderStatusContext`: uses `task_directory` instead of `skill_id`
+- `types/ros.ts`: `RecorderStatus.skill_id` → `task_directory`, `Skill` gained optional `directory`, `TaskSummary` dropped `skill_id`/`task_description`/`mobile_task`
+
+**Deleted files:**
+- `skill_utils.cpp`, `skill_utils.hpp` — no longer compiled or referenced
 
 ## Bugs Fixed by This Redesign
 
 1. **behavior_server only searched `$INNATE_OS_ROOT/skills/`** → now receives absolute path from skills_action_server, no path guessing
-2. **recorder_node hardcoded `~/innate-os/skills`** → resolves from ID using same logic as all other nodes
+2. **recorder_node hardcoded `~/innate-os/skills`** → now receives abs path from caller, no path resolution needed
 3. **metadata.json `name` ≠ directory name** → ID is always based on directory name; `name` is display-only, never used for path resolution
 4. **recorder.yaml `data_directory: "~/skills"` vs behavior_server `~/innate-os/skills/`** → both resolve from ID; `local/` → `~/skills/`, `innate/` → `$INNATE_OS_ROOT/skills/`

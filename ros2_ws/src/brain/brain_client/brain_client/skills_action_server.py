@@ -21,7 +21,7 @@ import rclpy
 
 # Import the action definition – ensure that it is built and available.
 from brain_messages.action import ExecuteBehavior, ExecuteSkill
-from brain_messages.srv import GetAvailableSkills
+from brain_messages.srv import GetAvailableSkills, CreatePhysicalSkill
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.node import Node
@@ -160,6 +160,13 @@ class SkillsActionServer(Node):
         # Create service for reloading skills
         self._reload_srv = self.create_service(Trigger, "/brain/reload_primitives", self._handle_reload_skills)
 
+        # Create service for creating new physical skills
+        self._create_physical_skill_srv = self.create_service(
+            CreatePhysicalSkill,
+            "/brain/create_physical_skill",
+            self._handle_create_physical_skill,
+        )
+
         # Create service for selective skill reload (PEAS-only, called by brain_client)
         from brain_messages.srv import ReloadSkillsAgents
         self._reload_skills_srv = self.create_service(
@@ -236,6 +243,70 @@ class SkillsActionServer(Node):
         except Exception as e:
             response.success = False
             response.message = f"Failed to reload skills: {e}"
+        return response
+
+    def _handle_create_physical_skill(self, request, response):
+        """Create a new physical (learned) skill directory with metadata.json.
+
+        Creates the skill under the user skills directory (~/skills/) with a
+        kebab-case directory name derived from the display name.
+        """
+        try:
+            display_name = request.name.strip()
+            if not display_name:
+                response.success = False
+                response.message = "Skill name cannot be empty."
+                response.skill_directory = ""
+                return response
+
+            # Convert display name to kebab-case directory name
+            import re
+            dir_name = re.sub(r'[^a-zA-Z0-9\s-]', '', display_name)
+            dir_name = re.sub(r'\s+', '-', dir_name).strip('-').lower()
+            if not dir_name:
+                response.success = False
+                response.message = f"Cannot derive valid directory name from '{display_name}'."
+                response.skill_directory = ""
+                return response
+
+            # Create under user skills directory (last in the list, ~/skills)
+            user_skills_dir = self._skills_directories[-1]
+            skill_dir = os.path.join(user_skills_dir, dir_name)
+
+            if os.path.exists(os.path.join(skill_dir, "metadata.json")):
+                self.get_logger().info(f"Skill '{display_name}' already exists at {skill_dir}. Returning existing directory.")
+                response.success = True
+                response.message = f"Skill already exists at {skill_dir}."
+                response.skill_directory = skill_dir
+                return response
+
+            os.makedirs(skill_dir, exist_ok=True)
+
+            metadata = {
+                "name": display_name,
+                "type": "learned",
+                "guidelines": "",
+                "guidelines_when_running": "",
+                "inputs": {},
+                "execution": {},
+            }
+            metadata_path = os.path.join(skill_dir, "metadata.json")
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=4)
+
+            self.get_logger().info(f"Created physical skill '{display_name}' at {skill_dir}")
+
+            # Reload so skills_action_server picks it up immediately
+            self._reload_skills()
+
+            response.success = True
+            response.message = f"Created skill '{display_name}' at {skill_dir}."
+            response.skill_directory = skill_dir
+        except Exception as e:
+            self.get_logger().error(f"Error creating physical skill: {e}")
+            response.success = False
+            response.message = f"Failed to create skill: {e}"
+            response.skill_directory = ""
         return response
 
     def _handle_reload_skills_agents(self, request, response):

@@ -1,0 +1,8 @@
+# Create a new physical (learned) skill directory with metadata.json
+# Request
+string name               # Display name for the skill (e.g. "Pick Up Socks")
+---
+# Response
+bool success
+string message
+string skill_directory     # Absolute path to the created skill directory
