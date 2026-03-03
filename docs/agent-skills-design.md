@@ -120,7 +120,7 @@ App (CreateSkillScreen)
 
 Skill IDs follow the pattern: `<user>/<skill_name>` matching `[a-z0-9_-]+/[a-z0-9_-]+`.
 
-- **Code skill ID**: `<user>/<filename_without_py>` (e.g. `innate/navigate_to_position`)
+- **Code skill ID**: `<user>/<filename_without_py>` (e.g. `innate-os/navigate_to_position`)
 - **Physical skill ID**: `<user>/<directory_name>` (e.g. `local/pick-socks`)
 
 ### Character rules
@@ -130,7 +130,7 @@ Skill IDs follow the pattern: `<user>/<skill_name>` matching `[a-z0-9_-]+/[a-z0-
   - Either `name` (display name) or `id` must be provided
   - If `name` is not provided → `name = skill_name` portion of the ID
   - If `id` is not provided → `skill_name` derived from name: spaces → dashes, all other special chars removed, uppercase → lowercase
-  - `id` must start with `innate/` or `local/`
+  - `id` must start with `innate-os/` or `local/`
 - The `name` field in `metadata.json` is the human-readable display name (free-form text, not constrained)
 - The directory name on disk **is** the `<skill_name>` portion of the ID
 
@@ -139,20 +139,20 @@ Skill IDs follow the pattern: `<user>/<skill_name>` matching `[a-z0-9_-]+/[a-z0-
 | User | Disk location | Description |
 |------|--------------|-------------|
 | `local` | `~/skills/<skill_name>/` | User-created skills (recording, custom code) |
-| `innate` | `$INNATE_OS_ROOT/skills/<skill_name>/` | Built-in skills shipped with innate-os |
+| `innate-os` | `$INNATE_OS_ROOT/skills/<skill_name>/` | Built-in skills shipped with innate-os |
 
 No other users are valid yet. Future: cloud-synced skills from other users.
 
 ### ID ↔ Path resolution
 
 ```
-innate/<skill_name>  →  $INNATE_OS_ROOT/skills/<skill_name>/
+innate-os/<skill_name>  →  $INNATE_OS_ROOT/skills/<skill_name>/
 local/<skill_name>   →  ~/skills/<skill_name>/
 ```
 
 For code skills, the "directory" is the parent directory containing the `.py` file:
 ```
-innate/navigate_to_position  →  $INNATE_OS_ROOT/skills/navigate_to_position.py
+innate-os/navigate_to_position  →  $INNATE_OS_ROOT/skills/navigate_to_position.py
 local/my-custom-skill        →  ~/skills/my-custom-skill.py
 ```
 
@@ -161,8 +161,8 @@ local/my-custom-skill        →  ~/skills/my-custom-skill.py
 | ID | Display Name | Path |
 |----|-------------|------|
 | `local/pick-socks` | Pick Socks | `~/skills/pick-socks/` |
-| `innate/wave` | wave | `$INNATE_OS_ROOT/skills/wave/` |
-| `innate/navigate_to_position` | navigate_to_position | `$INNATE_OS_ROOT/skills/navigate_to_position.py` |
+| `innate-os/wave` | wave | `$INNATE_OS_ROOT/skills/wave/` |
+| `innate-os/navigate_to_position` | navigate_to_position | `$INNATE_OS_ROOT/skills/navigate_to_position.py` |
 | `local/arm-circle` | Arm Circle | `~/skills/arm-circle/` |
 
 ---
@@ -225,7 +225,7 @@ local/my-custom-skill        →  ~/skills/my-custom-skill.py
 |-----------|-------|-------|-------|
 | Agent `get_skills()` | agent Python classes | Returns **IDs** | Was bare names. Agents declare which skills they can use by ID |
 | `register_primitives_and_directive` | brain_client → websocket | Each primitive includes **id**, **name** | LLM sees both; uses ID in tool calls |
-| Hot reload watcher | brain_client | Maps file changes to **IDs** | Derives `innate/<stem>` or `local/<stem>` based on which directory the file is in |
+| Hot reload watcher | brain_client | Maps file changes to **IDs** | Derives `innate-os/<stem>` or `local/<stem>` based on which directory the file is in |
 
 ### Removed
 
@@ -285,4 +285,4 @@ The original design proposed using `skill_id` (e.g. `local/pick-socks`) on all r
 1. **behavior_server only searched `$INNATE_OS_ROOT/skills/`** → now receives absolute path from skills_action_server, no path guessing
 2. **recorder_node hardcoded `~/innate-os/skills`** → now receives abs path from caller, no path resolution needed
 3. **metadata.json `name` ≠ directory name** → ID is always based on directory name; `name` is display-only, never used for path resolution
-4. **recorder.yaml `data_directory: "~/skills"` vs behavior_server `~/innate-os/skills/`** → both resolve from ID; `local/` → `~/skills/`, `innate/` → `$INNATE_OS_ROOT/skills/`
+4. **recorder.yaml `data_directory: "~/skills"` vs behavior_server `~/innate-os/skills/`** → both resolve from ID; `local/` → `~/skills/`, `innate-os/` → `$INNATE_OS_ROOT/skills/`

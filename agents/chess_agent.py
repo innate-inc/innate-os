@@ -16,7 +16,15 @@ class ChessAgent(Agent):
 
     def get_skills(self) -> list[str]:
         """Return piece manipulation skills."""
-        return ["pick_up_piece_simple", "detect_opponent_move", "update_chess_state", "recalibrate_manual", "arm_utils", "reset_chess_game", "head_emotion"]
+        return [
+            "innate-os/pick_up_piece_simple",
+            "innate-os/detect_opponent_move",
+            "innate-os/update_chess_state",
+            "innate-os/recalibrate_manual",
+            "innate-os/arm_utils",
+            "innate-os/reset_chess_game",
+            "innate-os/head_emotion",
+        ]
 
     def get_inputs(self) -> list[str]:
         """Enable microphone input."""
