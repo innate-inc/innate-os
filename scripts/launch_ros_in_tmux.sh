@@ -3,7 +3,7 @@
 
 SESSION_NAME="ros_nodes"
 ROS_WS_PATH="$INNATE_OS_ROOT/ros2_ws"
-DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh"
+DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/scripts/rmw/setup_dds.zsh"
 
 # ROS launch commands grouped into windows (pipe-delimited for 2 panes)
 ROS_COMMAND_GROUPS=(
