@@ -565,13 +565,13 @@ fi
 # 9. Setup DDS configuration
 # -----------------------------------------------------------------------------
 log "Setting up DDS configuration..."
-if [ -d "$REPO_DIR/dds" ]; then
-    # Ensure DDS scripts are executable
-    chmod +x "$REPO_DIR/dds"/*.zsh 2>/dev/null || true
+if [ -d "$REPO_DIR/scripts/rmw" ]; then
+    # Ensure RMW scripts are executable
+    chmod +x "$REPO_DIR/scripts/rmw"/*.zsh 2>/dev/null || true
 
     # Generate initial DDS config (will be regenerated on shell login)
-    if [ -f "$REPO_DIR/dds/setup_dds.zsh" ]; then
-        log "  DDS setup script ready at $REPO_DIR/dds/setup_dds.zsh"
+    if [ -f "$REPO_DIR/scripts/rmw/setup_dds.zsh" ]; then
+        log "  DDS setup script ready at $REPO_DIR/scripts/rmw/setup_dds.zsh"
     fi
 fi
 
