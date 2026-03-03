@@ -68,9 +68,9 @@ RUN sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="agnoster"/' /root/.zshrc
 RUN mkdir -p /root/.ssh && \
     ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
 
-# 8. Copy your entire innate-os directory (including dds, ros2_ws, .git for version info)
+# 8. Copy your entire innate-os directory (including scripts/rmw, ros2_ws, .git for version info)
 COPY ros2_ws /root/innate-os/ros2_ws
-COPY dds /root/innate-os/dds
+COPY scripts/rmw /root/innate-os/scripts/rmw
 COPY scripts /root/innate-os/scripts
 
 # For version tracking, git needs to be present
@@ -83,7 +83,7 @@ RUN source /opt/ros/humble/setup.zsh && colcon build
 
 #
 # 10. Patch the root .zshrc to set up your environment the same way
-#    "setup_dds.zsh" does. This means:
+#    "scripts/rmw/setup_dds.zsh" does. This means:
 #      - Source ROS 2
 #      - Source your workspace
 #      - Export environment variables for RMW + discovery
@@ -104,7 +104,7 @@ source /opt/ros/humble/setup.zsh\n\
 source /root/innate-os/ros2_ws/install/setup.zsh\n\
 \n\
 # Source the DDS setup\n\
-source /root/innate-os/dds/setup_dds.zsh\n\
+source /root/innate-os/scripts/rmw/setup_dds.zsh\n\
 \n\
 # Set INNATE_OS_ROOT environment variable\n\
 export INNATE_OS_ROOT=/root/innate-os\n\
