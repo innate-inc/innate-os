@@ -301,6 +301,23 @@ def download(ctx: click.Context, skill_dir: str, run_id: int, dest: str | None) 
     _print_progress(gen)
 
 
+# ── Fetch Input Data ────────────────────────────────────────────────
+
+
+@cli.command("fetch-data")
+@click.argument("skill_dir", type=click.Path(exists=True, file_okay=False), default=".")
+@click.option("--dest", type=click.Path(), default=None,
+              help="Destination dir (default: SKILL_DIR/data)")
+@click.pass_context
+def fetch_data(ctx: click.Context, skill_dir: str, dest: str | None) -> None:
+    """Download the input training data files for a skill."""
+    manager = _make_manager(ctx)
+    skill_id = _resolve_skill_id(skill_dir)
+    dest = dest or str(Path(skill_dir) / "data")
+    gen = manager.fetch_data(skill_id, dest)
+    _print_progress(gen)
+
+
 # ── List Skills ─────────────────────────────────────────────────────
 
 

@@ -19,7 +19,7 @@ from typing import Any, Generator
 
 from .client import APIError, OrchestratorClient
 from .compression import cleanup_compressed
-from .downloader import download_results
+from .downloader import download_results, download_skill_data, download_files
 from .types import (
     ClientConfig,
     RunInfo,
@@ -367,7 +367,6 @@ class SkillManager:
 
         yield from download_results(
             client=self.client,
-            config=self.config,
             skill_id=skill_id,
             run_id=run_id,
             dest_dir=dest,
@@ -450,6 +449,24 @@ class SkillManager:
         )
 
         return {"checkpoint": checkpoint, "stats_file": stats_file}
+
+    # ── Fetch input data ────────────────────────────────────────────
+
+    def fetch_data(
+        self,
+        skill_id: str,
+        dest_dir: str | Path,
+    ) -> Generator[ProgressUpdate, None, None]:
+        """Download the input training data files for a skill.
+
+        Files are saved into *dest_dir*.  ``.zst`` files are auto-decompressed.
+        Yields :class:`ProgressUpdate` for each file downloaded.
+        """
+        yield from download_skill_data(
+            client=self.client,
+            skill_id=skill_id,
+            dest_dir=Path(dest_dir),
+        )
 
     # ── Cleanup ─────────────────────────────────────────────────────
 
