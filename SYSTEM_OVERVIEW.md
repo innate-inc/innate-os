@@ -57,7 +57,7 @@ Below is a brief description of each major piece. In the repository, these are l
 2. **`maurice_bringup`**: Launch files and nodes for the real robot (UART drivers, battery manager).
 3. **`maurice_sim_bringup`**: Launch files and nodes for simulation (TCP manager or direct rosbridge).
 4. **`brain_client`**: A node that connects to the cloud agent via WebSocket. This sends images, receives commands, etc.
-5. **`dds/`** scripts: Facilitates DDS discovery server usage (setup scripts, XML templates).
+5. **`scripts/rmw/`**: Zenoh/RMW setup scripts (`setup_dds.zsh`, `start_zenoh_router.zsh`).
 
 ### Cloud Agent
 
@@ -70,7 +70,7 @@ A remote server or application that:
 
 - We can run a **Zenoh Router** (`rmw_zenohd`), so that distributed ROS 2 nodes find each other on the network without heavy multicast.
 
-- The environment variables in `dds/setup_dds.sh` and `start_zenoh_router.zsh` control how Zenoh is configured.
+- The environment variables in `scripts/rmw/setup_dds.zsh` and `scripts/rmw/start_zenoh_router.zsh` control how Zenoh is configured.
 
 - You can use `start_zenoh_router.zsh {ip/hostname}` to connect your local ROS instance to the robot.
 
@@ -107,7 +107,7 @@ Below is a summary of the main ROS 2 topics and services used. They are standard
 
 Every ROS node contains a Zenoh session which connects to `localhost:7447` by default. The Zenoh Router must be running at this address.
 
-This behavior is controlled by scripts in the `dds` directory.
+This behavior is controlled by scripts in the `scripts/rmw/` directory.
 
 ---
 
