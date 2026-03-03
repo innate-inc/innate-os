@@ -5,7 +5,7 @@
 
 SESSION_NAME="arm_debug"
 ROS_WS_PATH="$INNATE_OS_ROOT/ros2_ws"
-DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/dds/setup_dds.zsh"
+DDS_SETUP_SCRIPT="$INNATE_OS_ROOT/scripts/rmw/setup_dds.zsh"
 PID_HOT_RELOAD="$ROS_WS_PATH/src/maurice_bot/maurice_arm/maurice_arm/pid_hot_reload.py"
 ARM_GOTO_LOOP="$INNATE_OS_ROOT/scripts/debug/arm_goto_loop.py"
 
