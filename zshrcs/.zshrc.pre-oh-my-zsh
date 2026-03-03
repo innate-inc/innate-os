@@ -33,7 +33,7 @@ zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,cmd'
 
 # ROS2 and DDS setup
 source /opt/ros/humble/setup.zsh
-source "$INNATE_OS_ROOT/dds/setup_dds.zsh"
+source "$INNATE_OS_ROOT/scripts/rmw/setup_dds.zsh"
 
 # Automatically source ROS2 workspace if available
 WORKSPACE="$INNATE_OS_ROOT/ros2_ws"
