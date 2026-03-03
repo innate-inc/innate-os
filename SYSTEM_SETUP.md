@@ -66,7 +66,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
         → Should mention only `default-wifi-powersave-off.conf`
 
 3.  **Update Scripts:**
-    *   The script `innate-os/dds/setup_dds.zsh` has already been modified to dynamically detect the IP address.
+    *   The script `innate-os/scripts/rmw/setup_dds.zsh` has already been modified to dynamically detect the IP address.
     *   The script `innate-os/ros2_ws/src/maurice_bot/maurice_bt_provisioner/maurice_bt_provisioner/simple_bt_service.py` has been modified to detect IP changes and call the restart helper script.
 
 4.  **Place Helper Scripts:**
@@ -159,7 +159,7 @@ When the BLE service connects the robot to a new network and detects an IP addre
 *   **Script Not Found:** Double-check the paths in the `.service` files (`ExecStart=`) and the path used in `simple_bt_service.py` (`RESTART_SCRIPT_PATH`). Verify the scripts in `/usr/local/bin` are executable (`chmod +x`).
 *   **ROS Nodes Don't Start:** Check `journalctl -u ros-app.service`. Ensure environment sourcing works (`setup_dds.zsh`, ROS workspace `setup.zsh`). Verify the `ROS_LAUNCH_PACKAGE` and `ROS_LAUNCH_FILE` in `launch_ros_in_tmux.sh` are correct. Check permissions on the ROS workspace files.
 *   **Tmux Session Issues:** Make sure `tmux` is installed. Check logs (`journalctl -u ros-app.service`). Try running `launch_ros_in_tmux.sh` manually as the correct user to debug.
-*   **IP Address Not Updating:** Verify `hostname -I` gives the expected IP in `setup_dds.zsh`. Check `journalctl -u ble-provisioner.service` to see if the IP change is detected and the restart script is called. 
+*   **IP Address Not Updating:** Verify `hostname -I` gives the expected IP in `scripts/rmw/setup_dds.zsh`. Check `journalctl -u ble-provisioner.service` to see if the IP change is detected and the restart script is called. 
 *   **Unable to read the topics / discovery server seemingly not working:** Make sure you import the .zshrc properly and if you zsh with oh-my-zsh, make sure you import the right .zshrc (pre-omz) like in the `zhrcs` folder. The .zshrc there imports the thing that has the right ros2 workspace stuff. TODO: Make a good .zshrc for everyone seriously. Not this janky stuff.
 *   **No Audio Output (MAX98357A I2S Amp):** If you're using the MAX98357A speaker and can't hear audio:
     1. Run `sudo /opt/nvidia/jetson-io/jetson-io.py` to configure GPIO pins
