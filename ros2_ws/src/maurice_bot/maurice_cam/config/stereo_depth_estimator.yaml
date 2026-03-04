@@ -20,7 +20,7 @@ main_camera_driver:
     gain: -1
     disable_auto_exposure: false
     default_gain: 110
-    enable_auto_exposure: false
+    enable_auto_exposure: true
     target_brightness: 128.0
     ae_kp: 0.8
     auto_exposure_update_interval: 3
