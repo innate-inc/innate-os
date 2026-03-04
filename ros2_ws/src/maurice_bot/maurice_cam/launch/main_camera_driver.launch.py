@@ -95,12 +95,6 @@ def generate_launch_description():
         description='Manual gain value (-1 = use current value, 0-255)'
     )
     
-    disable_auto_exposure_arg = DeclareLaunchArgument(
-        'disable_auto_exposure',
-        default_value='false',
-        description='Disable automatic exposure (true/false)'
-    )
-    
     default_gain_arg = DeclareLaunchArgument(
         'default_gain',
         default_value='110',
@@ -108,10 +102,10 @@ def generate_launch_description():
     )
     
     # Auto exposure parameters
-    enable_auto_exposure_arg = DeclareLaunchArgument(
-        'enable_auto_exposure',
-        default_value='false',
-        description='Enable custom auto exposure algorithm (true/false)'
+    auto_exposure_mode_arg = DeclareLaunchArgument(
+        'auto_exposure_mode',
+        default_value='0',
+        description='Auto exposure mode: 0=hardware AE, 1=custom PID AE, 2=manual'
     )
     
     target_brightness_arg = DeclareLaunchArgument(
@@ -160,9 +154,8 @@ def generate_launch_description():
                 'compressed_frame_interval': LaunchConfiguration('compressed_frame_interval'),
                 'exposure': LaunchConfiguration('exposure'),
                 'gain': LaunchConfiguration('gain'),
-                'disable_auto_exposure': LaunchConfiguration('disable_auto_exposure'),
                 'default_gain': LaunchConfiguration('default_gain'),
-                'enable_auto_exposure': LaunchConfiguration('enable_auto_exposure'),
+                'auto_exposure_mode': LaunchConfiguration('auto_exposure_mode'),
                 'target_brightness': LaunchConfiguration('target_brightness'),
                 'ae_kp': LaunchConfiguration('ae_kp'),
                 'auto_exposure_update_interval': LaunchConfiguration('auto_exposure_update_interval'),
@@ -189,9 +182,8 @@ def generate_launch_description():
         compressed_frame_interval_arg,
         exposure_arg,
         gain_arg,
-        disable_auto_exposure_arg,
         default_gain_arg,
-        enable_auto_exposure_arg,
+        auto_exposure_mode_arg,
         target_brightness_arg,
         ae_kp_arg,
         auto_exposure_update_interval_arg,

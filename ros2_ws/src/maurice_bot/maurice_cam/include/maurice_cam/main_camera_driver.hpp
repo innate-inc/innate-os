@@ -166,6 +166,15 @@ class MainCameraDriver : public rclcpp::Node
 {
 public:
   /**
+   * @brief Auto exposure mode selection
+   */
+  enum class AutoExposureMode : int {
+    HARDWARE = 0,   // Camera built-in AE (aperture priority)
+    CUSTOM_PID = 1, // Custom PID controller (manual V4L2 mode)
+    MANUAL = 2,     // Pure manual, no AE
+  };
+
+  /**
    * @brief Constructor
    * @param options Node options for component composition
    */
@@ -298,12 +307,11 @@ private:
   bool v4l2_controls_initialized_{false};
   int exposure_setting_{-1};
   int gain_setting_{-1};
-  bool disable_auto_exposure_{false};
   int default_gain_param_{110};
 
   // Auto exposure control
   AutoExposureController auto_exposure_controller_;
-  bool enable_auto_exposure_{true};
+  AutoExposureMode auto_exposure_mode_{AutoExposureMode::HARDWARE};
   double target_brightness_{128.0};
   double ae_kp_{0.8};
   int auto_exposure_update_interval_{3};  // Update every N frames (10Hz for 30Hz camera)

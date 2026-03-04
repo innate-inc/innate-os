@@ -27,11 +27,10 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   this->declare_parameter<bool>("publish_stereo", false);  // Combined stereo image for legacy compatibility
   this->declare_parameter<int>("exposure", -1);  // -1 means use current value
   this->declare_parameter<int>("gain", -1);      // -1 means use current value
-  this->declare_parameter<bool>("disable_auto_exposure", false);
   this->declare_parameter<int>("default_gain", 110);  // Default gain for auto-exposure mode
   
   // Auto exposure parameters
-  this->declare_parameter<bool>("enable_auto_exposure", true);
+  this->declare_parameter<int>("auto_exposure_mode", 0);
   this->declare_parameter<double>("target_brightness", 128.0);
   this->declare_parameter<double>("ae_kp", 0.8);
   this->declare_parameter<int>("auto_exposure_update_interval", 3);
@@ -56,11 +55,10 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   // Get V4L2 control parameters
   exposure_setting_ = this->get_parameter("exposure").as_int();
   gain_setting_ = this->get_parameter("gain").as_int();
-  disable_auto_exposure_ = this->get_parameter("disable_auto_exposure").as_bool();
   default_gain_param_ = this->get_parameter("default_gain").as_int();
   
   // Get auto exposure parameter values
-  enable_auto_exposure_ = this->get_parameter("enable_auto_exposure").as_bool();
+  auto_exposure_mode_ = static_cast<AutoExposureMode>(this->get_parameter("auto_exposure_mode").as_int());
   target_brightness_ = this->get_parameter("target_brightness").as_double();
   ae_kp_ = this->get_parameter("ae_kp").as_double();
   auto_exposure_update_interval_ = this->get_parameter("auto_exposure_update_interval").as_int();
@@ -275,36 +273,39 @@ bool MainCameraDriver::initializeCamera()
   if (!initializeV4L2Controls()) {
     RCLCPP_WARN(this->get_logger(), "Failed to initialize V4L2 controls, using default settings");
   } else {
-    // Initialize auto exposure controller if enabled
-    if (enable_auto_exposure_ && !disable_auto_exposure_) {
-      auto_exposure_controller_.initialize(exposure_min_, exposure_max_, 
-                                         target_brightness_, ae_kp_);
-      RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
-      RCLCPP_DEBUG(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
-      RCLCPP_DEBUG(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
-      RCLCPP_DEBUG(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)", 
-                  auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
-    }
-    // Apply parameter settings if specified
-    if (disable_auto_exposure_ || enable_auto_exposure_) {
-      // Use manual mode for either manual control or custom auto exposure
-      if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
-        if (enable_auto_exposure_) {
-          RCLCPP_DEBUG(this->get_logger(), "Disabled camera auto exposure (Manual Mode for custom AE)");
-        } else {
-          RCLCPP_DEBUG(this->get_logger(), "Disabled auto exposure (Manual Mode)");
+    // Configure V4L2 and initialize AE controller based on mode
+    switch (auto_exposure_mode_) {
+      case AutoExposureMode::HARDWARE:
+        // Camera built-in AE (aperture priority) — no PID, reset gain to default
+        if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
+          RCLCPP_DEBUG(this->get_logger(), "AE mode: HARDWARE (aperture priority)");
+          if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
+            current_gain_ = default_gain_param_;
+            RCLCPP_DEBUG(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
+          }
         }
-      }
-    } else {
-      // Use camera's built-in auto exposure
-      if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_APERTURE_PRIORITY)) {
-        RCLCPP_DEBUG(this->get_logger(), "Enabled camera auto exposure (Aperture Priority Mode)");
-        // Reset gain to default when switching to auto-exposure
-        if (setV4L2Control(V4L2_CID_GAIN, default_gain_param_)) {
-          current_gain_ = default_gain_param_;
-          RCLCPP_DEBUG(this->get_logger(), "Reset gain to default: %d", default_gain_param_);
+        break;
+
+      case AutoExposureMode::CUSTOM_PID:
+        // Custom PID AE — set V4L2 manual mode, initialize and run PID controller
+        if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
+          RCLCPP_DEBUG(this->get_logger(), "AE mode: CUSTOM_PID (manual V4L2 + PID controller)");
         }
-      }
+        auto_exposure_controller_.initialize(exposure_min_, exposure_max_,
+                                             target_brightness_, ae_kp_);
+        RCLCPP_DEBUG(this->get_logger(), "Auto exposure controller initialized:");
+        RCLCPP_DEBUG(this->get_logger(), "  Target brightness: %.1f", target_brightness_);
+        RCLCPP_DEBUG(this->get_logger(), "  Proportional gain: Kp=%.2f", ae_kp_);
+        RCLCPP_DEBUG(this->get_logger(), "  Update interval: every %d frames (%.1f Hz)",
+                    auto_exposure_update_interval_, fps_ / auto_exposure_update_interval_);
+        break;
+
+      case AutoExposureMode::MANUAL:
+        // Pure manual — set V4L2 manual mode, no PID controller
+        if (setV4L2Control(V4L2_CID_EXPOSURE_AUTO, V4L2_EXPOSURE_MANUAL)) {
+          RCLCPP_DEBUG(this->get_logger(), "AE mode: MANUAL (pure manual, no PID)");
+        }
+        break;
     }
     
     if (exposure_setting_ >= 0) {
@@ -509,7 +510,7 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
   }
   
   // Apply auto exposure control (frame is already rotated and downscaled)
-  if (enable_auto_exposure_ && !disable_auto_exposure_ && v4l2_controls_initialized_) {
+  if (auto_exposure_mode_ == AutoExposureMode::CUSTOM_PID && v4l2_controls_initialized_) {
     frame_counter_++;
     if (frame_counter_ >= auto_exposure_update_interval_) {
       // Use left half of the already-downscaled frame

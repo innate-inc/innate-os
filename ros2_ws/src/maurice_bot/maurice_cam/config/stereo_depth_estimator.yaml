@@ -18,9 +18,8 @@ main_camera_driver:
     publish_stereo: false
     exposure: -1
     gain: -1
-    disable_auto_exposure: false
     default_gain: 110
-    enable_auto_exposure: false
+    auto_exposure_mode: 0  # 0=hardware AE (camera built-in), 1=custom PID AE, 2=manual (no AE)
     target_brightness: 128.0
     ae_kp: 0.8
     auto_exposure_update_interval: 3
