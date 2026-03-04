@@ -444,6 +444,23 @@ void RecorderNode::activate_physical_primitive(
         return;
     }
 
+    // Validate that the directory was previously created by /brain/create_physical_skill
+    if (!fs::is_directory(task_dir)) {
+        response->success = false;
+        RCLCPP_ERROR(this->get_logger(),
+            "task_directory '%s' does not exist. Call /brain/create_physical_skill first.",
+            task_dir.c_str());
+        return;
+    }
+    std::string metadata_path = task_dir + "/metadata.json";
+    if (!fs::exists(metadata_path)) {
+        response->success = false;
+        RCLCPP_ERROR(this->get_logger(),
+            "No metadata.json in '%s'. Call /brain/create_physical_skill first.",
+            metadata_path.c_str());
+        return;
+    }
+
     // Derive display name from directory basename
     std::string display_name = fs::path(task_dir).filename().string();
 

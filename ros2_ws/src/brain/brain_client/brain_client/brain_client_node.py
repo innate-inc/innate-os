@@ -618,6 +618,7 @@ class BrainClientNode(Node):
         self._update_gaze_tracker()
 
         self.primitive_running = None
+        self._pending_reregistration = False
         # Add a variable to store the current goal handle
         self._goal_handle = None
 
@@ -710,7 +711,21 @@ class BrainClientNode(Node):
 
         # Re-register primitives with the cloud agent server if already registered
         if hasattr(self, 'primitives_registered') and self.primitives_registered:
-            self.register_primitives_and_directive()
+            if not self.primitive_running:
+                self.register_primitives_and_directive()
+            else:
+                self.get_logger().info(
+                    "Deferring primitives re-registration — a skill is currently running"
+                )
+                self._pending_reregistration = True
+
+    def _drain_pending_reregistration(self):
+        """Re-register primitives if a re-registration was deferred during skill execution."""
+        if self._pending_reregistration:
+            self._pending_reregistration = False
+            if hasattr(self, 'primitives_registered') and self.primitives_registered:
+                self.get_logger().info("Draining deferred primitives re-registration")
+                self.register_primitives_and_directive()
 
     def _wait_for_input_manager(self, timeout_sec=5.0):
         """
@@ -1999,6 +2014,7 @@ class BrainClientNode(Node):
             self.primitive_running = None
             self._goal_handle = None
             self._resume_gaze()
+            self._drain_pending_reregistration()
             return
         # Store the goal handle for potential cancellation, using the same naming as in the example
         self._goal_handle = goal_handle
@@ -2054,6 +2070,7 @@ class BrainClientNode(Node):
                 )
         self.primitive_running = None  # Clear running state
         self._resume_gaze()  # Resume gaze after skill execution
+        self._drain_pending_reregistration()
 
         # Determine the appropriate message type based on the result
         self.get_logger().info(f"Primitive result details: {result}")

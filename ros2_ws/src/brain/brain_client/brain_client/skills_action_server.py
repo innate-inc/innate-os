@@ -119,6 +119,10 @@ class SkillsActionServer(Node):
         # Handle special case for navigation skill based on simulator mode
         self._apply_sim_swap(id_keyed)
 
+        # Lock that guards _code_skills, _physical_skills, and _in_training_skills
+        # against concurrent access from the HotReloadWatcher background thread.
+        self._skills_lock = threading.Lock()
+
         # Create code skill instances keyed by ID
         self._code_skills: dict[str, tuple[str, object]] = {}  # {id: (display_name, instance)}
         for skill_id, (display_name, skill_class, _src) in id_keyed.items():
@@ -240,8 +244,14 @@ class SkillsActionServer(Node):
         msg = AvailableSkills()
         skills = []
 
+        # Snapshot the skill dicts under lock to avoid iteration during reload.
+        with self._skills_lock:
+            code_skills_snapshot = dict(self._code_skills)
+            physical_skills_snapshot = dict(self._physical_skills)
+            in_training_skills_snapshot = dict(self._in_training_skills)
+
         # Add code skills (dict is {id: (display_name, instance)})
-        for skill_id, (display_name, skill_instance) in self._code_skills.items():
+        for skill_id, (display_name, skill_instance) in code_skills_snapshot.items():
             inputs = {}
             if hasattr(skill_instance, "execute"):
                 signature = inspect.signature(skill_instance.execute)
@@ -277,7 +287,7 @@ class SkillsActionServer(Node):
             ))
 
         # Add physical skills (ready) — dict is {id: skill_data}
-        for skill_id, physical_data in self._physical_skills.items():
+        for skill_id, physical_data in physical_skills_snapshot.items():
             metadata = physical_data["metadata"]
             episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
             skills.append(self._build_skill_info(
@@ -293,7 +303,7 @@ class SkillsActionServer(Node):
             ))
 
         # Add in-training skills — dict is {id: skill_data}
-        for skill_id, physical_data in self._in_training_skills.items():
+        for skill_id, physical_data in in_training_skills_snapshot.items():
             metadata = physical_data["metadata"]
             episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
             skills.append(self._build_skill_info(
@@ -344,22 +354,29 @@ class SkillsActionServer(Node):
         # Handle simulator mode nav swap
         self._apply_sim_swap(id_keyed)
 
-        self._code_skills = {}
+        # Build new dicts locally, then swap under lock to avoid a window
+        # where _code_skills is empty while still being populated.
+        new_code_skills: dict[str, tuple[str, object]] = {}
         for skill_id, (display_name, cls, _src) in id_keyed.items():
             try:
                 instance = cls(self.get_logger())
                 instance.node = self
                 self._inject_required_interfaces(instance)
-                self._code_skills[skill_id] = (display_name, instance)
+                new_code_skills[skill_id] = (display_name, instance)
                 self.get_logger().info(f"Reloaded code skill: {skill_id}")
             except Exception as e:
                 self.get_logger().error(f"Error instantiating {skill_id}: {e}")
 
         # Reload physical skills (from all skill directories)
-        self._physical_skills, self._in_training_skills = self._load_physical_skills(self._skills_directories)
+        new_physical, new_in_training = self._load_physical_skills(self._skills_directories)
+
+        with self._skills_lock:
+            self._code_skills = new_code_skills
+            self._physical_skills = new_physical
+            self._in_training_skills = new_in_training
 
         self.get_logger().info(
-            f"Reloaded {len(self._code_skills)} code + {len(self._physical_skills)} physical skills"
+            f"Reloaded {len(new_code_skills)} code + {len(new_physical)} physical skills"
         )
         self._publish_skills_list()
 
@@ -515,7 +532,8 @@ class SkillsActionServer(Node):
         """
         if not skill_ids:
             self._reload_skills()
-            return list(self._code_skills.keys()) + list(self._physical_skills.keys())
+            with self._skills_lock:
+                return list(self._code_skills.keys()) + list(self._physical_skills.keys())
 
         self.get_logger().info(f"Selectively reloading skills: {skill_ids}")
         reloaded = []
@@ -524,8 +542,15 @@ class SkillsActionServer(Node):
             # Extract the basename from the ID (e.g. 'innate-os/foo' -> 'foo')
             basename = skill_id.split("/", 1)[-1] if "/" in skill_id else skill_id
 
+            # Determine skill category under lock.
+            with self._skills_lock:
+                is_code = skill_id in self._code_skills or self._is_code_skill_id(skill_id)
+                is_physical = (not is_code) and (
+                    skill_id in self._physical_skills or skill_id in self._in_training_skills
+                )
+
             # Check if it's a code skill
-            if skill_id in self._code_skills or self._is_code_skill_id(skill_id):
+            if is_code:
                 result = self.skill_loader.reload_skill_by_file_stem(basename, self._skills_directories)
                 if result is not None:
                     cls, src_path = result
@@ -534,14 +559,15 @@ class SkillsActionServer(Node):
                         instance = cls(self.get_logger())
                         instance.node = self
                         self._inject_required_interfaces(instance)
-                        self._code_skills[skill_id] = (display_name, instance)
+                        with self._skills_lock:
+                            self._code_skills[skill_id] = (display_name, instance)
                         reloaded.append(skill_id)
                         self.get_logger().info(f"Reloaded code skill: {skill_id}")
                     except Exception as e:
                         self.get_logger().error(f"Error instantiating {skill_id}: {e}")
 
             # Check if it's a physical skill
-            elif skill_id in self._physical_skills or skill_id in self._in_training_skills:
+            elif is_physical:
                 if self._reload_physical_skill(skill_id):
                     reloaded.append(skill_id)
 
@@ -581,12 +607,13 @@ class SkillsActionServer(Node):
                             "episode_count": episode_count,
                         }
                         
-                        if is_in_training:
-                            self._in_training_skills[skill_id] = skill_data
-                            self._physical_skills.pop(skill_id, None)
-                        else:
-                            self._physical_skills[skill_id] = skill_data
-                            self._in_training_skills.pop(skill_id, None)
+                        with self._skills_lock:
+                            if is_in_training:
+                                self._in_training_skills[skill_id] = skill_data
+                                self._physical_skills.pop(skill_id, None)
+                            else:
+                                self._physical_skills[skill_id] = skill_data
+                                self._in_training_skills.pop(skill_id, None)
                         
                         self.get_logger().info(f"Reloaded physical skill: {skill_id}")
                         return True
@@ -659,12 +686,18 @@ class SkillsActionServer(Node):
             # Get the skill type (ID) from the goal handle
             skill_type = goal_handle.request.skill_type
 
+            # Snapshot under lock to make check-then-access atomic.
+            with self._skills_lock:
+                code_entry = self._code_skills.get(skill_type)
+                is_physical = skill_type in self._physical_skills
+                all_code = list(self._code_skills.items()) if code_entry is None and not is_physical else []
+
             # Find and cancel the code skill
-            if skill_type in self._code_skills:
-                _name, instance = self._code_skills[skill_type]
+            if code_entry is not None:
+                _name, instance = code_entry
                 self.get_logger().debug(f"Canceling code skill: {skill_type}")
                 instance.cancel()
-            elif skill_type in self._physical_skills:
+            elif is_physical:
                 self.get_logger().debug(f"Canceling physical skill: {skill_type}")
             else:
                 self.get_logger().warning(f"Unknown skill type: {skill_type}")
@@ -673,7 +706,9 @@ class SkillsActionServer(Node):
 
             # If we couldn't determine the skill type, try to cancel all code skills
             self.get_logger().debug("Attempting to cancel all code skills")
-            for sid, (_name, instance) in self._code_skills.items():
+            with self._skills_lock:
+                all_code = list(self._code_skills.items())
+            for sid, (_name, instance) in all_code:
                 try:
                     instance.cancel()
                 except Exception as cancel_error:
@@ -699,17 +734,23 @@ class SkillsActionServer(Node):
 
         skill_type = goal_handle.request.skill_type
 
+        # Snapshot the skill entry under lock so check-then-access is atomic.
+        with self._skills_lock:
+            code_entry = self._code_skills.get(skill_type)
+            physical_entry = self._physical_skills.get(skill_type)
+
         # Check if it's a code skill
-        if skill_type in self._code_skills:
+        if code_entry is not None:
             return self._execute_code_skill(goal_handle, skill_type, inputs)
 
         # Check if it's a physical skill
-        elif skill_type in self._physical_skills:
+        elif physical_entry is not None:
             return self._execute_physical_skill(goal_handle, skill_type, inputs)
 
         # Skill not found
         else:
-            all_skills = list(self._code_skills.keys()) + list(self._physical_skills.keys())
+            with self._skills_lock:
+                all_skills = list(self._code_skills.keys()) + list(self._physical_skills.keys())
             self.get_logger().error(f"Skill '{skill_type}' not available")
             self.get_logger().error(f"Available skills: {all_skills}")
             goal_handle.abort()
@@ -850,7 +891,18 @@ class SkillsActionServer(Node):
             self._state_update_stop_event.wait(0.02)
 
     def _execute_code_skill(self, goal_handle, skill_type, inputs):
-        _name, skill = self._code_skills[skill_type]
+        with self._skills_lock:
+            entry = self._code_skills.get(skill_type)
+        if entry is None:
+            self.get_logger().error(f"Code skill '{skill_type}' disappeared during reload")
+            goal_handle.abort()
+            return ExecuteSkill.Result(
+                success=False,
+                message=f"Skill '{skill_type}' was removed during a concurrent reload",
+                skill_type=skill_type,
+                success_type=SkillResult.FAILURE.value,
+            )
+        _name, skill = entry
 
         # Define a feedback publisher for the skill
         def _publish_feedback(update_message: str, image_b64: str = None):
@@ -931,8 +983,18 @@ class SkillsActionServer(Node):
     def _execute_physical_skill(self, goal_handle, skill_type, inputs):
         self.get_logger().info(f"Delegating physical skill '{skill_type}' to behavior_server")
 
-        # Get the physical skill metadata
-        physical_data = self._physical_skills[skill_type]
+        # Get the physical skill metadata under lock
+        with self._skills_lock:
+            physical_data = self._physical_skills.get(skill_type)
+        if physical_data is None:
+            self.get_logger().error(f"Physical skill '{skill_type}' disappeared during reload")
+            goal_handle.abort()
+            return ExecuteSkill.Result(
+                success=False,
+                message=f"Skill '{skill_type}' was removed during a concurrent reload",
+                skill_type=skill_type,
+                success_type=SkillResult.FAILURE.value,
+            )
         metadata = physical_data["metadata"]
 
         # Wait for behavior server to be available
