@@ -123,6 +123,7 @@ install(PROGRAMS
   maurice_nav/mode_manager.py
   maurice_nav/grid_localizer.py
   maurice_nav/odom_to_tf_node.py
+  maurice_nav/goal_approach_scaler.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -39,7 +39,7 @@
       
       # Velocity limits (from existing DWB config)
       vx_min: -0.2                      # matches min_vel_x
-      vx_max: 0.3                       # matches max_vel_x
+      vx_max: 0.45                       # matches max_vel_x
       vy_max: 0.0                       # differential drive - no lateral motion
       wz_max: 0.8                       # matches max_vel_theta
       
@@ -109,8 +109,8 @@
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.0
-        threshold_to_consider: 0.5
+        cost_weight: 10.0
+        threshold_to_consider: 0.3
       
       # Path alignment critic - keeps robot aligned with path
       PathAlignCritic:

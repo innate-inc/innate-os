@@ -72,6 +72,22 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([maurice_nav_launch_dir, '/mapping.launch.py'])
     )
     
+    # Goal approach scaler - slows robot near goal
+    goal_approach_scaler_node = Node(
+        package='maurice_nav',
+        executable='goal_approach_scaler.py',
+        name='goal_approach_scaler',
+        output='screen',
+        parameters=[{
+            'slowdown_radius': 1.0,
+            'min_speed_fraction': 0.3,
+        }],
+        remappings=[
+            ('cmd_vel_in', '/cmd_vel_raw'),
+            ('cmd_vel_out', '/cmd_vel_scaled'),
+        ]
+    )
+
     # Shared velocity smoother node
     velocity_smoother_node = Node(
         package='nav2_velocity_smoother',
@@ -79,7 +95,7 @@ def generate_launch_description():
         name='velocity_smoother',
         output='screen',
         parameters=[smoother_params_file],
-        remappings=[('cmd_vel', '/cmd_vel_raw'), ('cmd_vel_smoothed', '/cmd_vel')]
+        remappings=[('cmd_vel', '/cmd_vel_scaled'), ('cmd_vel_smoothed', '/cmd_vel')]
     )
     
     # Shared BT navigator node
@@ -147,6 +163,7 @@ def generate_launch_description():
         # mapfree_launch,
         mapping_launch,
         dynamic_footprint_node,
+        goal_approach_scaler_node,
         velocity_smoother_node,
         bt_navigator_node,
         mapfree_planner_node,
