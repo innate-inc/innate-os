@@ -43,6 +43,7 @@ from brain_client.skill_loader import SkillLoader
 from brain_client.skill_types import (
     InterfaceType,
     RobotStateType,
+    Skill,
     SkillResult,
 )
 
@@ -124,7 +125,7 @@ class SkillsActionServer(Node):
         self._skills_lock = threading.Lock()
 
         # Create code skill instances keyed by ID
-        self._code_skills: dict[str, tuple[str, object]] = {}  # {id: (display_name, instance)}
+        self._code_skills: dict[str, tuple[str, Skill]] = {}  # {id: (display_name, instance)}
         for skill_id, (display_name, skill_class, _src) in id_keyed.items():
             try:
                 skill_instance = skill_class(self.get_logger())
@@ -228,15 +229,15 @@ class SkillsActionServer(Node):
                           directory: str = "") -> SkillInfo:
         """Create a SkillInfo message from skill data."""
         msg = SkillInfo()
-        msg.id = skill_id
-        msg.name = name
-        msg.type = skill_type
-        msg.guidelines = guidelines
-        msg.guidelines_when_running = guidelines_when_running
-        msg.inputs_json = inputs_json
-        msg.in_training = in_training
-        msg.episode_count = episode_count
-        msg.directory = directory
+        msg.id = skill_id or ""
+        msg.name = name or ""
+        msg.type = skill_type or ""
+        msg.guidelines = guidelines or ""
+        msg.guidelines_when_running = guidelines_when_running or ""
+        msg.inputs_json = inputs_json or ""
+        msg.in_training = bool(in_training)
+        msg.episode_count = int(episode_count or 0)
+        msg.directory = directory or ""
         return msg
 
     def _publish_skills_list(self):
@@ -356,7 +357,7 @@ class SkillsActionServer(Node):
 
         # Build new dicts locally, then swap under lock to avoid a window
         # where _code_skills is empty while still being populated.
-        new_code_skills: dict[str, tuple[str, object]] = {}
+        new_code_skills: dict[str, tuple[str, Skill]] = {}
         for skill_id, (display_name, cls, _src) in id_keyed.items():
             try:
                 instance = cls(self.get_logger())

@@ -143,6 +143,23 @@ class JobStore:
                     direction, skill_id, run_id, update
                 )
 
+    def mark_upload_pending(self, skill_id: str) -> None:
+        """Insert a placeholder upload transfer so the very next publish
+        cycle reports ``has_active_transfer=true`` before the upload thread
+        has sent its first real progress update."""
+        key = (TransferProgress.UPLOAD, skill_id, -1)
+        placeholder = TransferProgress()
+        placeholder.direction = TransferProgress.UPLOAD
+        placeholder.stage = TransferProgress.STAGE_COMPRESSING
+        placeholder.message = "Preparing upload…"
+        placeholder.transfer_done = False
+        with self._lock:
+            # Only set if there isn't already a real transfer in-flight.
+            if key not in self._transfers:
+                self._transfers[key] = placeholder
+            # Clear any stale "completed" marker from a previous upload.
+            self._completed_transfers.discard(key)
+
     # ── Snapshot for publish ────────────────────────────────────────
 
     def snapshot(

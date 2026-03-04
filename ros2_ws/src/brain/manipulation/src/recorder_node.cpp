@@ -13,22 +13,6 @@ namespace fs = std::filesystem;
 
 namespace manipulation {
 
-namespace {
-std::string trim_copy(const std::string& input) {
-    size_t start = 0;
-    while (start < input.size() && std::isspace(static_cast<unsigned char>(input[start]))) {
-        ++start;
-    }
-
-    size_t end = input.size();
-    while (end > start && std::isspace(static_cast<unsigned char>(input[end - 1]))) {
-        --end;
-    }
-
-    return input.substr(start, end - start);
-}
-}
-
 RecorderNode::RecorderNode()
     : Node("recorder_node"),
       state_(State::IDLE),
@@ -465,8 +449,15 @@ void RecorderNode::activate_physical_primitive(
     std::string display_name = fs::path(task_dir).filename().string();
 
     RCLCPP_INFO(this->get_logger(), "Starting recording at directory: %s", task_dir.c_str());
-    task_manager_->start_new_task_at_directory(display_name, task_dir, data_frequency_);
-    
+
+    try {
+        task_manager_->start_new_task_at_directory(display_name, task_dir, data_frequency_);
+    } catch (const std::exception& e) {
+        response->success = false;
+        RCLCPP_ERROR(this->get_logger(), "Failed to activate task '%s': %s", display_name.c_str(), e.what());
+        return;
+    }
+
     if (task_manager_->has_metadata()) {
         episode_count_ = task_manager_->get_number_of_episodes();
     } else {

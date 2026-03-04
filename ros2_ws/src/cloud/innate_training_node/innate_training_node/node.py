@@ -259,6 +259,11 @@ class TrainingNode(Node):
             self._store.put_skill(skill)
             self._store.register_dir(skill.skill_id, req.skill_dir)
 
+            # Mark upload as pending *before* spawning the thread and
+            # returning the response, so the next published status already
+            # reflects has_active_transfer=true / transfer_done=false.
+            self._store.mark_upload_pending(skill.skill_id)
+
             # Start upload in a background thread.
             self.get_logger().info(
                 f"Skill {skill.skill_id[:8]} ({skill.name}) submitted "

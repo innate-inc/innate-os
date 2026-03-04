@@ -3022,7 +3022,24 @@ def main(args=None):
     rclpy.init(args=args)
     node = BrainClientNode()
     try:
-        rclpy.spin(node)
+        # Use a manual spin loop so transient deserialization errors
+        # (e.g. corrupted CompressedImage or type-hash mismatches) are
+        # logged and skipped instead of crashing the whole node.
+        while rclpy.ok():
+            try:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                # Catch RCLError (deserialization failures from corrupted
+                # messages, type-hash mismatches, etc.) without killing the
+                # node.  Re-raise anything that isn't an RCL-layer error.
+                if "RCLError" in type(e).__name__:
+                    node.get_logger().warn(
+                        f"Skipping deserialization error (message dropped): {e}"
+                    )
+                else:
+                    raise
     except KeyboardInterrupt:
         node.get_logger().info("KeyboardInterrupt, shutting down.")
     finally:

@@ -44,7 +44,14 @@ void TaskManager::resume_task_at_directory(const std::string& task_name, const s
     std::string metadata_path = current_task_dir_ + "/data/dataset_metadata.json";
     
     if (!fs::exists(metadata_path)) {
-        throw std::runtime_error("Dataset metadata not found for task '" + task_name + "' at " + metadata_path);
+        std::cerr << "No dataset_metadata.json for '" << task_name << "'. Starting fresh." << std::endl;
+        metadata_ = {
+            {"data_frequency", 0},
+            {"number_of_episodes", 0},
+            {"episodes", nlohmann::json::array()}
+        };
+        save_metadata();
+        return;
     }
     load_metadata();
 }
@@ -111,7 +118,14 @@ void TaskManager::load_metadata() {
     
     std::ifstream file(metadata_path);
     if (!file.is_open()) {
-        throw std::runtime_error("Failed to open metadata file: " + metadata_path);
+        std::cerr << "Cannot open " << metadata_path << ". Reinitializing metadata." << std::endl;
+        metadata_ = {
+            {"data_frequency", 0},
+            {"number_of_episodes", 0},
+            {"episodes", nlohmann::json::array()}
+        };
+        save_metadata();
+        return;
     }
     file >> metadata_;
 }
@@ -122,23 +136,37 @@ std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const 
     std::string metadata_file_path = data_dir + "/dataset_metadata.json";
     std::string task_name = fs::path(task_directory).filename().string();
 
-    if (!fs::exists(task_directory) || !fs::is_directory(task_directory)) {
-        error_msg = "Task directory " + task_directory + " not found or is not a directory.";
-        return std::nullopt;
+    // Helper: return a zero-episode response for any "no data yet" state.
+    auto empty_metadata = [&]() -> nlohmann::json {
+        return {
+            {"task_name", task_name},
+            {"task_directory", task_directory},
+            {"data_frequency", 0},
+            {"number_of_episodes", 0},
+            {"episodes", nlohmann::json::array()}
+        };
+    };
+
+    // No data yet — folder missing, no data/ subfolder, no metadata file, or empty file.
+    if (!fs::exists(task_directory) || !fs::is_directory(task_directory) ||
+        !fs::exists(data_dir) || !fs::is_directory(data_dir) ||
+        !fs::exists(metadata_file_path) || fs::file_size(metadata_file_path) == 0) {
+        return empty_metadata();
     }
 
-    if (!fs::exists(metadata_file_path)) {
-        error_msg = "dataset_metadata.json not found in " + data_dir + ".";
-        return std::nullopt;
-    }
-
+    // Try to parse — only error if the file is actually corrupted.
     nlohmann::json dataset_metadata;
     try {
         std::ifstream file(metadata_file_path);
         file >> dataset_metadata;
     } catch (const std::exception& e) {
-        error_msg = "Error reading dataset_metadata.json in " + data_dir + ": " + e.what();
+        error_msg = "Corrupted dataset_metadata.json in " + data_dir + ": " + e.what();
         return std::nullopt;
+    }
+
+    // Parsed OK but null / not an object — treat as empty, not corrupted.
+    if (dataset_metadata.is_null() || !dataset_metadata.is_object()) {
+        return empty_metadata();
     }
 
     nlohmann::json processed_episodes = nlohmann::json::array();
