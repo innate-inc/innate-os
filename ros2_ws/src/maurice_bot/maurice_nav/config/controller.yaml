@@ -39,7 +39,7 @@
       
       # Velocity limits (from existing DWB config)
       vx_min: -0.2                      # matches min_vel_x
-      vx_max: 0.5                       # matches max_vel_x
+      vx_max: 0.3                       # matches max_vel_x
       vy_max: 0.0                       # differential drive - no lateral motion
       wz_max: 0.8                       # matches max_vel_theta
       
@@ -119,9 +119,9 @@
         cost_weight: 4.5
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.3
         offset_from_furthest: 20
-        use_path_orientations: false
+        use_path_orientations: true
       
       # Path following critic - drives progress along path
       PathFollowCritic:
