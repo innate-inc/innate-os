@@ -58,6 +58,7 @@ class TelemetryClient:
                     headers={
                         "Content-Type": "application/json",
                         "Authorization": f"Bearer {self._auth.token}",
+                        "User-Agent": "innate-robot",
                     },
                     method="POST",
                 )

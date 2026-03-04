@@ -123,7 +123,10 @@ class AuthProvider:
                 req = urllib.request.Request(
                     self._token_endpoint,
                     data=b"",  # POST
-                    headers={"Authorization": f"Bearer {self._service_key}"},
+                    headers={
+                        "Authorization": f"Bearer {self._service_key}",
+                        "User-Agent": "innate-robot",
+                    },
                 )
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data: dict[str, object] = json.loads(resp.read())
@@ -182,7 +185,10 @@ class AuthProvider:
         url = f"{self._issuer_url}/.well-known/openid-configuration"
         logger.debug("Discovering OIDC config from %s", url)
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            disco_req = urllib.request.Request(
+                url, headers={"User-Agent": "innate-robot"}
+            )
+            with urllib.request.urlopen(disco_req, timeout=10) as resp:
                 discovery: dict[str, object] = json.loads(resp.read())
         except urllib.error.URLError as exc:
             raise AuthError(f"OIDC discovery failed at {url}: {exc}") from exc
