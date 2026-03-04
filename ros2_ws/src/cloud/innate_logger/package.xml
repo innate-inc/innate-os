@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>innate_logger</name>
+  <version>0.1.0</version>
+  <description>ROS 2 node for logging robot vitals, directives, and chat to the cloud.</description>
+  <maintainer email="eng@innate.bot">Innate Engineering</maintainer>
+  <license>Proprietary</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>cloud_clients</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
