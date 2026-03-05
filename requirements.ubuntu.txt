@@ -80,6 +80,7 @@ genesis-world==0.3.6
 glfw==2.9.0
 google-auth==2.40.3
 google-auth-oauthlib==1.2.2
+google-genai==1.66.0
 google-pasta==0.2.0
 grpcio==1.73.1
 h11==0.16.0

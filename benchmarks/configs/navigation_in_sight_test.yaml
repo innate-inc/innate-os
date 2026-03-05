@@ -3,14 +3,14 @@ environment:
   name: "default"  # Using a default environment
   initial_parameters:
     # User will define the starting position
-    - robot_position: [0.0, 0.0, 0.25]  # Placeholder: e.g., one side of the room
+    - robot_position: [0.0, 0.0, 0.05]  # Ground-safe spawn height
       robot_orientation: [0, 0, -0.7, 0.7] # Default orientation
 
 # Input section
 name: "navigation_in_sight_to_tv_test"
 description: "Test if the robot can navigate to the TV using navigation_in_sight primitive multiple times, based on a single initial instruction."
 goal: "Robot should navigate to the vicinity of the TV by repeatedly calling navigation_in_sight and never using navigation_history, after being told once to navigate to the TV."
-directive: "empty_directive" # Simple, direct instruction
+directive: "basic_agent" # Use an available directive id
 duration: 300  # seconds, allowing time for navigation
 
 # Messages - No specific initial messages needed as the directive is primary

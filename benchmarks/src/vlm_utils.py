@@ -2,9 +2,93 @@
 import os
 import time
 import json
-import base64
+import mimetypes
 from dotenv import load_dotenv
-import google.genai as genai
+
+
+def _init_gemini_backend(api_key):
+    """
+    Initialize Gemini SDK backend.
+
+    Prefers the latest google-genai client API and falls back to the legacy
+    google-generativeai API only when needed.
+    """
+    new_api_error = None
+    try:
+        from google import genai as google_genai
+
+        return {"mode": "new", "client": google_genai.Client(api_key=api_key), "genai": google_genai}
+    except Exception as e:
+        new_api_error = e
+
+    legacy_api_error = None
+    try:
+        import google.generativeai as legacy_genai
+
+        legacy_genai.configure(api_key=api_key)
+        return {"mode": "legacy", "genai": legacy_genai}
+    except Exception as e:
+        legacy_api_error = e
+
+    raise RuntimeError(
+        "Failed to initialize Gemini SDK. "
+        f"google-genai error: {new_api_error}; "
+        f"google-generativeai error: {legacy_api_error}"
+    )
+
+
+def _extract_response_text(response):
+    """Extract text from Gemini response across SDK versions."""
+    text = getattr(response, "text", None)
+    if text:
+        return text
+
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            first = candidates[0]
+            content = getattr(first, "content", None)
+            parts = getattr(content, "parts", None) or []
+            collected = []
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    collected.append(part_text)
+            if collected:
+                return "\n".join(collected)
+    except Exception:
+        pass
+
+    return str(response)
+
+
+def _generate_content(backend, model_name, prompt, frame_paths):
+    """Generate content with images using whichever Gemini backend is available."""
+    images = []
+    for frame_path in frame_paths:
+        image_data = encode_image(frame_path)
+        if image_data:
+            images.append(image_data)
+
+    if backend["mode"] == "new":
+        genai_module = backend["genai"]
+        contents = [prompt]
+        for image in images:
+            contents.append(
+                genai_module.types.Part.from_bytes(
+                    data=image["data"], mime_type=image["mime_type"]
+                )
+            )
+        response = backend["client"].models.generate_content(
+            model=model_name, contents=contents
+        )
+        return _extract_response_text(response)
+
+    model = backend["genai"].GenerativeModel(model_name)
+    content = [prompt]
+    content.extend(images)
+    response = model.generate_content(content)
+    return _extract_response_text(response)
 
 
 def encode_image(image_path):
@@ -20,7 +104,8 @@ def encode_image(image_path):
     try:
         with open(image_path, "rb") as image_file:
             image_data = image_file.read()
-            return {"mime_type": "image/jpeg", "data": image_data}
+            mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+            return {"mime_type": mime_type, "data": image_data}
     except Exception as e:
         print(f"Error loading image {image_path}: {e}")
         return None
@@ -88,9 +173,7 @@ def evaluate_periodic_with_vlm(
         raise ValueError("No GOOGLE_API_KEY provided in benchmarks/.env")
 
     try:
-        # Configure Gemini
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-pro")
+        backend = _init_gemini_backend(api_key)
 
         # Format the chat log with coordinates
         chat_log_text = ""
@@ -163,26 +246,21 @@ Please respond with a JSON object containing:
 - "action": One of "continue", "success", or "stop"
 - "reason": Detailed explanation for the chosen action"""
 
-        # Prepare content with images
-        content = [prompt]
-
-        # Add images
-        for frame_path in frame_paths:
-            image_data = encode_image(frame_path)
-            if image_data:
-                content.append(image_data)
-
-        # Generate response
-        response = model.generate_content(content)
+        response_text = _generate_content(
+            backend=backend,
+            model_name="gemini-2.5-pro",
+            prompt=prompt,
+            frame_paths=frame_paths,
+        )
 
         # Parse the JSON response
         try:
             # First try to parse as direct JSON
-            result = json.loads(response.text)
+            result = json.loads(response_text)
             return result
         except json.JSONDecodeError:
             # Try to extract JSON from markdown code blocks
-            text = response.text
+            text = response_text
             if "```json" in text:
                 # Extract JSON from markdown code blocks
                 start = text.find("```json") + 7
@@ -208,7 +286,7 @@ Please respond with a JSON object containing:
 
             return {
                 "action": action,
-                "reason": response.text,
+                "reason": response_text,
                 "reflection": "Response parsing failed, extracted action from text",
             }
 
@@ -247,9 +325,7 @@ def evaluate_with_vlm(
         raise ValueError("No GOOGLE_API_KEY provided in benchmarks/.env")
 
     try:
-        # Configure Gemini
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")
+        backend = _init_gemini_backend(api_key)
 
         # Format the chat log for inclusion in the prompt
         chat_log_text = ""
@@ -291,28 +367,23 @@ Please respond with a JSON object containing:
 - "{result_key}": true/false whether the criterion has been met
 - "reason": Detailed explanation of the criterion evaluation"""
 
-        # Prepare content with images
-        content = [prompt]
-
-        # Add images
-        for frame_path in frame_paths:
-            image_data = encode_image(frame_path)
-            if image_data:
-                content.append(image_data)
-
-        # Generate response
-        response = model.generate_content(content)
+        response_text = _generate_content(
+            backend=backend,
+            model_name="gemini-2.5-flash",
+            prompt=prompt,
+            frame_paths=frame_paths,
+        )
 
         # Parse the JSON response
         try:
             # First try to parse as direct JSON
-            result = json.loads(response.text)
+            result = json.loads(response_text)
             if print_evaluation:
                 print(f"VLM evaluation result: {result}\n\n")
             return result
         except json.JSONDecodeError:
             # Try to extract JSON from markdown code blocks
-            text = response.text
+            text = response_text
             if "```json" in text:
                 # Extract JSON from markdown code blocks
                 start = text.find("```json") + 7
@@ -333,7 +404,7 @@ Please respond with a JSON object containing:
                 should_stop = "should stop" in text_lower or "stop" in text_lower
                 result = {
                     "should_stop": should_stop,
-                    "reason": response.text,
+                    "reason": response_text,
                     "reflection": "Response parsing failed, extracted result from text",
                 }
             else:
@@ -342,7 +413,7 @@ Please respond with a JSON object containing:
                 )
                 result = {
                     "success": success,
-                    "reason": response.text,
+                    "reason": response_text,
                     "reflection": "Response parsing failed, extracted result from text",
                 }
 

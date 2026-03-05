@@ -9,12 +9,12 @@ A framework for evaluating agent performance across navigation, task completion,
 2. **Start required components** in order:
    - **[Innate OS](../../innate-os)** — Start in Docker (`ws://localhost:9090`)
    - **(Optional) [Innate Cloud Agent](../../innate-cloud-agent)** — Only if using local agent
-   - **Simulator** — `python main.py --vis --need-oauth false`
+   - **Simulator** — `python main.py --vis ----disable-robot-collision`
 
-3. **Set OpenAI API key** for VLM-based evaluation:
+3. **Set Google API key** for VLM-based evaluation:
    ```bash
    # Create benchmarks/.env with:
-   OPENAI_API_KEY=your_key_here
+   GOOGLE_API_KEY=your_key_here
    ```
 
 ## Quick Start
@@ -129,7 +129,7 @@ duration: 600  # seconds
 environment:
   name: "environment_name"
   initial_parameters:
-    - robot_position: [x, y, z]
+    - robot_position: [x, y, z]  # Use z=0.05 for ground-safe spawn with Maurice
       robot_orientation: [qx, qy, qz, qw]
 
 messages:
@@ -163,14 +163,14 @@ expectations:
 | `primitive` | Verifies a specific action was called |
 | `compound` | Verifies action in specific location |
 | `sequence` | Verifies ordered sequence of checks |
-| `vlm_verification` | Uses GPT-4o to verify behavior from frames |
+| `vlm_verification` | Uses Gemini to verify behavior from frames |
 
 </details>
 
 <details>
 <summary>VLM Integration details</summary>
 
-The benchmark runner uses GPT-4o to evaluate success/stop criteria by analyzing:
+The benchmark runner uses Gemini to evaluate success/stop criteria by analyzing:
 - Representative frames from both cameras
 - Complete chat log with timestamps
 - Check-specific context

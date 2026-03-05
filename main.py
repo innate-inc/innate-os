@@ -142,6 +142,12 @@ def main():
         default=None,
         help="Path to initial environment JSON (absolute or workspace-relative)",
     )
+    parser.add_argument(
+        "--disable-robot-collision",
+        action="store_true",
+        default=False,
+        help="Disable robot collisions with scene geometry (temporary debug mode).",
+    )
     args = parser.parse_args()
 
     # 1) Create shared queues
@@ -168,6 +174,7 @@ def main():
         SHARED_QUEUES,
         enable_vis=args.vis,
         initial_env_config=initial_env_config,
+        robot_collision_enabled=not args.disable_robot_collision,
     )
 
     # 3) Start the agent (async) in a separate thread unless disabled
