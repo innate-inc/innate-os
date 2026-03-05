@@ -2,7 +2,7 @@
 environment:
   name: "walking_man_path"  # Using a default environment
   initial_parameters:
-    - robot_position: [2.5, -5, 0.3]  # Near the TV
+    - robot_position: [2.5, -5, 0.05]  # Ground-safe spawn height near the TV
       robot_orientation: [0, 0, 0, 1] # Facing another direction
 
 # Input section - defines the benchmark parameters

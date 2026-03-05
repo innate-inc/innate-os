@@ -2,7 +2,7 @@
 environment:
   name: "apartment"
   initial_parameters:
-    - robot_position: [10.0, 5.0, 0.0]
+    - robot_position: [10.0, 5.0, 0.05]
       robot_orientation: [0, 0, 1, 0]
       object_positions:
         coffee_mug: [12.5, 3.2, 0.8]

@@ -2,7 +2,7 @@
 environment:
   name: "office"
   initial_parameters:
-    - robot_position: [5.0, 2.0, 0.0]
+    - robot_position: [5.0, 2.0, 0.05]
       robot_orientation: [0, 0, 1, 0]
       object_positions:
         whiteboard: [15.0, 8.5, 1.2]

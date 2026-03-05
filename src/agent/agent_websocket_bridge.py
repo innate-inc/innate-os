@@ -786,7 +786,6 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
     }
     outbound = rosbridge_publish("/odom", odom_msg)
     await ws.send(json.dumps(outbound, default=np_encoder))
-    print("[ROSBridge] Published odometry")
 
 
 async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):

@@ -60,9 +60,11 @@ class SimulationNode:
         shared_queues: SharedQueues,
         enable_vis: bool = True,
         initial_env_config: Optional[Dict[str, Any]] = None,
+        robot_collision_enabled: bool = True,
     ):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
+        self.robot_collision_enabled = robot_collision_enabled
         self.loaded_entities = {}  # To store references to loaded entities
         self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
         self.managed_entities: Dict[str, gs.Entity] = {}
@@ -685,14 +687,19 @@ class SimulationNode:
 
     def _init_robot(self):
         """Initialize robot and its parameters"""
-        self.robot = self.scene.add_entity(
-            gs.morphs.URDF(
-                file="data/urdf/maurice.urdf",
-                pos=ROBOT_INIT_POS,
-                quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
-                fixed=True,  # Disable physics dynamics - robot is moved kinematically via set_pos/set_quat
-            )
-        )
+        urdf_kwargs = {
+            "file": "data/urdf/maurice.urdf",
+            "pos": ROBOT_INIT_POS,
+            "quat": xyzw_to_wxyz(ROBOT_INIT_QUAT),
+            # Disable physics dynamics - robot is moved kinematically via set_pos/set_quat.
+            "fixed": True,
+        }
+        if not self.robot_collision_enabled:
+            # Temporary troubleshooting mode: ghost robot through scene geometry.
+            urdf_kwargs["collision"] = False
+            print("[SimulationNode] Robot collisions disabled.")
+
+        self.robot = self.scene.add_entity(gs.morphs.URDF(**urdf_kwargs))
 
     def _apply_arm_positions(self, joint_positions):
         """Apply joint positions to arm and update current state.

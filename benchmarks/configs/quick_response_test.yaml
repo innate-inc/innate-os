@@ -2,14 +2,14 @@
 environment:
   name: "default"  # Using a default environment since original doesn't specify
   initial_parameters:
-    - robot_position: [0.0, 0.0, 0.0]  # Default position
+    - robot_position: [0.0, 0.0, 0.05]  # Ground-safe default position
       robot_orientation: [0, 0, 1, 0]  # Default orientation
 
 # Input section - based on the original example
 name: "quick_response_test"
 description: "Test if the robot responds quickly to a simple directive"
 goal: "Robot should respond within 10 seconds and only respond once"
-directive: "empty_directive"
+directive: "basic_agent"
 duration: 300  # seconds
 
 # Message with updated format
