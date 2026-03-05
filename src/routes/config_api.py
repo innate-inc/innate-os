@@ -174,7 +174,7 @@ async def reset_robot(
     Request body can include:
     - memory_state: string identifier for memory state to load
     - position: [x, y, z] coordinates for robot position
-    - orientation: [w, x, y, z] quaternion for robot orientation
+    - orientation: [x, y, z, w] quaternion for robot orientation
 
     If position and orientation are both provided, they will be used as the new pose.
     Otherwise, the default pose will be used.
