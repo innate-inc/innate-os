@@ -376,7 +376,7 @@ async def outbound_loop(ws, shared_queues):
 
     # First, advertise standard topics once
     adv_color = rosbridge_advertise(
-        "/mars/main_camera/image/compressed", "sensor_msgs/msg/CompressedImage"
+        "/mars/main_camera/left/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
     )
     adv_arm_camera = rosbridge_advertise(
         "/mars/arm/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
@@ -424,7 +424,7 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_nav_mode))
     await ws.send(json.dumps(adv_arm_state))
     await ws.send(json.dumps(adv_arm_camera))
-    await ws.send(json.dumps(adv_arm_goto_service))
+    # await ws.send(json.dumps(adv_arm_goto_service))
     print(
         "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, navigation topics, and arm interfaces"
     )
@@ -693,7 +693,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
                 "data": list(jpg_bytes),
             }
             outbound = rosbridge_publish(
-                "/mars/main_camera/image/compressed", compressed_msg
+                "/mars/main_camera/left/image_raw/compressed", compressed_msg
             )
             await ws.send(json.dumps(outbound))
 
@@ -786,6 +786,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
     }
     outbound = rosbridge_publish("/odom", odom_msg)
     await ws.send(json.dumps(outbound, default=np_encoder))
+    print("[ROSBridge] Published odometry")
 
 
 async def publish_occupancy_grid(ws, og: OccupancyGridMsg, shared_queues):

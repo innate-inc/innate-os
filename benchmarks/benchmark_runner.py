@@ -2,6 +2,7 @@
 import json
 import time
 import argparse
+import sys
 import requests
 import threading
 import cv2
@@ -1142,7 +1143,8 @@ def main():
         output_dir_base=args.output_dir,
     )
 
-    benchmark.run()
+    success = benchmark.run()
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":

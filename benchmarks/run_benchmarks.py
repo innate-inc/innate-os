@@ -16,6 +16,29 @@ from pathlib import Path
 
 from analyze_full_run import generate_report
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_input_path(path_value, base_dir=None):
+    """Resolve a path from absolute, cwd-relative, script-relative, or base-dir-relative input."""
+    path = Path(os.path.expanduser(path_value))
+    if path.is_absolute():
+        return path.resolve()
+
+    candidates = []
+    if base_dir is not None:
+        candidates.append((Path(base_dir) / path).resolve())
+    candidates.append((Path.cwd() / path).resolve())
+    candidates.append((SCRIPT_DIR / path).resolve())
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    # Fall back to base_dir if provided, otherwise cwd.
+    fallback_base = Path(base_dir) if base_dir is not None else Path.cwd()
+    return (fallback_base / path).resolve()
+
 
 def send_email_summary(
     subject,
@@ -55,11 +78,13 @@ def run_benchmark(
     output_dir_base=None,
 ):
     """Run a single benchmark with the given config file."""
+    benchmark_runner_path = SCRIPT_DIR / "benchmark_runner.py"
+    resolved_config_file = _resolve_input_path(config_file)
     cmd = [
-        "python",
-        "benchmark_runner.py",
+        sys.executable,
+        str(benchmark_runner_path),
         "--config",
-        config_file,
+        str(resolved_config_file),
         "--trial",
         str(trial),
         "--url",
@@ -76,7 +101,7 @@ def run_benchmark(
     if output_dir_base:
         cmd.extend(["--output-dir", output_dir_base])
 
-    config_name = os.path.basename(config_file)
+    config_name = resolved_config_file.name
     print(f"\n{'='*80}")
     print(f"Running benchmark: '{config_name}' (Trial {trial})")
     if variant:
@@ -107,8 +132,10 @@ def run_multiple_trials(
     """
     Run multiple trials of a benchmark in sequence
     """
+    resolved_config_file = _resolve_input_path(config_file)
+
     # Load the config file to check the number of initial parameter sets
-    with open(config_file, "r") as f:
+    with open(resolved_config_file, "r") as f:
         config = yaml.safe_load(f)
 
     # Get the number of initial parameter sets
@@ -132,7 +159,10 @@ def run_multiple_trials(
             print("Exiting.")
             return False
 
-    print(f"Running {num_trials} trials of benchmark with config: {config_file}")
+    print(
+        f"Running {num_trials} trials of benchmark with config:"
+        f" {resolved_config_file}"
+    )
     if variant:
         print(f"Using variant: {variant}")
     if num_param_sets > 1:
@@ -158,7 +188,7 @@ def run_multiple_trials(
         print(f"{'='*50}\n")
 
         success = run_benchmark(
-            config_file=config_file,
+            config_file=str(resolved_config_file),
             trial=trial_num,
             base_url=base_url,
             interval=interval,
@@ -203,16 +233,25 @@ def run_benchmarks_from_config(
     """
     Run multiple benchmarks as defined in a benchmarks configuration file
     """
+    config_file_path = _resolve_input_path(config_file)
+    if not config_file_path.exists():
+        print(f"Config file does not exist: {config_file_path}")
+        return False, [], None  # Return None for main_output_directory path
+
     # Determine file type and load configuration
-    if config_file.endswith(".json"):
-        with open(config_file, "r") as f:
+    if str(config_file_path).endswith(".json"):
+        with open(config_file_path, "r") as f:
             benchmarks_config = json.load(f)
-    elif config_file.endswith(".yaml") or config_file.endswith(".yml"):
-        with open(config_file, "r") as f:
+    elif str(config_file_path).endswith(".yaml") or str(config_file_path).endswith(
+        ".yml"
+    ):
+        with open(config_file_path, "r") as f:
             benchmarks_config = yaml.safe_load(f)
     else:
-        print(f"Unsupported config file format: {config_file}")
+        print(f"Unsupported config file format: {config_file_path}")
         return False, [], None  # Return None for main_output_directory path
+
+    config_base_dir = config_file_path.parent
 
     # Extract benchmarks to run
     benchmarks = benchmarks_config.get("benchmarks", [])
@@ -259,12 +298,11 @@ def run_benchmarks_from_config(
             print("Error: Missing 'config' path in benchmark definition.")
             continue
 
-        # Expand ~ to user's home directory if present
-        config_path = os.path.expanduser(config_path)
-
-        # Check if config file exists
-        if not os.path.exists(config_path):
-            print(f"Error: Config file does not exist: {config_path}")
+        resolved_benchmark_config = _resolve_input_path(
+            config_path, base_dir=config_base_dir
+        )
+        if not resolved_benchmark_config.exists():
+            print(f"Error: Config file does not exist: {resolved_benchmark_config}")
             continue
 
         # If variants is specified, run the benchmark for each variant
@@ -297,7 +335,7 @@ def run_benchmarks_from_config(
 
                 # Run the benchmark with specified number of trials for this variant
                 success = run_multiple_trials(
-                    config_file=config_path,
+                    config_file=str(resolved_benchmark_config),
                     num_trials=trials,
                     base_url=base_url,
                     interval=interval,
@@ -335,7 +373,7 @@ def run_benchmarks_from_config(
         else:
             # Run the benchmark normally with specified number of trials
             success = run_multiple_trials(
-                config_file=config_path,
+                config_file=str(resolved_benchmark_config),
                 num_trials=trials,
                 base_url=base_url,
                 interval=interval,
@@ -494,9 +532,10 @@ def main():
     # Default to 'all' command if no command specified
     if not args.command:
         print("No command specified, running all benchmarks from default config...\n")
-        if os.path.exists("benchmarks_config.json"):
+        default_config = SCRIPT_DIR / "benchmarks_config.json"
+        if default_config.exists():
             args.command = "all"
-            args.config = "benchmarks_config.json"
+            args.config = str(default_config)
             # Set default values for common arguments
             args.url = "http://localhost:8000"
             args.interval = 1.0
