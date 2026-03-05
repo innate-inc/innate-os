@@ -21,6 +21,7 @@
   <depend>nav2_costmap_2d</depend>
   <depend>pluginlib</depend>
   <depend>angles</depend>
+  <depend>action_msgs</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
@@ -30,7 +31,7 @@
   <depend>tf2_msgs</depend>
   <depend>urdf</depend>
   <depend>std_msgs</depend>
-  <exec_depend>nav2_msgs</exec_depend>
+  <depend>nav2_msgs</depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

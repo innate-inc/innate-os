@@ -20,6 +20,8 @@ find_package(nav2_util REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(angles REQUIRED)
+find_package(nav2_msgs REQUIRED)
+find_package(action_msgs REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -82,6 +84,16 @@ ament_target_dependencies(dynamic_footprint
 )
 install(TARGETS dynamic_footprint DESTINATION lib/${PROJECT_NAME})
 
+# Build C++ executable for goal_approach_scaler node
+add_executable(goal_approach_scaler src/goal_approach_scaler.cpp)
+ament_target_dependencies(goal_approach_scaler
+  rclcpp
+  geometry_msgs
+  nav2_msgs
+  action_msgs
+)
+install(TARGETS goal_approach_scaler DESTINATION lib/${PROJECT_NAME})
+
 # Build Switch BT control node plugin
 # Build BT control node plugins
 add_library(maurice_nav_bt_nodes SHARED
@@ -123,7 +135,6 @@ install(PROGRAMS
   maurice_nav/mode_manager.py
   maurice_nav/grid_localizer.py
   maurice_nav/odom_to_tf_node.py
-  maurice_nav/goal_approach_scaler.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

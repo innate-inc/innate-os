@@ -75,7 +75,7 @@ def generate_launch_description():
     # Goal approach scaler - slows robot near goal
     goal_approach_scaler_node = Node(
         package='maurice_nav',
-        executable='goal_approach_scaler.py',
+        executable='goal_approach_scaler',
         name='goal_approach_scaler',
         output='screen',
         parameters=[{
