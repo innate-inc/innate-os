@@ -42,6 +42,8 @@ configure_only_nodes = {
 # These nodes stay in INACTIVE state rather than being fully unconfigured
 skip_cleanup_nodes = {
     'controller_server',  # Zenoh RMW crashes during TF unsubscription in cleanup
+    'mapfree/planner_server',  # Segfaults during costmap cleanup (SIGSEGV exit code -11)
+    'navigation/planner_server',  # Same binary, same risk
 }
 
 modes_nodes = {
@@ -88,6 +90,10 @@ class ModeManager(Node):
 
         # Will be set in main() after adding this node to an executor.
         self._executor = None
+        
+        # Lock to prevent concurrent mode changes
+        import threading
+        self._mode_change_lock = threading.Lock()
         
         # Pre-create service clients and store in dictionary
         self._service_clients = {}
@@ -490,19 +496,26 @@ class ModeManager(Node):
         try:
             self.get_logger().info(f"Requesting {mode.value} mode startup")
             
-            # Stop other modes first
-            # for other_mode in NavigationMode:
-            #     if other_mode != mode:
-            #         self.shutdown_mode(other_mode.value)
-            # self.get_logger().info(f"Shut down other nodes")
+            # Log current state of all nodes before any transitions
+            state_names = {0: 'UNKNOWN', 1: 'UNCONFIGURED', 2: 'INACTIVE', 3: 'ACTIVE', 4: 'FINALIZED',
+                           10: 'CONFIGURING', 11: 'CLEANINGUP', 12: 'SHUTTINGDOWN', 13: 'ACTIVATING', 14: 'DEACTIVATING', 15: 'ERRORPROCESSING'}
+            all_nodes = set()
+            for nodes_list in modes_nodes.values():
+                all_nodes.update(nodes_list)
+            state_summary = []
+            for n in sorted(all_nodes):
+                s = get_node_state(self._service_clients, self.get_logger(), n)
+                state_summary.append(f"{n}={state_names.get(s, str(s)) if s is not None else 'UNREACHABLE'}")
+            self.get_logger().info(f"Node states before {mode.value} startup: {', '.join(state_summary)}")
 
+            target_nodes = set(modes_nodes[mode.value])
             all_nodes_except_target = []
+            seen = set()
             for mode_name, nodes in modes_nodes.items():
-                all_nodes_except_target.extend(nodes)
-            for node in modes_nodes[mode.value]:
-                # implement this: remove `node` from all_nodes_except_target
-                if node in all_nodes_except_target:
-                    all_nodes_except_target.remove(node)
+                for node in nodes:
+                    if node not in target_nodes and node not in seen:
+                        all_nodes_except_target.append(node)
+                        seen.add(node)
             
             
             # Get nodes for this mode
@@ -528,8 +541,7 @@ class ModeManager(Node):
                     success = transition_node(self._service_clients, self.get_logger(), node_name, State.PRIMARY_STATE_UNCONFIGURED)
                 
                 if not success:
-                    failures.append(node_name)
-                    self.get_logger().warning(f"Failed to transition {node_name}")
+                    self.get_logger().warning(f"Failed to shutdown non-target node {node_name} (continuing)")
 
             # Phase 1: Configure all nodes in forward order
             self.get_logger().info(f"Configuring {len(node_names)} nodes for {mode.value} mode")
@@ -923,6 +935,14 @@ class ModeManager(Node):
         """
 
         self.get_logger().info("Attempting to change mode")
+        
+        # Prevent concurrent mode changes (ReentrantCallbackGroup allows parallel calls)
+        if not self._mode_change_lock.acquire(blocking=False):
+            response.success = False
+            response.message = "Mode change already in progress, ignoring duplicate request"
+            self.get_logger().warning(response.message)
+            return response
+        
         try:
             target_mode = request.mode.strip().lower()
             if self.current_map is None:
@@ -1007,6 +1027,8 @@ class ModeManager(Node):
             response.message = f"Error switching modes: {str(e)}"
             self.get_logger().error(response.message)
             self.current_mode = "none"
+        finally:
+            self._mode_change_lock.release()
 
         self.get_logger().info("returning from change mode callback")
         return response
