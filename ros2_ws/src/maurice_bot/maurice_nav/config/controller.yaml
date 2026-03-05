@@ -13,15 +13,19 @@
       required_movement_radius: 0.5
       movement_time_allowance: 10.0
     goal_checker:
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.16 # 10 deg
-      stateful: True
+      plugin: "maurice_nav::DynamicGoalChecker"
+      time_thresholds: [0.0, 0.40]
+      xy_tolerances: [0.25, 0.10]
+      yaw_tolerances: [0.16, 0.10] # 10 deg -> tighter final settle
+      linear_vel_tolerances: [0.5, 0.08]
+      angular_vel_tolerances: [1.5, 0.25]
     goal_checker_precise:
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.05
-      yaw_goal_tolerance: 0.08 # 5 deg
-      stateful: True
+      plugin: "maurice_nav::DynamicGoalChecker"
+      time_thresholds: [0.0, 0.30]
+      xy_tolerances: [0.15, 0.08]
+      yaw_tolerances: [0.12, 0.08] # 5 deg -> tighter final settle
+      linear_vel_tolerances: [0.5, 0.06]
+      angular_vel_tolerances: [1.5, 0.20]
     # MPPI controller parameters for the "FollowPath" plugin
     InnateFollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
@@ -35,7 +39,7 @@
       
       # Velocity limits (from existing DWB config)
       vx_min: -0.2                      # matches min_vel_x
-      vx_max: 0.5                       # matches max_vel_x
+      vx_max: 0.45                       # matches max_vel_x
       vy_max: 0.0                       # differential drive - no lateral motion
       wz_max: 0.8                       # matches max_vel_theta
       
@@ -59,7 +63,7 @@
       # Algorithm parameters
       temperature: 0.3                  # Trajectory selection temperature
       gamma: 0.015                      # Smoothness vs energy trade-off
-      visualize: false                   # Set to true for debugging (slows performance)
+      visualize: false                    # Set to true for debugging (slows performance)
       regenerate_noises: false
       
       # Goal tolerances
@@ -105,34 +109,34 @@
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.0
-        threshold_to_consider: 0.5
+        cost_weight: 10.0
+        threshold_to_consider: 0.3
       
       # Path alignment critic - keeps robot aligned with path
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0
+        cost_weight: 4.5
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.3
         offset_from_furthest: 20
-        use_path_orientations: false
+        use_path_orientations: true
       
       # Path following critic - drives progress along path
       PathFollowCritic:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        offset_from_furthest: 6
+        offset_from_furthest: 15
         threshold_to_consider: 1.2
       
       # Path angle critic - handles sharp turns
       PathAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 2.2
-        offset_from_furthest: 4
+        cost_weight: 1.0
+        offset_from_furthest: 17
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 0                          # Forward preference mode
@@ -141,5 +145,5 @@
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 15.0
         threshold_to_consider: 0.5

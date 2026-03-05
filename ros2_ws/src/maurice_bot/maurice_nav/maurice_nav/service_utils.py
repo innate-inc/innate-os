@@ -122,18 +122,32 @@ def transition_node(service_clients: dict, logger, node_name: str, target_state:
             # Deactivate if needed
             if current_state == State.PRIMARY_STATE_ACTIVE:
                 if not send_lifecycle_transition(service_clients, logger, node_name, Transition.TRANSITION_DEACTIVATE):
-                    logger.warning(f"Failed to deactivate {node_name}")
-                    return False
+                    # Re-check state - node may have already transitioned down
+                    current_state = get_node_state(service_clients, logger, node_name)
+                    if current_state is not None and current_state <= target_state:
+                        logger.info(f"{node_name} already at state {current_state} (target {target_state}), treating as success")
+                        return True
+                    elif current_state is not None and current_state == State.PRIMARY_STATE_INACTIVE:
+                        logger.info(f"{node_name} now INACTIVE, continuing to cleanup")
+                    else:
+                        logger.warning(f"Failed to deactivate {node_name}")
+                        return False
                 
-                current_state = State.PRIMARY_STATE_INACTIVE
-                if current_state == target_state:
+                current_state = get_node_state(service_clients, logger, node_name) or State.PRIMARY_STATE_INACTIVE
+                if current_state <= target_state:
                     return True
             
             # Cleanup if needed
             if current_state == State.PRIMARY_STATE_INACTIVE and target_state == State.PRIMARY_STATE_UNCONFIGURED:
                 if not send_lifecycle_transition(service_clients, logger, node_name, Transition.TRANSITION_CLEANUP):
-                    logger.warning(f"Failed to cleanup {node_name}")
-                    return False
+                    # Re-check state - node may have already been cleaned up
+                    current_state = get_node_state(service_clients, logger, node_name)
+                    if current_state is not None and current_state <= target_state:
+                        logger.info(f"{node_name} already at state {current_state} (target {target_state}), treating as success")
+                        return True
+                    else:
+                        logger.warning(f"Failed to cleanup {node_name}")
+                        return False
                 
                 return True
         
@@ -142,18 +156,28 @@ def transition_node(service_clients: dict, logger, node_name: str, target_state:
             # Configure if needed
             if current_state == State.PRIMARY_STATE_UNCONFIGURED:
                 if not send_lifecycle_transition(service_clients, logger, node_name, Transition.TRANSITION_CONFIGURE):
-                    logger.warning(f"Failed to configure {node_name}")
-                    return False
+                    # Re-check state - node may have been configured by another source
+                    current_state = get_node_state(service_clients, logger, node_name)
+                    if current_state is not None and current_state >= target_state:
+                        logger.info(f"{node_name} already at state {current_state} (target {target_state}), treating as success")
+                    else:
+                        logger.warning(f"Failed to configure {node_name}")
+                        return False
                 
-                current_state = State.PRIMARY_STATE_INACTIVE
-                if current_state == target_state:
+                current_state = get_node_state(service_clients, logger, node_name) or State.PRIMARY_STATE_INACTIVE
+                if current_state >= target_state:
                     return True
             
             # Activate if needed
             if current_state == State.PRIMARY_STATE_INACTIVE and target_state == State.PRIMARY_STATE_ACTIVE:
                 if not send_lifecycle_transition(service_clients, logger, node_name, Transition.TRANSITION_ACTIVATE):
-                    logger.warning(f"Failed to activate {node_name}")
-                    return False
+                    # Re-check state - node may have been activated by another source
+                    current_state = get_node_state(service_clients, logger, node_name)
+                    if current_state is not None and current_state >= target_state:
+                        logger.info(f"{node_name} already at state {current_state} (target {target_state}), treating as success")
+                    else:
+                        logger.warning(f"Failed to activate {node_name}")
+                        return False
                 
                 return True
         

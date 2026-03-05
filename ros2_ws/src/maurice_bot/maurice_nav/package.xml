@@ -12,18 +12,26 @@
   <!-- Core ROS dependencies -->
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>nav2_core</depend>
+  <depend>nav2_util</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>pluginlib</depend>
+  <depend>angles</depend>
+  <depend>action_msgs</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
   <!-- Message dependencies -->
-  <depend>geometry_msgs</depend>
-  <depend>nav_msgs</depend>
   <depend>tf2_msgs</depend>
   <depend>urdf</depend>
   <depend>std_msgs</depend>
-  <exec_depend>nav2_msgs</exec_depend>
+  <depend>nav2_msgs</depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
@@ -42,7 +50,6 @@
   <exec_depend>nav2_controller</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <depend>behaviortree_cpp_v3</depend>
-  <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>visualization_msgs</depend>
 

@@ -662,6 +662,9 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # Free GPU memory before exit so restarts don't OOM
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
         rclpy.shutdown()
 
 if __name__ == '__main__':
