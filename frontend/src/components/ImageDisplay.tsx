@@ -10,8 +10,9 @@ import {
   SecondaryVideo,
 } from "../styles/StyledImages";
 import { useRobotWebRTC } from "../hooks/useRobotWebRTC";
+import { Costmap2DView } from "./Costmap2DView";
 
-type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus";
+type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus" | "costmap2D";
 
 type ImageDisplayProps = {
   viewMode: ViewMode;
@@ -307,6 +308,7 @@ export function ImageDisplay({
   setViewMode,
   onSetDirective,
 }: ImageDisplayProps) {
+  const isCostmapView = viewMode === "costmap2D";
   const [backendShowLoading, setBackendShowLoading] = useState(true);
   const [backendConnectionFailed, setBackendConnectionFailed] = useState(false);
   const [backendErrorMessage, setBackendErrorMessage] = useState(
@@ -454,8 +456,13 @@ export function ImageDisplay({
   }, [useDirectRobot, directSecondaryStream]);
 
   // Only show all modes on desktop. On mobile, remove "sideBySide".
-  const desktopModes: ViewMode[] = ["sideBySide", "frontFocus", "chaseFocus"];
-  const mobileModes: ViewMode[] = ["frontFocus", "chaseFocus"];
+  const desktopModes: ViewMode[] = [
+    "sideBySide",
+    "frontFocus",
+    "chaseFocus",
+    "costmap2D",
+  ];
+  const mobileModes: ViewMode[] = ["frontFocus", "chaseFocus", "costmap2D"];
   const modes: ViewMode[] = isMobile ? mobileModes : desktopModes;
 
   // Ensure that if a user is on mobile and currently has "sideBySide",
@@ -468,6 +475,7 @@ export function ImageDisplay({
     sideBySide: "Side By Side",
     frontFocus: "Front Focus",
     chaseFocus: "Chase Focus",
+    costmap2D: "Costmap 2D",
   };
 
   // Handle view mode change
@@ -551,7 +559,7 @@ export function ImageDisplay({
         />
 
         {/* Loading indicator */}
-        {showLoading && (
+        {!isCostmapView && showLoading && (
           <LoadingContainer>
             {connectionFailed ? (
               <>
@@ -576,7 +584,7 @@ export function ImageDisplay({
         )}
 
         {/* Overlay UI */}
-        {!showLoading && (
+        {!isCostmapView && !showLoading && (
           <OverlayUI>
             <CamLabel>LIVE FEED</CamLabel>
             <Crosshair>
