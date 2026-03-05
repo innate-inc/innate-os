@@ -477,7 +477,7 @@ export default function App() {
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const [viewMode, setViewMode] = useState<
-    "sideBySide" | "frontFocus" | "chaseFocus"
+    "sideBySide" | "frontFocus" | "chaseFocus" | "costmap2D"
   >("frontFocus");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 

@@ -17,13 +17,15 @@
     "react-device-detect": "^2.2.3",
     "react-dom": "^18.3.1",
     "react-icons": "^5.5.0",
-    "styled-components": "^6.1.14"
+    "styled-components": "^6.1.14",
+    "three": "^0.183.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.12.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.0.0",
