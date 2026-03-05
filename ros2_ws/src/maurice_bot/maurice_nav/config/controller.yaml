@@ -63,7 +63,7 @@
       # Algorithm parameters
       temperature: 0.3                  # Trajectory selection temperature
       gamma: 0.015                      # Smoothness vs energy trade-off
-      visualize: false                   # Set to true for debugging (slows performance)
+      visualize: false                    # Set to true for debugging (slows performance)
       regenerate_noises: false
       
       # Goal tolerances
@@ -128,15 +128,15 @@
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        offset_from_furthest: 6
+        offset_from_furthest: 15
         threshold_to_consider: 1.2
       
       # Path angle critic - handles sharp turns
       PathAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 2.2
-        offset_from_furthest: 4
+        cost_weight: 1.0
+        offset_from_furthest: 17
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 0                          # Forward preference mode

@@ -39,7 +39,7 @@ def generate_launch_description():
         package='topic_tools',
         executable='throttle',
         name='scan_throttle',
-        arguments=['messages', '/scan_fast', '3.0', '/scan'],
+        arguments=['messages', '/scan_fast', '6.0', '/scan'],
         output='screen'
     )
 
