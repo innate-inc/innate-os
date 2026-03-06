@@ -8,7 +8,6 @@ dependencies = []
 [project.optional-dependencies]
 httpx = ["httpx>=0.24"]
 websockets = ["websockets>=12"]
-websocket-client = ["websocket-client>=1.6"]
 
 [project.scripts]
 innate-auth-token = "auth_client.__main__:main"

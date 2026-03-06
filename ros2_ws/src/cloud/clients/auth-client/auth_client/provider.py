@@ -152,42 +152,6 @@ class AuthProvider:
 
         raise RuntimeError("WS auth retry exhausted")  # unreachable
 
-    def ws_connect_sync(
-        self,
-        url: str,
-        extra_headers: dict[str, str] | None = None,
-        **kwargs,
-    ):
-        """Open a sync WebSocket with Bearer auth and one 401 retry.
-
-        Uses ``websocket-client``'s :func:`~websocket.create_connection`.
-        Returns a connected :class:`websocket.WebSocket` instance.
-
-        Args:
-            url: WebSocket URL (``wss://`` or ``ws://``).
-            extra_headers: Additional headers merged after the auth header.
-            **kwargs: Forwarded to ``create_connection()``
-                (e.g. ``timeout``, ``enable_multithread``).
-        """
-        import websocket as _ws_mod  # websocket-client, optional dep
-
-        for attempt in range(2):
-            headers = self.bearer_headers()
-            if extra_headers:
-                headers.update(extra_headers)
-            header_list = [f"{k}: {v}" for k, v in headers.items()]
-
-            try:
-                return _ws_mod.create_connection(url, header=header_list, **kwargs)
-            except _ws_mod.WebSocketBadStatusException as exc:
-                if exc.status_code == 401 and attempt == 0:
-                    logger.warning("WS auth 401 — renewing token and retrying")
-                    self.token_needs_renewal = True
-                    continue
-                raise
-
-        raise RuntimeError("WS auth retry exhausted")  # unreachable
-
     # ── Internals ───────────────────────────────────────────────────
 
     def _renew(self) -> str:
