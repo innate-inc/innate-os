@@ -17,11 +17,6 @@ Manual test::
 
 from __future__ import annotations
 
-CMD_DURATION_SEC: float = 0.15
-CMD_PUBLISH_HZ: float = 30.0
-POLL_PERIOD_SEC: float = 0.02
-LATENCY_REPORT_SEC: float = 5.0
-
 import os
 import statistics
 import time
@@ -75,6 +70,12 @@ class UninavidNode(Node):
         self.declare_parameter("ws_url", os.getenv("UNINAVID_WS_URL", DEFAULT_WS_URL))
         self.declare_parameter("service_key", os.getenv("INNATE_SERVICE_KEY", ""))
         self.declare_parameter("auth_issuer_url", os.getenv("INNATE_AUTH_URL", DEFAULT_AUTH_ISSUER_URL))
+        self.declare_parameter("cmd_duration_sec", 0.1)
+        self.declare_parameter("cmd_publish_hz", 50.0)
+        self.declare_parameter("poll_period_sec", 0.02)
+        self.declare_parameter("latency_report_sec", 5.0)
+        self.declare_parameter("image_send_hz", 49.0)
+        self.declare_parameter("consecutive_stops_to_complete", 20)
 
         self._ws_url = str(self.get_parameter("ws_url").value)
         service_key = str(self.get_parameter("service_key").value)
@@ -130,8 +131,12 @@ class UninavidNode(Node):
         if c is None or c.state != ClientState.CONNECTED:
             return
         s = msg.header.stamp
+        now = self.get_clock().now().nanoseconds
+        last = getattr(self, '_last_image_ns', 0)
+        cam_dt = (now - last) / 1e9 if last > 0 else -1.0
+        self._last_image_ns = now
         self.get_logger().info(
-            f"push_frame stamp={s.sec}.{s.nanosec:09d} ({len(msg.data)} bytes)"
+            f"push_frame stamp={s.sec}.{s.nanosec:09d} ({len(msg.data)} bytes) cam_dt={cam_dt:.3f}s"
         )
         c.push_frame(format=msg.format, stamp_sec=s.sec,
                      stamp_nanosec=s.nanosec, data=bytes(msg.data))
@@ -142,9 +147,18 @@ class UninavidNode(Node):
         instruction = goal_handle.request.instruction
         self.get_logger().info(f"Executing: {instruction!r}")
 
+        cmd_duration = float(self.get_parameter("cmd_duration_sec").value)
+        cmd_publish_hz = float(self.get_parameter("cmd_publish_hz").value)
+        poll_period = float(self.get_parameter("poll_period_sec").value)
+        latency_report = float(self.get_parameter("latency_report_sec").value)
+        image_send_hz = float(self.get_parameter("image_send_hz").value)
+        consecutive_stops = int(self.get_parameter("consecutive_stops_to_complete").value)
+
         client = UninavidWsClient(
             url=self._ws_url, auth_provider=self._auth,
             logger=self.get_logger(),
+            image_send_hz=image_send_hz,
+            consecutive_stops_to_complete=consecutive_stops,
         )
         self._client = client
         client.connect(instruction)
@@ -192,8 +206,8 @@ class UninavidNode(Node):
 
                     tw = _twist(code)
                     if tw is not None:
-                        deadline = time.monotonic() + CMD_DURATION_SEC
-                        dt = 1.0 / CMD_PUBLISH_HZ
+                        deadline = time.monotonic() + cmd_duration
+                        dt = 1.0 / cmd_publish_hz
                         while time.monotonic() < deadline:
                             self._cmd.publish(tw)
                             time.sleep(dt)
@@ -202,7 +216,7 @@ class UninavidNode(Node):
                     code = client.pop_action()
 
                 # RTT
-                if now - self._last_rtt_report >= LATENCY_REPORT_SEC:
+                if now - self._last_rtt_report >= latency_report:
                     self._last_rtt_report = now
                     samples = client.pop_rtt_samples()
                     if samples:
@@ -217,7 +231,7 @@ class UninavidNode(Node):
                 if goal_handle.is_active:
                     goal_handle.publish_feedback(feedback)
 
-                time.sleep(POLL_PERIOD_SEC)
+                time.sleep(poll_period)
 
             # Preempted (is_active became False) or shutting down
             self._cmd.publish(_STOP)

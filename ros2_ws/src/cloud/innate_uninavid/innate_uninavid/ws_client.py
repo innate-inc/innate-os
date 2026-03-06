@@ -25,12 +25,7 @@ from enum import IntEnum, auto
 from typing import Optional
 
 import websockets
-
-# ── Public constants ──────────────────────────────────────────────────────────
-
-IMAGE_SEND_HZ: float = 10.0
-CONSECUTIVE_STOPS_TO_COMPLETE: int = 20
-
+from aiotools import create_timer
 
 class Action(IntEnum):
     STOP = 0
@@ -61,10 +56,14 @@ class UninavidWsClient:
         url: str,
         auth_provider=None,
         logger=None,
+        image_send_hz: float = 49.0,
+        consecutive_stops_to_complete: int = 20,
     ) -> None:
         self._url = url
         self._auth = auth_provider
         self._log = logger or logging.getLogger(__name__)
+        self._image_send_hz = image_send_hz
+        self._consecutive_stops_to_complete = consecutive_stops_to_complete
 
         # ── Thread-safe shared state ──────────────────────────────────────
         self._lock = threading.Lock()
@@ -82,6 +81,7 @@ class UninavidWsClient:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._instruction: Optional[str] = None
+        self._send_count: int = 0
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -202,19 +202,16 @@ class UninavidWsClient:
                     await ws.send(self._instruction)
                     self._log.info(f"Sent: {self._instruction!r}")
 
-                    send_task = asyncio.create_task(self._send_loop(ws))
-                    recv_task = asyncio.create_task(self._recv_loop(ws))
-
-                    done, pending = await asyncio.wait(
-                        {send_task, recv_task},
-                        return_when=asyncio.FIRST_COMPLETED,
+                    # Start periodic send timer + run recv loop
+                    self._ws = ws
+                    self._send_count = 0
+                    send_timer = create_timer(
+                        self._send_tick, 1.0 / self._image_send_hz,
                     )
-                    for t in pending:
-                        t.cancel()
-                    # Propagate exceptions
-                    for t in done:
-                        if t.exception() is not None:
-                            raise t.exception()
+                    try:
+                        await self._recv_loop(ws)
+                    finally:
+                        send_timer.cancel()
                     return  # success
 
             except websockets.InvalidStatus as exc:
@@ -246,25 +243,27 @@ class UninavidWsClient:
                     self._error_msg = str(exc)
             return  # don't retry on non-401 errors
 
-    async def _send_loop(self, ws) -> None:
-        interval = 1.0 / IMAGE_SEND_HZ
-        _send_count = 0
-        while True:
-            await asyncio.sleep(interval)
+    async def _send_tick(self, interval: float) -> None:
+        """Called by aiotools.create_timer every 1/image_send_hz seconds."""
+        try:
             with self._lock:
                 payload = self._frame
                 stamp = self._frame_stamp
                 self._frame = None  # don't re-send the same frame
             if payload is not None:
-                await ws.send(payload)
-                _send_count += 1
-                now = time.monotonic()
+                t0 = time.monotonic()
+                await self._ws.send(payload)
+                upload_ms = (time.monotonic() - t0) * 1000
+                self._send_count += 1
                 with self._lock:
+                    since_last = t0 - self._last_send_time if self._last_send_time > 0 else -1.0
                     self._sent_stamps.append(stamp)
-                    self._last_send_time = now
+                    self._last_send_time = t0
                 self._log.info(
-                    f"ws_send #{_send_count} stamp={stamp[0]}.{stamp[1]:09d} ({len(payload)} bytes)"
+                    f"ws_send #{self._send_count} stamp={stamp[0]}.{stamp[1]:09d} ({len(payload)} bytes) upload={upload_ms:.0f}ms dt={since_last:.3f}s"
                 )
+        except Exception as exc:
+            self._log.error(f"send_tick error: {exc}")
 
     async def _recv_loop(self, ws) -> None:
         _recv_count = 0
@@ -342,14 +341,14 @@ class UninavidWsClient:
                 if rtt > 0:
                     self._rtt_samples.append(rtt)
 
-                if self._consecutive_stops >= CONSECUTIVE_STOPS_TO_COMPLETE:
+                if self._consecutive_stops >= self._consecutive_stops_to_complete:
                     self._consecutive_stops = 0
                     self._state = ClientState.COMPLETED
 
             # If completed, notify server and close
             if self.state == ClientState.COMPLETED:
                 self._log.info(
-                    f"{CONSECUTIVE_STOPS_TO_COMPLETE} consecutive STOPs — done"
+                    f"{self._consecutive_stops_to_complete} consecutive STOPs — done"
                 )
                 try:
                     await ws.close()

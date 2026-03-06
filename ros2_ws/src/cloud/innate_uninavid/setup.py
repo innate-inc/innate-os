@@ -12,6 +12,8 @@ setup(
             ["resource/" + package_name],
         ),
         ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name + "/launch", ["launch/uninavid.launch.py"]),
+        ("share/" + package_name + "/config", ["config/params.yaml"]),
     ],
     install_requires=["setuptools", "httpx>=0.24", "httpx-ws>=0.6", "python-dotenv"],
     zip_safe=True,
