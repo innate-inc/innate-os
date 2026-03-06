@@ -201,7 +201,7 @@ class ProxyClient:
         if self._openai is None:
             from innate_proxy.adapters.openai import ProxyOpenAIClient
 
-            self._openai = ProxyOpenAIClient(self)
+            self._openai = ProxyOpenAIClient(self, auth=self._auth)
         return self._openai
 
     # -- Lifecycle ------------------------------------------------------------

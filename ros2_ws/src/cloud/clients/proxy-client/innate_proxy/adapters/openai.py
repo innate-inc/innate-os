@@ -7,11 +7,10 @@ audio streaming from synchronous code.
 The adapter expects a *parent* object that exposes:
 
 - ``parent.proxy_url``  — base URL of the proxy
-- ``parent.innate_service_key`` or ``parent.token`` — bearer credential
 - ``parent.request(...)`` — for HTTP calls
 
-This is satisfied by both :class:`innate_proxy.ProxyClient` and
-``brain_client.client.proxy_client.ProxyClient``.
+An optional :class:`auth_client.AuthProvider` is passed separately at
+construction time for WebSocket auth.
 """
 
 from __future__ import annotations
@@ -23,13 +22,13 @@ import threading
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 import websocket  # websocket-client (sync, fast)
-import websockets  # websockets (async)
+from auth_client import AuthProvider
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Sync WebSocket wrapper
+# Sync WebSocket wrapper  (websocket-client — no httpx/asyncio)
 # ---------------------------------------------------------------------------
 
 
@@ -37,28 +36,22 @@ class SyncRealtimeConnection:
     """Synchronous WebSocket connection for OpenAI Realtime API via proxy.
 
     Uses ``websocket-client`` (sync) for low-latency audio streaming.
-
-    Accepts either a static ``innate_service_key`` string **or** a
-    ``token_provider`` callable that returns a fresh token on each
-    invocation.  When both are given, the callback wins.  This ensures
-    that ``start()`` always uses a current JWT even after reconnects
-    that may happen well past the original token's TTL.
+    Auth is handled via the supplied :class:`AuthProvider`; if none is
+    provided the connection is made without credentials.
     """
 
     def __init__(
         self,
         proxy_url: str,
-        innate_service_key: str = "",
         model: str = "gpt-4o-realtime-preview",
+        auth: Optional[AuthProvider] = None,
         on_message: Optional[Callable] = None,
         on_open: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
         on_close: Optional[Callable] = None,
-        token_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self._proxy_url = proxy_url.rstrip("/")
-        self._static_token = innate_service_key
-        self._token_provider = token_provider
+        self._auth = auth
         self._model = model
         self._on_message_callback = on_message
         self._on_open_callback = on_open
@@ -72,10 +65,10 @@ class SyncRealtimeConnection:
         self._audio_chunk_count = 0
 
     def _get_token(self) -> str:
-        """Return a fresh token via the provider, falling back to the static one."""
-        if self._token_provider is not None:
-            return self._token_provider()
-        return self._static_token
+        """Return a fresh token from the AuthProvider, or empty string."""
+        if self._auth is not None:
+            return self._auth.token
+        return ""
 
     def start(self) -> None:
         """Start the WebSocket connection in a background thread.
@@ -91,14 +84,13 @@ class SyncRealtimeConnection:
         ws_url = self._proxy_url.replace("https://", "wss://").replace(
             "http://", "ws://"
         )
-        ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}&token={token}"
+        ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}"
 
         logger.info("Connecting to WebSocket: %s...", ws_url[:80])
 
-        headers = {
-            "X-Innate-Token": token,
-            "OpenAI-Beta": "realtime=v1",
-        }
+        headers: dict[str, str] = {"OpenAI-Beta": "realtime=v1"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
         self._ws = websocket.WebSocketApp(
             ws_url,
@@ -199,24 +191,18 @@ class ProxyOpenAIClient:
     """OpenAI client that routes through the Innate service proxy.
 
     Supports HTTP (Chat Completions) and WebSocket (Realtime) sub-APIs.
+    Auth is delegated to :mod:`auth_client` — this adapter carries no
+    token / JWT logic of its own.
     """
 
-    def __init__(self, parent: Any) -> None:
+    def __init__(self, parent: Any, auth: AuthProvider | None = None) -> None:
         self._parent = parent
+        self._auth = auth
 
     # -- helpers --------------------------------------------------------------
 
     def _get_proxy_url(self) -> str:
         return getattr(self._parent, "proxy_url", "")
-
-    def _get_service_key(self) -> str:
-        # Works with both innate_proxy.ProxyClient (.token) and
-        # brain_client ProxyClient (._innate_service_key / .innate_service_key)
-        if hasattr(self._parent, "token"):
-            return self._parent.token
-        if hasattr(self._parent, "innate_service_key"):
-            return self._parent.innate_service_key
-        return getattr(self._parent, "_innate_service_key", "")
 
     # -- Chat -----------------------------------------------------------------
 
@@ -275,29 +261,24 @@ class ProxyOpenAIClient:
             return SyncRealtimeConnection(
                 proxy_url=self._oc._get_proxy_url(),
                 model=model,
+                auth=self._oc._auth,
                 on_message=on_message,
                 on_open=on_open,
                 on_error=on_error,
                 on_close=on_close,
-                token_provider=self._oc._get_service_key,
             )
 
         async def connect(
             self,
             model: str = "gpt-4o-realtime-preview",
             on_message: Optional[Callable] = None,
-        ) -> websockets.WebSocketClientProtocol:
+        ):
+            """Open an async WebSocket to the OpenAI Realtime API via proxy."""
             proxy_url = self._oc._get_proxy_url()
-            # Fetch a fresh token at connect-time (not cached from init)
-            service_key = self._oc._get_service_key()
             ws_url = proxy_url.replace("https://", "wss://").replace("http://", "ws://")
-            ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={model}&token={service_key}"
+            ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={model}"
 
-            headers = {"Authorization": f"Bearer {service_key}"}
-            try:
-                ws = await websockets.connect(ws_url, extra_headers=headers)
-            except TypeError:
-                ws = await websockets.connect(ws_url, additional_headers=headers)
+            ws = await self._oc._auth.ws_connect(ws_url)
 
             if on_message:
 

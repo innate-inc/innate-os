@@ -105,6 +105,46 @@ class AuthProvider:
         renewal = self._issued_at + half_life
         return (renewal - datetime.now(timezone.utc)).total_seconds()
 
+    async def ws_connect(self, url: str, extra_headers: dict[str, str] | None = None, **ws_kwargs):
+        """Open an async WebSocket with Bearer auth and one 401 retry.
+
+        Injects the current JWT as a ``Bearer`` header and retries once
+        on a 401 response after forcing token renewal.
+
+        Args:
+            url: WebSocket URL (``wss://`` or ``ws://``).
+            extra_headers: Additional headers merged after the auth header.
+            **ws_kwargs: Forwarded to :func:`websockets.connect`
+                (e.g. ``max_size``, ``ping_interval``, ``ping_timeout``).
+
+        Returns:
+            An open WebSocket connection (context-manageable).
+        """
+        import websockets  # optional dep
+
+        for attempt in range(2):
+            headers: dict[str, str] = {
+                "User-Agent": "innate-robot",
+                "Authorization": f"Bearer {self.token}",
+            }
+            if extra_headers:
+                headers.update(extra_headers)
+
+            try:
+                return await websockets.connect(
+                    url,
+                    additional_headers=headers,
+                    **ws_kwargs,
+                )
+            except websockets.InvalidStatus as exc:
+                if exc.response.status_code == 401 and attempt == 0:
+                    logger.warning("WS auth 401 — renewing token and retrying")
+                    self.token_needs_renewal = True
+                    continue
+                raise
+
+        raise RuntimeError("WS auth retry exhausted")  # unreachable
+
     # ── Internals ───────────────────────────────────────────────────
 
     def _renew(self) -> str:
