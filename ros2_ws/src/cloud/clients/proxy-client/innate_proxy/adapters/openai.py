@@ -1,15 +1,12 @@
 """OpenAI adapter for the Innate proxy client.
 
-Provides :class:`ProxyOpenAIClient` with ``chat`` (HTTP) and ``realtime``
-(WebSocket) sub-APIs, plus :class:`SyncRealtimeConnection` for low-latency
-audio streaming from synchronous code.
+Provides :class:`ProxyOpenAIClient` with a ``realtime`` WebSocket sub-API.
 
 The adapter expects a *parent* object that exposes:
 
 - ``parent.proxy_url``  — base URL of the proxy
-- ``parent.request(...)`` — for HTTP calls
 
-An optional :class:`auth_client.AuthProvider` is passed separately at
+An :class:`auth_client.AuthProvider` is passed separately at
 construction time for WebSocket auth.
 """
 
@@ -19,171 +16,118 @@ import asyncio
 import json
 import logging
 import threading
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
-import websocket  # websocket-client (sync, fast)
 from auth_client import AuthProvider
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Sync WebSocket wrapper  (websocket-client — no httpx/asyncio)
+# Sync adapter — bridges the async websocket for callers that need
+# a threaded callback-based interface (e.g. MicroInput).
+#
+# TODO: This adds indirection.  Long-term we want to make MicroInput
+#       fully async and drop this class entirely.
 # ---------------------------------------------------------------------------
 
 
 class SyncRealtimeConnection:
-    """Synchronous WebSocket connection for OpenAI Realtime API via proxy.
+    """Sync wrapper around an async WebSocket.
 
-    Uses ``websocket-client`` (sync) for low-latency audio streaming.
-    Auth is handled entirely by the supplied :class:`AuthProvider`.
+    Presents the callback-based API expected by existing consumers::
+
+        conn = proxy.openai.realtime.connect_sync(
+            model=model,
+            on_message=my_handler,   # (ws, message_str)
+            on_open=on_open_cb,      # ()
+            on_error=on_error_cb,    # (error)
+            on_close=on_close_cb,    # ()
+        )
+        conn.start()                 # non-blocking, spawns background thread
+        conn.wait_until_connected()  # blocks
+        conn.send_json({...})
+        conn.stop()
     """
 
     def __init__(
         self,
-        proxy_url: str,
-        model: str = "gpt-4o-realtime-preview",
-        auth: Optional[AuthProvider] = None,
+        auth: AuthProvider,
+        ws_url: str,
         on_message: Optional[Callable] = None,
         on_open: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
         on_close: Optional[Callable] = None,
     ) -> None:
-        self._proxy_url = proxy_url.rstrip("/")
         self._auth = auth
-        self._model = model
-        self._on_message_callback = on_message
-        self._on_open_callback = on_open
-        self._on_error_callback = on_error
-        self._on_close_callback = on_close
+        self._ws_url = ws_url
+        self._on_message = on_message
+        self._on_open = on_open
+        self._on_error = on_error
+        self._on_close = on_close
 
-        self._ws: Optional[websocket.WebSocket] = None
-        self._stop_event = threading.Event()
-        self._connected_event = threading.Event()
-        self._send_lock = threading.Lock()
-        self._audio_chunk_count = 0
+        self._ws: Any = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._connected = threading.Event()
+        self._stopped = threading.Event()
+
+    # -- public API -----------------------------------------------------------
 
     def start(self) -> None:
-        """Start the WebSocket connection in a background thread.
+        """Start the background event-loop thread and connect."""
+        self._loop = asyncio.new_event_loop()
 
-        Auth (including 401 retry) is delegated to
-        :meth:`AuthProvider.ws_connect_sync`.
-        """
-        self._stop_event.clear()
-        self._connected_event.clear()
-        self._audio_chunk_count = 0
+        def _run() -> None:
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self._run_ws())
 
-        ws_url = self._proxy_url.replace("https://", "wss://").replace(
-            "http://", "ws://"
-        )
-        ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}"
-
-        logger.info("Connecting to WebSocket: %s...", ws_url[:80])
-
-        self._ws = self._auth.ws_connect_sync(
-            ws_url,
-            extra_headers={"OpenAI-Beta": "realtime=v1"},
-            enable_multithread=True,
-        )
-
-        logger.info("WebSocket connected successfully")
-        self._connected_event.set()
-        if self._on_open_callback:
-            self._on_open_callback()
-
-        # Background threads for recv loop and keepalive pings
-        threading.Thread(target=self._recv_loop, daemon=True).start()
-        threading.Thread(target=self._ping_loop, daemon=True).start()
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
-        """Stop the WebSocket connection."""
-        self._stop_event.set()
-        if self._ws:
-            try:
-                self._ws.close()
-            except Exception:
-                pass
-        self._connected_event.clear()
+        """Close the websocket and stop the background loop."""
+        self._stopped.set()
+        if self._ws and self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._ws.close(), self._loop)
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread:
+            self._thread.join(timeout=2.0)
+        self._loop = None
+        self._thread = None
 
-    def wait_until_connected(self, timeout: float = 10.0) -> bool:
-        return self._connected_event.wait(timeout=timeout)
+    def send_json(self, data: dict) -> None:
+        """Send a JSON payload (thread-safe)."""
+        if self._ws and self._loop and self._loop.is_running():
+            raw = json.dumps(data)
+            asyncio.run_coroutine_threadsafe(self._ws.send(raw), self._loop)
 
-    def send_json(self, data: Dict[str, Any]) -> None:
-        msg_type = data.get("type", "unknown")
-        if msg_type == "input_audio_buffer.append":
-            self._audio_chunk_count += 1
-            if self._audio_chunk_count == 1:
-                logger.info("📤 First audio chunk sent")
-            elif self._audio_chunk_count == 100:
-                logger.info("📤 100 audio chunks sent")
-        else:
-            logger.info("📤 send_json: %s", msg_type)
+    def wait_until_connected(self, timeout: float = 10) -> bool:
+        """Block until the websocket is open. Returns *True* on success."""
+        return self._connected.wait(timeout=timeout)
 
-        msg = json.dumps(data)
-        with self._send_lock:
-            if self._ws and self._connected_event.is_set():
-                try:
-                    self._ws.send(msg)
-                except Exception as e:
-                    logger.error("Send error: %s", e)
+    # -- internals ------------------------------------------------------------
 
-    # -- internal loops / callbacks -------------------------------------------
-
-    def _recv_loop(self) -> None:
-        """Receive messages until stop or disconnect."""
+    async def _run_ws(self) -> None:
         try:
-            while not self._stop_event.is_set():
-                try:
-                    message = self._ws.recv()
-                    if not message:
-                        break
-                    if isinstance(message, str):
-                        self._dispatch_message(message)
-                except websocket.WebSocketConnectionClosedException:
+            self._ws = await self._auth.ws_connect(self._ws_url)
+            self._connected.set()
+            if self._on_open:
+                self._on_open()
+
+            async for message in self._ws:
+                if self._stopped.is_set():
                     break
-                except Exception as exc:
-                    if not self._stop_event.is_set():
-                        logger.error("WebSocket error: %s", exc)
-                        if self._on_error_callback:
-                            self._on_error_callback(str(exc))
-                    break
+                if self._on_message:
+                    self._on_message(self._ws, message)
+        except Exception as exc:
+            if self._on_error and not self._stopped.is_set():
+                self._on_error(exc)
         finally:
-            logger.info("WebSocket closed")
-            self._connected_event.clear()
-            if self._on_close_callback:
-                self._on_close_callback()
-
-    def _ping_loop(self) -> None:
-        """Send keepalive pings every 30 seconds."""
-        while not self._stop_event.wait(timeout=30):
-            try:
-                if self._ws and self._connected_event.is_set():
-                    self._ws.ping()
-            except Exception:
-                break
-
-    def _dispatch_message(self, message: str) -> None:
-        """Log and forward a received text message."""
-        try:
-            msg_data = json.loads(message)
-            msg_type = msg_data.get("type", "unknown")
-            if msg_type in (
-                "session.created",
-                "session.updated",
-                "input_audio_buffer.speech_started",
-                "input_audio_buffer.speech_stopped",
-                "conversation.item.input_audio_transcription.completed",
-            ):
-                logger.info("📨 %s", msg_type)
-            elif msg_type == "error":
-                logger.error("📨 OpenAI error: %s", msg_data)
-        except Exception:
-            pass
-        if self._on_message_callback:
-            try:
-                self._on_message_callback(self._ws, message)
-            except Exception as e:
-                logger.error("Message handler error: %s", e)
+            self._connected.clear()
+            if self._on_close and not self._stopped.is_set():
+                self._on_close()
 
     def _on_error(self, ws: Any, error: Any) -> None:
         logger.error("WebSocket error: %s", error)
@@ -206,7 +150,7 @@ class SyncRealtimeConnection:
 class ProxyOpenAIClient:
     """OpenAI client that routes through the Innate service proxy.
 
-    Supports HTTP (Chat Completions) and WebSocket (Realtime) sub-APIs.
+    Provides a realtime WebSocket sub-API (async *and* sync).
     Auth is delegated to :mod:`auth_client` — this adapter carries no
     token / JWT logic of its own.
     """
@@ -220,68 +164,16 @@ class ProxyOpenAIClient:
     def _get_proxy_url(self) -> str:
         return getattr(self._parent, "proxy_url", "")
 
-    # -- Chat -----------------------------------------------------------------
-
-    class Chat:
-        def __init__(self, parent: Any) -> None:
-            self._parent = parent
-
-        async def completions(
-            self,
-            model: str,
-            messages: list[Dict[str, str]],
-            **kwargs: Any,
-        ) -> Dict[str, Any] | AsyncIterator[Dict[str, Any]]:
-            body: Dict[str, Any] = {"model": model, "messages": messages, **kwargs}
-            if stream:
-                body["stream"] = True
-
-            response = await self._parent.request_async(
-                service_name="openai",
-                endpoint="/v1/chat/completions",
-                method="POST",
-                json=body,
-            )
-
-            if stream:
-
-                async def _stream() -> AsyncIterator[Dict[str, Any]]:
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data.strip() == "[DONE]":
-                                break
-                            try:
-                                yield json.loads(data)
-                            except json.JSONDecodeError:
-                                continue
-
-                return _stream()
-            return response.json()
-
     # -- Realtime -------------------------------------------------------------
 
     class Realtime:
         def __init__(self, openai_client: "ProxyOpenAIClient") -> None:
             self._oc = openai_client
 
-        def connect_sync(
-            self,
-            model: str = "gpt-4o-realtime-preview",
-            on_message: Optional[Callable] = None,
-            on_open: Optional[Callable] = None,
-            on_error: Optional[Callable] = None,
-            on_close: Optional[Callable] = None,
-        ) -> SyncRealtimeConnection:
-            return SyncRealtimeConnection(
-                proxy_url=self._oc._get_proxy_url(),
-                model=model,
-                auth=self._oc._auth,
-                on_message=on_message,
-                on_open=on_open,
-                on_error=on_error,
-                on_close=on_close,
-            )
+        def _build_ws_url(self, model: str) -> str:
+            proxy_url = self._oc._get_proxy_url()
+            ws_url = proxy_url.replace("https://", "wss://").replace("http://", "ws://")
+            return f"{ws_url}/v1/services/openai/v1/realtime?model={model}"
 
         async def connect(
             self,
@@ -289,10 +181,7 @@ class ProxyOpenAIClient:
             on_message: Optional[Callable] = None,
         ):
             """Open an async WebSocket to the OpenAI Realtime API via proxy."""
-            proxy_url = self._oc._get_proxy_url()
-            ws_url = proxy_url.replace("https://", "wss://").replace("http://", "ws://")
-            ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={model}"
-
+            ws_url = self._build_ws_url(model)
             ws = await self._oc._auth.ws_connect(ws_url)
 
             if on_message:
@@ -305,11 +194,26 @@ class ProxyOpenAIClient:
 
             return ws
 
-    # -- properties -----------------------------------------------------------
+        def connect_sync(
+            self,
+            model: str = "gpt-4o-realtime-preview",
+            on_message: Optional[Callable] = None,
+            on_open: Optional[Callable] = None,
+            on_error: Optional[Callable] = None,
+            on_close: Optional[Callable] = None,
+        ) -> SyncRealtimeConnection:
+            """Return a :class:`SyncRealtimeConnection` (call ``.start()`` to connect)."""
+            ws_url = self._build_ws_url(model)
+            return SyncRealtimeConnection(
+                auth=self._oc._auth,
+                ws_url=ws_url,
+                on_message=on_message,
+                on_open=on_open,
+                on_error=on_error,
+                on_close=on_close,
+            )
 
-    @property
-    def chat(self) -> Chat:
-        return self.Chat(self._parent)
+    # -- properties -----------------------------------------------------------
 
     @property
     def realtime(self) -> Realtime:
