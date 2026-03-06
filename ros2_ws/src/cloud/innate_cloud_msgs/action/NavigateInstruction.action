@@ -8,3 +8,4 @@ string message
 # Feedback: latest action code received from the server
 int32 latest_action
 int32 consecutive_stops
+int32 max_consecutive_stops

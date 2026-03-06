@@ -228,6 +228,7 @@ class UninavidNode(Node):
                 # Feedback
                 feedback.latest_action = code if code is not None else 0
                 feedback.consecutive_stops = client.consecutive_stops
+                feedback.max_consecutive_stops = consecutive_stops
                 if goal_handle.is_active:
                     goal_handle.publish_feedback(feedback)
 

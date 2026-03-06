@@ -185,7 +185,7 @@ class NavigateWithVision(Skill):
         action_label = _ACTION_LABELS.get(fb.latest_action, str(fb.latest_action))
         text = (
             f"Action: {action_label} | "
-            f"Consecutive stops: {fb.consecutive_stops}/20"
+            f"Consecutive stops: {fb.consecutive_stops}/{fb.max_consecutive_stops}"
         )
         self.logger.debug(f"[NavigateWithVision] feedback: {text}")
 
