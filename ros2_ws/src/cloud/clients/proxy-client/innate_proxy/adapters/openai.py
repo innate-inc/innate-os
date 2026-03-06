@@ -36,8 +36,7 @@ class SyncRealtimeConnection:
     """Synchronous WebSocket connection for OpenAI Realtime API via proxy.
 
     Uses ``websocket-client`` (sync) for low-latency audio streaming.
-    Auth is handled via the supplied :class:`AuthProvider`; if none is
-    provided the connection is made without credentials.
+    Auth is handled entirely by the supplied :class:`AuthProvider`.
     """
 
     def __init__(
@@ -58,28 +57,21 @@ class SyncRealtimeConnection:
         self._on_error_callback = on_error
         self._on_close_callback = on_close
 
-        self._ws: Optional[websocket.WebSocketApp] = None
+        self._ws: Optional[websocket.WebSocket] = None
         self._stop_event = threading.Event()
         self._connected_event = threading.Event()
         self._send_lock = threading.Lock()
         self._audio_chunk_count = 0
 
-    def _get_token(self) -> str:
-        """Return a fresh token from the AuthProvider, or empty string."""
-        if self._auth is not None:
-            return self._auth.token
-        return ""
-
     def start(self) -> None:
         """Start the WebSocket connection in a background thread.
 
-        A fresh token is obtained on every call so that reconnects after
-        the original JWT has expired will succeed.
+        Auth (including 401 retry) is delegated to
+        :meth:`AuthProvider.ws_connect_sync`.
         """
         self._stop_event.clear()
         self._connected_event.clear()
-
-        token = self._get_token()
+        self._audio_chunk_count = 0
 
         ws_url = self._proxy_url.replace("https://", "wss://").replace(
             "http://", "ws://"
@@ -88,25 +80,20 @@ class SyncRealtimeConnection:
 
         logger.info("Connecting to WebSocket: %s...", ws_url[:80])
 
-        headers: dict[str, str] = {"OpenAI-Beta": "realtime=v1"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        self._ws = websocket.WebSocketApp(
+        self._ws = self._auth.ws_connect_sync(
             ws_url,
-            header=[f"{k}: {v}" for k, v in headers.items()],
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
+            extra_headers={"OpenAI-Beta": "realtime=v1"},
+            enable_multithread=True,
         )
 
-        thread = threading.Thread(
-            target=self._ws.run_forever,
-            kwargs={"ping_interval": 30, "ping_timeout": 10},
-            daemon=True,
-        )
-        thread.start()
+        logger.info("WebSocket connected successfully")
+        self._connected_event.set()
+        if self._on_open_callback:
+            self._on_open_callback()
+
+        # Background threads for recv loop and keepalive pings
+        threading.Thread(target=self._recv_loop, daemon=True).start()
+        threading.Thread(target=self._ping_loop, daemon=True).start()
 
     def stop(self) -> None:
         """Stop the WebSocket connection."""
@@ -140,15 +127,43 @@ class SyncRealtimeConnection:
                 except Exception as e:
                     logger.error("Send error: %s", e)
 
-    # -- internal callbacks ---------------------------------------------------
+    # -- internal loops / callbacks -------------------------------------------
 
-    def _on_open(self, ws: Any) -> None:
-        logger.info("WebSocket connected successfully")
-        self._connected_event.set()
-        if self._on_open_callback:
-            self._on_open_callback()
+    def _recv_loop(self) -> None:
+        """Receive messages until stop or disconnect."""
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    message = self._ws.recv()
+                    if not message:
+                        break
+                    if isinstance(message, str):
+                        self._dispatch_message(message)
+                except websocket.WebSocketConnectionClosedException:
+                    break
+                except Exception as exc:
+                    if not self._stop_event.is_set():
+                        logger.error("WebSocket error: %s", exc)
+                        if self._on_error_callback:
+                            self._on_error_callback(str(exc))
+                    break
+        finally:
+            logger.info("WebSocket closed")
+            self._connected_event.clear()
+            if self._on_close_callback:
+                self._on_close_callback()
 
-    def _on_message(self, ws: Any, message: str) -> None:
+    def _ping_loop(self) -> None:
+        """Send keepalive pings every 30 seconds."""
+        while not self._stop_event.wait(timeout=30):
+            try:
+                if self._ws and self._connected_event.is_set():
+                    self._ws.ping()
+            except Exception:
+                break
+
+    def _dispatch_message(self, message: str) -> None:
+        """Log and forward a received text message."""
         try:
             msg_data = json.loads(message)
             msg_type = msg_data.get("type", "unknown")
@@ -166,20 +181,9 @@ class SyncRealtimeConnection:
             pass
         if self._on_message_callback:
             try:
-                self._on_message_callback(ws, message)
+                self._on_message_callback(self._ws, message)
             except Exception as e:
                 logger.error("Message handler error: %s", e)
-
-    def _on_error(self, ws: Any, error: Any) -> None:
-        logger.error("WebSocket error: %s", error)
-        if self._on_error_callback:
-            self._on_error_callback(str(error))
-
-    def _on_close(self, ws: Any, status_code: Any, msg: Any) -> None:
-        logger.info("WebSocket closed")
-        self._connected_event.clear()
-        if self._on_close_callback:
-            self._on_close_callback()
 
 
 # ---------------------------------------------------------------------------
