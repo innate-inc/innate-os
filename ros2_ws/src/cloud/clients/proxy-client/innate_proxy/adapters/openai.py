@@ -297,9 +297,9 @@ class ProxyOpenAIClient:
 
             headers = {"Authorization": f"Bearer {service_key}"}
             try:
-                ws = await websockets.connect(ws_url, additional_headers=headers)
-            except TypeError:
                 ws = await websockets.connect(ws_url, extra_headers=headers)
+            except TypeError:
+                ws = await websockets.connect(ws_url, additional_headers=headers)
 
             if on_message:
 
