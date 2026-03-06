@@ -41,6 +41,7 @@ class OrchestratorClient:
         self._base = config.server_url.rstrip("/")
         self._session = requests.Session()
         self._session.headers["Content-Type"] = "application/json"
+        self._session.headers["User-Agent"] = "innate-robot"
 
         # Set up auth: either OIDC (service-key → JWT) or plain bearer token
         if config.auth_issuer_url:
@@ -205,6 +206,7 @@ class OrchestratorClient:
                     headers={
                         "Content-Type": content_type,
                         "Content-Length": str(file_size),
+                        "User-Agent": "innate-robot",
                     },
                     timeout=self._config.upload_timeout_seconds,
                 )
@@ -242,7 +244,9 @@ class OrchestratorClient:
         """
         try:
             resp = requests.head(
-                signed_url, timeout=self._config.request_timeout_seconds
+                signed_url,
+                timeout=self._config.request_timeout_seconds,
+                headers={"User-Agent": "innate-robot"},
             )
             if resp.status_code == 200:
                 cl = resp.headers.get("Content-Length")
@@ -267,7 +271,10 @@ class OrchestratorClient:
         name = os.path.basename(dest_path)
         os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
         with requests.get(
-            signed_url, stream=True, timeout=self._config.download_timeout_seconds
+            signed_url,
+            stream=True,
+            timeout=self._config.download_timeout_seconds,
+            headers={"User-Agent": "innate-robot"},
         ) as resp:
             resp.raise_for_status()
             total = int(resp.headers.get("Content-Length", 0))

@@ -114,7 +114,7 @@ python3-gst-1.0
 | action_msgs | ros-humble-action-msgs | maurice_msgs, brain_messages | Action framework messages |
 | builtin_interfaces | ros-humble-builtin-interfaces | maurice_msgs, brain_messages | Built-in type definitions |
 | unique_identifier_msgs | ros-humble-unique-identifier-msgs | maurice_msgs | UUID message type |
-| diagnostic_msgs | ros-humble-diagnostic-msgs | maurice_log | Diagnostic system messages |
+| diagnostic_msgs | ros-humble-diagnostic-msgs | innate_logger | Diagnostic system messages |
 | lifecycle_msgs | ros-humble-lifecycle-msgs | maurice_nav | Lifecycle management |
 | rosgraph_msgs | ros-humble-rosgraph-msgs | stage_ros2 | ROS graph messages |
 | rcl_interfaces | ros-humble-rcl-interfaces | maurice_arm, maurice_head | Parameter services |
@@ -352,7 +352,7 @@ These are packages within this workspace (no external install needed):
 | maurice_sim_bringup | maurice_bot/maurice_sim_bringup | Simulation launch |
 | maurice_head | maurice_bot/maurice_head | Head control |
 | maurice_bringup | maurice_bot/maurice_bringup | Robot bringup |
-| maurice_log | maurice_bot/maurice_log | Logging |
+| innate_logger | cloud/innate_logger | Cloud telemetry logging |
 | maurice_control | maurice_bot/maurice_control | Control system |
 | maurice_bt_provisioner | maurice_bot/maurice_bt_provisioner | Bluetooth provisioner |
 | stage_ros2 | maurice_bot/stage_ros2 | Stage simulator ROS2 wrapper |

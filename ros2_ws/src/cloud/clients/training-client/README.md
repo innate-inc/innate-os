@@ -4,25 +4,6 @@ Python library for submitting training skills and runs to the Innate Training Or
 
 ## Quick Start
 
-### 1. Install
-
-```bash
-git clone <repo-url> && cd training_client
-pip install .
-```
-
-### 2. Configure
-
-Set your credentials once (or pass `--server` / `--token` on every command):
-
-```bash
-export INNATE_SERVICE_KEY="your-innate-service-key"
-```
-
-The CLI also auto-loads a `.env` file from the current directory or `~/innate-os/.env`.
-
-### 3. Submit a skill and start training
-
 ```bash
 # Create a skill from your data directory (writes server-skill.json)
 python -m training_client.cli submit ./skill
@@ -39,7 +20,7 @@ python -m training_client.cli run ./skill \
     --budget 200
 ```
 
-### 4. Monitor and download results
+### Monitor and download results
 
 ```bash
 # Poll until the run finishes
