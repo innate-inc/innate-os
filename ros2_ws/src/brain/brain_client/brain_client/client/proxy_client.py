@@ -29,7 +29,7 @@ class ProxyClient:
         
         # Access services
         proxy.cartesia.tts(...)
-        proxy.openai.realtime.connect_sync(...)
+        ws = await proxy.openai.realtime.connect(...)
         
         # Access config
         voice_id = proxy.config["cartesia_voice_id"]
@@ -108,7 +108,7 @@ class ProxyClient:
         OpenAI service adapter (realtime, completions, etc.)
         
         Usage:
-            conn = proxy.openai.realtime.connect_sync(model="...", on_message=..., ...)
+            ws = await proxy.openai.realtime.connect(model="...", on_message=...)
         """
         if self._openai is None:
             from brain_client.client.adapters.openai_adapter import ProxyOpenAIClient

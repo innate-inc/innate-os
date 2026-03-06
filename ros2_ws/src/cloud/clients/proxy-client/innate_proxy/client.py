@@ -13,7 +13,7 @@ Usage::
 
     proxy = ProxyClient(config={"cartesia_voice_id": "..."})
     proxy.cartesia.tts.bytes_stream(...)
-    proxy.openai.realtime.connect_sync(...)
+    ws = await proxy.openai.realtime.connect(...)
 """
 
 from __future__ import annotations

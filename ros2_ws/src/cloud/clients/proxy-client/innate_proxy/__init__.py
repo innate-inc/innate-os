@@ -2,7 +2,7 @@
 
 Provides :class:`ProxyClient` for authenticated HTTP requests through the
 Innate service proxy, plus drop-in adapter classes for Cartesia TTS and
-OpenAI (Chat Completions + Realtime WebSocket).
+OpenAI (Realtime WebSocket).
 
 Usage::
 
