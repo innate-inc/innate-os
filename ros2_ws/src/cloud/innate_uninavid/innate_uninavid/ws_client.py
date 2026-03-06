@@ -180,68 +180,56 @@ class UninavidWsClient:
                 self._error_msg = str(exc)
 
     async def _session(self) -> None:
-        """Single connection attempt with one 401 retry."""
-        for attempt in range(2):
-            extra_headers = {"User-Agent": "innate-robot"}
-            if self._auth is not None:
-                extra_headers["Authorization"] = f"Bearer {self._auth.token}"
-
-            try:
-                async with websockets.connect(
-                    self._url,
-                    additional_headers=extra_headers,
-                    max_size=4 * 1024 * 1024,
-                    ping_interval=20,
-                    ping_timeout=20,
-                ) as ws:
-                    with self._lock:
-                        self._state = ClientState.CONNECTED
-                    self._log.info("WS connected")
-
-                    # Send instruction
-                    await ws.send(self._instruction)
-                    self._log.info(f"Sent: {self._instruction!r}")
-
-                    # Start periodic send timer + run recv loop
-                    self._ws = ws
-                    self._send_count = 0
-                    send_timer = create_timer(
-                        self._send_tick, 1.0 / self._image_send_hz,
-                    )
-                    try:
-                        await self._recv_loop(ws)
-                    finally:
-                        send_timer.cancel()
-                    return  # success
-
-            except websockets.InvalidStatus as exc:
-                status = exc.response.status_code
-                if status == 401 and attempt == 0 and self._auth is not None:
-                    self._log.warning("WS auth failed (401) — renewing token and retrying")
-                    self._auth.token_needs_renewal = True
-                    continue
-                self._log.error(f"WS connection rejected: HTTP {status}")
+        """Single connection attempt with one 401 retry (via auth.ws_connect)."""
+        try:
+            async with await self._auth.ws_connect(
+                self._url,
+                max_size=4 * 1024 * 1024,
+                ping_interval=20,
+                ping_timeout=20,
+            ) as ws:
                 with self._lock:
-                    self._state = ClientState.FAILED
-                    self._error_msg = f"HTTP {status}"
-            except websockets.ConnectionClosed as exc:
-                reason = f"Connection closed (code={exc.code}, reason={exc.reason!r})"
-                self._log.info(reason)
-                with self._lock:
-                    if self._state == ClientState.CONNECTED:
-                        self._state = ClientState.DISCONNECTED
-                        self._error_msg = reason
-            except OSError as exc:
-                self._log.error(f"WS connection failed: {exc}")
-                with self._lock:
-                    self._state = ClientState.FAILED
-                    self._error_msg = str(exc)
-            except Exception as exc:
-                self._log.error(f"WS unexpected error: {type(exc).__name__}: {exc}")
-                with self._lock:
-                    self._state = ClientState.FAILED
-                    self._error_msg = str(exc)
-            return  # don't retry on non-401 errors
+                    self._state = ClientState.CONNECTED
+                self._log.info("WS connected")
+
+                # Send instruction
+                await ws.send(self._instruction)
+                self._log.info(f"Sent: {self._instruction!r}")
+
+                # Start periodic send timer + run recv loop
+                self._ws = ws
+                self._send_count = 0
+                send_timer = create_timer(
+                    self._send_tick, 1.0 / self._image_send_hz,
+                )
+                try:
+                    await self._recv_loop(ws)
+                finally:
+                    send_timer.cancel()
+
+        except websockets.InvalidStatus as exc:
+            status = exc.response.status_code
+            self._log.error(f"WS connection rejected: HTTP {status}")
+            with self._lock:
+                self._state = ClientState.FAILED
+                self._error_msg = f"HTTP {status}"
+        except websockets.ConnectionClosed as exc:
+            reason = f"Connection closed (code={exc.code}, reason={exc.reason!r})"
+            self._log.info(reason)
+            with self._lock:
+                if self._state == ClientState.CONNECTED:
+                    self._state = ClientState.DISCONNECTED
+                    self._error_msg = reason
+        except OSError as exc:
+            self._log.error(f"WS connection failed: {exc}")
+            with self._lock:
+                self._state = ClientState.FAILED
+                self._error_msg = str(exc)
+        except Exception as exc:
+            self._log.error(f"WS unexpected error: {type(exc).__name__}: {exc}")
+            with self._lock:
+                self._state = ClientState.FAILED
+                self._error_msg = str(exc)
 
     async def _send_tick(self, interval: float) -> None:
         """Called by aiotools.create_timer every 1/image_send_hz seconds."""
