@@ -37,20 +37,28 @@ class SyncRealtimeConnection:
     """Synchronous WebSocket connection for OpenAI Realtime API via proxy.
 
     Uses ``websocket-client`` (sync) for low-latency audio streaming.
+
+    Accepts either a static ``innate_service_key`` string **or** a
+    ``token_provider`` callable that returns a fresh token on each
+    invocation.  When both are given, the callback wins.  This ensures
+    that ``start()`` always uses a current JWT even after reconnects
+    that may happen well past the original token's TTL.
     """
 
     def __init__(
         self,
         proxy_url: str,
-        innate_service_key: str,
+        innate_service_key: str = "",
         model: str = "gpt-4o-realtime-preview",
         on_message: Optional[Callable] = None,
         on_open: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
         on_close: Optional[Callable] = None,
+        token_provider: Optional[Callable[[], str]] = None,
     ) -> None:
         self._proxy_url = proxy_url.rstrip("/")
-        self._innate_service_key = innate_service_key
+        self._static_token = innate_service_key
+        self._token_provider = token_provider
         self._model = model
         self._on_message_callback = on_message
         self._on_open_callback = on_open
@@ -63,20 +71,32 @@ class SyncRealtimeConnection:
         self._send_lock = threading.Lock()
         self._audio_chunk_count = 0
 
+    def _get_token(self) -> str:
+        """Return a fresh token via the provider, falling back to the static one."""
+        if self._token_provider is not None:
+            return self._token_provider()
+        return self._static_token
+
     def start(self) -> None:
-        """Start the WebSocket connection in a background thread."""
+        """Start the WebSocket connection in a background thread.
+
+        A fresh token is obtained on every call so that reconnects after
+        the original JWT has expired will succeed.
+        """
         self._stop_event.clear()
         self._connected_event.clear()
+
+        token = self._get_token()
 
         ws_url = self._proxy_url.replace("https://", "wss://").replace(
             "http://", "ws://"
         )
-        ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}&token={self._innate_service_key}"
+        ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={self._model}&token={token}"
 
         logger.info("Connecting to WebSocket: %s...", ws_url[:80])
 
         headers = {
-            "X-Innate-Token": self._innate_service_key,
+            "X-Innate-Token": token,
             "OpenAI-Beta": "realtime=v1",
         }
 
@@ -254,12 +274,12 @@ class ProxyOpenAIClient:
         ) -> SyncRealtimeConnection:
             return SyncRealtimeConnection(
                 proxy_url=self._oc._get_proxy_url(),
-                innate_service_key=self._oc._get_service_key(),
                 model=model,
                 on_message=on_message,
                 on_open=on_open,
                 on_error=on_error,
                 on_close=on_close,
+                token_provider=self._oc._get_service_key,
             )
 
         async def connect(
@@ -268,6 +288,7 @@ class ProxyOpenAIClient:
             on_message: Optional[Callable] = None,
         ) -> websockets.WebSocketClientProtocol:
             proxy_url = self._oc._get_proxy_url()
+            # Fetch a fresh token at connect-time (not cached from init)
             service_key = self._oc._get_service_key()
             ws_url = proxy_url.replace("https://", "wss://").replace("http://", "ws://")
             ws_url = f"{ws_url}/v1/services/openai/v1/realtime?model={model}&token={service_key}"
