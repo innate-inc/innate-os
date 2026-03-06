@@ -18,7 +18,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        MODE: simulation  # Change to 'simulation' or 'hardware'
+        MODE: simulation # Change to 'simulation' or 'hardware'
     container_name: innate-dev
     # Use host networking if you need direct access to hardware, or use your own approach
     depends_on:
@@ -26,8 +26,8 @@ services:
     environment:
       - DISPLAY=novnc:0.0
       - INNATE_OS_ROOT=/root/innate-os
-      - SKIP_UPDATE_CHECK=1  # Skip git update checks in simulation mode
-      - BRAIN_URL=ws://host.docker.internal:8765  # Connect to brain running on host
+      - SKIP_UPDATE_CHECK=1 # Skip git update checks in simulation mode
+      - BRAIN_URL=ws://host.docker.internal:8765 # Connect to brain running on host
     ports:
       - "9090:9090"
 
@@ -37,6 +37,7 @@ services:
       - ./scripts:/root/innate-os/scripts:rw
       - ./agents:/root/innate-os/agents:rw
       - ./skills:/root/innate-os/skills:rw
+      - ./maps:/root/innate-os/maps:rw
       - ./.env:/root/innate-os/.env:ro
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host

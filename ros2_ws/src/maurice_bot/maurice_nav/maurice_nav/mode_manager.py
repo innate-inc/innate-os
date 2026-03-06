@@ -59,7 +59,7 @@ modes_nodes = {
     ],
     'navigation': [                      # on map switch
             'navigation_map_server',      # load_map topic 
-            'navigation_grid_localizer',  # localize Trigger service - USE THE TRIGGER SERVICE AND RELOAD MAP SERVICE
+            # 'navigation_grid_localizer',  # localize Trigger service - USE THE TRIGGER SERVICE AND RELOAD MAP SERVICE
             'navigation_amcl',            # either restart or make sure its not first_map_only and send /map and /initialpose
             'mapfree/planner_server',
             'navigation/planner_server',  # TBD DO WE WANT TO CLEAR COSTMAPS OR NAH # def has to be unconfigured to reload static map (unless we want to do update topics and stuff. which might be worth doing in iter 2) - do MAP_UPDATES
