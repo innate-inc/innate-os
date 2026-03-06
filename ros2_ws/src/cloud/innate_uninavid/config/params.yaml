@@ -1,0 +1,18 @@
+uninavid_node:
+  ros__parameters:
+    # ── Connection ────────────────────────────────────────────────────────
+    # ws_url, service_key, and auth_issuer_url default from env vars;
+    # override here if needed.
+    # ws_url: "wss://office.servers.innatebotstatus.com:9000"
+    # service_key: ""
+    # auth_issuer_url: "https://auth-v1.innate.bot"
+
+    # ── Timing / control ─────────────────────────────────────────────────
+    cmd_duration_sec: 0.1
+    cmd_publish_hz: 50.0
+    poll_period_sec: 0.02
+    latency_report_sec: 5.0
+
+    # ── Websocket image streaming ────────────────────────────────────────
+    image_send_hz: 49.0
+    consecutive_stops_to_complete: 30

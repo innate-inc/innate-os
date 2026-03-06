@@ -14,7 +14,7 @@ main_camera_driver:
     frame_id: "camera_optical_frame"
     jpeg_quality: 80
     publish_compressed: true
-    compressed_frame_interval: 6
+    compressed_frame_interval: 2
     publish_stereo: false
     exposure: -1
     gain: -1
