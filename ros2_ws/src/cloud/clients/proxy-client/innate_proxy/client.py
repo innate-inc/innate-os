@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import logging
 import os
-from contextlib import contextmanager
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from auth_client import AuthProvider
+from auth_client.httpx_auth import InnateBearerAuth
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -67,8 +67,10 @@ class ProxyClient:
                 issuer_url=issuer_url,
                 service_key=self._service_key,
             )
+            self._httpx_auth: InnateBearerAuth | None = InnateBearerAuth(self._auth)
         else:
             self._auth = None
+            self._httpx_auth = None
 
         self._sync_client: httpx.Client | None = None
         self._async_client: httpx.AsyncClient | None = None
@@ -90,56 +92,14 @@ class ProxyClient:
             return self._auth.token
         return self._service_key
 
-    def _get_auth_headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.token}",
-            "User-Agent": "innate-robot",
-        }
-
-    @staticmethod
-    def _is_token_expired(response: httpx.Response) -> bool:
-        if response.status_code != 401:
-            return False
-        return "invalid_token" in response.headers.get("WWW-Authenticate", "")
-
-    def _renew_token(self) -> None:
-        """Force JWT renewal and update cached client headers."""
-        if self._auth is not None:
-            logger.info("JWT expired — renewing token")
-            self._auth.token_needs_renewal = True
-        new_headers = self._get_auth_headers()
-        if self._sync_client is not None:
-            self._sync_client.headers.update(new_headers)
-        if self._async_client is not None:
-            self._async_client.headers.update(new_headers)
-
-    @contextmanager
-    def _stream_with_token_renewal(
-        self, url: str, method: str, kwargs: Dict[str, Any]
-    ) -> Generator[httpx.Response, None, None]:
-        """Open a streaming request, retrying once on expired JWT."""
-        client = self.get_sync_client()
-        with client.stream(**kwargs) as response:
-            if self._auth is not None and self._is_token_expired(response):
-                # Token expired before first byte — close, renew, retry.
-                pass  # exit the context manager, then retry below
-            else:
-                yield response
-                return
-
-        # Retry with a fresh token.
-        self._renew_token()
-        client = self.get_sync_client()
-        with client.stream(**kwargs) as response:
-            response.raise_for_status()
-            yield response
-
     # -- Sync HTTP ------------------------------------------------------------
 
     def get_sync_client(self) -> httpx.Client:
         if self._sync_client is None:
             self._sync_client = httpx.Client(
-                timeout=60.0, headers=self._get_auth_headers()
+                timeout=60.0,
+                auth=self._httpx_auth,
+                headers={"User-Agent": "innate-robot"},
             )
         return self._sync_client
 
@@ -175,14 +135,17 @@ class ProxyClient:
         elif data is not None:
             kwargs["content"] = data
 
-        return self._stream_with_token_renewal(url, method, kwargs)
+        # Auth (incl. 401 retry) is handled by InnateBearerAuth on the client
+        return self.get_sync_client().stream(**kwargs)
 
     # -- Async HTTP -----------------------------------------------------------
 
     def get_async_client(self) -> httpx.AsyncClient:
         if self._async_client is None:
             self._async_client = httpx.AsyncClient(
-                timeout=60.0, headers=self._get_auth_headers()
+                timeout=60.0,
+                auth=self._httpx_auth,
+                headers={"User-Agent": "innate-robot"},
             )
         return self._async_client
 
@@ -211,12 +174,8 @@ class ProxyClient:
         elif data is not None:
             kwargs["content"] = data
 
+        # Auth (incl. 401 retry) is handled by InnateBearerAuth on the client
         response = await client.request(**kwargs)
-
-        if self._auth is not None and self._is_token_expired(response):
-            self._renew_token()
-            response = await client.request(**kwargs)
-
         response.raise_for_status()
         return response
 

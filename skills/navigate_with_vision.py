@@ -33,6 +33,8 @@ class NavigateWithVision(Skill):
         self._action_client: ActionClient | None = None
         self._goal_handle = None
         self._cancel_requested = threading.Event()
+        self._last_feedback_action: int | None = None
+        self._last_feedback_stops: int = 0
 
     # ── Skill interface ───────────────────────────────────────────────────────
 
@@ -47,6 +49,7 @@ class NavigateWithVision(Skill):
             "The instruction is sent to the UniNavid cloud service which streams "
             "back movement commands until the goal is reached. "
             "Requires param 'instruction' (str)."
+            "Some other examples of instructions are 'move to the nearest sofa and then stop', 'follow the human wearing black pants'."
         )
 
     # ── Execution ─────────────────────────────────────────────────────────────
@@ -62,10 +65,10 @@ class NavigateWithVision(Skill):
             tuple: ``(result_message, SkillResult)``
         """
         if not self.node:
-            self.logger.error(
-                "NavigateWithVision skill has no ROS node — cannot execute."
-            )
-            return "Skill not initialised (no ROS node)", SkillResult.FAILURE
+            msg = "Navigation skill has no ROS node and cannot execute."
+            self.logger.error(msg)
+            self._send_feedback(msg)
+            return msg, SkillResult.FAILURE
 
         self._cancel_requested.clear()
 
@@ -80,11 +83,10 @@ class NavigateWithVision(Skill):
 
         # ── Wait for the action server ────────────────────────────────────────
         if not self._action_client.wait_for_server(timeout_sec=10.0):
-            self.logger.error("navigate_instruction action server not available")
-            return (
-                "navigate_instruction action server not available",
-                SkillResult.FAILURE,
-            )
+            msg = "Navigation server is not available. Please try again."
+            self.logger.error(msg)
+            self._send_feedback(msg)
+            return msg, SkillResult.FAILURE
 
         # ── Send goal ─────────────────────────────────────────────────────────
         goal_msg = NavigateInstruction.Goal()
@@ -97,17 +99,23 @@ class NavigateWithVision(Skill):
         try:
             rclpy.spin_until_future_complete(self.node, goal_future, timeout_sec=10.0)
         except Exception as exc:
-            self.logger.error(f"Exception sending goal: {exc}")
-            return f"Failed to send goal: {exc}", SkillResult.FAILURE
+            msg = f"Failed to send navigation goal: {exc}"
+            self.logger.error(msg)
+            self._send_feedback(msg)
+            return msg, SkillResult.FAILURE
 
         if not goal_future.done():
-            self.logger.error("Goal acceptance timed out")
-            return "Goal acceptance timed out", SkillResult.FAILURE
+            msg = "Navigation goal timed out waiting for acceptance."
+            self.logger.error(msg)
+            self._send_feedback(msg)
+            return msg, SkillResult.FAILURE
 
         self._goal_handle = goal_future.result()
         if not self._goal_handle.accepted:
-            self.logger.info("Goal rejected by action server")
-            return "Goal rejected by action server", SkillResult.FAILURE
+            msg = "Navigation goal was rejected."
+            self.logger.info(msg)
+            self._send_feedback(msg)
+            return msg, SkillResult.FAILURE
 
         self.logger.info("Goal accepted — waiting for result …")
         self._send_feedback("Navigation started, waiting for completion …")
@@ -136,9 +144,11 @@ class NavigateWithVision(Skill):
                 pass
 
         if not result_future.done():
-            self.logger.error("Result wait timed out after cancel")
+            msg = "Navigation timed out."
+            self.logger.error(msg)
+            self._send_feedback(msg)
             self._goal_handle = None
-            return "Navigation timed out", SkillResult.FAILURE
+            return msg, SkillResult.FAILURE
 
         result_response = result_future.result()
         status = result_response.status
@@ -155,16 +165,22 @@ class NavigateWithVision(Skill):
         if status in (GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_ABORTED):
             msg = result.message or "Navigation canceled"
             self.logger.info(f"Goal canceled/aborted: {msg}")
+            self._send_feedback(msg)
             return msg, SkillResult.CANCELLED
 
-        msg = result.message or f"Navigation ended with status {status}"
+        msg = result.message or f"Navigation ended unexpectedly."
         self.logger.warning(msg)
+        self._send_feedback(msg)
         return msg, SkillResult.FAILURE
 
     # ── Feedback callback (called on the executor thread) ─────────────────────
 
     def _on_feedback(self, feedback_msg):
-        """Relay action feedback to the brain as a human-readable string."""
+        """Relay action feedback to the brain as a human-readable string.
+
+        Only sends when the action changes or every 5th consecutive stop
+        to avoid flooding the brain logs.
+        """
         fb = feedback_msg.feedback
         action_label = _ACTION_LABELS.get(fb.latest_action, str(fb.latest_action))
         text = (
@@ -172,7 +188,17 @@ class NavigateWithVision(Skill):
             f"Consecutive stops: {fb.consecutive_stops}/20"
         )
         self.logger.debug(f"[NavigateWithVision] feedback: {text}")
-        self._send_feedback(text)
+
+        action_changed = (
+            fb.latest_action != self._last_feedback_action
+            and fb.latest_action != 0  # don't report individual STOPs
+        )
+        stops_milestone = False  # no stop-count feedback
+        self._last_feedback_action = fb.latest_action
+        self._last_feedback_stops = fb.consecutive_stops
+
+        if action_changed or stops_milestone:
+            self._send_feedback(text)
 
     # ── Cancellation ──────────────────────────────────────────────────────────
 

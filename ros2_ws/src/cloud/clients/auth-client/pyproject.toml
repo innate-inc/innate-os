@@ -5,5 +5,8 @@ description = "Innate auth client library: OIDC JWT acquisition and timed renewa
 # requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+httpx = ["httpx>=0.24"]
+
 [project.scripts]
 innate-auth-token = "auth_client.__main__:main"

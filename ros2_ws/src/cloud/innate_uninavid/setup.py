@@ -13,7 +13,7 @@ setup(
         ),
         ("share/" + package_name, ["package.xml"]),
     ],
-    install_requires=["setuptools", "websockets", "python-dotenv"],
+    install_requires=["setuptools", "httpx>=0.24", "httpx-ws>=0.6", "python-dotenv"],
     zip_safe=True,
     maintainer="Innate Engineering",
     maintainer_email="eng@innate.bot",

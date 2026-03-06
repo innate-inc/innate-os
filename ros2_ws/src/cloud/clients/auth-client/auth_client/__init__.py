@@ -13,5 +13,6 @@ Usage::
 """
 
 from auth_client.provider import AuthProvider, AuthError
+from auth_client.httpx_auth import InnateBearerAuth
 
-__all__: list[str] = ["AuthProvider", "AuthError"]
+__all__: list[str] = ["AuthProvider", "AuthError", "InnateBearerAuth"]
