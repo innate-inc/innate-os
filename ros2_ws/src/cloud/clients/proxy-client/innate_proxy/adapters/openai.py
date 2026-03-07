@@ -77,6 +77,7 @@ class SyncRealtimeConnection:
 
         headers = {
             "X-Innate-Token": self._innate_service_key,
+            "Authorization": f"Bearer {self._innate_service_key}",
             "OpenAI-Beta": "realtime=v1",
         }
 
@@ -193,6 +194,7 @@ class ProxyOpenAIClient:
         # Works with both innate_proxy.ProxyClient (.token) and
         # brain_client ProxyClient (._innate_service_key / .innate_service_key)
         if hasattr(self._parent, "token"):
+            self._parent._renew_token()
             return self._parent.token
         if hasattr(self._parent, "innate_service_key"):
             return self._parent.innate_service_key
