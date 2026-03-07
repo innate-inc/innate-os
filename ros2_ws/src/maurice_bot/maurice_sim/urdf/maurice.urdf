@@ -45,6 +45,7 @@
     <child link="left_wheel"/>
     <origin xyz="0 0.0882 0.03725" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
+    <limit effort="0.25" velocity="10.3"/>
     <dynamics damping="0.1" friction="0.0"/>
   </joint>
   <link name="left_wheel">
@@ -74,6 +75,7 @@
     <child link="right_wheel"/>
     <origin xyz="0 -0.0882 0.03725" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
+    <limit effort="0.25" velocity="10.3"/>
     <dynamics damping="0.1" friction="0.0"/>
   </joint>
   <link name="right_wheel">
@@ -103,7 +105,8 @@
     <child link="caster_frame"/>
     <origin xyz="-0.1229 0 0.037775" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
-    <dynamics damping="0.01" friction="0.0"/>
+    <limit effort="0.0" velocity="100.0"/>
+    <dynamics damping="0.01" friction="0.1"/>
   </joint>
   <link name="caster_frame">
     <inertial>
@@ -132,7 +135,8 @@
     <child link="caster_wheel"/>
     <origin xyz="-0.0085 0 -0.025425" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <dynamics damping="0.01" friction="0.0"/>
+    <limit effort="0.0" velocity="100.0"/>
+    <dynamics damping="0.01" friction="0.1"/>
   </joint>
   <link name="caster_wheel">
     <inertial>
