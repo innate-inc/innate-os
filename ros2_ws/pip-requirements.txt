@@ -35,6 +35,7 @@ bluezero
 # Text-to-Speech (via innate-proxy-client)
 httpx
 websocket-client
+aiotools
 
 # Training client dependencies
 requests
