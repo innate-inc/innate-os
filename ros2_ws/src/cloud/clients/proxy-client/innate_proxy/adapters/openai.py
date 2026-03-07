@@ -163,6 +163,7 @@ class SyncRealtimeConnection:
         logger.error("WebSocket error: %s", error)
         if self._on_error_callback:
             self._on_error_callback(str(error))
+        self.stop()
 
     def _on_close(self, ws: Any, status_code: Any, msg: Any) -> None:
         logger.info("WebSocket closed")
