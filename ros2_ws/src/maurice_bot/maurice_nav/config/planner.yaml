@@ -10,7 +10,7 @@
       GridBased:
         # pure grid search + spin-on-spot
         plugin: "nav2_smac_planner/SmacPlanner2D"
-        tolerance: 0.6
+        tolerance: 0.1
         downsample_costmap: false
         downsampling_factor: 1
         allow_unknown: false

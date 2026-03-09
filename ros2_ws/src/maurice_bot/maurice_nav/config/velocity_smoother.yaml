@@ -8,11 +8,10 @@ velocity_smoother:
 
     # Limits using flat list structure [x, y, theta]
     max_velocity: [0.45, 0.0, 0.6]   # Based on controller max_vel_x, max_vel_y, max_vel_theta
-    min_velocity: [-0.2, 0.0, -0.8]  # Based on controller min_vel_x, min_vel_y, symmetric min_vel_theta
+    min_velocity: [-0.2, 0.0, -0.6]  # Based on controller min_vel_x, min_vel_y, symmetric min_vel_theta
     
-    max_accel: [2.5, 0.0, 3.2]      # Increased for more responsive behavior
-    # NOTE: This format often uses negative values for max_decel, representing deceleration limits.
-    max_decel: [-2.5, 0.0, -3.2]    # Increased for quicker stopping
+    max_accel: [0.3, 0.0, 0.5]
+    max_decel: [-0.3, 0.0, -0.5]
 
     deadband_velocity: [0.01, 0.0, 0.02] # Deadband for x, y, theta based on previous 'min_velocity_deadband'
 
