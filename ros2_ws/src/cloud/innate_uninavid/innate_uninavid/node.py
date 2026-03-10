@@ -30,6 +30,7 @@ from auth_client import AuthProvider
 from dotenv import find_dotenv, load_dotenv
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path
+from std_msgs.msg import Int32MultiArray
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -109,6 +110,7 @@ class UninavidNode(Node):
         )
         self._cmd = self.create_publisher(Twist, "/cmd_vel", 10)
         self._plan_pub = self.create_publisher(Path, "/vln/plan", 10)
+        self._actions_pub = self.create_publisher(Int32MultiArray, "/vln/actions", 10)
         self._debug_img_pub = self.create_publisher(Image, "/uninavid/debug_image", 1)
 
         # Dead-reckoning state for trajectory building
@@ -192,6 +194,12 @@ class UninavidNode(Node):
             path_msg.poses.append(ps)
 
         self._plan_pub.publish(path_msg)
+
+    def _publish_actions(self, actions: list[int]) -> None:
+        """Publish the latest batch of action codes on /vln/actions for client-side overlay."""
+        msg = Int32MultiArray()
+        msg.data = actions
+        self._actions_pub.publish(msg)
 
     def _publish_debug_image(self) -> None:
         """Overlay trajectory dots on the latest camera frame and publish."""
@@ -359,9 +367,10 @@ class UninavidNode(Node):
                             time.sleep(dt)
                         self._cmd.publish(_STOP)
 
-                    # Publish trajectory incrementally after each action
+                    # Publish trajectory + actions incrementally after each action
                     new_actions = client.pop_action_history()
                     if new_actions:
+                        self._publish_actions(new_actions)
                         self._extend_trajectory(new_actions)
                         self._publish_trajectory()
                         self._publish_debug_image()
@@ -381,6 +390,7 @@ class UninavidNode(Node):
                 # Catch any remaining trajectory actions outside the drain loop
                 new_actions = client.pop_action_history()
                 if new_actions:
+                    self._publish_actions(new_actions)
                     self._extend_trajectory(new_actions)
                     self._publish_trajectory()
                     self._publish_debug_image()
