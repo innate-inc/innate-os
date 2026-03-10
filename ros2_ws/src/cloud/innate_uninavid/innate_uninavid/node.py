@@ -126,6 +126,14 @@ class UninavidNode(Node):
         self._goal_handle = goal_handle
         goal_handle.execute()
 
+    # ── Actions publisher ────────────────────────────────────────────────
+
+    def _publish_actions(self, actions: list[int]) -> None:
+        """Publish the latest batch of action codes on /vln/actions for client-side overlay."""
+        msg = Int32MultiArray()
+        msg.data = actions
+        self._actions_pub.publish(msg)
+
     # ── Image forwarding ──────────────────────────────────────────────────
 
     def _on_image(self, msg: CompressedImage) -> None:
@@ -215,6 +223,9 @@ class UninavidNode(Node):
                             time.sleep(dt)
                         self._cmd.publish(_STOP)
 
+                    new_actions = client.pop_action_history()
+                    if new_actions:
+                        self._publish_actions(new_actions)
 
                     code = client.pop_action()
 
