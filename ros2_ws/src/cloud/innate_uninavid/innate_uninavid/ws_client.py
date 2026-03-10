@@ -76,6 +76,7 @@ class UninavidWsClient:
         self._rtt_samples: deque[float] = deque(maxlen=500)
         self._sent_stamps: deque[tuple[int, int]] = deque(maxlen=200)
         self._last_send_time: float = 0.0
+        self._action_history: deque[int] = deque(maxlen=2000)
 
         # ── Internals (only touched from the ws thread) ──────────────────
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -108,6 +109,7 @@ class UninavidWsClient:
         with self._lock:
             self._state = ClientState.CONNECTING
             self._action_queue.clear()
+            self._action_history.clear()
             self._consecutive_stops = 0
             self._frame = None
             self._error_msg = None
@@ -150,6 +152,13 @@ class UninavidWsClient:
             if self._action_queue:
                 return self._action_queue.popleft()
             return None
+
+    def pop_action_history(self) -> list[int]:
+        """Drain and return all accumulated action codes since last call."""
+        with self._lock:
+            history = list(self._action_history)
+            self._action_history.clear()
+            return history
 
     def pop_rtt_samples(self) -> list[float]:
         """Drain and return all accumulated round-trip-time samples (seconds)."""
@@ -321,6 +330,7 @@ class UninavidWsClient:
             with self._lock:
                 for action in actions:
                     self._action_queue.append(action)
+                    self._action_history.append(action)
                     if action == Action.STOP:
                         self._consecutive_stops += 1
                     else:
