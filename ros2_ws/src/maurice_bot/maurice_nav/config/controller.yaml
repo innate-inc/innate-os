@@ -41,19 +41,19 @@
       vx_min: -0.2                      # matches min_vel_x
       vx_max: 0.45                       # matches max_vel_x
       vy_max: 0.0                       # differential drive - no lateral motion
-      wz_max: 0.8                       # matches max_vel_theta
+      wz_max: 0.6                       # matches velocity_smoother max
       
-      # Acceleration limits (increased for more responsive behavior)
-      ax_min: -2.5                      # matches decel_lim_x from velocity_smoother
-      ax_max: 2.5                       # matches acc_lim_x from velocity_smoother
+      # Acceleration limits
+      ax_min: -0.3                      # decel limit for linear x
+      ax_max: 0.3                       # accel limit for linear x
       ay_min: 0.0                       # differential drive - no lateral acceleration
       ay_max: 0.0                       # differential drive - no lateral acceleration
-      az_max: 3.2                       # matches acc_lim_theta from velocity_smoother
+      az_max: 0.5                       # angular acceleration limit
       
       # Sampling standard deviations
       vx_std: 0.2                       # Forward velocity sampling std
       vy_std: 0.0                       # No lateral sampling for diff drive
-      wz_std: 0.4                       # Angular velocity sampling std
+      wz_std: 0.2                       # Angular velocity sampling std (matched to vx_std)
       
       # Path handling
       transform_tolerance: 0.2          # matches existing transform_tolerance
@@ -103,7 +103,7 @@
         enabled: true
         cost_power: 2
         cost_weight: 15.0
-        threshold_to_consider: 1.2       # Start considering when within this distance of goal
+        threshold_to_consider: 0.6
       
       # Goal angle critic - aligns robot with goal orientation
       GoalAngleCritic:
@@ -116,28 +116,28 @@
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 4.5
+        cost_weight: 4.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
-        threshold_to_consider: 0.3
+        threshold_to_consider: 0.6
         offset_from_furthest: 20
-        use_path_orientations: true
+        use_path_orientations: false
       
       # Path following critic - drives progress along path
       PathFollowCritic:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        offset_from_furthest: 15
-        threshold_to_consider: 1.2
+        offset_from_furthest: 6
+        threshold_to_consider: 0.6
       
       # Path angle critic - handles sharp turns
       PathAngleCritic:
         enabled: true
         cost_power: 1
         cost_weight: 1.0
-        offset_from_furthest: 17
-        threshold_to_consider: 0.5
+        offset_from_furthest: 4
+        threshold_to_consider: 0.6
         max_angle_to_furthest: 1.0
         mode: 0                          # Forward preference mode
       
