@@ -9,8 +9,8 @@ from nav_msgs.msg import Odometry
 from maurice_msgs.srv import LightCommand
 from tf2_ros import TransformBroadcaster
 from sensor_msgs.msg import BatteryState
+from std_msgs.msg import Float32
 from std_srvs.srv import Trigger
-import time
 
 class Bringup(Node):
     def __init__(self, debug=False):
@@ -163,8 +163,11 @@ class Bringup(Node):
         
         if self.debug:
             self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
-
-        self.get_logger().info(f"Limited velocities: linear={limited_linear}, angular={limited_angular}")
+        
+        if limited_linear != msg.linear.x or limited_angular != -msg.angular.z:
+            self.get_logger().info(
+                f'Velocity limited: linear {msg.linear.x:.2f}->{limited_linear:.2f}, '
+                f'angular {-msg.angular.z:.2f}->{limited_angular:.2f}')
         
         # Forward the limited velocities to the I2C manager
         self.i2c_manager.set_speed_command(
@@ -241,7 +244,7 @@ class Bringup(Node):
         """Publish odometry data, transform, and battery state from I2C readings."""
         transform = self.i2c_manager.current_transform
         
-        # Broadcast the transform
+        # Broadcast the IMU-based transform (odom -> base_link)
         self.tf_broadcaster.sendTransform(transform)
         
         # Create and publish odometry message
@@ -254,6 +257,9 @@ class Bringup(Node):
         odom.pose.pose.position.y = transform.transform.translation.y
         odom.pose.pose.position.z = transform.transform.translation.z
         odom.pose.pose.orientation = transform.transform.rotation
+
+        # Populate twist with gyro Z yaw rate from MCU
+        odom.twist.twist.angular.z = getattr(self.i2c_manager, 'current_gyro_z', 0.0)
         
         # Publish the odometry message
         self.odom_pub.publish(odom)

@@ -58,6 +58,7 @@ class I2CManager:
         # -------------------------
         # Initialize zero transform for odom->base_link using a dedicated method.
         self.current_transform = self._initialize_transform()
+        self.current_gyro_z = 0.0
         self.battery_voltage = 0.0
         self.motor_temperature = 0.0
         self.fault_code = 0
@@ -119,17 +120,18 @@ class I2CManager:
 
     def _read_response(self):
         """
-        Read 8-byte response from MCU via I2C
-        Format: [resp_id] + [6 data bytes] + [crc]
+        Read 10-byte response from MCU via I2C
+        Format: [resp_id] + [8 data bytes] + [crc]
         """
         try:
             # Small delay to allow MCU to prepare response
             time.sleep(0.001)  # 1ms delay
             
-            # Read 8 bytes from MCU
-            data = self.bus.read_i2c_block_data(self.device_address, 0x00, 8)
+            # Read 10 bytes from MCU
+            data = self.bus.read_i2c_block_data(self.device_address, 0x00, 10)
+            self.logger.debug(f"Raw I2C bytes: {[f'0x{b:02X}' for b in data]}", throttle_duration_sec=2.0)
             
-            if len(data) != 8:
+            if len(data) != 10:
                 return None
             
             # Check if response is empty (all zeros or first byte is 0)
@@ -139,17 +141,16 @@ class I2CManager:
                 return None
             
             # Verify CRC
-            message = data[:7]
-            received_crc = data[7]
+            message = bytes(data[:9])
+            received_crc = data[9]
             calculated_crc = self._calculate_crc(message)
             
             if received_crc != calculated_crc:
-                if self.debug:
-                    self.logger.debug(f"CRC mismatch: expected 0x{calculated_crc:02X}, got 0x{received_crc:02X}")
+                self.logger.info(f"CRC mismatch: expected 0x{calculated_crc:02X}, got 0x{received_crc:02X}", throttle_duration_sec=2.0)
                 return None
             
             resp_id = data[0]
-            response_data = data[1:7]
+            response_data = data[1:9]
             
             self._process_response(resp_id, response_data)
             return True
@@ -165,9 +166,9 @@ class I2CManager:
             self.logger.debug(f"Received response 0x{resp_id:02X}: {[hex(b) for b in data]}")
         
         if resp_id == self.RESP_MOVE:
-            # Position feedback: x, y (cm), theta (rad*100)
+            # Position feedback: x, y (cm), theta_imu (rad*100), gyro_z (rad/s * 100)
             try:
-                x, y, theta = struct.unpack(">hhh", bytes(data))
+                x, y, theta_imu, gyro_z_raw = struct.unpack(">hhhh", bytes(data))
             except struct.error as e:
                 self.logger.error(f"Failed to unpack movement response: {e}")
                 return
@@ -179,17 +180,17 @@ class I2CManager:
             self.current_transform.transform.translation.y = y / 100.0
             self.current_transform.transform.translation.z = 0.0
             import math
-            theta_rad = theta / 100.0
+            theta_rad = theta_imu / 100.0
+            self.current_gyro_z = gyro_z_raw / 100.0
             self.current_transform.transform.rotation.x = 0.0
             self.current_transform.transform.rotation.y = 0.0
             self.current_transform.transform.rotation.z = math.sin(theta_rad / 2.0)
             self.current_transform.transform.rotation.w = math.cos(theta_rad / 2.0)
-            if self.debug:
-                self.logger.debug(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ: {theta_rad} rad")
+            self.logger.debug(f"Position Update - X: {x/100.0}, Y: {y/100.0}, θ_imu: {theta_rad} rad, gyro_z: {self.current_gyro_z} rad/s", throttle_duration_sec=1.0)
         elif resp_id == self.RESP_STATUS:
             # Health status: battery voltage, motor temp, fault code
             try:
-                battery, temp, fault, _ = struct.unpack(">HHBB", bytes(data))
+                battery, temp, fault, _ = struct.unpack(">HHBB", bytes(data[:6]))
                 self.battery_voltage = battery / 100.0  # Convert to volts
                 self.motor_temperature = temp  # Temperature in Celsius
                 self.fault_code = fault
