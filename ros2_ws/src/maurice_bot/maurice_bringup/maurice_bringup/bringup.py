@@ -137,12 +137,21 @@ class Bringup(Node):
         # Every minute, enqueue an I2C health request (will update battery_voltage)
         self.status_timer = self.create_timer(60.0, self.i2c_manager.request_health)
 
+        # Subscribe to /set_turn_p to tune the MCU turn P gain on the fly
+        self.create_subscription(Float32, '/set_turn_p', self._set_turn_p_cb, 10)
+
          # Publish battery at configured frequency (default 0.2Hz)
         battery_period = 1.0 / self.params['ros_topics']['battery_state_frequency']
         self.battery_timer = self.create_timer(battery_period, self._publish_battery)
 
         if self.debug:
             self.get_logger().debug('Finished setting up ROS2 services and topics')
+
+    def _set_turn_p_cb(self, msg: Float32):
+        """Set the MCU turn P gain and trigger a status request to send it."""
+        self.i2c_manager.turn_p = msg.data
+        self.i2c_manager.request_health()
+        self.get_logger().info(f'Set turn_p={msg.data:.2f}, sending to MCU via STATUS')
 
     def _cmd_vel_callback(self, msg: Twist):
         """Handle incoming velocity commands."""

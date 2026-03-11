@@ -51,6 +51,7 @@ class I2CManager:
         self.last_speed_command_time = 0.0
         self.status_requested = False
         self.calibration_requested = False
+        self.turn_p = 0.0  # Desired turn P gain (0 = leave unchanged on MCU)
         
         # -------------------------
         # Stored responses
@@ -238,8 +239,10 @@ class I2CManager:
         if not self.status_requested:
             return False
         
-        # All bytes reserved (zero)
-        data = bytes([0x00] * 6)
+        # Bytes 1-2: turn P gain × 100 as int16 (0 = leave unchanged)
+        turn_p_int = int(max(-32767, min(32767, self.turn_p * 100)))
+        data = struct.pack(">h", turn_p_int) + bytes([0x00] * 4)
+        self.logger.info(f"STATUS request: turn_p={self.turn_p}, scaled={turn_p_int}, bytes=[{', '.join(f'0x{b:02X}' for b in data)}]")
         success = self._send_command(self.CMD_STATUS, data)
         if success:
             self.status_requested = False  # Clear after sending
