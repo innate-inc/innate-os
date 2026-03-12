@@ -412,12 +412,12 @@ class AppControl : public rclcpp::Node {
             "/set_volume",
             std::bind(&AppControl::set_volume_callback, this, std::placeholders::_1, std::placeholders::_2));
 
-        // Sync PulseAudio volume from robot_info.json on startup
+        // Sync ALSA volume from robot_info.json on startup
         try {
             json robot_info = get_robot_info();
             int startup_vol = robot_info.value("volume_percent", 50);
-            apply_pulseaudio_volume(startup_vol);
-            RCLCPP_INFO(this->get_logger(), "PulseAudio volume synced to %d%%", startup_vol);
+            apply_alsa_volume(startup_vol);
+            RCLCPP_INFO(this->get_logger(), "ALSA volume synced to %d%%", startup_vol);
         } catch (const std::exception& e) {
             RCLCPP_WARN(this->get_logger(), "Failed to sync startup volume: %s", e.what());
         }
@@ -915,22 +915,22 @@ class AppControl : public rclcpp::Node {
     }
 
     /**
-     * Apply volume to PulseAudio default sink.
+     * Apply volume to ALSA default playback device.
      * This updates the system volume immediately, affecting any currently
-     * playing audio (e.g. TTS via paplay) in real time.
+     * playing audio (e.g. TTS via aplay) in real time.
      */
-    void apply_pulseaudio_volume(int percent) {
-        std::string cmd = "pactl set-sink-volume @DEFAULT_SINK@ " + std::to_string(percent) + "% 2>/dev/null";
+    void apply_alsa_volume(int percent) {
+        std::string cmd = "amixer sset Master " + std::to_string(percent) + "% 2>/dev/null";
         int ret = std::system(cmd.c_str());
         if (ret != 0) {
-            RCLCPP_WARN(this->get_logger(), "pactl set-sink-volume failed (rc=%d)", ret);
+            RCLCPP_WARN(this->get_logger(), "amixer sset Master failed (rc=%d)", ret);
         }
     }
 
     /**
      * Service callback to set the system speaker volume.
      * Stores volume_percent in robot_info.json and applies it to
-     * PulseAudio immediately so in-progress audio is affected.
+     * ALSA immediately so in-progress audio is affected.
      */
     void set_volume_callback(const std::shared_ptr<maurice_msgs::srv::SetVolume::Request> request,
                              std::shared_ptr<maurice_msgs::srv::SetVolume::Response> response) {
@@ -951,8 +951,8 @@ class AppControl : public rclcpp::Node {
                 return;
             }
 
-            // Apply to PulseAudio immediately (affects in-progress playback)
-            apply_pulseaudio_volume(vol);
+            // Apply to ALSA immediately (affects in-progress playback)
+            apply_alsa_volume(vol);
 
             response->success = true;
             response->message = "Volume set to " + std::to_string(vol) + "%";

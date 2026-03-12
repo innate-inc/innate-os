@@ -111,158 +111,11 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Step 4: Find PulseAudio source
+# Step 4: Verify setup
 # -----------------------------------------------------------------------------
 echo ""
-echo "🔍 Searching for PulseAudio source..."
-
-# Wait a moment for PulseAudio to detect the device
-sleep 1
-
-# List all sources
-echo "Available sources:"
-if [ -n "$SUDO_USER" ]; then
-    sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $ACTUAL_USER)" \
-        pactl list short sources 2>/dev/null || true
-else
-    pactl list short sources 2>/dev/null || true
-fi
-
-# Find the Arducam source (skip monitor sources)
-if [ -n "$SUDO_USER" ]; then
-    ARDUCAM_SOURCE=$(sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $ACTUAL_USER)" \
-        pactl list short sources 2>/dev/null | grep -i arducam | grep -v monitor | head -1 | cut -f2)
-else
-    ARDUCAM_SOURCE=$(pactl list short sources 2>/dev/null | grep -i arducam | grep -v monitor | head -1 | cut -f2)
-fi
-
-# Fallback to USB audio
-if [ -z "$ARDUCAM_SOURCE" ]; then
-    if [ -n "$SUDO_USER" ]; then
-        ARDUCAM_SOURCE=$(sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $ACTUAL_USER)" \
-            pactl list short sources 2>/dev/null | grep -i -E 'usb|camera|uac' | grep -v monitor | head -1 | cut -f2)
-    else
-        ARDUCAM_SOURCE=$(pactl list short sources 2>/dev/null | grep -i -E 'usb|camera|uac' | grep -v monitor | head -1 | cut -f2)
-    fi
-    if [ -n "$ARDUCAM_SOURCE" ]; then
-        echo "⚠️  Using USB audio source: $ARDUCAM_SOURCE"
-    fi
-fi
-
-# Fallback to first non-monitor source
-if [ -z "$ARDUCAM_SOURCE" ]; then
-    if [ -n "$SUDO_USER" ]; then
-        ARDUCAM_SOURCE=$(sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $ACTUAL_USER)" \
-            pactl list short sources 2>/dev/null | grep -v monitor | head -1 | cut -f2)
-    else
-        ARDUCAM_SOURCE=$(pactl list short sources 2>/dev/null | grep -v monitor | head -1 | cut -f2)
-    fi
-    if [ -n "$ARDUCAM_SOURCE" ]; then
-        echo "⚠️  Using first available source: $ARDUCAM_SOURCE"
-    fi
-fi
-
-if [ -z "$ARDUCAM_SOURCE" ]; then
-    echo "❌ No suitable PulseAudio source found"
-    echo "   The mic should still work via ALSA directly."
-    exit 0
-fi
-
-echo "✅ Found source: $ARDUCAM_SOURCE"
-
-# -----------------------------------------------------------------------------
-# Step 5: Configure PulseAudio (session and persistent)
-# -----------------------------------------------------------------------------
-echo ""
-echo "🔧 Configuring PulseAudio source: $ARDUCAM_SOURCE"
-
-run_pactl() {
-    if [ -n "$SUDO_USER" ]; then
-        sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$(id -u $ACTUAL_USER)" pactl "$@"
-    else
-        pactl "$@"
-    fi
-}
-
-# Set as default source (current session)
-if run_pactl set-default-source "$ARDUCAM_SOURCE" 2>/dev/null; then
-    echo "  ✓ Set as default source"
-else
-    echo "  ⚠️  Failed to set as default source"
-fi
-
-# Unmute the source
-if run_pactl set-source-mute @DEFAULT_SOURCE@ 0 2>/dev/null; then
-    echo "  ✓ Unmuted source"
-else
-    echo "  ⚠️  Failed to unmute source"
-fi
-
-# Set volume to 100%
-if run_pactl set-source-volume @DEFAULT_SOURCE@ 100% 2>/dev/null; then
-    echo "  ✓ Set volume to 100%"
-else
-    echo "  ⚠️  Failed to set volume"
-fi
-
-# -----------------------------------------------------------------------------
-# Step 5b: Create persistent PulseAudio configuration
-# -----------------------------------------------------------------------------
-echo ""
-echo "💾 Creating persistent PulseAudio configuration..."
-
-PULSE_CONFIG_DIR="$ACTUAL_HOME/.config/pulse"
-
-# Create pulse config directory if needed
-if [ -n "$SUDO_USER" ]; then
-    sudo -u "$ACTUAL_USER" mkdir -p "$PULSE_CONFIG_DIR"
-else
-    mkdir -p "$PULSE_CONFIG_DIR"
-fi
-
-# Create/update default.pa to set default source on startup
-PULSE_DEFAULT_PA="$PULSE_CONFIG_DIR/default.pa"
-
-# Check if we already have our config
-if [ -f "$PULSE_DEFAULT_PA" ] && grep -q "# Arducam mic setup" "$PULSE_DEFAULT_PA" 2>/dev/null; then
-    # Update existing config
-    if [ -n "$SUDO_USER" ]; then
-        sudo -u "$ACTUAL_USER" sed -i "s|set-default-source .*|set-default-source $ARDUCAM_SOURCE|" "$PULSE_DEFAULT_PA"
-    else
-        sed -i "s|set-default-source .*|set-default-source $ARDUCAM_SOURCE|" "$PULSE_DEFAULT_PA"
-    fi
-    echo "  ✓ Updated existing PulseAudio config"
-else
-    # Create new config that includes system defaults and adds our settings
-    PA_CONFIG="# Include the default PulseAudio configuration
-.include /etc/pulse/default.pa
-
-# Arducam mic setup - auto-configured by setup_arducam.sh
-# This sets the default recording source to the Arducam microphone
-set-default-source $ARDUCAM_SOURCE
-"
-    if [ -n "$SUDO_USER" ]; then
-        echo "$PA_CONFIG" | sudo -u "$ACTUAL_USER" tee "$PULSE_DEFAULT_PA" > /dev/null
-        chown "$ACTUAL_USER:$ACTUAL_USER" "$PULSE_DEFAULT_PA"
-    else
-        echo "$PA_CONFIG" > "$PULSE_DEFAULT_PA"
-    fi
-    echo "  ✓ Created persistent PulseAudio config at $PULSE_DEFAULT_PA"
-fi
-
-# -----------------------------------------------------------------------------
-# Step 6: Verify setup
-# -----------------------------------------------------------------------------
-echo ""
-echo "🔍 Verifying setup..."
-
-DEFAULT_SOURCE=$(run_pactl get-default-source 2>/dev/null)
-echo "  Default source: $DEFAULT_SOURCE"
-
-# Show mute/volume status
-run_pactl list sources 2>/dev/null | grep -A 20 "Name: $DEFAULT_SOURCE" | grep -E "Mute:|Volume:" | head -2 | while read line; do
-    echo "  $line"
-done
+echo "🔍 Verifying ALSA setup..."
+amixer -c "$ARDUCAM_CARD" scontents 2>/dev/null | head -20 || true
 
 echo ""
 echo "=================================================="
@@ -270,7 +123,6 @@ echo "✅ Setup complete!"
 echo ""
 echo "Settings will persist after reboot:"
 echo "  - ALSA: saved to /var/lib/alsa/asound.state"
-echo "  - PulseAudio: $PULSE_CONFIG_DIR/default.pa"
 echo ""
 echo "To test the microphone, run:"
 echo "  python3 test_mic.py"

@@ -8,7 +8,7 @@
 # This script handles:
 #   - I2S audio amplifier (MAX98357A via Adafruit UDA1334A overlay)
 #   - Bluetooth configuration
-#   - Arducam microphone setup (ALSA + PulseAudio)
+#   - Arducam microphone setup (ALSA)
 #   - WiFi power management (disable power saving for stable ROS/DDS)
 #   - Ethernet connection for SSH access (static IP, non-default route)
 
@@ -60,6 +60,26 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# 1b. ALSA dmix configuration (software mixing)
+# -----------------------------------------------------------------------------
+log "Configuring ALSA dmix..."
+
+ALSA_CONF_SRC="$REPO_DIR/config/alsa/asound.conf"
+ALSA_CONF_DST="/etc/asound.conf"
+
+if [ -f "$ALSA_CONF_SRC" ]; then
+    if [ -f "$ALSA_CONF_DST" ] && grep -q 'dmix:APE' "$ALSA_CONF_DST" 2>/dev/null; then
+        log "  ALSA dmix already configured"
+    else
+        log "  Installing ALSA dmix config (enables concurrent audio playback)..."
+        cp "$ALSA_CONF_SRC" "$ALSA_CONF_DST"
+        log "  ALSA dmix configured"
+    fi
+else
+    log "  WARNING: asound.conf not found at $ALSA_CONF_SRC"
+fi
+
+# -----------------------------------------------------------------------------
 # 2. Bluetooth Configuration
 # -----------------------------------------------------------------------------
 log "Checking Bluetooth configurations..."
@@ -86,7 +106,7 @@ if [ -f "$REPO_DIR/config/bluetooth/nv-bluetooth-service.conf" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 3. Arducam Microphone (ALSA + PulseAudio)
+# 3. Arducam Microphone (ALSA)
 # -----------------------------------------------------------------------------
 log "Configuring Arducam microphone..."
 
