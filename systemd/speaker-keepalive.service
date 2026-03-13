@@ -13,7 +13,6 @@ Restart=always
 RestartSec=3
 # Run as the actual user for ALSA access
 # NOTE: User and paths are updated by post_update.sh during install
-User=jetson1
 
 [Install]
 WantedBy=multi-user.target
