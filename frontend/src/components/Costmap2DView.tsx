@@ -74,6 +74,33 @@ const StatusPill = styled.div<{ $isError: boolean }>`
   pointer-events: none;
 `;
 
+const GoToButton = styled.button<{ $active: boolean }>`
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+  font-size: 11px;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  letter-spacing: 0.04em;
+  border: 1px solid
+    ${({ $active, theme }) => ($active ? "#00b7ff" : theme.colors.foreground)};
+  color: ${({ $active, theme }) =>
+    $active ? "#fff" : theme.colors.foreground};
+  background: ${({ $active }) =>
+    $active ? "rgba(0, 183, 255, 0.7)" : "rgba(0, 0, 0, 0.7)"};
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+
+  &:hover {
+    background: ${({ $active }) =>
+      $active ? "rgba(0, 183, 255, 0.85)" : "rgba(255, 255, 255, 0.15)"};
+  }
+`;
+
 function quaternionToYaw(x: number, y: number, z: number, w: number): number {
   const sinyCosp = 2 * (w * z + x * y);
   const cosyCosp = 1 - 2 * (y * y + z * z);
@@ -170,8 +197,263 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
     THREE.LineBasicMaterial
   > | null>(null);
 
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const goalArrowRef = useRef<THREE.Line<
+    THREE.BufferGeometry,
+    THREE.LineBasicMaterial
+  > | null>(null);
+  const goalMarkerRef = useRef<THREE.Mesh<
+    THREE.CircleGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
+  const isDraggingGoalRef = useRef(false);
+  const dragStartWorldRef = useRef<THREE.Vector3 | null>(null);
+
   const [status, setStatus] = useState("Connecting to map stream");
   const [error, setError] = useState<string | null>(null);
+  const [isGoToMode, setIsGoToMode] = useState(false);
+
+  const screenToWorld = useCallback(
+    (screenX: number, screenY: number): THREE.Vector3 | null => {
+      const camera = cameraRef.current;
+      const renderer = rendererRef.current;
+      if (!camera || !renderer) return null;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      const ndcX = ((screenX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((screenY - rect.top) / rect.height) * 2 + 1;
+
+      const ndc = new THREE.Vector3(ndcX, ndcY, 0);
+      ndc.unproject(camera);
+      return new THREE.Vector3(ndc.x, ndc.y, 0);
+    },
+    [],
+  );
+
+  const updateGoalArrow = useCallback(
+    (start: THREE.Vector3, end: THREE.Vector3) => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+
+      // Remove old arrow
+      if (goalArrowRef.current) {
+        goalArrowRef.current.geometry.dispose();
+        scene.remove(goalArrowRef.current);
+        goalArrowRef.current = null;
+      }
+
+      // Main line
+      const points = [
+        new THREE.Vector3(start.x, start.y, 0.06),
+        new THREE.Vector3(end.x, end.y, 0.06),
+      ];
+
+      // Arrowhead
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len > 0.05) {
+        const angle = Math.atan2(dy, dx);
+        const headLen = Math.min(len * 0.3, 0.25);
+        const headAngle = Math.PI / 6;
+        points.push(
+          new THREE.Vector3(end.x, end.y, 0.06),
+          new THREE.Vector3(
+            end.x - headLen * Math.cos(angle - headAngle),
+            end.y - headLen * Math.sin(angle - headAngle),
+            0.06,
+          ),
+        );
+        points.push(
+          new THREE.Vector3(end.x, end.y, 0.06),
+          new THREE.Vector3(
+            end.x - headLen * Math.cos(angle + headAngle),
+            end.y - headLen * Math.sin(angle + headAngle),
+            0.06,
+          ),
+        );
+      }
+
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({
+        color: 0x00ff88,
+        linewidth: 2,
+      });
+      const line = new THREE.LineSegments(geometry, material);
+      scene.add(line);
+      goalArrowRef.current = line;
+    },
+    [],
+  );
+
+  const clearGoalArrow = useCallback(() => {
+    const scene = sceneRef.current;
+    if (goalArrowRef.current && scene) {
+      goalArrowRef.current.geometry.dispose();
+      scene.remove(goalArrowRef.current);
+      goalArrowRef.current = null;
+    }
+  }, []);
+
+  const updateGoalMarker = useCallback((pos: THREE.Vector3) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    if (!goalMarkerRef.current) {
+      const geo = new THREE.CircleGeometry(0.08, 16);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(pos.x, pos.y, 0.06);
+      scene.add(mesh);
+      goalMarkerRef.current = mesh;
+    } else {
+      goalMarkerRef.current.position.set(pos.x, pos.y, 0.06);
+      goalMarkerRef.current.visible = true;
+    }
+  }, []);
+
+  const publishNavigationGoal = useCallback(
+    (x: number, y: number, yaw: number) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.error(
+          "[Costmap2DView] WebSocket not connected, cannot publish nav goal",
+        );
+        return;
+      }
+
+      const qz = Math.sin(yaw / 2);
+      const qw = Math.cos(yaw / 2);
+      const now = Date.now();
+
+      const msg = {
+        op: "publish",
+        topic: "/sim_navigation/global_plan",
+        msg: {
+          header: {
+            stamp: {
+              sec: Math.floor(now / 1000),
+              nanosec: (now % 1000) * 1_000_000,
+            },
+            frame_id: "map",
+          },
+          poses: [
+            {
+              header: {
+                stamp: {
+                  sec: Math.floor(now / 1000),
+                  nanosec: (now % 1000) * 1_000_000,
+                },
+                frame_id: "map",
+              },
+              pose: {
+                position: { x, y, z: 0.0 },
+                orientation: { x: 0.0, y: 0.0, z: qz, w: qw },
+              },
+            },
+          ],
+        },
+      };
+
+      ws.send(JSON.stringify(msg));
+      console.log(
+        `[Costmap2DView] Published nav goal: (${x.toFixed(2)}, ${y.toFixed(2)}), yaw=${((yaw * 180) / Math.PI).toFixed(1)}°`,
+      );
+    },
+    [],
+  );
+
+  const handlePointerDown = useCallback(
+    (e: PointerEvent) => {
+      if (!isGoToMode) return;
+
+      const worldPos = screenToWorld(e.clientX, e.clientY);
+      if (!worldPos) return;
+
+      isDraggingGoalRef.current = true;
+      dragStartWorldRef.current = worldPos;
+      updateGoalMarker(worldPos);
+      clearGoalArrow();
+
+      // Disable orbit controls during drag
+      if (controlsRef.current) {
+        controlsRef.current.enabled = false;
+      }
+    },
+    [isGoToMode, screenToWorld, updateGoalMarker, clearGoalArrow],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: PointerEvent) => {
+      if (!isDraggingGoalRef.current || !dragStartWorldRef.current) return;
+
+      const worldPos = screenToWorld(e.clientX, e.clientY);
+      if (!worldPos) return;
+
+      updateGoalArrow(dragStartWorldRef.current, worldPos);
+    },
+    [screenToWorld, updateGoalArrow],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: PointerEvent) => {
+      if (!isDraggingGoalRef.current || !dragStartWorldRef.current) return;
+
+      const start = dragStartWorldRef.current;
+      const endWorld = screenToWorld(e.clientX, e.clientY);
+
+      isDraggingGoalRef.current = false;
+      dragStartWorldRef.current = null;
+
+      // Re-enable orbit controls
+      if (controlsRef.current) {
+        controlsRef.current.enabled = true;
+      }
+
+      if (!endWorld) {
+        clearGoalArrow();
+        return;
+      }
+
+      const dx = endWorld.x - start.x;
+      const dy = endWorld.y - start.y;
+      const dragDist = Math.sqrt(dx * dx + dy * dy);
+
+      // If drag is too short, use a default orientation (face "east")
+      const yaw = dragDist > 0.05 ? Math.atan2(dy, dx) : 0;
+
+      publishNavigationGoal(start.x, start.y, yaw);
+
+      // Clear arrow after a short delay so user sees feedback
+      setTimeout(() => {
+        clearGoalArrow();
+        if (goalMarkerRef.current) {
+          goalMarkerRef.current.visible = false;
+        }
+      }, 1500);
+
+      setIsGoToMode(false);
+    },
+    [screenToWorld, publishNavigationGoal, clearGoalArrow],
+  );
+
+  // Attach/detach pointer events for Go To mode
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+
+    const canvas = renderer.domElement;
+    canvas.addEventListener("pointerdown", handlePointerDown);
+    canvas.addEventListener("pointermove", handlePointerMove);
+    canvas.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", handlePointerDown);
+      canvas.removeEventListener("pointermove", handlePointerMove);
+      canvas.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [handlePointerDown, handlePointerMove, handlePointerUp]);
 
   const fitCameraToMap = useCallback((metadata: MapMetadata) => {
     const camera = cameraRef.current;
@@ -475,6 +757,16 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
         headingLineRef.current.material.dispose();
         headingLineRef.current = null;
       }
+      if (goalArrowRef.current) {
+        goalArrowRef.current.geometry.dispose();
+        goalArrowRef.current.material.dispose();
+        goalArrowRef.current = null;
+      }
+      if (goalMarkerRef.current) {
+        goalMarkerRef.current.geometry.dispose();
+        goalMarkerRef.current.material.dispose();
+        goalMarkerRef.current = null;
+      }
 
       renderer.dispose();
       if (renderer.domElement.parentElement === container) {
@@ -493,9 +785,17 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
     setStatus("Connecting to map stream");
 
     const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
     let isDisposed = false;
 
     ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          op: "advertise",
+          topic: "/sim_navigation/global_plan",
+          type: "nav_msgs/msg/Path",
+        }),
+      );
       ws.send(
         JSON.stringify({
           op: "subscribe",
@@ -561,17 +861,33 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
 
     return () => {
       isDisposed = true;
+      wsRef.current = null;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ op: "unsubscribe", topic: "/map" }));
         ws.send(JSON.stringify({ op: "unsubscribe", topic: "/odom" }));
+        ws.send(
+          JSON.stringify({
+            op: "unadvertise",
+            topic: "/sim_navigation/global_plan",
+          }),
+        );
       }
       ws.close();
     };
   }, [applyMapMessage, applyOdomMessage, wsUrl]);
 
   return (
-    <ViewRoot ref={containerRef}>
+    <ViewRoot
+      ref={containerRef}
+      style={isGoToMode ? { cursor: "crosshair" } : undefined}
+    >
       <StatusPill $isError={Boolean(error)}>{error ?? status}</StatusPill>
+      <GoToButton
+        $active={isGoToMode}
+        onClick={() => setIsGoToMode((prev) => !prev)}
+      >
+        {isGoToMode ? "Cancel" : "Go To"}
+      </GoToButton>
     </ViewRoot>
   );
 }
