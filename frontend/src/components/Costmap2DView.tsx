@@ -118,8 +118,7 @@ function createCostmapTexture(
   for (let row = 0; row < height; row += 1) {
     for (let col = 0; col < width; col += 1) {
       const sourceIndex = row * width + col;
-      const targetRow = height - 1 - row;
-      const targetIndex = (targetRow * width + col) * 4;
+      const targetIndex = sourceIndex * 4;
 
       const occupancy = data[sourceIndex] ?? -1;
       let shade = 105;
@@ -207,6 +206,11 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
     THREE.CircleGeometry,
     THREE.MeshBasicMaterial
   > | null>(null);
+  const planLineRef = useRef<THREE.Line<
+    THREE.BufferGeometry,
+    THREE.LineBasicMaterial
+  > | null>(null);
+
   const isDraggingGoalRef = useRef(false);
   const dragStartWorldRef = useRef<THREE.Vector3 | null>(null);
 
@@ -295,6 +299,44 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       goalArrowRef.current = null;
     }
   }, []);
+
+  const clearPlanPath = useCallback(() => {
+    const scene = sceneRef.current;
+    if (planLineRef.current && scene) {
+      planLineRef.current.geometry.dispose();
+      scene.remove(planLineRef.current);
+      planLineRef.current = null;
+    }
+  }, []);
+
+  const drawPlanPath = useCallback(
+    (poses: Array<{ pose?: { position?: { x?: number; y?: number } } }>) => {
+      const scene = sceneRef.current;
+      if (!scene || poses.length < 1) return;
+
+      clearPlanPath();
+
+      const points: THREE.Vector3[] = [];
+      for (const poseStamped of poses) {
+        const pos = poseStamped.pose?.position;
+        if (pos && typeof pos.x === "number" && typeof pos.y === "number") {
+          points.push(new THREE.Vector3(pos.x, pos.y, 0.05));
+        }
+      }
+
+      if (points.length < 1) return;
+
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({
+        color: 0x00b7ff,
+        linewidth: 2,
+      });
+      const line = new THREE.Line(geometry, material);
+      scene.add(line);
+      planLineRef.current = line;
+    },
+    [clearPlanPath],
+  );
 
   const updateGoalMarker = useCallback((pos: THREE.Vector3) => {
     const scene = sceneRef.current;
@@ -425,6 +467,16 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
 
       publishNavigationGoal(start.x, start.y, yaw);
 
+      // Draw plan line from robot position to goal immediately
+      // (rosbridge doesn't echo back our own published messages)
+      const robotPos = robotPointRef.current?.position;
+      if (robotPos) {
+        drawPlanPath([
+          { pose: { position: { x: robotPos.x, y: robotPos.y } } },
+          { pose: { position: { x: start.x, y: start.y } } },
+        ]);
+      }
+
       // Clear arrow after a short delay so user sees feedback
       setTimeout(() => {
         clearGoalArrow();
@@ -435,7 +487,7 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
 
       setIsGoToMode(false);
     },
-    [screenToWorld, publishNavigationGoal, clearGoalArrow],
+    [screenToWorld, publishNavigationGoal, clearGoalArrow, drawPlanPath],
   );
 
   // Attach/detach pointer events for Go To mode
@@ -767,6 +819,11 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
         goalMarkerRef.current.material.dispose();
         goalMarkerRef.current = null;
       }
+      if (planLineRef.current) {
+        planLineRef.current.geometry.dispose();
+        planLineRef.current.material.dispose();
+        planLineRef.current = null;
+      }
 
       renderer.dispose();
       if (renderer.domElement.parentElement === container) {
@@ -814,6 +871,22 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
           queue_length: 1,
         }),
       );
+      ws.send(
+        JSON.stringify({
+          op: "subscribe",
+          topic: "/sim_navigation/global_plan",
+          type: "nav_msgs/msg/Path",
+          queue_length: 1,
+        }),
+      );
+      ws.send(
+        JSON.stringify({
+          op: "subscribe",
+          topic: "/sim_navigation/status",
+          type: "std_msgs/msg/String",
+          queue_length: 1,
+        }),
+      );
       setStatus("Waiting for costmap data");
     };
 
@@ -841,6 +914,29 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
 
       if (message.topic === "/odom") {
         applyOdomMessage(message.msg as OdomMessage);
+        return;
+      }
+
+      if (message.topic === "/sim_navigation/global_plan") {
+        const pathMsg = message.msg as {
+          poses?: Array<{ pose?: { position?: { x?: number; y?: number } } }>;
+        };
+        if (pathMsg.poses && Array.isArray(pathMsg.poses)) {
+          drawPlanPath(pathMsg.poses);
+        }
+        return;
+      }
+
+      if (message.topic === "/sim_navigation/status") {
+        const statusMsg = message.msg as { data?: string };
+        const navStatus = statusMsg.data ?? "";
+        if (
+          navStatus === "SUCCEEDED" ||
+          navStatus === "FAILED" ||
+          navStatus === "CANCELED"
+        ) {
+          clearPlanPath();
+        }
       }
     };
 
@@ -867,6 +963,18 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
         ws.send(JSON.stringify({ op: "unsubscribe", topic: "/odom" }));
         ws.send(
           JSON.stringify({
+            op: "unsubscribe",
+            topic: "/sim_navigation/global_plan",
+          }),
+        );
+        ws.send(
+          JSON.stringify({
+            op: "unsubscribe",
+            topic: "/sim_navigation/status",
+          }),
+        );
+        ws.send(
+          JSON.stringify({
             op: "unadvertise",
             topic: "/sim_navigation/global_plan",
           }),
@@ -874,7 +982,7 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       }
       ws.close();
     };
-  }, [applyMapMessage, applyOdomMessage, wsUrl]);
+  }, [applyMapMessage, applyOdomMessage, drawPlanPath, clearPlanPath, wsUrl]);
 
   return (
     <ViewRoot
