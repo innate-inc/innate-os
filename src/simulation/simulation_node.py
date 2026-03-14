@@ -60,9 +60,11 @@ class SimulationNode:
         shared_queues: SharedQueues,
         enable_vis: bool = True,
         initial_env_config: Optional[Dict[str, Any]] = None,
+        robot_collision_enabled: bool = True,
     ):
         self.shared_queues = shared_queues
         self.enable_vis = enable_vis
+        self.robot_collision_enabled = robot_collision_enabled
         self.loaded_entities = {}  # To store references to loaded entities
         self.loaded_dynamic_entities: Dict[str, gs.Entity] = {}
         self.managed_entities: Dict[str, gs.Entity] = {}
@@ -75,7 +77,9 @@ class SimulationNode:
         self.manual_entity_hitboxes: Dict[str, Dict[str, float]] = {}
         self.current_scene_config = self._resolve_scene_config(initial_env_config)
         self.scene_built = False
-        self.current_entity_asset_signature: Optional[tuple[tuple[str, str], ...]] = None
+        self.current_entity_asset_signature: Optional[tuple[tuple[str, str], ...]] = (
+            None
+        )
         # Store trajectory data for managed entities
         self.entity_trajectories: Dict[str, Dict[str, Any]] = {}
 
@@ -186,7 +190,7 @@ class SimulationNode:
 
     def _init_genesis(self):
         """Initialize Genesis backend"""
-        gs.init(backend=gs.gpu)
+        gs.init(backend=gs.cpu)
 
     def _init_scene(self):
         """Initialize the main simulation scene"""
@@ -406,7 +410,9 @@ class SimulationNode:
                     except Exception as e:
                         print(f"Failed to load collision for {object_name}: {e}")
 
-    def _process_occupancy_grid(self, file_path: str, output_prefix: str = "scene_slice"):
+    def _process_occupancy_grid(
+        self, file_path: str, output_prefix: str = "scene_slice"
+    ):
         """
         Process the STL mesh to create an occupancy grid.
         This version also retrieves the mesh bounds so that the map origin can be set
@@ -685,14 +691,19 @@ class SimulationNode:
 
     def _init_robot(self):
         """Initialize robot and its parameters"""
-        self.robot = self.scene.add_entity(
-            gs.morphs.URDF(
-                file="data/urdf/maurice.urdf",
-                pos=ROBOT_INIT_POS,
-                quat=xyzw_to_wxyz(ROBOT_INIT_QUAT),
-                fixed=True,  # Disable physics dynamics - robot is moved kinematically via set_pos/set_quat
-            )
-        )
+        urdf_kwargs = {
+            "file": "data/urdf/maurice.urdf",
+            "pos": ROBOT_INIT_POS,
+            "quat": xyzw_to_wxyz(ROBOT_INIT_QUAT),
+            # Disable physics dynamics - robot is moved kinematically via set_pos/set_quat.
+            "fixed": True,
+        }
+        if not self.robot_collision_enabled:
+            # Temporary troubleshooting mode: ghost robot through scene geometry.
+            urdf_kwargs["collision"] = False
+            print("[SimulationNode] Robot collisions disabled.")
+
+        self.robot = self.scene.add_entity(gs.morphs.URDF(**urdf_kwargs))
 
     def _apply_arm_positions(self, joint_positions):
         """Apply joint positions to arm and update current state.
@@ -1096,9 +1107,7 @@ class SimulationNode:
         full_asset_path = self._resolve_project_path(asset_path)
 
         if not os.path.exists(full_asset_path):
-            error = (
-                f"Cannot load '{name}': asset path not found ({full_asset_path})"
-            )
+            error = f"Cannot load '{name}': asset path not found ({full_asset_path})"
             print(f"[SimulationNode] {error}")
             return False, error
 
@@ -1138,9 +1147,7 @@ class SimulationNode:
             )
             return True, None
         except Exception as e:
-            error = (
-                f"Error loading entity '{name}' from path '{full_asset_path}': {e}"
-            )
+            error = f"Error loading entity '{name}' from path '{full_asset_path}': {e}"
             print(f"[SimulationNode] {error}")
             return False, error
 
@@ -1340,7 +1347,9 @@ class SimulationNode:
 
         load_errors = self._ensure_config_entities_loaded(config)
         if load_errors:
-            details = "; ".join(f"{name}: {error}" for name, error in load_errors.items())
+            details = "; ".join(
+                f"{name}: {error}" for name, error in load_errors.items()
+            )
             if allow_rebuild and self._requires_rebuild_for_load_errors(load_errors):
                 raise EnvironmentRebuildRequired(
                     "Environment introduces entities that are not in the current "
@@ -1348,8 +1357,7 @@ class SimulationNode:
                     f"Details: {details}"
                 )
             raise RuntimeError(
-                "Failed to load requested environment entities. "
-                f"Details: {details}"
+                "Failed to load requested environment entities. " f"Details: {details}"
             )
 
         # Clear previous trajectory data and active entities
@@ -1406,9 +1414,7 @@ class SimulationNode:
                         self._add_entity_to_active_list(name, position)
 
                     except Exception as e:
-                        raise RuntimeError(
-                            f"Error placing entity '{name}': {e}"
-                        ) from e
+                        raise RuntimeError(f"Error placing entity '{name}': {e}") from e
 
                 elif len(poses) > 1:
                     # Store trajectory data for update loop
@@ -1424,9 +1430,7 @@ class SimulationNode:
                     )
 
                 else:
-                    raise RuntimeError(
-                        f"Entity '{name}' has no poses defined."
-                    )
+                    raise RuntimeError(f"Entity '{name}' has no poses defined.")
 
         self.current_entity_asset_signature = requested_signature
         # Note: Debug grids are automatically saved when entities regenerate
@@ -1624,8 +1628,12 @@ class SimulationNode:
                             f"{rebuild_exc}"
                         )
                         try:
-                            self._rebuild_scene_for_environment(latest_set_env_cmd.config)
-                            print("[SimulationNode] Environment rebuild/apply complete.")
+                            self._rebuild_scene_for_environment(
+                                latest_set_env_cmd.config
+                            )
+                            print(
+                                "[SimulationNode] Environment rebuild/apply complete."
+                            )
                             self._report_set_environment_result(
                                 latest_set_env_cmd, success=True
                             )

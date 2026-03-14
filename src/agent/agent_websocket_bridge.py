@@ -77,12 +77,13 @@ def rosbridge_service_response(service: str, result: dict, call_id: str = None) 
     return resp
 
 
-async def inbound_loop(ws, shared_queues):
+async def inbound_data_loop(ws, shared_queues):
     """
-    Continuously receive inbound messages on the WebSocket (e.g. /cmd_vel, /chat_in, service calls)
-    and push them to shared_queues if needed.
+    Continuously receive inbound messages on the data WebSocket
+    (e.g. /cmd_vel, /chat_in, service calls for services we provide).
+    Service responses are handled on the separate service connection.
     """
-    print("[ROSBridge] inbound_loop started.")
+    print("[ROSBridge] inbound_data_loop started.")
     while not shared_queues.exit_event.is_set():
         try:
             # Wait for incoming message
@@ -258,18 +259,43 @@ async def inbound_loop(ws, shared_queues):
                     )
                     await ws.send(json.dumps(response))
 
-        # Process service responses (responses to service calls that we initiated)
-        elif op_type == "service_response":
+        await asyncio.sleep(0.0001)
+
+    print("[ROSBridge] inbound_data_loop stopped.")
+
+
+async def inbound_service_loop(ws, shared_queues):
+    """
+    Receive service_response messages on the dedicated service WebSocket.
+    This runs on a separate connection so that blocking service calls
+    do not starve the data connection.
+    """
+    print("[ROSBridge] inbound_service_loop started.")
+    while not shared_queues.exit_event.is_set():
+        try:
+            inbound_raw = await asyncio.wait_for(ws.recv(), timeout=0.01)
+        except asyncio.TimeoutError:
+            await asyncio.sleep(0.001)
+            continue
+        except websockets.exceptions.ConnectionClosed:
+            print("[ROSBridge] Connection closed in inbound_service_loop.")
+            break
+
+        try:
+            inbound_data = json.loads(inbound_raw)
+        except json.JSONDecodeError:
+            continue
+
+        op_type = inbound_data.get("op", "")
+
+        if op_type == "service_response":
             service_name = inbound_data.get("service", "")
             if service_name == "/brain/get_chat_history":
-                # Check if inbound_data result field is True, otherwise the brain is not ready yet
                 if not inbound_data.get("result", False):
                     continue
 
-                # Extract the history data from the response
                 history_data_raw = inbound_data.get("values", {}).get("history", "")
 
-                # If history_data is a JSON string, parse it; otherwise assume it's already a list.
                 if isinstance(history_data_raw, str):
                     try:
                         history_data = json.loads(history_data_raw)
@@ -279,7 +305,6 @@ async def inbound_loop(ws, shared_queues):
                 else:
                     history_data = history_data_raw
 
-                # Iterate through the history and forward each message to the simulation queue.
                 for chat in history_data:
                     try:
                         chat_msg = ChatMessage(
@@ -298,7 +323,6 @@ async def inbound_loop(ws, shared_queues):
                         print(f"[ROSBridge] Error processing chat history entry: {e}")
 
             elif service_name == "/brain/get_available_directives":
-                # Check if the service call was successful
                 if not inbound_data.get("result", False):
                     print(
                         "[ROSBridge] get_available_directives service call failed or brain not ready"
@@ -310,12 +334,9 @@ async def inbound_loop(ws, shared_queues):
                 current_directive = values.get("current_directive", "")
                 startup_directive = values.get("startup_directive", "")
 
-                # The service returns a list with one element: a JSON string containing all agents
-                # e.g., ['[{"id": "agent1", ...}, {"id": "agent2", ...}]']
                 agents = []
 
                 try:
-                    # Get the JSON string (first element of the list)
                     if isinstance(directives_raw, list) and len(directives_raw) > 0:
                         json_string = directives_raw[0]
                     elif isinstance(directives_raw, str):
@@ -323,10 +344,8 @@ async def inbound_loop(ws, shared_queues):
                     else:
                         json_string = "[]"
 
-                    # Parse the JSON string to get list of agent dicts
                     agents_list = json.loads(json_string)
 
-                    # Convert each dict to AgentInfo
                     for directive in agents_list:
                         if isinstance(directive, dict):
                             agent = AgentInfo(
@@ -347,7 +366,6 @@ async def inbound_loop(ws, shared_queues):
                 except Exception as e:
                     print(f"[ROSBridge] Error processing directives: {e}")
 
-                # Update shared_queues with available agents
                 shared_queues.update_available_agents(
                     agents=agents,
                     current_agent_id=current_directive,
@@ -357,18 +375,22 @@ async def inbound_loop(ws, shared_queues):
 
         await asyncio.sleep(0.0001)
 
-    print("[ROSBridge] inbound_loop stopped.")
+    print("[ROSBridge] inbound_service_loop stopped.")
 
 
-async def outbound_loop(ws, shared_queues):
+async def outbound_data_loop(ws, shared_queues, service_call_queue):
     """
     Continuously process messages from sim_to_agent and publish them
     to rosbridge (camera images, odometry, map, etc.).
     Also advertise relevant topics/services once at start.
 
+    Service calls (call_service) are routed to *service_call_queue* so they
+    are sent on a dedicated service websocket connection, avoiding the RWS
+    client_handler deadlock.
+
     IMPORTANT: Chat messages are processed FIRST to avoid latency from heavy sensor data.
     """
-    print("[ROSBridge] outbound_loop started.")
+    print("[ROSBridge] outbound_data_loop started.")
 
     # Queue monitoring - log periodically if queues are backing up
     last_queue_log_time = time.time()
@@ -376,7 +398,7 @@ async def outbound_loop(ws, shared_queues):
 
     # First, advertise standard topics once
     adv_color = rosbridge_advertise(
-        "/mars/main_camera/image/compressed", "sensor_msgs/msg/CompressedImage"
+        "/mars/main_camera/left/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
     )
     adv_arm_camera = rosbridge_advertise(
         "/mars/arm/image_raw/compressed", "sensor_msgs/msg/CompressedImage"
@@ -424,7 +446,7 @@ async def outbound_loop(ws, shared_queues):
     await ws.send(json.dumps(adv_nav_mode))
     await ws.send(json.dumps(adv_arm_state))
     await ws.send(json.dumps(adv_arm_camera))
-    await ws.send(json.dumps(adv_arm_goto_service))
+    # await ws.send(json.dumps(adv_arm_goto_service))
     print(
         "[ROSBridge] Advertised camera-related topics, /odom, /map, /chat_in, /logging_config, navigation topics, and arm interfaces"
     )
@@ -459,31 +481,17 @@ async def outbound_loop(ws, shared_queues):
     shared_queues.nav_controller = nav_controller  # Store reference for inbound_loop
     print("[ROSBridge] Navigation controller initialized")
 
-    # Send the logging configuration immediately after connection
+    # Send the logging configuration via topic (non-blocking)
     if hasattr(shared_queues, "log_everything"):
-        # Method 1: Publish to a topic
         logging_msg = {"data": shared_queues.log_everything}
         outbound = rosbridge_publish("/logging_config", logging_msg)
         await ws.send(json.dumps(outbound))
-
-        # Method 2: Call a service (more reliable for initialization)
-        srv_set_logging = rosbridge_call_service(
-            "/brain/set_logging_config", "std_srvs/srv/SetBool"
-        )
-        # Add the data parameter for the service call
-        srv_set_logging["args"] = {"data": shared_queues.log_everything}
-        await ws.send(json.dumps(srv_set_logging))
-
         print(
-            f"[ROSBridge] Set logging configuration: log_everything={shared_queues.log_everything}"
+            f"[ROSBridge] Set logging configuration (topic): log_everything={shared_queues.log_everything}"
         )
 
-    # Request available agents/directives from the brain
-    srv_get_agents = rosbridge_call_service(
-        "/brain/get_available_directives", "brain_messages/srv/GetAvailableDirectives"
-    )
-    await ws.send(json.dumps(srv_get_agents))
-    print("[ROSBridge] Requested available agents from brain")
+    # Service calls (set_logging_config, get_available_directives) are sent
+    # on the dedicated service connection — see outbound_service_loop.
 
     while not shared_queues.exit_event.is_set():
         # Monitor queue sizes periodically
@@ -537,7 +545,7 @@ async def outbound_loop(ws, shared_queues):
                             "/brain/get_chat_history",
                             "brain_messages/srv/GetChatHistory",
                         )
-                        await ws.send(json.dumps(srv_chat_history))
+                        await service_call_queue.put(srv_chat_history)
 
                 chat_processed += 1
             except queue.Empty:
@@ -570,13 +578,10 @@ async def outbound_loop(ws, shared_queues):
                     "/brain/reset_brain", "brain_messages/srv/ResetBrain"
                 )
 
-                # Set the memory_state parameter directly (empty string if none provided)
-                # Using dict for clarity when working with the service call params
                 memory_state = ""
                 if msg.memory_state:
                     memory_state = msg.memory_state
 
-                # This is the correct way to format args for the service call in rosbridge
                 reset_srv["args"] = {"memory_state": memory_state}
 
                 if memory_state:
@@ -584,7 +589,7 @@ async def outbound_loop(ws, shared_queues):
                 else:
                     print("[ROSBridge] Reset without memory state")
 
-                await ws.send(json.dumps(reset_srv))
+                await service_call_queue.put(reset_srv)
 
             elif isinstance(msg, BrainActiveCmd):
                 brain_active_srv = rosbridge_call_service(
@@ -593,7 +598,7 @@ async def outbound_loop(ws, shared_queues):
                 brain_active_srv["args"] = {"data": msg.active}
 
                 print(f"[ROSBridge] Setting brain active: {msg.active}")
-                await ws.send(json.dumps(brain_active_srv))
+                await service_call_queue.put(brain_active_srv)
 
             elif isinstance(msg, dict) and "clock" in msg:
                 outbound = rosbridge_publish("/clock", msg)
@@ -619,42 +624,154 @@ async def outbound_loop(ws, shared_queues):
 
         await asyncio.sleep(0.0001)
 
-    print("[ROSBridge] outbound_loop stopped.")
+    print("[ROSBridge] outbound_data_loop stopped.")
 
 
-async def rosbridge_loop(
-    shared_queues, rosbridge_uri: str, retry_interval: float = 2.0
+async def outbound_service_loop(ws, shared_queues, service_call_queue):
+    """
+    Send service calls on a dedicated WebSocket connection.
+    Handles startup service calls and processes queued service calls
+    from the data loop.  Runs on its own RWS client_handler so that
+    blocking retries do not starve topic publishes.
+    """
+    print("[ROSBridge] outbound_service_loop started.")
+
+    # Startup service calls
+    if hasattr(shared_queues, "log_everything"):
+        srv_set_logging = rosbridge_call_service(
+            "/brain/set_logging_config", "std_srvs/srv/SetBool"
+        )
+        srv_set_logging["args"] = {"data": shared_queues.log_everything}
+        await ws.send(json.dumps(srv_set_logging))
+        print(
+            f"[ROSBridge] [service] Called /brain/set_logging_config: "
+            f"{shared_queues.log_everything}"
+        )
+
+    srv_get_agents = rosbridge_call_service(
+        "/brain/get_available_directives", "brain_messages/srv/GetAvailableDirectives"
+    )
+    await ws.send(json.dumps(srv_get_agents))
+    print("[ROSBridge] [service] Called /brain/get_available_directives")
+
+    # Process queued service calls from the data loop
+    while not shared_queues.exit_event.is_set():
+        try:
+            srv_msg = await asyncio.wait_for(service_call_queue.get(), timeout=0.1)
+            await ws.send(json.dumps(srv_msg))
+            service_name = srv_msg.get("service", "unknown")
+            print(f"[ROSBridge] [service] Forwarded call_service: {service_name}")
+        except asyncio.TimeoutError:
+            continue
+        except websockets.exceptions.ConnectionClosed:
+            print("[ROSBridge] Service connection closed in outbound_service_loop.")
+            break
+
+    print("[ROSBridge] outbound_service_loop stopped.")
+
+
+async def _data_connection_loop(
+    shared_queues, rosbridge_uri: str, service_call_queue, retry_interval: float = 2.0
 ):
     """
-    High-level function that connects to rosbridge and starts
-    two concurrent tasks: inbound_loop & outbound_loop & chat_bridge_loop.
-    Automatically retries connection if it drops.
+    Manage the data WebSocket connection (topics: advertise, subscribe, publish).
+    Retries automatically on disconnect.
     """
     while not shared_queues.exit_event.is_set():
-        print(f"[ROSBridge] Connecting to {rosbridge_uri} ...")
-
+        print(f"[ROSBridge] [data] Connecting to {rosbridge_uri} ...")
         try:
             async with websockets.connect(rosbridge_uri) as ws:
-                print(f"[ROSBridge] Connected to {rosbridge_uri}")
-
-                # Run inbound & outbound in parallel
-                tasks = []
-                tasks.append(asyncio.create_task(inbound_loop(ws, shared_queues)))
-                tasks.append(asyncio.create_task(outbound_loop(ws, shared_queues)))
-                # Wait for them to complete
+                print(f"[ROSBridge] [data] Connected to {rosbridge_uri}")
+                tasks = [
+                    asyncio.create_task(inbound_data_loop(ws, shared_queues)),
+                    asyncio.create_task(
+                        outbound_data_loop(ws, shared_queues, service_call_queue)
+                    ),
+                ]
                 done, pending = await asyncio.wait(
                     tasks, return_when=asyncio.FIRST_COMPLETED
                 )
                 for task in pending:
                     task.cancel()
         except Exception as e:
-            print(f"[ROSBridge] Connection error: {e}")
+            print(f"[ROSBridge] [data] Connection error: {e}")
 
         if shared_queues.exit_event.is_set():
             break
-
-        print(f"[ROSBridge] Connection lost. Retrying in {retry_interval}s...")
+        print(f"[ROSBridge] [data] Connection lost. Retrying in {retry_interval}s...")
         await asyncio.sleep(retry_interval)
+
+    print("[ROSBridge] [data] Stopped.")
+
+
+async def _service_connection_loop(
+    shared_queues, rosbridge_uri: str, service_call_queue, retry_interval: float = 2.0
+):
+    """
+    Manage the service WebSocket connection (call_service operations).
+    Runs independently of the data connection so that blocking RWS
+    service retries never starve topic publishes.
+    """
+    while not shared_queues.exit_event.is_set():
+        print(f"[ROSBridge] [service] Connecting to {rosbridge_uri} ...")
+        try:
+            async with websockets.connect(rosbridge_uri) as ws:
+                print(f"[ROSBridge] [service] Connected to {rosbridge_uri}")
+                tasks = [
+                    asyncio.create_task(inbound_service_loop(ws, shared_queues)),
+                    asyncio.create_task(
+                        outbound_service_loop(ws, shared_queues, service_call_queue)
+                    ),
+                ]
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+        except Exception as e:
+            print(f"[ROSBridge] [service] Connection error: {e}")
+
+        if shared_queues.exit_event.is_set():
+            break
+        print(
+            f"[ROSBridge] [service] Connection lost. Retrying in {retry_interval}s..."
+        )
+        await asyncio.sleep(retry_interval)
+
+    print("[ROSBridge] [service] Stopped.")
+
+
+async def rosbridge_loop(
+    shared_queues, rosbridge_uri: str, retry_interval: float = 2.0
+):
+    """
+    High-level function that manages two independent WebSocket connections
+    to rosbridge:
+      1. Data connection  – topic advertise/subscribe/publish (images, odom, map, chat)
+      2. Service connection – call_service operations (brain services)
+
+    This prevents the RWS client_handler deadlock where a blocking
+    service call starves all topic publishes on the same handler.
+    """
+    service_call_queue = asyncio.Queue()
+
+    data_task = asyncio.create_task(
+        _data_connection_loop(
+            shared_queues, rosbridge_uri, service_call_queue, retry_interval
+        )
+    )
+    service_task = asyncio.create_task(
+        _service_connection_loop(
+            shared_queues, rosbridge_uri, service_call_queue, retry_interval
+        )
+    )
+
+    # If either loop exits (e.g. exit_event set), cancel the other
+    done, pending = await asyncio.wait(
+        [data_task, service_task], return_when=asyncio.FIRST_COMPLETED
+    )
+    for task in pending:
+        task.cancel()
 
     print("[ROSBridge] Stopped rosbridge_loop.")
 
@@ -693,7 +810,7 @@ async def publish_robot_state(ws, rsm: RobotStateMsg, shared_queues):
                 "data": list(jpg_bytes),
             }
             outbound = rosbridge_publish(
-                "/mars/main_camera/image/compressed", compressed_msg
+                "/mars/main_camera/left/image_raw/compressed", compressed_msg
             )
             await ws.send(json.dumps(outbound))
 
