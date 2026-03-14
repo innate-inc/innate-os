@@ -69,16 +69,12 @@ const StatusPill = styled.div<{ $isError: boolean }>`
   letter-spacing: 0.04em;
   border: 1px solid ${({ theme }) => theme.colors.foreground};
   color: ${({ theme }) => theme.colors.foreground};
-  background: ${({ $isError }) => ($isError ? "rgba(220, 38, 38, 0.85)" : "rgba(0, 0, 0, 0.7)")};
+  background: ${({ $isError }) =>
+    $isError ? "rgba(220, 38, 38, 0.85)" : "rgba(0, 0, 0, 0.7)"};
   pointer-events: none;
 `;
 
-function quaternionToYaw(
-  x: number,
-  y: number,
-  z: number,
-  w: number,
-): number {
+function quaternionToYaw(x: number, y: number, z: number, w: number): number {
   const sinyCosp = 2 * (w * z + x * y);
   const cosyCosp = 1 - 2 * (y * y + z * z);
   return Math.atan2(sinyCosp, cosyCosp);
@@ -114,7 +110,12 @@ function createCostmapTexture(
     }
   }
 
-  const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat);
+  const texture = new THREE.DataTexture(
+    pixels,
+    width,
+    height,
+    THREE.RGBAFormat,
+  );
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -151,19 +152,23 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
   const mapMetadataRef = useRef<MapMetadata | null>(null);
   const hasFittedMapRef = useRef(false);
 
-  const mapMeshRef = useRef<
-    THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null
-  >(null);
+  const mapMeshRef = useRef<THREE.Mesh<
+    THREE.PlaneGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
   const mapTextureRef = useRef<THREE.DataTexture | null>(null);
-  const robotPointRef = useRef<
-    THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial> | null
-  >(null);
-  const robotConeRef = useRef<
-    THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> | null
-  >(null);
-  const headingLineRef = useRef<
-    THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial> | null
-  >(null);
+  const robotPointRef = useRef<THREE.Mesh<
+    THREE.CircleGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
+  const robotConeRef = useRef<THREE.Mesh<
+    THREE.ShapeGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
+  const headingLineRef = useRef<THREE.Line<
+    THREE.BufferGeometry,
+    THREE.LineBasicMaterial
+  > | null>(null);
 
   const [status, setStatus] = useState("Connecting to map stream");
   const [error, setError] = useState<string | null>(null);
@@ -300,7 +305,7 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       }
 
       mapTextureRef.current = texture;
-      setStatus(`Costmap ${width}x${height}`);
+      setStatus("map");
 
       if (!hasFittedMapRef.current) {
         fitCameraToMap(mapMetadataRef.current);

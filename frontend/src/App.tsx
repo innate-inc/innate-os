@@ -476,9 +476,7 @@ export default function App() {
   const blockedAgentsFetchUntilRef = useRef(0);
   const useDirectRobot = import.meta.env.VITE_DIRECT_ROBOT === "true";
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
-  const [viewMode, setViewMode] = useState<
-    "sideBySide" | "frontFocus" | "chaseFocus" | "costmap2D"
-  >("frontFocus");
+  const [viewMode, setViewMode] = useState<"frontFocus" | "map">("frontFocus");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // Voice recognition state
@@ -808,6 +806,34 @@ export default function App() {
     }
   }
 
+  async function handleResetPosition() {
+    try {
+      const baseUrl =
+        import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
+
+      const response = await fetch(`${baseUrl}/reset_robot`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+
+      if (!response.ok) {
+        alert(`Reset Position failed (HTTP ${response.status}).`);
+        return;
+      }
+
+      const data = await response.json();
+      console.log("Reset position response:", data);
+      if (data.status === "reset_enqueued") {
+        alert("Position reset requested!");
+      }
+    } catch (error) {
+      console.error("Error resetting position:", error);
+    }
+  }
+
   async function handleSetDirective(directive: string) {
     try {
       if (useDirectRobot) {
@@ -953,7 +979,7 @@ export default function App() {
               }}
               style={{ width: "100%", justifyContent: "center" }}
             >
-              Reset
+              Reset Agent
             </ActionButton>
           </div>
         </Sidebar>
@@ -976,8 +1002,8 @@ export default function App() {
       <Footer>
         <ControlPanel>
           <div style={{ flex: 1 }}></div>
-          <ActionButton $isDanger onClick={() => handleResetRobot()}>
-            Reset Systems
+          <ActionButton $isDanger onClick={() => void handleResetPosition()}>
+            Reset Position
           </ActionButton>
         </ControlPanel>
 

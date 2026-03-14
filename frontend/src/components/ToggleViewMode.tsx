@@ -1,11 +1,10 @@
 /**
- * Segmented control to switch between "sideBySide", "frontFocus", or "chaseFocus"
+ * Segmented control to switch between "frontFocus" or "map"
  */
 import React from "react";
 import styled from "styled-components";
-import { isMobile } from "react-device-detect";
 
-type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus";
+type ViewMode = "frontFocus" | "map";
 
 type Props = {
   viewMode: ViewMode;
@@ -76,25 +75,15 @@ const ToggleButton = styled.button<{ $active?: boolean }>`
 `;
 
 export function ToggleViewMode({ viewMode, setViewMode }: Props) {
-  // Only show all modes on desktop. On mobile, remove "sideBySide".
-  const desktopModes: ViewMode[] = ["sideBySide", "frontFocus", "chaseFocus"];
-  const mobileModes: ViewMode[] = ["frontFocus", "chaseFocus"];
-  const modes: ViewMode[] = isMobile ? mobileModes : desktopModes;
+  const modes: ViewMode[] = ["frontFocus", "map"];
 
   // Convert the current mode into an index, default to 0 if not found
   const currentIndex =
     modes.indexOf(viewMode) >= 0 ? modes.indexOf(viewMode) : 0;
 
-  // Ensure that if a user is on mobile and currently has "sideBySide",
-  // we switch them to a mobile-supported mode (e.g. "frontFocus").
-  if (isMobile && viewMode === "sideBySide") {
-    setViewMode("frontFocus");
-  }
-
   const labels: Record<ViewMode, string> = {
-    sideBySide: "Side By Side",
     frontFocus: "Front Focus",
-    chaseFocus: "Chase Focus",
+    map: "Map",
   };
 
   return (
