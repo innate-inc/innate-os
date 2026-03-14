@@ -203,6 +203,7 @@ class UninavidNode(Node):
 
                 # Drain & execute actions
                 now = time.monotonic()
+                executed_action = None
                 code = client.pop_action()
                 while code is not None:
                     if not goal_handle.is_active or goal_handle.is_cancel_requested:
@@ -211,6 +212,7 @@ class UninavidNode(Node):
                                         ClientState.COMPLETED):
                         break
 
+                    executed_action = code
                     label = Action(code).name if code in Action._value2member_map_ else str(code)
                     self.get_logger().info(f"Executing action: {label}")
 
@@ -241,7 +243,7 @@ class UninavidNode(Node):
 
 
                 # Feedback
-                feedback.latest_action = code if code is not None else 0
+                feedback.latest_action = executed_action if executed_action is not None else 0
                 feedback.consecutive_stops = client.consecutive_stops
                 feedback.max_consecutive_stops = consecutive_stops
                 if goal_handle.is_active:
