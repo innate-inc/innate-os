@@ -528,7 +528,7 @@ export function ImageDisplay({
           onClick={!isMapView ? () => handleViewModeChange("map") : undefined}
         >
           {!isMapView && <MiniLabel>map</MiniLabel>}
-          <Costmap2DView wsUrl={robotWsUrl} />
+          <Costmap2DView wsUrl={robotWsUrl} isMini={!isMapView} />
         </ViewLayer>
 
         {/* Loading indicator */}

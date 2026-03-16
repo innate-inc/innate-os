@@ -5,6 +5,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 type Costmap2DViewProps = {
   wsUrl: string;
+  isMini?: boolean;
 };
 
 type RosbridgeMessage = {
@@ -167,7 +168,7 @@ function updateCameraProjection(
   camera.updateProjectionMatrix();
 }
 
-export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
+export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -990,12 +991,14 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       style={isGoToMode ? { cursor: "crosshair" } : undefined}
     >
       <StatusPill $isError={Boolean(error)}>{error ?? status}</StatusPill>
-      <GoToButton
-        $active={isGoToMode}
-        onClick={() => setIsGoToMode((prev) => !prev)}
-      >
-        {isGoToMode ? "Cancel" : "Go To"}
-      </GoToButton>
+      {!isMini && (
+        <GoToButton
+          $active={isGoToMode}
+          onClick={() => setIsGoToMode((prev) => !prev)}
+        >
+          {isGoToMode ? "Cancel" : "Go To"}
+        </GoToButton>
+      )}
     </ViewRoot>
   );
 }
