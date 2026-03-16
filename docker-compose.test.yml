@@ -5,8 +5,12 @@ services:
     environment:
       - INNATE_OS_ROOT=/root/innate-os
       - SKIP_UPDATE_CHECK=1
+      - ZENOH_ROUTER_CONFIG_URI=/root/innate-os/zenoh_test_config.json5
+      - RMW_ZENOH_CONFIG_FILE=/root/innate-os/zenoh_test_config.json5
 
     shm_size: "2g"
+    volumes:
+      - ./zenoh_test_config.json5:/root/innate-os/zenoh_test_config.json5:ro
     # Test image already contains ros2_ws, skills, and agents from Dockerfile.test.
     # Rebuild once in-container to keep behavior aligned with current test workflow.
     command: >

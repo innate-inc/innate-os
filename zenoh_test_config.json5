@@ -1,0 +1,11 @@
+{
+  // Zenoh config for CI/testing: disables SHM transport to avoid POSIX shm failures in containers
+  transport: {
+    unicast: {
+      lowlatency: false,
+    },
+    shared_memory: {
+      enabled: false,
+    },
+  },
+}
