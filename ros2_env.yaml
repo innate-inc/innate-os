@@ -623,7 +623,7 @@ dependencies:
   - zstd=1.5.6=hb46c0d2_0
   - zziplib=0.13.69=he1e0b03_1
   - pip:
-    - genesis-world==0.3.6
+    - genesis-world==0.4.3
     - open3d==0.18.0
     - torch==2.5.1
 
