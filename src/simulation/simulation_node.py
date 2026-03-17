@@ -275,6 +275,7 @@ class SimulationNode:
                 pos=(0, 0, 0),
                 convexify=False,
                 collision=False,
+                file_meshes_are_zup=False,  # genesis 0.4.x defaults to True for GLB; preserve manual euler
             )
         )
 
@@ -390,6 +391,7 @@ class SimulationNode:
                                 visualization=False,  # Invisible collision only
                                 collision=True,
                                 convexify=True,  # Individual objects can be safely convexified
+                                file_meshes_are_zup=False,  # genesis 0.4.x: preserve pre-0.4 rotation behavior
                             )
                         )
 
@@ -1131,6 +1133,7 @@ class SimulationNode:
                     scale=normalized_scale,
                     collision=False,
                     convexify=False,
+                    file_meshes_are_zup=False,  # genesis 0.4.x: preserve pre-0.4 rotation behavior
                 )
             )
             self.managed_entities[name] = entity_obj
