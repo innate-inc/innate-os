@@ -35,7 +35,7 @@ ROBOT_INIT_QUAT = (0, 0, 0, 1)
 DEFAULT_SCENE_CONFIG = {
     "name": "Baked_sc0_staging_00",
     "mesh_path": "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
-    "mesh_euler": [90, 0, 0],
+    "mesh_euler": [0, 0, 0],
     "collision_stage_config": "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json",
     "occupancy_stl_path": "data/replica_scene.stl",
     "slice_output_prefix": "replica_scene_sliced",
@@ -230,7 +230,7 @@ class SimulationNode:
             preset = SCENE_PRESETS.get(env_name)
             if preset:
                 scene_config.update(preset)
-                scene_config["mesh_euler"] = list(preset.get("mesh_euler", [90, 0, 0]))
+                scene_config["mesh_euler"] = list(preset.get("mesh_euler", [0, 0, 0]))
             else:
                 scene_config["name"] = env_name
 
@@ -260,7 +260,7 @@ class SimulationNode:
         """Initialize static scene geometry and occupancy baseline."""
         scene_config = self.current_scene_config
         base_scene_path = self._resolve_project_path(scene_config["mesh_path"])
-        base_scene_euler = tuple(scene_config.get("mesh_euler", [90, 0, 0]))
+        base_scene_euler = tuple(scene_config.get("mesh_euler", [0, 0, 0]))
 
         print(
             f"[SimulationNode] Loading static scene '{scene_config['name']}' "
@@ -315,7 +315,7 @@ class SimulationNode:
         )
 
     def _add_collision_from_stage_config(
-        self, config_path: str, scene_euler: tuple = (90, 0, 0)
+        self, config_path: str, scene_euler: tuple = (0, 0, 0)
     ):
         """Add collision geometry based on receptacles defined in the stage config"""
         if not os.path.exists(config_path):
