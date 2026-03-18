@@ -72,7 +72,7 @@ if [ -f "$ALSA_CONF_SRC" ]; then
     if [ -f "$ALSA_CONF_DST" ] \
         && grep -q 'pcm.softvol' "$ALSA_CONF_DST" 2>/dev/null \
         && grep -q 'name "Master"' "$ALSA_CONF_DST" 2>/dev/null \
-        && grep -q 'dmix:APE' "$ALSA_CONF_DST" 2>/dev/null \
+        && grep -q 'dmixer' "$ALSA_CONF_DST" 2>/dev/null \
         && grep -q 'pcm "softvol"' "$ALSA_CONF_DST" 2>/dev/null; then
         log "  ALSA dmix + softvol already configured"
     else
