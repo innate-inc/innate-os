@@ -62,6 +62,10 @@ jobs:
           echo "Pushing main branch to release repo..."
           git push release HEAD:main --force
           
+          # Sync all tags so customers can access old releases from the release repo
+          echo "Syncing all tags to release repo..."
+          git push release --tags --force
+          
             # For staging tags, skip tagging the release repo but still sync main
             if [[ "$TAG" =~ -rc[0-9]+$ ]]; then
               echo "Staging tag detected ($TAG): skipping remote tag update"
@@ -69,6 +73,7 @@ jobs:
                 echo "### Release to Deploy Repo"
                 echo "- Tag: $TAG"
                 echo "- Main branch sync: completed"
+                echo "- All tags synced: completed"
                 echo "- Release repo tag update: skipped (staging tag)"
                 echo "- GitHub Release creation: skipped (staging tag)"
               } >> "$GITHUB_STEP_SUMMARY"
@@ -83,6 +88,7 @@ jobs:
                 echo "### Release to Deploy Repo"
                 echo "- Tag: $TAG"
                 echo "- Main branch sync: completed"
+                echo "- All tags synced: completed"
                 echo "- Release repo tag update: completed"
                 echo "- GitHub Release creation: enabled"
               } >> "$GITHUB_STEP_SUMMARY"
