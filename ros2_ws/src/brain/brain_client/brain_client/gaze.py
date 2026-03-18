@@ -11,20 +11,18 @@ Hardware: MARS robot
 """
 
 import math
-import time
 import threading
-from typing import Optional, Callable, List, Tuple
+import time
+from collections.abc import Callable
 
 import cv2
+import inspireface as isf
 import numpy as np
-
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 
 from brain_client.head_interface import HeadInterface
 from brain_client.mobility_interface import MobilityInterface
-
-import inspireface as isf
 
 
 class FaceDetector:
@@ -39,18 +37,20 @@ class FaceDetector:
         )
         self._session.set_detection_confidence_threshold(min_confidence)
 
-    def detect(self, frame) -> List[dict]:
+    def detect(self, frame) -> list[dict]:
         """Detect faces, return list of {center_x, center_y, width, height}."""
         h, w = frame.shape[:2]
         faces = []
         for face in self._session.face_detection(frame):
             x1, y1, x2, y2 = face.location
-            faces.append({
-                "center_x": (x1 + x2) / 2 / w,
-                "center_y": (y1 + y2) / 2 / h,
-                "width": (x2 - x1) / w,
-                "height": (y2 - y1) / h,
-            })
+            faces.append(
+                {
+                    "center_x": (x1 + x2) / 2 / w,
+                    "center_y": (y1 + y2) / 2 / h,
+                    "width": (x2 - x1) / w,
+                    "height": (y2 - y1) / h,
+                }
+            )
         return faces
 
 
@@ -59,21 +59,21 @@ class GazeController:
 
     # Hardware limits
     MIN_TILT = -25  # degrees (looking down)
-    MAX_TILT = 15   # degrees (looking up)
+    MAX_TILT = 15  # degrees (looking up)
 
     # Camera parameters
     CAMERA_HFOV = 100.0  # horizontal FOV degrees
-    CAMERA_VFOV = 50.0   # vertical FOV degrees
+    CAMERA_VFOV = 50.0  # vertical FOV degrees
 
     # Pan parameters (from original)
-    PAN_GAIN = 0.4       # rad/s per unit offset
-    PAN_COOLDOWN = 0.5   # seconds between pan adjustments
+    PAN_GAIN = 0.4  # rad/s per unit offset
+    PAN_COOLDOWN = 0.5  # seconds between pan adjustments
     PAN_THRESHOLD = 5.0  # degrees - only pan if error exceeds this
 
     def __init__(
         self,
         head_command_fn: Callable[[int], None],
-        wheel_rotate_fn: Optional[Callable[[float, float], None]] = None,
+        wheel_rotate_fn: Callable[[float, float], None] | None = None,
     ):
         self._head_command = head_command_fn
         self._wheel_rotate = wheel_rotate_fn
@@ -83,7 +83,7 @@ class GazeController:
         self._last_commanded_tilt = 0
 
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
         self._last_pan_time = 0.0
@@ -101,7 +101,7 @@ class GazeController:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-    def track_face(self, face: dict, frame_shape: Tuple[int, int]):
+    def track_face(self, face: dict, frame_shape: tuple[int, int]):
         """Track a detected face by pointing at its center."""
         # Pan error (positive = face is on right = turn right)
         pan_error = (face["center_x"] - 0.5) * self.CAMERA_HFOV
@@ -177,10 +177,10 @@ class ROSPersonTracker:
             head_command_fn=self._head.set_position,
             wheel_rotate_fn=self._mobility.rotate_in_place,
         )
-        self._detector: Optional[FaceDetector] = None
+        self._detector: FaceDetector | None = None
 
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
         # Face tracking state
         self._last_face_time = 0.0
@@ -196,9 +196,7 @@ class ROSPersonTracker:
     def _on_image(self, msg):
         """Store latest camera frame."""
         try:
-            frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(
-                msg.height, msg.width, -1
-            )
+            frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
             if msg.encoding == "rgb8":
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             with self._frame_lock:
