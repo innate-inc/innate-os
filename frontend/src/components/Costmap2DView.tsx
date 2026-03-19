@@ -694,7 +694,20 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch (error) {
+      console.error(
+        "[Costmap2DView] Failed to initialize WebGL renderer.",
+        error,
+      );
+      setError("Map renderer unavailable");
+      setStatus("Map stream unavailable");
+      sceneRef.current = null;
+      cameraRef.current = null;
+      return;
+    }
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setSize(size.x, size.y);
     rendererRef.current = renderer;
@@ -836,7 +849,7 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       sceneRef.current = null;
       rendererRef.current = null;
     };
-  }, []);
+  }, [isMini, wsUrl]);
 
   useEffect(() => {
     setError(null);
@@ -945,6 +958,9 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       if (isDisposed) {
         return;
       }
+      console.error("[Costmap2DView] Map rosbridge websocket error.", {
+        wsUrl,
+      });
       setError("ROSBridge connection failed");
       setStatus("Map stream unavailable");
     };
@@ -953,6 +969,9 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       if (isDisposed) {
         return;
       }
+      console.warn("[Costmap2DView] Map rosbridge websocket closed.", {
+        wsUrl,
+      });
       setStatus("Map stream disconnected");
     };
 
