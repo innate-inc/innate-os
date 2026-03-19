@@ -98,7 +98,7 @@ class BrainClientNode(Node):
 
         # Parameters
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
-        self.declare_parameter("token", "MY_HARDCODED_TOKEN")
+        self.declare_parameter("token", "")
         self.declare_parameter("image_topic", "/mars/main_camera/left/image_raw/compressed")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
 

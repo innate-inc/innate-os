@@ -125,7 +125,7 @@ class WSClientNode(Node):
 
         # Declare parameters for websocket configuration.
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
-        self.declare_parameter("token", "MY_HARDCODED_TOKEN")
+        self.declare_parameter("token", "")
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
@@ -135,6 +135,12 @@ class WSClientNode(Node):
         self._ws_configured = self._validate_ws_uri(self.ws_uri)
         if not self._ws_configured:
             self.get_logger().error("❌ WebSocket URI not configured or invalid. Set 'websocket_uri' parameter (must start with ws:// or wss://).")
+        self._token_configured = self._validate_token_for_uri(self.ws_uri, self.token)
+        if not self._token_configured:
+            self.get_logger().error(
+                "❌ Missing INNATE_SERVICE_KEY for hosted Innate agent. "
+                "This client cannot authenticate to the hosted agent without a token."
+            )
 
         # Robot version from /robot/info
         self._robot_version: Optional[str] = None
@@ -156,7 +162,7 @@ class WSClientNode(Node):
         self.exit_event = threading.Event()
 
         # Set up the WSClient (only if configured).
-        if self._ws_configured:
+        if self._ws_configured and self._token_configured:
             self.ws_client = WSClient(self.ws_uri, self.token, self, self._robot_version)
         else:
             self.ws_client = None
@@ -203,6 +209,16 @@ class WSClientNode(Node):
             return False
         return uri.startswith("ws://") or uri.startswith("wss://")
 
+    def _is_hosted_innate_uri(self, uri: str) -> bool:
+        return uri.startswith("wss://agent-v1.innate.bot") or uri.startswith(
+            "wss://brain.innate.bot"
+        )
+
+    def _validate_token_for_uri(self, uri: str, token: str) -> bool:
+        if not self._is_hosted_innate_uri(uri):
+            return True
+        return bool(token and token.strip())
+
     def ws_outgoing_callback(self, msg: String):
         """
         Callback for outgoing messages. It verifies that the received JSON has a proper message type
@@ -224,6 +240,12 @@ class WSClientNode(Node):
                 if internal_message.type == InternalMessageType.READY_FOR_CONNECTION:
                     if not self._ws_configured:
                         self.get_logger().error("WebSocket not configured, ignoring connection request.")
+                        return
+                    if not self._token_configured:
+                        self.get_logger().error(
+                            "Hosted Innate agent selected but INNATE_SERVICE_KEY is missing. "
+                            "Skipping websocket connection."
+                        )
                         return
                     self.get_logger().debug("Received ready for connection message.")
                     if self.ws_thread is None or not self.ws_thread.is_alive():
