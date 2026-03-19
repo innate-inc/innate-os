@@ -60,4 +60,13 @@ Open http://localhost:5173 in your browser.
 |--------|-------------|
 | `--vis` | Enable 3D visualization window |
 | `--log-everything` | Verbose logging |
+| `--sim-log-mode {debug,quiet}` | Runtime simulator log mode; `quiet` hides repetitive simulator chatter |
 | `--no-web` | Headless mode (no web server) |
+
+While the simulator is running, you can also change the mode live via FastAPI:
+
+```bash
+curl -X POST http://localhost:8000/sim_log_config \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"quiet"}'
+```
