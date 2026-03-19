@@ -240,6 +240,12 @@ export function Chat() {
     }
   };
   useEffect(() => {
+    console.info("[Chat] Initializing chat transport.", {
+      useDirectRobot,
+      robotWsUrl,
+      backendWsBaseUrl,
+    });
+
     // If there's a socket and it's not fully closed, skip making a new one.
     if (
       wsRef.current &&
@@ -291,6 +297,7 @@ export function Chat() {
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
       try {
+        console.info("[Chat] Attempting websocket connection.", { wsUrl });
         const socket = new WebSocket(wsUrl);
         wsRef.current = socket;
 
@@ -305,7 +312,7 @@ export function Chat() {
               JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }),
             );
           } else {
-            console.log("Connected to chat websocket");
+            console.info("[Chat] Connected to chat websocket.", { wsUrl });
           }
         };
 
@@ -360,19 +367,28 @@ export function Chat() {
         };
 
         socket.onclose = (event) => {
+          console.warn("[Chat] WebSocket closed.", {
+            wsUrl,
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+          });
           // Try to reconnect after a delay if it wasn't a clean close
           if (!event.wasClean) {
             scheduleReconnect();
           }
         };
 
-        socket.onerror = () => {
-          console.error("WebSocket error");
+        socket.onerror = (event) => {
+          console.error("[Chat] WebSocket error.", { wsUrl, event });
         };
 
         return socket;
       } catch (error) {
-        console.error("Error creating WebSocket connection:", error);
+        console.error("[Chat] Error creating WebSocket connection.", {
+          wsUrl,
+          error,
+        });
         return null;
       }
     };
@@ -384,6 +400,7 @@ export function Chat() {
     return () => {
       shouldReconnect = false;
       clearReconnectTimeout();
+      console.info("[Chat] Cleaning up websocket.", { wsUrl });
       if (socket) {
         socket.close();
       }
