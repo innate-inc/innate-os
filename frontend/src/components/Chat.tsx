@@ -290,12 +290,6 @@ export function Chat() {
   ]);
 
   useEffect(() => {
-    console.info("[Chat] Initializing chat transport.", {
-      useDirectRobot,
-      robotWsUrl,
-      backendWsBaseUrl,
-    });
-
     // If there's a socket and it's not fully closed, skip making a new one.
     if (
       wsRef.current &&
@@ -344,7 +338,6 @@ export function Chat() {
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
       try {
-        console.info("[Chat] Attempting websocket connection.", { wsUrl });
         const socket = new WebSocket(wsUrl);
         wsRef.current = socket;
 
@@ -358,8 +351,6 @@ export function Chat() {
             socket.send(
               JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }),
             );
-          } else {
-            console.info("[Chat] Connected to chat websocket.", { wsUrl });
           }
         };
 
@@ -447,7 +438,6 @@ export function Chat() {
     return () => {
       shouldReconnect = false;
       clearReconnectTimeout();
-      console.info("[Chat] Cleaning up websocket.", { wsUrl });
       if (socket) {
         socket.close();
       }
