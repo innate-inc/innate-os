@@ -12,6 +12,7 @@ import uuid
 # SetEnvironmentCmd is used to send the config to the simulation node
 # BrainActiveCmd is used to activate/deactivate the brain via rosbridge
 from src.agent.types import ResetRobotCmd, SetEnvironmentCmd, BrainActiveCmd
+from src.runtime_logging import SIM_LOG_MODES
 
 router = APIRouter()
 SET_ENV_APPLY_TIMEOUT_S = 30.0
@@ -38,6 +39,10 @@ class SetEnvironmentRequest(BaseModel):
         if config is None and config_name is None:
             raise ValueError("Either 'config' or 'config_name' must be provided.")
         return values
+
+
+class SetSimLogConfigRequest(BaseModel):
+    mode: str
 
 
 async def wait_for_environment_apply_result(
@@ -155,6 +160,51 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
                 if body.config_name
                 else "direct config"
             ),
+        }
+    )
+
+
+@router.get("/sim_log_config")
+def get_sim_log_config(request: Request):
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "mode": shared_queues.get_sim_log_mode(),
+            "available_modes": list(SIM_LOG_MODES),
+        }
+    )
+
+
+@router.post("/sim_log_config")
+def set_sim_log_config(request: Request, body: SetSimLogConfigRequest):
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    mode = (body.mode or "").strip().lower()
+    if mode not in SIM_LOG_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported sim log mode '{body.mode}'. Expected one of: {', '.join(SIM_LOG_MODES)}",
+        )
+
+    applied_mode = shared_queues.set_sim_log_mode(mode)
+    print(f"[ConfigAPI] Simulator log mode set to {applied_mode}")
+    return JSONResponse(
+        {
+            "status": "success",
+            "mode": applied_mode,
+            "available_modes": list(SIM_LOG_MODES),
         }
     )
 
