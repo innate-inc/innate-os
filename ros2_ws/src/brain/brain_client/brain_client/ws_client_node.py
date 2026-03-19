@@ -125,7 +125,7 @@ class WSClientNode(Node):
 
         # Declare parameters for websocket configuration.
         self.declare_parameter("websocket_uri", "ws://localhost:8765")
-        self.declare_parameter("token", "MY_HARDCODED_TOKEN")
+        self.declare_parameter("token", "")
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
         )
@@ -135,7 +135,6 @@ class WSClientNode(Node):
         self._ws_configured = self._validate_ws_uri(self.ws_uri)
         if not self._ws_configured:
             self.get_logger().error("❌ WebSocket URI not configured or invalid. Set 'websocket_uri' parameter (must start with ws:// or wss://).")
-        self._hosted_innate_uri = self._is_hosted_innate_uri(self.ws_uri)
         self._token_configured = self._validate_token_for_uri(self.ws_uri, self.token)
         if not self._token_configured:
             self.get_logger().error(
