@@ -9,6 +9,13 @@ import os
 from launch.actions import SetEnvironmentVariable
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 class UniversalLogger:
     """
     Universal logger wrapper that handles enabled/disabled state internally.
@@ -85,12 +92,27 @@ def get_logging_env_vars():
     Returns:
         list: A list of SetEnvironmentVariable actions.
     """
-    return [
-        # Format: [level] message
-        # This removes timestamps and node names for more concise logs
+    profile = os.getenv("INNATE_BRAIN_LOG_PROFILE", "compact").strip().lower()
+    output_format_by_profile = {
+        "compact": "[{severity}] {message}",
+        "message-only": "{message}",
+        "plain": "{message}",
+        "ros-default": None,
+        "default": None,
+    }
+    output_format = output_format_by_profile.get(profile)
+    if profile not in output_format_by_profile:
+        output_format = output_format_by_profile["compact"]
+
+    actions = []
+    if output_format is not None:
+        actions.append(
+            SetEnvironmentVariable("RCUTILS_CONSOLE_OUTPUT_FORMAT", output_format)
+        )
+    actions.append(
         SetEnvironmentVariable(
-            "RCUTILS_CONSOLE_OUTPUT_FORMAT", "[{severity}] {message}"
-        ),
-        # Enable colorized output
-        SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1"),
-    ]
+            "RCUTILS_COLORIZED_OUTPUT",
+            "1" if _env_flag("INNATE_BRAIN_LOG_COLOR", True) else "0",
+        )
+    )
+    return actions
