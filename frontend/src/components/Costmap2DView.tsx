@@ -681,6 +681,13 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       return;
     }
 
+    console.info("[Costmap2DView] Mounting map view.", {
+      wsUrl,
+      isMini,
+      width: container.clientWidth || 1,
+      height: container.clientHeight || 1,
+    });
+
     const scene = new THREE.Scene();
     scene.background = new THREE.Color("#050505");
     sceneRef.current = scene;
@@ -694,7 +701,21 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch (error) {
+      console.error(
+        "[Costmap2DView] Failed to initialize WebGL renderer.",
+        error,
+      );
+      setError("Map renderer unavailable");
+      setStatus("Map stream unavailable");
+      sceneRef.current = null;
+      cameraRef.current = null;
+      return;
+    }
+    console.info("[Costmap2DView] WebGL renderer initialized.");
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setSize(size.x, size.y);
     rendererRef.current = renderer;
@@ -836,7 +857,7 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       sceneRef.current = null;
       rendererRef.current = null;
     };
-  }, []);
+  }, [isMini, wsUrl]);
 
   useEffect(() => {
     setError(null);
@@ -847,6 +868,9 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
     let isDisposed = false;
 
     ws.onopen = () => {
+      console.info("[Costmap2DView] Map rosbridge websocket connected.", {
+        wsUrl,
+      });
       ws.send(
         JSON.stringify({
           op: "advertise",
@@ -945,6 +969,9 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       if (isDisposed) {
         return;
       }
+      console.error("[Costmap2DView] Map rosbridge websocket error.", {
+        wsUrl,
+      });
       setError("ROSBridge connection failed");
       setStatus("Map stream unavailable");
     };
@@ -953,6 +980,9 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       if (isDisposed) {
         return;
       }
+      console.warn("[Costmap2DView] Map rosbridge websocket closed.", {
+        wsUrl,
+      });
       setStatus("Map stream disconnected");
     };
 
