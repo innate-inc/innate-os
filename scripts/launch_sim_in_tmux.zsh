@@ -2,13 +2,18 @@
 
 # launch-sim-in-tmux.zsh
 # Launches simulation environment in organized tmux windows
-# Usage: ./scripts/launch-sim-in-tmux.zsh
+# Usage: ./scripts/launch-sim-in-tmux.zsh [--detach]
+
+ATTACH=1
+if [[ "$1" == "--detach" ]]; then
+  ATTACH=0
+fi
 
 # First, ensure we have a clean tmux environment
 tmux kill-session -t mars 2>/dev/null
 
 # Create a new tmux session named 'mars'
-tmux new-session -d -s mars -n zenoh
+tmux new-session -d -x 240 -y 72 -s mars -n zenoh
 
 # === Window 0: Zenoh Router ===
 tmux send-keys -t mars:zenoh "ros2 run rmw_zenoh_cpp rmw_zenohd" C-m
@@ -47,7 +52,11 @@ echo "Started behavior server..."
 # Select the rosbridge-app window
 tmux select-window -t mars:rosbridge-app
 
-# Attach to the tmux session
-echo "All services started in tmux session 'mars'. Attaching to session..."
-sleep 1
-tmux attach-session -t mars
+if [[ $ATTACH -eq 1 ]]; then
+  echo "All services started in tmux session 'mars'. Attaching to session..."
+  sleep 1
+  tmux attach-session -t mars
+else
+  echo "All services started in tmux session 'mars'."
+  echo "Attach with: tmux attach-session -t mars"
+fi
