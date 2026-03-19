@@ -681,13 +681,6 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       return;
     }
 
-    console.info("[Costmap2DView] Mounting map view.", {
-      wsUrl,
-      isMini,
-      width: container.clientWidth || 1,
-      height: container.clientHeight || 1,
-    });
-
     const scene = new THREE.Scene();
     scene.background = new THREE.Color("#050505");
     sceneRef.current = scene;
@@ -715,7 +708,6 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
       cameraRef.current = null;
       return;
     }
-    console.info("[Costmap2DView] WebGL renderer initialized.");
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setSize(size.x, size.y);
     rendererRef.current = renderer;
@@ -868,9 +860,6 @@ export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
     let isDisposed = false;
 
     ws.onopen = () => {
-      console.info("[Costmap2DView] Map rosbridge websocket connected.", {
-        wsUrl,
-      });
       ws.send(
         JSON.stringify({
           op: "advertise",
