@@ -37,7 +37,7 @@ services:
       - ./scripts:/root/innate-os/scripts:rw
       - ./agents:/root/innate-os/agents:rw
       - ./skills:/root/innate-os/skills:rw
-      - ./.env:/root/innate-os/.env:ro
+      - ${INNATE_OS_ENV_FILE:-./.env}:/root/innate-os/.env:ro
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
       - ros2_ws_build:/root/innate-os/ros2_ws/build
