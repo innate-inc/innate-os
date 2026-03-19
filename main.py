@@ -19,12 +19,19 @@ from src.agent.agent_websocket_bridge import run_agent_async
 from src.routes.video_api import router as video_api_router
 from src.routes.chat_api import router as chat_api_router
 from src.routes.config_api import router as config_api_router
+from src.runtime_logging import (
+    DEFAULT_SIM_LOG_MODE,
+    SIM_LOG_MODES,
+    install_runtime_log_filter,
+    normalize_sim_log_mode,
+)
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Define constants
-ROSBRIDGE_URI = "ws://localhost:9090"  # Connects to Innate OS running locally in Docker
+ROSBRIDGE_URI = os.getenv("ROSBRIDGE_URI", "ws://localhost:9090")
+SIMULATOR_PORT = int(os.getenv("SIMULATOR_PORT", "8000"))
 
 app = FastAPI()
 
@@ -64,6 +71,7 @@ def frame_collector(shared_queues: SharedQueues):
         frames_dict = shared_queues.sim_to_web.get()  # blocks until new frames
         if frames_dict is None:
             break
+        shared_queues.record_web_frames(list(frames_dict.keys()))
         # Update the latest_frames dictionary with newly arrived frames
         for cam_name, frame in frames_dict.items():
             shared_queues.latest_frames[cam_name] = frame
@@ -148,12 +156,23 @@ def main():
         default=False,
         help="Disable robot collisions with scene geometry (temporary debug mode).",
     )
+    parser.add_argument(
+        "--sim-log-mode",
+        choices=SIM_LOG_MODES,
+        default=normalize_sim_log_mode(
+            os.getenv("SIM_LOG_MODE", DEFAULT_SIM_LOG_MODE)
+        ),
+        help="Runtime simulator log mode. 'quiet' suppresses noisy debug chatter.",
+    )
     args = parser.parse_args()
 
     # 1) Create shared queues
     global SHARED_QUEUES
-    SHARED_QUEUES = SharedQueues(log_everything=args.log_everything)
+    SHARED_QUEUES = SharedQueues(
+        log_everything=args.log_everything, sim_log_mode=args.sim_log_mode
+    )
     app.state.SHARED_QUEUES = SHARED_QUEUES
+    install_runtime_log_filter(SHARED_QUEUES)
 
     # 1b) Start the background frame collector
     collector_thread = threading.Thread(
@@ -191,7 +210,11 @@ def main():
 
         def run_uvicorn():
             config = uvicorn.Config(
-                app=app, host="0.0.0.0", port=8000, log_level="info", reload=False
+                app=app,
+                host="0.0.0.0",
+                port=SIMULATOR_PORT,
+                log_level="info",
+                reload=False,
             )
             server = uvicorn.Server(config)
             server.run()

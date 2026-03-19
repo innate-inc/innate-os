@@ -1,8 +1,12 @@
 # src/shared_queues.py
 
+from collections import deque
 from typing import NamedTuple, Optional, List, Tuple, Dict, Any
 import threading
 import queue
+import time
+
+from src.runtime_logging import normalize_sim_log_mode
 
 
 class ChatMessage(NamedTuple):
@@ -35,7 +39,7 @@ class SharedQueues:
     - sim_to_web: dictionary of named images for web streaming
     """
 
-    def __init__(self, log_everything=False):
+    def __init__(self, log_everything=False, sim_log_mode: str = "debug"):
         self.sim_to_agent = queue.Queue(maxsize=100)  # Commands, nav status, etc.
         self.agent_to_sim = queue.Queue(maxsize=100)
         self.sim_to_web = queue.Queue(
@@ -50,6 +54,8 @@ class SharedQueues:
 
         # Flag to indicate if all model outputs should be logged
         self.log_everything = log_everything
+        self._sim_log_mode = normalize_sim_log_mode(sim_log_mode)
+        self.sim_log_mode_lock = threading.Lock()
 
         # Queues specifically for chat messages
         self.chat_to_bridge = queue.Queue(maxsize=5000)
@@ -73,6 +79,19 @@ class SharedQueues:
         # Key: request_id, Value: {"success": bool, "error": Optional[str]}
         self.environment_apply_results: Dict[str, Dict[str, Any]] = {}
         self.environment_apply_lock = threading.Lock()
+
+        # Lightweight runtime metrics for the local stack dashboard.
+        self.camera_frame_times: Dict[str, deque[float]] = {}
+        self.camera_metrics_lock = threading.Lock()
+
+    def set_sim_log_mode(self, mode: str) -> str:
+        with self.sim_log_mode_lock:
+            self._sim_log_mode = normalize_sim_log_mode(mode)
+            return self._sim_log_mode
+
+    def get_sim_log_mode(self) -> str:
+        with self.sim_log_mode_lock:
+            return self._sim_log_mode
 
     def update_robot_position(
         self, x: float, y: float, z: float, timestamp: float = None
@@ -164,3 +183,48 @@ class SharedQueues:
         """Pop and return a set_environment result if available."""
         with self.environment_apply_lock:
             return self.environment_apply_results.pop(request_id, None)
+
+    def record_web_frames(self, camera_names: List[str], timestamp: Optional[float] = None):
+        """Record frame timestamps for dashboard-friendly FPS estimates."""
+        if timestamp is None:
+            timestamp = time.time()
+
+        with self.camera_metrics_lock:
+            for camera_name in camera_names:
+                history = self.camera_frame_times.get(camera_name)
+                if history is None:
+                    history = deque(maxlen=120)
+                    self.camera_frame_times[camera_name] = history
+                history.append(timestamp)
+
+    def get_runtime_metrics(self) -> Dict[str, Any]:
+        """Return lightweight runtime metrics for local stack dashboards."""
+        now = time.time()
+        with self.camera_metrics_lock:
+            fps_by_camera: Dict[str, float] = {}
+            latest_frame_age_by_camera: Dict[str, Optional[float]] = {}
+            for camera_name, history in self.camera_frame_times.items():
+                timestamps = list(history)
+                if len(timestamps) >= 2 and timestamps[-1] > timestamps[0]:
+                    fps_by_camera[camera_name] = round(
+                        (len(timestamps) - 1) / (timestamps[-1] - timestamps[0]), 2
+                    )
+                else:
+                    fps_by_camera[camera_name] = 0.0
+                latest_frame_age_by_camera[camera_name] = round(
+                    now - timestamps[-1], 3
+                ) if timestamps else None
+
+        return {
+            "queue_sizes": {
+                "sim_to_agent": self.sim_to_agent.qsize(),
+                "agent_to_sim": self.agent_to_sim.qsize(),
+                "sim_to_web": self.sim_to_web.qsize(),
+                "sensor_to_agent": self.sensor_to_agent.qsize(),
+                "chat_to_bridge": self.chat_to_bridge.qsize(),
+                "chat_from_bridge": self.chat_from_bridge.qsize(),
+            },
+            "fps_by_camera": fps_by_camera,
+            "latest_frame_age_by_camera": latest_frame_age_by_camera,
+            "sim_log_mode": self.get_sim_log_mode(),
+        }

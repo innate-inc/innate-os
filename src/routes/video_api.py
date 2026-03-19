@@ -70,6 +70,24 @@ def video_feeds_ready(request: Request):
     )
 
 
+@router.get("/stack_metrics")
+def stack_metrics(request: Request):
+    """Return lightweight simulator/runtime metrics for local stack dashboards."""
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is None:
+        return JSONResponse(
+            {
+                "ready": False,
+                "queue_sizes": {},
+                "fps_by_camera": {},
+                "latest_frame_age_by_camera": {},
+            }
+        )
+
+    metrics = shared_queues.get_runtime_metrics()
+    return JSONResponse({"ready": True, **metrics})
+
+
 @router.get("/video_feed", include_in_schema=False)
 def video_feed(request: Request):
     """
