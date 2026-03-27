@@ -413,6 +413,11 @@ class GitRepo:
         result = self._run(["checkout", ref], check=False)
         return result.returncode == 0
 
+    def checkout_branch(self, branch: str, start_point: str) -> bool:
+        """Checkout a local branch, resetting it to a start point."""
+        result = self._run(["checkout", "-B", branch, start_point], check=False)
+        return result.returncode == 0
+
 
 class UpdateManager:
     """Main update manager."""
@@ -593,9 +598,9 @@ class UpdateManager:
 
     def _apply_dev_mode(self, current: str) -> int:
         """Apply updates to latest commit (git-based, no artifacts)."""
-        target_ref = f"origin/{self.config.branch}"
+        remote_ref = f"origin/{self.config.branch}"
         target_display = f"latest commit on {self.config.branch}"
-        commits_behind = self.git.commits_between("HEAD", target_ref)
+        commits_behind = self.git.commits_between("HEAD", remote_ref)
 
         if commits_behind == 0:
             self.logger.success("Already up to date (dev mode)")
@@ -605,9 +610,12 @@ class UpdateManager:
         self.logger.info(f"Found {commits_behind} commit(s) to apply (dev mode)")
         print()
         print("Changes to be applied:")
-        self._show_commits("HEAD", target_ref, commits_behind, max_show=20)
+        self._show_commits("HEAD", remote_ref, commits_behind, max_show=20)
 
-        return self._do_git_update(target_ref, target_display, current)
+        return self._do_git_update(
+            self.config.branch, target_display, current,
+            track_remote=remote_ref,
+        )
 
     def _apply_tag_mode(self, current: str) -> int:
         """Apply updates to latest tag via git checkout."""
@@ -645,6 +653,7 @@ class UpdateManager:
         target_display: str,
         old_commit: str,
         skip_confirm: bool = False,
+        track_remote: str = None,
     ) -> int:
         """Perform git-based update (for dev mode or fallback)."""
         if not skip_confirm and not self.yes:
@@ -667,7 +676,12 @@ class UpdateManager:
         # Checkout target
         self.logger.info(f"Updating to {target_display}...")
 
-        if self.git.checkout(target_ref):
+        if track_remote is not None:
+            success = self.git.checkout_branch(target_ref, track_remote)
+        else:
+            success = self.git.checkout(target_ref)
+
+        if success:
             new_commit = self.git.current_commit()
             self.logger.success(f"Code updated: {old_commit[:7]} → {new_commit[:7]}")
         else:
