@@ -204,7 +204,7 @@ std::string get_robot_version(const std::string& maurice_root) {
         throw std::runtime_error("No git tags found - repository must have at least one tag");
     }
 
-    // Validate tag format (x.y.z or x.y.z-rcN) and return dev version
+    // Validate tag format (x.y.z, optionally with -rc<N> suffix)
     std::regex version_regex("^(\\d+)\\.(\\d+)\\.(\\d+)(-rc\\d+)?$");
     std::smatch match;
     if (std::regex_match(latest_tag, match, version_regex)) {

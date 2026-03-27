@@ -20,21 +20,14 @@ for chunk in proxy.cartesia.tts.bytes_stream(
     process_audio(chunk)
 
 # Chat completions (async)
-resp = await proxy.openai.chat.completions(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
+resp = await proxy.request_async("openai", "/v1/chat/completions", json={...})
 
-# Realtime WebSocket (sync, for audio streaming)
-conn = proxy.openai.realtime.connect_sync(
-    model="gpt-4o-realtime-preview",
-    on_message=on_message,
-    on_open=on_open,
-)
-conn.start()
-conn.wait_until_connected()
-conn.send_json({"type": "input_audio_buffer.append", "audio": "..."})
-conn.stop()
+# Realtime WebSocket (async)
+ws = await proxy.openai.realtime.connect(model="gpt-4o-realtime-preview")
+await ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": "..."}))
+async for msg in ws:
+    print(msg)
+await ws.close()
 ```
 
 ## Environment variables
@@ -112,13 +105,6 @@ proxy.cartesia.tts.bytes_stream(model_id, transcript, voice, output_format) -> I
 ### OpenAI adapter
 
 ```python
-# Async chat completions
-resp = await proxy.openai.chat.completions(model, messages, stream=False)
-
-# Sync realtime WebSocket
-conn = proxy.openai.realtime.connect_sync(model, on_message, on_open, on_error, on_close)
-conn.start() / conn.stop() / conn.send_json(data) / conn.wait_until_connected()
-
 # Async realtime WebSocket
 ws = await proxy.openai.realtime.connect(model, on_message)
 ```

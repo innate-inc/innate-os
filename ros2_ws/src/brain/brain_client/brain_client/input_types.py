@@ -34,7 +34,7 @@ class InputDevice(ABC):
     
     Usage in your input device:
         # Access proxy services
-        self.proxy.openai.realtime.connect_sync(...)
+        ws = await self.proxy.openai.realtime.connect(...)
         self.proxy.cartesia.tts.sse(...)
         
         # Access config (models, voice IDs, etc.)

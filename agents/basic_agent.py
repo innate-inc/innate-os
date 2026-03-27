@@ -19,7 +19,8 @@ class BasicAgent(Agent):
     def get_skills(self) -> List[str]:
         """Return the list of skill IDs this directive can use"""
         return [
-            "innate-os/navigate_to_position"
+            "innate-os/navigate_to_position",
+            "innate-os/navigate_with_vision"
         ]
 
     def get_inputs(self) -> List[str]:
