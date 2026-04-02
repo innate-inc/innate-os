@@ -609,7 +609,7 @@ class UpdateManager:
         self.git.fetch()
         current = self.git.current_commit()
 
-        if self.dev_mode:
+        if self.dev_mode or self.target:
             return self._apply_dev_mode(current)
         else:
             return self._apply_tag_mode(current)
@@ -952,7 +952,7 @@ Configuration (environment variables):
         "target",
         nargs="?",
         default=None,
-        help="Target tag or branch for --dev apply (e.g. 0.5.0-rc1, main)",
+        help="Target tag, commit, or branch for apply (e.g. 0.5.0-rc1, main)",
     )
     parser.add_argument(
         "--dev",
