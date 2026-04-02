@@ -1,0 +1,15 @@
+services:
+  cloud-agent:
+    container_name: stack-cloud-agent
+    build:
+      context: ${STACK_CLOUD_AGENT_SOURCE_DIR}
+      dockerfile: Dockerfile
+    working_dir: /app
+    volumes:
+      - ${STACK_CLOUD_AGENT_SOURCE_DIR}:/app
+    env_file:
+      - ${STACK_CLOUD_AGENT_ENV_FILE}
+    command: python -u run_server.py
+    ports:
+      - "${STACK_CLOUD_AGENT_PORT:-8765}:8765"
+    restart: unless-stopped

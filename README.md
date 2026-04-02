@@ -26,25 +26,28 @@ It is designed on a few **core principles**:
 
 ## Quick Start (Simulation)
 
-If you don't have a robot, you can simply start the Innate OS in simulation mode, then use [our simulator](https://github.com/innate-inc/genesis-sim) to try out the robot with a web interface.
+If you don't have a robot, this repository now includes the simulator as [`sim/`](sim/) and a one-command local stack launcher.
 
 > **Note:** The Docker build defaults to simulation mode, which skips NVIDIA Jetson-specific packages. See [SIMULATION_MODE.md](SIMULATION_MODE.md) for details on switching between simulation and hardware modes.
 
-First build the container:
+Recommended:
+
+```bash
+./stack up
+```
+
+This starts:
+
+- Innate OS in Docker
+- the simulator backend from [`sim/`](sim/)
+- the built simulator UI on `http://localhost:8000`
+- an optional local cloud agent if enabled in [`dev/launcher/README.md`](dev/launcher/README.md)
+
+Manual flow:
 
 ```bash
 docker compose -f docker-compose.dev.yml build
-```
-
-Then run the container:
-
-```bash
 docker compose -f docker-compose.dev.yml up -d
-```
-
-And then drop into the container:
-
-```bash
 docker compose -f docker-compose.dev.yml exec innate zsh -l
 ```
 
@@ -68,6 +71,8 @@ You can use novnc to connect to rviz2. After launching rviz2 inside the containe
 ```bash
 http://localhost:8080/vnc.html
 ```
+
+See [`dev/launcher/README.md`](dev/launcher/README.md) for the full `./stack` workflow.
 
 ## Quick start (Physical Robot)
 
