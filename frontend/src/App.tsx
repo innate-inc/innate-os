@@ -758,7 +758,7 @@ export default function App() {
     };
   }, [stopVoiceRecognition]);
 
-  async function handleResetRobot(memory_state?: string) {
+  async function handleResetBrain(memory_state?: string) {
     try {
       const isValidMemoryState = typeof memory_state === "string";
 
@@ -768,9 +768,9 @@ export default function App() {
           isValidMemoryState ? memory_state : undefined,
         );
         if (isValidMemoryState && memory_state) {
-          alert(`Robot reset requested with memory state: ${memory_state}!`);
+          alert(`Brain reset requested with memory state: ${memory_state}!`);
         } else {
-          alert("Robot reset requested!");
+          alert("Brain reset requested!");
         }
         return;
       }
@@ -786,23 +786,28 @@ export default function App() {
         ? JSON.stringify({ memory_state })
         : JSON.stringify({});
 
-      const response = await fetch(`${baseUrl}/reset_robot`, {
+      const response = await fetch(`${baseUrl}/reset_brain`, {
         method: "POST",
         headers,
         body,
       });
 
+      if (!response.ok) {
+        alert(`Reset Brain failed (HTTP ${response.status}).`);
+        return;
+      }
+
       const data = await response.json();
-      console.log("Reset response:", data);
-      if (data.status === "reset_enqueued") {
+      console.log("Reset brain response:", data);
+      if (data.status === "reset_brain_enqueued") {
         if (isValidMemoryState && memory_state) {
-          alert(`Robot reset requested with memory state: ${memory_state}!`);
+          alert(`Brain reset requested with memory state: ${memory_state}!`);
         } else {
-          alert("Robot reset requested!");
+          alert("Brain reset requested!");
         }
       }
     } catch (error) {
-      console.error("Error resetting robot:", error);
+      console.error("Error resetting brain:", error);
     }
   }
 
@@ -811,7 +816,14 @@ export default function App() {
       const baseUrl =
         import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
-      const response = await fetch(`${baseUrl}/reset_robot`, {
+      console.log(
+        "Requesting reset_position from simulator backend:",
+        baseUrl,
+        "(direct robot mode:",
+        useDirectRobot,
+        ")",
+      );
+      const response = await fetch(`${baseUrl}/reset_position`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -826,11 +838,14 @@ export default function App() {
 
       const data = await response.json();
       console.log("Reset position response:", data);
-      if (data.status === "reset_enqueued") {
+      if (data.status === "reset_position_enqueued") {
         alert("Position reset requested!");
       }
     } catch (error) {
       console.error("Error resetting position:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown reset error";
+      alert(`Reset Position request failed: ${errorMessage}`);
     }
   }
 
@@ -974,12 +989,12 @@ export default function App() {
             <ActionButton
               $isDanger
               onClick={() => {
-                handleResetRobot();
+                handleResetBrain();
                 setIsDrawerOpen(false);
               }}
               style={{ width: "100%", justifyContent: "center" }}
             >
-              Reset Agent
+              Reset Brain
             </ActionButton>
           </div>
         </Sidebar>
@@ -988,7 +1003,7 @@ export default function App() {
           <ImageDisplay
             viewMode={viewMode}
             setViewMode={setViewMode}
-            onResetRobot={handleResetRobot}
+            onResetRobot={handleResetBrain}
             onSetDirective={handleSetDirective}
           />
         </MainContent>
