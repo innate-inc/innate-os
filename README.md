@@ -26,17 +26,18 @@ It is designed on a few **core principles**:
 
 ## Quick Start (Simulation)
 
-If you don't have a robot, this repository now includes the simulator as [`sim/`](sim/) and a one-command local stack launcher.
+If you don't have a robot, this repository now includes the simulator as [`sim/`](sim/) and a local `innate` CLI for setup and startup.
 
 > **Note:** The Docker build defaults to simulation mode, which skips NVIDIA Jetson-specific packages. See [SIMULATION_MODE.md](SIMULATION_MODE.md) for details on switching between simulation and hardware modes.
 
-Recommended:
+Recommended first run:
 
 ```bash
-./stack up
+./innate sim setup
+./innate sim up
 ```
 
-Before the first simulator run, make sure Git LFS is installed. `./stack up` will try to fetch the required ReplicaCAD scene data into [`sim/data/`](sim/data/) automatically when it is missing. See [`sim/data/README.md`](sim/data/README.md) for the expected layout and manual download commands.
+Before the first simulator run, make sure Git LFS is installed. `./innate sim setup` will prepare the simulator virtualenv, build the frontend, and fetch the required ReplicaCAD scene data into [`sim/data/`](sim/data/) when it is missing. See [`sim/data/README.md`](sim/data/README.md) for the expected layout and manual download commands.
 
 This starts:
 
@@ -74,7 +75,7 @@ You can use novnc to connect to rviz2. After launching rviz2 inside the containe
 http://localhost:8080/vnc.html
 ```
 
-See [`dev/launcher/README.md`](dev/launcher/README.md) for the full `./stack` workflow.
+See [`dev/launcher/README.md`](dev/launcher/README.md) for the full `./innate sim` workflow.
 
 ## Quick start (Physical Robot)
 

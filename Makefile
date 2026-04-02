@@ -13,7 +13,7 @@
 
 COMPOSE_FILE := docker-compose.dev.yml
 CONTAINER := innate
-TMUX_SESSION := stack
+TMUX_SESSION := innate
 
 .PHONY: sim build up down shell logs clean help test
 
