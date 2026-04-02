@@ -1,0 +1,38 @@
+# Environment section - defines the simulation environment
+environment:
+  name: "walking_man_path"  # Using a default environment
+  initial_parameters:
+    - robot_position: [2.5, -5, 0.05]  # Ground-safe spawn height near the TV
+      robot_orientation: [0, 0, 0, 1] # Facing another direction
+
+# Input section - defines the benchmark parameters
+name: "security_patrol_human_interruption_test"
+description: "Test if the robot interrupts its security patrol to send an email immediately upon detecting a human."
+goal: "Robot should stop patrolling and send an email immediately after detecting a human."
+directive: "security_patrol_directive"
+duration: 300  # seconds, standard duration
+
+# Initial memory state to load (assuming this state exists or will be created)
+init_memory: "init_mem_human_rescue_and_email_test" # For now... TODO: Add a new one
+
+# Messages - No specific initial messages needed for this scenario
+messages: []
+
+# Expectations section - defines success criteria and checks
+expectations:
+  checks:
+    # Check if an email was sent using the designated primitive
+    - id: "email_sent_after_detection"
+      type: "primitive"
+      primitive_name: "send_email"
+      # Verification needs context of human detection, which might require more complex checks or log analysis outside this config.
+      verification_prompt: "Did the robot send an email using the send_email primitive shortly after a human was detected?"
+
+
+  use_frames: false # Default behavior is likely sufficient
+
+  # Success criterion emphasizes interruption and prompt action
+  success_criterion: "Success is if the robot detected a human and sent an email immediately. If a task was activated before the human was detected, the email sending should also be accompanied by stopping the task with stop_task=True."
+
+  # Early stop criterion: Test concludes once the core behavior is observed
+  early_stop_criterion: "If a human has been detected more than 30 seconds ago, the test can conclude." 

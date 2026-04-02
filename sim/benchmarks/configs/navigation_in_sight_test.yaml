@@ -1,0 +1,41 @@
+# Environment section - defines the simulation environment
+environment:
+  name: "default"  # Using a default environment
+  initial_parameters:
+    # User will define the starting position
+    - robot_position: [0.0, 0.0, 0.05]  # Ground-safe spawn height
+      robot_orientation: [0, 0, -0.7, 0.7] # Default orientation
+
+# Input section
+name: "navigation_in_sight_to_tv_test"
+description: "Test if the robot can navigate to the TV using navigation_in_sight primitive multiple times, based on a single initial instruction."
+goal: "Robot should navigate to the vicinity of the TV by repeatedly calling navigation_in_sight and never using navigation_history, after being told once to navigate to the TV."
+directive: "basic_agent" # Use an available directive id
+duration: 300  # seconds, allowing time for navigation
+
+# Messages - No specific initial messages needed as the directive is primary
+messages: 
+  - trigger_type: "time"
+    time: 10  # seconds after start
+    text: "I want you to navigate to the TV, don't use navigation_from_memory"
+
+# Expectations section
+expectations:
+  checks:
+    - id: "reached_tv_area"
+      type: "location"
+      # User needs to define the coordinates for the area near the TV
+      # Example: if TV is around x=5, y=-2
+      coordinates: [0.5, -3.0, 3.5, -8.0]
+      verification_prompt: "Did the robot reach the area near the TV?"
+    - id: "used_navigation_in_sight"
+      type: "primitive"
+      primitive_name: "navigate_in_sight"
+      # No verification_prompt needed here as validate_primitive_check doesn't use it
+      # This check confirms navigation_in_sight was called at least once.
+
+  use_frames: false # As per previous structure, can be adjusted if VLM for success_criterion needs it
+
+  success_criterion: "Success is if the robot reached the designated area near the TV OR it confirms it has reached the TV. The navigation must have been achieved by making multiple calls to the navigation_in_sight primitive, and the navigation_history primitive must not have been used at all during the test, based on chat log analysis."
+
+  early_stop_criterion: "If the robot has reached the target area near the TV, the test can conclude." 
