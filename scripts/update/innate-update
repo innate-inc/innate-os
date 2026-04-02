@@ -483,9 +483,10 @@ class UpdateManager:
     def _check_dev_mode(self, current: str) -> int:
         current_tag = self.git.get_current_tag()
         newer_tags = self.git.get_tags_newer_than("HEAD")
+        on_main = self.git.current_branch() == self.config.branch
         commits_behind = self.git.commits_between(
             "HEAD", f"origin/{self.config.branch}"
-        )
+        ) if on_main else 0
 
         if not newer_tags and commits_behind == 0:
             self.logger.success("System is up to date (dev)")
@@ -508,7 +509,10 @@ class UpdateManager:
             print(f"{commits_behind} commit(s) ahead on {self.config.branch} ({remote_tip[:7]})")
             print()
 
-        print("Run 'innate-update apply --dev <tag>' or 'innate-update apply --dev main'")
+        hint = "Run 'innate-update apply --dev <tag>'"
+        if on_main:
+            hint += f" or 'innate-update apply --dev {self.config.branch}'"
+        print(hint)
         return 1
 
     def _check_tag_mode(self, current: str) -> int:
@@ -589,7 +593,8 @@ class UpdateManager:
                 print()
             print("Examples:")
             print(f"  innate-update apply --dev 0.5.0-rc1")
-            print(f"  innate-update apply --dev {self.config.branch}")
+            if self.git.current_branch() == self.config.branch:
+                print(f"  innate-update apply --dev {self.config.branch}")
             return 1
 
         # Create lock file to indicate update in progress
