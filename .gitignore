@@ -7,6 +7,4 @@ data/Replica*
 .DS_Store
 
 /*.png
-logs/
-
 .env
