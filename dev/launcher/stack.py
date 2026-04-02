@@ -524,6 +524,18 @@ def ensure_dependency(command: str, label: str | None = None) -> None:
         raise StackError(f"Missing dependency: {label or command}")
 
 
+def python_import_succeeds(python_path: Path, module: str) -> bool:
+    result = subprocess.run(
+        [str(python_path), "-c", f"import {module}"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def ensure_sim_setup(config: dict[str, object]) -> Path:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     frontend_dir = sim_repo / "frontend"
@@ -532,7 +544,17 @@ def ensure_sim_setup(config: dict[str, object]) -> Path:
 
     ensure_dependency("python3")
 
-    if not sim_python.exists():
+    needs_setup = not sim_python.exists()
+    if sim_python.exists() and not python_import_succeeds(sim_python, "dotenv"):
+        if not config["sim_auto_setup"]:
+            raise StackError(
+                "Simulator virtualenv is missing required packages. "
+                f"Re-run {sim_repo / 'setup.sh'} or enable STACK_SIM_AUTO_SETUP."
+            )
+        warn("Simulator virtualenv is incomplete. Re-running setup to repair it...")
+        needs_setup = True
+
+    if needs_setup:
         if not config["sim_auto_setup"]:
             raise StackError(
                 f"Simulator virtualenv missing at {sim_python}. Run {sim_repo / 'setup.sh'}"
@@ -547,6 +569,11 @@ def ensure_sim_setup(config: dict[str, object]) -> Path:
 
     if not sim_python.exists():
         raise StackError(f"Simulator Python environment was not created at {sim_python}")
+    if not python_import_succeeds(sim_python, "dotenv"):
+        raise StackError(
+            "Simulator Python environment is missing required packages after setup.\n"
+            f"Check: {BOOTSTRAP_LOG_PATH}"
+        )
 
     if not dist_index.exists():
         if not config["sim_auto_build_frontend"]:
@@ -759,7 +786,19 @@ def pid_is_running(pid: int) -> bool:
         os.kill(pid, 0)
     except OSError:
         return False
-    return True
+    result = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    status = result.stdout.strip()
+    if not status:
+        return False
+    return not status.startswith("Z")
 
 
 def read_sim_pid() -> int | None:
@@ -1617,14 +1656,32 @@ def wait_for_simulator_http(port: str, timeout_seconds: float = 90.0) -> None:
     deadline = time.time() + timeout_seconds
     url = f"http://localhost:{port}/video_feeds_ready"
     while time.time() < deadline:
+        if read_sim_pid() is None:
+            tail = tail_file(SIM_LOG_PATH, limit=80)
+            hint = ""
+            if "ReplicaCAD_baked_lighting" in tail or "ReplicaCAD_dataset" in tail:
+                hint = "\nHint: required simulator scene data is missing. See sim/data/README.md."
+            raise StackError(
+                "Simulator backend exited while waiting for the HTTP endpoint.\n"
+                f"Recent log output:\n{tail}{hint}"
+            )
         try:
             with urlopen(url, timeout=2) as response:
-                if response.status == 200:
+                if response.status != 200:
+                    time.sleep(2)
+                    continue
+                payload = json.loads(response.read().decode("utf-8"))
+                if payload.get("ready"):
                     return
         except URLError:
             time.sleep(2)
-        except TimeoutError:
+        except (TimeoutError, json.JSONDecodeError):
             time.sleep(2)
+    tail = tail_file(SIM_LOG_PATH, limit=80)
+    raise StackError(
+        "Timed out waiting for the simulator HTTP endpoint.\n"
+        f"Recent log output:\n{tail}"
+    )
 
 
 def simulator_ready(port: str) -> bool:

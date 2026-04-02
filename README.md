@@ -36,6 +36,8 @@ Recommended:
 ./stack up
 ```
 
+Before the first simulator run, download the required ReplicaCAD scene data into [`sim/data/`](sim/data/). See [`sim/data/README.md`](sim/data/README.md) for the expected layout and download commands.
+
 This starts:
 
 - Innate OS in Docker
