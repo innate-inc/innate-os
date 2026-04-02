@@ -13,7 +13,7 @@
 
 ```bash
 git clone <repository-url>
-cd innate-sim
+cd sim
 ./setup.sh
 source .venv/bin/activate
 ```
