@@ -304,8 +304,6 @@ export function Chat() {
             socket.send(
               JSON.stringify({ op: "subscribe", topic: CHAT_IN_TOPIC }),
             );
-          } else {
-            console.log("Connected to chat websocket");
           }
         };
 
@@ -360,19 +358,28 @@ export function Chat() {
         };
 
         socket.onclose = (event) => {
+          console.warn("[Chat] WebSocket closed.", {
+            wsUrl,
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+          });
           // Try to reconnect after a delay if it wasn't a clean close
           if (!event.wasClean) {
             scheduleReconnect();
           }
         };
 
-        socket.onerror = () => {
-          console.error("WebSocket error");
+        socket.onerror = (event) => {
+          console.error("[Chat] WebSocket error.", { wsUrl, event });
         };
 
         return socket;
       } catch (error) {
-        console.error("Error creating WebSocket connection:", error);
+        console.error("[Chat] Error creating WebSocket connection.", {
+          wsUrl,
+          error,
+        });
         return null;
       }
     };

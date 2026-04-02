@@ -8,10 +8,11 @@ import json  # Need json for loading file
 import asyncio
 import uuid
 
-# ResetRobotCmd is used by the /reset_robot route
+# ResetRobotCmd is used by the reset routes
 # SetEnvironmentCmd is used to send the config to the simulation node
 # BrainActiveCmd is used to activate/deactivate the brain via rosbridge
 from src.agent.types import ResetRobotCmd, SetEnvironmentCmd, BrainActiveCmd
+from src.runtime_logging import SIM_LOG_MODES
 
 router = APIRouter()
 SET_ENV_APPLY_TIMEOUT_S = 30.0
@@ -21,6 +22,15 @@ SET_ENV_APPLY_POLL_INTERVAL_S = 0.02
 # Pydantic model for the reset request body (copied from video_api)
 class ResetRobotRequest(BaseModel):
     memory_state: Optional[str] = None
+    position: Optional[list[float]] = None
+    orientation: Optional[list[float]] = None
+
+
+class ResetBrainRequest(BaseModel):
+    memory_state: Optional[str] = None
+
+
+class ResetPositionRequest(BaseModel):
     position: Optional[list[float]] = None
     orientation: Optional[list[float]] = None
 
@@ -38,6 +48,18 @@ class SetEnvironmentRequest(BaseModel):
         if config is None and config_name is None:
             raise ValueError("Either 'config' or 'config_name' must be provided.")
         return values
+
+
+class SetSimLogConfigRequest(BaseModel):
+    mode: str
+
+
+def build_reset_pose(
+    position: Optional[list[float]], orientation: Optional[list[float]]
+):
+    if position is None or orientation is None:
+        return None
+    return (tuple(position), tuple(orientation))
 
 
 async def wait_for_environment_apply_result(
@@ -159,6 +181,51 @@ async def set_environment(request: Request, body: SetEnvironmentRequest):
     )
 
 
+@router.get("/sim_log_config")
+def get_sim_log_config(request: Request):
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "mode": shared_queues.get_sim_log_mode(),
+            "available_modes": list(SIM_LOG_MODES),
+        }
+    )
+
+
+@router.post("/sim_log_config")
+def set_sim_log_config(request: Request, body: SetSimLogConfigRequest):
+    shared_queues = request.app.state.SHARED_QUEUES
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    mode = (body.mode or "").strip().lower()
+    if mode not in SIM_LOG_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported sim log mode '{body.mode}'. Expected one of: {', '.join(SIM_LOG_MODES)}",
+        )
+
+    applied_mode = shared_queues.set_sim_log_mode(mode)
+    print(f"[ConfigAPI] Simulator log mode set to {applied_mode}")
+    return JSONResponse(
+        {
+            "status": "success",
+            "mode": applied_mode,
+            "available_modes": list(SIM_LOG_MODES),
+        }
+    )
+
+
 # --- Moved Routes ---
 
 
@@ -167,32 +234,18 @@ async def reset_robot(
     request: Request, reset_request: Optional[ResetRobotRequest] = None
 ):
     """
-    Enqueues a command to reset the robot to its origin or a specified pose.
-    Optionally specifies a memory state to load.
-    Retrieves the shared queues from the application's state.
+    Legacy combined reset.
 
-    Request body can include:
-    - memory_state: string identifier for memory state to load
-    - position: [x, y, z] coordinates for robot position
-    - orientation: [x, y, z, w] quaternion for robot orientation
-
-    If position and orientation are both provided, they will be used as the new pose.
-    Otherwise, the default pose will be used.
+    Resets the simulator pose and also requests a brain reset.
     """
     shared_queues = request.app.state.SHARED_QUEUES
 
-    # Get memory_state from request body if provided
     memory_state = None
     pose = None
 
     if reset_request is not None:
         memory_state = reset_request.memory_state
-
-        # If both position and orientation are provided, combine them into pose
-        if reset_request.position is not None and reset_request.orientation is not None:
-            position = tuple(reset_request.position)
-            orientation = tuple(reset_request.orientation)
-            pose = (position, orientation)
+        pose = build_reset_pose(reset_request.position, reset_request.orientation)
 
     if shared_queues is not None:
         try:
@@ -217,6 +270,74 @@ async def reset_robot(
             {"status": "error", "message": "Simulation not initialized"},
             status_code=500,
         )
+
+
+@router.post("/reset_brain")
+async def reset_brain(
+    request: Request, reset_request: Optional[ResetBrainRequest] = None
+):
+    """Request a brain reset without resetting simulator position."""
+    shared_queues = request.app.state.SHARED_QUEUES
+    memory_state = reset_request.memory_state if reset_request is not None else None
+
+    if shared_queues is None:
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    try:
+        reset_cmd = ResetRobotCmd(memory_state=memory_state)
+        shared_queues.sim_to_agent.put_nowait(reset_cmd)
+    except Exception:
+        return JSONResponse({"status": "queue_full"}, status_code=503)
+
+    return JSONResponse(
+        {"status": "reset_brain_enqueued", "memory_state": memory_state}
+    )
+
+
+@router.post("/reset_position")
+async def reset_position(
+    request: Request, reset_request: Optional[ResetPositionRequest] = None
+):
+    """Reset simulator position without requesting a brain reset."""
+    shared_queues = request.app.state.SHARED_QUEUES
+    pose = None
+
+    if reset_request is not None:
+        pose = build_reset_pose(reset_request.position, reset_request.orientation)
+
+    if shared_queues is None:
+        print("[ConfigAPI] Rejecting reset_position request: simulation not initialized")
+        return JSONResponse(
+            {"status": "error", "message": "Simulation not initialized"},
+            status_code=500,
+        )
+
+    try:
+        if pose is None:
+            print("[ConfigAPI] Received reset_position request for default pose")
+        else:
+            print(
+                "[ConfigAPI] Received reset_position request for custom pose: "
+                f"position={pose[0]}, orientation={pose[1]}"
+            )
+        reset_cmd = ResetRobotCmd(pose=pose)
+        shared_queues.agent_to_sim.put_nowait(reset_cmd)
+        print("[ConfigAPI] Enqueued reset_position command")
+    except Exception as exc:
+        print(f"[ConfigAPI] Failed to enqueue reset_position command: {exc}")
+        return JSONResponse({"status": "queue_full"}, status_code=503)
+
+    response = {"status": "reset_position_enqueued"}
+    if pose and reset_request is not None:
+        response["pose"] = {
+            "position": list(reset_request.position),
+            "orientation": list(reset_request.orientation),
+        }
+
+    return JSONResponse(response)
 
 
 @router.post("/stop_agent")

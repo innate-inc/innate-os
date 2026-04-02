@@ -1,17 +1,10 @@
 import styled from "styled-components";
-import { isMobile } from "react-device-detect";
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  PreviewContainer,
-  MainImage,
-  SecondaryImage,
-  MainVideo,
-  SecondaryVideo,
-} from "../styles/StyledImages";
+import { PreviewContainer, MainImage, MainVideo } from "../styles/StyledImages";
 import { useRobotWebRTC } from "../hooks/useRobotWebRTC";
 import { Costmap2DView } from "./Costmap2DView";
 
-type ViewMode = "sideBySide" | "frontFocus" | "chaseFocus" | "costmap2D";
+type ViewMode = "frontFocus" | "map";
 
 type ImageDisplayProps = {
   viewMode: ViewMode;
@@ -49,6 +42,56 @@ const ViewBtn = styled.div<{ $isActive: boolean }>`
     background: ${({ $isActive, theme }) =>
       $isActive ? theme.colors.foreground : "rgba(255, 255, 255, 0.1)"};
   }
+`;
+
+const ViewLayer = styled.div<{ $isMini: boolean }>`
+  position: absolute;
+  overflow: hidden;
+  transition: all 0.3s ease;
+
+  ${({ $isMini }) =>
+    $isMini
+      ? `
+    right: 16px;
+    bottom: 16px;
+    width: 28%;
+    aspect-ratio: 4 / 3;
+    z-index: 50;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 4px 4px 0 rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.6);
+    cursor: pointer;
+  `
+      : `
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 10;
+  `}
+
+  @media (max-width: 1024px) {
+    ${({ $isMini }) =>
+      $isMini
+        ? `
+      right: 8px;
+      bottom: 8px;
+      width: 34%;
+    `
+        : ""}
+  }
+`;
+
+const MiniLabel = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 4px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  pointer-events: none;
 `;
 
 // Camera Viewport - fills available space in the 4:3 container
@@ -307,7 +350,7 @@ export function ImageDisplay({
   setViewMode,
   onSetDirective,
 }: ImageDisplayProps) {
-  const isCostmapView = viewMode === "costmap2D";
+  const isMapView = viewMode === "map";
   const [backendShowLoading, setBackendShowLoading] = useState(true);
   const [backendConnectionFailed, setBackendConnectionFailed] = useState(false);
   const [backendErrorMessage, setBackendErrorMessage] = useState(
@@ -321,7 +364,6 @@ export function ImageDisplay({
   const robotWsUrl = import.meta.env.VITE_ROBOT_WS_URL ?? "ws://localhost:9090";
   const {
     mainStream,
-    secondaryStream,
     hasMedia,
     isConnecting: isWebRTCConnecting,
     error: webRTCError,
@@ -333,15 +375,11 @@ export function ImageDisplay({
   });
 
   const mainVideoRef = useRef<HTMLVideoElement | null>(null);
-  const secondaryVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const connectionFailed = useDirectRobot
     ? Boolean(webRTCError)
     : backendConnectionFailed;
-  const directMainStream =
-    viewMode === "chaseFocus" ? (secondaryStream ?? mainStream) : mainStream;
-  const directSecondaryStream =
-    viewMode === "chaseFocus" ? mainStream : secondaryStream;
+  const directMainStream = mainStream;
   const showLoading = useDirectRobot
     ? !hasMedia && !webRTCError
     : backendShowLoading;
@@ -352,20 +390,7 @@ export function ImageDisplay({
   const baseUrl = import.meta.env.VITE_SIM_BASE_URL ?? "http://localhost:8000";
 
   // Set up the sources for the main and secondary feeds based on view mode
-  let mainSrc = baseUrl + "/video_feed";
-  let subSrc = baseUrl + "/video_feed_chase";
-
-  if (viewMode === "chaseFocus") {
-    mainSrc = baseUrl + "/video_feed_chase";
-    subSrc = baseUrl + "/video_feed";
-  } else if (viewMode === "frontFocus") {
-    mainSrc = baseUrl + "/video_feed";
-    subSrc = baseUrl + "/video_feed_chase";
-  } else if (viewMode === "sideBySide") {
-    // In side-by-side mode, we keep the original sources
-    mainSrc = baseUrl + "/video_feed";
-    subSrc = baseUrl + "/video_feed_chase";
-  }
+  const mainSrc = baseUrl + "/video_feed";
 
   // Function to check if the simulation is running
   const checkSimulationReady = useCallback(async () => {
@@ -439,45 +464,13 @@ export function ImageDisplay({
     }
   }, [useDirectRobot, directMainStream]);
 
-  useEffect(() => {
-    if (!useDirectRobot || !secondaryVideoRef.current) {
-      return;
-    }
-
-    const video = secondaryVideoRef.current;
-    video.srcObject = directSecondaryStream;
-    video.autoplay = true;
-    video.muted = true;
-    video.playsInline = true;
-    if (directSecondaryStream) {
-      void video.play().catch(() => {});
-    }
-  }, [useDirectRobot, directSecondaryStream]);
-
-  // Only show all modes on desktop. On mobile, remove "sideBySide".
-  const desktopModes: ViewMode[] = [
-    "sideBySide",
-    "frontFocus",
-    "chaseFocus",
-    "costmap2D",
-  ];
-  const mobileModes: ViewMode[] = ["frontFocus", "chaseFocus", "costmap2D"];
-  const modes: ViewMode[] = isMobile ? mobileModes : desktopModes;
-
-  // Ensure that if a user is on mobile and currently has "sideBySide",
-  // we switch them to a mobile-supported mode (e.g. "frontFocus").
-  if (isMobile && viewMode === "sideBySide") {
-    setViewMode("frontFocus");
-  }
+  const modes: ViewMode[] = ["frontFocus", "map"];
 
   const labels: Record<ViewMode, string> = {
-    sideBySide: "Side By Side",
     frontFocus: "Front Focus",
-    chaseFocus: "Chase Focus",
-    costmap2D: "Costmap 2D",
+    map: "Map",
   };
 
-  // Handle view mode change
   const handleViewModeChange = (newMode: ViewMode) => {
     if (newMode !== viewMode) {
       setViewMode(newMode);
@@ -502,40 +495,44 @@ export function ImageDisplay({
       {/* Camera Viewport */}
       <CameraViewport>
         {/* Background Grid */}
-        {!isCostmapView && <SimGrid />}
+        {!isMapView && <SimGrid />}
 
-        {isCostmapView ? (
-          <Costmap2DView wsUrl={robotWsUrl} />
-        ) : useDirectRobot ? (
-          <>
+        {/* Camera layer — always mounted, swaps between main and mini */}
+        <ViewLayer
+          $isMini={isMapView}
+          onClick={
+            isMapView ? () => handleViewModeChange("frontFocus") : undefined
+          }
+        >
+          {isMapView && <MiniLabel>{labels.frontFocus}</MiniLabel>}
+          {useDirectRobot ? (
             <MainVideo
               ref={mainVideoRef}
-              $viewMode={viewMode}
+              $viewMode={"frontFocus"}
               muted
               autoPlay
               playsInline
             />
-            <SecondaryVideo
-              ref={secondaryVideoRef}
-              $viewMode={viewMode}
-              muted
-              autoPlay
-              playsInline
+          ) : (
+            <MainImage
+              $viewMode={"frontFocus"}
+              src={mainSrc}
+              alt="Main Camera"
             />
-          </>
-        ) : (
-          <>
-            <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
-            <SecondaryImage
-              $viewMode={viewMode}
-              src={subSrc}
-              alt="Secondary Camera"
-            />
-          </>
-        )}
+          )}
+        </ViewLayer>
+
+        {/* Map layer — always mounted, swaps between main and mini */}
+        <ViewLayer
+          $isMini={!isMapView}
+          onClick={!isMapView ? () => handleViewModeChange("map") : undefined}
+        >
+          {!isMapView && <MiniLabel>map</MiniLabel>}
+          <Costmap2DView wsUrl={robotWsUrl} isMini={!isMapView} />
+        </ViewLayer>
 
         {/* Loading indicator */}
-        {!isCostmapView && showLoading && (
+        {!isMapView && showLoading && (
           <LoadingContainer>
             {connectionFailed ? (
               <>
@@ -570,7 +567,7 @@ export function ImageDisplay({
         )}
 
         {/* Overlay UI */}
-        {!isCostmapView && !showLoading && (
+        {!isMapView && !showLoading && (
           <OverlayUI>
             <CamLabel>LIVE FEED</CamLabel>
             <Crosshair>

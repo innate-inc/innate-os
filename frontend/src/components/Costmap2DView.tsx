@@ -5,6 +5,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 type Costmap2DViewProps = {
   wsUrl: string;
+  isMini?: boolean;
 };
 
 type RosbridgeMessage = {
@@ -69,16 +70,39 @@ const StatusPill = styled.div<{ $isError: boolean }>`
   letter-spacing: 0.04em;
   border: 1px solid ${({ theme }) => theme.colors.foreground};
   color: ${({ theme }) => theme.colors.foreground};
-  background: ${({ $isError }) => ($isError ? "rgba(220, 38, 38, 0.85)" : "rgba(0, 0, 0, 0.7)")};
+  background: ${({ $isError }) =>
+    $isError ? "rgba(220, 38, 38, 0.85)" : "rgba(0, 0, 0, 0.7)"};
   pointer-events: none;
 `;
 
-function quaternionToYaw(
-  x: number,
-  y: number,
-  z: number,
-  w: number,
-): number {
+const GoToButton = styled.button<{ $active: boolean }>`
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+  font-size: 11px;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  letter-spacing: 0.04em;
+  border: 1px solid
+    ${({ $active, theme }) => ($active ? "#00b7ff" : theme.colors.foreground)};
+  color: ${({ $active, theme }) =>
+    $active ? "#fff" : theme.colors.foreground};
+  background: ${({ $active }) =>
+    $active ? "rgba(0, 183, 255, 0.7)" : "rgba(0, 0, 0, 0.7)"};
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+
+  &:hover {
+    background: ${({ $active }) =>
+      $active ? "rgba(0, 183, 255, 0.85)" : "rgba(255, 255, 255, 0.15)"};
+  }
+`;
+
+function quaternionToYaw(x: number, y: number, z: number, w: number): number {
   const sinyCosp = 2 * (w * z + x * y);
   const cosyCosp = 1 - 2 * (y * y + z * z);
   return Math.atan2(sinyCosp, cosyCosp);
@@ -95,8 +119,7 @@ function createCostmapTexture(
   for (let row = 0; row < height; row += 1) {
     for (let col = 0; col < width; col += 1) {
       const sourceIndex = row * width + col;
-      const targetRow = height - 1 - row;
-      const targetIndex = (targetRow * width + col) * 4;
+      const targetIndex = sourceIndex * 4;
 
       const occupancy = data[sourceIndex] ?? -1;
       let shade = 105;
@@ -114,7 +137,12 @@ function createCostmapTexture(
     }
   }
 
-  const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat);
+  const texture = new THREE.DataTexture(
+    pixels,
+    width,
+    height,
+    THREE.RGBAFormat,
+  );
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -140,7 +168,7 @@ function updateCameraProjection(
   camera.updateProjectionMatrix();
 }
 
-export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
+export function Costmap2DView({ wsUrl, isMini = false }: Costmap2DViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -151,22 +179,334 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
   const mapMetadataRef = useRef<MapMetadata | null>(null);
   const hasFittedMapRef = useRef(false);
 
-  const mapMeshRef = useRef<
-    THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null
-  >(null);
+  const mapMeshRef = useRef<THREE.Mesh<
+    THREE.PlaneGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
   const mapTextureRef = useRef<THREE.DataTexture | null>(null);
-  const robotPointRef = useRef<
-    THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial> | null
-  >(null);
-  const robotConeRef = useRef<
-    THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> | null
-  >(null);
-  const headingLineRef = useRef<
-    THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial> | null
-  >(null);
+  const robotPointRef = useRef<THREE.Mesh<
+    THREE.CircleGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
+  const robotConeRef = useRef<THREE.Mesh<
+    THREE.ShapeGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
+  const headingLineRef = useRef<THREE.Line<
+    THREE.BufferGeometry,
+    THREE.LineBasicMaterial
+  > | null>(null);
+
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const goalArrowRef = useRef<THREE.Line<
+    THREE.BufferGeometry,
+    THREE.LineBasicMaterial
+  > | null>(null);
+  const goalMarkerRef = useRef<THREE.Mesh<
+    THREE.CircleGeometry,
+    THREE.MeshBasicMaterial
+  > | null>(null);
+  const planLineRef = useRef<THREE.Line<
+    THREE.BufferGeometry,
+    THREE.LineBasicMaterial
+  > | null>(null);
+
+  const isDraggingGoalRef = useRef(false);
+  const dragStartWorldRef = useRef<THREE.Vector3 | null>(null);
 
   const [status, setStatus] = useState("Connecting to map stream");
   const [error, setError] = useState<string | null>(null);
+  const [isGoToMode, setIsGoToMode] = useState(false);
+
+  const screenToWorld = useCallback(
+    (screenX: number, screenY: number): THREE.Vector3 | null => {
+      const camera = cameraRef.current;
+      const renderer = rendererRef.current;
+      if (!camera || !renderer) return null;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      const ndcX = ((screenX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((screenY - rect.top) / rect.height) * 2 + 1;
+
+      const ndc = new THREE.Vector3(ndcX, ndcY, 0);
+      ndc.unproject(camera);
+      return new THREE.Vector3(ndc.x, ndc.y, 0);
+    },
+    [],
+  );
+
+  const updateGoalArrow = useCallback(
+    (start: THREE.Vector3, end: THREE.Vector3) => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+
+      // Remove old arrow
+      if (goalArrowRef.current) {
+        goalArrowRef.current.geometry.dispose();
+        scene.remove(goalArrowRef.current);
+        goalArrowRef.current = null;
+      }
+
+      // Main line
+      const points = [
+        new THREE.Vector3(start.x, start.y, 0.06),
+        new THREE.Vector3(end.x, end.y, 0.06),
+      ];
+
+      // Arrowhead
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len > 0.05) {
+        const angle = Math.atan2(dy, dx);
+        const headLen = Math.min(len * 0.3, 0.25);
+        const headAngle = Math.PI / 6;
+        points.push(
+          new THREE.Vector3(end.x, end.y, 0.06),
+          new THREE.Vector3(
+            end.x - headLen * Math.cos(angle - headAngle),
+            end.y - headLen * Math.sin(angle - headAngle),
+            0.06,
+          ),
+        );
+        points.push(
+          new THREE.Vector3(end.x, end.y, 0.06),
+          new THREE.Vector3(
+            end.x - headLen * Math.cos(angle + headAngle),
+            end.y - headLen * Math.sin(angle + headAngle),
+            0.06,
+          ),
+        );
+      }
+
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({
+        color: 0x00ff88,
+        linewidth: 2,
+      });
+      const line = new THREE.LineSegments(geometry, material);
+      scene.add(line);
+      goalArrowRef.current = line;
+    },
+    [],
+  );
+
+  const clearGoalArrow = useCallback(() => {
+    const scene = sceneRef.current;
+    if (goalArrowRef.current && scene) {
+      goalArrowRef.current.geometry.dispose();
+      scene.remove(goalArrowRef.current);
+      goalArrowRef.current = null;
+    }
+  }, []);
+
+  const clearPlanPath = useCallback(() => {
+    const scene = sceneRef.current;
+    if (planLineRef.current && scene) {
+      planLineRef.current.geometry.dispose();
+      scene.remove(planLineRef.current);
+      planLineRef.current = null;
+    }
+  }, []);
+
+  const drawPlanPath = useCallback(
+    (poses: Array<{ pose?: { position?: { x?: number; y?: number } } }>) => {
+      const scene = sceneRef.current;
+      if (!scene || poses.length < 1) return;
+
+      clearPlanPath();
+
+      const points: THREE.Vector3[] = [];
+      for (const poseStamped of poses) {
+        const pos = poseStamped.pose?.position;
+        if (pos && typeof pos.x === "number" && typeof pos.y === "number") {
+          points.push(new THREE.Vector3(pos.x, pos.y, 0.05));
+        }
+      }
+
+      if (points.length < 1) return;
+
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({
+        color: 0x00b7ff,
+        linewidth: 2,
+      });
+      const line = new THREE.Line(geometry, material);
+      scene.add(line);
+      planLineRef.current = line;
+    },
+    [clearPlanPath],
+  );
+
+  const updateGoalMarker = useCallback((pos: THREE.Vector3) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    if (!goalMarkerRef.current) {
+      const geo = new THREE.CircleGeometry(0.08, 16);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(pos.x, pos.y, 0.06);
+      scene.add(mesh);
+      goalMarkerRef.current = mesh;
+    } else {
+      goalMarkerRef.current.position.set(pos.x, pos.y, 0.06);
+      goalMarkerRef.current.visible = true;
+    }
+  }, []);
+
+  const publishNavigationGoal = useCallback(
+    (x: number, y: number, yaw: number) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.error(
+          "[Costmap2DView] WebSocket not connected, cannot publish nav goal",
+        );
+        return;
+      }
+
+      const qz = Math.sin(yaw / 2);
+      const qw = Math.cos(yaw / 2);
+      const now = Date.now();
+
+      const msg = {
+        op: "publish",
+        topic: "/sim_navigation/global_plan",
+        msg: {
+          header: {
+            stamp: {
+              sec: Math.floor(now / 1000),
+              nanosec: (now % 1000) * 1_000_000,
+            },
+            frame_id: "map",
+          },
+          poses: [
+            {
+              header: {
+                stamp: {
+                  sec: Math.floor(now / 1000),
+                  nanosec: (now % 1000) * 1_000_000,
+                },
+                frame_id: "map",
+              },
+              pose: {
+                position: { x, y, z: 0.0 },
+                orientation: { x: 0.0, y: 0.0, z: qz, w: qw },
+              },
+            },
+          ],
+        },
+      };
+
+      ws.send(JSON.stringify(msg));
+      console.log(
+        `[Costmap2DView] Published nav goal: (${x.toFixed(2)}, ${y.toFixed(2)}), yaw=${((yaw * 180) / Math.PI).toFixed(1)}°`,
+      );
+    },
+    [],
+  );
+
+  const handlePointerDown = useCallback(
+    (e: PointerEvent) => {
+      if (!isGoToMode) return;
+
+      const worldPos = screenToWorld(e.clientX, e.clientY);
+      if (!worldPos) return;
+
+      isDraggingGoalRef.current = true;
+      dragStartWorldRef.current = worldPos;
+      updateGoalMarker(worldPos);
+      clearGoalArrow();
+
+      // Disable orbit controls during drag
+      if (controlsRef.current) {
+        controlsRef.current.enabled = false;
+      }
+    },
+    [isGoToMode, screenToWorld, updateGoalMarker, clearGoalArrow],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: PointerEvent) => {
+      if (!isDraggingGoalRef.current || !dragStartWorldRef.current) return;
+
+      const worldPos = screenToWorld(e.clientX, e.clientY);
+      if (!worldPos) return;
+
+      updateGoalArrow(dragStartWorldRef.current, worldPos);
+    },
+    [screenToWorld, updateGoalArrow],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: PointerEvent) => {
+      if (!isDraggingGoalRef.current || !dragStartWorldRef.current) return;
+
+      const start = dragStartWorldRef.current;
+      const endWorld = screenToWorld(e.clientX, e.clientY);
+
+      isDraggingGoalRef.current = false;
+      dragStartWorldRef.current = null;
+
+      // Re-enable orbit controls
+      if (controlsRef.current) {
+        controlsRef.current.enabled = true;
+      }
+
+      if (!endWorld) {
+        clearGoalArrow();
+        return;
+      }
+
+      const dx = endWorld.x - start.x;
+      const dy = endWorld.y - start.y;
+      const dragDist = Math.sqrt(dx * dx + dy * dy);
+
+      // If drag is too short, use a default orientation (face "east")
+      const yaw = dragDist > 0.05 ? Math.atan2(dy, dx) : 0;
+
+      publishNavigationGoal(start.x, start.y, yaw);
+
+      // Draw plan line from robot position to goal immediately
+      // (rosbridge doesn't echo back our own published messages)
+      const robotPos = robotPointRef.current?.position;
+      if (robotPos) {
+        drawPlanPath([
+          { pose: { position: { x: robotPos.x, y: robotPos.y } } },
+          { pose: { position: { x: start.x, y: start.y } } },
+        ]);
+      }
+
+      // Clear arrow after a short delay so user sees feedback
+      setTimeout(() => {
+        clearGoalArrow();
+        if (goalMarkerRef.current) {
+          goalMarkerRef.current.visible = false;
+        }
+      }, 1500);
+
+      setIsGoToMode(false);
+    },
+    [screenToWorld, publishNavigationGoal, clearGoalArrow, drawPlanPath],
+  );
+
+  // Attach/detach pointer events for Go To mode
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+
+    const canvas = renderer.domElement;
+    canvas.addEventListener("pointerdown", handlePointerDown);
+    canvas.addEventListener("pointermove", handlePointerMove);
+    canvas.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", handlePointerDown);
+      canvas.removeEventListener("pointermove", handlePointerMove);
+      canvas.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [handlePointerDown, handlePointerMove, handlePointerUp]);
 
   const fitCameraToMap = useCallback((metadata: MapMetadata) => {
     const camera = cameraRef.current;
@@ -300,7 +640,7 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       }
 
       mapTextureRef.current = texture;
-      setStatus(`Costmap ${width}x${height}`);
+      setStatus("map");
 
       if (!hasFittedMapRef.current) {
         fitCameraToMap(mapMetadataRef.current);
@@ -354,7 +694,20 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch (error) {
+      console.error(
+        "[Costmap2DView] Failed to initialize WebGL renderer.",
+        error,
+      );
+      setError("Map renderer unavailable");
+      setStatus("Map stream unavailable");
+      sceneRef.current = null;
+      cameraRef.current = null;
+      return;
+    }
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setSize(size.x, size.y);
     rendererRef.current = renderer;
@@ -470,6 +823,21 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
         headingLineRef.current.material.dispose();
         headingLineRef.current = null;
       }
+      if (goalArrowRef.current) {
+        goalArrowRef.current.geometry.dispose();
+        goalArrowRef.current.material.dispose();
+        goalArrowRef.current = null;
+      }
+      if (goalMarkerRef.current) {
+        goalMarkerRef.current.geometry.dispose();
+        goalMarkerRef.current.material.dispose();
+        goalMarkerRef.current = null;
+      }
+      if (planLineRef.current) {
+        planLineRef.current.geometry.dispose();
+        planLineRef.current.material.dispose();
+        planLineRef.current = null;
+      }
 
       renderer.dispose();
       if (renderer.domElement.parentElement === container) {
@@ -481,16 +849,24 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       sceneRef.current = null;
       rendererRef.current = null;
     };
-  }, []);
+  }, [isMini, wsUrl]);
 
   useEffect(() => {
     setError(null);
     setStatus("Connecting to map stream");
 
     const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
     let isDisposed = false;
 
     ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          op: "advertise",
+          topic: "/sim_navigation/global_plan",
+          type: "nav_msgs/msg/Path",
+        }),
+      );
       ws.send(
         JSON.stringify({
           op: "subscribe",
@@ -506,6 +882,22 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
           topic: "/odom",
           type: "nav_msgs/msg/Odometry",
           throttle_rate: 100,
+          queue_length: 1,
+        }),
+      );
+      ws.send(
+        JSON.stringify({
+          op: "subscribe",
+          topic: "/sim_navigation/global_plan",
+          type: "nav_msgs/msg/Path",
+          queue_length: 1,
+        }),
+      );
+      ws.send(
+        JSON.stringify({
+          op: "subscribe",
+          topic: "/sim_navigation/status",
+          type: "std_msgs/msg/String",
           queue_length: 1,
         }),
       );
@@ -536,6 +928,29 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
 
       if (message.topic === "/odom") {
         applyOdomMessage(message.msg as OdomMessage);
+        return;
+      }
+
+      if (message.topic === "/sim_navigation/global_plan") {
+        const pathMsg = message.msg as {
+          poses?: Array<{ pose?: { position?: { x?: number; y?: number } } }>;
+        };
+        if (pathMsg.poses && Array.isArray(pathMsg.poses)) {
+          drawPlanPath(pathMsg.poses);
+        }
+        return;
+      }
+
+      if (message.topic === "/sim_navigation/status") {
+        const statusMsg = message.msg as { data?: string };
+        const navStatus = statusMsg.data ?? "";
+        if (
+          navStatus === "SUCCEEDED" ||
+          navStatus === "FAILED" ||
+          navStatus === "CANCELED"
+        ) {
+          clearPlanPath();
+        }
       }
     };
 
@@ -543,6 +958,9 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       if (isDisposed) {
         return;
       }
+      console.error("[Costmap2DView] Map rosbridge websocket error.", {
+        wsUrl,
+      });
       setError("ROSBridge connection failed");
       setStatus("Map stream unavailable");
     };
@@ -551,22 +969,55 @@ export function Costmap2DView({ wsUrl }: Costmap2DViewProps) {
       if (isDisposed) {
         return;
       }
+      console.warn("[Costmap2DView] Map rosbridge websocket closed.", {
+        wsUrl,
+      });
       setStatus("Map stream disconnected");
     };
 
     return () => {
       isDisposed = true;
+      wsRef.current = null;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ op: "unsubscribe", topic: "/map" }));
         ws.send(JSON.stringify({ op: "unsubscribe", topic: "/odom" }));
+        ws.send(
+          JSON.stringify({
+            op: "unsubscribe",
+            topic: "/sim_navigation/global_plan",
+          }),
+        );
+        ws.send(
+          JSON.stringify({
+            op: "unsubscribe",
+            topic: "/sim_navigation/status",
+          }),
+        );
+        ws.send(
+          JSON.stringify({
+            op: "unadvertise",
+            topic: "/sim_navigation/global_plan",
+          }),
+        );
       }
       ws.close();
     };
-  }, [applyMapMessage, applyOdomMessage, wsUrl]);
+  }, [applyMapMessage, applyOdomMessage, drawPlanPath, clearPlanPath, wsUrl]);
 
   return (
-    <ViewRoot ref={containerRef}>
+    <ViewRoot
+      ref={containerRef}
+      style={isGoToMode ? { cursor: "crosshair" } : undefined}
+    >
       <StatusPill $isError={Boolean(error)}>{error ?? status}</StatusPill>
+      {!isMini && (
+        <GoToButton
+          $active={isGoToMode}
+          onClick={() => setIsGoToMode((prev) => !prev)}
+        >
+          {isGoToMode ? "Cancel" : "Go To"}
+        </GoToButton>
+      )}
     </ViewRoot>
   );
 }

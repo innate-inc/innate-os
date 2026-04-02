@@ -22,81 +22,58 @@ export const PreviewContainer = styled.div`
 `;
 
 // Define the shared styles as a function to avoid TypeScript errors
-const getMainImageStyles = ($viewMode: string) => css`
-  position: absolute;
-  transition: all 0.8s ease-in-out;
-  z-index: 10;
+const getMainImageStyles = (_viewMode: string) => {
+  void _viewMode;
+  return css`
+    position: absolute;
+    transition: all 0.8s ease-in-out;
+    z-index: 10;
 
-  ${() => {
-    switch ($viewMode) {
-      case "sideBySide":
-        return css`
-          left: 0;
-          top: 0;
-          width: 50%;
-          height: 100%;
-          object-fit: cover;
-          border-right: 1px solid white;
-        `;
-      case "frontFocus":
-      case "chaseFocus":
-      default:
-        return css`
-          /* Fill the entire viewport without cropping */
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
-        `;
-    }
-  }}
-
-  @media (max-width: 1024px) {
-    position: relative;
-    left: 0;
-    top: 0;
-    transform: none;
-    width: 100%;
-    height: auto;
-  }
-`;
-
-const getSecondaryImageStyles = ($viewMode: string) => css`
-  position: absolute;
-  transition: all 0.8s ease-in-out;
-  z-index: 11;
-  object-fit: cover;
-
-  ${() => {
-    switch ($viewMode) {
-      case "sideBySide":
-        return css`
-          left: 50%;
-          top: 0;
-          width: 50%;
-          height: 100%;
-          object-fit: cover;
-        `;
-      case "frontFocus":
-      case "chaseFocus":
-      default:
-        return css`
-          /* Picture-in-picture style in corner */
-          width: 25%;
-          height: auto;
-          right: 16px;
-          bottom: 16px;
-          object-fit: cover;
-          border: 1px solid rgba(255, 255, 255, 0.3);
-          box-shadow: 4px 4px 0 rgba(255, 255, 255, 0.05);
-        `;
-    }
-  }}
-
-  @media (max-width: 1024px) {
     ${() => {
-      if ($viewMode === "frontFocus" || $viewMode === "chaseFocus") {
+      return css`
+        /* Fill the entire viewport without cropping */
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      `;
+    }}
+
+    @media (max-width: 1024px) {
+      position: relative;
+      left: 0;
+      top: 0;
+      transform: none;
+      width: 100%;
+      height: auto;
+    }
+  `;
+};
+
+const getSecondaryImageStyles = (_viewMode: string) => {
+  void _viewMode;
+  return css`
+    position: absolute;
+    transition: all 0.8s ease-in-out;
+    z-index: 11;
+    object-fit: cover;
+
+    ${() => {
+      return css`
+        /* Picture-in-picture style in corner */
+        width: 25%;
+        height: auto;
+        right: 16px;
+        bottom: 16px;
+        object-fit: cover;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 4px 4px 0 rgba(255, 255, 255, 0.05);
+      `;
+    }}
+
+    @media (max-width: 1024px) {
+      ${() => {
         return css`
           width: 30%;
           height: auto;
@@ -107,17 +84,10 @@ const getSecondaryImageStyles = ($viewMode: string) => css`
           position: absolute;
           border: 1px solid rgba(255, 255, 255, 0.3);
         `;
-      } else {
-        return css`
-          position: relative;
-          width: 100%;
-          height: auto;
-          margin: 0 auto;
-        `;
-      }
-    }}
-  }
-`;
+      }}
+    }
+  `;
+};
 
 // Export the styled components with proper typing
 export const MainImage = styled.img<{ $viewMode: string }>`
