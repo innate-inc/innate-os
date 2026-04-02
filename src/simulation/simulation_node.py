@@ -32,10 +32,6 @@ from src.shared_queues import SharedQueues
 ROBOT_INIT_POS = (2, -5, 0.05)
 ROBOT_INIT_QUAT = (0, 0, 0, 1)
 ROBOT_ROOT_POS = (0.0, 0.0, ROBOT_INIT_POS[2])
-ROBOT_BASE_COLLISION_CENTER_LOCAL = np.array([-0.0587, 0.0, 0.0838])
-ROBOT_BASE_COLLISION_FRONT_LOCAL = np.array([0.0352, 0.0, 0.0838])
-ROBOT_BASE_COLLISION_REAR_LOCAL = np.array([-0.1526, 0.0, 0.0838])
-
 DEFAULT_SCENE_CONFIG = {
     "name": "Baked_sc0_staging_00",
     "mesh_path": "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
@@ -76,8 +72,6 @@ class SimulationNode:
         self.project_root = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        self.motion_debug_log_path = self._init_motion_debug_log()
-        self.motion_debug_event_index = 0
         self.default_entity_catalog: Dict[str, Dict[str, Any]] = {}
         self.entity_specs: Dict[str, Dict[str, Any]] = {}
         self.manual_entity_hitboxes: Dict[str, Dict[str, float]] = {}
@@ -190,11 +184,6 @@ class SimulationNode:
             self.current_entity_asset_signature = tuple()
 
         print("SimulationNode initialized.")
-        self._motion_debug_log(
-            "sim_initialized",
-            sim_time=0.0,
-            snapshot=self._capture_robot_motion_snapshot(),
-        )
 
     def _init_genesis(self):
         """Initialize Genesis backend"""
@@ -766,68 +755,6 @@ class SimulationNode:
         yaw = self._yaw_from_wxyz(np.asarray(quat_wxyz, dtype=float))
         self._set_robot_base_dofs(position[0], position[1], yaw)
 
-    def _init_motion_debug_log(self) -> str:
-        logs_dir = os.path.join(self.project_root, "logs")
-        os.makedirs(logs_dir, exist_ok=True)
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        log_path = os.path.join(logs_dir, f"simulation_motion_debug_{timestamp}.jsonl")
-        with open(log_path, "a", encoding="utf-8"):
-            pass
-        print(f"[SimulationNode][motion-debug] Logging movement traces to {log_path}")
-        return log_path
-
-    def _motion_debug_jsonable(self, value):
-        if isinstance(value, np.ndarray):
-            return value.tolist()
-        if isinstance(value, (np.floating, np.integer)):
-            return value.item()
-        if isinstance(value, (list, tuple)):
-            return [self._motion_debug_jsonable(item) for item in value]
-        if isinstance(value, dict):
-            return {
-                key: self._motion_debug_jsonable(val) for key, val in value.items()
-            }
-        return value
-
-    def _motion_debug_log(self, event: str, sim_time: Optional[float] = None, **fields):
-        record = {
-            "event_index": self.motion_debug_event_index,
-            "event": event,
-            "wall_time": time.time(),
-        }
-        self.motion_debug_event_index += 1
-        if sim_time is not None:
-            record["sim_time"] = sim_time
-        for key, value in fields.items():
-            record[key] = self._motion_debug_jsonable(value)
-        line = json.dumps(record, sort_keys=True)
-        print(f"[SimulationNode][motion-debug] {line}")
-        with open(self.motion_debug_log_path, "a", encoding="utf-8") as log_file:
-            log_file.write(line + "\n")
-
-    def _capture_robot_motion_snapshot(self):
-        root_pos = self.robot.get_pos().cpu().numpy().astype(float)
-        root_quat = self.robot.get_quat().cpu().numpy().astype(float)
-        base_pos, base_quat = self._get_robot_base_pose()
-        base_dofs = self._get_robot_base_dofs()
-        rot = R.from_quat(
-            [base_quat[1], base_quat[2], base_quat[3], base_quat[0]]
-        )
-        yaw = self._normalize_angle(base_dofs[2])
-
-        return {
-            "root_entity_pos": root_pos,
-            "root_entity_quat_wxyz": root_quat,
-            "base_link_pos": base_pos,
-            "base_link_quat_wxyz": base_quat,
-            "base_dofs": base_dofs,
-            "yaw_rad": yaw,
-            "forward_dir_world": rot.apply([1.0, 0.0, 0.0]),
-            "collision_center_world": base_pos + rot.apply(ROBOT_BASE_COLLISION_CENTER_LOCAL),
-            "collision_front_world": base_pos + rot.apply(ROBOT_BASE_COLLISION_FRONT_LOCAL),
-            "collision_rear_world": base_pos + rot.apply(ROBOT_BASE_COLLISION_REAR_LOCAL),
-        }
-
     def _apply_arm_positions(self, joint_positions):
         """Apply joint positions to arm and update current state.
 
@@ -949,8 +876,6 @@ class SimulationNode:
         """
         current_pos, current_quat = self._get_robot_base_pose()
         current_yaw = self._yaw_from_wxyz(current_quat)
-        pre_update_snapshot = self._capture_robot_motion_snapshot()
-
         # Calculate position error
         pos_error = self.nav_target_pos - current_pos
         distance_to_target = np.linalg.norm(pos_error[:2])  # Only X,Y distance
@@ -979,13 +904,6 @@ class SimulationNode:
 
         if position_reached and final_angle_reached:
             # Target fully reached, clear navigation target
-            self._motion_debug_log(
-                "nav_target_reached",
-                sim_time=sim_time,
-                nav_target_pos=self.nav_target_pos,
-                nav_target_yaw=self.nav_target_yaw,
-                snapshot=self._capture_robot_motion_snapshot(),
-            )
             self.nav_target_pos = None
             self.nav_target_yaw = None
             self.commanded_lin_vel = np.zeros(3)
@@ -1055,20 +973,6 @@ class SimulationNode:
         new_quat = self._quat_wxyz_from_yaw(new_yaw)
 
         self._set_robot_base_pose(new_pos, new_quat)
-        self._motion_debug_log(
-            "nav_update",
-            sim_time=sim_time,
-            nav_target_pos=self.nav_target_pos,
-            nav_target_yaw=self.nav_target_yaw,
-            position_error=pos_error,
-            distance_to_target=distance_to_target,
-            heading_error=heading_error,
-            final_angle_error=final_angle_error,
-            linear_vel=linear_vel,
-            angular_vel=angular_vel,
-            pre_update=pre_update_snapshot,
-            post_update=self._capture_robot_motion_snapshot(),
-        )
 
         # Store commanded velocities for odometry (in world frame)
         self.commanded_lin_vel = np.array(
@@ -1813,14 +1717,6 @@ class SimulationNode:
                     # Cancel any in-flight nav target so the robot stays at the reset pose.
                     self.nav_target_pos = None
                     self.nav_target_yaw = None
-                    self._motion_debug_log(
-                        "reset_applied",
-                        sim_time=sim_time,
-                        custom_pose=latest_reset_cmd.pose
-                        if hasattr(latest_reset_cmd, "pose")
-                        else None,
-                        snapshot=self._capture_robot_motion_snapshot(),
-                    )
 
                 # Apply arm joint positions if we have an arm command (immediate)
                 if latest_arm_cmd is not None:
@@ -1868,13 +1764,6 @@ class SimulationNode:
                         ]
                     )
                     self.nav_target_yaw = latest_position_cmd.target_yaw
-                    self._motion_debug_log(
-                        "nav_target_received",
-                        sim_time=sim_time,
-                        target_pos=self.nav_target_pos,
-                        target_yaw=self.nav_target_yaw,
-                        snapshot=self._capture_robot_motion_snapshot(),
-                    )
 
                     # print(f"New nav target: pos=({self.nav_target_pos[0]:.3f}, {self.nav_target_pos[1]:.3f}), yaw={self.nav_target_yaw:.3f}")
                 elif latest_velocity_cmd is not None:
@@ -1883,7 +1772,6 @@ class SimulationNode:
 
                     # Convert desired velocities to robot position update
                     current_pos, current_quat = self._get_robot_base_pose()
-                    pre_command_snapshot = self._capture_robot_motion_snapshot()
 
                     # Update position based on linear velocity and current orientation
                     dt = self.scene.sim_options.dt
@@ -1923,18 +1811,6 @@ class SimulationNode:
 
                     print(
                         f"Commanded vel: linear={linear_vel:.3f}, angular={angular_vel:.3f}"
-                    )
-                    self._motion_debug_log(
-                        "velocity_cmd_applied",
-                        sim_time=sim_time,
-                        linear_vel=linear_vel,
-                        angular_vel=angular_vel,
-                        dt=dt,
-                        forward_dir=forward_dir,
-                        pre_update=pre_command_snapshot,
-                        requested_pos=new_pos,
-                        requested_quat_wxyz=new_quat,
-                        post_update=self._capture_robot_motion_snapshot(),
                     )
             except Exception as e:
                 print(f"Error processing commands: {e}")
@@ -2130,37 +2006,8 @@ class SimulationNode:
 
             # --- (H) Step the physics
             try:
-                should_log_motion_step = (
-                    latest_velocity_cmd is not None
-                    or latest_reset_cmd is not None
-                    or (
-                        self.nav_target_pos is not None and self.nav_target_yaw is not None
-                    )
-                )
-                if should_log_motion_step:
-                    self._motion_debug_log(
-                        "pre_scene_step",
-                        sim_time=sim_time,
-                        step_count=step_count,
-                        nav_target_pos=self.nav_target_pos,
-                        nav_target_yaw=self.nav_target_yaw,
-                        commanded_lin_vel=self.commanded_lin_vel,
-                        commanded_ang_vel=self.commanded_ang_vel,
-                        snapshot=self._capture_robot_motion_snapshot(),
-                    )
                 self.scene.step()
                 step_count += 1
-                if should_log_motion_step:
-                    self._motion_debug_log(
-                        "post_scene_step",
-                        sim_time=sim_time,
-                        step_count=step_count,
-                        nav_target_pos=self.nav_target_pos,
-                        nav_target_yaw=self.nav_target_yaw,
-                        commanded_lin_vel=self.commanded_lin_vel,
-                        commanded_ang_vel=self.commanded_ang_vel,
-                        snapshot=self._capture_robot_motion_snapshot(),
-                    )
 
                 # --- (I) Sleep to maintain real-time simulation
                 current_time = time.time()
