@@ -2,4 +2,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$SCRIPT_DIR/dev/launcher/stack.py" "$@"
+if [[ $# -eq 0 ]]; then
+  exec "$SCRIPT_DIR/innate" sim up
+fi
+
+echo "[deprecated] ./stack is now ./innate sim ..." >&2
+
+case "${1:-}" in
+  init|setup)
+    shift
+    exec "$SCRIPT_DIR/innate" sim setup "$@"
+    ;;
+  up|down|status|logs)
+    legacy_cmd="$1"
+    shift
+    exec "$SCRIPT_DIR/innate" sim "$legacy_cmd" "$@"
+    ;;
+  *)
+    exec "$SCRIPT_DIR/innate" "$@"
+    ;;
+esac

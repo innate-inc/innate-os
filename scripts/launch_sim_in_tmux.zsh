@@ -9,14 +9,14 @@ if [[ "$1" == "--detach" ]]; then
   ATTACH=0
 fi
 
-SESSION_NAME="${INNATE_SIM_TMUX_SESSION:-stack}"
+SESSION_NAME="${INNATE_SIM_TMUX_SESSION:-innate}"
 # Use braces in tmux targets so zsh does not interpret ":foo" as a parameter modifier.
 TMUX_TARGET_PREFIX="${SESSION_NAME}"
 
 # First, ensure we have a clean tmux environment
 tmux kill-session -t "$SESSION_NAME" 2>/dev/null
 
-# Create a new tmux session for the local stack
+# Create a new tmux session for the local Innate runtime
 tmux new-session -d -x 240 -y 72 -s "$SESSION_NAME" -n zenoh
 
 # === Window 0: Zenoh Router ===

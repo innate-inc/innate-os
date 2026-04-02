@@ -24,7 +24,7 @@ It is designed on a few **core principles**:
 - Intuitive: Creating a program should be easy and not need to touch ROS at all. And the OS can be controlled via the Innate phone app.
 - Powerful: The Innate OS can be quickly extended to perform long-range tasks with robots. It natively supports VLAs, VLNs, and agentic workflows.
 
-See [`dev/launcher/README.md`](dev/launcher/README.md) for the full `./stack` workflow.
+See [`dev/launcher/README.md`](dev/launcher/README.md) for the full `./innate sim` workflow.
 
 ## Quick start (Physical Robot)
 
