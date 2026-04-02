@@ -1,0 +1,93 @@
+# Environment section - defines the simulation environment
+environment:
+  name: "apartment"
+  initial_parameters:
+    - robot_position: [10.0, 5.0, 0.05]
+      robot_orientation: [0, 0, 1, 0]
+      object_positions:
+        coffee_mug: [12.5, 3.2, 0.8]
+        book: [14.2, 3.5, 0.9]
+        remote: [8.4, 6.3, 0.7]
+
+# Input section
+name: "long_term_consistency_continuous_operation"
+category: "long_term_consistency"
+description: "Tests the robot's ability to maintain performance over an extended period"
+goal: "Robot should stay responsive and coherent throughout the entire duration"
+directive: "explore_and_describe"
+duration: 3600  # 1 hour
+
+# Enhanced message scheduling
+messages:
+  # Regular interval messages to test consistency
+  - trigger_type: "time"
+    time: 300  # 5 minutes
+    text: "What objects have you found so far?"
+  
+  - trigger_type: "time"
+    time: 900  # 15 minutes
+    text: "How are you feeling? Are your systems functioning properly?"
+  
+  - trigger_type: "time"
+    time: 1800  # 30 minutes
+    text: "Can you find a book and describe it to me?"
+  
+  - trigger_type: "time"
+    time: 2700  # 45 minutes
+    text: "Please go back to the kitchen and tell me what you see there."
+  
+  # Check-based messages
+  - trigger_type: "check"
+    check_id: "found_book"
+    delay: 5
+    text: "Great job finding the book! Now, can you find a remote control?"
+  
+  - trigger_type: "check"
+    check_id: "kitchen_return"
+    text: "Now that you're in the kitchen, can you look for a coffee mug?"
+
+# Expectations section
+expectations:
+  checks:
+    # Location checks
+    - id: "kitchen_visit"
+      type: "location"
+      coordinates: [12.0, 3.0, 13.0, 4.0]  # Kitchen area
+    
+    - id: "living_room_visit"
+      type: "location"
+      coordinates: [8.0, 6.0, 10.0, 8.0]  # Living room area
+    
+    - id: "kitchen_return"
+      type: "location"
+      coordinates: [12.0, 3.0, 13.0, 4.0]  # Kitchen area again
+    
+    # Primitive checks
+    - id: "describe_object"
+      type: "primitive"
+      primitive_name: "describe_object"
+      verification_prompt: "Did the robot use the describe_object primitive with a valid object as an argument?"
+    
+    - id: "found_book"
+      type: "primitive"
+      primitive_name: "identify_object"
+      verification_prompt: "Did the robot correctly identify a book using the identify_object primitive?"
+    
+    # Compound checks
+    - id: "describe_in_kitchen"
+      type: "compound"
+      location: "kitchen_visit"
+      action: "describe_object"
+      verification_prompt: "Did the robot describe objects while in the kitchen area?"
+    
+    # Sequence checks
+    - id: "exploration_sequence"
+      type: "sequence"
+      order: ["kitchen_visit", "living_room_visit", "kitchen_return"]
+      verification_prompt: "Did the robot first visit the kitchen, then the living room, and then return to the kitchen?"
+
+  # Overall success criterion
+  success_criterion: "Did the robot remain responsive, coherent, and functional throughout the entire test duration? It should have explored multiple areas, responded to queries appropriately, and maintained consistent behavior quality from beginning to end."
+
+  # Early stop criterion
+  stop_criterion: "Has the robot shown clear signs of degraded performance such as repeated failures to respond, garbled responses, or getting stuck in a loop? If so, the test can be stopped as it demonstrates inconsistency." 

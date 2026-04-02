@@ -1,0 +1,16 @@
+:root {
+  --bg-color: #000000;
+  --ink-color: #FFFFFF;
+  --accent-color: #401FFB;
+  --border-width: 1px;
+  --spacing-unit: 16px;
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --panel-bg: #111111;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
