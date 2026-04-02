@@ -86,6 +86,8 @@ Use this to develop and test agents for Innate robots — navigation, task execu
 ## Running the Application
 
 > [!IMPORTANT]
+> Inside this monorepo, the recommended entrypoint is `../stack up` from the repository root.
+>
 > The simulator connects to the **[Innate OS](https://github.com/innate-inc/innate-os)** running locally in Docker on `ws://localhost:9090`.
 >
 > **Before starting the simulator:**
