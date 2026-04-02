@@ -31,7 +31,7 @@ from src.shared_queues import SharedQueues
 
 ROBOT_INIT_POS = (2, -5, 0.05)
 ROBOT_INIT_QUAT = (0, 0, 0, 1)
-
+ROBOT_ROOT_POS = (0.0, 0.0, ROBOT_INIT_POS[2])
 DEFAULT_SCENE_CONFIG = {
     "name": "Baked_sc0_staging_00",
     "mesh_path": "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb",
@@ -123,11 +123,6 @@ class SimulationNode:
             []
         )  # Store references to debug objects for clearing
 
-        # Logical robot position tracking (separate from physics mesh to avoid collision drift)
-        # These track the "intended" robot position, unaffected by collision resolution
-        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
-        self.robot_logical_yaw = 0.0  # Extracted from ROBOT_INIT_QUAT
-
         # Arm control state
         self.arm_joint_names = [
             "joint1",
@@ -170,6 +165,8 @@ class SimulationNode:
         self._init_map_params()
 
         self.scene.build()
+        self._init_robot_base_pose_control()
+        self._set_robot_base_pose(ROBOT_INIT_POS, xyzw_to_wxyz(ROBOT_INIT_QUAT))
         self.scene_built = True
 
         print("Scene built")
@@ -285,9 +282,11 @@ class SimulationNode:
         # Add separate collision geometry when a stage config is available.
         collision_stage_config = scene_config.get("collision_stage_config")
         if collision_stage_config:
+            # ReplicaCAD stage metadata remains in the original Y-up-authored frame
+            # even though Genesis 0.4.x now auto-converts the visible GLB to Z-up.
             self._add_collision_from_stage_config(
                 self._resolve_project_path(collision_stage_config),
-                scene_euler=base_scene_euler,
+                scene_euler=(90, 0, 0),
             )
         else:
             print(
@@ -315,7 +314,7 @@ class SimulationNode:
         )
 
     def _add_collision_from_stage_config(
-        self, config_path: str, scene_euler: tuple = (0, 0, 0)
+        self, config_path: str, scene_euler: tuple = (90, 0, 0)
     ):
         """Add collision geometry based on receptacles defined in the stage config"""
         if not os.path.exists(config_path):
@@ -695,9 +694,10 @@ class SimulationNode:
         """Initialize robot and its parameters"""
         urdf_kwargs = {
             "file": "data/urdf/maurice.urdf",
-            "pos": ROBOT_INIT_POS,
-            "quat": xyzw_to_wxyz(ROBOT_INIT_QUAT),
-            # Disable physics dynamics - robot is moved kinematically via set_pos/set_quat.
+            # Keep the articulation root fixed and drive the planar base joints directly.
+            "pos": ROBOT_ROOT_POS,
+            "quat": (1.0, 0.0, 0.0, 0.0),
+            # Disable physics dynamics - robot is moved kinematically via base DOFs.
             "fixed": True,
         }
         if not self.robot_collision_enabled:
@@ -706,6 +706,54 @@ class SimulationNode:
             print("[SimulationNode] Robot collisions disabled.")
 
         self.robot = self.scene.add_entity(gs.morphs.URDF(**urdf_kwargs))
+
+    def _init_robot_base_pose_control(self):
+        """Cache the planar base DOFs used to drive Maurice in world space."""
+        self.robot_base_root_pos = np.array(ROBOT_ROOT_POS, dtype=float)
+        self.base_pose_joint_names = ("base_x", "base_y", "base_yaw")
+        self.base_pose_dof_indices = [
+            self.robot.get_joint(name).dofs_idx_local[0]
+            for name in self.base_pose_joint_names
+        ]
+
+    def _normalize_angle(self, angle: float) -> float:
+        return np.arctan2(np.sin(angle), np.cos(angle))
+
+    def _yaw_from_wxyz(self, quat_wxyz) -> float:
+        w, x, y, z = quat_wxyz
+        return np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+    def _quat_wxyz_from_yaw(self, yaw: float) -> np.ndarray:
+        half_yaw = yaw / 2.0
+        return np.array([np.cos(half_yaw), 0.0, 0.0, np.sin(half_yaw)], dtype=float)
+
+    def _get_robot_base_dofs(self) -> np.ndarray:
+        return (
+            self.robot.get_dofs_position(self.base_pose_dof_indices).cpu().numpy().astype(float)
+        )
+
+    def _set_robot_base_dofs(self, x: float, y: float, yaw: float):
+        base_dofs = torch.tensor(
+            [x - self.robot_base_root_pos[0], y - self.robot_base_root_pos[1], yaw],
+            dtype=torch.float32,
+        )
+        self.robot.set_dofs_position(
+            position=base_dofs,
+            dofs_idx_local=self.base_pose_dof_indices,
+            zero_velocity=True,
+        )
+
+    def _get_robot_base_pose(self):
+        base_link = self.robot.get_link("base_link")
+        return (
+            base_link.get_pos().cpu().numpy().astype(float),
+            base_link.get_quat().cpu().numpy().astype(float),
+        )
+
+    def _set_robot_base_pose(self, position, quat_wxyz):
+        position = np.asarray(position, dtype=float)
+        yaw = self._yaw_from_wxyz(np.asarray(quat_wxyz, dtype=float))
+        self._set_robot_base_dofs(position[0], position[1], yaw)
 
     def _apply_arm_positions(self, joint_positions):
         """Apply joint positions to arm and update current state.
@@ -825,15 +873,9 @@ class SimulationNode:
            - v_right = v + ω * L/2
            - Both wheel speeds must be <= max_wheel_speed
 
-        NOTE: Uses logical position tracking to avoid drift from collision resolution.
-        The physics mesh may be pushed by collisions, but navigation calculations
-        use the tracked logical position to maintain consistent reference frame.
         """
-        # Use tracked logical position instead of physics mesh position
-        # This prevents collision-induced drift from affecting navigation
-        current_pos = self.robot_logical_pos.copy()
-        current_yaw = self.robot_logical_yaw
-
+        current_pos, current_quat = self._get_robot_base_pose()
+        current_yaw = self._yaw_from_wxyz(current_quat)
         # Calculate position error
         pos_error = self.nav_target_pos - current_pos
         distance_to_target = np.linalg.norm(pos_error[:2])  # Only X,Y distance
@@ -928,21 +970,9 @@ class SimulationNode:
 
         # Update orientation
         new_yaw = current_yaw + angular_vel * dt
-        new_quat = [
-            np.cos(new_yaw / 2.0),  # w
-            0.0,  # x
-            0.0,  # y
-            np.sin(new_yaw / 2.0),  # z
-        ]
+        new_quat = self._quat_wxyz_from_yaw(new_yaw)
 
-        # Update logical position tracking (this is our source of truth)
-        self.robot_logical_pos = new_pos.copy()
-        self.robot_logical_yaw = new_yaw
-
-        # Apply to physics mesh for visualization (may be pushed by collisions,
-        # but we don't read it back for navigation calculations)
-        self.robot.set_pos(new_pos)
-        self.robot.set_quat(new_quat)
+        self._set_robot_base_pose(new_pos, new_quat)
 
         # Store commanded velocities for odometry (in world frame)
         self.commanded_lin_vel = np.array(
@@ -1304,10 +1334,6 @@ class SimulationNode:
 
         self._add_objects_to_occupancy_grid()
         self.init_movement()
-
-        # Reset logical robot tracking to known default after rebuild.
-        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
-        self.robot_logical_yaw = 0.0
 
         # Apply requested placements/trajectories onto the rebuilt scene.
         self._apply_environment_config(config, allow_rebuild=False)
@@ -1673,30 +1699,22 @@ class SimulationNode:
                             f"[SimulationNode] Resetting robot to custom pose: "
                             f"pos={custom_position}, quat={xyzw_to_wxyz(custom_orientation)} (w, x, y, z)"
                         )
-                        self.robot.set_pos(custom_position)
-                        self.robot.set_quat(xyzw_to_wxyz(custom_orientation))
-                        # Update logical position tracking
-                        self.robot_logical_pos = np.array(custom_position)
-                        # Extract yaw from quaternion (xyzw format)
-                        qx, qy, qz, qw = custom_orientation
-                        self.robot_logical_yaw = np.arctan2(
-                            2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)
+                        self._set_robot_base_pose(
+                            custom_position, xyzw_to_wxyz(custom_orientation)
                         )
                     else:
                         # Use default position and orientation
                         print(
                             "[SimulationNode] Resetting robot pose to default origin."
                         )
-                        self.robot.set_pos(ROBOT_INIT_POS)
-                        self.robot.set_quat(xyzw_to_wxyz(ROBOT_INIT_QUAT))
-                        # Update logical position tracking
-                        self.robot_logical_pos = np.array(ROBOT_INIT_POS)
-                        self.robot_logical_yaw = 0.0  # Default orientation has yaw=0
+                        self._set_robot_base_pose(
+                            ROBOT_INIT_POS, xyzw_to_wxyz(ROBOT_INIT_QUAT)
+                        )
 
                     # Reset commanded velocities
                     self.commanded_lin_vel = np.zeros(3)
                     self.commanded_ang_vel = np.zeros(3)
-                    # Clear any active navigation target
+                    # Cancel any in-flight nav target so the robot stays at the reset pose.
                     self.nav_target_pos = None
                     self.nav_target_yaw = None
 
@@ -1753,38 +1771,37 @@ class SimulationNode:
                     angular_vel = latest_velocity_cmd.angular_z
 
                     # Convert desired velocities to robot position update
-                    # Use logical position to avoid collision drift
-                    current_pos = self.robot_logical_pos.copy()
-                    current_yaw = self.robot_logical_yaw
+                    current_pos, current_quat = self._get_robot_base_pose()
 
                     # Update position based on linear velocity and current orientation
                     dt = self.scene.sim_options.dt
-                    # Calculate forward direction from yaw
-                    cos_yaw = np.cos(current_yaw)
-                    sin_yaw = np.sin(current_yaw)
-                    forward_dir = np.array([cos_yaw, sin_yaw, 0.0])
+                    # Convert current quaternion to rotation matrix to get forward direction
+                    current_rot = R.from_quat(
+                        [
+                            current_quat[1],
+                            current_quat[2],
+                            current_quat[3],
+                            current_quat[0],
+                        ]
+                    )
+                    forward_dir = current_rot.apply(
+                        [1, 0, 0]
+                    )  # Transform x-axis by current rotation
 
                     # Move in the forward direction
                     new_pos = current_pos + forward_dir * linear_vel * dt
 
                     # Update orientation based on angular velocity
-                    new_yaw = current_yaw + angular_vel * dt
+                    angle = angular_vel * dt
+                    delta_rot = R.from_euler("z", angle)
+                    new_rot = delta_rot * current_rot
+                    new_quat = new_rot.as_quat()  # Returns [x, y, z, w]
                     new_quat = np.array(
-                        [
-                            np.cos(new_yaw / 2.0),  # w
-                            0.0,  # x
-                            0.0,  # y
-                            np.sin(new_yaw / 2.0),  # z
-                        ]
+                        [new_quat[3], new_quat[0], new_quat[1], new_quat[2]]
                     )
 
-                    # Update logical position tracking
-                    self.robot_logical_pos = new_pos.copy()
-                    self.robot_logical_yaw = new_yaw
-
-                    # Set the new position and orientation on physics mesh
-                    self.robot.set_pos(new_pos)
-                    self.robot.set_quat(new_quat)
+                    # Set the new position and orientation
+                    self._set_robot_base_pose(new_pos, new_quat)
 
                     # Store commanded velocities in world frame for odometry
                     # MULTIPLY BY 0 TO DISABLE MESSING WITH TH EACTUAL ROBOT
@@ -1806,17 +1823,7 @@ class SimulationNode:
             self._update_entity_poses(sim_time)
 
             # --- (D) Gather robot pose, velocity (after applying commands)
-            # Use logical position for odometry to avoid drift from collision resolution
-            pos = self.robot_logical_pos.copy()
-            # Convert logical yaw to quaternion [w, x, y, z] format
-            quat = np.array(
-                [
-                    np.cos(self.robot_logical_yaw / 2.0),  # w
-                    0.0,  # x
-                    0.0,  # y
-                    np.sin(self.robot_logical_yaw / 2.0),  # z
-                ]
-            )
+            pos, quat = self._get_robot_base_pose()
 
             # Use commanded velocities for odometry
             lin_vel = self.commanded_lin_vel
@@ -1855,8 +1862,7 @@ class SimulationNode:
                 )
 
                 # Update chase camera to follow robot
-                robot_pos = self.robot.get_pos().cpu().numpy()
-                robot_quat = self.robot.get_quat().cpu().numpy()
+                robot_pos, robot_quat = self._get_robot_base_pose()
                 offset = np.array([-2.0, 0.0, 2.0])  # 2m behind, 2m up
                 rotated_offset = rotate_vector(offset, robot_quat)
                 chase_pos = robot_pos + rotated_offset
