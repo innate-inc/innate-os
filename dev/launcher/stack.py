@@ -88,7 +88,9 @@ GREEN = "\033[0;32m" if USE_COLOR else ""
 YELLOW = "\033[1;33m" if USE_COLOR else ""
 RED = "\033[0;31m" if USE_COLOR else ""
 SHOW_LIVE_DASHBOARD_DEFAULT = sys.stdout.isatty()
-TMUX_SESSION_NAME = "stack"
+TMUX_SESSION_NAME = "innate"
+CLI_ROOT = "./innate"
+CLI_SIM = "./innate sim"
 ASCII_BANNER = [
     r" ____  _____  _    ____ _  __",
     r"/ ___||_   _|/ \  / ___| |/ /",
@@ -202,7 +204,7 @@ class DashboardRuntime:
 
 
 def log(message: str) -> None:
-    print(f"{CYAN}[stack]{NC} {message}")
+    print(f"{CYAN}[innate]{NC} {message}")
 
 
 def success(message: str) -> None:
@@ -230,7 +232,7 @@ def print_banner() -> None:
     clear_screen()
     divider()
     print_ascii_banner()
-    print(f"{DIM}one env // one command // os + sim + optional cloud agent{NC}")
+    print(f"{DIM}one env // one cli // os + sim + optional cloud agent{NC}")
     divider()
 
 
@@ -556,7 +558,7 @@ def python_import_succeeds(python_path: Path, module: str) -> bool:
     return result.returncode == 0
 
 
-def ensure_sim_setup(config: dict[str, object]) -> Path:
+def ensure_sim_setup(config: dict[str, object], *, allow_setup: bool) -> Path:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     frontend_dir = sim_repo / "frontend"
     dist_index = frontend_dir / "dist" / "index.html"
@@ -566,15 +568,25 @@ def ensure_sim_setup(config: dict[str, object]) -> Path:
 
     needs_setup = not sim_python.exists()
     if sim_python.exists() and not python_import_succeeds(sim_python, "dotenv"):
+        if not allow_setup:
+            raise StackError(
+                "Simulator virtualenv is incomplete.\n"
+                f"Run `{CLI_SIM} setup` to repair {sim_repo / '.venv'}."
+            )
         if not config["sim_auto_setup"]:
             raise StackError(
                 "Simulator virtualenv is missing required packages. "
-                f"Re-run {sim_repo / 'setup.sh'} or enable STACK_SIM_AUTO_SETUP."
+                f"Re-run {sim_repo / 'setup.sh'} or enable STACK_SIM_AUTO_SETUP before using `{CLI_SIM} setup`."
             )
         warn("Simulator virtualenv is incomplete. Re-running setup to repair it...")
         needs_setup = True
 
     if needs_setup:
+        if not allow_setup:
+            raise StackError(
+                "Simulator Python environment is not ready.\n"
+                f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
+            )
         if not config["sim_auto_setup"]:
             raise StackError(
                 f"Simulator virtualenv missing at {sim_python}. Run {sim_repo / 'setup.sh'}"
@@ -596,6 +608,11 @@ def ensure_sim_setup(config: dict[str, object]) -> Path:
         )
 
     if not dist_index.exists():
+        if not allow_setup:
+            raise StackError(
+                "Simulator frontend build is missing.\n"
+                f"Run `{CLI_SIM} setup` before `{CLI_SIM} up`."
+            )
         if not config["sim_auto_build_frontend"]:
             raise StackError(
                 f"Simulator frontend build missing at {dist_index}. Run `yarn build` in {frontend_dir}."
@@ -1010,7 +1027,7 @@ def capture_os_brain_logs(config: dict[str, object], lines: int = 18) -> list[st
         return [
             "OS tmux session is not running.",
             "The ROS stack did not finish launching inside the container.",
-            "Check: ./stack logs os-session",
+            f"Check: {CLI_SIM} logs os-session",
             *recent_launch_output.splitlines(),
         ][:lines]
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
@@ -1685,24 +1702,34 @@ def missing_sim_data_paths(sim_repo: Path) -> list[tuple[str, Path]]:
     return missing
 
 
-def ensure_sim_data(config: dict[str, object]) -> None:
+def ensure_sim_data(config: dict[str, object], *, allow_fetch: bool) -> None:
     sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
     missing_before = missing_sim_data_paths(sim_repo)
     if not missing_before:
         return
 
+    if not allow_fetch:
+        details = "\n".join(f"- {label}: {path}" for label, path in missing_before)
+        raise StackError(
+            "Required simulator scene data is missing.\n"
+            f"{details}\nRun `{CLI_SIM} setup` to download it.\n"
+            f"See: {sim_repo / 'data' / 'README.md'}"
+        )
+
     if not config["sim_auto_fetch_data"]:
         details = "\n".join(f"- {label}: {path}" for label, path in missing_before)
         raise StackError(
             "Required simulator scene data is missing.\n"
-            f"{details}\nSee: {sim_repo / 'data' / 'README.md'}"
+            f"{details}\nEnable STACK_SIM_AUTO_FETCH_DATA or download it manually.\n"
+            f"See: {sim_repo / 'data' / 'README.md'}"
         )
 
     ensure_dependency("git")
     if not command_succeeds(["git", "lfs", "version"], cwd=sim_repo):
         raise StackError(
             "Git LFS is required to download simulator scene data automatically.\n"
-            "Install it first, for example: `brew install git-lfs && git lfs install`."
+            "Install it first, for example: `brew install git-lfs && git lfs install`.\n"
+            f"Then rerun `{CLI_SIM} setup`."
         )
 
     data_dir = sim_repo / "data"
@@ -1969,9 +1996,9 @@ def render_status(
         print_ascii_banner()
         used_lines += len(ASCII_BANNER)
     else:
-        print_dashboard_line(f"{BOLD}stack dashboard{NC}", term_width)
+        print_dashboard_line(f"{BOLD}innate dashboard{NC}", term_width)
         used_lines += 1
-    print_dashboard_line(f"{DIM}sim stack dashboard{NC}", term_width)
+    print_dashboard_line(f"{DIM}innate sim dashboard{NC}", term_width)
     used_lines += 1
     print(divider_line(term_width))
     used_lines += 1
@@ -2031,10 +2058,10 @@ def render_status(
             term_width,
         )
         used_lines += 1
-    print_dashboard_line(f"{BOLD}Logs:{NC} ./stack logs startup", term_width)
+    print_dashboard_line(f"{BOLD}Logs:{NC} {CLI_SIM} logs startup", term_width)
     used_lines += 1
     print_dashboard_line(
-        f"{DIM}Keys: q detach  d toggle sim logs  v verbose  Ctrl+C stop stack{NC}",
+        f"{DIM}Keys: q detach  d toggle sim logs  v verbose  Ctrl+C stop runtime{NC}",
         term_width,
     )
     used_lines += 1
@@ -2234,7 +2261,7 @@ def watch_dashboard(
                     next_refresh = 0.0
                 elif normalized == "q":
                     print()
-                    success("Left the live dashboard. The stack is still running.")
+                    success("Left the live dashboard. The Innate runtime is still running.")
                     return "detach"
     except KeyboardInterrupt:
         return "shutdown"
@@ -2256,8 +2283,8 @@ def cmd_up(
         ensure_dependency("docker")
         os_env_file = build_os_env(config)
         cloud_env_file = build_cloud_env(config)
-        sim_python = ensure_sim_setup(config)
-        ensure_sim_data(config)
+        sim_python = ensure_sim_setup(config, allow_setup=False)
+        ensure_sim_data(config, allow_fetch=False)
 
         started = True
         start_cloud_agent(config, cloud_env_file)
@@ -2267,29 +2294,29 @@ def cmd_up(
         simulator_port = config["raw_env"].get("SIMULATOR_PORT", "8000")  # type: ignore[index]
         log("Waiting for the simulator HTTP endpoint...")
         wait_for_simulator_http(str(simulator_port))
-        success("Local stack is up.")
+        success("Innate sim runtime is up.")
         if watch and sys.stdout.isatty():
             dashboard_result = watch_dashboard(config)
             if dashboard_result == "shutdown":
                 print()
-                log("Ctrl+C received. Stopping local stack...")
+                log("Ctrl+C received. Stopping the Innate runtime...")
                 cmd_down(config)
         else:
             print_status(config)
     except KeyboardInterrupt:
         print()
         if started:
-            warn("Interrupted. Stopping local stack...")
+            warn("Interrupted. Stopping the Innate runtime...")
             cmd_down(config)
         else:
-            warn("Interrupted before the local stack finished starting.")
+            warn("Interrupted before the Innate runtime finished starting.")
 
 
 def cmd_down(config: dict[str, object]) -> None:
     stop_simulator()
     down_cloud_agent()
     down_os(config)
-    log("Local stack is down.")
+    log("Innate sim runtime is down.")
 
 
 def cmd_logs(target: str) -> None:
@@ -2315,30 +2342,57 @@ def cmd_logs(target: str) -> None:
     print(tail_file(path, limit=120))
 
 
-def cmd_init() -> None:
-    ensure_env_file()
+def cmd_setup(config: dict[str, object]) -> None:
+    print_banner()
+    sim_python = ensure_sim_setup(config, allow_setup=True)
+    ensure_sim_data(config, allow_fetch=True)
+    success("Simulator setup is ready.")
     print(f"Workspace config: {ENV_PATH}")
+    print(f"Simulator Python: {sim_python}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Local stack launcher for the Innate OS monorepo."
+        prog="innate",
+        description="Innate local development CLI."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("init", help="Create dev/launcher/.env from the template if it does not exist")
-    up_parser = subparsers.add_parser("up", help="Start the local development stack")
+    sim_parser = subparsers.add_parser(
+        "sim",
+        prog=f"{CLI_ROOT} sim",
+        help="Set up and run the local simulator-backed runtime",
+    )
+    sim_subparsers = sim_parser.add_subparsers(dest="sim_command", required=True)
+    sim_subparsers.add_parser(
+        "setup",
+        prog=f"{CLI_SIM} setup",
+        help="Prepare the simulator environment, frontend build, and required scene data",
+    )
+    up_parser = sim_subparsers.add_parser(
+        "up",
+        prog=f"{CLI_SIM} up",
+        help="Start the local simulator-backed runtime",
+    )
     up_parser.add_argument(
         "--once",
         action="store_true",
-        help="Start the stack and print a single status snapshot instead of the live dashboard",
+        help="Start the runtime and print a single status snapshot instead of the live dashboard",
     )
     up_parser.add_argument(
         "--vis",
         action="store_true",
         help="Start the simulator with the native visualization window enabled for this run",
     )
-    subparsers.add_parser("down", help="Stop the local development stack")
-    status_parser = subparsers.add_parser("status", help="Show current stack status")
+    sim_subparsers.add_parser(
+        "down",
+        prog=f"{CLI_SIM} down",
+        help="Stop the local simulator-backed runtime",
+    )
+    status_parser = sim_subparsers.add_parser(
+        "status",
+        prog=f"{CLI_SIM} status",
+        help="Show current runtime status",
+    )
     status_parser.add_argument(
         "mode",
         nargs="?",
@@ -2346,7 +2400,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["panel", "verbose"],
         help="Show the default panel or include extra repo/runtime details",
     )
-    logs_parser = subparsers.add_parser("logs", help="Show recent logs")
+    logs_parser = sim_subparsers.add_parser(
+        "logs",
+        prog=f"{CLI_SIM} logs",
+        help="Show recent logs",
+    )
     logs_parser.add_argument(
         "target",
         nargs="?",
@@ -2357,31 +2415,55 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def normalize_argv(argv: list[str]) -> list[str]:
+    if not argv:
+        return argv
+
+    legacy_commands = {
+        "init": "setup",
+        "setup": "setup",
+        "up": "up",
+        "down": "down",
+        "status": "status",
+        "logs": "logs",
+    }
+    first = argv[0]
+    if first in legacy_commands:
+        mapped = legacy_commands[first]
+        print(
+            f"[deprecated] Use `{CLI_SIM} {mapped}` instead of `{first}`.",
+            file=sys.stderr,
+        )
+        return ["sim", mapped, *argv[1:]]
+    return argv
+
+
 def main() -> int:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(normalize_argv(sys.argv[1:]))
 
     try:
-        if args.command == "init":
-            cmd_init()
-            return 0
-
         config = get_config()
 
-        if args.command == "up":
+        if args.command != "sim":
+            parser.error(f"Unknown command group: {args.command}")
+
+        if args.sim_command == "setup":
+            cmd_setup(config)
+        elif args.sim_command == "up":
             cmd_up(
                 config,
                 watch=not args.once,
                 sim_visualization_override=True if args.vis else None,
             )
-        elif args.command == "down":
+        elif args.sim_command == "down":
             cmd_down(config)
-        elif args.command == "status":
+        elif args.sim_command == "status":
             print_status(config, verbose=args.mode == "verbose")
-        elif args.command == "logs":
+        elif args.sim_command == "logs":
             cmd_logs(args.target)
         else:
-            parser.error(f"Unknown command: {args.command}")
+            parser.error(f"Unknown sim command: {args.sim_command}")
     except StackError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
