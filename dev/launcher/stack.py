@@ -65,6 +65,19 @@ LOG_TARGETS = {
     "simulator": SIM_LOG_PATH,
     "down": DOWN_LOG_PATH,
 }
+SIM_DATASET_REPOS = {
+    "ReplicaCAD_baked_lighting": "https://huggingface.co/datasets/ai-habitat/ReplicaCAD_baked_lighting",
+    "ReplicaCAD_dataset": "https://huggingface.co/datasets/ai-habitat/ReplicaCAD_dataset",
+}
+SIM_REQUIRED_DATA_PATHS = {
+    "ReplicaCAD baked lighting stage": Path(
+        "data/ReplicaCAD_baked_lighting/stages_uncompressed/Baked_sc0_staging_00.glb"
+    ),
+    "ReplicaCAD stage config": Path(
+        "data/ReplicaCAD_baked_lighting/configs/stages/Baked_sc0_staging_00.stage_config.json"
+    ),
+    "ReplicaCAD object dataset": Path("data/ReplicaCAD_dataset/objects"),
+}
 
 USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 NC = "\033[0m" if USE_COLOR else ""
@@ -202,6 +215,10 @@ def warn(message: str) -> None:
 
 def divider() -> None:
     print(f"{DIM}{'━' * 72}{NC}")
+
+
+def divider_line(width: int) -> str:
+    return colorize("━" * max(width, 1), fg=THEME["dim"], dim=True)
 
 
 def clear_screen() -> None:
@@ -466,6 +483,9 @@ def get_config() -> dict[str, object]:
         "sim_auto_setup": parse_bool(raw_env.get("STACK_SIM_AUTO_SETUP"), True),
         "sim_auto_build_frontend": parse_bool(
             raw_env.get("STACK_SIM_AUTO_BUILD_FRONTEND"), True
+        ),
+        "sim_auto_fetch_data": parse_bool(
+            raw_env.get("STACK_SIM_AUTO_FETCH_DATA"), True
         ),
         "sim_visualization": parse_bool(
             raw_env.get("STACK_SIM_VISUALIZATION"), False
@@ -1505,6 +1525,10 @@ def fit_ansi_line(text: str, width: int) -> str:
     return fitted
 
 
+def print_dashboard_line(text: str, width: int) -> None:
+    print(truncate_ansi_line(text, width))
+
+
 def bounce_position(distance: int, tick: int) -> tuple[int, bool]:
     if distance <= 0:
         return (0, True)
@@ -1650,6 +1674,76 @@ def print_log_columns(
 
     for row_index in range(box_height):
         print("  ".join(column[row_index] for column in rendered_columns))
+
+
+def missing_sim_data_paths(sim_repo: Path) -> list[tuple[str, Path]]:
+    missing: list[tuple[str, Path]] = []
+    for label, relative_path in SIM_REQUIRED_DATA_PATHS.items():
+        candidate = sim_repo / relative_path
+        if not candidate.exists():
+            missing.append((label, candidate))
+    return missing
+
+
+def ensure_sim_data(config: dict[str, object]) -> None:
+    sim_repo: Path = config["sim_repo"]  # type: ignore[assignment]
+    missing_before = missing_sim_data_paths(sim_repo)
+    if not missing_before:
+        return
+
+    if not config["sim_auto_fetch_data"]:
+        details = "\n".join(f"- {label}: {path}" for label, path in missing_before)
+        raise StackError(
+            "Required simulator scene data is missing.\n"
+            f"{details}\nSee: {sim_repo / 'data' / 'README.md'}"
+        )
+
+    ensure_dependency("git")
+    if not command_succeeds(["git", "lfs", "version"], cwd=sim_repo):
+        raise StackError(
+            "Git LFS is required to download simulator scene data automatically.\n"
+            "Install it first, for example: `brew install git-lfs && git lfs install`."
+        )
+
+    data_dir = sim_repo / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    log("Ensuring required simulator scene data is present...")
+    run_logged(
+        ["git", "lfs", "install"],
+        cwd=sim_repo,
+        log_path=BOOTSTRAP_LOG_PATH,
+        failure_message="Git LFS setup failed for simulator data bootstrap.",
+    )
+
+    for dataset_name, dataset_url in SIM_DATASET_REPOS.items():
+        dataset_dir = data_dir / dataset_name
+        if not dataset_dir.exists():
+            log(f"Downloading simulator dataset {dataset_name}...")
+            run_logged(
+                ["git", "clone", dataset_url],
+                cwd=data_dir,
+                log_path=BOOTSTRAP_LOG_PATH,
+                failure_message=f"Downloading {dataset_name} failed.",
+            )
+            continue
+
+        if command_succeeds(["git", "rev-parse", "--is-inside-work-tree"], cwd=dataset_dir):
+            log(f"Refreshing simulator dataset {dataset_name} via Git LFS...")
+            run_logged(
+                ["git", "lfs", "pull"],
+                cwd=dataset_dir,
+                log_path=BOOTSTRAP_LOG_PATH,
+                failure_message=f"Fetching large files for {dataset_name} failed.",
+            )
+
+    missing_after = missing_sim_data_paths(sim_repo)
+    if missing_after:
+        details = "\n".join(f"- {label}: {path}" for label, path in missing_after)
+        raise StackError(
+            "Required simulator scene data is still missing after automatic download.\n"
+            f"{details}\nSee: {sim_repo / 'data' / 'README.md'}"
+        )
 
 
 def wait_for_simulator_http(port: str, timeout_seconds: float = 90.0) -> None:
@@ -1870,17 +1964,19 @@ def render_status(
     term_height = term_size.lines
     used_lines = 0
 
-    if term_height >= 28:
-        print()
+    show_banner = term_height >= 48 and term_width >= 170
+    if show_banner:
+        print_ascii_banner()
+        used_lines += len(ASCII_BANNER)
+    else:
+        print_dashboard_line(f"{BOLD}stack dashboard{NC}", term_width)
         used_lines += 1
-    print_ascii_banner()
-    used_lines += len(ASCII_BANNER)
-    print(f"{DIM}sim stack dashboard{NC}")
+    print_dashboard_line(f"{DIM}sim stack dashboard{NC}", term_width)
     used_lines += 1
-    divider()
+    print(divider_line(term_width))
     used_lines += 1
     used_lines += print_metric_panels(snapshot, history)
-    print(
+    print_dashboard_line(
         "  ".join(
             [
                 f"{BOLD}Mood:{NC} {format_level(str(snapshot['stack_level']), str(snapshot['stack_label']))}",
@@ -1889,10 +1985,11 @@ def render_status(
                 f"{BOLD}Brain:{NC} {format_level(str(snapshot['brain_level']), str(snapshot['brain_label']))}",
                 f"{BOLD}Agent:{NC} {format_level(str(snapshot['agent_level']), str(snapshot['agent_label']))}",
             ]
-        )
+        ),
+        term_width,
     )
     used_lines += 1
-    print(
+    print_dashboard_line(
         "  ".join(
             [
                 f"{BOLD}Cloud mode:{NC} {config['mode']}",
@@ -1902,38 +1999,50 @@ def render_status(
                 f"{BOLD}Frame age:{NC} {float(snapshot['frame_age_ms']):.0f} ms",
                 f"{BOLD}Queue load:{NC} {format_level(str(snapshot['transport_level']), str(snapshot['queue_pressure']))} (peak {snapshot['queue_peak']})",
             ]
-        )
+        ),
+        term_width,
     )
     used_lines += 1
-    print(describe_sim_log_mode(str(snapshot["sim_log_mode"])))
+    print_dashboard_line(describe_sim_log_mode(str(snapshot["sim_log_mode"])), term_width)
     used_lines += 1
-    print(
+    print_dashboard_line(
         "  ".join(
             [
                 f"{BOLD}Queues:{NC} {snapshot['queue_summary']}",
                 f"{BOLD}Chat:{NC} {snapshot['chat_load']}",
                 f"{BOLD}System:{NC} {snapshot['system_summary']}",
             ]
-        )
+        ),
+        term_width,
     )
     used_lines += 1
     print()
     used_lines += 1
-    print(f"{BOLD}Simulator UI:{NC} http://localhost:{snapshot['simulator_port']}")
+    print_dashboard_line(
+        f"{BOLD}Simulator UI:{NC} http://localhost:{snapshot['simulator_port']}",
+        term_width,
+    )
     used_lines += 1
-    print(f"{BOLD}ROSBridge:{NC} ws://localhost:9090")
+    print_dashboard_line(f"{BOLD}ROSBridge:{NC} ws://localhost:9090", term_width)
     used_lines += 1
     if config["mode"] in LOCAL_MODES:
-        print(f"{BOLD}Local agent:{NC} ws://localhost:{config['cloud_port']}")
+        print_dashboard_line(
+            f"{BOLD}Local agent:{NC} ws://localhost:{config['cloud_port']}",
+            term_width,
+        )
         used_lines += 1
-    print(f"{BOLD}Logs:{NC} ./stack logs startup")
+    print_dashboard_line(f"{BOLD}Logs:{NC} ./stack logs startup", term_width)
     used_lines += 1
-    print(f"{DIM}Keys: q detach  d toggle sim logs  v verbose  Ctrl+C stop stack{NC}")
+    print_dashboard_line(
+        f"{DIM}Keys: q detach  d toggle sim logs  v verbose  Ctrl+C stop stack{NC}",
+        term_width,
+    )
     used_lines += 1
-    marquee_lines = render_robot_marquee(term_width)
-    for marquee_line in marquee_lines:
-        print(marquee_line)
-    used_lines += len(marquee_lines)
+    if term_height - used_lines >= 12:
+        marquee_lines = render_robot_marquee(term_width)
+        for marquee_line in marquee_lines:
+            print(marquee_line)
+        used_lines += len(marquee_lines)
 
     if verbose:
         used_lines += 5
@@ -1981,12 +2090,15 @@ def render_status(
     print_log_columns(log_columns, available_height=available_height)
     if verbose:
         print()
-        divider()
-        print(f"{BOLD}Innate OS repo:{NC} {config['os_repo']}")
-        print(f"{BOLD}Innate sim repo:{NC} {config['sim_repo']}")
+        print(divider_line(term_width))
+        print_dashboard_line(f"{BOLD}Innate OS repo:{NC} {config['os_repo']}", term_width)
+        print_dashboard_line(f"{BOLD}Innate sim repo:{NC} {config['sim_repo']}", term_width)
         if config["cloud_repo"] is not None:
-            print(f"{BOLD}Local cloud-agent repo:{NC} {config['cloud_repo']}")
-        print(f"{BOLD}State dir:{NC} {STATE_DIR}")
+            print_dashboard_line(
+                f"{BOLD}Local cloud-agent repo:{NC} {config['cloud_repo']}",
+                term_width,
+            )
+        print_dashboard_line(f"{BOLD}State dir:{NC} {STATE_DIR}", term_width)
 
 
 def render_status_text(
@@ -2145,6 +2257,7 @@ def cmd_up(
         os_env_file = build_os_env(config)
         cloud_env_file = build_cloud_env(config)
         sim_python = ensure_sim_setup(config)
+        ensure_sim_data(config)
 
         started = True
         start_cloud_agent(config, cloud_env_file)

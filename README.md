@@ -36,7 +36,7 @@ Recommended:
 ./stack up
 ```
 
-Before the first simulator run, download the required ReplicaCAD scene data into [`sim/data/`](sim/data/). See [`sim/data/README.md`](sim/data/README.md) for the expected layout and download commands.
+Before the first simulator run, make sure Git LFS is installed. `./stack up` will try to fetch the required ReplicaCAD scene data into [`sim/data/`](sim/data/) automatically when it is missing. See [`sim/data/README.md`](sim/data/README.md) for the expected layout and manual download commands.
 
 This starts:
 
