@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from collections import deque
 from pathlib import Path
 from urllib.error import URLError
@@ -1555,13 +1556,50 @@ def print_metric_panels(snapshot: dict[str, object], history: DashboardHistory) 
     return line_count
 
 def truncate_line(text: str, width: int) -> str:
-    if len(text) <= width:
-        return text.ljust(width)
-    return text[: max(width - 1, 1)] + "…"
+    if display_text_width(text) <= width:
+        return text + (" " * max(width - display_text_width(text), 0))
+
+    target = max(width - 1, 0)
+    visible = 0
+    out: list[str] = []
+    for char in text:
+        char_width = char_display_width(char)
+        if visible + char_width > target:
+            break
+        out.append(char)
+        visible += char_width
+    if width > 0:
+        out.append("…")
+    rendered = "".join(out)
+    padding = width - display_text_width(rendered)
+    if padding > 0:
+        rendered += " " * padding
+    return rendered
+
+
+def char_display_width(char: str) -> int:
+    if not char:
+        return 0
+    if char in {"\n", "\r"}:
+        return 0
+    if char == "\t":
+        return 4
+    category = unicodedata.category(char)
+    if category.startswith("C"):
+        return 0
+    if unicodedata.combining(char):
+        return 0
+    if unicodedata.east_asian_width(char) in {"F", "W"}:
+        return 2
+    return 1
+
+
+def display_text_width(text: str) -> int:
+    return sum(char_display_width(char) for char in text)
 
 
 def visible_text_width(text: str) -> int:
-    return len(ANSI_ESCAPE_RE.sub("", text))
+    return display_text_width(ANSI_ESCAPE_RE.sub("", text))
 
 
 def truncate_ansi_line(text: str, width: int) -> str:
@@ -1580,8 +1618,12 @@ def truncate_ansi_line(text: str, width: int) -> str:
             out.append(match.group(0))
             cursor = match.end()
             continue
-        out.append(text[cursor])
-        visible += 1
+        char = text[cursor]
+        char_width = char_display_width(char)
+        if visible + char_width > target:
+            break
+        out.append(char)
+        visible += char_width
         cursor += 1
 
     if width > 0:
@@ -1594,7 +1636,8 @@ def truncate_ansi_line(text: str, width: int) -> str:
 def fit_ansi_line(text: str, width: int) -> str:
     if width <= 0:
         return ""
-    fitted = truncate_ansi_line(text.rstrip(), width)
+    sanitized = text.replace("\r", "").expandtabs(4).rstrip()
+    fitted = truncate_ansi_line(sanitized, width)
     padding = width - visible_text_width(fitted)
     if padding > 0:
         fitted += " " * padding
