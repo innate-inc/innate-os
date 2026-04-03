@@ -155,7 +155,7 @@ from nav_msgs.msg import Odometry
 
 | Package | Apt Package | Found In | Usage |
 |---------|-------------|----------|-------|
-| cv_bridge | ros-humble-cv-bridge | maurice_arm, maurice_bringup, manipulation, innate_webrtc_streamer | OpenCV-ROS2 bridge |
+| cv_bridge | ros-humble-cv-bridge | maurice_arm, maurice_bringup, manipulation | OpenCV-ROS2 bridge |
 | camera_info_manager | ros-humble-camera-info-manager | maurice_bringup | Camera calibration |
 | image_transport | ros-humble-image-transport | maurice_bringup | Image transport plugins |
 
@@ -257,11 +257,6 @@ These should be in `pip-requirements.txt`:
 
 **Python Imports:**
 ```python
-# innate_webrtc_streamer/webrtc_streamer.py
-import gi
-from gi.repository import Gst, GstWebRTC, GstSdp
-import numpy as np
-
 # behavior_server.py
 import torch
 import h5py
@@ -280,45 +275,16 @@ from pynput import keyboard
 **Locations:**
 - `brain/brain_client/brain_client/brain_client_node.py`
 - `brain/manipulation/manipulation/behavior_server.py`
-- `brain/innate_webrtc_streamer/innate_webrtc_streamer/webrtc_streamer.py`
 
 ---
 
-## 9. GStreamer Packages (for WebRTC)
-
-Required by `innate_webrtc_streamer`:
-
-| Apt Package | Usage |
-|-------------|-------|
-| gstreamer1.0-tools | GStreamer tools |
-| gstreamer1.0-plugins-base | Base plugins |
-| gstreamer1.0-plugins-good | Good plugins |
-| gstreamer1.0-plugins-bad | Bad plugins (includes webrtc) |
-| gstreamer1.0-plugins-ugly | Ugly plugins |
-| gstreamer1.0-libav | FFmpeg plugin |
-| gstreamer1.0-nice | ICE/STUN/TURN support |
-| libgstreamer1.0-dev | Development files |
-| libgstreamer-plugins-base1.0-dev | Base plugins dev |
-| gir1.2-gstreamer-1.0 | GObject introspection |
-| gir1.2-gst-plugins-base-1.0 | GObject introspection |
-| python3-gi | PyGObject |
-| python3-gst-1.0 | GStreamer Python bindings |
-
-**Locations:**
-- `brain/innate_webrtc_streamer/innate_webrtc_streamer/webrtc_streamer.py`
-
----
-
-## 10. Testing & Linting Packages
+## 9. Testing & Linting Packages
 
 | Package | Apt Package | Found In |
 |---------|-------------|----------|
 | ament_lint_auto | ros-humble-ament-lint-auto | All packages |
 | ament_lint_common | ros-humble-ament-lint-common | All packages |
-| ament_copyright | ros-humble-ament-copyright | innate_webrtc_streamer |
-| ament_flake8 | ros-humble-ament-flake8 | innate_webrtc_streamer |
-| ament_pep257 | ros-humble-ament-pep257 | innate_webrtc_streamer |
-| python3-pytest | python3-pytest | brain_client, innate_webrtc_streamer |
+| python3-pytest | python3-pytest | brain_client |
 
 **Locations:**
 - `maurice_bot/stage_ros2/package.xml`
@@ -326,7 +292,7 @@ Required by `innate_webrtc_streamer`:
 
 ---
 
-## 11. VCS Dependencies (External Repos)
+## 10. VCS Dependencies (External Repos)
 
 These are cloned via `vcs import` from `dependencies.repos`:
 
@@ -358,7 +324,6 @@ These are packages within this workspace (no external install needed):
 | stage_ros2 | maurice_bot/stage_ros2 | Stage simulator ROS2 wrapper |
 | brain_client | brain/brain_client | Brain system client |
 | manipulation | brain/manipulation | Manipulation behaviors |
-| innate_webrtc_streamer | brain/innate_webrtc_streamer | WebRTC streaming |
 
 ---
 
@@ -374,10 +339,8 @@ These are packages within this workspace (no external install needed):
 | Bridge/Middleware Packages | 5 |
 | External SDKs | 7 |
 | Python Packages (non-ROS) | 10 |
-| GStreamer Packages | 13 |
-| Testing Packages | 6 |
-| **Total External Dependencies** | **~72** |
-| Internal Workspace Packages | 15 |
+| Testing Packages | 3 |
+| Internal Workspace Packages | 14 |
 
 ---
 
