@@ -357,6 +357,18 @@ class BleProvisionerServer:
         
         logger.info(f"Adapter properties: Discoverable={self.adapter.discoverable}, Powered={self.adapter.powered}, Pairable={self.adapter.pairable}")
 
+        # If already discoverable, disable it so bluezero's LE AdvertisingManager
+        # doesn't hit a "Busy" error competing with legacy discoverable mode.
+        # publish() will re-enable advertising via the LE path.
+        if self.adapter.discoverable:
+            logger.info("Adapter is already discoverable, temporarily disabling to avoid Busy conflict with LE advertising...")
+            try:
+                self.adapter.discoverable = False
+                time.sleep(1)
+                logger.info(f"Discoverable disabled. Current state: Discoverable={self.adapter.discoverable}")
+            except Exception as e:
+                logger.warning(f"Could not disable discoverable state: {e}")
+
         try:
             # Create Peripheral - AdvertisingManager will set discoverable=True internally
             logger.info(f"Creating BLE peripheral with local_name='{ROBOT_NAME}'...")
@@ -410,8 +422,21 @@ class BleProvisionerServer:
             # (upstream ad callbacks use bare print(), GATT error just warns)
             import bluezero.advertisement as _adv
             import bluezero.GATT as _gatt
+            _adv_adapter = self.adapter
+
             _adv.register_ad_cb = lambda: logger.info("BLE advertisement registered successfully.")
-            _adv.register_ad_error_cb = lambda error: logger.error(f"BLE advertisement registration FAILED: {error}")
+
+            def _on_ad_error(error):
+                logger.error(f"BLE advertisement registration FAILED: {error}")
+                # Fallback: re-enable legacy discoverable so the device name
+                # is still visible even if LE advertising failed
+                try:
+                    _adv_adapter.discoverable = True
+                    logger.warning("Fell back to legacy discoverable mode.")
+                except Exception as e:
+                    logger.error(f"Failed to enable legacy discoverable fallback: {e}")
+
+            _adv.register_ad_error_cb = _on_ad_error
             _gatt.register_app_cb = lambda: logger.info("GATT application registered successfully.")
             _gatt.register_app_error_cb = lambda error: logger.error(f"GATT application registration FAILED: {error}")
 

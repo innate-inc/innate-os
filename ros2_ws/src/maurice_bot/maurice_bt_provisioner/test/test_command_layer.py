@@ -26,9 +26,11 @@ sys.modules['bluezero.peripheral'] = MagicMock()
 import nmcli_utils
 from nmcli_utils import _run_nmcli
 
-# Re-import after bluezero mock is in place
-import simple_bt_service
-from simple_bt_service import BleProvisionerServer
+# Mock robot_info.json read before importing simple_bt_service since
+# load_robot_name() runs at module level and the file won't exist in CI.
+with patch('builtins.open', MagicMock(return_value=__import__('io').StringIO('{"robot_name": "TEST"}'))):
+    import simple_bt_service
+    from simple_bt_service import BleProvisionerServer
 
 # ---------------------------------------------------------------------------
 # Helpers
