@@ -149,7 +149,11 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
     # auto-negotiate security (WPA2/WPA3/open)
     if success_check and exists:
         nm_logger.info(f"Removing existing profile for {ssid} (password change)")
-        _run_nmcli(['nmcli', 'connection', 'delete', ssid], use_sudo=True)
+        success_del, _, stderr_del = _run_nmcli(
+            ['nmcli', 'connection', 'delete', ssid], use_sudo=True
+        )
+        if not success_del:
+            nm_logger.warning(f"Failed to remove old profile for '{ssid}': {stderr_del}")
 
     cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'ifname', DEFAULT_WIFI_INTERFACE]
     if password:
@@ -274,6 +278,7 @@ def nmcli_scan_for_visible_ssids(timeout=15):
         timeout=timeout,
         use_sudo=True
     )
+    nm_logger.info(f"nmcli wifi list stdout: {stdout_list.strip() if stdout_list else 'N/A'}")
     if not success_list:
         nm_logger.error(f"Wi-Fi list after rescan failed: {stderr_list or 'Unknown error'}")
         return False, [], f"Wi-Fi list failed: {stderr_list or 'Unknown error'}"
