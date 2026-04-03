@@ -148,38 +148,15 @@ class BleProvisionerServer:
         self._current_ip_address = nmcli_get_active_ipv4_address() 
         logger.info(f"IP before update/connect attempt: {self._current_ip_address}")
 
-        # Step 1: Add or Modify the connection profile
-        success_update, err_update = nmcli_add_or_modify_connection(ssid, password, priority)
-        if not success_update:
-            return {"command": command, "status": "error", "message": err_update}
-        
-        logger.info(f"Network profile '{ssid}' updated successfully.")
+        # Connect and create profile (nmcli device wifi connect auto-negotiates security)
+        success, err = nmcli_add_or_modify_connection(ssid, password, priority)
+        if not success:
+            return {"command": command, "status": "error", "message": err}
 
-        # Step 2: Scan for the network
-        success_scan, visible, err_scan = nmcli_scan_for_ssid(ssid)
-        if not success_scan:
-            # Report as warning: profile saved, but scan failed
-            return {"command": command, "status": "warning", "message": f"Network {ssid} updated, but scan failed: {err_scan}"}
-
-        if not visible:
-             logger.info(f"Target network '{ssid}' not visible after scan. Profile saved.")
-             # Even if not visible now, the profile is saved. Don't trigger restart yet.
-             return {"command": command, "status": "success", "message": f"Network {ssid} updated. Network not currently visible for connection."}
-
-        # Step 3: Attempt connection if visible
-        logger.info(f"Target network '{ssid}' is visible. Attempting connection...")
-        success_connect, connect_msg_or_err = nmcli_connect(ssid)
-        
-        # --- Check IP and restart services AFTER connection attempt --- 
-        if success_connect:
-            logger.info(f"Connection initiated for {ssid}. Waiting briefly for network stabilization...")
-            time.sleep(5) # Give the network/DHCP some time
-            self._trigger_service_restart() # Check IP and restart if needed
-            return {"command": command, "status": "success", "message": f"Network {ssid} updated and connection initiated."}
-        else:
-            logger.error(f"Connection attempt failed for {ssid}: {connect_msg_or_err}")
-            # Don't trigger restart if connection failed
-            return {"command": command, "status": "warning", "message": f"Network {ssid} updated, but connection attempt failed: {connect_msg_or_err}"}
+        logger.info(f"Connected to {ssid}. Waiting briefly for network stabilization...")
+        time.sleep(5)
+        self._trigger_service_restart()
+        return {"command": command, "status": "success", "message": f"Network {ssid} updated and connected."}
 
     def handle_remove_network(self, data):
         """Handle remove_network command."""
