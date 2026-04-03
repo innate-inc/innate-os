@@ -118,11 +118,6 @@ export const GlobalStyle = createGlobalStyle`
     100% { opacity: 1; }
   }
 
-  @keyframes wave {
-    0%, 100% { height: 10px; }
-    50% { height: 35px; }
-  }
-
   @keyframes gridMove {
     0% { background-position: 0 0; }
     100% { background-position: 50px 50px; }
