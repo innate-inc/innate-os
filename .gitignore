@@ -53,6 +53,8 @@ Thumbs.db
 
 # Environment files
 .env
+config/os.toml
+sim/config.toml
 .venv/
 ENV/
 deploy-keys/

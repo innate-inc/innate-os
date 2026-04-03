@@ -23,6 +23,11 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
+
+try:
     import termios
     import tty
 except ImportError:
@@ -35,8 +40,12 @@ LAUNCHER_DIR = SCRIPT_PATH.parent
 DEV_DIR = LAUNCHER_DIR.parent
 REPO_ROOT = DEV_DIR.parent
 WORKSPACE_ROOT = REPO_ROOT.parent
-ENV_PATH = LAUNCHER_DIR / ".env"
-ENV_TEMPLATE_PATH = LAUNCHER_DIR / ".env.template"
+ENV_PATH = REPO_ROOT / ".env"
+ENV_TEMPLATE_PATH = REPO_ROOT / ".env.template"
+OS_CONFIG_PATH = REPO_ROOT / "config" / "os.toml"
+OS_CONFIG_TEMPLATE_PATH = REPO_ROOT / "config" / "os.toml.template"
+SIM_CONFIG_PATH = REPO_ROOT / "sim" / "config.toml"
+SIM_CONFIG_TEMPLATE_PATH = REPO_ROOT / "sim" / "config.toml.template"
 STATE_DIR = LAUNCHER_DIR / ".state"
 LOG_DIR = STATE_DIR / "logs"
 SIM_LOG_PATH = LOG_DIR / "simulator.log"
@@ -471,7 +480,14 @@ def ensure_env_file() -> None:
     if ENV_PATH.exists():
         return
     shutil.copyfile(ENV_TEMPLATE_PATH, ENV_PATH)
-    warn(f"Created {ENV_PATH} from template. Edit it if you need custom paths or keys.")
+    warn(f"Created {ENV_PATH} from template. Add your Innate service key there if needed.")
+
+
+def ensure_config_file(path: Path, template_path: Path) -> None:
+    if path.exists():
+        return
+    shutil.copyfile(template_path, path)
+    warn(f"Created {path} from template. Edit it only if you need non-default behavior.")
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -491,6 +507,119 @@ def parse_env_file(path: Path) -> dict[str, str]:
         ):
             value = value[1:-1]
         env[key.strip()] = value
+    return env
+
+
+def _strip_toml_comment(value: str) -> str:
+    in_single = False
+    in_double = False
+    escaped = False
+    chars: list[str] = []
+
+    for char in value:
+        if escaped:
+            chars.append(char)
+            escaped = False
+            continue
+        if char == "\\" and (in_single or in_double):
+            chars.append(char)
+            escaped = True
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            chars.append(char)
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            chars.append(char)
+            continue
+        if char == "#" and not in_single and not in_double:
+            break
+        chars.append(char)
+
+    return "".join(chars).strip()
+
+
+def _parse_toml_scalar(raw_value: str) -> object:
+    value = _strip_toml_comment(raw_value).strip()
+    if (
+        len(value) >= 2
+        and value[0] == value[-1]
+        and value[0] in {"'", '"'}
+    ):
+        return value[1:-1]
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    return value
+
+
+def parse_toml_file(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    if tomllib is not None:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+        return data if isinstance(data, dict) else {}
+
+    data: dict[str, object] = {}
+    current_section: dict[str, object] = data
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section_name = line[1:-1].strip()
+            if not section_name:
+                continue
+            current_section = data
+            for key in section_name.split("."):
+                current_section = current_section.setdefault(key, {})  # type: ignore[assignment]
+            continue
+        if "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        current_section[key] = _parse_toml_scalar(raw_value)
+    return data
+
+
+def get_nested_value(data: dict[str, object], *keys: str) -> object | None:
+    current: object = data
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def get_nested_str(data: dict[str, object], *keys: str) -> str | None:
+    value = get_nested_value(data, *keys)
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None
+
+
+def get_nested_bool(data: dict[str, object], *keys: str) -> bool | None:
+    value = get_nested_value(data, *keys)
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def build_os_config_env(os_config: dict[str, object]) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if websocket_uri := get_nested_str(os_config, "brain", "websocket_uri"):
+        env["BRAIN_WEBSOCKET_URI"] = websocket_uri
+    if telemetry_url := get_nested_str(os_config, "telemetry", "url"):
+        env["TELEMETRY_URL"] = telemetry_url
+    if cartesia_voice_id := get_nested_str(os_config, "voice", "cartesia_voice_id"):
+        env["CARTESIA_VOICE_ID"] = cartesia_voice_id
     return env
 
 
@@ -517,24 +646,30 @@ def require_path(path: Path, label: str) -> Path:
 
 def get_config() -> dict[str, object]:
     ensure_env_file()
-    raw_env = parse_env_file(ENV_PATH)
+    ensure_config_file(OS_CONFIG_PATH, OS_CONFIG_TEMPLATE_PATH)
+    ensure_config_file(SIM_CONFIG_PATH, SIM_CONFIG_TEMPLATE_PATH)
 
-    mode = raw_env.get("STACK_CLOUD_AGENT_MODE", HOSTED_MODE).strip() or HOSTED_MODE
+    raw_env = parse_env_file(ENV_PATH)
+    os_config = parse_toml_file(OS_CONFIG_PATH)
+    sim_config = parse_toml_file(SIM_CONFIG_PATH)
+    os_config_env = build_os_config_env(os_config)
+
+    merged_env = dict(raw_env)
+    for key, value in os_config_env.items():
+        merged_env.setdefault(key, value)
+    merged_env.setdefault("ROSBRIDGE_URI", "ws://localhost:9090")
+    merged_env.setdefault("SIMULATOR_PORT", "8000")
+
+    mode = get_nested_str(sim_config, "cloud_agent", "mode") or HOSTED_MODE
     if mode not in {HOSTED_MODE, LOCAL_IMAGE_MODE, LOCAL_SOURCE_MODE}:
         raise StackError(
-            "STACK_CLOUD_AGENT_MODE must be one of: hosted, local-image, local-source"
+            "sim/config.toml cloud_agent.mode must be one of: hosted, local-image, local-source"
         )
 
-    os_repo = require_path(
-        resolve_repo_path(raw_env.get("STACK_OS_REPO"), "."),
-        "innate-os repository",
-    )
-    sim_repo = require_path(
-        resolve_repo_path(raw_env.get("STACK_SIM_REPO"), "sim"),
-        "sim repository",
-    )
+    os_repo = require_path(REPO_ROOT, "innate-os repository")
+    sim_repo = require_path(REPO_ROOT / "sim", "sim repository")
 
-    cloud_dir_value = raw_env.get("STACK_CLOUD_AGENT_DIR")
+    cloud_dir_value = get_nested_str(sim_config, "cloud_agent", "source_dir")
     cloud_repo = None
     if cloud_dir_value:
         cloud_repo = resolve_repo_path(cloud_dir_value, "innate-cloud-agent")
@@ -542,29 +677,25 @@ def get_config() -> dict[str, object]:
         cloud_repo = (WORKSPACE_ROOT / "innate-cloud-agent").resolve()
 
     return {
-        "raw_env": raw_env,
+        "raw_env": merged_env,
+        "user_env": raw_env,
+        "os_config_env": os_config_env,
         "mode": mode,
         "os_repo": os_repo,
         "sim_repo": sim_repo,
         "cloud_repo": cloud_repo,
-        "cloud_port": raw_env.get("STACK_CLOUD_AGENT_PORT", "8765"),
-        "cloud_image": raw_env.get("STACK_CLOUD_AGENT_IMAGE", ""),
-        "sim_auto_setup": parse_bool(raw_env.get("STACK_SIM_AUTO_SETUP"), True),
-        "sim_auto_build_frontend": parse_bool(
-            raw_env.get("STACK_SIM_AUTO_BUILD_FRONTEND"), True
-        ),
-        "sim_auto_fetch_data": parse_bool(
-            raw_env.get("STACK_SIM_AUTO_FETCH_DATA"), True
-        ),
-        "sim_visualization": parse_bool(
-            raw_env.get("STACK_SIM_VISUALIZATION"), False
-        ),
-        "sim_log_mode": raw_env.get("STACK_SIM_LOG_MODE", "quiet").strip().lower() or "quiet",
-        "sim_args": raw_env.get("STACK_SIM_ARGS", "--log-everything"),
-        "os_always_build": parse_bool(raw_env.get("STACK_OS_ALWAYS_BUILD"), True),
-        "skip_local_cloud_auth": parse_bool(
-            raw_env.get("STACK_LOCAL_CLOUD_AGENT_SKIP_AUTH"), True
-        ),
+        "cloud_port": "8765",
+        "cloud_image": get_nested_str(sim_config, "cloud_agent", "image") or "",
+        "sim_auto_setup": True,
+        "sim_auto_build_frontend": True,
+        "sim_auto_fetch_data": True,
+        "sim_visualization": get_nested_bool(sim_config, "display", "visualization")
+        if get_nested_bool(sim_config, "display", "visualization") is not None
+        else False,
+        "sim_log_mode": "quiet",
+        "sim_args": "--log-everything",
+        "os_always_build": True,
+        "skip_local_cloud_auth": True,
     }
 
 
@@ -578,9 +709,7 @@ def build_os_env(config: dict[str, object]) -> Path:
     mode = config["mode"]
     cloud_port = config["cloud_port"]
 
-    os_env: dict[str, str] = {
-        key: value for key, value in raw_env.items() if not key.startswith("STACK_")
-    }
+    os_env: dict[str, str] = dict(raw_env)
 
     if mode in LOCAL_MODES:
         os_env["BRAIN_WEBSOCKET_URI"] = f"ws://host.docker.internal:{cloud_port}"
@@ -596,9 +725,7 @@ def build_os_env(config: dict[str, object]) -> Path:
 
 def build_cloud_env(config: dict[str, object]) -> Path:
     raw_env: dict[str, str] = config["raw_env"]  # type: ignore[assignment]
-    cloud_env: dict[str, str] = {
-        key: value for key, value in raw_env.items() if not key.startswith("STACK_")
-    }
+    cloud_env: dict[str, str] = dict(raw_env)
     if config["skip_local_cloud_auth"]:
         cloud_env.setdefault("SKIP_AUTH", "true")
     cloud_env.setdefault("ROBOT_TYPE", "sim")
@@ -643,7 +770,7 @@ def ensure_sim_setup(config: dict[str, object], *, allow_setup: bool) -> Path:
         if not config["sim_auto_setup"]:
             raise StackError(
                 "Simulator virtualenv is missing required packages. "
-                f"Re-run {sim_repo / 'setup.sh'} or enable STACK_SIM_AUTO_SETUP before using `{CLI_SIM} setup`."
+                f"Re-run {sim_repo / 'setup.sh'}. The launcher expects simulator setup to stay enabled."
             )
         warn("Simulator virtualenv is incomplete. Re-running setup to repair it...")
         needs_setup = True
@@ -735,7 +862,14 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     if config["os_always_build"]:
         build_cmd += "colcon build"
     else:
-        build_cmd += "test -f install/setup.zsh || colcon build"
+        build_cmd += (
+            "if [ ! -f install/setup.zsh ] || "
+            "find src -type f -newer install/setup.zsh -print -quit | grep -q .; then "
+            "colcon build; "
+            "else "
+            "echo 'ROS workspace install is current; skipping rebuild.'; "
+            "fi"
+        )
 
     log("Building / validating the ROS workspace inside the container...")
     run_logged(
@@ -822,7 +956,7 @@ def start_cloud_agent(config: dict[str, object], cloud_env_file: Path) -> None:
         image = str(config["cloud_image"]).strip()
         if not image:
             raise StackError(
-                "STACK_CLOUD_AGENT_IMAGE must be set when STACK_CLOUD_AGENT_MODE=local-image"
+                "sim/config.toml must set cloud_agent.image when cloud_agent.mode = 'local-image'."
             )
         log(f"Starting local cloud-agent image {image}...")
         compose_env = docker_compose_env({**base_env, "STACK_CLOUD_AGENT_IMAGE": image})
@@ -847,7 +981,7 @@ def start_cloud_agent(config: dict[str, object], cloud_env_file: Path) -> None:
     cloud_repo: Path | None = config["cloud_repo"]  # type: ignore[assignment]
     if cloud_repo is None:
         raise StackError(
-            "STACK_CLOUD_AGENT_DIR must point to a checkout when STACK_CLOUD_AGENT_MODE=local-source"
+            "sim/config.toml must set cloud_agent.source_dir when cloud_agent.mode = 'local-source'."
         )
     require_path(cloud_repo, "innate-cloud-agent repository")
     log(f"Starting local cloud-agent from source at {cloud_repo}...")
@@ -1843,7 +1977,7 @@ def ensure_sim_data(config: dict[str, object], *, allow_fetch: bool) -> None:
         details = "\n".join(f"- {label}: {path}" for label, path in missing_before)
         raise StackError(
             "Required simulator scene data is missing.\n"
-            f"{details}\nEnable STACK_SIM_AUTO_FETCH_DATA or download it manually.\n"
+            f"{details}\nAutomatic simulator data bootstrap is expected to be enabled.\n"
             f"See: {sim_repo / 'data' / 'README.md'}"
         )
 
@@ -2470,7 +2604,9 @@ def cmd_setup(config: dict[str, object]) -> None:
     sim_python = ensure_sim_setup(config, allow_setup=True)
     ensure_sim_data(config, allow_fetch=True)
     success("Simulator setup is ready.")
-    print(f"Workspace config: {ENV_PATH}")
+    print(f"OS secrets: {ENV_PATH}")
+    print(f"OS config: {OS_CONFIG_PATH}")
+    print(f"Sim config: {SIM_CONFIG_PATH}")
     print(f"Simulator Python: {sim_python}")
 
 

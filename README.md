@@ -39,6 +39,12 @@ Recommended first run:
 
 Before the first simulator run, make sure Git LFS is installed. `./innate sim setup` will prepare the simulator virtualenv, build the frontend, and fetch the required ReplicaCAD scene data into [`sim/data/`](sim/data/) when it is missing. See [`sim/data/README.md`](sim/data/README.md) for the expected layout and manual download commands.
 
+Local configuration is now split across:
+
+- [`.env`](/Users/axelpeytavin/Projects/innate-repos/innate-os/.env) for secrets only, typically `INNATE_SERVICE_KEY`
+- [`config/os.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/config/os.toml.template) for optional non-secret OS overrides
+- [`sim/config.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/sim/config.toml.template) for optional non-secret simulator overrides
+
 This starts:
 
 - Innate OS in Docker
@@ -84,6 +90,8 @@ Simply SSH into the robot.
 - If it's the first time and you're installing it, clone the repository and execute the post_update.sh script to complete the setup.
 
 - Execute the launch_ros_in_tmux.sh script to start the ROS nodes.
+
+- Keep secrets in [`.env`](/Users/axelpeytavin/Projects/innate-repos/innate-os/.env) and optional non-secret runtime overrides in [`config/os.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/config/os.toml.template).
 
 Connect via the app like explained in the [documentation](https://docs.innate.bot).
 
