@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""
-Environment loader for Innate-OS.
-Loads .env file and provides access to environment variables.
-"""
+from __future__ import annotations
 
+import argparse
 import os
+import shlex
 from pathlib import Path
-from typing import Optional
 
 try:
     import tomllib
@@ -14,19 +12,24 @@ except ModuleNotFoundError:
     tomllib = None
 
 
-def _load_key_value_env(path: Path) -> None:
+def parse_env_file(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
     if not path.exists():
-        return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
-                value = value.strip()
-                if (value.startswith('"') and value.endswith('"')) or \
-                   (value.startswith("'") and value.endswith("'")):
-                    value = value[1:-1]
-                os.environ[key.strip()] = value
+        return env
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in {"'", '"'}
+        ):
+            value = value[1:-1]
+        env[key.strip()] = value
+    return env
 
 
 def _strip_toml_comment(value: str) -> str:
@@ -59,7 +62,7 @@ def _strip_toml_comment(value: str) -> str:
     return "".join(chars).strip()
 
 
-def _parse_toml_scalar(raw_value: str):
+def _parse_toml_scalar(raw_value: str) -> object:
     value = _strip_toml_comment(raw_value).strip()
     if (
         len(value) >= 2
@@ -75,7 +78,7 @@ def _parse_toml_scalar(raw_value: str):
     return value
 
 
-def _parse_toml_file(path: Path) -> dict:
+def parse_toml_file(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     if tomllib is not None:
@@ -83,8 +86,8 @@ def _parse_toml_file(path: Path) -> dict:
             data = tomllib.load(f)
         return data if isinstance(data, dict) else {}
 
-    data: dict = {}
-    current_section: dict = data
+    data: dict[str, object] = {}
+    current_section: dict[str, object] = data
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -95,7 +98,7 @@ def _parse_toml_file(path: Path) -> dict:
                 continue
             current_section = data
             for key in section_name.split("."):
-                current_section = current_section.setdefault(key, {})
+                current_section = current_section.setdefault(key, {})  # type: ignore[assignment]
             continue
         if "=" not in line:
             continue
@@ -107,12 +110,12 @@ def _parse_toml_file(path: Path) -> dict:
     return data
 
 
-def _load_os_config(path: Path) -> None:
+def parse_os_config(path: Path) -> dict[str, str]:
     if not path.exists():
-        return
+        return {}
+    data = parse_toml_file(path)
 
-    data = _parse_toml_file(path)
-
+    env: dict[str, str] = {}
     brain = data.get("brain", {}) if isinstance(data, dict) else {}
     telemetry = data.get("telemetry", {}) if isinstance(data, dict) else {}
     voice = data.get("voice", {}) if isinstance(data, dict) else {}
@@ -122,47 +125,36 @@ def _load_os_config(path: Path) -> None:
     cartesia_voice_id = voice.get("cartesia_voice_id") if isinstance(voice, dict) else None
 
     if isinstance(websocket_uri, str) and websocket_uri.strip():
-        os.environ.setdefault("BRAIN_WEBSOCKET_URI", websocket_uri.strip())
+        env["BRAIN_WEBSOCKET_URI"] = websocket_uri.strip()
     if isinstance(telemetry_url, str) and telemetry_url.strip():
-        os.environ.setdefault("TELEMETRY_URL", telemetry_url.strip())
+        env["TELEMETRY_URL"] = telemetry_url.strip()
     if isinstance(cartesia_voice_id, str) and cartesia_voice_id.strip():
-        os.environ.setdefault("CARTESIA_VOICE_ID", cartesia_voice_id.strip())
+        env["CARTESIA_VOICE_ID"] = cartesia_voice_id.strip()
+    return env
 
 
-def load_env_file(env_path: Optional[Path] = None) -> None:
-    """
-    Load environment variables from .env file.
-    
-    Args:
-        env_path: Optional path to .env file. If not provided, uses INNATE_OS_ROOT
-                  or defaults to ~/innate-os/.env
-    """
-    if env_path is None:
-        innate_root = os.environ.get(
-            'INNATE_OS_ROOT', 
-            os.path.join(os.path.expanduser('~'), 'innate-os')
-        )
-        env_path = Path(innate_root) / ".env"
-
-    innate_root = env_path.parent
-    _load_os_config(innate_root / "config" / "os.toml")
-    _load_key_value_env(env_path)
+def build_runtime_env(repo_root: Path) -> dict[str, str]:
+    env = parse_os_config(repo_root / "config" / "os.toml")
+    env.update(parse_env_file(repo_root / ".env"))
+    return env
 
 
-def get_env(key: str, default: str = "") -> str:
-    """
-    Get environment variable, loading .env if not already loaded.
-    
-    Args:
-        key: Environment variable name
-        default: Default value if not found
-        
-    Returns:
-        Environment variable value or default
-    """
-    return os.environ.get(key, default)
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Print merged Innate OS runtime environment.")
+    parser.add_argument("--shell", action="store_true", help="Print shell export commands")
+    args = parser.parse_args()
+
+    repo_root = Path(__file__).resolve().parent.parent
+    env = build_runtime_env(repo_root)
+
+    if args.shell:
+        print("; ".join(f"export {key}={shlex.quote(value)}" for key, value in sorted(env.items())))
+        return 0
+
+    for key, value in sorted(env.items()):
+        print(f"{key}={value}")
+    return 0
 
 
-# Load env file on module import
 if __name__ == "__main__":
-    load_env_file()
+    raise SystemExit(main())
