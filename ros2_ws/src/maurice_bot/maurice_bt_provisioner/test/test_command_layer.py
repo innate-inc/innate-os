@@ -1,22 +1,14 @@
 """
-Integration tests for the BT provisioner command layer.
+Tests for the BT provisioner command layer.
 
 Exercises the command handlers with mocked nmcli subprocess calls so we can
 verify the full dispatch path (JSON in -> handler -> nmcli args -> JSON out)
 without needing Bluetooth or a live NetworkManager.
-
-Marked with @pytest.mark.integration so they are skipped by default.
-Run explicitly with:
-    colcon test --packages-select maurice_bt_provisioner \
-        --pytest-args "-m integration"
-or:
-    pytest test/test_command_layer.py -m integration
 """
 
 import json
 import sys
 import os
-import pytest
 from unittest.mock import patch, MagicMock
 
 # Ensure the package is importable
@@ -41,8 +33,6 @@ from simple_bt_service import BleProvisionerServer
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-pytestmark = pytest.mark.integration
 
 
 def _make_server():
