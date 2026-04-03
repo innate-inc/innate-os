@@ -11,6 +11,12 @@ try:
 except ModuleNotFoundError:
     tomllib = None
 
+ENV_KEYS_MOVED_TO_OS_CONFIG = {
+    "BRAIN_WEBSOCKET_URI",
+    "TELEMETRY_URL",
+    "CARTESIA_VOICE_ID",
+}
+
 
 def parse_env_file(path: Path) -> dict[str, str]:
     env: dict[str, str] = {}
@@ -135,7 +141,10 @@ def parse_os_config(path: Path) -> dict[str, str]:
 
 def build_runtime_env(repo_root: Path) -> dict[str, str]:
     env = parse_os_config(repo_root / "config" / "os.toml")
-    env.update(parse_env_file(repo_root / ".env"))
+    for key, value in parse_env_file(repo_root / ".env").items():
+        if key in ENV_KEYS_MOVED_TO_OS_CONFIG:
+            continue
+        env[key] = value
     return env
 
 

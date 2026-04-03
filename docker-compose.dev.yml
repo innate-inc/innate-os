@@ -25,7 +25,6 @@ services:
       - DISPLAY=novnc:0.0
       - INNATE_OS_ROOT=/root/innate-os
       - SKIP_UPDATE_CHECK=1 # Skip git update checks in simulation mode
-      - BRAIN_URL=ws://host.docker.internal:8765 # Connect to brain running on host
     ports:
       - "9090:9090"
 
