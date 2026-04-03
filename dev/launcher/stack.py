@@ -400,6 +400,58 @@ def run_logged(
         )
 
 
+def latest_log_line(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    for line in reversed(path.read_text(errors="replace").splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def run_logged_with_heartbeat(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    log_path: Path,
+    env: dict[str, str] | None = None,
+    failure_message: str,
+    progress_message: str,
+    heartbeat_seconds: float = 10.0,
+) -> None:
+    ensure_state_dir()
+    with log_path.open("a", encoding="utf-8") as log_file:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        next_heartbeat = time.monotonic() + heartbeat_seconds
+        while True:
+            return_code = proc.poll()
+            if return_code is not None:
+                break
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                latest = latest_log_line(log_path)
+                if latest:
+                    log(f"{progress_message} Latest Docker activity: {latest}")
+                else:
+                    log(progress_message)
+                next_heartbeat = now + heartbeat_seconds
+            time.sleep(0.5)
+
+    if return_code != 0:
+        raise StackError(
+            f"{failure_message}\nRecent log output:\n{tail_file(log_path, limit=60)}"
+        )
+
+
 def ensure_env_file() -> None:
     if ENV_PATH.exists():
         return
@@ -648,14 +700,21 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
     compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(os_env_file)})
 
-    log("Starting Innate OS dev container...")
-    run_logged(
-        ["docker", "compose", "-f", "docker-compose.dev.yml", "up", "-d"],
-        cwd=os_repo,
-        env=compose_env,
-        log_path=COMPOSE_LOG_PATH,
-        failure_message="Innate OS Docker startup failed.",
-    )
+    if container_running("innate-dev"):
+        log("Innate OS dev container already running.")
+    else:
+        log("Starting Innate OS dev container...")
+        run_logged_with_heartbeat(
+            ["docker", "compose", "-f", "docker-compose.dev.yml", "up", "-d"],
+            cwd=os_repo,
+            env=compose_env,
+            log_path=COMPOSE_LOG_PATH,
+            failure_message="Innate OS Docker startup failed.",
+            progress_message=(
+                "Docker is still preparing the Innate OS container. "
+                "First boot or an image rebuild can take a minute."
+            ),
+        )
 
     build_cmd = "source /opt/ros/humble/setup.zsh && cd ~/innate-os/ros2_ws && "
     if config["os_always_build"]:
