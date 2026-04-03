@@ -376,17 +376,22 @@ const WaveformViz = styled.div`
   }
 `;
 
+const NUM_AUDIO_BARS = 20;
+
 const WaveBars = styled.div`
   display: flex;
   align-items: flex-end;
-  gap: 3px;
+  gap: 2px;
   height: 40px;
 `;
 
-const Bar = styled.div<{ $duration: number }>`
-  width: 3px;
+const Bar = styled.div<{ $height: number }>`
+  width: 2.5px;
+  border-radius: 1.5px;
   background: ${({ theme }) => theme.colors.foreground};
-  animation: wave ${({ $duration }) => $duration}s ease-in-out infinite;
+  height: ${({ $height }) => $height}px;
+  min-height: 3px;
+  transition: height 0.07s ease-out;
 `;
 
 const VizLabel = styled.div`
@@ -494,10 +499,76 @@ export default function App() {
   const isRecordingRef = useRef<boolean>(false);
   const hasSpeechRef = useRef<boolean>(false);
 
+  // Audio visualization state
+  const [audioLevels, setAudioLevels] = useState<number[]>(() =>
+    new Array(NUM_AUDIO_BARS).fill(0),
+  );
+  const vizFrameRef = useRef<number | null>(null);
+
   // Keep sensitivity ref in sync
   useEffect(() => {
     sensitivityRef.current = sensitivity;
   }, [sensitivity]);
+
+  // Real-time audio visualization loop
+  useEffect(() => {
+    if (!isVoiceActive) {
+      setAudioLevels(new Array(NUM_AUDIO_BARS).fill(0));
+      return;
+    }
+
+    const updateVisualization = () => {
+      if (!analyserRef.current) {
+        vizFrameRef.current = requestAnimationFrame(updateVisualization);
+        return;
+      }
+
+      const analyser = analyserRef.current;
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(dataArray);
+
+      // Focus on voice-relevant frequency range (bins 1–50 ≈ 187Hz–9.4kHz at 48kHz)
+      // and build a symmetric mirrored visualization (tallest in center)
+      const halfBars = NUM_AUDIO_BARS / 2;
+      const voiceStart = 1;
+      const voiceEnd = 50;
+      const voiceRange = voiceEnd - voiceStart;
+      const binsPerBar = Math.floor(voiceRange / halfBars);
+      const maxBarHeight = 38;
+
+      const halfLevels = new Array(halfBars);
+      for (let i = 0; i < halfBars; i++) {
+        let sum = 0;
+        const start = voiceStart + i * binsPerBar;
+        for (let j = start; j < start + binsPerBar; j++) {
+          sum += dataArray[j];
+        }
+        const avg = sum / binsPerBar / 255;
+        halfLevels[i] = Math.max(3, avg * maxBarHeight);
+      }
+
+      // Mirror: edges are low frequencies, center is mid/high — then
+      // sort so the strongest bars sit in the center
+      halfLevels.sort((a, b) => a - b);
+      const bars = new Array(NUM_AUDIO_BARS);
+      for (let i = 0; i < halfBars; i++) {
+        bars[i] = halfLevels[i];
+        bars[NUM_AUDIO_BARS - 1 - i] = halfLevels[i];
+      }
+
+      setAudioLevels(bars);
+      vizFrameRef.current = requestAnimationFrame(updateVisualization);
+    };
+
+    vizFrameRef.current = requestAnimationFrame(updateVisualization);
+
+    return () => {
+      if (vizFrameRef.current !== null) {
+        cancelAnimationFrame(vizFrameRef.current);
+        vizFrameRef.current = null;
+      }
+    };
+  }, [isVoiceActive]);
 
   // Fetch available agents from the robot on mount
   useEffect(() => {
@@ -1032,14 +1103,9 @@ export default function App() {
           </VoiceToggleButton>
           <VoiceStatusContainer>
             <WaveBars style={{ opacity: isVoiceActive ? 1 : 0.3 }}>
-              <Bar $duration={0.5} />
-              <Bar $duration={0.7} />
-              <Bar $duration={0.4} />
-              <Bar $duration={0.8} />
-              <Bar $duration={0.6} />
-              <Bar $duration={0.5} />
-              <Bar $duration={0.7} />
-              <Bar $duration={0.4} />
+              {audioLevels.map((level, i) => (
+                <Bar key={i} $height={level} />
+              ))}
             </WaveBars>
             <VizLabel>{voiceStatus}</VizLabel>
           </VoiceStatusContainer>
