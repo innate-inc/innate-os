@@ -65,6 +65,11 @@ LOCAL_SOURCE_MODE = "local-source"
 LOCAL_MODES = {LOCAL_IMAGE_MODE, LOCAL_SOURCE_MODE}
 OS_CONTAINER_SERVICE = "innate"
 OS_CONTAINER_TMUX_CMD = "./scripts/launch_sim_in_tmux.zsh --detach"
+ENV_KEYS_MOVED_TO_OS_CONFIG = {
+    "BRAIN_WEBSOCKET_URI",
+    "TELEMETRY_URL",
+    "CARTESIA_VOICE_ID",
+}
 LOG_TARGETS = {
     "bootstrap": BOOTSTRAP_LOG_PATH,
     "frontend": FRONTEND_LOG_PATH,
@@ -649,14 +654,26 @@ def get_config() -> dict[str, object]:
     ensure_config_file(OS_CONFIG_PATH, OS_CONFIG_TEMPLATE_PATH)
     ensure_config_file(SIM_CONFIG_PATH, SIM_CONFIG_TEMPLATE_PATH)
 
-    raw_env = parse_env_file(ENV_PATH)
+    user_env = parse_env_file(ENV_PATH)
+    ignored_os_env_keys = sorted(
+        key for key in user_env if key in ENV_KEYS_MOVED_TO_OS_CONFIG
+    )
+    raw_env = {
+        key: value
+        for key, value in user_env.items()
+        if key not in ENV_KEYS_MOVED_TO_OS_CONFIG
+    }
+    if ignored_os_env_keys:
+        warn(
+            f"Ignoring deprecated OS config keys in {ENV_PATH.name}: "
+            f"{', '.join(ignored_os_env_keys)}. Move them to config/os.toml if still needed."
+        )
     os_config = parse_toml_file(OS_CONFIG_PATH)
     sim_config = parse_toml_file(SIM_CONFIG_PATH)
     os_config_env = build_os_config_env(os_config)
 
     merged_env = dict(raw_env)
-    for key, value in os_config_env.items():
-        merged_env.setdefault(key, value)
+    merged_env.update(os_config_env)
     merged_env.setdefault("ROSBRIDGE_URI", "ws://localhost:9090")
     merged_env.setdefault("SIMULATOR_PORT", "8000")
 
@@ -678,7 +695,7 @@ def get_config() -> dict[str, object]:
 
     return {
         "raw_env": merged_env,
-        "user_env": raw_env,
+        "user_env": user_env,
         "os_config_env": os_config_env,
         "mode": mode,
         "os_repo": os_repo,

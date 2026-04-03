@@ -13,6 +13,12 @@ try:
 except ModuleNotFoundError:
     tomllib = None
 
+ENV_KEYS_MOVED_TO_OS_CONFIG = {
+    "BRAIN_WEBSOCKET_URI",
+    "TELEMETRY_URL",
+    "CARTESIA_VOICE_ID",
+}
+
 
 def _load_key_value_env(path: Path) -> None:
     if not path.exists():
@@ -22,11 +28,14 @@ def _load_key_value_env(path: Path) -> None:
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 key, value = line.split('=', 1)
+                key = key.strip()
+                if key in ENV_KEYS_MOVED_TO_OS_CONFIG:
+                    continue
                 value = value.strip()
                 if (value.startswith('"') and value.endswith('"')) or \
                    (value.startswith("'") and value.endswith("'")):
                     value = value[1:-1]
-                os.environ[key.strip()] = value
+                os.environ[key] = value
 
 
 def _strip_toml_comment(value: str) -> str:
