@@ -105,6 +105,20 @@ TRUECOLOR = USE_COLOR and os.environ.get("COLORTERM", "").lower() in {
     "24bit",
 }
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+ASCII_MIRROR_MAP = str.maketrans(
+    {
+        "/": "\\",
+        "\\": "/",
+        "(": ")",
+        ")": "(",
+        "[": "]",
+        "]": "[",
+        "{": "}",
+        "}": "{",
+        "<": ">",
+        ">": "<",
+    }
+)
 
 THEME = {
     "title": (238, 238, 238),
@@ -1658,6 +1672,10 @@ def bounce_position(distance: int, tick: int) -> tuple[int, bool]:
     return (cycle - step, False)
 
 
+def mirror_ascii_line(text: str) -> str:
+    return text.translate(ASCII_MIRROR_MAP)[::-1]
+
+
 def render_robot_marquee(width: int) -> list[str]:
     sprite_frames = [
         [
@@ -1679,6 +1697,9 @@ def render_robot_marquee(width: int) -> list[str]:
     tick = int(time.monotonic() * 6.0)
     frame = sprite_frames[tick % len(sprite_frames)]
     sprite_width = max(len(line) for line in frame)
+    _, moving_right = bounce_position(max(width - sprite_width, 0), tick)
+    if not moving_right:
+        frame = [mirror_ascii_line(line) for line in frame]
     if width <= sprite_width:
         clipped = []
         for line in frame:
