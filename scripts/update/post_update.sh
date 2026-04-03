@@ -141,6 +141,14 @@ sudo -u "$ACTUAL_USER" git config --global core.fsync added,reference
 sudo -u "$ACTUAL_USER" git config --global core.fsyncMethod fsync
 log "Git fsync settings configured"
 
+# Migrate git remote from old release repo to main repo
+CURRENT_REMOTE=$(sudo -u "$ACTUAL_USER" git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)
+if [ "$CURRENT_REMOTE" = "git@github.com:innate-inc/innate-os-release.git" ]; then
+    log "Migrating git remote from innate-os-release to innate-os..."
+    sudo -u "$ACTUAL_USER" git -C "$REPO_DIR" remote set-url origin https://github.com/innate-inc/innate-os.git
+    log "Git remote updated to https://github.com/innate-inc/innate-os.git"
+fi
+
 # -----------------------------------------------------------------------------
 # 0. Migrate .env file (comment out deprecated URLs)
 # -----------------------------------------------------------------------------
