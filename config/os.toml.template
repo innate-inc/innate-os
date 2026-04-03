@@ -1,0 +1,12 @@
+# Optional non-secret Innate OS runtime overrides.
+# Copy to config/os.toml or let `./innate sim setup` create it automatically.
+# Leave values commented to use the built-in defaults.
+
+[brain]
+# websocket_uri = "wss://agent-v1.innate.bot"
+
+[telemetry]
+# url = "https://logs.innate.bot"
+
+[voice]
+# cartesia_voice_id = "6ccbfb76-1fc6-48f7-b71d-91ac6298247b"

@@ -33,6 +33,7 @@ services:
       # 1) Mount your local code
       - ./ros2_ws:/root/innate-os/ros2_ws:rw
       - ./scripts:/root/innate-os/scripts:rw
+      - ./config:/root/innate-os/config:ro
       - ./agents:/root/innate-os/agents:rw
       - ./skills:/root/innate-os/skills:rw
       - ${INNATE_OS_ENV_FILE:-./.env}:/root/innate-os/.env:ro
