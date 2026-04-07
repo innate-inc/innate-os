@@ -1,3 +1,6 @@
+# Claude Code worktrees
+.claude/
+
 # Colcon build and install directories
 build/
 install/
