@@ -368,6 +368,11 @@ class GitRepo:
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().split("\n")[0]
+        # Fallback: origin/<branch> may not exist (e.g. partial clone from install.sh).
+        # List all version-sorted tags instead.
+        result = self._run(["tag", "--sort=-v:refname"], check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split("\n")[0]
         return ""
 
     def get_current_tag(self) -> str:
@@ -823,16 +828,15 @@ class UpdateManager:
             except OSError:
                 pass
 
-        # Fetch silently
-        if not self.git.fetch():
-            return 0
+        # Fetch silently (best-effort; even on failure we check local tags)
+        self.git.fetch()
 
         current = self.git.current_commit()
         latest_tag = self.git.get_latest_tag()
 
         if not latest_tag:
-            self._write_cache("0")
-            return 0
+            # No tags at all -- can't determine status; don't cache a false "0"
+            return 2
 
         latest_tag_commit = self.git.resolve_ref(latest_tag)
 

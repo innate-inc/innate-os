@@ -361,6 +361,7 @@ download_release() {
                 git remote add origin "https://github.com/$GITHUB_REPO.git"
             fi
             git fetch --tags -q 2>/dev/null || true
+            git fetch origin main -q 2>/dev/null || true
             git checkout -b main -q 2>/dev/null || true
             git reset --soft "$LATEST_TAG" 2>/dev/null || true
         fi
