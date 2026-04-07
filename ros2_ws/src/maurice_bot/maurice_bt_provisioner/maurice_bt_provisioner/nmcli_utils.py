@@ -116,10 +116,18 @@ def nmcli_connection_exists(ssid):
     existing_connections = stdout.strip().split('\n') if stdout else []
     return True, ssid in existing_connections, None
     
-def nmcli_add_or_modify_connection(ssid, password, priority):
+def nmcli_add_or_modify_connection(ssid, password, priority, autoconnect=True):
     """Adds a new Wi-Fi connection or modifies an existing one.
     
     Requires elevated privileges (uses sudo).
+    
+    Args:
+        ssid: Network SSID / connection name.
+        password: WPA-PSK passphrase (None for open networks).
+        priority: Autoconnect priority integer.
+        autoconnect: Whether to enable autoconnect on the profile.
+                     Set False when the password is unverified, then
+                     enable after a successful connection attempt.
     """
     success_check, exists, err_check = nmcli_connection_exists(ssid)
     if not success_check:
@@ -135,7 +143,8 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
         cmd = base_cmd + ['add', 'type', 'wifi', 'con-name', ssid, 'ifname', DEFAULT_WIFI_INTERFACE, 'ssid', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE]
     
     # Common settings
-    cmd.extend(['connection.autoconnect', 'yes', 'connection.autoconnect-priority', str(priority)])
+    ac_flag = 'yes' if autoconnect else 'no'
+    cmd.extend(['connection.autoconnect', ac_flag, 'connection.autoconnect-priority', str(priority)])
 
     # Security settings
     if password:
@@ -361,4 +370,20 @@ def nmcli_get_active_ipv4_address():
         nm_logger.error(f"Error parsing IP address output for {active_device}: {e}", exc_info=True)
         return None
 
-    return ipv4_address 
+    return ipv4_address
+
+def nmcli_set_autoconnect(ssid, enabled):
+    """Enable or disable autoconnect for an existing connection profile.
+
+    Requires elevated privileges (uses sudo).
+    """
+    flag = 'yes' if enabled else 'no'
+    nm_logger.info(f"Setting autoconnect={flag} for '{ssid}'")
+    success, _, stderr = _run_nmcli(
+        ['nmcli', 'connection', 'modify', ssid, 'connection.autoconnect', flag],
+        use_sudo=True
+    )
+    if not success:
+        nm_logger.error(f"Failed to set autoconnect for '{ssid}': {stderr or 'Unknown error'}")
+        return False, f"Failed to set autoconnect: {stderr or 'Unknown error'}"
+    return True, None
