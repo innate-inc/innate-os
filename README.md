@@ -26,25 +26,37 @@ It is designed on a few **core principles**:
 
 ## Quick Start (Simulation)
 
-If you don't have a robot, you can simply start the Innate OS in simulation mode, then use [our simulator](https://github.com/innate-inc/genesis-sim) to try out the robot with a web interface.
+If you don't have a robot, this repository now includes the simulator as [`sim/`](sim/) and a local `innate` CLI for setup and startup.
 
 > **Note:** The Docker build defaults to simulation mode, which skips NVIDIA Jetson-specific packages. See [SIMULATION_MODE.md](SIMULATION_MODE.md) for details on switching between simulation and hardware modes.
 
-First build the container:
+Recommended first run:
+
+```bash
+./innate sim setup
+./innate sim up
+```
+
+Before the first simulator run, make sure Git LFS is installed. `./innate sim setup` will prepare the simulator virtualenv, build the frontend, and fetch the required ReplicaCAD scene data into [`sim/data/`](sim/data/) when it is missing. See [`sim/data/README.md`](sim/data/README.md) for the expected layout and manual download commands.
+
+Local configuration is now split across:
+
+- [`.env`](/Users/axelpeytavin/Projects/innate-repos/innate-os/.env) for secrets only, typically `INNATE_SERVICE_KEY`
+- [`config/os.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/config/os.toml.template) for optional non-secret OS overrides
+- [`sim/config.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/sim/config.toml.template) for optional non-secret simulator overrides
+
+This starts:
+
+- Innate OS in Docker
+- the simulator backend from [`sim/`](sim/)
+- the built simulator UI on `http://localhost:8000`
+- an optional local cloud agent if enabled in [`dev/launcher/README.md`](dev/launcher/README.md)
+
+Manual flow:
 
 ```bash
 docker compose -f docker-compose.dev.yml build
-```
-
-Then run the container:
-
-```bash
 docker compose -f docker-compose.dev.yml up -d
-```
-
-And then drop into the container:
-
-```bash
 docker compose -f docker-compose.dev.yml exec innate zsh -l
 ```
 
@@ -69,6 +81,8 @@ You can use novnc to connect to rviz2. After launching rviz2 inside the containe
 http://localhost:8080/vnc.html
 ```
 
+See [`dev/launcher/README.md`](dev/launcher/README.md) for the full `./innate sim` workflow.
+
 ## Quick start (Physical Robot)
 
 Simply SSH into the robot.
@@ -76,6 +90,8 @@ Simply SSH into the robot.
 - If it's the first time and you're installing it, clone the repository and execute the post_update.sh script to complete the setup.
 
 - Execute the launch_ros_in_tmux.sh script to start the ROS nodes.
+
+- Keep secrets in [`.env`](/Users/axelpeytavin/Projects/innate-repos/innate-os/.env) and optional non-secret runtime overrides in [`config/os.toml`](/Users/axelpeytavin/Projects/innate-repos/innate-os/config/os.toml.template).
 
 Connect via the app like explained in the [documentation](https://docs.innate.bot).
 

@@ -74,6 +74,7 @@ RUN mkdir -p /root/.ssh && \
 COPY ros2_ws /root/innate-os/ros2_ws
 COPY dds /root/innate-os/dds
 COPY scripts /root/innate-os/scripts
+COPY config /root/innate-os/config
 
 # For version tracking, git needs to be present
 COPY .git /root/innate-os/.git

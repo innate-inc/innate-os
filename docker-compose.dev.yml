@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   novnc:
     image: theasp/novnc:latest
@@ -27,7 +25,6 @@ services:
       - DISPLAY=novnc:0.0
       - INNATE_OS_ROOT=/root/innate-os
       - SKIP_UPDATE_CHECK=1 # Skip git update checks in simulation mode
-      - BRAIN_URL=ws://host.docker.internal:8765 # Connect to brain running on host
     ports:
       - "9090:9090"
 
@@ -35,9 +32,10 @@ services:
       # 1) Mount your local code
       - ./ros2_ws:/root/innate-os/ros2_ws:rw
       - ./scripts:/root/innate-os/scripts:rw
+      - ./config:/root/innate-os/config:ro
       - ./agents:/root/innate-os/agents:rw
       - ./skills:/root/innate-os/skills:rw
-      - ./.env:/root/innate-os/.env:ro
+      - ${INNATE_OS_ENV_FILE:-./.env}:/root/innate-os/.env:ro
 
       # 2) Keep build/install/log folders as Docker named volumes, so they won't pollute your host
       - ros2_ws_build:/root/innate-os/ros2_ws/build

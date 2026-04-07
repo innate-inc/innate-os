@@ -1,0 +1,11 @@
+# Optional non-secret simulator overrides for `./innate sim`.
+# Copy to sim/config.toml or let `./innate sim setup` create it automatically.
+# Leave values commented to use the built-in defaults.
+
+[display]
+# visualization = true
+
+[cloud_agent]
+# mode = "hosted"
+# image = "ghcr.io/your-org/innate-cloud-agent:latest"
+# source_dir = "../innate-cloud-agent"
