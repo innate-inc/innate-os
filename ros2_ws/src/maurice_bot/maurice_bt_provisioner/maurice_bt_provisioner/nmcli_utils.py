@@ -118,43 +118,65 @@ def nmcli_connection_exists(ssid):
     
 def nmcli_add_or_modify_connection(ssid, password, priority):
     """Adds a new Wi-Fi connection or modifies an existing one.
-    
+
+    If a profile already exists, updates priority in place and reconnects.
+    If no profile exists (or password is provided), deletes any stale profile
+    and uses 'nmcli device wifi connect' which auto-negotiates security
+    (WPA2/WPA3).
+
     Requires elevated privileges (uses sudo).
     """
     success_check, exists, err_check = nmcli_connection_exists(ssid)
+
     if not success_check:
         return False, f"Failed to check if connection exists: {err_check}"
 
-    base_cmd = ['nmcli', 'connection']
+    # If profile exists and no new password, just update priority and reconnect
+    if exists and not password:
+        nm_logger.info(f"Profile exists for {ssid}, updating priority")
+        _run_nmcli([
+            'nmcli', 'connection', 'modify', ssid,
+            'connection.autoconnect', 'yes',
+            'connection.autoconnect-priority', str(priority),
+            'connection.interface-name', DEFAULT_WIFI_INTERFACE,
+        ], use_sudo=True)
+        success, _, stderr = _run_nmcli(
+            ['nmcli', 'connection', 'up', ssid, 'ifname', DEFAULT_WIFI_INTERFACE],
+            timeout=30, use_sudo=True,
+        )
+        if not success:
+            return False, f"Failed to activate '{ssid}': {stderr or 'Unknown error'}"
+        return True, None
+
+    # New network or password change — delete stale profile and let nmcli
+    # auto-negotiate security (WPA2/WPA3/open)
     if exists:
-        nm_logger.info(f"Modifying existing connection: {ssid}")
-        cmd = base_cmd + ['modify', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE]
-    else:
-        nm_logger.info(f"Adding new connection: {ssid}")
-        # Bind the profile to the default Wi‑Fi interface
-        cmd = base_cmd + ['add', 'type', 'wifi', 'con-name', ssid, 'ifname', DEFAULT_WIFI_INTERFACE, 'ssid', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE]
-    
-    # Common settings
-    cmd.extend(['connection.autoconnect', 'yes', 'connection.autoconnect-priority', str(priority)])
+        nm_logger.info(f"Removing existing profile for {ssid} (password change)")
+        success_del, _, stderr_del = _run_nmcli(
+            ['nmcli', 'connection', 'delete', ssid], use_sudo=True
+        )
+        if not success_del:
+            nm_logger.warning(f"Failed to remove old profile for '{ssid}': {stderr_del}")
 
-    # Security settings
+    cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'ifname', DEFAULT_WIFI_INTERFACE]
     if password:
-        cmd.extend(['wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', password])
-    else: # Open network
-        cmd.extend(['wifi-sec.key-mgmt', 'none'])
-    
-    # Use sudo for privileged operations
-    success, _, stderr = _run_nmcli(cmd, use_sudo=True)
-    if not success:
-         action = "modify" if exists else "add"
-         return False, f"Failed to {action} connection '{ssid}': {stderr or 'Unknown error'}"
+        cmd.extend(['password', password])
 
-    # Ensure the profile is pinned to the default Wi‑Fi interface
-    # Use an explicit modify call, which works reliably for both add and modify paths
-    success_bind, _, stderr_bind = _run_nmcli(['nmcli', 'connection', 'modify', ssid, 'connection.interface-name', DEFAULT_WIFI_INTERFACE], use_sudo=True)
-    if not success_bind:
-        return False, f"Failed to bind '{ssid}' to interface {DEFAULT_WIFI_INTERFACE}: {stderr_bind or 'Unknown error'}"
-    return True, None # Success
+    success, _, stderr = _run_nmcli(cmd, timeout=30, use_sudo=True)
+    if not success:
+        return False, f"Failed to connect to '{ssid}': {stderr or 'Unknown error'}"
+
+    # Set autoconnect priority on the created profile
+    success_mod, _, stderr_mod = _run_nmcli([
+        'nmcli', 'connection', 'modify', ssid,
+        'connection.autoconnect', 'yes',
+        'connection.autoconnect-priority', str(priority),
+        'connection.interface-name', DEFAULT_WIFI_INTERFACE,
+    ], use_sudo=True)
+    if not success_mod:
+        nm_logger.warning(f"Connected but failed to set priority: {stderr_mod}")
+
+    return True, None
 
 def nmcli_delete_connection(ssid):
     """Deletes a Wi-Fi connection profile.
@@ -175,21 +197,11 @@ def nmcli_delete_connection(ssid):
 
 def nmcli_scan_for_ssid(target_ssid):
     """Performs a Wi-Fi scan and checks if the target SSID is visible."""
-    nm_logger.info("Performing Wi-Fi scan...")
-    success, stdout, stderr = _run_nmcli(
-        ['nmcli', '--terse', '--fields', 'SSID', 'device', 'wifi', 'list', '--rescan', 'yes'],
-        timeout=15
-    )
+    success, visible_ssids, err = nmcli_scan_for_visible_ssids()
     if not success:
-        return False, False, f"Wi-Fi scan failed: {stderr or 'Unknown error'}"
-    
-    visible_ssids = stdout.strip().replace("[", "").replace("]", "").split("\n")
-
-    # Remove empty strings from the list
-    visible_ssids = [ssid for ssid in visible_ssids if ssid]
-
-    nm_logger.info(f"Visible SSIDs: {visible_ssids}")
+        return False, False, err
     return True, target_ssid in visible_ssids, None
+
 
 def nmcli_connect(ssid, ifname=DEFAULT_WIFI_INTERFACE):
     """Attempts to activate (connect to) a given network profile.
@@ -263,25 +275,13 @@ def nmcli_get_active_wifi_ssid():
 def nmcli_scan_for_visible_ssids(timeout=15):
     """Performs a Wi-Fi scan and returns a list of visible SSIDs."""
     nm_logger.info("Triggering Wi-Fi rescan...")
-    # Step 1: Trigger rescan (don't strictly check, list command is the source of truth)
-    success_rescan, _, stderr_rescan = _run_nmcli(
-        ['nmcli', 'device', 'wifi', 'rescan'], 
-        check=False, # Don't fail if rescan itself reports an error, list command is key
-        timeout=10 # Shorter timeout for the trigger
-    )
-    if not success_rescan:
-        nm_logger.warning(f"nmcli rescan command finished with an issue: {stderr_rescan or 'Unknown error'}")
-        # Proceed anyway, the list command might still work
-
-    nm_logger.info("Waiting 5 seconds for scan results...")
-    time.sleep(5)
-    
-    nm_logger.info("Listing visible Wi-Fi networks...")
-    # Step 2: List the networks found by the rescan
+    nm_logger.info("Scanning and listing visible Wi-Fi networks...")
     success_list, stdout_list, stderr_list = _run_nmcli(
-        ['nmcli', '-t', '-f', 'SSID', 'device', 'wifi', 'list'], 
-        timeout=timeout # Use original timeout for list
+        ['nmcli', '-t', '-f', 'SSID', 'device', 'wifi', 'list', '--rescan', 'yes'],
+        timeout=timeout,
+        use_sudo=True
     )
+    nm_logger.info(f"nmcli wifi list stdout: {stdout_list.strip() if stdout_list else 'N/A'}")
     if not success_list:
         nm_logger.error(f"Wi-Fi list after rescan failed: {stderr_list or 'Unknown error'}")
         return False, [], f"Wi-Fi list failed: {stderr_list or 'Unknown error'}"
