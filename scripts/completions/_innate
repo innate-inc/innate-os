@@ -1,0 +1,128 @@
+#compdef innate in8
+
+_innate_packages() {
+  local -a pkgs
+  local src_dir="${INNATE_OS_ROOT:-$HOME/innate-os}/ros2_ws/src"
+  if [[ -d "$src_dir" ]]; then
+    pkgs=( ${(f)"$(find "$src_dir" -name package.xml -exec dirname {} \; 2>/dev/null | xargs -I{} basename {})"} )
+    _describe 'ROS2 package' pkgs
+  fi
+}
+
+_innate_service() {
+  local -a actions=(
+    'start:Start all ROS nodes'
+    'stop:Stop all ROS nodes'
+    'restart:Restart all ROS nodes'
+    'rebuild:Stop, build, start'
+    'view:Attach to tmux session'
+  )
+  case $words[1] in
+    rebuild)
+      _innate_packages
+      ;;
+    *)
+      _describe 'service action' actions
+      ;;
+  esac
+}
+
+_innate_update() {
+  local -a subcmds=(
+    'check:Check for updates'
+    'apply:Apply updates'
+    'status:Show version info'
+  )
+  case $words[1] in
+    check|apply)
+      _arguments \
+        '--dev[Use dev channel]' \
+        '--yes[Skip confirmation]' \
+        '--background[Run in background]'
+      ;;
+    *)
+      _describe 'update action' subcmds
+      ;;
+  esac
+}
+
+_innate() {
+  local -a commands=(
+    'service:Manage ROS nodes (start/stop/restart/rebuild/view)'
+    'view:Attach to ROS tmux session'
+    'restart:Restart all ROS nodes'
+    'rebuild:Stop nodes, build, start nodes'
+    'build:Build ROS2 workspace'
+    'clean:Remove build/install/log artifacts'
+    'diag:Run hardware diagnostics'
+    'update:Check/apply OS updates'
+  )
+
+  _arguments -C \
+    '1:command:->cmd' \
+    '*::arg:->args'
+
+  case $state in
+    cmd)
+      _describe 'innate command' commands
+      ;;
+    args)
+      case $words[1] in
+        service)
+          _arguments -C \
+            '1:action:->svc_action' \
+            '*::arg:->svc_args'
+          case $state in
+            svc_action)
+              local -a actions=(
+                'start:Start all ROS nodes'
+                'stop:Stop all ROS nodes'
+                'restart:Restart all ROS nodes'
+                'rebuild:Stop, build, start'
+                'view:Attach to tmux session'
+              )
+              _describe 'service action' actions
+              ;;
+            svc_args)
+              case $words[1] in
+                rebuild)
+                  _innate_packages
+                  ;;
+              esac
+              ;;
+          esac
+          ;;
+        build|rebuild)
+          _innate_packages
+          ;;
+        update)
+          _arguments -C \
+            '1:subcmd:->upd_sub' \
+            '*::arg:->upd_args'
+          case $state in
+            upd_sub)
+              local -a subcmds=(
+                'check:Check for updates'
+                'apply:Apply updates'
+                'status:Show version info'
+              )
+              _describe 'update action' subcmds
+              ;;
+            upd_args)
+              case $words[1] in
+                check|apply)
+                  _arguments \
+                    '--dev[Use dev channel]' \
+                    '--yes[Skip confirmation]' \
+                    '--background[Run in background]'
+                  ;;
+              esac
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_innate "$@"
