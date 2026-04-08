@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Innate-OS Update Manager
+Innate-OS Update Manager (backend for `innate update`)
 
-Usage:
-    innate-update check         - Check if updates are available (latest tag)
-    innate-update check --dev   - Check for updates (latest commit)
-    innate-update apply         - Apply pending updates (to latest tag)
-    innate-update apply --dev   - Apply updates (to latest commit)
-    innate-update status        - Show current version info
-    innate-update start         - Start ROS services (tmux session)
-    innate-update stop          - Stop ROS services
-    innate-update restart       - Restart ROS services
-    innate-update view          - Attach to tmux session to view ROS nodes
-    innate-update daemon        - Run as background daemon (for systemd)
+User-facing commands (via innate CLI):
+    innate update check              Check if updates are available (latest tag)
+    innate update check --dev        Check for updates (latest commit)
+    innate update apply              Apply pending updates (to latest tag)
+    innate update apply --dev        Apply updates (to latest commit)
+    innate update apply --yes        Apply without confirmation prompt
+    innate update apply --background Apply in a background tmux session
+    innate update status             Show current version & service info
+
+Internal commands (used by systemd/scripts, not invoked directly):
+    innate-update daemon             Run as background daemon (for systemd)
+    innate-update quick-check        Silent check for shell/app integration
 """
 
 import argparse
@@ -163,8 +164,8 @@ class ServiceManager:
             self.logger.warning(
                 f"ROS services already running (tmux session '{self.TMUX_SESSION}')"
             )
-            print("Use 'innate-update view' to attach to the session")
-            print("Use 'innate-update restart' to restart services")
+            print("Use 'innate view' to attach to the session")
+            print("Use 'innate restart' to restart services")
             return 0
 
         if not self.launch_script.exists():
@@ -193,7 +194,7 @@ class ServiceManager:
             if self.is_running():
                 self.logger.success("ROS services started")
                 print(f"  Session: {self.TMUX_SESSION}")
-                print("  Use 'innate-update view' to attach")
+                print("  Use 'innate view' to attach")
                 return 0
             else:
                 self.logger.error("Failed to start ROS services")
@@ -244,7 +245,7 @@ class ServiceManager:
             self.logger.error(
                 f"ROS services not running (no tmux session '{self.TMUX_SESSION}')"
             )
-            print("Use 'innate-update start' to start services first")
+            print("Use 'innate service start' to start services first")
             return 1
 
         print(f"Attaching to tmux session '{self.TMUX_SESSION}'...")
@@ -517,7 +518,7 @@ class UpdateManager:
         print("Recent changes:")
         self._show_commits("HEAD", f"origin/{self.config.branch}", commits_behind)
         print()
-        print("Run 'innate-update apply --dev' to install updates")
+        print("Run 'innate update apply --dev' to install updates")
         return 1
 
     def _check_tag_mode(self, current: str) -> int:
@@ -526,7 +527,7 @@ class UpdateManager:
 
         if not latest_tag:
             self.logger.warning(f"No tags found on {self.config.branch} branch")
-            print("Use 'innate-update check --dev' to check for latest commits instead")
+            print("Use 'innate update check --dev' to check for latest commits instead")
             return 0
 
         latest_tag_commit = self.git.resolve_ref(latest_tag)
@@ -544,7 +545,7 @@ class UpdateManager:
             print(f"Latest tag: {latest_tag} ({latest_tag_commit[:7]})")
             print()
             print("You are on a development commit ahead of the latest release.")
-            print("Use 'innate-update check --dev' to check for newer dev commits.")
+            print("Use 'innate update check --dev' to check for newer dev commits.")
             return 0
 
         self._write_cache("1")
@@ -560,7 +561,7 @@ class UpdateManager:
             self._show_commits("HEAD", latest_tag, commits_behind)
 
         print()
-        print("Run 'innate-update apply' to install updates")
+        print("Run 'innate update apply' to install updates")
         return 1
 
     def _create_update_lock(self):
@@ -640,7 +641,7 @@ class UpdateManager:
 
         if self.git.is_ancestor(latest_tag_commit, current):
             self.logger.warning(f"You are on a dev commit ahead of {latest_tag}")
-            print("Use 'innate-update apply --dev' to update to the latest dev commit.")
+            print("Use 'innate update apply --dev' to update to the latest dev commit.")
             self._remove_update_lock()
             return 0
 
@@ -780,13 +781,13 @@ class UpdateManager:
                 updates = int(cached)
                 if updates > 0:
                     self.logger.warning(f"Updates available: {updates} commit(s)")
-                    print("  Run 'innate-update apply' to install")
+                    print("  Run 'innate update apply' to install")
                 else:
                     self.logger.success("System up to date")
             except ValueError:
                 pass
         else:
-            print("  Run 'innate-update check' to check for updates")
+            print("  Run 'innate update check' to check for updates")
 
         return 0
 

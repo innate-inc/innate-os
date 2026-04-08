@@ -18,9 +18,13 @@ Usage:
     innate clean                        Remove build artifacts
     innate diag                         Run hardware diagnostics
 
-    innate update check [--dev]         Check for updates
-    innate update apply [--dev]         Apply updates
-    innate update status                Show version info
+    innate update check                 Check for updates (latest tag)
+    innate update check --dev           Check for updates (latest commit)
+    innate update apply                 Apply updates (latest tag)
+    innate update apply --dev           Apply updates (latest commit)
+    innate update apply --yes           Apply without confirmation
+    innate update apply --background    Apply in background tmux session
+    innate update status                Show version & service info
 
 Alias: in8
 """
@@ -191,6 +195,7 @@ def cmd_status(_args):
     print(f"  {C.BOLD}innate view{C.NC}         Attach to nodes")
     print(f"  {C.BOLD}innate restart{C.NC}      Restart nodes")
     print(f"  {C.BOLD}innate build{C.NC}        Build workspace")
+    print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
     print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
     print(f"  {C.BOLD}innate --help{C.NC}       All commands")
     print()
@@ -267,7 +272,11 @@ def _service_view():
         print(f"  Use {C.BOLD}innate service start{C.NC} first")
         return 1
 
-    os.execvp("tmux", ["tmux", "attach", "-t", session])
+    try:
+        os.execvp("tmux", ["tmux", "attach", "-t", session])
+    except OSError as e:
+        fail(f"Failed to attach to tmux: {e}")
+        return 1
 
 
 def cmd_view(_args):
@@ -358,7 +367,11 @@ def cmd_diag(_args):
     if not DIAGNOSTICS.exists():
         fail(f"Diagnostics script not found: {DIAGNOSTICS}")
         return 1
-    os.execvp("python3", ["python3", str(DIAGNOSTICS)])
+    try:
+        os.execvp("python3", ["python3", str(DIAGNOSTICS)])
+    except OSError as e:
+        fail(f"Failed to launch diagnostics: {e}")
+        return 1
 
 
 def cmd_update(args):
@@ -368,7 +381,11 @@ def cmd_update(args):
         return 1
 
     argv = [str(INNATE_UPDATE), args.subcmd] + args.extra
-    os.execvp(str(INNATE_UPDATE), argv)
+    try:
+        os.execvp(str(INNATE_UPDATE), argv)
+    except OSError as e:
+        fail(f"Failed to launch innate-update: {e}")
+        return 1
 
 
 # ---------------------------------------------------------------------------

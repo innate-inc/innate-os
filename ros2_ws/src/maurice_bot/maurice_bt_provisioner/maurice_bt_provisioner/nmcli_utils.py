@@ -141,12 +141,14 @@ def nmcli_add_or_modify_connection(ssid, password, priority, autoconnect=True):
     # If profile exists and no new password, just update priority
     if exists and not password:
         nm_logger.info(f"Profile exists for {ssid}, updating priority (autoconnect={ac_value})")
-        _run_nmcli([
+        success_mod, _, stderr_mod = _run_nmcli([
             'nmcli', 'connection', 'modify', ssid,
             'connection.autoconnect', ac_value,
             'connection.autoconnect-priority', str(priority),
             'connection.interface-name', DEFAULT_WIFI_INTERFACE,
         ], use_sudo=True)
+        if not success_mod:
+            return False, f"Failed to modify profile '{ssid}': {stderr_mod or 'Unknown error'}"
         if autoconnect:
             success, _, stderr = _run_nmcli(
                 ['nmcli', 'connection', 'up', ssid, 'ifname', DEFAULT_WIFI_INTERFACE],

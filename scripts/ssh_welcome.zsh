@@ -85,8 +85,8 @@ case "$STATUS_MODE" in
         ;;
     update)
         printf "%b[UPDATE]%b A newer Innate OS release is available.\n" "$YELLOW" "$NC"
-        echo "Run: innate-update check"
-        echo "Then: innate-update apply"
+        echo "Run: innate update check"
+        echo "Then: innate update apply"
         ;;
     *)
         printf "%b[INFO]%b Unable to verify update status right now.\n" "$YELLOW" "$NC"

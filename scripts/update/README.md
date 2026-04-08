@@ -15,19 +15,19 @@
 
 ```bash
 # Check for updates
-innate-update check
+innate update check
 
 # Apply updates (asks confirmation)
-innate-update apply
+innate update apply
 
 # Show current version and service status
-innate-update status
+innate update status
 
 # Manage ROS services
-innate-update start    # Start ROS services
-innate-update stop     # Stop ROS services
-innate-update restart  # Restart ROS services
-innate-update view     # Attach to tmux session
+innate service start    # Start ROS services
+innate service stop     # Stop ROS services
+innate restart          # Restart ROS services
+innate view             # Attach to tmux session
 ```
 
 ---
@@ -37,26 +37,28 @@ innate-update view     # Attach to tmux session
 ### Update Commands
 
 ```bash
-innate-update check           # Check for updates (latest tagged release)
-innate-update check --dev     # Check for updates (latest commit on main)
-innate-update apply           # Download and apply latest release
-innate-update apply --dev     # Update to latest commit (git-based)
-innate-update status          # Show version info and service status
+innate update check           # Check for updates (latest tagged release)
+innate update check --dev     # Check for updates (latest commit on main)
+innate update apply           # Apply latest release
+innate update apply --dev     # Update to latest commit (git-based)
+innate update status          # Show version info and service status
 ```
 
 ### Service Commands
 
 ```bash
-innate-update start           # Start ROS services in tmux
-innate-update stop            # Stop ROS services
-innate-update restart         # Restart ROS services
-innate-update view            # Attach to tmux session (Ctrl+b d to detach)
+innate service start          # Start ROS services in tmux
+innate service stop           # Stop ROS services
+innate restart                # Restart ROS services
+innate view                   # Attach to tmux session (Ctrl+b d to detach)
 ```
 
-### Daemon Mode
+### Daemon Mode (internal)
+
+The update daemon runs via systemd and is not invoked directly by users:
 
 ```bash
-innate-update daemon          # Run as background daemon (for systemd)
+innate-update daemon          # Called by innate-update.service
 ```
 
 ---
@@ -176,7 +178,7 @@ gh run watch
 ### Release Updates (Default)
 
 ```
-innate-update apply
+innate update apply
        |
        v
 1. Git fetch with tags
@@ -202,7 +204,7 @@ innate-update apply
 ### Development Updates (--dev)
 
 ```
-innate-update apply --dev
+innate update apply --dev
        |
        v
 1. Git fetch origin
