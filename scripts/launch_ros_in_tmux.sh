@@ -109,3 +109,7 @@ echo ""
 # Play startup sound after processes initialize (backgrounded, detached from terminal)
 (sleep 20 && XDG_RUNTIME_DIR=/run/user/1000 gst-play-1.0 "$INNATE_OS_ROOT/sounds/turnon.mp3" >/dev/null 2>&1) &
 disown
+
+# Keep the script alive so systemd (Type=simple) considers the service running.
+# When systemctl stop is called, SIGTERM kills this sleep, then ExecStop cleans up tmux.
+exec sleep infinity

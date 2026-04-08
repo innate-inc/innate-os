@@ -236,17 +236,56 @@ def _service_start():
         fail(f"Launch script not found: {script}")
         return 1
 
-    print(f"  Starting ROS nodes ({C.BOLD}{'sim' if is_sim_mode() else 'hardware'}{C.NC})...")
-    r = run([str(script)], cwd=str(INNATE_OS_ROOT))
-    if r.returncode != 0:
-        fail("Launch script failed")
-        return 1
+    # Launch in background -- the script ends with `sleep infinity` for systemd,
+    # so we can't wait for it. Stream its output until the tmux session appears,
+    # then drain the remaining banner lines and return.
+    import fcntl
+    import time
+
+    proc = subprocess.Popen(
+        [str(script)],
+        cwd=str(INNATE_OS_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    # Make stdout non-blocking so we never hang on read
+    fd = proc.stdout.fileno()
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+    collected = b""
+
+    def drain_output():
+        nonlocal collected
+        try:
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                collected += chunk
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+        except (BlockingIOError, IOError):
+            pass
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        drain_output()
+        # The banner's closing box line marks the script is done launching
+        if b"\xe2\x95\x9a" in collected:  # ╚
+            break
+        time.sleep(0.3)
+
+    # Detach from the pipe -- let the script continue with sleep infinity
+    proc.stdout.close()
 
     if tmux_session_exists(session):
-        ok(f"ROS nodes started (tmux: {session})")
-    else:
-        warn("Launch script exited but tmux session not found")
-    return 0
+        return 0
+
+    fail("Timed out waiting for tmux session")
+    return 1
 
 
 def _service_stop():
