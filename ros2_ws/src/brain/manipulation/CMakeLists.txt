@@ -36,6 +36,12 @@ include_directories(
   ${MPI_C_INCLUDE_DIRS}
 )
 
+# Reduce optimization on memory-constrained platforms (e.g. Jetson)
+# to prevent OOM during compilation of template-heavy translation units
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+  set_source_files_properties(src/recorder_node.cpp PROPERTIES COMPILE_OPTIONS "-O1")
+endif()
+
 # C++ Recorder Node executable
 add_executable(recorder_node_cpp
   src/recorder_main.cpp

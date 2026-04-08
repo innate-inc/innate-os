@@ -10,6 +10,9 @@
 export ZSH="$HOME/.oh-my-zsh"
 export INNATE_OS_ROOT="$HOME/innate-os"
 
+export PATH="$INNATE_OS_ROOT/scripts:$PATH"
+fpath=("$INNATE_OS_ROOT/scripts/completions" $fpath)
+
 # Make sure cuda is in the path
 export PATH=/usr/local/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
@@ -123,6 +126,8 @@ if [ -f '/home/jetson1/google-cloud-sdk/path.zsh.inc' ]; then . '/home/jetson1/g
 if [ -f '/home/jetson1/google-cloud-sdk/completion.zsh.inc' ]; then . '/home/jetson1/google-cloud-sdk/completion.zsh.inc'; fi
 
 (ros2 daemon start &) >/dev/null 2>&1
+
+alias in8="innate"
 
 # SSH welcome banner + update status.
 if [ -f "$INNATE_OS_ROOT/scripts/ssh_welcome.zsh" ]; then

@@ -1,0 +1,88 @@
+#compdef innate in8
+# Auto-generated — do not edit.
+# Regenerate: innate completions > scripts/completions/_innate
+
+_innate_packages() {
+  local -a pkgs
+  local src_dir="${INNATE_OS_ROOT:-$HOME/innate-os}/ros2_ws/src"
+  if [[ -d "$src_dir" ]]; then
+    pkgs=( ${(f)"$(find "$src_dir" -name package.xml -exec dirname {} \; 2>/dev/null | xargs -I{} basename {})"} )
+    _describe 'ROS2 package' pkgs
+  fi
+}
+
+_innate() {
+  local -a commands=(
+    'build:Stop nodes, build workspace, restart nodes.'
+    'clean:Remove build/install/log artifacts.'
+    'diag:Run hardware diagnostics.'
+    'restart:Restart all ROS nodes.'
+    'service:Manage ROS nodes (start/stop/restart/view).'
+    'update:Check and apply Innate-OS updates.'
+    'view:Attach to ROS tmux session.'
+  )
+
+  _arguments -C \
+    '1:command:->cmd' \
+    '*::arg:->args'
+
+  case $state in
+    cmd)
+      _describe 'innate command' commands
+      ;;
+    args)
+      case $words[1] in
+        build)
+          _innate_packages
+          ;;
+        service)
+          _arguments -C \
+            '1:action:->sub' \
+            '*::arg:->sub_args'
+          case $state in
+            sub)
+              local -a actions=(
+                'restart:Restart all ROS nodes.'
+                'start:Start all ROS nodes.'
+                'stop:Stop all ROS nodes.'
+                'view:Attach to tmux session.'
+              )
+              _describe 'service action' actions
+              ;;
+          esac
+          ;;
+        update)
+          _arguments -C \
+            '1:action:->sub' \
+            '*::arg:->sub_args'
+          case $state in
+            sub)
+              local -a actions=(
+                'apply:Apply pending updates.'
+                'check:Check if updates are available.'
+                'status:Show current version and service info.'
+              )
+              _describe 'update action' actions
+              ;;
+            sub_args)
+              case $words[1] in
+                apply)
+                  _arguments \
+                    '--dev[Use latest commit instead of latest tag]' \
+                    '--yes[Skip confirmation prompts]' \
+                    '--background[Run in background tmux session]'
+                  ;;
+                check)
+                  _arguments \
+                    '--dev[Use latest commit instead of latest tag]'
+                  ;;
+              esac
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_innate "$@"

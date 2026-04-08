@@ -667,12 +667,12 @@ print_summary() {
     echo "Next steps:"
     echo "  1. Reload your shell:  source ~/.bashrc  (or ~/.zshrc)"
     echo "  2. Start ROS nodes:    launch_ros_in_tmux.sh"
-    echo "  3. Check for updates:  innate-update check"
+    echo "  3. Check for updates:  innate update check"
     echo
     echo "Useful commands:"
-    echo "  innate-update check   - Check for updates"
-    echo "  innate-update apply   - Apply available update"
-    echo "  innate-update status  - Show current version"
+    echo "  innate update check   - Check for updates"
+    echo "  innate update apply   - Apply available update"
+    echo "  innate update status  - Show current version"
     echo
 }
 

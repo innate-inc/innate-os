@@ -116,13 +116,18 @@ def nmcli_connection_exists(ssid):
     existing_connections = stdout.strip().split('\n') if stdout else []
     return True, ssid in existing_connections, None
     
-def nmcli_add_or_modify_connection(ssid, password, priority):
+def nmcli_add_or_modify_connection(ssid, password, priority, autoconnect=True):
     """Adds a new Wi-Fi connection or modifies an existing one.
 
-    If a profile already exists, updates priority in place and reconnects.
-    If no profile exists (or password is provided), deletes any stale profile
-    and uses 'nmcli device wifi connect' which auto-negotiates security
-    (WPA2/WPA3).
+    When *autoconnect* is True (default, legacy behaviour) the function saves
+    the profile **and** activates the connection before returning — this blocks
+    for up to 30 s while NetworkManager negotiates.
+
+    When *autoconnect* is False the profile is persisted with
+    ``connection.autoconnect no`` and the function returns immediately
+    (~1-2 s).  The caller is expected to connect asynchronously afterwards
+    and flip autoconnect on only after a successful connection (see
+    :func:`nmcli_set_autoconnect`).
 
     Requires elevated privileges (uses sudo).
     """
@@ -131,25 +136,29 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
     if not success_check:
         return False, f"Failed to check if connection exists: {err_check}"
 
-    # If profile exists and no new password, just update priority and reconnect
+    ac_value = 'yes' if autoconnect else 'no'
+
+    # If profile exists and no new password, just update priority
     if exists and not password:
-        nm_logger.info(f"Profile exists for {ssid}, updating priority")
-        _run_nmcli([
+        nm_logger.info(f"Profile exists for {ssid}, updating priority (autoconnect={ac_value})")
+        success_mod, _, stderr_mod = _run_nmcli([
             'nmcli', 'connection', 'modify', ssid,
-            'connection.autoconnect', 'yes',
+            'connection.autoconnect', ac_value,
             'connection.autoconnect-priority', str(priority),
             'connection.interface-name', DEFAULT_WIFI_INTERFACE,
         ], use_sudo=True)
-        success, _, stderr = _run_nmcli(
-            ['nmcli', 'connection', 'up', ssid, 'ifname', DEFAULT_WIFI_INTERFACE],
-            timeout=30, use_sudo=True,
-        )
-        if not success:
-            return False, f"Failed to activate '{ssid}': {stderr or 'Unknown error'}"
+        if not success_mod:
+            return False, f"Failed to modify profile '{ssid}': {stderr_mod or 'Unknown error'}"
+        if autoconnect:
+            success, _, stderr = _run_nmcli(
+                ['nmcli', 'connection', 'up', ssid, 'ifname', DEFAULT_WIFI_INTERFACE],
+                timeout=30, use_sudo=True,
+            )
+            if not success:
+                return False, f"Failed to activate '{ssid}': {stderr or 'Unknown error'}"
         return True, None
 
-    # New network or password change — delete stale profile and let nmcli
-    # auto-negotiate security (WPA2/WPA3/open)
+    # New network or password change — delete stale profile first
     if exists:
         nm_logger.info(f"Removing existing profile for {ssid} (password change)")
         success_del, _, stderr_del = _run_nmcli(
@@ -158,6 +167,27 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
         if not success_del:
             nm_logger.warning(f"Failed to remove old profile for '{ssid}': {stderr_del}")
 
+    if not autoconnect:
+        # Save-only path: create the profile without activating it.
+        cmd = [
+            'nmcli', 'connection', 'add',
+            'type', 'wifi',
+            'con-name', ssid,
+            'ssid', ssid,
+            'connection.autoconnect', 'no',
+            'connection.autoconnect-priority', str(priority),
+            'connection.interface-name', DEFAULT_WIFI_INTERFACE,
+        ]
+        if password:
+            cmd.extend(['wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', password])
+
+        success, _, stderr = _run_nmcli(cmd, timeout=10, use_sudo=True)
+        if not success:
+            return False, f"Failed to save profile for '{ssid}': {stderr or 'Unknown error'}"
+        return True, None
+
+    # Legacy path: connect immediately (blocks ~30 s) and auto-negotiate
+    # security (WPA2/WPA3/open).
     cmd = ['nmcli', 'device', 'wifi', 'connect', ssid, 'ifname', DEFAULT_WIFI_INTERFACE]
     if password:
         cmd.extend(['password', password])
@@ -166,7 +196,6 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
     if not success:
         return False, f"Failed to connect to '{ssid}': {stderr or 'Unknown error'}"
 
-    # Set autoconnect priority on the created profile
     success_mod, _, stderr_mod = _run_nmcli([
         'nmcli', 'connection', 'modify', ssid,
         'connection.autoconnect', 'yes',
@@ -177,6 +206,18 @@ def nmcli_add_or_modify_connection(ssid, password, priority):
         nm_logger.warning(f"Connected but failed to set priority: {stderr_mod}")
 
     return True, None
+
+
+def nmcli_set_autoconnect(ssid, enabled):
+    """Enable or disable autoconnect on an existing connection profile."""
+    val = 'yes' if enabled else 'no'
+    success, _, stderr = _run_nmcli([
+        'nmcli', 'connection', 'modify', ssid,
+        'connection.autoconnect', val,
+    ], use_sudo=True)
+    if not success:
+        nm_logger.warning(f"Failed to set autoconnect={val} for '{ssid}': {stderr}")
+    return success
 
 def nmcli_delete_connection(ssid):
     """Deletes a Wi-Fi connection profile.

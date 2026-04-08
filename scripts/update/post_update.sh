@@ -259,6 +259,21 @@ if [ -d "$REPO_DIR/scripts" ]; then
         ln -s "$REPO_DIR/scripts/update/innate-update" /usr/local/bin/innate-update
     fi
 
+    # Symlink innate dev CLI
+    if [ -f "$REPO_DIR/scripts/innate" ]; then
+        log "  Symlinking innate"
+        rm -f /usr/local/bin/innate
+        ln -s "$REPO_DIR/scripts/innate" /usr/local/bin/innate
+    fi
+
+    # Regenerate zsh completions from the Click command tree
+    if [ -f "$REPO_DIR/scripts/innate" ]; then
+        log "  Generating zsh completions"
+        mkdir -p "$REPO_DIR/scripts/completions"
+        sudo -u "$ACTUAL_USER" "$REPO_DIR/scripts/innate" completions > "$REPO_DIR/scripts/completions/_innate"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$REPO_DIR/scripts/completions/_innate"
+    fi
+
     # Symlink restart script if it exists
     if [ -f "$REPO_DIR/scripts/restart_robot_networking.sh" ]; then
         log "  Symlinking restart_robot_networking.sh"
@@ -482,7 +497,12 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     cd "$REPO_DIR/ros2_ws"
 
     # Run as the actual user, not root
-    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
+    CCACHE_ARGS=""
+    if command -v ccache >/dev/null 2>&1; then
+        CCACHE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+    fi
+
+    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build --symlink-install --parallel-workers 2 --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release $CCACHE_ARGS"
 
     if [ $? -eq 0 ]; then
         log "ROS2 workspace rebuilt successfully"

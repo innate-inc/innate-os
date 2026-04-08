@@ -15,6 +15,7 @@ Checks:
 import os
 import sys
 import glob
+import subprocess
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -55,6 +56,12 @@ def warn(msg):
 def header(msg):
     print(f"\n{Colors.BOLD}{Colors.CYAN}{msg}{Colors.END}")
 
+
+def is_innate_service_running():
+    r = subprocess.run(["tmux", "has-session", "-t", "ros_nodes"],
+                       capture_output=True)
+    return r.returncode == 0
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SERVO DETECTION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -62,6 +69,11 @@ def header(msg):
 def check_servos():
     """Check if Dynamixel servos 1-7 are detected"""
     header("DYNAMIXEL SERVOS (1-7)")
+
+    if is_innate_service_running():
+        fail("Innate service is running and holding the serial port open")
+        warn("Stop it first:  innate service stop")
+        return False
     
     # Check if device exists
     if not os.path.exists(DYNAMIXEL_DEVICE):
@@ -113,9 +125,18 @@ def check_servos():
     missing = []
     
     for servo_id in SERVO_IDS:
-        # Try up to 3 times to ping each servo
         for attempt in range(5):
-            _, result, _ = packet.ping(port, servo_id)
+            try:
+                _, result, _ = packet.ping(port, servo_id)
+            except Exception as e:
+                if attempt == 4:
+                    fail(f"Serial error while pinging servo {servo_id}: {e}")
+                    if is_innate_service_running():
+                        warn("Innate service is running — stop it first:  innate service stop")
+                    port.closePort()
+                    return False
+                time.sleep(0.2)
+                continue
             if result == COMM_SUCCESS:
                 detected.append(servo_id)
                 break

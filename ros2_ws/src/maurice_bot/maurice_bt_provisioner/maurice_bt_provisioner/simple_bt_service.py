@@ -4,13 +4,14 @@ import json
 import signal
 import sys
 import subprocess
+import threading
 import time
 import os
 
+from gi.repository import GLib
 from bluezero import adapter
 from bluezero import peripheral
 
-# Import NetworkManager utilities
 from nmcli_utils import (
     nmcli_get_wifi_connections,
     nmcli_add_or_modify_connection,
@@ -19,7 +20,8 @@ from nmcli_utils import (
     nmcli_connect,
     nmcli_get_active_wifi_ssid,
     nmcli_get_active_ipv4_address,
-    nmcli_scan_for_visible_ssids
+    nmcli_scan_for_visible_ssids,
+    nmcli_set_autoconnect,
 )
 
 # IMPORTANT NOTES
@@ -58,8 +60,9 @@ class BleProvisionerServer:
         self.adapter = adapter_obj
         self._ble_characteristic = None
         self.peripheral = None
-        self._connected_device = None  # Track connected device for disconnect
-        self._current_ip_address = nmcli_get_active_ipv4_address() # Store initial IP
+        self._connected_device = None
+        self._connection_lock = threading.Lock()
+        self._current_ip_address = nmcli_get_active_ipv4_address()
         logger.info(f"Initial IPv4 address: {self._current_ip_address}")
 
     # --- Helper to Trigger Service Restart ---
@@ -94,6 +97,63 @@ class BleProvisionerServer:
                  logger.error(f"An unexpected error occurred during restart script execution: {e}", exc_info=True)
         else:
             logger.info("IP address unchanged. No service restart needed.")
+
+    # --- Thread-safe BLE helpers ---
+
+    def _send_notification_threadsafe(self, response):
+        """Schedule a BLE notification on the GLib main loop (safe from any thread)."""
+        def _do_send():
+            if self._ble_characteristic and self._ble_characteristic.is_notifying:
+                try:
+                    response_bytes = bytes(json.dumps(response), 'utf-8')
+                    self._ble_characteristic.set_value(list(response_bytes))
+                    logger.info(f"Async notification sent: {response}")
+                except Exception as e:
+                    logger.error(f"Error sending async notification: {e}")
+            else:
+                logger.warning(f"Cannot send notification (client not subscribed): {response}")
+            return False  # one-shot; do not repeat
+        GLib.idle_add(_do_send)
+
+    def _background_connect(self, command, ssid, enable_autoconnect_on_success=True):
+        """Scan + connect in a daemon thread; notify the BLE client when done."""
+        try:
+            with self._connection_lock:
+                self._current_ip_address = nmcli_get_active_ipv4_address()
+
+                success_scan, visible, err_scan = nmcli_scan_for_ssid(ssid)
+                if not success_scan:
+                    logger.warning(f"Pre-connect scan failed: {err_scan}")
+                elif not visible:
+                    logger.warning(f"Network '{ssid}' not visible in scan, attempting connect anyway")
+
+                success, msg_or_err = nmcli_connect(ssid)
+
+                if success:
+                    if enable_autoconnect_on_success:
+                        nmcli_set_autoconnect(ssid, True)
+                    logger.info(f"Background connect to '{ssid}' succeeded, waiting for stabilisation…")
+                    time.sleep(5)
+                    self._trigger_service_restart()
+                    self._send_notification_threadsafe({
+                        "command": command,
+                        "status": "success",
+                        "message": f"Connected to {ssid}",
+                    })
+                else:
+                    logger.error(f"Background connect to '{ssid}' failed: {msg_or_err}")
+                    self._send_notification_threadsafe({
+                        "command": command,
+                        "status": "error",
+                        "message": f"Connection failed for {ssid}: {msg_or_err}",
+                    })
+        except Exception as e:
+            logger.error(f"Background connect error: {e}", exc_info=True)
+            self._send_notification_threadsafe({
+                "command": command,
+                "status": "error",
+                "message": f"Connection error: {str(e)}",
+            })
 
     # --- Command Handlers ---
     def handle_get_status(self, data):
@@ -133,30 +193,35 @@ class BleProvisionerServer:
              }
 
     def handle_update_network(self, data):
-        """Handle update_network command."""
+        """Handle update_network command.
+
+        Saves the connection profile with autoconnect disabled (~1-2 s), then
+        dispatches scan+connect to a background thread so the BLE callback
+        returns quickly.  The background thread sends a follow-up notification
+        with the final result.
+        """
         command = data.get('command')
         logger.info(f"Handling {command} command")
         network_data = data.get('data', {})
         ssid = network_data.get('ssid')
-        password = network_data.get('password') # Get password if provided
-        priority = network_data.get('priority', 10) # Default priority
+        password = network_data.get('password')
+        priority = network_data.get('priority', 10)
 
         if not ssid:
             return {"command": command, "status": "error", "message": "SSID required"}
 
-        # --- Store current IP before attempting changes --- 
-        self._current_ip_address = nmcli_get_active_ipv4_address() 
-        logger.info(f"IP before update/connect attempt: {self._current_ip_address}")
-
-        # Connect and create profile (nmcli device wifi connect auto-negotiates security)
-        success, err = nmcli_add_or_modify_connection(ssid, password, priority)
+        success, err = nmcli_add_or_modify_connection(ssid, password, priority, autoconnect=False)
         if not success:
             return {"command": command, "status": "error", "message": err}
 
-        logger.info(f"Connected to {ssid}. Waiting briefly for network stabilization...")
-        time.sleep(5)
-        self._trigger_service_restart()
-        return {"command": command, "status": "success", "message": f"Network {ssid} updated and connected."}
+        threading.Thread(
+            target=self._background_connect,
+            args=(command, ssid),
+            kwargs={"enable_autoconnect_on_success": True},
+            daemon=True,
+        ).start()
+
+        return {"command": command, "status": "in_progress", "message": f"Connecting to {ssid}…"}
 
     def handle_remove_network(self, data):
         """Handle remove_network command."""
@@ -199,7 +264,12 @@ class BleProvisionerServer:
         return {"command": command or "unknown", "status": "error", "message": "Unknown command"}
 
     def handle_connect_network(self, data):
-        """Handle connect_network command."""
+        """Handle connect_network command.
+
+        Returns an immediate ``in_progress`` response and dispatches the slow
+        scan+connect to a background thread.  The profile already exists so
+        autoconnect is left as-is.
+        """
         command = data.get('command')
         logger.info(f"Handling {command} command")
         ssid = data.get('data', {}).get('ssid')
@@ -207,33 +277,14 @@ class BleProvisionerServer:
         if not ssid:
             return {"command": command, "status": "error", "message": "SSID required for connection"}
 
-        logger.info(f"Attempting to connect to network: {ssid}")
-        
-        # --- Store current IP before attempting changes --- 
-        self._current_ip_address = nmcli_get_active_ipv4_address() 
-        logger.info(f"IP before connect attempt: {self._current_ip_address}")
+        threading.Thread(
+            target=self._background_connect,
+            args=(command, ssid),
+            kwargs={"enable_autoconnect_on_success": False},
+            daemon=True,
+        ).start()
 
-        # Check if the network is visible (optional but good practice)
-        success_scan, visible, err_scan = nmcli_scan_for_ssid(ssid)
-        if not success_scan:
-            logger.warning(f"Scan for '{ssid}' failed before connection attempt: {err_scan}")
-        elif not visible:
-            logger.warning(f"Network '{ssid}' not visible, connection attempt might fail.")
-            # Allow connection attempt anyway
-
-        # Attempt connection
-        success_connect, connect_msg_or_err = nmcli_connect(ssid)
-
-        # --- Check IP and restart services AFTER connection attempt --- 
-        if success_connect:
-            logger.info(f"Connection initiated for {ssid}. Waiting briefly for network stabilization...")
-            time.sleep(5) # Give the network/DHCP some time
-            self._trigger_service_restart() # Check IP and restart if needed
-            return {"command": command, "status": "success", "message": f"Connection initiated for {ssid}"}
-        else:
-            logger.error(f"Connection attempt failed for {ssid}: {connect_msg_or_err}")
-            # Don't trigger restart if connection failed
-            return {"command": command, "status": "error", "message": f"Connection attempt failed for {ssid}: {connect_msg_or_err}"}
+        return {"command": command, "status": "in_progress", "message": f"Connecting to {ssid}…"}
 
     # --- BLE Callbacks ---
     def write_callback(self, value, options=None):
