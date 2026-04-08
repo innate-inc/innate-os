@@ -90,15 +90,24 @@ done
 
 tmux select-window -t $SESSION_NAME:"${WINDOW_NAMES[1]}"
 
-echo "✓ ROS nodes launched in tmux session '$SESSION_NAME'"
-echo "  Attach: tmux attach -t $SESSION_NAME"
+echo ""
+echo "  ╔══════════════════════════════════════════════╗"
+echo "  ║                                              ║"
+echo "  ║   ██ ███    ██ ███    ██  █████  ████████    ║"
+echo "  ║   ██ ████   ██ ████   ██ ██   ██    ██       ║"
+echo "  ║   ██ ██ ██  ██ ██ ██  ██ ███████    ██       ║"
+echo "  ║   ██ ██  ██ ██ ██  ██ ██ ██   ██    ██       ║"
+echo "  ║   ██ ██   ████ ██   ████ ██   ██    ██       ║"
+echo "  ║                                              ║"
+echo "  ║         ✓  All systems launched              ║"
+echo "  ║                                              ║"
+printf "  ║   Session:  %-33s║\n" "$SESSION_NAME"
+printf "  ║   Windows:  %-33s║\n" "${#WINDOW_NAMES[@]}"
+printf "  ║   Attach:   %-33s║\n" "tmux attach -t $SESSION_NAME"
+echo "  ║                                              ║"
+echo "  ╚══════════════════════════════════════════════╝"
 echo ""
 
-# Wait for processes to initialize then play startup sound
-(sleep 20 && XDG_RUNTIME_DIR=/run/user/1000 gst-play-1.0 "$INNATE_OS_ROOT/sounds/turnon.mp3" 2>/dev/null) &
-
-while tmux has-session -t $SESSION_NAME 2>/dev/null; do
-    sleep 5
-done
-
-echo "Tmux session ended." 
+# Play startup sound after processes initialize (backgrounded, detached from terminal)
+(sleep 20 && XDG_RUNTIME_DIR=/run/user/1000 gst-play-1.0 "$INNATE_OS_ROOT/sounds/turnon.mp3" >/dev/null 2>&1) &
+disown
