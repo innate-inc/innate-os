@@ -931,7 +931,9 @@ class _UpdateManager:
             print(f"Changes to be applied for {target}:")
             self._show_commits("HEAD", target, commits, max_show=20)
 
-        return self._do_git_update(target, target, current)
+        return self._do_git_update(
+            self.config.branch, target, current, track_remote=target,
+        )
 
     def _apply_tag_mode(self, current: str) -> int:
         latest_tag = self.git.get_latest_tag(stable_only=True)
@@ -960,7 +962,9 @@ class _UpdateManager:
         print(f"Changes to be applied for {latest_tag}:")
         self._show_commits("HEAD", latest_tag, commits_behind, max_show=20)
 
-        return self._do_git_update(latest_tag, latest_tag, current)
+        return self._do_git_update(
+            self.config.branch, latest_tag, current, track_remote=latest_tag,
+        )
 
     def _do_git_update(self, target_ref, target_display, old_commit, skip_confirm=False, track_remote=None):
         if not skip_confirm and not self.yes:
