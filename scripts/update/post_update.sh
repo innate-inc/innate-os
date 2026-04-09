@@ -674,6 +674,21 @@ if [ -d "$DIRECTIVES_DIR" ]; then
 fi
 
 # -----------------------------------------------------------------------------
+# 11b. Download skill assets from metadata.json
+# -----------------------------------------------------------------------------
+for meta_file in "$REPO_DIR"/skills/*/metadata.json; do
+    [ -f "$meta_file" ] || continue
+    jq -r '.downloads // {} | to_entries[] | "\(.key)\t\(.value)"' "$meta_file" 2>/dev/null | \
+    while IFS=$'\t' read -r fname url; do
+        dest="$(dirname "$meta_file")/$fname"
+        [ -f "$dest" ] && continue
+        log "  Downloading $dest"
+        sudo -u "$ACTUAL_USER" curl -fsSL -o "$dest.tmp" "$url"
+        mv "$dest.tmp" "$dest"
+    done
+done
+
+# -----------------------------------------------------------------------------
 # 12. Enable and restart services
 # -----------------------------------------------------------------------------
 log "Enabling and starting services..."
