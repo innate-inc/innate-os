@@ -1,3 +1,6 @@
+# Generated files
+scripts/completions/
+
 # Colcon build and install directories
 build/
 install/
