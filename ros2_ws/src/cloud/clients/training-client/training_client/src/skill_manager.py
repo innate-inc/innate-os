@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Generator
 
 from .client import APIError, OrchestratorClient
-from .compression import cleanup_compressed
 from .downloader import download_results, download_skill_data, download_files
 from .types import (
     ClientConfig,
@@ -249,16 +248,13 @@ class SkillManager:
         if not filenames:
             raise ValueError(f"No files found in {source_dir}")
 
-        use_zstd = not _is_h264_dataset(source_dir / "data")
-        url_filenames = [f + ".zst" for f in filenames] if use_zstd else filenames
-
         yield ProgressUpdate(
             stage=ProgressStage.UPLOADING,
             message=f"Uploading {len(filenames)} file(s) to skill {skill_id}",
             skill_id=skill_id,
         )
 
-        url_resp = self.client.request_file_urls(skill_id, url_filenames)
+        url_resp = self.client.request_file_urls(skill_id, filenames)
 
         yield from upload_data_files(
             client=self.client,
@@ -267,7 +263,6 @@ class SkillManager:
             filenames=filenames,
             upload_urls=url_resp.get("upload_urls", {}),
             download_urls=url_resp.get("download_urls", {}),
-            compress=use_zstd,
         )
 
         yield ProgressUpdate(
@@ -472,29 +467,9 @@ class SkillManager:
             dest_dir=Path(dest_dir),
         )
 
-    # ── Cleanup ─────────────────────────────────────────────────────
-
-    def cleanup(self, source_dir: str | Path) -> None:
-        """Remove local .zst files from a source directory."""
-        source_dir = Path(source_dir).resolve()
-        if source_dir.is_dir():
-            filenames = _enumerate_files(source_dir)
-            cleanup_compressed(source_dir, filenames)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
-
-
-def _is_h264_dataset(data_dir: Path) -> bool:
-    """Check if the dataset has been converted to H.264 format."""
-    meta_path = data_dir / "dataset_metadata.json"
-    if not meta_path.is_file():
-        return False
-    try:
-        meta = json.loads(meta_path.read_text())
-        return meta.get("dataset_type") == "h264"
-    except (json.JSONDecodeError, OSError):
-        return False
 
 
 def _enumerate_files(source_dir: Path) -> list[str]:
@@ -507,10 +482,6 @@ def _enumerate_files(source_dir: Path) -> list[str]:
 
     def _should_skip(rel: Path) -> bool:
         if any(p.startswith(".") or p == "__pycache__" for p in rel.parts):
-            return True
-        if rel.suffix == ".zst" or rel.name.endswith(".zst.tmp"):
-            return True
-        if rel.suffix == ".bak":
             return True
         if rel.name in (SKILL_JSON, METADATA_JSON):
             return True

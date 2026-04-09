@@ -2,14 +2,14 @@
 Convert HDF5 episodes from raw-image format to H.264 MP4 + stripped HDF5.
 
 For each episode_N.h5 in the data directory:
-  1. Back up the original as episode_N.h5.bak
+  1. Move the original to raw_data/ (sibling of data/)
   2. Encode each camera's image stack to an MP4 via GStreamer x264enc
   3. Write a new episode_N.h5 without /observations/images/
   4. Update dataset_metadata.json (dataset_type h5 -> h264)
 
 The conversion is idempotent: if dataset_type is already "h264", no work
 is done.  Partially-completed conversions are detected by the presence of
-.bak files and resumed.
+files in raw_data/ and resumed.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from .types import FileProgress, ProgressStage, ProgressUpdate
 logger = logging.getLogger(__name__)
 
 DATASET_METADATA = "dataset_metadata.json"
+RAW_DATA_DIR = "raw_data"
 
 
 def convert_episodes_to_h264(
@@ -38,7 +39,7 @@ def convert_episodes_to_h264(
     """Convert all episodes under *data_dir* from raw-image HDF5 to H.264.
 
     Yields :class:`ProgressUpdate` with ``stage=COMPRESSING`` matching the
-    existing zstd compression progress pattern.
+    existing upload progress pattern.
     """
     meta_path = data_dir / DATASET_METADATA
     if not meta_path.is_file():
@@ -57,7 +58,10 @@ def convert_episodes_to_h264(
     if not episodes:
         return
 
-    work_items = _build_work_list(data_dir, episodes)
+    raw_dir = data_dir.parent / RAW_DATA_DIR
+    raw_dir.mkdir(exist_ok=True)
+
+    work_items = _build_work_list(data_dir, raw_dir, episodes)
     if not work_items:
         return
 
@@ -66,7 +70,7 @@ def convert_episodes_to_h264(
     for idx, item in enumerate(work_items, start=1):
         if item["kind"] == "mp4":
             h5_path = data_dir / item["h5_file"]
-            bak_path = h5_path.with_suffix(".h5.bak")
+            raw_path = raw_dir / item["h5_file"]
             mp4_path = data_dir / item["filename"]
             cam_name = item["camera"]
 
@@ -80,9 +84,9 @@ def convert_episodes_to_h264(
                 )
                 continue
 
-            if not bak_path.exists():
-                shutil.copy2(str(h5_path), str(bak_path))
-                logger.info("Backed up %s -> %s", h5_path.name, bak_path.name)
+            if not raw_path.exists():
+                shutil.move(str(h5_path), str(raw_path))
+                logger.info("Moved %s -> raw_data/%s", h5_path.name, raw_path.name)
 
             yield ProgressUpdate(
                 stage=ProgressStage.COMPRESSING,
@@ -93,7 +97,7 @@ def convert_episodes_to_h264(
             )
 
             try:
-                _encode_camera_to_mp4(bak_path, cam_name, mp4_path, fps)
+                _encode_camera_to_mp4(raw_path, cam_name, mp4_path, fps)
             except Exception as e:
                 yield ProgressUpdate(
                     stage=ProgressStage.ERROR,
@@ -110,7 +114,7 @@ def convert_episodes_to_h264(
 
         elif item["kind"] == "strip":
             h5_path = data_dir / item["filename"]
-            bak_path = h5_path.with_suffix(".h5.bak")
+            raw_path = raw_dir / item["filename"]
 
             yield ProgressUpdate(
                 stage=ProgressStage.COMPRESSING,
@@ -121,7 +125,7 @@ def convert_episodes_to_h264(
             )
 
             try:
-                _strip_images_from_h5(bak_path, h5_path)
+                _strip_images_from_h5(raw_path, h5_path)
             except Exception as e:
                 yield ProgressUpdate(
                     stage=ProgressStage.ERROR,
@@ -137,7 +141,6 @@ def convert_episodes_to_h264(
                 raise
 
     _update_metadata(data_dir, meta, episodes)
-    _cleanup_backups(data_dir)
 
     yield ProgressUpdate(
         stage=ProgressStage.COMPRESSING,
@@ -146,7 +149,7 @@ def convert_episodes_to_h264(
 
 
 def _build_work_list(
-    data_dir: Path, episodes: list[dict]
+    data_dir: Path, raw_dir: Path, episodes: list[dict]
 ) -> list[dict]:
     """Build a flat list of work items (MP4 encodes + H5 strips)."""
     items: list[dict] = []
@@ -155,15 +158,15 @@ def _build_work_list(
         if not h5_file:
             continue
 
+        raw_path = raw_dir / h5_file
         h5_path = data_dir / h5_file
-        bak_path = h5_path.with_suffix(".h5.bak")
-        source = bak_path if bak_path.exists() else h5_path
+        source = raw_path if raw_path.exists() else h5_path
 
         if not source.exists():
             logger.warning("Episode file %s not found, skipping", h5_file)
             continue
 
-        stem = h5_path.stem  # e.g. "episode_0"
+        stem = h5_path.stem
 
         with h5py.File(str(source), "r") as f:
             obs = f.get("observations")
@@ -252,11 +255,11 @@ def _encode_camera_to_mp4(
     )
 
 
-def _strip_images_from_h5(bak_path: Path, dest_path: Path) -> None:
-    """Create a copy of *bak_path* at *dest_path* without /observations/images/."""
+def _strip_images_from_h5(raw_path: Path, dest_path: Path) -> None:
+    """Create a copy of *raw_path* at *dest_path* without /observations/images/."""
     tmp_path = dest_path.with_suffix(".h5.tmp")
     try:
-        with h5py.File(str(bak_path), "r") as src, h5py.File(str(tmp_path), "w") as dst:
+        with h5py.File(str(raw_path), "r") as src, h5py.File(str(tmp_path), "w") as dst:
             for key in src:
                 if key == "observations":
                     obs_grp = dst.create_group("observations")
@@ -271,12 +274,12 @@ def _strip_images_from_h5(bak_path: Path, dest_path: Path) -> None:
         tmp_path.unlink(missing_ok=True)
         raise
 
-    bak_size = bak_path.stat().st_size
+    raw_size = raw_path.stat().st_size
     stripped_size = dest_path.stat().st_size
     logger.info(
         "Stripped %s: %.1f MB -> %.1f MB",
         dest_path.name,
-        bak_size / 1e6,
+        raw_size / 1e6,
         stripped_size / 1e6,
     )
 
@@ -284,12 +287,8 @@ def _strip_images_from_h5(bak_path: Path, dest_path: Path) -> None:
 def _update_metadata(
     data_dir: Path, meta: dict, episodes: list[dict]
 ) -> None:
-    """Back up dataset_metadata.json and update dataset_type + per-episode video_files."""
+    """Update dataset_metadata.json with dataset_type and per-episode video_files."""
     meta_path = data_dir / DATASET_METADATA
-    bak_path = meta_path.with_suffix(".json.bak")
-
-    if not bak_path.exists():
-        shutil.copy2(str(meta_path), str(bak_path))
 
     meta["dataset_type"] = "h264"
 
@@ -308,18 +307,3 @@ def _update_metadata(
 
     meta_path.write_text(json.dumps(meta, indent=4) + "\n")
     logger.info("Updated %s: dataset_type -> h264", DATASET_METADATA)
-
-
-def _cleanup_backups(data_dir: Path) -> None:
-    """Remove .bak files after successful conversion."""
-    removed = 0
-    freed = 0
-    for bak in sorted(data_dir.glob("*.bak")):
-        freed += bak.stat().st_size
-        bak.unlink()
-        removed += 1
-    if removed:
-        logger.info(
-            "Cleaned up %d backup file(s), freed %.1f GB",
-            removed, freed / 1e9,
-        )
