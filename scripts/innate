@@ -704,12 +704,13 @@ class _GitRepo:
 class _UpdateManager:
     """Core update logic: check, apply, status, daemon."""
 
-    def __init__(self, config: _UpdateConfig, logger: _UpdateLogger, dev_mode: bool = False, yes: bool = False, target: str = None):
+    def __init__(self, config: _UpdateConfig, logger: _UpdateLogger, dev_mode: bool = False, yes: bool = False, target: str = None, skip_ros_clean: bool = False):
         self.config = config
         self.logger = logger
         self.dev_mode = dev_mode
         self.yes = yes
         self.target = target
+        self.skip_ros_clean = skip_ros_clean
         self.git = _GitRepo(config)
         self.services = _UpdateServiceManager(config, logger)
 
@@ -993,7 +994,10 @@ class _UpdateManager:
 
         if post_update_script.exists():
             self.logger.info("Running post-update script...")
-            result = subprocess.run(["sudo", str(post_update_script)], check=False)
+            cmd = ["sudo", str(post_update_script)]
+            if self.skip_ros_clean:
+                cmd.append("--skip-ros-clean")
+            result = subprocess.run(cmd, check=False)
             if result.returncode == 0:
                 self.logger.success("Post-update script completed")
             else:
@@ -1139,10 +1143,10 @@ class _UpdateManager:
             time.sleep(self.config.daemon_interval)
 
 
-def _make_update_manager(dev=False, yes=False, target=None):
+def _make_update_manager(dev=False, yes=False, target=None, skip_ros_clean=False):
     config = _UpdateConfig()
     logger = _UpdateLogger(config.log_dir / "update.log")
-    return _UpdateManager(config, logger, dev_mode=dev, yes=yes, target=target)
+    return _UpdateManager(config, logger, dev_mode=dev, yes=yes, target=target, skip_ros_clean=skip_ros_clean)
 
 
 # ---------------------------------------------------------------------------
@@ -1265,8 +1269,9 @@ def volume(level):
 
 @cli.group("update", invoke_without_command=True)
 @click.option("--dev", "-d", is_flag=True, help="Use dev mode (pre-release tags, branch targets)")
+@click.option("--skip-ros-clean", is_flag=True, hidden=True)
 @click.pass_context
-def update(ctx, dev):
+def update(ctx, dev, skip_ros_clean):
     """Check and apply Innate-OS updates.
 
     \b
@@ -1276,6 +1281,7 @@ def update(ctx, dev):
     """
     ctx.ensure_object(dict)
     ctx.obj["dev"] = dev
+    ctx.obj["skip_ros_clean"] = skip_ros_clean
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
@@ -1304,10 +1310,13 @@ def apply(ctx, yes, background, in_tmux, target):
       innate update apply 0.5.0              Apply a specific target
     """
     dev = ctx.obj["dev"]
+    skip_ros_clean = ctx.obj["skip_ros_clean"]
     if background and not in_tmux:
         cmd = ["tmux", "new-session", "-d", "-s", "innate_update", "innate", "update"]
         if dev:
             cmd.append("--dev")
+        if skip_ros_clean:
+            cmd.append("--skip-ros-clean")
         cmd.extend(["apply", "--in-tmux"])
         if yes:
             cmd.append("--yes")
@@ -1322,7 +1331,7 @@ def apply(ctx, yes, background, in_tmux, target):
             print("Failed to start background update session", file=sys.stderr)
             sys.exit(1)
 
-    sys.exit(_make_update_manager(dev=dev, yes=yes, target=target).apply())
+    sys.exit(_make_update_manager(dev=dev, yes=yes, target=target, skip_ros_clean=ctx.obj["skip_ros_clean"]).apply())
 
 
 @update.command()
@@ -1338,14 +1347,18 @@ def daemon():
 
 
 @update.command("reinstall")
-def reinstall():
+@click.pass_context
+def reinstall(ctx):
     """Re-run post-update script (systemd, sudoers, deps, rebuild)."""
     script = INNATE_OS_ROOT / "scripts" / "update" / "post_update.sh"
     if not script.exists():
         fail(f"Post-update script not found: {script}")
         sys.exit(1)
+    cmd = ["sudo", str(script)]
+    if ctx.obj["skip_ros_clean"]:
+        cmd.append("--skip-ros-clean")
     print(f"  Running {script}...")
-    r = run(["sudo", str(script)])
+    r = run(cmd)
     sys.exit(r.returncode)
 
 

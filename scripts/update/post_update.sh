@@ -30,6 +30,16 @@ else
 fi
 
 
+# Parse arguments
+SKIP_ROS_CLEAN=false
+for arg in "$@"; do
+    case $arg in
+        --skip-ros-clean)
+            SKIP_ROS_CLEAN=true
+            ;;
+    esac
+done
+
 # Check for root privileges
 if [ "$(id -u)" -ne 0 ]; then
     echo "This script must be run as root. Please use sudo." >&2
@@ -488,7 +498,12 @@ if [ -d "$REPO_DIR/ros2_ws/src" ]; then
     cd "$REPO_DIR/ros2_ws"
 
     # Run as the actual user, not root
-    sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
+    if [ "$SKIP_ROS_CLEAN" = true ]; then
+        log "  Skipping clean build (--skip-ros-clean)"
+        sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && colcon build"
+    else
+        sudo -u "$ACTUAL_USER" bash -c "cd $REPO_DIR/ros2_ws && source /opt/ros/humble/setup.bash && rm -rf build/ install/ log/ && colcon build"
+    fi
 
     if [ $? -eq 0 ]; then
         log "ROS2 workspace rebuilt successfully"
