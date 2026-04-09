@@ -27,6 +27,7 @@ from .types import (
     ProgressStage,
     ProgressUpdate,
 )
+from .episode_converter import convert_episodes_to_h264
 from .uploader import upload_data_files
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,8 @@ class SkillManager:
         source_dir = Path(source_dir).resolve()
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
+
+        yield from convert_episodes_to_h264(source_dir / "data")
 
         filenames = _enumerate_files(source_dir)
         if not filenames:
@@ -492,6 +495,8 @@ def _enumerate_files(source_dir: Path) -> list[str]:
         if any(p.startswith(".") or p == "__pycache__" for p in rel.parts):
             return True
         if rel.suffix == ".zst" or rel.name.endswith(".zst.tmp"):
+            return True
+        if rel.suffix == ".bak":
             return True
         if rel.name in (SKILL_JSON, METADATA_JSON):
             return True

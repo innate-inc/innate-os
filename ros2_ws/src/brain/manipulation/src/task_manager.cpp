@@ -32,6 +32,7 @@ void TaskManager::start_new_task_at_directory(const std::string& task_name, cons
     // Initialize metadata
     metadata_ = {
         {"data_frequency", data_frequency},
+        {"dataset_type", "h5"},
         {"number_of_episodes", 0},
         {"episodes", nlohmann::json::array()}
     };
@@ -47,6 +48,7 @@ void TaskManager::resume_task_at_directory(const std::string& task_name, const s
         std::cerr << "No dataset_metadata.json for '" << task_name << "'. Starting fresh." << std::endl;
         metadata_ = {
             {"data_frequency", 0},
+            {"dataset_type", "h5"},
             {"number_of_episodes", 0},
             {"episodes", nlohmann::json::array()}
         };
@@ -121,6 +123,7 @@ void TaskManager::load_metadata() {
         std::cerr << "Cannot open " << metadata_path << ". Reinitializing metadata." << std::endl;
         metadata_ = {
             {"data_frequency", 0},
+            {"dataset_type", "h5"},
             {"number_of_episodes", 0},
             {"episodes", nlohmann::json::array()}
         };
@@ -208,6 +211,7 @@ std::optional<nlohmann::json> TaskManager::get_enriched_metadata_for_task(const 
         {"task_name", task_name},
         {"task_directory", task_directory},
         {"data_frequency", dataset_metadata.value("data_frequency", 0)},
+        {"dataset_type", dataset_metadata.value("dataset_type", "h5")},
         {"number_of_episodes", dataset_metadata.value("number_of_episodes", 0)},
         {"episodes", processed_episodes}
     };
