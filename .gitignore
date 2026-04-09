@@ -2,6 +2,9 @@
 build/
 install/
 log/
+
+# Generated CLI artifacts
+scripts/build/
 ros2_ws/src/brain/manipulation/ckpts/*
 
 # Python artifacts
