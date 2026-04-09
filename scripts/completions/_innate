@@ -86,13 +86,14 @@ _innate() {
               case $words[1] in
                 apply)
                   _arguments \
-                    '--dev[Use latest commit instead of latest tag]' \
+                    '--dev[Dev mode: check lists all newer tags, apply requires a target]' \
                     '--yes[Skip confirmation prompts]' \
-                    '--background[Run in background tmux session]'
+                    '--background[Run in background tmux session]' \
+                    '1:target:(main)'
                   ;;
                 check)
                   _arguments \
-                    '--dev[Use latest commit instead of latest tag]'
+                    '--dev[List all newer tags including pre-release]'
                   ;;
               esac
               ;;

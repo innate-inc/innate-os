@@ -8,6 +8,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import re
+
 import click
 
 
@@ -595,21 +597,66 @@ class _GitRepo:
         result = self._run(["config", "--get", "remote.origin.url"], check=False)
         return result.stdout.strip() if result.returncode == 0 else "unknown"
 
-    def get_latest_tag(self) -> str:
+    @staticmethod
+    def is_stable_tag(tag: str) -> bool:
+        """Return True for strict x.y.z tags (no suffix)."""
+        return bool(re.match(r"^\d+\.\d+\.\d+$", tag))
+
+    def get_all_tags(self) -> list[str]:
+        """Get all tags merged into origin/{branch}, sorted by version descending."""
         result = self._run(
             ["tag", "--sort=-v:refname", "--merged", f"origin/{self.branch}"],
             check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split("\n")[0]
-        result = self._run(["tag", "--sort=-v:refname"], check=False)
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split("\n")[0]
-        return ""
+            return result.stdout.strip().split("\n")
+        return []
+
+    def get_latest_tag(self, stable_only: bool = False) -> str:
+        """Get the latest tag. If stable_only, only consider x.y.z tags."""
+        tags = self.get_all_tags()
+        if stable_only:
+            tags = [t for t in tags if self.is_stable_tag(t)]
+        return tags[0] if tags else ""
 
     def get_current_tag(self) -> str:
-        result = self._run(["describe", "--tags", "--exact-match", "HEAD"], check=False)
-        return result.stdout.strip() if result.returncode == 0 else ""
+        """Get tag at HEAD. If multiple tags, prefer the stable one."""
+        result = self._run(["tag", "--points-at", "HEAD"], check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            return ""
+        tags = result.stdout.strip().split("\n")
+        stable = [t for t in tags if self.is_stable_tag(t)]
+        return stable[0] if stable else tags[0]
+
+    def get_tags_newer_than(self, ref: str) -> list[str]:
+        """Get all tags merged into origin/{branch} that are newer than ref.
+
+        Deduplicates: if a stable and pre-release tag share a commit, only the stable one is kept.
+        Returns tags sorted by version descending.
+        """
+        all_tags = self.get_all_tags()
+        ref_commit = self.resolve_ref(ref)
+
+        newer = []
+        seen_commits = {}
+        for tag in all_tags:
+            tag_commit = self.resolve_ref(tag)
+            if tag_commit == ref_commit:
+                continue
+            if not self.is_ancestor(ref_commit, tag_commit):
+                continue
+            # Dedup: prefer stable tag for a given commit
+            if tag_commit in seen_commits:
+                existing = seen_commits[tag_commit]
+                if self.is_stable_tag(tag) and not self.is_stable_tag(existing):
+                    newer = [t for t in newer if t != existing]
+                    newer.append(tag)
+                    seen_commits[tag_commit] = tag
+            else:
+                newer.append(tag)
+                seen_commits[tag_commit] = tag
+
+        return newer
 
     def resolve_ref(self, ref: str) -> str:
         result = self._run(["rev-parse", ref], check=False)
@@ -657,11 +704,12 @@ class _GitRepo:
 class _UpdateManager:
     """Core update logic: check, apply, status, daemon."""
 
-    def __init__(self, config: _UpdateConfig, logger: _UpdateLogger, dev_mode: bool = False, yes: bool = False):
+    def __init__(self, config: _UpdateConfig, logger: _UpdateLogger, dev_mode: bool = False, yes: bool = False, target: str = None):
         self.config = config
         self.logger = logger
         self.dev_mode = dev_mode
         self.yes = yes
+        self.target = target
         self.git = _GitRepo(config)
         self.services = _UpdateServiceManager(config, logger)
 
@@ -736,27 +784,42 @@ class _UpdateManager:
         return self._check_tag_mode(current)
 
     def _check_dev_mode(self, current: str) -> int:
-        target = self.git.resolve_ref(f"origin/{self.config.branch}")
-        commits_behind = self.git.commits_between("HEAD", f"origin/{self.config.branch}")
-        self._write_cache(str(commits_behind))
+        current_tag = self.git.get_current_tag()
+        newer_tags = self.git.get_tags_newer_than("HEAD")
+        on_main = self.git.current_branch() == self.config.branch
+        commits_behind = self.git.commits_between(
+            "HEAD", f"origin/{self.config.branch}"
+        ) if on_main else 0
 
-        if commits_behind == 0:
-            self.logger.success("System is up to date (dev mode)")
-            print(f"Current: {current[:7]}")
+        if not newer_tags and commits_behind == 0:
+            self.logger.success("System is up to date (dev)")
+            print(f"Current: {current_tag or current[:7]}")
             return 0
 
-        self.logger.warning(f"Updates available (dev mode): {commits_behind} new commit(s)")
-        print(f"Current: {current[:7]}")
-        print(f"Latest:  {target[:7]}")
+        print(f"Current: {current_tag or current[:7]}")
         print()
-        print("Recent changes:")
-        self._show_commits("HEAD", f"origin/{self.config.branch}", commits_behind)
-        print()
-        print("Run 'innate update apply --dev' to install updates")
+
+        if newer_tags:
+            self.logger.warning(f"{len(newer_tags)} newer tag(s) available:")
+            for tag in newer_tags:
+                tag_commit = self.git.resolve_ref(tag)
+                stable = "" if self.git.is_stable_tag(tag) else " (pre-release)"
+                print(f"  {tag} ({tag_commit[:7]}){stable}")
+            print()
+
+        if commits_behind > 0:
+            remote_tip = self.git.resolve_ref(f"origin/{self.config.branch}")
+            print(f"{commits_behind} commit(s) ahead on {self.config.branch} ({remote_tip[:7]})")
+            print()
+
+        hint = "Run 'innate update apply --dev <tag>'"
+        if on_main:
+            hint += f" or 'innate update apply --dev {self.config.branch}'"
+        print(hint)
         return 1
 
     def _check_tag_mode(self, current: str) -> int:
-        latest_tag = self.git.get_latest_tag()
+        latest_tag = self.git.get_latest_tag(stable_only=True)
         current_tag = self.git.get_current_tag()
 
         if not latest_tag:
@@ -800,6 +863,25 @@ class _UpdateManager:
     def apply(self) -> int:
         """Apply available updates."""
         self._check_repo()
+
+        # For dev mode without target, fail fast before banner/fetch
+        if self.dev_mode and not self.target:
+            self.git.fetch()
+            newer_tags = self.git.get_tags_newer_than("HEAD")
+            self.logger.error("No target specified. Usage: innate update apply --dev <target>")
+            print()
+            if newer_tags:
+                print("Available tags:")
+                for tag in newer_tags:
+                    stable = "" if self.git.is_stable_tag(tag) else " (pre-release)"
+                    print(f"  {tag}{stable}")
+                print()
+            print("Examples:")
+            print("  innate update apply --dev 0.5.0-rc1")
+            if self.git.current_branch() == self.config.branch:
+                print(f"  innate update apply --dev {self.config.branch}")
+            return 1
+
         self._create_update_lock()
 
         print()
@@ -811,34 +893,56 @@ class _UpdateManager:
         self.git.fetch()
         current = self.git.current_commit()
 
-        if self.dev_mode:
+        if self.dev_mode or self.target:
             return self._apply_dev_mode(current)
         return self._apply_tag_mode(current)
 
     def _apply_dev_mode(self, current: str) -> int:
-        remote_ref = f"origin/{self.config.branch}"
-        target_display = f"latest commit on {self.config.branch}"
-        commits_behind = self.git.commits_between("HEAD", remote_ref)
+        """Apply updates to a specific target (tag or branch)."""
+        target = self.target
 
-        if commits_behind == 0:
-            self.logger.success("Already up to date (dev mode)")
+        # If target is the branch name, track remote branch
+        if target == self.config.branch:
+            remote_ref = f"origin/{self.config.branch}"
+            commits_behind = self.git.commits_between("HEAD", remote_ref)
+            if commits_behind == 0:
+                self.logger.success(f"Already up to date with {self.config.branch}")
+                self._remove_update_lock()
+                return 0
+
+            self.logger.info(f"Updating to latest on {self.config.branch} ({commits_behind} commits)")
+            print()
+            print("Changes to be applied:")
+            self._show_commits("HEAD", remote_ref, commits_behind, max_show=20)
+
+            return self._do_git_update(
+                self.config.branch, f"latest on {self.config.branch}", current,
+                track_remote=remote_ref,
+            )
+
+        # Target is a tag — verify it exists
+        tag_commit = self.git.resolve_ref(target)
+        if tag_commit == "unknown":
+            self.logger.error(f"Unknown target: {target}")
+            self._remove_update_lock()
+            return 1
+
+        if tag_commit == current:
+            self.logger.success(f"Already at {target}")
             self._remove_update_lock()
             return 0
 
-        self.logger.info(f"Found {commits_behind} commit(s) to apply (dev mode)")
-        print()
-        print("Changes to be applied:")
-        self._show_commits("HEAD", remote_ref, commits_behind, max_show=20)
+        commits = self.git.commits_between("HEAD", target)
+        self.logger.info(f"Updating to {target} ({commits} commits)")
+        if commits > 0:
+            print()
+            print(f"Changes to be applied for {target}:")
+            self._show_commits("HEAD", target, commits, max_show=20)
 
-        return self._do_git_update(
-            self.config.branch,
-            target_display,
-            current,
-            track_remote=remote_ref,
-        )
+        return self._do_git_update(target, target, current)
 
     def _apply_tag_mode(self, current: str) -> int:
-        latest_tag = self.git.get_latest_tag()
+        latest_tag = self.git.get_latest_tag(stable_only=True)
 
         if not latest_tag:
             self.logger.error("No tags found. Use --dev to update to latest commit.")
@@ -1010,7 +1114,7 @@ class _UpdateManager:
         self.git.fetch()
 
         current = self.git.current_commit()
-        latest_tag = self.git.get_latest_tag()
+        latest_tag = self.git.get_latest_tag(stable_only=True)
 
         if not latest_tag:
             return 2
@@ -1049,10 +1153,10 @@ class _UpdateManager:
             time.sleep(self.config.daemon_interval)
 
 
-def _make_update_manager(dev=False, yes=False):
+def _make_update_manager(dev=False, yes=False, target=None):
     config = _UpdateConfig()
     logger = _UpdateLogger(config.log_dir / "update.log")
-    return _UpdateManager(config, logger, dev_mode=dev, yes=yes)
+    return _UpdateManager(config, logger, dev_mode=dev, yes=yes, target=target)
 
 
 # ---------------------------------------------------------------------------
@@ -1182,25 +1286,36 @@ def update(ctx):
 
 
 @update.command()
-@click.option("--dev", "-d", is_flag=True, help="Use latest commit instead of latest tag")
+@click.option("--dev", "-d", is_flag=True, help="List all newer tags including pre-release")
 def check(dev):
-    """Check if updates are available."""
+    """Check if updates are available (stable x.y.z tags by default)."""
     sys.exit(_make_update_manager(dev=dev).check())
 
 
 @update.command()
-@click.option("--dev", "-d", is_flag=True, help="Use latest commit instead of latest tag")
+@click.option("--dev", "-d", is_flag=True, help="Dev mode: check lists all newer tags, apply requires a target")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts")
 @click.option("--background", "-b", is_flag=True, help="Run in background tmux session")
 @click.option("--in-tmux", is_flag=True, hidden=True)
-def apply(dev, yes, background, in_tmux):
-    """Apply pending updates."""
+@click.argument("target", required=False, default=None)
+def apply(dev, yes, background, in_tmux, target):
+    """Apply pending updates.
+
+    \b
+    Examples:
+      innate update apply              Apply latest stable tag
+      innate update apply --dev 0.5.0-rc1   Apply a specific tag
+      innate update apply --dev main   Update to latest commit on main
+      innate update apply 0.5.0        Apply a specific target (without --dev)
+    """
     if background and not in_tmux:
         cmd = ["tmux", "new-session", "-d", "-s", "innate_update", "innate", "update", "apply", "--in-tmux"]
         if dev:
             cmd.append("--dev")
         if yes:
             cmd.append("--yes")
+        if target:
+            cmd.append(target)
         result = subprocess.run(cmd)
         if result.returncode == 0:
             print("Update started in background (tmux session 'innate_update')")
@@ -1210,7 +1325,7 @@ def apply(dev, yes, background, in_tmux):
             print("Failed to start background update session", file=sys.stderr)
             sys.exit(1)
 
-    sys.exit(_make_update_manager(dev=dev, yes=yes).apply())
+    sys.exit(_make_update_manager(dev=dev, yes=yes, target=target).apply())
 
 
 @update.command()
