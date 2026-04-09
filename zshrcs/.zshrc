@@ -11,7 +11,7 @@ export ZSH="$HOME/.oh-my-zsh"
 export INNATE_OS_ROOT="$HOME/innate-os"
 
 export PATH="$INNATE_OS_ROOT/scripts:$PATH"
-fpath=("$INNATE_OS_ROOT/scripts/completions" $fpath)
+fpath=("$INNATE_OS_ROOT/ros2_ws/build/completions" $fpath)
 
 # Make sure cuda is in the path
 export PATH=/usr/local/cuda/bin:$PATH
