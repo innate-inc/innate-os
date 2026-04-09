@@ -763,6 +763,29 @@ class _UpdateManager:
         except Exception:
             pass
 
+    def _print_dev_targets(self):
+        """Print available dev targets (tags + main branch if ahead)."""
+        newer_tags = self.git.get_tags_newer_than("HEAD")
+        on_main = self.git.current_branch() == self.config.branch
+        commits_behind = self.git.commits_between(
+            "HEAD", f"origin/{self.config.branch}"
+        ) if on_main else 0
+
+        print("Available targets:")
+        if newer_tags:
+            for tag in newer_tags:
+                tag_commit = self.git.resolve_ref(tag)
+                stable = "" if self.git.is_stable_tag(tag) else " (pre-release)"
+                print(f"  {tag} ({tag_commit[:7]}){stable}")
+        else:
+            print("  No newer tags")
+        if commits_behind > 0:
+            remote_tip = self.git.resolve_ref(f"origin/{self.config.branch}")
+            print(f"  {self.config.branch} ({remote_tip[:7]}, {commits_behind} commit(s) ahead)")
+        elif on_main:
+            print(f"  No new commits on {self.config.branch}")
+        print()
+
     # -- check ----------------------------------------------------------------
 
     def check(self) -> int:
@@ -785,38 +808,11 @@ class _UpdateManager:
 
     def _check_dev_mode(self, current: str) -> int:
         current_tag = self.git.get_current_tag()
-        newer_tags = self.git.get_tags_newer_than("HEAD")
-        on_main = self.git.current_branch() == self.config.branch
-        commits_behind = self.git.commits_between(
-            "HEAD", f"origin/{self.config.branch}"
-        ) if on_main else 0
-
-        if not newer_tags and commits_behind == 0:
-            self.logger.success("System is up to date (dev)")
-            print(f"Current: {current_tag or current[:7]}")
-            return 0
-
         print(f"Current: {current_tag or current[:7]}")
         print()
-
-        if newer_tags:
-            self.logger.warning(f"{len(newer_tags)} newer tag(s) available:")
-            for tag in newer_tags:
-                tag_commit = self.git.resolve_ref(tag)
-                stable = "" if self.git.is_stable_tag(tag) else " (pre-release)"
-                print(f"  {tag} ({tag_commit[:7]}){stable}")
-            print()
-
-        if commits_behind > 0:
-            remote_tip = self.git.resolve_ref(f"origin/{self.config.branch}")
-            print(f"{commits_behind} commit(s) ahead on {self.config.branch} ({remote_tip[:7]})")
-            print()
-
-        hint = "Run 'innate update --dev apply <tag>'"
-        if on_main:
-            hint += f" or 'innate update --dev apply {self.config.branch}'"
-        print(hint)
-        return 1
+        self._print_dev_targets()
+        print("Run 'innate update --dev apply <target>'")
+        return 0
 
     def _check_tag_mode(self, current: str) -> int:
         latest_tag = self.git.get_latest_tag(stable_only=True)
@@ -867,19 +863,9 @@ class _UpdateManager:
         # For dev mode without target, fail fast before banner/fetch
         if self.dev_mode and not self.target:
             self.git.fetch()
-            newer_tags = self.git.get_tags_newer_than("HEAD")
             self.logger.error("No target specified. Usage: innate update --dev apply <target>")
             print()
-            if newer_tags:
-                print("Available tags:")
-                for tag in newer_tags:
-                    stable = "" if self.git.is_stable_tag(tag) else " (pre-release)"
-                    print(f"  {tag}{stable}")
-                print()
-            print("Examples:")
-            print("  innate update --dev apply 0.5.0-rc1")
-            if self.git.current_branch() == self.config.branch:
-                print(f"  innate update --dev apply {self.config.branch}")
+            self._print_dev_targets()
             return 1
 
         self._create_update_lock()
