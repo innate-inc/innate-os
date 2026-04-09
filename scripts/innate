@@ -196,44 +196,25 @@ def _show_status():
 def _service_start():
     if is_sim_mode():
         return _service_start_sim()
-    return _service_start_hw()
 
-
-def _service_start_hw():
     service = SYSTEMD_SERVICE_HW
     if systemd_active(service):
         warn(f"Already running (systemd: {service})")
-        print(f"  Use {C.BOLD}innate view{C.NC} to attach")
-        print(f"  Use {C.BOLD}innate restart{C.NC} to restart")
         return 0
 
-    print(f"  Starting {service} via systemd...")
     r = run(["sudo", "systemctl", "start", service])
     if r.returncode != 0:
         fail(f"Failed to start {service}")
-        print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
         return 1
 
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if systemd_active(service):
-            ok("ROS nodes started (systemd)")
-            print(f"  Use {C.BOLD}innate view{C.NC} to attach")
-            print(f"  Use {C.BOLD}innate logs -f{C.NC} to follow logs")
-            return 0
-        time.sleep(1)
-
-    fail(f"Service {service} did not become active in time")
-    print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
-    return 1
+    ok("ROS nodes starting (systemd)")
+    return 0
 
 
 def _service_start_sim():
     session = TMUX_SESSION_SIM
     if tmux_session_exists(session):
         warn(f"Already running (tmux session '{session}')")
-        print(f"  Use {C.BOLD}innate view{C.NC} to attach")
-        print(f"  Use {C.BOLD}innate restart{C.NC} to restart")
         return 0
 
     script = LAUNCH_SIM
@@ -241,116 +222,53 @@ def _service_start_sim():
         fail(f"Launch script not found: {script}")
         return 1
 
-    import fcntl
-
-    proc = subprocess.Popen(
+    subprocess.Popen(
         [str(script)],
         cwd=str(INNATE_OS_ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-
-    fd = proc.stdout.fileno()
-    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-    collected = b""
-
-    def drain_output():
-        nonlocal collected
-        try:
-            while True:
-                chunk = proc.stdout.read(4096)
-                if not chunk:
-                    break
-                collected += chunk
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.buffer.flush()
-        except (BlockingIOError, IOError):
-            pass
-
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        drain_output()
-        if b"\xe2\x95\x9a" in collected:  # ╚
-            break
-        time.sleep(0.3)
-
-    proc.stdout.close()
-
-    if tmux_session_exists(session):
-        return 0
-
-    fail("Timed out waiting for tmux session")
-    return 1
+    ok("ROS nodes starting (tmux)")
+    return 0
 
 
 def _service_stop():
     if is_sim_mode():
-        return _service_stop_sim()
-    return _service_stop_hw()
+        session = TMUX_SESSION_SIM
+        if not tmux_session_exists(session):
+            warn("ROS nodes are not running")
+            return 0
+        run(["tmux", "kill-session", "-t", session])
+        ok("ROS nodes stopped")
+        return 0
 
-
-def _service_stop_hw():
     service = SYSTEMD_SERVICE_HW
-    active = systemd_active(service)
-    orphaned_tmux = not active and tmux_session_exists(TMUX_SESSION_HW)
-
-    if not active and not orphaned_tmux:
+    if not systemd_active(service):
         warn("ROS nodes are not running")
         return 0
 
-    if active:
-        print(f"  Stopping {service} via systemd...")
-        r = run(["sudo", "systemctl", "stop", service])
-        if r.returncode != 0:
-            fail(f"Failed to stop {service}")
-            return 1
-        ok("ROS nodes stopped (systemd)")
+    r = run(["sudo", "systemctl", "stop", service])
+    if r.returncode != 0:
+        fail(f"Failed to stop {service}")
+        return 1
 
-    if orphaned_tmux:
-        warn("Found orphaned tmux session (not managed by systemd)")
-        run(["tmux", "kill-session", "-t", TMUX_SESSION_HW])
-        ok("Orphaned tmux session cleaned up")
-
-    return 0
-
-
-def _service_stop_sim():
-    session = TMUX_SESSION_SIM
-    if not tmux_session_exists(session):
-        warn("ROS nodes are not running")
-        return 0
-
-    run(["tmux", "kill-session", "-t", session])
-    ok("ROS nodes stopped")
+    ok("ROS nodes stopped (systemd)")
     return 0
 
 
 def _service_restart():
     if is_sim_mode():
-        _service_stop_sim()
+        _service_stop()
         return _service_start_sim()
 
-    service = SYSTEMD_SERVICE_HW
-    print(f"  Restarting {service} via systemd...")
-    r = run(["sudo", "systemctl", "restart", service])
+    r = run(["sudo", "systemctl", "restart", SYSTEMD_SERVICE_HW])
     if r.returncode != 0:
-        fail(f"Failed to restart {service}")
-        print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
+        fail(f"Failed to restart {SYSTEMD_SERVICE_HW}")
         return 1
 
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if systemd_active(service):
-            ok("ROS nodes restarted (systemd)")
-            return 0
-        time.sleep(1)
-
-    fail(f"Service {service} did not become active after restart")
-    print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
-    return 1
+    ok("ROS nodes restarting (systemd)")
+    return 0
 
 
 def _service_view():
@@ -608,30 +526,15 @@ class _UpdateServiceManager:
     def start(self) -> int:
         if self.is_running():
             self.logger.warning("ROS services already running")
-            print("Use 'innate view' to attach to the session")
-            print("Use 'innate restart' to restart services")
             return 0
 
-        self.logger.info(f"Starting {self.SYSTEMD_SERVICE} via systemd...")
-        try:
-            result = self._run(["sudo", "systemctl", "start", self.SYSTEMD_SERVICE], check=False)
-            if result.returncode != 0:
-                self.logger.error(f"systemctl start failed: {result.stderr.strip()}")
-                return 1
-
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if self._systemd_service_active(self.SYSTEMD_SERVICE):
-                    self.logger.success("ROS services started (systemd)")
-                    print("  Use 'innate view' to attach")
-                    return 0
-                time.sleep(1)
-
-            self.logger.error("Service did not become active in time")
+        result = self._run(["sudo", "systemctl", "start", self.SYSTEMD_SERVICE], check=False)
+        if result.returncode != 0:
+            self.logger.error(f"systemctl start failed: {result.stderr.strip()}")
             return 1
-        except Exception as e:
-            self.logger.error(f"Failed to start services: {e}")
-            return 1
+
+        self.logger.success("ROS services starting (systemd)")
+        return 0
 
     def status(self) -> dict:
         ros_systemd = self._systemd_service_active(self.SYSTEMD_SERVICE)
