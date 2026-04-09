@@ -812,9 +812,9 @@ class _UpdateManager:
             print(f"{commits_behind} commit(s) ahead on {self.config.branch} ({remote_tip[:7]})")
             print()
 
-        hint = "Run 'innate update apply --dev <tag>'"
+        hint = "Run 'innate update --dev apply <tag>'"
         if on_main:
-            hint += f" or 'innate update apply --dev {self.config.branch}'"
+            hint += f" or 'innate update --dev apply {self.config.branch}'"
         print(hint)
         return 1
 
@@ -824,7 +824,7 @@ class _UpdateManager:
 
         if not latest_tag:
             self.logger.warning(f"No tags found on {self.config.branch} branch")
-            print("Use 'innate update check --dev' to check for latest commits instead")
+            print("Use 'innate update --dev check' to check for latest commits instead")
             return 0
 
         latest_tag_commit = self.git.resolve_ref(latest_tag)
@@ -842,7 +842,7 @@ class _UpdateManager:
             print(f"Latest tag: {latest_tag} ({latest_tag_commit[:7]})")
             print()
             print("You are on a development commit ahead of the latest release.")
-            print("Use 'innate update check --dev' to check for newer dev commits.")
+            print("Use 'innate update --dev check' to check for newer dev commits.")
             return 0
 
         self._write_cache("1")
@@ -868,7 +868,7 @@ class _UpdateManager:
         if self.dev_mode and not self.target:
             self.git.fetch()
             newer_tags = self.git.get_tags_newer_than("HEAD")
-            self.logger.error("No target specified. Usage: innate update apply --dev <target>")
+            self.logger.error("No target specified. Usage: innate update --dev apply <target>")
             print()
             if newer_tags:
                 print("Available tags:")
@@ -877,9 +877,9 @@ class _UpdateManager:
                     print(f"  {tag}{stable}")
                 print()
             print("Examples:")
-            print("  innate update apply --dev 0.5.0-rc1")
+            print("  innate update --dev apply 0.5.0-rc1")
             if self.git.current_branch() == self.config.branch:
-                print(f"  innate update apply --dev {self.config.branch}")
+                print(f"  innate update --dev apply {self.config.branch}")
             return 1
 
         self._create_update_lock()
@@ -958,7 +958,7 @@ class _UpdateManager:
 
         if self.git.is_ancestor(latest_tag_commit, current):
             self.logger.warning(f"You are on a dev commit ahead of {latest_tag}")
-            print("Use 'innate update apply --dev' to update to the latest dev commit.")
+            print("Use 'innate update --dev apply' to update to the latest dev commit.")
             self._remove_update_lock()
             return 0
 
@@ -1278,40 +1278,51 @@ def volume(level):
 
 
 @cli.group("update", invoke_without_command=True)
+@click.option("--dev", "-d", is_flag=True, help="Use dev mode (pre-release tags, branch targets)")
 @click.pass_context
-def update(ctx):
-    """Check and apply Innate-OS updates."""
+def update(ctx, dev):
+    """Check and apply Innate-OS updates.
+
+    \b
+    Pass --dev before the subcommand to enable dev mode:
+      innate update --dev check        List all newer tags (including pre-release)
+      innate update --dev apply <tag>  Apply a specific tag or branch
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["dev"] = dev
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
 
 @update.command()
-@click.option("--dev", "-d", is_flag=True, help="List all newer tags including pre-release")
-def check(dev):
+@click.pass_context
+def check(ctx):
     """Check if updates are available (stable x.y.z tags by default)."""
-    sys.exit(_make_update_manager(dev=dev).check())
+    sys.exit(_make_update_manager(dev=ctx.obj["dev"]).check())
 
 
 @update.command()
-@click.option("--dev", "-d", is_flag=True, help="Dev mode: check lists all newer tags, apply requires a target")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts")
 @click.option("--background", "-b", is_flag=True, help="Run in background tmux session")
 @click.option("--in-tmux", is_flag=True, hidden=True)
 @click.argument("target", required=False, default=None)
-def apply(dev, yes, background, in_tmux, target):
+@click.pass_context
+def apply(ctx, yes, background, in_tmux, target):
     """Apply pending updates.
 
     \b
     Examples:
-      innate update apply              Apply latest stable tag
-      innate update apply --dev 0.5.0-rc1   Apply a specific tag
-      innate update apply --dev main   Update to latest commit on main
-      innate update apply 0.5.0        Apply a specific target (without --dev)
+      innate update apply                    Apply latest stable tag
+      innate update --dev apply 0.5.0-rc1    Apply a specific tag
+      innate update --dev apply main         Update to latest commit on main
+      innate update apply 0.5.0              Apply a specific target
     """
+    dev = ctx.obj["dev"]
     if background and not in_tmux:
-        cmd = ["tmux", "new-session", "-d", "-s", "innate_update", "innate", "update", "apply", "--in-tmux"]
+        cmd = ["tmux", "new-session", "-d", "-s", "innate_update", "innate", "update"]
         if dev:
             cmd.append("--dev")
+        cmd.extend(["apply", "--in-tmux"])
         if yes:
             cmd.append("--yes")
         if target:
