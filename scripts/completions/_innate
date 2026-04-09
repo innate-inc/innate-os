@@ -16,10 +16,12 @@ _innate() {
     'build:Stop nodes, build workspace, restart nodes.'
     'clean:Remove build/install/log artifacts.'
     'diag:Run hardware diagnostics.'
+    'logs:View ROS node logs from journald.'
     'restart:Restart all ROS nodes.'
-    'service:Manage ROS nodes (start/stop/restart/view).'
+    'service:Manage ROS nodes via systemd (start/stop/restart/view/logs).'
     'update:Check and apply Innate-OS updates.'
-    'view:Attach to ROS tmux session.'
+    'view:Attach to ROS node tmux session.'
+    'volume:Get or set the robot speaker volume.'
   )
 
   _arguments -C \
@@ -35,6 +37,11 @@ _innate() {
         build)
           _innate_packages
           ;;
+        logs)
+          _arguments \
+            '--follow[Follow log output]' \
+            '--lines[Number of lines to show]'
+          ;;
         service)
           _arguments -C \
             '1:action:->sub' \
@@ -42,12 +49,22 @@ _innate() {
           case $state in
             sub)
               local -a actions=(
-                'restart:Restart all ROS nodes.'
-                'start:Start all ROS nodes.'
-                'stop:Stop all ROS nodes.'
-                'view:Attach to tmux session.'
+                'logs:View ROS node logs from journald.'
+                'restart:Restart all ROS nodes (systemd on hardware, tmux in sim).'
+                'start:Start all ROS nodes (systemd on hardware, tmux in sim).'
+                'stop:Stop all ROS nodes (systemd on hardware, tmux in sim).'
+                'view:Attach to node tmux session.'
               )
               _describe 'service action' actions
+              ;;
+            sub_args)
+              case $words[1] in
+                logs)
+                  _arguments \
+                    '--follow[Follow log output]' \
+                    '--lines[Number of lines to show]'
+                  ;;
+              esac
               ;;
           esac
           ;;
@@ -60,6 +77,7 @@ _innate() {
               local -a actions=(
                 'apply:Apply pending updates.'
                 'check:Check if updates are available.'
+                'reinstall:Re-run post-update script (systemd, sudoers, deps, rebuild).'
                 'status:Show current version and service info.'
               )
               _describe 'update action' actions
