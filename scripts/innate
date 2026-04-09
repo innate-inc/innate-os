@@ -186,6 +186,7 @@ def _show_status():
     print(f"  {C.BOLD}innate view{C.NC}         Attach to nodes")
     print(f"  {C.BOLD}innate restart{C.NC}      Restart nodes")
     print(f"  {C.BOLD}innate build{C.NC}        Build & restart")
+    print(f"  {C.BOLD}innate build release{C.NC} Build release & restart")
     print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
     print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
     print(f"  {C.BOLD}innate volume{C.NC}       Get/set speaker volume")
@@ -286,7 +287,7 @@ def _service_view():
         return 1
 
 
-def _build(packages):
+def _build(packages, release=False):
     ros_setup = "/opt/ros/humble/setup.bash"
     ws_setup = ROS_WS / "install" / "setup.bash"
 
@@ -296,12 +297,16 @@ def _build(packages):
 
     colcon_cmd = "colcon build"
 
+    if release:
+        colcon_cmd += " --cmake-args -DCMAKE_BUILD_TYPE=Release"
+
     if packages:
         pkg_list = " ".join(packages)
         colcon_cmd += f" --packages-select {pkg_list}"
 
+    mode_label = " (release)" if release else ""
     full_cmd = f"{source_chain} && cd {ROS_WS} && {colcon_cmd}"
-    print(f"  Building{' ' + ' '.join(packages) if packages else ' workspace'}...")
+    print(f"  Building{' ' + ' '.join(packages) if packages else ' workspace'}{mode_label}...")
     r = run(["bash", "-c", full_cmd])
     if r.returncode == 0:
         ok("Build complete")
@@ -380,10 +385,10 @@ def _volume(level):
     return 1
 
 
-def _build_cycle(packages):
+def _build_cycle(packages, release=False):
     """Stop nodes, build, restart."""
     _service_stop()
-    rc = _build(packages)
+    rc = _build(packages, release=release)
     if rc != 0:
         fail("Skipping restart due to build failure")
         sys.exit(rc)
@@ -1237,8 +1242,24 @@ def restart():
 @cli.command()
 @click.argument("packages", nargs=-1)
 def build(packages):
-    """Stop nodes, build workspace, restart nodes."""
-    _build_cycle(packages)
+    """Stop nodes, build workspace, restart nodes.
+
+    \b
+    If the first argument is "release", the workspace is built with
+    CMAKE_BUILD_TYPE=Release.  Remaining arguments are package names.
+
+    \b
+    Examples:
+      innate build                   Build all (debug)
+      innate build my_pkg            Build specific package (debug)
+      innate build release           Build all (release)
+      innate build release my_pkg    Build specific package (release)
+    """
+    release = False
+    if packages and packages[0] == "release":
+        release = True
+        packages = packages[1:]
+    _build_cycle(packages, release=release)
 
 
 @cli.command()
@@ -1463,7 +1484,12 @@ def _zsh_completions():
             w("          ;;")
         elif has_packages_arg(cmd):
             w(f"        {name})")
-            w("          _innate_packages")
+            if name == "build":
+                w("          local -a build_modes=('release:Build with CMAKE_BUILD_TYPE=Release')")
+                w("          _describe 'build mode' build_modes")
+                w("          _innate_packages")
+            else:
+                w("          _innate_packages")
             w("          ;;")
         else:
             opts = fmt_options(cmd)
