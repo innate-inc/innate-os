@@ -68,13 +68,8 @@ ALSA_CONF_SRC="$REPO_DIR/config/alsa/asound.conf"
 ALSA_CONF_DST="/etc/asound.conf"
 
 if [ -f "$ALSA_CONF_SRC" ]; then
-    # Verify all critical config elements are present (not just one)
-    if [ -f "$ALSA_CONF_DST" ] \
-        && grep -q 'pcm.softvol' "$ALSA_CONF_DST" 2>/dev/null \
-        && grep -q 'name "Master"' "$ALSA_CONF_DST" 2>/dev/null \
-        && grep -q 'dmixer' "$ALSA_CONF_DST" 2>/dev/null \
-        && grep -q 'pcm "softvol"' "$ALSA_CONF_DST" 2>/dev/null; then
-        log "  ALSA dmix + softvol already configured"
+    if [ -f "$ALSA_CONF_DST" ] && diff -q "$ALSA_CONF_SRC" "$ALSA_CONF_DST" >/dev/null 2>&1; then
+        log "  ALSA dmix + softvol already up to date"
     else
         log "  Installing ALSA dmix config (enables concurrent audio playback)..."
         cp "$ALSA_CONF_SRC" "$ALSA_CONF_DST"
