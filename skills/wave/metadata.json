@@ -4,6 +4,9 @@
     "guidelines": "",
     "guidelines_when_running": "",
     "inputs": {},
+    "downloads": {
+        "episode_0.h5": "https://storage.googleapis.com/karmanyaah-public/arm_wave/episode_0.h5"
+    },
     "execution": {
         "model_type": "replay",
         "replay_file": "episode_0.h5",

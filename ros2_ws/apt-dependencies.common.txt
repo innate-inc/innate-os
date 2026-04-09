@@ -15,6 +15,7 @@ zsh
 tmux
 
 # System libraries
+jq
 zstd
 libudev-dev
 libusb-1.0-0-dev
