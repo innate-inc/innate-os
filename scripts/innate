@@ -24,6 +24,8 @@ DIAGNOSTICS = INNATE_OS_ROOT / "scripts" / "diagnostics.py"
 TMUX_SESSION_HW = "ros_nodes"
 TMUX_SESSION_SIM = "mars"
 
+SYSTEMD_SERVICE_HW = "ros-app.service"
+
 LOGO = r"""  ___ _   _ _   _    _  _____ _____
  |_ _| \ | | \ | |  / \|_   _| ____|
   | ||  \| |  \| | / _ \ | | |  _|
@@ -128,9 +130,14 @@ def get_mode_label():
         return "hardware"
 
 
-def zenoh_active():
-    r = subprocess.run(["systemctl", "is-active", "--quiet", "zenoh-router.service"], capture_output=True)
+def systemd_active(service):
+    """Check if a systemd service unit is active."""
+    r = subprocess.run(["systemctl", "is-active", "--quiet", service], capture_output=True)
     return r.returncode == 0
+
+
+def zenoh_active():
+    return systemd_active("zenoh-router.service")
 
 
 # ---------------------------------------------------------------------------
@@ -146,21 +153,28 @@ def _show_status():
 
     version = get_version()
     mode = get_mode_label()
-    session = tmux_session()
-    running = tmux_session_exists(session)
-
-    if running:
-        wins = tmux_window_count(session)
-        ros_status = f"{C.GREEN}running{C.NC} ({wins} windows)"
-    else:
-        ros_status = f"{C.DIM}stopped{C.NC}"
 
     if is_sim_mode():
+        session = TMUX_SESSION_SIM
+        running = tmux_session_exists(session)
+        if running:
+            wins = tmux_window_count(session)
+            ros_status = f"{C.GREEN}running{C.NC} ({wins} tmux windows)"
+        else:
+            ros_status = f"{C.DIM}stopped{C.NC}"
         dds_status = f"{C.DIM}n/a (sim){C.NC}"
-    elif zenoh_active():
-        dds_status = f"{C.GREEN}zenoh active{C.NC}"
     else:
-        dds_status = f"{C.DIM}zenoh inactive{C.NC}"
+        running = systemd_active(SYSTEMD_SERVICE_HW)
+        if running:
+            wins = tmux_window_count(TMUX_SESSION_HW)
+            detail = f", {wins} windows" if wins else ""
+            ros_status = f"{C.GREEN}running{C.NC} (systemd{detail})"
+        else:
+            ros_status = f"{C.DIM}stopped{C.NC}"
+        if zenoh_active():
+            dds_status = f"{C.GREEN}zenoh active{C.NC}"
+        else:
+            dds_status = f"{C.DIM}zenoh inactive{C.NC}"
 
     print(f"  {C.BOLD}Version:{C.NC}  {version}")
     print(f"  {C.BOLD}Mode:{C.NC}     {mode}")
@@ -169,23 +183,60 @@ def _show_status():
     print()
     print(f"  {C.BOLD}innate view{C.NC}         Attach to nodes")
     print(f"  {C.BOLD}innate restart{C.NC}      Restart nodes")
+    print(f"  {C.BOLD}innate logs{C.NC}         View node logs")
     print(f"  {C.BOLD}innate build{C.NC}        Build & restart")
     print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
     print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
+    print(f"  {C.BOLD}innate volume{C.NC}       Get/set speaker volume")
     print(f"  {C.BOLD}innate --help{C.NC}       All commands")
     print()
     return 0
 
 
 def _service_start():
-    session = tmux_session()
+    if is_sim_mode():
+        return _service_start_sim()
+    return _service_start_hw()
+
+
+def _service_start_hw():
+    service = SYSTEMD_SERVICE_HW
+    if systemd_active(service):
+        warn(f"Already running (systemd: {service})")
+        print(f"  Use {C.BOLD}innate view{C.NC} to attach")
+        print(f"  Use {C.BOLD}innate restart{C.NC} to restart")
+        return 0
+
+    print(f"  Starting {service} via systemd...")
+    r = run(["sudo", "systemctl", "start", service])
+    if r.returncode != 0:
+        fail(f"Failed to start {service}")
+        print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
+        return 1
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if systemd_active(service):
+            ok("ROS nodes started (systemd)")
+            print(f"  Use {C.BOLD}innate view{C.NC} to attach")
+            print(f"  Use {C.BOLD}innate logs -f{C.NC} to follow logs")
+            return 0
+        time.sleep(1)
+
+    fail(f"Service {service} did not become active in time")
+    print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
+    return 1
+
+
+def _service_start_sim():
+    session = TMUX_SESSION_SIM
     if tmux_session_exists(session):
         warn(f"Already running (tmux session '{session}')")
         print(f"  Use {C.BOLD}innate view{C.NC} to attach")
         print(f"  Use {C.BOLD}innate restart{C.NC} to restart")
         return 0
 
-    script = LAUNCH_SIM if is_sim_mode() else LAUNCH_HW
+    script = LAUNCH_SIM
     if not script.exists():
         fail(f"Launch script not found: {script}")
         return 1
@@ -236,7 +287,38 @@ def _service_start():
 
 
 def _service_stop():
-    session = tmux_session()
+    if is_sim_mode():
+        return _service_stop_sim()
+    return _service_stop_hw()
+
+
+def _service_stop_hw():
+    service = SYSTEMD_SERVICE_HW
+    active = systemd_active(service)
+    orphaned_tmux = not active and tmux_session_exists(TMUX_SESSION_HW)
+
+    if not active and not orphaned_tmux:
+        warn("ROS nodes are not running")
+        return 0
+
+    if active:
+        print(f"  Stopping {service} via systemd...")
+        r = run(["sudo", "systemctl", "stop", service])
+        if r.returncode != 0:
+            fail(f"Failed to stop {service}")
+            return 1
+        ok("ROS nodes stopped (systemd)")
+
+    if orphaned_tmux:
+        warn("Found orphaned tmux session (not managed by systemd)")
+        run(["tmux", "kill-session", "-t", TMUX_SESSION_HW])
+        ok("Orphaned tmux session cleaned up")
+
+    return 0
+
+
+def _service_stop_sim():
+    session = TMUX_SESSION_SIM
     if not tmux_session_exists(session):
         warn("ROS nodes are not running")
         return 0
@@ -247,21 +329,67 @@ def _service_stop():
 
 
 def _service_restart():
-    _service_stop()
-    return _service_start()
+    if is_sim_mode():
+        _service_stop_sim()
+        return _service_start_sim()
+
+    service = SYSTEMD_SERVICE_HW
+    print(f"  Restarting {service} via systemd...")
+    r = run(["sudo", "systemctl", "restart", service])
+    if r.returncode != 0:
+        fail(f"Failed to restart {service}")
+        print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
+        return 1
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if systemd_active(service):
+            ok("ROS nodes restarted (systemd)")
+            return 0
+        time.sleep(1)
+
+    fail(f"Service {service} did not become active after restart")
+    print(f"  Check logs: {C.BOLD}innate logs{C.NC}")
+    return 1
 
 
 def _service_view():
     session = tmux_session()
-    if not tmux_session_exists(session):
-        fail(f"No active session ('{session}')")
-        print(f"  Use {C.BOLD}innate service start{C.NC} first")
+    if tmux_session_exists(session):
+        try:
+            os.execvp("tmux", ["tmux", "attach", "-t", session])
+        except OSError as e:
+            fail(f"Failed to attach to tmux: {e}")
+            return 1
+
+    if not is_sim_mode() and systemd_active(SYSTEMD_SERVICE_HW):
+        warn("Service is running but tmux session not found")
+        print(f"  Showing systemd journal instead...")
+        try:
+            os.execvp("journalctl", ["journalctl", "-u", SYSTEMD_SERVICE_HW, "-f", "--no-pager"])
+        except OSError as e:
+            fail(f"Failed to run journalctl: {e}")
+            return 1
+
+    fail(f"No active session ('{session}')")
+    print(f"  Use {C.BOLD}innate service start{C.NC} first")
+    return 1
+
+
+def _service_logs(follow, lines):
+    if is_sim_mode():
+        fail("Logs command not available in sim mode (no systemd)")
+        print(f"  Use {C.BOLD}innate view{C.NC} to see tmux output")
         return 1
 
+    cmd = ["journalctl", "-u", SYSTEMD_SERVICE_HW, f"-n{lines}", "--no-pager"]
+    if follow:
+        cmd.append("-f")
+
     try:
-        os.execvp("tmux", ["tmux", "attach", "-t", session])
+        os.execvp("journalctl", cmd)
     except OSError as e:
-        fail(f"Failed to attach to tmux: {e}")
+        fail(f"Failed to run journalctl: {e}")
         return 1
 
 
@@ -273,19 +401,7 @@ def _build(packages):
     if ws_setup.exists():
         source_chain += f" && source {ws_setup}"
 
-    colcon_cmd = (
-        "colcon build"
-        " --symlink-install"
-        " --parallel-workers 2"
-        " --cmake-args"
-        " -DBUILD_TESTING=OFF"
-        " -DCMAKE_BUILD_TYPE=Release"
-    )
-
-    import shutil
-
-    if shutil.which("ccache"):
-        colcon_cmd += " -DCMAKE_C_COMPILER_LAUNCHER=ccache" " -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+    colcon_cmd = "colcon build"
 
     if packages:
         pkg_list = " ".join(packages)
@@ -316,6 +432,59 @@ def _clean():
     else:
         warn("Nothing to clean")
     return 0
+
+
+def _get_current_volume():
+    """Return current Master volume as an integer (0-100), or None on failure."""
+    r = subprocess.run(
+        ["amixer", "sget", "Master"],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return None
+    import re
+    m = re.search(r"\[(\d+)%\]", r.stdout)
+    return int(m.group(1)) if m else None
+
+
+def _set_volume_via_ros2(level):
+    """Call /set_volume ROS2 service.  Returns True on success."""
+    ros_setup = "/opt/ros/humble/setup.bash"
+    ws_setup = ROS_WS / "install" / "setup.bash"
+
+    source_chain = f"source {ros_setup}"
+    if ws_setup.exists():
+        source_chain += f" && source {ws_setup}"
+
+    cmd = (
+        f"{source_chain} && "
+        f"ros2 service call /set_volume maurice_msgs/srv/SetVolume "
+        f'"{{volume_percent: {level}}}"'
+    )
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=15)
+    return r.returncode == 0 and "success=True" in r.stdout
+
+
+def _volume(level):
+    if level is None:
+        current = _get_current_volume()
+        if current is None:
+            fail("Could not read current volume (is amixer available?)")
+            return 1
+        print(f"  {C.BOLD}Volume:{C.NC} {current}%")
+        return 0
+
+    if not 0 <= level <= 100:
+        fail("Volume must be between 0 and 100")
+        return 1
+
+    if _set_volume_via_ros2(level):
+        ok(f"Volume set to {level}%")
+        return 0
+
+    fail("Failed to set volume — is the ROS2 service /set_volume running?")
+    return 1
 
 
 def _build_cycle(packages):
@@ -383,15 +552,15 @@ class _UpdateLogger:
 
 
 class _UpdateServiceManager:
-    """Manage ROS services (tmux-based).  Used internally by _UpdateManager."""
+    """Manage ROS services via systemd.  Used internally by _UpdateManager."""
 
+    SYSTEMD_SERVICE = "ros-app.service"
     TMUX_SESSION = "ros_nodes"
     DISCOVERY_SESSION = "discovery"
 
     def __init__(self, config: _UpdateConfig, logger: _UpdateLogger):
         self.config = config
         self.logger = logger
-        self.launch_script = config.repo_dir / "scripts" / "launch_ros_in_tmux.sh"
 
     def _run(self, cmd: list, check: bool = True) -> subprocess.CompletedProcess:
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -408,6 +577,8 @@ class _UpdateServiceManager:
         return result.returncode == 0
 
     def is_running(self) -> bool:
+        if self._systemd_service_active(self.SYSTEMD_SERVICE):
+            return True
         return self._tmux_session_exists(self.TMUX_SESSION)
 
     def is_discovery_running(self) -> bool:
@@ -436,41 +607,37 @@ class _UpdateServiceManager:
 
     def start(self) -> int:
         if self.is_running():
-            self.logger.warning(f"ROS services already running (tmux session '{self.TMUX_SESSION}')")
+            self.logger.warning("ROS services already running")
             print("Use 'innate view' to attach to the session")
             print("Use 'innate restart' to restart services")
             return 0
 
-        if not self.launch_script.exists():
-            self.logger.error(f"Launch script not found: {self.launch_script}")
-            return 1
-
-        self.logger.info("Starting ROS services...")
+        self.logger.info(f"Starting {self.SYSTEMD_SERVICE} via systemd...")
         try:
-            subprocess.Popen(
-                ["nohup", "bash", str(self.launch_script)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-                cwd=str(self.config.repo_dir),
-            )
-            time.sleep(2)
-
-            if self.is_running():
-                self.logger.success("ROS services started")
-                print(f"  Session: {self.TMUX_SESSION}")
-                print("  Use 'innate view' to attach")
-                return 0
-            else:
-                self.logger.error("Failed to start ROS services")
+            result = self._run(["sudo", "systemctl", "start", self.SYSTEMD_SERVICE], check=False)
+            if result.returncode != 0:
+                self.logger.error(f"systemctl start failed: {result.stderr.strip()}")
                 return 1
+
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if self._systemd_service_active(self.SYSTEMD_SERVICE):
+                    self.logger.success("ROS services started (systemd)")
+                    print("  Use 'innate view' to attach")
+                    return 0
+                time.sleep(1)
+
+            self.logger.error("Service did not become active in time")
+            return 1
         except Exception as e:
             self.logger.error(f"Failed to start services: {e}")
             return 1
 
     def status(self) -> dict:
+        ros_systemd = self._systemd_service_active(self.SYSTEMD_SERVICE)
         return {
-            "ros_running": self.is_running(),
+            "ros_running": ros_systemd or self._tmux_session_exists(self.TMUX_SESSION),
+            "ros_systemd": ros_systemd,
             "discovery_running": self.is_discovery_running(),
             "discovery_systemd": self._systemd_service_active("zenoh-router.service"),
             "update_running": self.is_update_running(),
@@ -907,7 +1074,10 @@ class _UpdateManager:
         svc_status = self.services.status()
         print("Services:")
         if svc_status["ros_running"]:
-            print(f"  {C.GREEN}●{C.NC} ROS nodes: running (tmux session 'ros_nodes')")
+            if svc_status.get("ros_systemd"):
+                print(f"  {C.GREEN}●{C.NC} ROS nodes: running (systemd)")
+            else:
+                print(f"  {C.GREEN}●{C.NC} ROS nodes: running (tmux session 'ros_nodes')")
         else:
             print(f"  {C.RED}○{C.NC} ROS nodes: stopped")
 
@@ -1023,6 +1193,7 @@ def cli(ctx):
     Shortcuts:
       innate view       → innate service view
       innate restart    → innate service restart
+      innate logs       → innate service logs
 
     Alias: in8
     """
@@ -1036,7 +1207,7 @@ def cli(ctx):
 @cli.group(invoke_without_command=True)
 @click.pass_context
 def service(ctx):
-    """Manage ROS nodes (start/stop/restart/view)."""
+    """Manage ROS nodes via systemd (start/stop/restart/view/logs)."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
         ctx.exit(1)
@@ -1044,26 +1215,34 @@ def service(ctx):
 
 @service.command("start")
 def service_start():
-    """Start all ROS nodes."""
+    """Start all ROS nodes (systemd on hardware, tmux in sim)."""
     sys.exit(_service_start())
 
 
 @service.command("stop")
 def service_stop():
-    """Stop all ROS nodes."""
+    """Stop all ROS nodes (systemd on hardware, tmux in sim)."""
     sys.exit(_service_stop())
 
 
 @service.command("restart")
 def service_restart():
-    """Restart all ROS nodes."""
+    """Restart all ROS nodes (systemd on hardware, tmux in sim)."""
     sys.exit(_service_restart())
 
 
 @service.command("view")
 def service_view_cmd():
-    """Attach to tmux session."""
+    """Attach to node tmux session."""
     sys.exit(_service_view())
+
+
+@service.command("logs")
+@click.option("--follow", "-f", is_flag=True, help="Follow log output")
+@click.option("--lines", "-n", default=50, help="Number of lines to show")
+def service_logs_cmd(follow, lines):
+    """View ROS node logs from journald."""
+    sys.exit(_service_logs(follow, lines))
 
 
 # -- shortcuts ----------------------------------------------------------------
@@ -1071,7 +1250,7 @@ def service_view_cmd():
 
 @cli.command()
 def view():
-    """Attach to ROS tmux session."""
+    """Attach to ROS node tmux session."""
     sys.exit(_service_view())
 
 
@@ -1079,6 +1258,14 @@ def view():
 def restart():
     """Restart all ROS nodes."""
     sys.exit(_service_restart())
+
+
+@cli.command()
+@click.option("--follow", "-f", is_flag=True, help="Follow log output")
+@click.option("--lines", "-n", default=50, help="Number of lines to show")
+def logs(follow, lines):
+    """View ROS node logs from journald."""
+    sys.exit(_service_logs(follow, lines))
 
 
 # -- build / clean / diag ----------------------------------------------------
@@ -1108,6 +1295,20 @@ def diag():
     except OSError as e:
         fail(f"Failed to launch diagnostics: {e}")
         sys.exit(1)
+
+
+@cli.command()
+@click.argument("level", type=click.IntRange(0, 100), required=False, metavar="[0-100]")
+def volume(level):
+    """Get or set the robot speaker volume.
+
+    \b
+    Examples:
+      innate volume          Show current volume
+      innate volume 60       Set volume to 60%
+      innate volume 0        Mute
+    """
+    sys.exit(_volume(level))
 
 
 # -- update -------------------------------------------------------------------
@@ -1163,6 +1364,18 @@ def status():
 def daemon():
     """Run as background daemon (for systemd)."""
     sys.exit(_make_update_manager().daemon())
+
+
+@update.command("reinstall")
+def reinstall():
+    """Re-run post-update script (systemd, sudoers, deps, rebuild)."""
+    script = INNATE_OS_ROOT / "scripts" / "update" / "post_update.sh"
+    if not script.exists():
+        fail(f"Post-update script not found: {script}")
+        sys.exit(1)
+    print(f"  Running {script}...")
+    r = run(["sudo", str(script)])
+    sys.exit(r.returncode)
 
 
 @update.command("quick-check", hidden=True)
