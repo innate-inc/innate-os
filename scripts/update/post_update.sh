@@ -262,9 +262,9 @@ if [ -d "$REPO_DIR/scripts" ]; then
     # Regenerate zsh completions from the Click command tree
     if [ -f "$REPO_DIR/scripts/innate" ]; then
         log "  Generating zsh completions"
-        mkdir -p "$REPO_DIR/ros2_ws/build/completions"
-        sudo -u "$ACTUAL_USER" "$REPO_DIR/scripts/innate" completions > "$REPO_DIR/ros2_ws/build/completions/_innate"
-        chown "$ACTUAL_USER:$ACTUAL_USER" "$REPO_DIR/ros2_ws/build/completions/_innate"
+        mkdir -p "$REPO_DIR/scripts/build/completions"
+        sudo -u "$ACTUAL_USER" "$REPO_DIR/scripts/innate" completions > "$REPO_DIR/scripts/build/completions/_innate"
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$REPO_DIR/scripts/build/completions/_innate"
     fi
 
     # Symlink restart script if it exists
