@@ -51,7 +51,7 @@ def convert_episodes_to_h264(
         logger.debug("dataset_type already h264 — skipping conversion")
         return
 
-    fps = meta.get("data_frequency", 30)
+    fps = int(meta.get("data_frequency", 30))
     episodes = meta.get("episodes", [])
 
     if not episodes:
