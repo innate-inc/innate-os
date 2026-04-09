@@ -49,15 +49,20 @@ def upload_data_files(
     filenames: list[str],
     upload_urls: dict[str, str],
     download_urls: dict[str, str],
+    compress: bool = True,
 ) -> Generator[ProgressUpdate, None, None]:
     """
-    Compress and upload each file in *filenames*.
+    Upload each file in *filenames*, optionally compressing with zstd first.
 
-    Compression of the next file runs in a background thread while the
-    current file is uploading, so the two I/O-bound stages overlap.
+    When *compress* is True (default), compression of the next file runs in
+    a background thread while the current file is uploading, so the two
+    I/O-bound stages overlap.
 
-    Yields a :class:`ProgressUpdate` after each file is compressed, uploaded,
-    and verified.  Skips files that are already uploaded (verified by HEAD).
+    When *compress* is False, files are uploaded directly without zstd
+    compression (useful when data is already compressed, e.g. H.264 MP4s).
+
+    Yields a :class:`ProgressUpdate` after each file is uploaded and verified.
+    Skips files that are already uploaded (verified by HEAD).
     """
     total = len(filenames)
 
@@ -65,10 +70,11 @@ def upload_data_files(
     work_items: list[tuple[int, str]] = []  # (1-based idx, filename)
     for idx, name in enumerate(filenames, start=1):
         source_path = source_dir / name
-        zst_name = name + ".zst"
-        download_url = download_urls.get(zst_name) or download_urls.get(name)
+        download_url = download_urls.get(name)
+        if not download_url and compress:
+            download_url = download_urls.get(name + ".zst")
         if download_url and _is_already_uploaded(
-            client, source_path, download_url, config
+            client, source_path, download_url, config, compress=compress
         ):
             yield ProgressUpdate(
                 stage=ProgressStage.UPLOADING,
@@ -90,11 +96,135 @@ def upload_data_files(
         )
         # Still fall through to verification below
 
-    # ── Pipelined compress + upload ─────────────────────────────────
-    # Use a single-thread pool to compress the *next* file while the
-    # current one is uploading.
+    if compress:
+        yield from _upload_with_zstd(client, config, source_dir, work_items, total,
+                                     upload_urls, download_urls)
+    else:
+        yield from _upload_raw(client, source_dir, work_items, total,
+                               upload_urls)
+
+    # ── Verify all uploads ───────────────────────────────────────
+    yield ProgressUpdate(
+        stage=ProgressStage.VERIFYING,
+        message="Verifying all uploads…",
+    )
+
+    for idx, name in enumerate(filenames, start=1):
+        download_url = download_urls.get(name)
+        if not download_url and compress:
+            download_url = download_urls.get(name + ".zst")
+
+        if not download_url:
+            logger.warning("No download URL for %s, cannot verify", name)
+            continue
+
+        if not _is_already_uploaded(client, source_dir / name, download_url, config,
+                                    compress=compress):
+            err = f"Verification failed for {name}: remote size mismatch"
+            yield ProgressUpdate(
+                stage=ProgressStage.ERROR,
+                message=err,
+                error=err,
+            )
+            raise RuntimeError(err)
+
+    yield ProgressUpdate(
+        stage=ProgressStage.VERIFYING,
+        message=f"All {total} files verified",
+    )
+
+
+def _upload_raw(
+    client: OrchestratorClient,
+    source_dir: Path,
+    work_items: list[tuple[int, str]],
+    total: int,
+    upload_urls: dict[str, str],
+) -> Generator[ProgressUpdate, None, None]:
+    """Upload files directly without compression."""
+    for idx, name in work_items:
+        source_path = source_dir / name
+        upload_url = upload_urls.get(name)
+        if not upload_url:
+            err = f"No upload URL for {name}"
+            yield ProgressUpdate(
+                stage=ProgressStage.ERROR,
+                message=err,
+                error=err,
+            )
+            raise RuntimeError(err)
+
+        file_size = source_path.stat().st_size
+
+        yield ProgressUpdate(
+            stage=ProgressStage.UPLOADING,
+            message=f"[{idx}/{total}] Uploading {name} ({file_size / 1e6:.1f} MB)…",
+            file_progress=FileProgress(
+                filename=name,
+                index=idx,
+                total=total,
+                bytes_total=file_size,
+            ),
+        )
+
+        try:
+            for fname, sent, total_bytes in client.upload_to_signed_url(
+                upload_url,
+                str(source_path),
+            ):
+                yield ProgressUpdate(
+                    stage=ProgressStage.UPLOADING,
+                    message=(
+                        f"[{idx}/{total}] Uploading {fname}: "
+                        f"{sent / 1e6:.1f}/{total_bytes / 1e6:.1f} MB"
+                    ),
+                    file_progress=FileProgress(
+                        filename=name,
+                        index=idx,
+                        total=total,
+                        bytes_done=sent,
+                        bytes_total=total_bytes,
+                    ),
+                )
+        except Exception as e:
+            yield ProgressUpdate(
+                stage=ProgressStage.ERROR,
+                message=f"[{idx}/{total}] Upload failed for {name}: {e}",
+                file_progress=FileProgress(
+                    filename=name,
+                    index=idx,
+                    total=total,
+                    error=str(e),
+                ),
+                error=str(e),
+            )
+            raise
+
+        yield ProgressUpdate(
+            stage=ProgressStage.UPLOADING,
+            message=f"[{idx}/{total}] Uploaded {name}",
+            file_progress=FileProgress(
+                filename=name,
+                index=idx,
+                total=total,
+                bytes_done=file_size,
+                bytes_total=file_size,
+                done=True,
+            ),
+        )
+
+
+def _upload_with_zstd(
+    client: OrchestratorClient,
+    config: ClientConfig,
+    source_dir: Path,
+    work_items: list[tuple[int, str]],
+    total: int,
+    upload_urls: dict[str, str],
+    download_urls: dict[str, str],
+) -> Generator[ProgressUpdate, None, None]:
+    """Compress with zstd then upload (original pipeline)."""
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="compress") as pool:
-        # Kick off compression of the first file immediately
         pending_future: Future[Path] | None = None
         pending_idx: int = 0
         pending_name: str = ""
@@ -112,7 +242,6 @@ def upload_data_files(
             pending_future = pool.submit(_compress_one, source_dir / first_name, config)
 
         for wi_pos, (idx, name) in enumerate(work_items):
-            # ── Wait for this file's compression to finish ──────────
             assert pending_future is not None
             try:
                 zst_path = pending_future.result()
@@ -130,7 +259,6 @@ def upload_data_files(
                 )
                 raise
 
-            # ── Start compressing the *next* file in background ─────
             next_pos = wi_pos + 1
             if next_pos < len(work_items):
                 next_idx, next_name = work_items[next_pos]
@@ -148,7 +276,6 @@ def upload_data_files(
             else:
                 pending_future = None
 
-            # ── Upload the just-compressed file ─────────────────────
             zst_name = name + ".zst"
             upload_url = upload_urls.get(zst_name) or upload_urls.get(name)
             if not upload_url:
@@ -219,51 +346,28 @@ def upload_data_files(
                 ),
             )
 
-    # ── 4. Verify all uploads ───────────────────────────────────────
-    yield ProgressUpdate(
-        stage=ProgressStage.VERIFYING,
-        message="Verifying all uploads…",
-    )
-
-    for idx, name in enumerate(filenames, start=1):
-        zst_name = name + ".zst"
-        zst_path = (source_dir / name).with_suffix((source_dir / name).suffix + ".zst")
-        download_url = download_urls.get(zst_name) or download_urls.get(name)
-
-        if not download_url:
-            logger.warning("No download URL for %s, cannot verify", name)
-            continue
-
-        if not _is_already_uploaded(client, source_dir / name, download_url, config):
-            err = f"Verification failed for {name}: remote size mismatch"
-            yield ProgressUpdate(
-                stage=ProgressStage.ERROR,
-                message=err,
-                error=err,
-            )
-            raise RuntimeError(err)
-
-    yield ProgressUpdate(
-        stage=ProgressStage.VERIFYING,
-        message=f"All {total} files verified",
-    )
-
 
 def _is_already_uploaded(
     client: OrchestratorClient,
     source_path: Path,
     download_url: str,
     config: ClientConfig,
+    *,
+    compress: bool = True,
 ) -> bool:
     """
     Check if a file is already uploaded by comparing remote Content-Length
-    to the local .zst file size.
+    to the local file size (or .zst file size when *compress* is True).
     """
-    zst_path = source_path.with_suffix(source_path.suffix + ".zst")
-    if not zst_path.exists():
+    if compress:
+        check_path = source_path.with_suffix(source_path.suffix + ".zst")
+    else:
+        check_path = source_path
+
+    if not check_path.exists():
         return False
 
-    local_size = zst_path.stat().st_size
+    local_size = check_path.stat().st_size
     remote_size = client.head_signed_url(download_url)
 
     if remote_size is None:

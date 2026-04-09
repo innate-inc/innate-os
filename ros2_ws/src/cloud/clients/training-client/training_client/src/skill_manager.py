@@ -249,7 +249,8 @@ class SkillManager:
         if not filenames:
             raise ValueError(f"No files found in {source_dir}")
 
-        zst_filenames = [f + ".zst" for f in filenames]
+        use_zstd = not _is_h264_dataset(source_dir / "data")
+        url_filenames = [f + ".zst" for f in filenames] if use_zstd else filenames
 
         yield ProgressUpdate(
             stage=ProgressStage.UPLOADING,
@@ -257,7 +258,7 @@ class SkillManager:
             skill_id=skill_id,
         )
 
-        url_resp = self.client.request_file_urls(skill_id, zst_filenames)
+        url_resp = self.client.request_file_urls(skill_id, url_filenames)
 
         yield from upload_data_files(
             client=self.client,
@@ -266,6 +267,7 @@ class SkillManager:
             filenames=filenames,
             upload_urls=url_resp.get("upload_urls", {}),
             download_urls=url_resp.get("download_urls", {}),
+            compress=use_zstd,
         )
 
         yield ProgressUpdate(
@@ -481,6 +483,18 @@ class SkillManager:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
+
+
+def _is_h264_dataset(data_dir: Path) -> bool:
+    """Check if the dataset has been converted to H.264 format."""
+    meta_path = data_dir / "dataset_metadata.json"
+    if not meta_path.is_file():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text())
+        return meta.get("dataset_type") == "h264"
+    except (json.JSONDecodeError, OSError):
+        return False
 
 
 def _enumerate_files(source_dir: Path) -> list[str]:
