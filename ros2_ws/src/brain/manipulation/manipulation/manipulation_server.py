@@ -75,7 +75,7 @@ def create_act_config(action_dim=10):
         optimizer_lr_backbone=1e-5,
     )
 
-class BehaviorServer(Node):
+class ManipulationServer(Node):
     def __init__(self):
         super().__init__('manipulation_server')
         self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
@@ -122,17 +122,11 @@ class BehaviorServer(Node):
         self.latest_image2_timestamp = None  
         self.latest_joint_timestamp = None
         
-        # Set up QoS profiles
-        image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
-        )
-        
-        # Subscribers
-        self.create_subscription(Image, '/mars/main_camera/left/image_raw', self.image1_callback, image_qos)
-        self.create_subscription(Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
-        self.create_subscription(JointState, '/mars/arm/state', self.joint_state_callback, 10)
+        # Sensor subscriptions are created on-demand to avoid idle CPU usage
+        # from deserializing 30fps camera frames when no behavior is running
+        self._image1_sub = None
+        self._image2_sub = None
+        self._joint_sub = None
         
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -233,6 +227,7 @@ class BehaviorServer(Node):
         try:
             self.current_goal_handle = goal_handle
             self.execution_running = True
+            self._start_sensor_subscriptions()
             
             behavior_type = behavior_config.get('type', 'unknown')
             self.get_logger().info(f"Executing {behavior_type} behavior at: {skill_dir}")
@@ -251,7 +246,7 @@ class BehaviorServer(Node):
             self.get_logger().error(f"Error executing behavior {skill_dir}: {e}")
             return "FAILURE", f"Exception during execution: {str(e)}"
         finally:
-            # Clean up
+            self._stop_sensor_subscriptions()
             self.execution_running = False
             self.current_goal_handle = None
             if self.current_policy:
@@ -779,7 +774,39 @@ class BehaviorServer(Node):
             self.get_logger().error(f"Failed to load policy: {e}")
             return False
     
-    # ... existing sensor callbacks and utility methods from policy.py ...
+    def _start_sensor_subscriptions(self):
+        """Create sensor subscriptions when a behavior begins executing."""
+        if self._image1_sub is not None:
+            return
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        self._image1_sub = self.create_subscription(
+            Image, '/mars/main_camera/left/image_raw', self.image1_callback, image_qos)
+        self._image2_sub = self.create_subscription(
+            Image, '/mars/arm/image_raw', self.image2_callback, image_qos)
+        self._joint_sub = self.create_subscription(
+            JointState, '/mars/arm/state', self.joint_state_callback, 10)
+        self.get_logger().info("Sensor subscriptions started")
+
+    def _stop_sensor_subscriptions(self):
+        """Destroy sensor subscriptions when idle to avoid wasting CPU on image deserialization."""
+        for sub in (self._image1_sub, self._image2_sub, self._joint_sub):
+            if sub is not None:
+                self.destroy_subscription(sub)
+        self._image1_sub = None
+        self._image2_sub = None
+        self._joint_sub = None
+        self.latest_image1 = None
+        self.latest_image2 = None
+        self.latest_joint_state = None
+        self.latest_image1_timestamp = None
+        self.latest_image2_timestamp = None
+        self.latest_joint_timestamp = None
+        self.get_logger().info("Sensor subscriptions stopped")
+
     def image1_callback(self, msg: Image):
         try:
             self.latest_image1 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -998,7 +1025,7 @@ class BehaviorServer(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = BehaviorServer()
+    node = ManipulationServer()
     
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)

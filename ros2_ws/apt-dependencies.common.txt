@@ -13,6 +13,8 @@ ccache
 # Shell and terminal tools
 zsh
 tmux
+htop
+btop
 
 # System libraries
 jq
