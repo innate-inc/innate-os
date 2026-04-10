@@ -118,6 +118,6 @@ install(
     manipulation/policy.py
     manipulation/trajectory.py
     manipulation/policyViT.py
-    manipulation/behavior_server.py
+    manipulation/manipulation_server.py
   DESTINATION lib/${PROJECT_NAME}
 )

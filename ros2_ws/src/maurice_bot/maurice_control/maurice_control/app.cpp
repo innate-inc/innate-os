@@ -415,7 +415,7 @@ class AppControl : public rclcpp::Node {
         // Sync ALSA volume from robot_info.json on startup
         try {
             json robot_info = get_robot_info();
-            int startup_vol = robot_info.value("volume_percent", 50);
+            int startup_vol = robot_info.value("volume_percent", 80);
             apply_alsa_volume(startup_vol);
             RCLCPP_INFO(this->get_logger(), "ALSA volume synced to %d%%", startup_vol);
         } catch (const std::exception& e) {
@@ -492,7 +492,7 @@ class AppControl : public rclcpp::Node {
                                    {"robot_id", nullptr},
                                    {"hardware_revision", default_hw_rev},
                                    {"color_variant", "black"},
-                                   {"volume_percent", 50}};
+                                   {"volume_percent", 80}};
 
         json robot_info;
 
@@ -724,7 +724,7 @@ class AppControl : public rclcpp::Node {
             }
             data_to_publish_dict["hardware_revision"] = robot_info.value("hardware_revision", default_hw_rev);
             data_to_publish_dict["color_variant"] = robot_info.value("color_variant", "black");
-            data_to_publish_dict["volume_percent"] = robot_info.value("volume_percent", 50);
+            data_to_publish_dict["volume_percent"] = robot_info.value("volume_percent", 80);
 
             // Read minimum_app_version from os_config.json
             if (app_config_.contains("minimum_app_version")) {

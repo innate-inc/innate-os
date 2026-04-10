@@ -133,7 +133,7 @@ Upload runs in a background thread; progress is reflected in `~/job_statuses` vi
 | `skill_id` | string | UUID of the created (or existing) skill. |
 | `message` | string | Human-readable status / error message. |
 
-**Behaviour:**
+**Manipulation:**
 1. If `<skill_dir>/metadata.json` already contains a `training_skill_id`, verify it against the server (fetch the skill). If the server confirms it exists and belongs to this user, reuse that ID (skip creation). If the server returns not-found or a permission error, log a warning and fall through to step 2 (the local ID is stale).
 2. Otherwise, create the skill on the server and write the ID into metadata.
 3. Start uploading data files in a background thread.
@@ -204,7 +204,7 @@ If activation fails (missing files, etc.), the download is still considered succ
 
 ---
 
-## Background Behaviour
+## Background Manipulation
 
 - **Startup fetch:** On launch the node fetches all existing skills and runs from the server. Any runs already in `done` state are auto-downloaded (and activated) to their registered skill directory.
 - **Polling:** A background thread polls active (non-terminal) runs every `poll_interval_sec` seconds. When a run transitions to `done`, an auto-download + activate is triggered.

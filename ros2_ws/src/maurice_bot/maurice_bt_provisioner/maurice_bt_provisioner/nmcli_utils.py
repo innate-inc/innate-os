@@ -119,7 +119,7 @@ def nmcli_connection_exists(ssid):
 def nmcli_add_or_modify_connection(ssid, password, priority, autoconnect=True):
     """Adds a new Wi-Fi connection or modifies an existing one.
 
-    When *autoconnect* is True (default, legacy behaviour) the function saves
+    When *autoconnect* is True (default, legacy manipulation) the function saves
     the profile **and** activates the connection before returning — this blocks
     for up to 30 s while NetworkManager negotiates.
 
