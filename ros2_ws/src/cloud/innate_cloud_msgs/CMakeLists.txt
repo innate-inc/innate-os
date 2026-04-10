@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SubmitSkill.srv"
   "srv/CreateRun.srv"
   "srv/DownloadResults.srv"
+  "srv/GetTrainingStatus.srv"
   "action/NavigateInstruction.action"
   DEPENDENCIES builtin_interfaces action_msgs
 )

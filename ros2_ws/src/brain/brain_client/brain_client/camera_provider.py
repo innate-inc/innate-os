@@ -6,6 +6,9 @@ in its own spin thread, storing raw compressed bytes.
 Runs independently of the main executor so camera callbacks are never
 starved by long-running action-server work.  Base64 encoding is deferred
 to property access so the callback stays as fast as possible.
+
+Subscriptions are created on-demand via start()/stop() so the node
+consumes zero CPU when no skill needs camera data.
 """
 
 import base64
@@ -25,41 +28,74 @@ class CameraProvider(Node):
     Raw compressed bytes are stored on every callback (cheap memcpy).
     Base64 strings are computed lazily via properties so the cost is
     only paid when a consumer actually reads the value.
+
+    Call start() before reading camera data and stop() when done.
     """
+
+    _IMAGE_QOS = QoSProfile(
+        reliability=QoSReliabilityPolicy.BEST_EFFORT,
+        history=QoSHistoryPolicy.KEEP_LAST,
+        depth=1,
+    )
 
     def __init__(self):
         super().__init__("camera_subscriber")
 
-        image_qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=1,
-        )
-
-        # Raw JPEG bytes (no decode, no base64) + timestamps
         self._main_camera_raw: bytes | None = None
         self._wrist_camera_raw: bytes | None = None
         self._main_camera_time: float = 0.0
         self._wrist_camera_time: float = 0.0
 
-        self.create_subscription(
+        self._main_sub = None
+        self._wrist_sub = None
+        self._executor: rclpy.executors.SingleThreadedExecutor | None = None
+        self._thread: threading.Thread | None = None
+        self._running = False
+
+    # ---- lifecycle ----
+
+    def start(self):
+        """Create subscriptions and begin spinning in a background thread."""
+        if self._running:
+            return
+        self._main_sub = self.create_subscription(
             CompressedImage,
             "/mars/main_camera/left/image_raw/compressed",
             self._main_camera_cb,
-            image_qos,
+            self._IMAGE_QOS,
         )
-        self.create_subscription(
+        self._wrist_sub = self.create_subscription(
             CompressedImage,
             "/mars/arm/image_raw/compressed",
             self._wrist_camera_cb,
-            image_qos,
+            self._IMAGE_QOS,
         )
-
-        # Background spin
         self._executor = rclpy.executors.SingleThreadedExecutor()
         self._executor.add_node(self)
         self._thread = threading.Thread(target=self._spin, daemon=True)
         self._thread.start()
+        self._running = True
+        self.get_logger().info("Camera subscriptions started")
+
+    def stop(self):
+        """Destroy subscriptions and stop the background thread."""
+        if not self._running:
+            return
+        if self._executor is not None:
+            self._executor.shutdown()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        self._executor = None
+        for sub in (self._main_sub, self._wrist_sub):
+            if sub is not None:
+                self.destroy_subscription(sub)
+        self._main_sub = None
+        self._wrist_sub = None
+        self._main_camera_raw = None
+        self._wrist_camera_raw = None
+        self._running = False
+        self.get_logger().info("Camera subscriptions stopped")
 
     # ---- callbacks (as cheap as possible) ----
 
@@ -118,5 +154,4 @@ class CameraProvider(Node):
     # ---- cleanup ----
 
     def shutdown(self):
-        self._executor.shutdown()
-        self._thread.join(timeout=2.0)
+        self.stop()

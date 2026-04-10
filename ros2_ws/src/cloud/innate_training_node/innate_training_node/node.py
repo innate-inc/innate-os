@@ -25,7 +25,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from innate_cloud_msgs.msg import TrainingJobList, TrainingParams, TransferProgress
-from innate_cloud_msgs.srv import CreateRun, DownloadResults, SubmitSkill
+from innate_cloud_msgs.srv import CreateRun, DownloadResults, GetTrainingStatus, SubmitSkill
 
 from training_client.src.skill_manager import SkillManager, read_skill_id
 from training_client.src.types import (
@@ -172,6 +172,7 @@ class TrainingNode(Node):
         self.create_service(SubmitSkill, "~/submit_skill", self._on_submit)
         self.create_service(CreateRun, "~/create_run", self._on_create_run)
         self.create_service(DownloadResults, "~/download_results", self._on_download)
+        self.create_service(GetTrainingStatus, "~/get_training_status", self._on_get_training_status)
 
         # ── Timer + poller ──────────────────────────────────────────
         self.create_timer(pub_sec, self._publish)
@@ -188,25 +189,21 @@ class TrainingNode(Node):
 
     # ── Periodic publish ────────────────────────────────────────────
 
-    def _publish(self) -> None:
+    def _build_skill_statuses(self) -> list:
+        """Build the current list of TrainingSkillStatus from the store."""
         jobs, skills, transfers, completed, dir_map = self._store.snapshot()
-        msg = TrainingJobList()
-        msg.stamp = self.get_clock().now().to_msg()
 
-        # Group runs by skill_id.
         runs_by_skill: dict[str, list] = defaultdict(list)
         for run in jobs:
             runs_by_skill[run.skill_id].append(run)
 
-        # Collect all skill_ids (some skills may have no runs yet).
         all_skill_ids = set(runs_by_skill.keys()) | set(skills.keys())
+        result = []
 
         for sid in sorted(all_skill_ids):
-            # Skill-level upload transfer (run_id == -1).
             upload_xfer = transfers.get((TransferProgress.UPLOAD, sid, -1))
             upload_done = (TransferProgress.UPLOAD, sid, -1) in completed
 
-            # Per-run download transfers.
             dl_xfers: dict[int, TransferProgress] = {}
             dl_done: set[int] = set()
             for run in runs_by_skill.get(sid, []):
@@ -217,7 +214,7 @@ class TrainingNode(Node):
                 if key in completed:
                     dl_done.add(run.run_id)
 
-            msg.skills.append(
+            result.append(
                 build_skill_status(
                     sid,
                     skills.get(sid),
@@ -229,8 +226,36 @@ class TrainingNode(Node):
                     skill_dir=dir_map.get(sid, ""),
                 )
             )
+        return result
 
+    def _publish(self) -> None:
+        msg = TrainingJobList()
+        msg.stamp = self.get_clock().now().to_msg()
+        msg.skills = self._build_skill_statuses()
         self._pub.publish(msg)
+
+    # ── Service: get_training_status ────────────────────────────────
+
+    def _on_get_training_status(
+        self, req: GetTrainingStatus.Request, res: GetTrainingStatus.Response
+    ) -> GetTrainingStatus.Response:
+        # Resolve skill_dir → skill_id from local metadata.json so we can
+        # match even when the dir_map hasn't been populated by a prior
+        # submit/create/download call.
+        lookup_skill_id: str | None = None
+        if req.skill_dir and os.path.isdir(req.skill_dir):
+            lookup_skill_id = read_skill_id(req.skill_dir)
+            if lookup_skill_id:
+                self._store.register_dir(lookup_skill_id, req.skill_dir)
+
+        res.found = False
+        for skill in self._build_skill_statuses():
+            if (lookup_skill_id and skill.training_skill_id == lookup_skill_id) or \
+               (req.skill_name and skill.skill_name == req.skill_name):
+                res.found = True
+                res.skill_status = skill
+                break
+        return res
 
     # ── Service: submit_skill ───────────────────────────────────────
 
