@@ -27,7 +27,7 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
 
-def create_act_config(action_dim=8):
+def create_act_config(action_dim=10):
     """Create ACT configuration matching the training setup."""
     input_shapes = {
         "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
@@ -77,7 +77,7 @@ def create_act_config(action_dim=8):
 
 class BehaviorServer(Node):
     def __init__(self):
-        super().__init__('behavior_server')
+        super().__init__('manipulation_server')
         self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Behavior server started.")
         
@@ -111,7 +111,7 @@ class BehaviorServer(Node):
         self.execution_running = False
         self.current_goal_handle = None
         self.current_policy = None
-        self.current_action_dim = 8  # Add this to track current policy's action dimension
+        self.current_action_dim = 10  # Add this to track current policy's action dimension
         self._cancel_requested = threading.Event()
         
         # Sensor data
@@ -126,7 +126,7 @@ class BehaviorServer(Node):
         image_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=1
         )
         
         # Subscribers
@@ -264,8 +264,8 @@ class BehaviorServer(Node):
             behavior_name = os.path.basename(skill_dir.rstrip('/'))
             checkpoint_file = behavior_config['execution'].get('checkpoint')
             checkpoint_path = os.path.join(skill_dir, checkpoint_file)
-            action_dim = behavior_config['execution'].get('action_dim', 8)
-            duration = behavior_config['execution'].get('duration', 20.0)
+            action_dim = behavior_config['execution'].get('action_dim', 10)
+            duration = behavior_config['execution'].get('duration', 120.0)
             progress_threshold = behavior_config['execution'].get('progress_threshold', 2.0)
             start_pose = behavior_config['execution'].get('start_pose')
             end_pose = behavior_config['execution'].get('end_pose')

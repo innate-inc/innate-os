@@ -32,8 +32,8 @@ def generate_launch_description():
     # Behavior server node
     behavior_server_node = Node(
         package='manipulation',
-        executable='behavior_server.py',
-        name='behavior_server',
+        executable='manipulation_server.py',
+        name='manipulation_server',
         output='screen',
         parameters=[
             {'recorder_config': LaunchConfiguration('recorder_config')},

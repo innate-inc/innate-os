@@ -4,7 +4,7 @@ Lazy throttle ComposableNode descriptions for remote RViz viewing.
 Each throttle republishes a main-camera topic at 2 Hz under
 /mars/main_camera/remote/... and only subscribes when its output
 has at least one subscriber (lazy=True), preserving the depth
-estimator's lazy-publish behaviour.
+estimator's lazy-publish manipulation.
 
 Import and append to any ComposableNodeContainer:
 
