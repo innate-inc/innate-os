@@ -161,21 +161,15 @@ def do_upload(
     """Compress + upload data files for *skill_id*."""
     sid = skill_id[:8]
     prev_stage: str | None = None
+    prev_msg: str | None = None
     try:
         for update in manager.upload_files(skill_id, skill_dir):
             store.update_transfer(TransferProgress.UPLOAD, skill_id, -1, update)
-            # Log stage transitions
             stage = update.stage.value
-            if stage != prev_stage:
+            if stage != prev_stage or update.message != prev_msg:
                 _ros.info(f"Upload {sid}: {stage} — {update.message}")
                 prev_stage = stage
-            # Log per-file progress when a new file starts
-            fp = update.file_progress
-            if fp and fp.bytes_done == 0 and not fp.done:
-                _ros.debug(
-                    f"Upload {sid}: file [{fp.index}/{fp.total}] {fp.filename}"
-                    f" ({fp.bytes_total} bytes)"
-                )
+                prev_msg = update.message
         _ros.info(f"Upload finished for {sid} from {skill_dir}")
     except Exception as e:
         _ros.error(f"Upload failed for {sid}: {e}")
