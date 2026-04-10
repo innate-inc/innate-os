@@ -335,21 +335,21 @@ std::string MainCameraDriver::createGStreamerPipeline()
   //   drop=true      - Drop old frames if queue is full (prevents memory buildup)
   //   sync=false     - Don't sync to clock (process as fast as possible)
   
-  // For Jetson, use nvvidconv for hardware-accelerated scaling and rotation
-  // This is much faster than CPU-based OpenCV operations
+  // For Jetson, use nvv4l2decoder for hardware JPEG decode (NVDEC engine) and
+  // nvvidconv for hardware-accelerated scaling and rotation (VIC engine).
+  // The two NVIDIA elements communicate via NVMM zero-copy buffers.
   // flip-method=2 rotates 180 degrees, interpolation-method=4 uses Smart interpolation
-  // nvvidconv outputs YUV/BGRx format, videoconvert converts to BGR for OpenCV
-  // Add io-mode=2 for memory-mapped I/O (better compatibility) and do-timestamp=true for proper timestamping
+  // videoconvert handles final BGRx→BGR for OpenCV.
   std::string pipeline = 
     "v4l2src device=" + camera_device_ + " io-mode=2 do-timestamp=true ! "
     "image/jpeg,width=" + std::to_string(capture_width_) + 
     ",height=" + std::to_string(capture_height_) + 
     ",framerate=" + std::to_string(static_cast<int>(fps_)) + "/1 ! "
-    "jpegdec ! "
-    "nvvidconv flip-method=2 interpolation-method=4 ! "  // Hardware rotation (180°) and scaling (Smart interpolation)
+    "nvv4l2decoder mjpeg=true ! "
+    "nvvidconv flip-method=2 interpolation-method=4 ! "
     "video/x-raw,width=" + std::to_string(publish_stereo_width_) + 
-    ",height=" + std::to_string(publish_stereo_height_) + " ! "  // nvvidconv outputs its native format
-    "videoconvert ! video/x-raw,format=BGR ! "  // videoconvert handles format conversion to BGR
+    ",height=" + std::to_string(publish_stereo_height_) + ",format=BGRx ! "
+    "videoconvert ! video/x-raw,format=BGR ! "
     "appsink max-buffers=1 drop=true sync=false";
   
   // Alternative pipeline using videoscale (fallback if nvvidconv fails):

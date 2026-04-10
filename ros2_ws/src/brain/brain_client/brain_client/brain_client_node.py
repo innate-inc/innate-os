@@ -247,23 +247,18 @@ class BrainClientNode(Node):
         self.cur_nav_mode = None
 
         self.last_arm_camera = None  # Store the latest arm camera image
-        self.odom_sub = self.create_subscription(
-            Odometry, self.odom_topic, self.odom_callback, 10
-        )
         self.current_nav_mode_topic = (
             self.get_parameter("current_nav_mode_topic")
             .get_parameter_value()
             .string_value
         )
-        self.current_nav_mode_sub = self.create_subscription(
-            String, self.current_nav_mode_topic, self.nav_mode_callback, 10
-        )
-        # self.map_agnostic_odom_pub = self.create_publisher(Odometry, '/map_agnost_odom', 10)
 
-        # Create a timer to fetch the transform at 30 Hz
-        self.transform_timer = self.create_timer(
-            1.0 / 30.0, self.fetch_transform_callback
-        )
+        # These subscriptions/timers are created on-demand when the brain activates
+        self._odom_sub = None
+        self._nav_mode_sub = None
+        self._head_position_sub = None
+        self.transform_timer = None
+        self._memory_positions_timer = None
 
         self.vertical_fov = (
             self.get_parameter("vertical_fov").get_parameter_value().double_value
@@ -350,18 +345,13 @@ class BrainClientNode(Node):
         self.last_arm_camera = None  # Store the latest arm camera image
         self.memory_positions = []  # Store memory positions from cloud agent
 
-        image_qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
+        # Image subscriptions are created on-demand via _start_brain_subscriptions()
+        # to avoid decoding 30fps camera streams when the brain is inactive.
+        self._image_sub = None
+        self._depth_image_sub = None
+        self._arm_camera_sub = None
 
-        # RGB image subscription remains unchanged.
-        self.image_sub = self.create_subscription(
-            CompressedImage, self.image_topic, self.image_callback, image_qos
-        )
-
-        # Subscribe to the map topic
+        # Subscribe to the map topic (lightweight, latched -- always on)
         map_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -371,24 +361,6 @@ class BrainClientNode(Node):
         self.map_sub = self.create_subscription(
             OccupancyGrid, self.map_topic, self.map_callback, map_qos
         )
-
-        # Optionally subscribe to the depth image topic if required.
-        if self.send_depth:
-            # Assuming that the depth image is published as a sensor_msgs/Image
-            # (which contains: header, height, width, encoding, is_bigendian, step, data)
-
-            self.depth_image_sub = self.create_subscription(
-                Image, self.depth_image_topic, self.depth_image_callback, 1
-            )
-
-        # Optionally subscribe to the arm camera image topic if required.
-        if self.send_arm_camera_image:
-            self.arm_camera_sub = self.create_subscription(
-                CompressedImage,
-                self.arm_camera_image_topic,
-                self.arm_camera_image_callback,
-                image_qos,  # Using the same QoS as the main camera
-            )
 
         # Subscribe to AMCL pose topic
         # NOTE: AMCL publishes with TRANSIENT_LOCAL durability, so we must match it
@@ -404,14 +376,6 @@ class BrainClientNode(Node):
             self.amcl_pose_topic,
             self.amcl_pose_callback,
             amcl_pose_qos,
-        )
-
-        # Subscribe to head position topic
-        self.head_position_sub = self.create_subscription(
-            String,
-            "/mars/head/current_position",
-            self.head_position_callback,
-            10,
         )
 
         self.cmd_vel_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -432,6 +396,10 @@ class BrainClientNode(Node):
         self.active_inputs_pub = self.create_publisher(
             String, "/input_manager/active_inputs", 10
         )
+        # Ensure all inputs (STT, etc.) are off on startup; they'll be activated
+        # when the brain activates via activate_directive_inputs().
+        self.active_inputs_pub.publish(String(data=json.dumps({"inputs": []})))
+
         self.chat_out_pub = self.create_publisher(String, "/brain/chat_out", 10)
         self.task_status_pub = self.create_publisher(
             String, "/brain/skill_status_update", 10
@@ -550,16 +518,16 @@ class BrainClientNode(Node):
             MessageOutType.MEMORY_POSITIONS, self._handle_memory_positions
         )
 
-        # Timer for regular memory positions publishing (1Hz)
-        self.memory_positions_timer = self.create_timer(
-            1.0, self._publish_memory_positions
-        )
-
         for _ in range(10):
             self.ws_bridge.send_message(
                 InternalMessage(type=InternalMessageType.READY_FOR_CONNECTION)
             )
             time.sleep(1.0)
+
+        # Initialise early — _on_available_skills reads this during the spin wait below
+        self.primitive_running = None
+        self._pending_reregistration = False
+        self._goal_handle = None
 
         # Subscribe to available_skills topic from skills_action_server (latched / transient_local)
         self._skills_qos = QoSProfile(
@@ -600,6 +568,7 @@ class BrainClientNode(Node):
             # Auto-activate brain if a startup directive is configured
             if not self.is_brain_active:
                 self.is_brain_active = True
+                self._start_brain_subscriptions()
                 self.get_logger().info(
                     "\033[1;92m[BrainClient] Auto-activating brain because startup directive is configured\033[0m"
                 )
@@ -616,11 +585,6 @@ class BrainClientNode(Node):
         # Gaze tracker (initialized if directive uses gaze)
         self._gaze_tracker = None
         self._update_gaze_tracker()
-
-        self.primitive_running = None
-        self._pending_reregistration = False
-        # Add a variable to store the current goal handle
-        self._goal_handle = None
 
         # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
@@ -1172,8 +1136,12 @@ class BrainClientNode(Node):
         """
         Publish the list of input devices that should be active based on current directive.
         The input_manager_node subscribes to this and activates/deactivates inputs accordingly.
+        Only activates inputs when the brain is active to avoid running STT etc. while idle.
         """
         if not self.current_directive:
+            return
+
+        if not self.is_brain_active:
             return
 
         try:
@@ -1261,9 +1229,73 @@ class BrainClientNode(Node):
         )
         return response
 
+    def _start_brain_subscriptions(self):
+        """Create all sensor subscriptions and timers needed while the brain is active."""
+        if self._image_sub is not None:
+            return
+        image_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self._image_sub = self.create_subscription(
+            CompressedImage, self.image_topic, self.image_callback, image_qos
+        )
+        if self.send_depth:
+            self._depth_image_sub = self.create_subscription(
+                Image, self.depth_image_topic, self.depth_image_callback, 1
+            )
+        if self.send_arm_camera_image:
+            self._arm_camera_sub = self.create_subscription(
+                CompressedImage,
+                self.arm_camera_image_topic,
+                self.arm_camera_image_callback,
+                image_qos,
+            )
+        self._odom_sub = self.create_subscription(
+            Odometry, self.odom_topic, self.odom_callback, 10
+        )
+        self._nav_mode_sub = self.create_subscription(
+            String, self.current_nav_mode_topic, self.nav_mode_callback, 10
+        )
+        self._head_position_sub = self.create_subscription(
+            String, "/mars/head/current_position", self.head_position_callback, 10
+        )
+        self.transform_timer = self.create_timer(
+            1.0 / 30.0, self.fetch_transform_callback
+        )
+        self._memory_positions_timer = self.create_timer(
+            1.0, self._publish_memory_positions
+        )
+        self.get_logger().info("Brain subscriptions started")
+
+    def _stop_brain_subscriptions(self):
+        """Destroy lazy subscriptions and timers when the brain deactivates."""
+        for sub in (
+            self._image_sub, self._depth_image_sub, self._arm_camera_sub,
+            self._odom_sub, self._nav_mode_sub, self._head_position_sub,
+        ):
+            if sub is not None:
+                self.destroy_subscription(sub)
+        self._image_sub = None
+        self._depth_image_sub = None
+        self._arm_camera_sub = None
+        self._odom_sub = None
+        self._nav_mode_sub = None
+        self._head_position_sub = None
+        for timer in (self.transform_timer, self._memory_positions_timer):
+            if timer is not None:
+                timer.cancel()
+        self.transform_timer = None
+        self._memory_positions_timer = None
+        self.last_image = None
+        self.last_depth_image = None
+        self.last_arm_camera = None
+        self.image_buffer.clear()
+        self.get_logger().info("Brain subscriptions stopped")
+
     def image_callback(self, msg: CompressedImage):
         try:
-            # self.get_logger().info(f"\033[1;92m[BrainClient] Received image_callback\033[0m")
             np_arr = np.frombuffer(msg.data, np.uint8)
             decoded_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
             if decoded_image is not None:
@@ -2198,6 +2230,7 @@ class BrainClientNode(Node):
                     "\033[1;92m[BrainClient] Auto-activating brain in simulator mode\033[0m"
                 )
                 self.is_brain_active = True
+                self._start_brain_subscriptions()
 
             # Start the pose image timer if we've already received a ready_for_image message
             if self.ready_for_image and not self.pose_image_started:
@@ -2737,6 +2770,7 @@ class BrainClientNode(Node):
         """Deactivates the brain's main operational loops and interactions."""
         self.get_logger().info("\033[1;93m[BrainClient] Deactivating brain...\033[0m")
         self.is_brain_active = False
+        self._stop_brain_subscriptions()
 
         # Stop timers
         if self.agent_timer and not self.agent_timer.is_canceled():
@@ -2814,6 +2848,7 @@ class BrainClientNode(Node):
             return
         
         self.is_brain_active = True
+        self._start_brain_subscriptions()
 
         # NOTE: We do NOT apply directive_on_startup here - that's only for initial startup
         # On reactivation, we keep whatever directive was active before
@@ -3027,7 +3062,8 @@ def main(args=None):
         # logged and skipped instead of crashing the whole node.
         while rclpy.ok():
             try:
-                rclpy.spin_once(node, timeout_sec=0.1)
+                timeout = 0.1 if node.is_brain_active else 1.0
+                rclpy.spin_once(node, timeout_sec=timeout)
             except KeyboardInterrupt:
                 raise
             except Exception as e:

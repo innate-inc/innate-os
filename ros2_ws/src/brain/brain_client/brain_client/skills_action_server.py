@@ -79,20 +79,13 @@ class SkillsActionServer(Node):
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
 
-        # Subscribers for robot state (cameras handled by _camera_node)
-        self.odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
-        self.map_sub = self.create_subscription(
-            OccupancyGrid,
-            "/map",
-            self.map_callback,
-            1,  # QoS profile with transient local durability might be better for map
-        )
-        self.head_position_sub = self.create_subscription(
-            String, self.head_current_position_topic, self.head_position_callback, 10
-        )
+        # Subscribers created on-demand via _start_state_subscriptions()
+        self._odom_sub = None
+        self._map_sub = None
+        self._head_position_sub = None
 
-        # Create manipulation interface for skills to use
-        self.manipulation = ManipulationInterface(self, self.get_logger())
+        # Create manipulation interface for skills to use (subs also lazy)
+        self.manipulation = ManipulationInterface(self, self.get_logger(), lazy=True)
         # Create mobility interface for base/wheel motion
         self.mobility = MobilityInterface(self, self.get_logger(), self.cmd_vel_topic)
         # Create head interface for head tilt control
@@ -915,16 +908,25 @@ class SkillsActionServer(Node):
         # Pass the feedback callback to the skill if it supports it
         skill.set_feedback_callback(_publish_feedback)
 
+        required_states = skill.get_required_robot_states()
+        needs_camera = required_states and (
+            RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64 in required_states
+            or RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64 in required_states
+        )
+
         try:
+            self._start_state_subscriptions()
+
+            if needs_camera:
+                self._camera_node.start()
+
             # Initial robot state injection
             self._update_skill_robot_state(skill)
 
             # Start continuous state updates if skill needs real-time data
-            required_states = skill.get_required_robot_states()
             if required_states:
                 with self._current_skill_lock:
                     self._current_skill = skill
-                # Start background thread for state updates (runs independently of executor)
                 self._state_update_stop_event.clear()
                 self._state_update_thread = threading.Thread(target=self._state_update_thread_func, daemon=True)
                 self._state_update_thread.start()
@@ -932,14 +934,6 @@ class SkillsActionServer(Node):
 
             # Execute the skill with its direct inputs
             result_message, result_status = skill.execute(**inputs)
-
-            # Stop continuous state updates
-            if self._state_update_thread is not None:
-                self._state_update_stop_event.set()
-                self._state_update_thread.join(timeout=1.0)
-                self._state_update_thread = None
-            with self._current_skill_lock:
-                self._current_skill = None
 
             # Handle the result based on the SkillResult enum
             if result_status == SkillResult.SUCCESS:
@@ -979,6 +973,16 @@ class SkillsActionServer(Node):
                 skill_type=skill_type,
                 success_type=SkillResult.FAILURE.value,
             )
+        finally:
+            if self._state_update_thread is not None:
+                self._state_update_stop_event.set()
+                self._state_update_thread.join(timeout=1.0)
+                self._state_update_thread = None
+            with self._current_skill_lock:
+                self._current_skill = None
+            if needs_camera:
+                self._camera_node.stop()
+            self._stop_state_subscriptions()
 
     def _execute_physical_skill(self, goal_handle, skill_type, inputs):
         self.get_logger().info(f"Delegating physical skill '{skill_type}' to behavior_server")
@@ -997,90 +1001,94 @@ class SkillsActionServer(Node):
             )
         metadata = physical_data["metadata"]
 
-        # Wait for behavior server to be available
-        if not self._behavior_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("Behavior server not available!")
-            goal_handle.abort()
-            return ExecuteSkill.Result(
-                success=False,
-                message="Behavior server not available",
-                skill_type=skill_type,
-                success_type=SkillResult.FAILURE.value,
-            )
+        self._start_state_subscriptions()
+        try:
+            # Wait for behavior server to be available
+            if not self._behavior_client.wait_for_server(timeout_sec=5.0):
+                self.get_logger().error("Behavior server not available!")
+                goal_handle.abort()
+                return ExecuteSkill.Result(
+                    success=False,
+                    message="Behavior server not available",
+                    skill_type=skill_type,
+                    success_type=SkillResult.FAILURE.value,
+                )
 
-        # Create behavior goal with config from metadata
-        behavior_goal = ExecuteBehavior.Goal()
-        behavior_goal.skill_dir = physical_data["directory"]
-        behavior_goal.behavior_config = json.dumps(metadata)  # Pass entire metadata as config
+            # Create behavior goal with config from metadata
+            behavior_goal = ExecuteBehavior.Goal()
+            behavior_goal.skill_dir = physical_data["directory"]
+            behavior_goal.behavior_config = json.dumps(metadata)  # Pass entire metadata as config
 
-        # Send goal and wait for result
-        self.get_logger().info(f"Sending behavior goal to behavior_server: {skill_type}")
-        send_goal_future = self._behavior_client.send_goal_async(behavior_goal)
+            # Send goal and wait for result
+            self.get_logger().info(f"Sending behavior goal to behavior_server: {skill_type}")
+            send_goal_future = self._behavior_client.send_goal_async(behavior_goal)
 
-        # Wait for goal acceptance
-        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=5.0)
+            # Wait for goal acceptance
+            rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=5.0)
 
-        if not send_goal_future.done():
-            self.get_logger().error("Timeout waiting for behavior goal acceptance")
-            goal_handle.abort()
-            return ExecuteSkill.Result(
-                success=False,
-                message="Timeout waiting for behavior goal acceptance",
-                skill_type=skill_type,
-                success_type=SkillResult.FAILURE.value,
-            )
+            if not send_goal_future.done():
+                self.get_logger().error("Timeout waiting for behavior goal acceptance")
+                goal_handle.abort()
+                return ExecuteSkill.Result(
+                    success=False,
+                    message="Timeout waiting for behavior goal acceptance",
+                    skill_type=skill_type,
+                    success_type=SkillResult.FAILURE.value,
+                )
 
-        behavior_goal_handle = send_goal_future.result()
-        if not behavior_goal_handle.accepted:
-            self.get_logger().error("Behavior goal rejected by behavior_server")
-            goal_handle.abort()
-            return ExecuteSkill.Result(
-                success=False,
-                message="Behavior goal rejected by behavior_server",
-                skill_type=skill_type,
-                success_type=SkillResult.FAILURE.value,
-            )
+            behavior_goal_handle = send_goal_future.result()
+            if not behavior_goal_handle.accepted:
+                self.get_logger().error("Behavior goal rejected by behavior_server")
+                goal_handle.abort()
+                return ExecuteSkill.Result(
+                    success=False,
+                    message="Behavior goal rejected by behavior_server",
+                    skill_type=skill_type,
+                    success_type=SkillResult.FAILURE.value,
+                )
 
-        self.get_logger().info("Behavior goal accepted, waiting for result...")
+            self.get_logger().info("Behavior goal accepted, waiting for result...")
 
-        # Wait for result
-        result_future = behavior_goal_handle.get_result_async()
+            # Wait for result
+            result_future = behavior_goal_handle.get_result_async()
 
-        # Spin until complete - this blocks but that's okay in an action callback
-        rclpy.spin_until_future_complete(self, result_future)
+            # Spin until complete - this blocks but that's okay in an action callback
+            rclpy.spin_until_future_complete(self, result_future)
 
-        behavior_result = result_future.result().result
+            behavior_result = result_future.result().result
 
-        # Convert behavior result to skill result
-        if behavior_result.success:
-            self.get_logger().info(f"Physical skill '{skill_type}' succeeded: {behavior_result.message}")
-            goal_handle.succeed()
-            return ExecuteSkill.Result(
-                success=True,
-                message=behavior_result.message,
-                skill_type=skill_type,
-                success_type=SkillResult.SUCCESS.value,
-            )
-        else:
-            # Check if it was cancelled
-            if "cancel" in behavior_result.message.lower():
-                self.get_logger().info(f"Physical skill '{skill_type}' cancelled: {behavior_result.message}")
+            # Convert behavior result to skill result
+            if behavior_result.success:
+                self.get_logger().info(f"Physical skill '{skill_type}' succeeded: {behavior_result.message}")
                 goal_handle.succeed()
                 return ExecuteSkill.Result(
                     success=True,
                     message=behavior_result.message,
                     skill_type=skill_type,
-                    success_type=SkillResult.CANCELLED.value,
+                    success_type=SkillResult.SUCCESS.value,
                 )
             else:
-                self.get_logger().error(f"Physical skill '{skill_type}' failed: {behavior_result.message}")
-                goal_handle.abort()
-                return ExecuteSkill.Result(
-                    success=False,
-                    message=behavior_result.message,
-                    skill_type=skill_type,
-                    success_type=SkillResult.FAILURE.value,
-                )
+                # Check if it was cancelled
+                if "cancel" in behavior_result.message.lower():
+                    self.get_logger().info(f"Physical skill '{skill_type}' cancelled: {behavior_result.message}")
+                    goal_handle.succeed()
+                    return ExecuteSkill.Result(
+                        success=True,
+                        message=behavior_result.message,
+                        skill_type=skill_type,
+                        success_type=SkillResult.CANCELLED.value,
+                    )
+                else:
+                    self.get_logger().error(f"Physical skill '{skill_type}' failed: {behavior_result.message}")
+                    goal_handle.abort()
+                    return ExecuteSkill.Result(
+                        success=False,
+                        message=behavior_result.message,
+                        skill_type=skill_type,
+                        success_type=SkillResult.FAILURE.value,
+                    )
+        finally:
+            self._stop_state_subscriptions()
 
     def destroy(self):
         if hasattr(self, '_hot_reload_watcher'):
@@ -1088,6 +1096,30 @@ class SkillsActionServer(Node):
         self._camera_node.shutdown()
         self._action_server.destroy()
         super().destroy_node()
+
+    def _start_state_subscriptions(self):
+        """Create robot-state subscriptions needed during skill execution."""
+        if self._odom_sub is not None:
+            return
+        self._odom_sub = self.create_subscription(Odometry, "/odom", self.odom_callback, 10)
+        self._map_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, 1)
+        self._head_position_sub = self.create_subscription(
+            String, self.head_current_position_topic, self.head_position_callback, 10
+        )
+        self.manipulation.start()
+
+    def _stop_state_subscriptions(self):
+        """Destroy robot-state subscriptions when no skill is running."""
+        for sub in (self._odom_sub, self._map_sub, self._head_position_sub):
+            if sub is not None:
+                self.destroy_subscription(sub)
+        self._odom_sub = None
+        self._map_sub = None
+        self._head_position_sub = None
+        self.manipulation.stop()
+        self.last_odom = None
+        self.last_map = None
+        self.last_head_position = None
 
     # Callbacks for state subscriptions
     def odom_callback(self, msg: Odometry):
@@ -1112,7 +1144,11 @@ class SkillsActionServer(Node):
 def main(args=None):
     rclpy.init(args=args)
     action_server = SkillsActionServer()
-    rclpy.spin(action_server)
+    try:
+        while rclpy.ok():
+            rclpy.spin_once(action_server, timeout_sec=1.0)
+    except KeyboardInterrupt:
+        pass
     action_server.destroy()
     rclpy.shutdown()
 

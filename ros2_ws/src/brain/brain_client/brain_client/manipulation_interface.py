@@ -27,13 +27,14 @@ class ManipulationInterface:
     without needing to know the details of ROS topics and services.
     """
 
-    def __init__(self, node: Node, logger):
+    def __init__(self, node: Node, logger, lazy: bool = False):
         """
         Initialize the manipulation interface.
 
         Args:
             node: ROS2 node for creating publishers/subscribers/clients
             logger: Logger for status messages
+            lazy: If True, defer subscription creation until start() is called
         """
         self.node = node
         self.logger = logger
@@ -41,22 +42,20 @@ class ManipulationInterface:
         # Publishers
         self._ik_target_pub = self.node.create_publisher(Twist, "/ik_delta", 10)
 
-        # Subscribers
+        # Cached state
         self._ik_solution = None
         self._ik_solution_fk = None
         self._fk_pose = None
         self._arm_state = None
-        self._ik_solution_sub = self.node.create_subscription(
-            JointState, "/ik_solution", self._ik_solution_callback, 10
-        )
-        self._ik_solution_fk_sub = self.node.create_subscription(
-            PoseStamped, "/ik_solution_fk", self._ik_solution_fk_callback, 10
-        )
-        self._fk_pose_sub = self.node.create_subscription(PoseStamped, "/fk_pose", self._fk_pose_callback, 10)
-        self._arm_state_sub = self.node.create_subscription(JointState, "/mars/arm/state", self._arm_state_callback, 10)
-        self._arm_state_sub = self.node.create_subscription(
-            JointState, "/mars/arm/state", self._arm_state_callback, 10
-        )
+
+        # Subscription handles (created in start(), destroyed in stop())
+        self._ik_solution_sub = None
+        self._ik_solution_fk_sub = None
+        self._fk_pose_sub = None
+        self._arm_state_sub = None
+
+        if not lazy:
+            self.start()
 
         # Service client for joint space control. We create the client once
         # here, but deliberately avoid any blocking wait_for_service calls
@@ -70,6 +69,38 @@ class ManipulationInterface:
         self._reboot_servos_client = self.node.create_client(Trigger, "/mars/arm/reboot")
 
         self.logger.info("ManipulationInterface initialized")
+
+    def start(self):
+        """Create all subscriptions. Safe to call multiple times."""
+        if self._arm_state_sub is not None:
+            return
+        self._ik_solution_sub = self.node.create_subscription(
+            JointState, "/ik_solution", self._ik_solution_callback, 10
+        )
+        self._ik_solution_fk_sub = self.node.create_subscription(
+            PoseStamped, "/ik_solution_fk", self._ik_solution_fk_callback, 10
+        )
+        self._fk_pose_sub = self.node.create_subscription(
+            PoseStamped, "/fk_pose", self._fk_pose_callback, 10
+        )
+        self._arm_state_sub = self.node.create_subscription(
+            JointState, "/mars/arm/state", self._arm_state_callback, 10
+        )
+
+    def stop(self):
+        """Destroy all subscriptions and clear cached state."""
+        for sub in (self._ik_solution_sub, self._ik_solution_fk_sub,
+                    self._fk_pose_sub, self._arm_state_sub):
+            if sub is not None:
+                self.node.destroy_subscription(sub)
+        self._ik_solution_sub = None
+        self._ik_solution_fk_sub = None
+        self._fk_pose_sub = None
+        self._arm_state_sub = None
+        self._ik_solution = None
+        self._ik_solution_fk = None
+        self._fk_pose = None
+        self._arm_state = None
 
     def spin_node_to_refresh_topics(self, count: int = 10, timeout_sec: float = 0.001):
         """Spin the underlying ROS node to process pending callbacks.
