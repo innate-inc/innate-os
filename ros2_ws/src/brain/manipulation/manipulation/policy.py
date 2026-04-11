@@ -253,7 +253,7 @@ class InferenceNode(Node):
                 self.get_logger().warn(
                     f"Invalid inference duration {inference_duration}s requested, using default 20s."
                 )
-                inference_duration = 20.0 # Default if not specified or invalid
+                inference_duration = 120.0 # Default if not specified or invalid
 
             # Step 1: Move arm to start position
             self.get_logger().info("Moving arm to start position...")

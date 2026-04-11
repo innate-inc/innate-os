@@ -71,7 +71,13 @@ def _build_training_params(
     if msg.preset:
         params["preset"] = msg.preset
     if msg.env:
-        params["env"] = list(msg.env)
+        env_dict: dict[str, str] = {}
+        for entry in msg.env:
+            key, _, value = entry.partition("=")
+            if key:
+                env_dict[key] = value
+        if env_dict:
+            params["env"] = env_dict
     return (params or None), None
 
 
