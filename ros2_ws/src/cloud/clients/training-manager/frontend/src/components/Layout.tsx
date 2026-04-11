@@ -22,7 +22,7 @@ interface LogEntry {
 }
 
 export default function Layout({ activeTab, onTabChange, children }: Props) {
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
 
