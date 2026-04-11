@@ -45,7 +45,9 @@ export default function DatasetsTab() {
     );
   }
 
-  const uploaded = datasets.filter((d) => d.status === "uploaded");
+  const mergeable = datasets.filter(
+    (d) => d.status === "uploaded" && d.dataset_type === "h264",
+  );
 
   return (
     <div>
@@ -54,7 +56,7 @@ export default function DatasetsTab() {
           Datasets
         </h2>
         <div className="flex gap-2">
-          {uploaded.length >= 2 && (
+          {mergeable.length >= 2 && (
             <button
               onClick={() => setMergeOpen(true)}
               className="flex items-center gap-1.5 text-xs border border-innate-border rounded-full px-3 py-1 text-innate-muted hover:text-black hover:border-black transition-all"
@@ -99,7 +101,7 @@ export default function DatasetsTab() {
 
       {mergeOpen && (
         <MergeModal
-          datasets={uploaded}
+          datasets={mergeable}
           onClose={() => {
             setMergeOpen(false);
             refresh();
@@ -124,6 +126,7 @@ function DatasetRow({
   const [stage, setStage] = useState("");
 
   const isUploaded = dataset.status === "uploaded";
+  const isViewable = isUploaded && dataset.dataset_type === "h264";
   const isActive =
     dataset.status === "compressing" || dataset.status === "uploading";
 
@@ -168,9 +171,9 @@ function DatasetRow({
     <div className="flex items-center border border-innate-border rounded-lg px-4 py-3 gap-4">
       <div className="flex-1 min-w-0">
         <button
-          onClick={isUploaded ? onSelect : undefined}
-          disabled={!isUploaded}
-          className={`text-sm font-semibold text-left ${isUploaded ? "hover:text-innate-purple cursor-pointer" : "text-gray-400 cursor-default"}`}
+          onClick={isViewable ? onSelect : undefined}
+          disabled={!isViewable}
+          className={`text-sm font-semibold text-left ${isViewable ? "hover:text-innate-purple cursor-pointer" : "text-gray-400 cursor-default"}`}
         >
           {dataset.name}
         </button>

@@ -419,9 +419,17 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
         if src_ds is None:
             raise HTTPException(404, f"No dataset metadata in {src.skill_name}")
 
+        src_type = src_ds.get("dataset_type", "h5")
+        if src_type != "h264":
+            raise HTTPException(
+                400,
+                f"Source {src.skill_name} has dataset_type '{src_type}'; "
+                "only h264 datasets can be merged",
+            )
+
         if data_frequency is None:
             data_frequency = src_ds.get("data_frequency", 10)
-        dataset_type = src_ds.get("dataset_type", dataset_type)
+        dataset_type = src_type
 
         for ep in src_ds.get("episodes", []):
             if ep.get("episode_id") not in src.episode_ids:

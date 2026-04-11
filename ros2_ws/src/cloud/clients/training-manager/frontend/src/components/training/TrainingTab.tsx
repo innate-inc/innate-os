@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { api } from "../../api";
 import RunDetail from "./RunDetail";
@@ -139,32 +139,55 @@ export default function TrainingTab() {
           </thead>
           <tbody>
             {runs.map((r) => (
-              <tr
-                key={`${r.skill_id}-${r.run_id}`}
-                onClick={() =>
-                  setSelectedRun({
-                    skill: r.skill_dir_name,
-                    runId: r.run_id,
-                  })
-                }
-                className="border-b border-innate-border/50 hover:bg-innate-panel cursor-pointer"
-              >
-                <td className="p-2">
-                  <span className="font-medium">{r.skill_name}</span>
-                </td>
-                <td className="p-2 font-mono text-xs text-gray-600">
-                  #{r.run_id}
-                </td>
-                <td className="p-2">
-                  <RunStatusBadge status={r.status} daemon={r.daemon_state} />
-                </td>
-                <td className="p-2 text-xs text-gray-600">
-                  {r.created_at ? fmtTime(r.created_at) : "—"}
-                </td>
-                <td className="p-2 text-xs text-gray-600">
-                  {duration(r.started_at, r.finished_at)}
-                </td>
-              </tr>
+              <Fragment key={`${r.skill_id}-${r.run_id}`}>
+                <tr
+                  onClick={() =>
+                    setSelectedRun({
+                      skill: r.skill_dir_name,
+                      runId: r.run_id,
+                    })
+                  }
+                  className={`border-b ${r.error_message ? "border-red-200 bg-red-50 hover:bg-red-100" : "border-innate-border/50 hover:bg-innate-panel"} cursor-pointer`}
+                >
+                  <td className="p-2">
+                    <span className="font-medium">{r.skill_name}</span>
+                  </td>
+                  <td className="p-2 font-mono text-xs text-gray-600">
+                    #{r.run_id}
+                  </td>
+                  <td className="p-2">
+                    <RunStatusBadge
+                      status={r.status}
+                      daemon={r.daemon_state}
+                      hasError={!!r.error_message}
+                    />
+                  </td>
+                  <td className="p-2 text-xs text-gray-600">
+                    {r.created_at ? fmtTime(r.created_at) : "—"}
+                  </td>
+                  <td className="p-2 text-xs text-gray-600">
+                    {duration(r.started_at, r.finished_at)}
+                  </td>
+                </tr>
+                {r.error_message && (
+                  <tr
+                    onClick={() =>
+                      setSelectedRun({
+                        skill: r.skill_dir_name,
+                        runId: r.run_id,
+                      })
+                    }
+                    className="bg-red-50 hover:bg-red-100 cursor-pointer"
+                  >
+                    <td
+                      colSpan={5}
+                      className="px-2 pb-2 text-xs text-red-600"
+                    >
+                      {r.error_message}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -186,11 +209,15 @@ const STATUS_COLORS: Record<string, string> = {
 function RunStatusBadge({
   status,
   daemon,
+  hasError,
 }: {
   status: string;
   daemon: string | null;
+  hasError: boolean;
 }) {
-  const colors = STATUS_COLORS[status] || "bg-innate-border text-gray-600";
+  const colors = hasError
+    ? "bg-red-600 text-white"
+    : STATUS_COLORS[status] || "bg-innate-border text-gray-600";
   const label = status.replace(/_/g, " ") + (daemon ? ` · ${daemon}` : "");
   return (
     <span

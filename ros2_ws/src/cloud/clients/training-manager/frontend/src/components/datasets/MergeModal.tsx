@@ -40,21 +40,23 @@ export default function MergeModal({ datasets, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadEpisodes = async (dirName: string) => {
-    if (episodeData[dirName]) return;
+  const loadEpisodes = async (dirName: string): Promise<DatasetDetail> => {
+    const cached = episodeData[dirName];
+    if (cached) return cached;
     const data = await api.get<DatasetDetail>(`/api/datasets/${dirName}`);
     setEpisodeData((prev) => ({ ...prev, [dirName]: data }));
+    return data;
   };
 
-  const toggleSource = (dirName: string) => {
+  const toggleSource = async (dirName: string) => {
     const exists = sources.find((s) => s.skill_name === dirName);
     if (exists) {
       setSources(sources.filter((s) => s.skill_name !== dirName));
     } else {
-      const detail = episodeData[dirName];
-      const allIds = detail
-        ? detail.dataset_metadata.episodes.map((e) => e.episode_id)
-        : [];
+      const detail = await loadEpisodes(dirName);
+      const allIds = detail.dataset_metadata.episodes.map(
+        (e) => e.episode_id,
+      );
       setSources([...sources, { skill_name: dirName, episode_ids: allIds }]);
     }
   };
@@ -145,9 +147,9 @@ export default function MergeModal({ datasets, onClose }: Props) {
                   <button
                     className="flex-1 text-left text-sm font-medium hover:text-innate-purple transition-colors"
                     onClick={async () => {
-                      await loadEpisodes(d.dir_name);
                       setExpanded(isExpanded ? null : d.dir_name);
-                      if (!isSource) toggleSource(d.dir_name);
+                      if (!isSource) await toggleSource(d.dir_name);
+                      else await loadEpisodes(d.dir_name);
                     }}
                   >
                     {d.name}{" "}
