@@ -242,11 +242,16 @@ def _encode_camera_to_mp4(
                 if not np.isfortran(frames):
                     frames = np.ascontiguousarray(frames)
                 proc.stdin.write(frames.tobytes())
-            proc.stdin.close()
         except BrokenPipeError:
             pass
+        finally:
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
 
-        _, stderr_bytes = proc.communicate()
+        stderr_bytes = proc.stderr.read()
+        proc.wait()
 
         if proc.returncode != 0:
             stderr = stderr_bytes.decode(errors="replace")

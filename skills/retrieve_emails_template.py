@@ -31,3 +31,6 @@ class RetrieveEmails(Skill):
             )
         except Exception as e:
             return f"Failed to retrieve emails: {str(e)}", SkillResult.FAILURE
+
+    def cancel(self):
+        return "Email retrieval cannot be canceled once started"
