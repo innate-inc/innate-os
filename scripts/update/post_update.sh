@@ -209,15 +209,16 @@ SYSTEM_ENV_FILE="$SYSTEM_ENV_DIR/.env"
         log "  No user .env at $ENV_FILE; skipping /etc/innate/.env"
         exit 0
     fi
-    SERVICE_KEY=$(grep -E '^[[:space:]]*INNATE_SERVICE_KEY=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")
-    if [ -z "$SERVICE_KEY" ]; then
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+    if [ -z "${INNATE_SERVICE_KEY:-}" ]; then
         log "  INNATE_SERVICE_KEY not set in $ENV_FILE; skipping /etc/innate/.env"
         exit 0
     fi
     mkdir -p "$SYSTEM_ENV_DIR"
     chmod 700 "$SYSTEM_ENV_DIR"
     umask 077
-    printf 'INNATE_SERVICE_KEY=%s\n' "$SERVICE_KEY" > "$SYSTEM_ENV_FILE"
+    printf 'INNATE_SERVICE_KEY=%s\n' "$INNATE_SERVICE_KEY" > "$SYSTEM_ENV_FILE"
     chmod 600 "$SYSTEM_ENV_FILE"
     log "  INNATE_SERVICE_KEY mirrored to $SYSTEM_ENV_FILE"
 ) || log "  WARNING: failed to update $SYSTEM_ENV_FILE (continuing)"
