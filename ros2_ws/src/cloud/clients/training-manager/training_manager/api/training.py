@@ -204,6 +204,8 @@ async def watch_run(
 
 class CreateRunRequest(BaseModel):
     preset: str = "act-default"
+    repo: str | None = None
+    ref: str | None = None
     env: dict[str, str] | None = None
     gpu_type: str | None = None
     min_gpus: int | None = None
@@ -231,6 +233,10 @@ async def create_run(
     params: dict[str, Any] = {"preset": body.preset}
     params["source_dir"] = str(skill_path.resolve())
 
+    if body.repo:
+        params["repo"] = body.repo
+    if body.ref:
+        params["ref"] = body.ref
     if body.env:
         params["env"] = body.env
     if body.gpu_type:
