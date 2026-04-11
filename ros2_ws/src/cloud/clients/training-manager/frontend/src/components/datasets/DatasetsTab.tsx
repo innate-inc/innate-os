@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Upload, Merge } from "lucide-react";
+import { Upload, Merge, RotateCcw } from "lucide-react";
 import { api } from "../../api";
 import EpisodeBrowser from "./EpisodeBrowser";
 import MergeModal from "./MergeModal";
@@ -183,9 +183,17 @@ function DatasetRow({
 
       <div className="shrink-0 flex items-center gap-2">
         {isUploaded && (
-          <span className="inline-block px-2 py-0.5 rounded-full text-[0.68rem] font-semibold uppercase bg-green-100 text-green-700">
-            uploaded
-          </span>
+          <>
+            <span className="inline-block px-2 py-0.5 rounded-full text-[0.68rem] font-semibold uppercase bg-green-100 text-green-700">
+              uploaded
+            </span>
+            <button
+              onClick={handleSubmit}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border border-innate-border text-innate-muted hover:text-black hover:border-black transition-all"
+            >
+              <RotateCcw size={13} /> Reupload
+            </button>
+          </>
         )}
         {!isUploaded && !showProgress && (
           <button

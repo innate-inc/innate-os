@@ -60,7 +60,7 @@ export default function Layout({ activeTab, onTabChange, children }: Props) {
       {/* Header */}
       <header className="shrink-0 border-b border-innate-border px-6 py-4">
         <h1 className="text-xl font-bold tracking-tight mb-3">
-          training<span className="text-innate-purple">.</span>manager
+          Innate Training Manager
         </h1>
         <nav className="flex gap-2">
           {TABS.map((t) => (

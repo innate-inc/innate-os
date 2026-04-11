@@ -20,6 +20,8 @@ export default function SkillDetail({ skillName, onBack }: Props) {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, unknown>>({});
+  const [executionJson, setExecutionJson] = useState("");
+  const [jsonError, setJsonError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -32,6 +34,9 @@ export default function SkillDetail({ skillName, onBack }: Props) {
           guidelines: d.metadata.guidelines as string,
           guidelines_when_running: d.metadata.guidelines_when_running as string,
         });
+        setExecutionJson(
+          JSON.stringify(d.metadata.execution || {}, null, 2),
+        );
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -41,7 +46,17 @@ export default function SkillDetail({ skillName, onBack }: Props) {
     setSaving(true);
     setSaveMsg(null);
     try {
-      await api.put(`/api/skills/${skillName}`, edits);
+      let execution: Record<string, unknown> | undefined;
+      if (executionJson.trim()) {
+        try {
+          execution = JSON.parse(executionJson);
+        } catch {
+          setSaveMsg("Error: invalid execution JSON");
+          setSaving(false);
+          return;
+        }
+      }
+      await api.put(`/api/skills/${skillName}`, { ...edits, execution });
       setSaveMsg("Saved!");
       setTimeout(() => setSaveMsg(null), 2000);
     } catch (e: unknown) {
@@ -57,7 +72,6 @@ export default function SkillDetail({ skillName, onBack }: Props) {
     return <p className="text-innate-orange text-sm">Error: {error}</p>;
 
   const meta = data.metadata;
-  const execution = (meta.execution as Record<string, unknown>) || {};
 
   return (
     <div>
@@ -80,7 +94,7 @@ export default function SkillDetail({ skillName, onBack }: Props) {
           )}
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || !!jsonError}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm font-semibold bg-innate-purple text-white hover:bg-innate-purple-hover transition-colors disabled:opacity-40"
           >
             <Save size={14} /> Save
@@ -113,6 +127,34 @@ export default function SkillDetail({ skillName, onBack }: Props) {
             }
             multiline
           />
+
+          <div>
+            <label className="block text-[0.7rem] font-semibold text-innate-muted uppercase tracking-wide mb-1">
+              Execution (JSON)
+            </label>
+            <textarea
+              value={executionJson}
+              onChange={(e) => {
+                setExecutionJson(e.target.value);
+                try {
+                  JSON.parse(e.target.value);
+                  setJsonError(null);
+                } catch {
+                  setJsonError("Invalid JSON");
+                }
+              }}
+              rows={8}
+              spellCheck={false}
+              className={`w-full border rounded-md px-3 py-2 text-sm font-mono focus:outline-none transition-colors resize-y ${
+                jsonError
+                  ? "border-innate-orange focus:border-innate-orange"
+                  : "border-innate-border focus:border-innate-purple"
+              }`}
+            />
+            {jsonError && (
+              <p className="text-xs text-innate-orange mt-1">{jsonError}</p>
+            )}
+          </div>
         </section>
 
         {/* Read-only fields */}
@@ -127,24 +169,6 @@ export default function SkillDetail({ skillName, onBack }: Props) {
             value={(meta.training_skill_id as string) || "—"}
             mono
           />
-
-          {Object.keys(execution).length > 0 && (
-            <div>
-              <p className="text-[0.7rem] font-semibold text-innate-muted uppercase tracking-wide mb-1">
-                Execution
-              </p>
-              <div className="bg-innate-panel border border-innate-border rounded-md p-3 space-y-1">
-                {Object.entries(execution).map(([k, v]) => (
-                  <div key={k} className="flex text-xs">
-                    <span className="text-innate-muted w-28 shrink-0">{k}</span>
-                    <span className="font-mono text-gray-700 break-all">
-                      {typeof v === "object" ? JSON.stringify(v) : String(v)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {data.dataset_metadata && (
             <div>
