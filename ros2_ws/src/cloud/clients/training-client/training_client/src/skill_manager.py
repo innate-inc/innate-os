@@ -144,6 +144,43 @@ def write_skill_id(skill_dir: str | Path, skill_id: str) -> None:
         logger.info("Wrote training_skill_id %s to %s", skill_id, meta_path)
 
 
+def read_local_episode_count(skill_dir: str | Path) -> int:
+    """Read ``number_of_episodes`` from ``data/dataset_metadata.json``.
+
+    This file is written by the C++ TaskManager when episodes are recorded.
+    Returns 0 if the file is missing or the key is absent.
+    """
+    meta_path = Path(skill_dir) / "data" / "dataset_metadata.json"
+    if not meta_path.is_file():
+        return 0
+    try:
+        data = json.loads(meta_path.read_text())
+        return int(data.get("number_of_episodes", 0))
+    except (json.JSONDecodeError, OSError, ValueError, TypeError):
+        return 0
+
+
+def read_uploaded_episode_count(skill_dir: str | Path) -> int:
+    """Read ``uploaded_episode_count`` from ``metadata.json``.
+
+    Returns -1 if the key is absent (meaning never uploaded).
+    Plain JSON read without file locking since it's read-only.
+    """
+    meta_path = Path(skill_dir) / METADATA_JSON
+    data = _read_meta(meta_path)
+    return int(data.get("uploaded_episode_count", -1))
+
+
+def write_uploaded_episode_count(skill_dir: str | Path, count: int) -> None:
+    """Persist ``uploaded_episode_count`` into ``metadata.json`` under the file lock."""
+    skill_dir = Path(skill_dir)
+    with _locked_metadata(skill_dir) as meta_path:
+        meta = _read_meta(meta_path)
+        meta["uploaded_episode_count"] = count
+        _write_meta(meta_path, meta)
+        logger.info("Wrote uploaded_episode_count=%d to %s", count, meta_path)
+
+
 class SkillManager:
     """
     High-level API for the training client.

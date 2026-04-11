@@ -3,20 +3,29 @@ from launch_ros.actions import Node
 import os
 
 def generate_launch_description():
-    # Use environment variable if set, otherwise construct from HOME
     maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
     data_directory = os.path.join(maurice_root, 'data')
-    
-    # Default hardware revision for new robots
+
     default_hardware_revision = 'R6'
-    
-    # Create rosbridge websocket node
+
     rosbridge_node = Node(
         package='rws',
         executable='rws_server',
         name='ros_websocket_server',
         parameters=[{}],
-        output='screen'
+        output='screen',
+        respawn=True,
+        respawn_delay=2.0,
+        # Disable Zenoh SHM for rws_server to prevent __pthread_tpp_change_priority
+        # crash from priority-inheritance mutex contention between websocketpp threads
+        # and Zenoh SHM watchdog threads. rws_server is a JSON bridge — no SHM needed.
+        additional_env={
+            'ZENOH_SESSION_CONFIG_OVERRIDE': (
+                'transport/shared_memory/enabled=false'
+                ';transport/link/tx/queue/congestion_control/drop/wait_before_drop=900000'
+                ';transport/link/tx/queue/congestion_control/drop/max_wait_before_drop_fragments=900000'
+            ),
+        },
     )
 
     app_node = Node(
@@ -26,11 +35,10 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'data_directory': data_directory,
-            'default_hardware_revision': default_hardware_revision
-        }]
+            'default_hardware_revision': default_hardware_revision,
+        }],
     )
 
-    # Return LaunchDescription with all nodes
     return LaunchDescription([
         rosbridge_node,
         app_node,
