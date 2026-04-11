@@ -262,10 +262,11 @@ class TrainingNode(Node):
             lookup_skill_id = read_skill_id(req.skill_dir)
             if lookup_skill_id:
                 self._store.register_dir(lookup_skill_id, req.skill_dir)
-                self._store.set_uploaded_ep_count(
-                    lookup_skill_id,
-                    _read_ep_count_from_disk(req.skill_dir),
-                )
+                if self._store.get_uploaded_ep_count(lookup_skill_id) < 0:
+                    self._store.set_uploaded_ep_count(
+                        lookup_skill_id,
+                        _read_ep_count_from_disk(req.skill_dir),
+                    )
 
         res.found = False
         for skill in self._build_skill_statuses():
