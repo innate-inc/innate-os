@@ -22,82 +22,26 @@ It is designed on a few **core principles**:
 
 - Lightweight: The Innate OS can run on resource-constrained hardware like the Jetson Orin Nano 8GB. It starts in an under a minute.
 - Intuitive: Creating a program should be easy and not need to touch ROS at all. And the OS can be controlled via the Innate phone app.
-- Powerful: The Innate OS can be quickly extended to perform long-range tasks with robots. It natively supports VLAs and agentic workflows.
+- Powerful: The Innate OS can be quickly extended to perform long-range tasks with robots. It natively supports VLAs, VLNs, and agentic workflows.
 
 ## Quick start (Physical Robot)
 
-Simply SSH into the robot.
+- Simply SSH into your MARS and connect via the app like explained in the [documentation](https://docs.innate.bot).
 
-- If it's the first time and you're installing it, clone the repository and execute the post_update.sh script to complete the setup.
+- Execute `innate build` to build your changes, `innate restart` to restart the ROS nodes, or `innate update apply` to update it to the latest stable version.
 
-- Execute the launch_ros_in_tmux.sh script to start the ROS nodes.
 
-Connect via the app like explained in the [documentation](https://docs.innate.bot).
+## ROS Packages
 
-## Building from Source
+The main ROS packages that make up the runtime. See [scripts/launch_ros_in_tmux.sh](scripts/launch_ros_in_tmux.sh) for how they are wired together at startup.
 
-### Dependencies
-
-All dependencies are managed through config files in `ros2_ws/`:
-
-| File | Description | Usage |
-|------|-------------|-------|
-| `apt-dependencies.txt` | System & ROS2 apt packages | `xargs sudo apt-get install -y < apt-dependencies.txt` |
-| `pip-requirements.txt` | Python packages | `pip3 install -r pip-requirements.txt` |
-| `src/dependencies.repos` | External ROS2 repositories | `vcs import src < src/dependencies.repos` |
-
-### Build with Docker (Recommended)
-
-The easiest way to build is using Docker, which works on any platform:
-
-```bash
-# Build the Docker image (includes full ROS2 workspace build)
-docker build -t innate-os -f Dockerfile.build .
-
-# Run interactively
-docker run -it innate-os bash
-```
-
-### Build Locally (Ubuntu 22.04 + ROS2 Humble)
-
-```bash
-# Install apt dependencies
-cd ros2_ws
-xargs sudo apt-get install -y < apt-dependencies.txt
-
-# Install Python dependencies
-pip3 install -r pip-requirements.txt
-
-# Import external ROS2 dependencies
-cd src
-vcs import < dependencies.repos
-cd ..
-
-# Install any remaining ROS dependencies via rosdep
-rosdep install --from-paths src --ignore-src -r -y
-
-# Build
-source /opt/ros/humble/setup.bash
-colcon build
-```
-
-### Adding Dependencies
-
-- **APT packages**: Add to `ros2_ws/apt-dependencies.txt`
-- **Python packages**: Add to `ros2_ws/pip-requirements.txt`
-- **External ROS2 repos**: Add to `ros2_ws/src/dependencies.repos`
-
-These files are used by both the local build and CI/CD pipeline.
-
-## Releases
-
-Releases are automatically built via GitHub Actions when a version tag is pushed:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Each release includes:
-- `innate-os-{version}.tar.gz` - Full release with pre-built artifacts
-- `innate-os-{version}-source.tar.gz` - Source code only
+- **[maurice_control](ros2_ws/src/maurice_bot/maurice_control)** — top-level robot app node, rosbridge websocket server for the mobile/web app, and low-latency UDP receiver for leader-arm teleop.
+- **[maurice_bringup](ros2_ws/src/maurice_bot/maurice_bringup)** — hardware bringup for motors, base, IMU, and LiDAR, plus `robot_state_publisher` for the TF tree.
+- **[maurice_arm](ros2_ws/src/maurice_bot/maurice_arm)** — arm + head servo driver, MoveIt `move_group`, and KDL-based IK solver.
+- **[maurice_cam](ros2_ws/src/maurice_bot/maurice_cam)** — stereo main camera, arm camera, VPI stereo depth estimator, WebRTC streamer, and stereo calibration action server.
+- **[maurice_nav](ros2_ws/src/maurice_bot/maurice_nav)** — Nav2-based navigation, SLAM mapping, and the mode manager that switches between `mapfree` / `mapping` / `navigation`.
+- **[brain_client](ros2_ws/src/brain/brain_client)** — bridges the robot to the cloud brain (agent-v1.innate.bot): websocket client, skills action server, and the user input manager (STT/TTS).
+- **[manipulation](ros2_ws/src/brain/manipulation)** — records/replays manipulation demonstrations and runs either learned or scripted manipulation policies.
+- **[innate_logger](ros2_ws/src/cloud/innate_logger)** — uploads robot logs and telemetry to the Innate cloud.
+- **[innate_training_node](ros2_ws/src/cloud/innate_training_node)** — collects training episodes and pushes them to the training cloud.
+- **[innate_uninavid](ros2_ws/src/cloud/innate_uninavid)** — Uninavid vision-language navigation client (talks to `nav-v1.innate.bot`).
