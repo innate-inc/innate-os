@@ -38,7 +38,7 @@ from innate_cloud_msgs.action import NavigateInstruction
 
 from .ws_client import Action, ClientState, UninavidWsClient
 
-DEFAULT_WS_URL = "wss://office.servers.innatebotstatus.com:9000"
+DEFAULT_WS_URL = "wss://nav-v1.innate.bot"
 DEFAULT_AUTH_ISSUER_URL = "https://auth-v1.innate.bot"
 
 _CMD_VEL: dict[int, tuple[float, float]] = {

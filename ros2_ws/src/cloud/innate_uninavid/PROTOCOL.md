@@ -27,7 +27,7 @@ config file at `config/params.yaml` or overridden on the command line.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ws_url` | string | env `UNINAVID_WS_URL` or `wss://office.servers.innatebotstatus.com:9000` | WebSocket server URL |
+| `ws_url` | string | env `UNINAVID_WS_URL` or `wss://nav-v1.innate.bot` | WebSocket server URL |
 | `service_key` | string | env `INNATE_SERVICE_KEY` | Service key for auth token acquisition |
 | `auth_issuer_url` | string | env `INNATE_AUTH_URL` or `https://auth-v1.innate.bot` | Auth token issuer |
 | `cmd_duration_sec` | float | 0.1 | How long each action command is published |

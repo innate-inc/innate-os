@@ -3,7 +3,7 @@ uninavid_node:
     # ── Connection ────────────────────────────────────────────────────────
     # ws_url, service_key, and auth_issuer_url default from env vars;
     # override here if needed.
-    # ws_url: "wss://office.servers.innatebotstatus.com:9000"
+    # ws_url: "wss://nav-v1.innate.bot"
     # service_key: ""
     # auth_issuer_url: "https://auth-v1.innate.bot"
 
