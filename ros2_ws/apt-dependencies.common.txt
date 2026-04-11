@@ -110,6 +110,7 @@ ros-humble-pcl-ros
 
 # ROS2 Humble packages - Hardware/Manipulation
 ros-humble-dynamixel-sdk
+# MoveIt: only used by maurice_sim (mujoco) via arm_utils.py; not on the real robot
 ros-humble-moveit
 ros-humble-moveit-ros-move-group
 

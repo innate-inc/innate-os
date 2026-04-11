@@ -44,9 +44,8 @@ ros-humble-cv-bridge
 ros-humble-camera-info-manager
 ros-humble-image-transport
 
-# MoveIt (if using arm)
+# MoveIt (sim only — used by maurice_sim mujoco via arm_utils.py)
 ros-humble-moveit
-ros-humble-moveit-py
 ros-humble-moveit-ros-move-group
 
 # KDL (Kinematics)
@@ -183,8 +182,7 @@ from cv_bridge import CvBridge
 
 | Package | Apt Package | Found In | Usage |
 |---------|-------------|----------|-------|
-| moveit_py | ros-humble-moveit-py | maurice_arm | MoveIt2 Python API |
-| moveit_ros_move_group | ros-humble-moveit-ros-move-group | maurice_arm | MoveIt2 move group |
+| moveit_ros_move_group | ros-humble-moveit-ros-move-group | maurice_sim (sim only) | MoveIt2 move group, used by arm_utils.py in mujoco sim |
 | kdl_parser_py | ros-humble-kdl-parser-py | maurice_arm | KDL parser for Python |
 
 **Locations:**
@@ -398,7 +396,7 @@ sudo apt install ros-humble-tf2-ros ros-humble-tf2-geometry-msgs
 # Image transport
 sudo apt install ros-humble-image-transport ros-humble-image-transport-plugins
 
-# MoveIt
+# MoveIt (sim only)
 sudo apt install ros-humble-moveit
 
 # Rosbridge

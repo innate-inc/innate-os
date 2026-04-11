@@ -37,7 +37,7 @@ The main ROS packages that make up the runtime. See [scripts/launch_ros_in_tmux.
 
 - **[maurice_control](ros2_ws/src/maurice_bot/maurice_control)** — top-level robot app node, rosbridge websocket server for the mobile/web app, and low-latency UDP receiver for leader-arm teleop.
 - **[maurice_bringup](ros2_ws/src/maurice_bot/maurice_bringup)** — hardware bringup for motors, base, IMU, and LiDAR, plus `robot_state_publisher` for the TF tree.
-- **[maurice_arm](ros2_ws/src/maurice_bot/maurice_arm)** — arm + head servo driver, MoveIt `move_group`, and KDL-based IK solver.
+- **[maurice_arm](ros2_ws/src/maurice_bot/maurice_arm)** — arm + head servo driver and KDL-based IK solver.
 - **[maurice_cam](ros2_ws/src/maurice_bot/maurice_cam)** — stereo main camera, arm camera, VPI stereo depth estimator, WebRTC streamer, and stereo calibration action server.
 - **[maurice_nav](ros2_ws/src/maurice_bot/maurice_nav)** — Nav2-based navigation, SLAM mapping, and the mode manager that switches between `mapfree` / `mapping` / `navigation`.
 - **[brain_client](ros2_ws/src/brain/brain_client)** — bridges the robot to the cloud brain (agent-v1.innate.bot): websocket client, skills action server, and the user input manager (STT/TTS).
