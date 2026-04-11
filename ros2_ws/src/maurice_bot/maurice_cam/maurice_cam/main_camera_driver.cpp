@@ -134,6 +134,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "Publish left: %dx%d (natural split: %dx%d)", publish_left_width_, publish_left_height_, left_width_, left_height_);
   RCLCPP_INFO(this->get_logger(), "FPS: %.1f", fps_);
   RCLCPP_INFO(this->get_logger(), "Frame ID: %s", frame_id_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Right Frame ID: %s", right_frame_id_.c_str());
   RCLCPP_INFO(this->get_logger(), "JPEG Quality: %d", jpeg_quality_);
 
   // Initialize publishers
@@ -148,8 +149,12 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   );
 
   if (publish_compressed_) {
-    compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+    left_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
       "/mars/main_camera/left/image_raw/compressed",
+      rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
+    );
+    right_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+      "/mars/main_camera/right/image_raw/compressed",
       rclcpp::SensorDataQoS().reliability(rclcpp::ReliabilityPolicy::BestEffort)
     );
   }
@@ -166,6 +171,7 @@ MainCameraDriver::MainCameraDriver(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/right/image_raw (%dx%d)", left_width_, left_height_);
   if (publish_compressed_) {
     RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/left/image_raw/compressed (%dx%d)", left_width_, left_height_);
+    RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/right/image_raw/compressed (%dx%d)", left_width_, left_height_);
   }
   if (publish_stereo_) {
     RCLCPP_INFO(this->get_logger(), "  - /mars/main_camera/stereo (%dx%d)", publish_stereo_width_, publish_stereo_height_);
@@ -644,23 +650,32 @@ void MainCameraDriver::processAndPublishFrame(const cv::Mat& frame)
       compressed_frame_counter_ = 0;
       
       auto left_compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      auto right_compressed_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
       left_compressed_msg->header.stamp = current_time;
       left_compressed_msg->header.frame_id = frame_id_;
       left_compressed_msg->format = "jpeg";
+      right_compressed_msg->header.stamp = current_time;
+      right_compressed_msg->header.frame_id = right_frame_id_;
+      right_compressed_msg->format = "jpeg";
       
-      // Encode from the left view using TurboJPEG
+      // Encode and publish both views using TurboJPEG so both stereo channels
+      // have symmetric compressed topic availability.
       try {
-        if (left_view.type() == CV_8UC3 && left_view.channels() == 3) {
+        if (left_view.type() == CV_8UC3 && left_view.channels() == 3 &&
+            right_view.type() == CV_8UC3 && right_view.channels() == 3) {
           jpeg_encoder_->encodeBGR(left_view, jpeg_quality_, left_compressed_msg->data);
-          compressed_pub_->publish(std::move(left_compressed_msg));
+          jpeg_encoder_->encodeBGR(right_view, jpeg_quality_, right_compressed_msg->data);
+          left_compressed_pub_->publish(std::move(left_compressed_msg));
+          right_compressed_pub_->publish(std::move(right_compressed_msg));
         } else {
           RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                               "Left image format invalid for JPEG encoding: type=%d, channels=%d",
-                               left_view.type(), left_view.channels());
+                               "Image format invalid for JPEG encoding: left(type=%d, channels=%d) right(type=%d, channels=%d)",
+                               left_view.type(), left_view.channels(),
+                               right_view.type(), right_view.channels());
         }
       } catch (const std::exception& e) {
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                             "JPEG turbo encode failed: %s", e.what());
+                             "JPEG turbo encode failed for stereo pair: %s", e.what());
       }
     }
   }
@@ -897,4 +912,3 @@ int main(int argc, char** argv)
   return 0;
 }
 #endif
-

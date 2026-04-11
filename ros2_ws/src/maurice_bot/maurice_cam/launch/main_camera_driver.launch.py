@@ -63,6 +63,12 @@ def generate_launch_description():
         default_value='camera_optical_frame',
         description='Camera frame ID'
     )
+
+    right_frame_id_arg = DeclareLaunchArgument(
+        'right_frame_id',
+        default_value='right_camera_optical_frame',
+        description='Right camera frame ID'
+    )
     
     jpeg_quality_arg = DeclareLaunchArgument(
         'jpeg_quality',
@@ -149,6 +155,7 @@ def generate_launch_description():
                 'publish_stereo_height': LaunchConfiguration('publish_stereo_height'),
                 'fps': LaunchConfiguration('fps'),
                 'frame_id': LaunchConfiguration('frame_id'),
+                'right_frame_id': LaunchConfiguration('right_frame_id'),
                 'jpeg_quality': LaunchConfiguration('jpeg_quality'),
                 'publish_compressed': LaunchConfiguration('publish_compressed'),
                 'compressed_frame_interval': LaunchConfiguration('compressed_frame_interval'),
@@ -177,6 +184,7 @@ def generate_launch_description():
         publish_stereo_height_arg,
         fps_arg,
         frame_id_arg,
+        right_frame_id_arg,
         jpeg_quality_arg,
         publish_compressed_arg,
         compressed_frame_interval_arg,
@@ -190,4 +198,3 @@ def generate_launch_description():
         use_sim_time_arg,
         main_camera_driver_node
     ])
-
