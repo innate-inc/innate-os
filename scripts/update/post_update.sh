@@ -431,6 +431,14 @@ fi
         add-apt-repository -y ppa:git-core/ppa
     fi
 
+    # Add NodeSource repo for Node.js 20 LTS (used to build Training Manager frontend)
+    if ! dpkg -l | grep -q "^ii.*nodejs"; then
+        if [ ! -f /etc/apt/sources.list.d/nodesource.list ]; then
+            log "  Adding NodeSource repository for Node.js 20..."
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        fi
+    fi
+
     apt-get update
 
     # Install all apt dependencies (common + hardware-specific) in one go
@@ -497,29 +505,9 @@ TRAINING_MANAGER_STATIC="$REPO_DIR/ros2_ws/src/cloud/clients/training-manager/tr
 
 if [ -d "$TRAINING_MANAGER_FRONTEND" ]; then
     log "Building Training Manager frontend..."
+    log "  Node.js $(node --version)"
 
-    # Everything runs as $ACTUAL_USER so nvm/node are installed in the
-    # right home directory and npm caches go to the right place.
-    sudo -u "$ACTUAL_USER" bash -c "
-        export NVM_DIR=\"$ACTUAL_HOME/.nvm\"
-
-        # Install nvm if missing
-        if [ ! -s \"\$NVM_DIR/nvm.sh\" ]; then
-            echo '  Installing nvm...'
-            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash 2>&1 | tail -1
-        fi
-
-        . \"\$NVM_DIR/nvm.sh\"
-
-        # Install Node 20 if missing
-        if ! command -v node &>/dev/null; then
-            echo '  Installing Node.js 20...'
-            nvm install 20
-        fi
-
-        echo \"  Node.js \$(node --version)\"
-        cd \"$TRAINING_MANAGER_FRONTEND\" && npm install && npm run build
-    "
+    sudo -u "$ACTUAL_USER" bash -c "cd \"$TRAINING_MANAGER_FRONTEND\" && npm install && npm run build"
 
     if [ -f "$TRAINING_MANAGER_STATIC/index.html" ]; then
         log "  Training Manager frontend built successfully"

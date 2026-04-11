@@ -69,7 +69,7 @@ When installed as part of the innate-os ROS workspace, everything is handled
 automatically by `post_update.sh`:
 
 1. `fastapi` and `uvicorn` are listed in `ros2_ws/pip-requirements.txt`
-2. Node.js is installed via nvm and the frontend is built (step 6a)
+2. Node.js is installed via apt (NodeSource) and the frontend is built (step 6a)
 3. `colcon build` packages `training_manager` as part of `cloud_clients`
 
 After a successful build:
