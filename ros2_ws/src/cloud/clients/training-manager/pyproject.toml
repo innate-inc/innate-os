@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "training-manager"
+version = "0.1.0"
+description = "Web UI for managing skills, datasets, and training runs on the robot."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "training-client",
+]
+
+[project.scripts]
+training-manager = "training_manager.server:main"
+
+[tool.setuptools.packages.find]
+include = ["training_manager*"]
+
+[tool.setuptools.package-data]
+training_manager = ["static/**/*"]

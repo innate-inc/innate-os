@@ -16,6 +16,9 @@ tmux
 htop
 btop
 
+# Node.js (for building Training Manager frontend)
+nodejs
+
 # System libraries
 jq
 zstd

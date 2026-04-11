@@ -431,6 +431,14 @@ fi
         add-apt-repository -y ppa:git-core/ppa
     fi
 
+    # Add NodeSource repo for Node.js 20 LTS (used to build Training Manager frontend)
+    if ! dpkg -l | grep -q "^ii.*nodejs"; then
+        if [ ! -f /etc/apt/sources.list.d/nodesource.list ]; then
+            log "  Adding NodeSource repository for Node.js 20..."
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        fi
+    fi
+
     apt-get update
 
     # Install all apt dependencies (common + hardware-specific) in one go
@@ -490,7 +498,26 @@ fi
     fi
 
 # -----------------------------------------------------------------------------
-# 6. Rebuild ROS2 workspace if needed
+# 6a. Build Training Manager frontend (Node.js / npm)
+# -----------------------------------------------------------------------------
+TRAINING_MANAGER_FRONTEND="$REPO_DIR/ros2_ws/src/cloud/clients/training-manager/frontend"
+TRAINING_MANAGER_STATIC="$REPO_DIR/ros2_ws/src/cloud/clients/training-manager/training_manager/static"
+
+if [ -d "$TRAINING_MANAGER_FRONTEND" ]; then
+    log "Building Training Manager frontend..."
+    log "  Node.js $(node --version)"
+
+    sudo -u "$ACTUAL_USER" bash -c "cd \"$TRAINING_MANAGER_FRONTEND\" && npm install && npm run build"
+
+    if [ -f "$TRAINING_MANAGER_STATIC/index.html" ]; then
+        log "  Training Manager frontend built successfully"
+    else
+        log "  WARNING: Training Manager frontend build may have failed"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+# 6b. Rebuild ROS2 workspace if needed
 # -----------------------------------------------------------------------------
 log "Checking ROS2 workspace..."
 if [ -d "$REPO_DIR/ros2_ws/src" ]; then
