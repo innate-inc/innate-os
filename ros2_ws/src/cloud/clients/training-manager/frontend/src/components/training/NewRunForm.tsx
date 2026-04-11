@@ -25,6 +25,8 @@ export default function NewRunForm({ onBack }: Props) {
 
   const [selectedSkill, setSelectedSkill] = useState("");
   const [preset, setPreset] = useState("act-default");
+  const [repo, setRepo] = useState("");
+  const [ref, setRef] = useState("");
   const [hyperparams, setHyperparams] = useState<Record<string, string>>({});
   const [infra, setInfra] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -73,6 +75,8 @@ export default function NewRunForm({ onBack }: Props) {
         `/api/training/runs/${selectedSkill}`,
         {
           preset,
+          repo: repo.trim() || undefined,
+          ref: ref.trim() || undefined,
           env: Object.keys(env).length > 0 ? env : undefined,
           gpu_type:
             infra.gpu_type !== String(defaults?.infrastructure.gpu_type)
@@ -155,6 +159,34 @@ export default function NewRunForm({ onBack }: Props) {
           >
             <option value="act-default">act-default</option>
           </select>
+        </div>
+
+        {/* Repository */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[0.7rem] font-semibold text-innate-muted uppercase tracking-wide mb-1">
+              Repository
+            </label>
+            <input
+              type="text"
+              value={repo}
+              onChange={(e) => setRepo(e.target.value)}
+              placeholder="owner/repo"
+              className="w-full border border-innate-border rounded-md px-3 py-1.5 text-sm font-mono focus:border-innate-purple focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-[0.7rem] font-semibold text-innate-muted uppercase tracking-wide mb-1">
+              Ref
+            </label>
+            <input
+              type="text"
+              value={ref}
+              onChange={(e) => setRef(e.target.value)}
+              placeholder="branch / tag / commit"
+              className="w-full border border-innate-border rounded-md px-3 py-1.5 text-sm font-mono focus:border-innate-purple focus:outline-none"
+            />
+          </div>
         </div>
 
         {/* Hyperparameters */}
