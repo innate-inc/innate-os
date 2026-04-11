@@ -42,7 +42,7 @@ export default function NewRunForm({ onBack }: Props) {
         setDefaults(d);
         setHyperparams({ ...d.hyperparameters });
         setInfra({
-          gpu_type: String(d.infrastructure.gpu_type || "H100"),
+          gpu_type: String(d.infrastructure.gpu_type || "5090"),
           min_gpus: String(d.infrastructure.min_gpus || 4),
           max_gpus: String(d.infrastructure.max_gpus || 4),
           hours: String(d.infrastructure.hours || 5),

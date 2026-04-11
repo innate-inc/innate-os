@@ -57,7 +57,7 @@ ARCHITECTURE_PARAMS: dict[str, Any] = {
 
 INFRASTRUCTURE_DEFAULTS: dict[str, Any] = {
     "preset": "act-default",
-    "gpu_type": "H100",
+    "gpu_type": "5090",
     "min_gpus": 4,
     "max_gpus": 4,
     "hours": 5,
