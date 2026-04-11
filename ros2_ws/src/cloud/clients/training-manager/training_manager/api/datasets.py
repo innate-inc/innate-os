@@ -39,6 +39,19 @@ def _skills_dir(request: Request) -> Path:
     return Path(request.app.state.skills_dir)
 
 
+def _replace_stem(video_filename: str, old_stem: str, new_stem: str) -> str:
+    """Replace the episode stem at the start of a video filename.
+
+    Anchored to the start of the basename so ``episode_1`` won't
+    accidentally match inside ``episode_10``.
+    """
+    p = Path(video_filename)
+    name = p.name
+    if name.startswith(old_stem):
+        name = new_stem + name[len(old_stem) :]
+    return str(p.with_name(name))
+
+
 def _read_dataset_metadata(skill_path: Path) -> dict[str, Any] | None:
     ds_path = skill_path / "data" / "dataset_metadata.json"
     if not ds_path.is_file():
@@ -317,60 +330,64 @@ async def copy_dataset(
 
     dest.mkdir(parents=True)
 
-    with _locked_metadata(source) as meta_path:
-        meta = _read_meta(meta_path)
+    try:
+        with _locked_metadata(source) as meta_path:
+            meta = _read_meta(meta_path)
 
-    meta["name"] = body.new_name
-    meta.pop("training_skill_id", None)
-    execution = meta.get("execution", {})
-    execution.pop("checkpoint", None)
-    execution.pop("stats_file", None)
-    meta["execution"] = execution
-    _write_meta(dest / "metadata.json", meta)
+        meta["name"] = body.new_name
+        meta.pop("training_skill_id", None)
+        execution = meta.get("execution", {})
+        execution.pop("checkpoint", None)
+        execution.pop("stats_file", None)
+        meta["execution"] = execution
+        _write_meta(dest / "metadata.json", meta)
 
-    ds_meta = _read_dataset_metadata(source)
-    new_idx = 0
-    if ds_meta:
-        data_dest = dest / "data"
-        data_dest.mkdir(parents=True, exist_ok=True)
+        ds_meta = _read_dataset_metadata(source)
+        new_idx = 0
+        if ds_meta:
+            data_dest = dest / "data"
+            data_dest.mkdir(parents=True, exist_ok=True)
 
-        kept_episodes: list[dict[str, Any]] = []
+            kept_episodes: list[dict[str, Any]] = []
 
-        for ep in ds_meta.get("episodes", []):
-            if ep.get("episode_id") in body.excluded_episode_ids:
-                continue
+            for ep in ds_meta.get("episodes", []):
+                if ep.get("episode_id") in body.excluded_episode_ids:
+                    continue
 
-            old_filename = ep.get("file_name", "")
-            new_filename = f"episode_{new_idx}.h5"
-            old_h5 = source / "data" / old_filename
-            if old_h5.is_file():
-                shutil.copy2(str(old_h5), str(data_dest / new_filename))
+                old_filename = ep.get("file_name", "")
+                new_filename = f"episode_{new_idx}.h5"
+                old_h5 = source / "data" / old_filename
+                if old_h5.is_file():
+                    shutil.copy2(str(old_h5), str(data_dest / new_filename))
 
-            new_ep = {**ep, "episode_id": new_idx, "file_name": new_filename}
-            new_video_files: list[str] = []
-            for vf in ep.get("video_files", []):
-                old_vf_path = source / "data" / vf
+                new_ep = {**ep, "episode_id": new_idx, "file_name": new_filename}
+                new_video_files: list[str] = []
                 stem = Path(old_filename).stem
                 new_stem = f"episode_{new_idx}"
-                new_vf = vf.replace(stem, new_stem)
-                if old_vf_path.is_file():
-                    shutil.copy2(str(old_vf_path), str(data_dest / new_vf))
-                    new_video_files.append(new_vf)
-            if new_video_files:
-                new_ep["video_files"] = new_video_files
+                for vf in ep.get("video_files", []):
+                    old_vf_path = source / "data" / vf
+                    new_vf = _replace_stem(vf, stem, new_stem)
+                    if old_vf_path.is_file():
+                        shutil.copy2(str(old_vf_path), str(data_dest / new_vf))
+                        new_video_files.append(new_vf)
+                if new_video_files:
+                    new_ep["video_files"] = new_video_files
 
-            kept_episodes.append(new_ep)
-            new_idx += 1
+                kept_episodes.append(new_ep)
+                new_idx += 1
 
-        new_ds_meta = {
-            "data_frequency": ds_meta.get("data_frequency", 10),
-            "dataset_type": ds_meta.get("dataset_type", "h5"),
-            "number_of_episodes": len(kept_episodes),
-            "episodes": kept_episodes,
-        }
-        (data_dest / "dataset_metadata.json").write_text(
-            json.dumps(new_ds_meta, indent=4) + "\n"
-        )
+            new_ds_meta = {
+                "data_frequency": ds_meta.get("data_frequency", 10),
+                "dataset_type": ds_meta.get("dataset_type", "h5"),
+                "number_of_episodes": len(kept_episodes),
+                "episodes": kept_episodes,
+            }
+            (data_dest / "dataset_metadata.json").write_text(
+                json.dumps(new_ds_meta, indent=4) + "\n"
+            )
+    except Exception:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
 
     logger.info("Copy complete: %s (%d episodes)", dest_dir_name, new_idx)
     return {"status": "ok", "new_dir_name": dest_dir_name}
@@ -405,83 +422,87 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
     data_dest = dest / "data"
     data_dest.mkdir()
 
-    merged_episodes: list[dict[str, Any]] = []
-    data_frequency: int | None = None
-    dataset_type: str = "h5"
-    new_idx = 0
+    try:
+        merged_episodes: list[dict[str, Any]] = []
+        data_frequency: int | None = None
+        dataset_type: str = "h5"
+        new_idx = 0
 
-    for src in body.sources:
-        src_path = root / src.skill_name
-        if not src_path.is_dir():
-            raise HTTPException(404, f"Source skill not found: {src.skill_name}")
+        for src in body.sources:
+            src_path = root / src.skill_name
+            if not src_path.is_dir():
+                raise HTTPException(404, f"Source skill not found: {src.skill_name}")
 
-        src_ds = _read_dataset_metadata(src_path)
-        if src_ds is None:
-            raise HTTPException(404, f"No dataset metadata in {src.skill_name}")
+            src_ds = _read_dataset_metadata(src_path)
+            if src_ds is None:
+                raise HTTPException(404, f"No dataset metadata in {src.skill_name}")
 
-        src_type = src_ds.get("dataset_type", "h5")
-        if src_type != "h264":
-            raise HTTPException(
-                400,
-                f"Source {src.skill_name} has dataset_type '{src_type}'; "
-                "only h264 datasets can be merged",
-            )
+            src_type = src_ds.get("dataset_type", "h5")
+            if src_type != "h264":
+                raise HTTPException(
+                    400,
+                    f"Source {src.skill_name} has dataset_type '{src_type}'; "
+                    "only h264 datasets can be merged",
+                )
 
-        if data_frequency is None:
-            data_frequency = src_ds.get("data_frequency", 10)
-        dataset_type = src_type
+            if data_frequency is None:
+                data_frequency = src_ds.get("data_frequency", 10)
+            dataset_type = src_type
 
-        for ep in src_ds.get("episodes", []):
-            if ep.get("episode_id") not in src.episode_ids:
-                continue
+            for ep in src_ds.get("episodes", []):
+                if ep.get("episode_id") not in src.episode_ids:
+                    continue
 
-            old_filename = ep.get("file_name", "")
-            new_filename = f"episode_{new_idx}.h5"
-            old_h5 = src_path / "data" / old_filename
-            if old_h5.is_file():
-                shutil.copy2(str(old_h5), str(data_dest / new_filename))
+                old_filename = ep.get("file_name", "")
+                new_filename = f"episode_{new_idx}.h5"
+                old_h5 = src_path / "data" / old_filename
+                if old_h5.is_file():
+                    shutil.copy2(str(old_h5), str(data_dest / new_filename))
 
-            new_ep: dict[str, Any] = {
-                "episode_id": new_idx,
-                "file_name": new_filename,
-                "start_timestamp": ep.get("start_timestamp", ""),
-                "end_timestamp": ep.get("end_timestamp", ""),
-            }
+                new_ep: dict[str, Any] = {
+                    "episode_id": new_idx,
+                    "file_name": new_filename,
+                    "start_timestamp": ep.get("start_timestamp", ""),
+                    "end_timestamp": ep.get("end_timestamp", ""),
+                }
 
-            new_video_files: list[str] = []
-            stem = Path(old_filename).stem
-            new_stem = f"episode_{new_idx}"
-            for vf in ep.get("video_files", []):
-                old_vf = src_path / "data" / vf
-                new_vf = vf.replace(stem, new_stem)
-                if old_vf.is_file():
-                    shutil.copy2(str(old_vf), str(data_dest / new_vf))
-                    new_video_files.append(new_vf)
-            if new_video_files:
-                new_ep["video_files"] = new_video_files
+                new_video_files: list[str] = []
+                stem = Path(old_filename).stem
+                new_stem = f"episode_{new_idx}"
+                for vf in ep.get("video_files", []):
+                    old_vf = src_path / "data" / vf
+                    new_vf = _replace_stem(vf, stem, new_stem)
+                    if old_vf.is_file():
+                        shutil.copy2(str(old_vf), str(data_dest / new_vf))
+                        new_video_files.append(new_vf)
+                if new_video_files:
+                    new_ep["video_files"] = new_video_files
 
-            merged_episodes.append(new_ep)
-            new_idx += 1
+                merged_episodes.append(new_ep)
+                new_idx += 1
 
-    new_ds_meta = {
-        "data_frequency": data_frequency or 10,
-        "dataset_type": dataset_type,
-        "number_of_episodes": len(merged_episodes),
-        "episodes": merged_episodes,
-    }
-    (data_dest / "dataset_metadata.json").write_text(
-        json.dumps(new_ds_meta, indent=4) + "\n"
-    )
+        new_ds_meta = {
+            "data_frequency": data_frequency or 10,
+            "dataset_type": dataset_type,
+            "number_of_episodes": len(merged_episodes),
+            "episodes": merged_episodes,
+        }
+        (data_dest / "dataset_metadata.json").write_text(
+            json.dumps(new_ds_meta, indent=4) + "\n"
+        )
 
-    meta: dict[str, Any] = {
-        "name": body.new_name,
-        "type": "learned",
-        "guidelines": "",
-        "guidelines_when_running": "",
-        "inputs": {},
-        "execution": {},
-    }
-    _write_meta(dest / "metadata.json", meta)
+        meta: dict[str, Any] = {
+            "name": body.new_name,
+            "type": "learned",
+            "guidelines": "",
+            "guidelines_when_running": "",
+            "inputs": {},
+            "execution": {},
+        }
+        _write_meta(dest / "metadata.json", meta)
+    except Exception:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
 
     logger.info("Merge complete: %s (%d episodes)", dest_dir_name, new_idx)
     return {"status": "ok", "new_dir_name": dest_dir_name}

@@ -25,13 +25,21 @@ class LogEntry:
         }
 
 
+class _Waiter:
+    __slots__ = ("event", "loop")
+
+    def __init__(self, event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> None:
+        self.event = event
+        self.loop = loop
+
+
 class LogCapture(logging.Handler):
     """Logging handler that stores entries in a ring buffer and notifies waiters."""
 
     def __init__(self, capacity: int = 500) -> None:
         super().__init__()
         self.buffer: deque[LogEntry] = deque(maxlen=capacity)
-        self._waiters: list[asyncio.Event] = []
+        self._waiters: list[_Waiter] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         entry = LogEntry(
@@ -40,14 +48,18 @@ class LogCapture(logging.Handler):
             message=self.format(record),
         )
         self.buffer.append(entry)
-        for event in self._waiters:
-            event.set()
+        for waiter in list(self._waiters):
+            try:
+                waiter.loop.call_soon_threadsafe(waiter.event.set)
+            except RuntimeError:
+                pass
 
     async def subscribe(self) -> Any:
         """Async generator that yields new LogEntry objects as they arrive."""
         seen = len(self.buffer)
         event = asyncio.Event()
-        self._waiters.append(event)
+        waiter = _Waiter(event, asyncio.get_running_loop())
+        self._waiters.append(waiter)
         try:
             while True:
                 entries = list(self.buffer)
@@ -58,7 +70,7 @@ class LogCapture(logging.Handler):
                 event.clear()
                 await event.wait()
         finally:
-            self._waiters.remove(event)
+            self._waiters.remove(waiter)
 
 
 log_capture = LogCapture()
