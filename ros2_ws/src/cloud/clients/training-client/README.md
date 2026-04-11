@@ -454,7 +454,6 @@ python -m training_client.cli run /home/jetson1/skills/pick-cable \
     -e BATCH_SIZE=128 \
     -e MAX_STEPS=200000
 ```
-
 ## Dependencies
 
 ### Core (always required)
