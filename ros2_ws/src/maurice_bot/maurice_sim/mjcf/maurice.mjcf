@@ -61,7 +61,7 @@
             <camera name="camera_base" pos="0.0197 0 0.19663" 
                     quat="0.5416752 0.4545195 -0.4545195 -0.5416752" mode="fixed" fovy="80"/>
             
-            <body name="link1" pos="-0.05285 -0.086 0.04025" euler="0 0 3.1416">
+            <body name="link1" pos="-0.05285 -0.086 0.04025" euler="-1.5708 0 3.1416">
               <inertial pos="0 0 0" mass="0.065" diaginertia="0.0001 0.0001 0.0001"/>
               <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="5"/>
               <geom name="link1_geom" type="mesh" mesh="link1_mesh" material="bright_orange" euler="0 0 3.1416"/>
@@ -71,7 +71,7 @@
                 <joint name="joint2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                 <geom name="link2_geom" type="mesh" mesh="link2_mesh" material="matt_black" euler="1.5708 -1.5708 1.5708"/>
                 
-                <body name="link3" pos="0.12125 0 -0.02825" euler="0 -1.5708 0">
+                <body name="link3" pos="0.12125 -0.02825 0" euler="0 -1.5708 -1.5708">
                   <inertial pos="0 0 0" mass="0.055" diaginertia="0.0001 0.0001 0.0001"/>
                   <joint name="joint3" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                   <geom name="link3_geom" type="mesh" mesh="link3_mesh" material="bright_orange" euler="1.5708 0 1.5708"/>
