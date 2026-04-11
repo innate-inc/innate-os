@@ -1,5 +1,5 @@
 <mujoco model="maurice_bot">
-  <compiler angle="radian" coordinate="local" meshdir="/home/vignesh/maurice-prod/ros2_ws/src/maurice_bot/maurice_sim/meshes" eulerseq="zyx"/>
+  <compiler angle="radian" coordinate="local" meshdir="../meshes" eulerseq="zyx"/>
   <!-- COLLISION DISABLED: Testing external collision checker -->
   <option gravity="0 0 -9.81" />
   
