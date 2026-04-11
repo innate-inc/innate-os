@@ -42,6 +42,10 @@ requests
 click
 zstandard
 
+# Training manager web UI
+fastapi
+uvicorn[standard]
+
 # Other AI
 inspireface
 

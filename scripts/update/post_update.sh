@@ -490,7 +490,51 @@ fi
     fi
 
 # -----------------------------------------------------------------------------
-# 6. Rebuild ROS2 workspace if needed
+# 6a. Build Training Manager frontend (Node.js / npm)
+# -----------------------------------------------------------------------------
+TRAINING_MANAGER_FRONTEND="$REPO_DIR/ros2_ws/src/cloud/clients/training-manager/frontend"
+TRAINING_MANAGER_STATIC="$REPO_DIR/ros2_ws/src/cloud/clients/training-manager/training_manager/static"
+
+if [ -d "$TRAINING_MANAGER_FRONTEND" ]; then
+    if [ ! -f "$TRAINING_MANAGER_STATIC/index.html" ]; then
+        log "Building Training Manager frontend..."
+
+        # Install Node.js via nvm if not available
+        export NVM_DIR="$ACTUAL_HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+        if ! command -v node &>/dev/null; then
+            log "  Node.js not found, installing via nvm..."
+            if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+                sudo -u "$ACTUAL_USER" bash -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash' 2>&1 | tail -1
+                export NVM_DIR="$ACTUAL_HOME/.nvm"
+                [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            fi
+            nvm install 20
+            log "  Node.js $(node --version) installed"
+        else
+            log "  Node.js $(node --version) already available"
+        fi
+
+        cd "$TRAINING_MANAGER_FRONTEND"
+        sudo -u "$ACTUAL_USER" bash -c "
+            export NVM_DIR=\"$ACTUAL_HOME/.nvm\"
+            [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"
+            cd \"$TRAINING_MANAGER_FRONTEND\" && npm install && npm run build
+        "
+
+        if [ -f "$TRAINING_MANAGER_STATIC/index.html" ]; then
+            log "  Training Manager frontend built successfully"
+        else
+            log "  WARNING: Training Manager frontend build may have failed"
+        fi
+    else
+        log "Training Manager frontend already built, skipping"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+# 6b. Rebuild ROS2 workspace if needed
 # -----------------------------------------------------------------------------
 log "Checking ROS2 workspace..."
 if [ -d "$REPO_DIR/ros2_ws/src" ]; then
