@@ -17,8 +17,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
 
+from requests.exceptions import ConnectionError, Timeout
+
 from .client import APIError, OrchestratorClient
-from .compression import cleanup_compressed
 from .downloader import download_results, download_skill_data, download_files
 from .types import (
     ClientConfig,
@@ -27,16 +28,17 @@ from .types import (
     ProgressStage,
     ProgressUpdate,
 )
+from .episode_converter import convert_episodes_to_h264
 from .uploader import upload_data_files
 
 logger = logging.getLogger(__name__)
 
-# Files/dirs to skip when enumerating source files
-_IGNORE_PATTERNS = {".git", "__pycache__", "*.zst", "*.zst.tmp"}
-
 SKILL_JSON = "server-skill.json"
 METADATA_JSON = "metadata.json"
 _LOCK_TIMEOUT = 10  # seconds
+
+_URL_REQUEST_MAX_RETRIES = 3
+_URL_REQUEST_BACKOFF_BASE = 5  # seconds
 
 
 @contextmanager
@@ -242,11 +244,11 @@ class SkillManager:
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
 
+        yield from convert_episodes_to_h264(source_dir / "data")
+
         filenames = _enumerate_files(source_dir)
         if not filenames:
             raise ValueError(f"No files found in {source_dir}")
-
-        zst_filenames = [f + ".zst" for f in filenames]
 
         yield ProgressUpdate(
             stage=ProgressStage.UPLOADING,
@@ -254,16 +256,39 @@ class SkillManager:
             skill_id=skill_id,
         )
 
-        url_resp = self.client.request_file_urls(skill_id, zst_filenames)
+        batch_size = self.config.url_batch_size
+        total_batches = (len(filenames) + batch_size - 1) // batch_size
 
-        yield from upload_data_files(
-            client=self.client,
-            config=self.config,
-            source_dir=source_dir,
-            filenames=filenames,
-            upload_urls=url_resp.get("upload_urls", {}),
-            download_urls=url_resp.get("download_urls", {}),
-        )
+        for batch_start in range(0, len(filenames), batch_size):
+            batch = filenames[batch_start : batch_start + batch_size]
+            batch_num = batch_start // batch_size + 1
+
+            for attempt in range(1, _URL_REQUEST_MAX_RETRIES + 1):
+                try:
+                    url_resp = self.client.request_file_urls(skill_id, batch)
+                    break
+                except (ConnectionError, Timeout, OSError) as e:
+                    if attempt == _URL_REQUEST_MAX_RETRIES:
+                        raise
+                    delay = _URL_REQUEST_BACKOFF_BASE * (2 ** (attempt - 1))
+                    logger.warning(
+                        "URL request batch %d/%d attempt %d/%d failed: %s "
+                        "— retrying in %ds",
+                        batch_num, total_batches,
+                        attempt, _URL_REQUEST_MAX_RETRIES,
+                        e, delay,
+                    )
+                    time.sleep(delay)
+
+            yield from upload_data_files(
+                client=self.client,
+                source_dir=source_dir,
+                filenames=batch,
+                upload_urls=url_resp.get("upload_urls", {}),
+                download_urls=url_resp.get("download_urls", {}),
+                file_offset=batch_start,
+                total_files=len(filenames),
+            )
 
         yield ProgressUpdate(
             stage=ProgressStage.DONE,
@@ -458,7 +483,7 @@ class SkillManager:
     ) -> Generator[ProgressUpdate, None, None]:
         """Download the input training data files for a skill.
 
-        Files are saved into *dest_dir*.  ``.zst`` files are auto-decompressed.
+        Files are saved into *dest_dir*.
         Yields :class:`ProgressUpdate` for each file downloaded.
         """
         yield from download_skill_data(
@@ -467,14 +492,6 @@ class SkillManager:
             dest_dir=Path(dest_dir),
         )
 
-    # ── Cleanup ─────────────────────────────────────────────────────
-
-    def cleanup(self, source_dir: str | Path) -> None:
-        """Remove local .zst files from a source directory."""
-        source_dir = Path(source_dir).resolve()
-        if source_dir.is_dir():
-            filenames = _enumerate_files(source_dir)
-            cleanup_compressed(source_dir, filenames)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -483,15 +500,12 @@ class SkillManager:
 def _enumerate_files(source_dir: Path) -> list[str]:
     """
     List uploadable files in *source_dir*: root-level files and
-    everything under ``data/``.  Skips hidden dirs, __pycache__,
-    and .zst artifacts.
+    everything under ``data/``.  Skips hidden dirs and __pycache__.
     """
     files: list[str] = []
 
     def _should_skip(rel: Path) -> bool:
         if any(p.startswith(".") or p == "__pycache__" for p in rel.parts):
-            return True
-        if rel.suffix == ".zst" or rel.name.endswith(".zst.tmp"):
             return True
         if rel.name in (SKILL_JSON, METADATA_JSON):
             return True

@@ -36,6 +36,7 @@ class ClientConfig:
     upload_timeout_seconds: int = 600
     download_timeout_seconds: int = 600
     upload_chunk_size: int = 8 * 1024 * 1024  # 8 MiB
+    url_batch_size: int = 25  # files per signed-URL request batch
 
 
 # ── Progress / Status ──────────────────────────────────────────────

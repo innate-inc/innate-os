@@ -232,6 +232,10 @@ class Bringup(Node):
         """Publish odometry data, transform, and battery state from I2C readings."""
         transform = self.i2c_manager.current_transform
         
+        # Always stamp with current time so downstream consumers (AMCL, costmaps)
+        # can correlate this transform with sensor data via tf2 MessageFilters.
+        transform.header.stamp = self.get_clock().now().to_msg()
+        
         # Broadcast the transform
         self.tf_broadcaster.sendTransform(transform)
         
