@@ -215,10 +215,10 @@ SYSTEM_ENV_FILE="$SYSTEM_ENV_DIR/.env"
         exit 0
     fi
     mkdir -p "$SYSTEM_ENV_DIR"
-    chmod 755 "$SYSTEM_ENV_DIR"
+    chmod 700 "$SYSTEM_ENV_DIR"
     umask 077
     printf 'INNATE_SERVICE_KEY=%s\n' "$SERVICE_KEY" > "$SYSTEM_ENV_FILE"
-    chmod 644 "$SYSTEM_ENV_FILE"
+    chmod 600 "$SYSTEM_ENV_FILE"
     log "  INNATE_SERVICE_KEY mirrored to $SYSTEM_ENV_FILE"
 ) || log "  WARNING: failed to update $SYSTEM_ENV_FILE (continuing)"
 
