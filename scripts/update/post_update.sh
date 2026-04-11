@@ -496,40 +496,35 @@ TRAINING_MANAGER_FRONTEND="$REPO_DIR/ros2_ws/src/cloud/clients/training-manager/
 TRAINING_MANAGER_STATIC="$REPO_DIR/ros2_ws/src/cloud/clients/training-manager/training_manager/static"
 
 if [ -d "$TRAINING_MANAGER_FRONTEND" ]; then
-    if [ ! -f "$TRAINING_MANAGER_STATIC/index.html" ]; then
-        log "Building Training Manager frontend..."
+    log "Building Training Manager frontend..."
 
-        # Install Node.js via nvm if not available
-        export NVM_DIR="$ACTUAL_HOME/.nvm"
-        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+    # Everything runs as $ACTUAL_USER so nvm/node are installed in the
+    # right home directory and npm caches go to the right place.
+    sudo -u "$ACTUAL_USER" bash -c "
+        export NVM_DIR=\"$ACTUAL_HOME/.nvm\"
 
+        # Install nvm if missing
+        if [ ! -s \"\$NVM_DIR/nvm.sh\" ]; then
+            echo '  Installing nvm...'
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash 2>&1 | tail -1
+        fi
+
+        . \"\$NVM_DIR/nvm.sh\"
+
+        # Install Node 20 if missing
         if ! command -v node &>/dev/null; then
-            log "  Node.js not found, installing via nvm..."
-            if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-                sudo -u "$ACTUAL_USER" bash -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash' 2>&1 | tail -1
-                export NVM_DIR="$ACTUAL_HOME/.nvm"
-                [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            fi
+            echo '  Installing Node.js 20...'
             nvm install 20
-            log "  Node.js $(node --version) installed"
-        else
-            log "  Node.js $(node --version) already available"
         fi
 
-        cd "$TRAINING_MANAGER_FRONTEND"
-        sudo -u "$ACTUAL_USER" bash -c "
-            export NVM_DIR=\"$ACTUAL_HOME/.nvm\"
-            [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\"
-            cd \"$TRAINING_MANAGER_FRONTEND\" && npm install && npm run build
-        "
+        echo \"  Node.js \$(node --version)\"
+        cd \"$TRAINING_MANAGER_FRONTEND\" && npm install && npm run build
+    "
 
-        if [ -f "$TRAINING_MANAGER_STATIC/index.html" ]; then
-            log "  Training Manager frontend built successfully"
-        else
-            log "  WARNING: Training Manager frontend build may have failed"
-        fi
+    if [ -f "$TRAINING_MANAGER_STATIC/index.html" ]; then
+        log "  Training Manager frontend built successfully"
     else
-        log "Training Manager frontend already built, skipping"
+        log "  WARNING: Training Manager frontend build may have failed"
     fi
 fi
 
