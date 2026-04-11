@@ -1,7 +1,70 @@
 // arm_node.cpp — Constructor, main()
 #include "maurice_arm/arm_node.hpp"
 
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+
 namespace maurice_arm {
+
+namespace {
+
+// Scans /sys/class/tty/ttyACM* and returns the /dev path whose USB parent
+// device matches the CH343 VID:PID (1a86:55d3) used by the arm MCU.
+// Falls back to /dev/ttyACM0 on no match.
+std::string discoverArmDevice(const rclcpp::Logger& logger) {
+    namespace fs = std::filesystem;
+    static constexpr const char* kTargetVid = "1a86";  // WCH
+    static constexpr const char* kTargetPid = "55d3";  // CH343 "USB Single Serial"
+    static constexpr const char* kTtyClass = "/sys/class/tty";
+
+    auto read_trim = [](const fs::path& p) -> std::string {
+        std::ifstream f(p);
+        if (!f.is_open()) return {};
+        std::string s;
+        std::getline(f, s);
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) {
+            s.pop_back();
+        }
+        return s;
+    };
+
+    std::vector<std::string> candidates;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(kTtyClass, ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("ttyACM", 0) != 0) continue;
+
+        // /sys/class/tty/ttyACMn/device is a symlink to the USB interface
+        // (e.g. .../1-1/1-1:1.0); its parent (..) is the USB device that
+        // exposes idVendor / idProduct.
+        const fs::path usb_dev = entry.path() / "device" / "..";
+        const std::string vid = read_trim(usb_dev / "idVendor");
+        const std::string pid = read_trim(usb_dev / "idProduct");
+
+        if (vid == kTargetVid && pid == kTargetPid) {
+            const std::string dev_path = "/dev/" + name;
+            RCLCPP_INFO(logger, "Discovered arm device: %s (%s:%s)",
+                        dev_path.c_str(), vid.c_str(), pid.c_str());
+            return dev_path;
+        }
+        candidates.push_back(name + " [" + (vid.empty() ? "?" : vid) + ":" + (pid.empty() ? "?" : pid) + "]");
+    }
+
+    std::string joined;
+    for (const auto& c : candidates) {
+        if (!joined.empty()) joined += ", ";
+        joined += c;
+    }
+    RCLCPP_ERROR(logger,
+                 "No ttyACM device with VID:PID %s:%s found. Candidates: %s. Falling back to /dev/ttyACM0.",
+                 kTargetVid, kTargetPid,
+                 joined.empty() ? "(none)" : joined.c_str());
+    return "/dev/ttyACM0";
+}
+
+}  // namespace
 
 MauriceArmNode::MauriceArmNode() : Node("maurice_arm") {
     RCLCPP_INFO(this->get_logger(), "Maurice Arm Node starting...");
@@ -35,8 +98,8 @@ MauriceArmNode::MauriceArmNode() : Node("maurice_arm") {
     // Load joint configurations from sub-parameters (nav2 style)
     loadJointConfigs(joint_names_param);
 
-    // Use fixed device path
-    std::string device_name = "/dev/ttyACM0";
+    // Auto-discover the arm's USB serial device (CH343 1a86:55d3)
+    std::string device_name = discoverArmDevice(this->get_logger());
     RCLCPP_INFO(this->get_logger(), "Using device: %s", device_name.c_str());
 
     // Create Dynamixel interface
