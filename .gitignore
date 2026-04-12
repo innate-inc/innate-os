@@ -102,3 +102,6 @@ logs
 arm_wave/
 
 .vscode
+
+# Google keys
+gemini_key.txt
