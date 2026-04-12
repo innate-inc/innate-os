@@ -61,6 +61,7 @@ from brain_messages.srv import ReloadSkillsAgents
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
+from brain_client.claude_mem_observer import ClaudeMemObserver
 from brain_client.initializers import initialize_agents
 from brain_client.tts_handler import TTSHandler
 from brain_client.hot_reload_watcher import HotReloadWatcher
@@ -205,6 +206,9 @@ class BrainClientNode(Node):
         self.get_logger().info(
             f"BrainClient running in {'simulator' if self.simulator_mode else 'real robot'} mode"
         )
+
+        # Claude-Mem: observe agent decisions for persistent memory
+        self._claude_mem = ClaudeMemObserver(self.get_logger())
 
         self.ws_uri = (
             self.get_parameter("websocket_uri").get_parameter_value().string_value
@@ -1674,6 +1678,10 @@ class BrainClientNode(Node):
                 )
 
         if payload.thoughts:
+            # Claude-Mem: record agent thought
+            directive_id = getattr(self.current_directive, 'id', None) if hasattr(self, 'current_directive') and self.current_directive else None
+            self._claude_mem.on_agent_thought(payload.thoughts, agent_id=directive_id)
+
             chat_entry = MessageOut(
                 type=MessageOutType.CHAT_OUT,
                 payload={"text": payload.thoughts},
@@ -2364,6 +2372,9 @@ class BrainClientNode(Node):
         if directive_name in self.directives:
             self.current_directive = self.directives[directive_name]
             self.get_logger().info(f"Activated directive: {directive_name}")
+
+            # Claude-Mem: record directive change
+            self._claude_mem.on_directive_change(directive_name, directive_name)
 
             # Clear local chat history when changing agent
             self.chat_history = []
