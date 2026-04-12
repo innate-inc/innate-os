@@ -1162,21 +1162,31 @@ class BrainClientNode(Node):
             "result": raw_message,
             "summary": summary,
         }
-        self.ws_bridge.send_message(
-            MessageIn(type=MessageInType.CUSTOM_INPUT, payload=custom)
-        )
-        line = f"(Tool result · {primitive_name}) {summary}"
-        payload = self._build_chat_in_payload(line)
-        self.ws_bridge.send_message(MessageIn(type=MessageInType.CHAT_IN, payload=payload))
-        self.chat_history.append(
-            {
-                "sender": "tool_result",
-                "text": line,
-                "timestamp": time.time(),
-            }
-        )
+        try:
+            self.ws_bridge.send_message(
+                MessageIn(type=MessageInType.CUSTOM_INPUT, payload=custom)
+            )
+            line = f"(Tool result · {primitive_name}) {summary}"
+            payload = self._build_chat_in_payload(line)
+            self.ws_bridge.send_message(MessageIn(type=MessageInType.CHAT_IN, payload=payload))
+        except Exception as e:
+            self.get_logger().error(
+                f"Failed to send tool-result to WebSocket for {skill_id}: {e}",
+                exc_info=True,
+            )
+            raise
+
+        entry = {
+            "sender": "tool_result",
+            "text": line,
+            "timestamp": time.time(),
+        }
+        self.chat_history.append(entry)
+        # Local subscribers (UI / debugging) even if offboard ignores WS order
+        self.chat_out_pub.publish(String(data=json.dumps(entry)))
+
         self.get_logger().info(
-            f"Sent tool-result follow-up (custom_input + chat_in) for {skill_id}"
+            f"Sent tool-result follow-up (custom_input + chat_in + local chat_out) for {skill_id}"
         )
 
     def chat_in_callback(self, msg: String):
@@ -2298,21 +2308,35 @@ class BrainClientNode(Node):
                 f"Unknown primitive result combination: success={result.success}, type={result.success_type}"
             )
 
+        # Send tool output to the offboard transcript *before* primitive_completed so the next
+        # VisionAgentOutput is less likely to race ahead without this context. Also mirrors to /brain/chat_out.
+        _st = str(getattr(result, "success_type", "") or "").lower()
+        if (
+            outgoing_msg is not None
+            and result.success
+            and _st == SkillResult.SUCCESS.value
+            and result.message
+            and str(result.message).strip()
+        ):
+            self.get_logger().info(
+                f"[BrainClient] Tool-result follow-up (before primitive_completed) for {skill_id}"
+            )
+            try:
+                self._notify_brain_tool_result(
+                    skill_id, primitive_name, primitive_id, result.message
+                )
+            except Exception as e:
+                self.get_logger().error(
+                    f"[BrainClient] Tool-result follow-up failed: {e}",
+                    exc_info=True,
+                )
+
         # Send the determined status message
         if outgoing_msg:
             self.ws_bridge.send_message(outgoing_msg)
             self.get_logger().info(
                 f"Sent primitive status message: {outgoing_msg.type.name}"
             )
-            if (
-                result.success
-                and result.success_type == SkillResult.SUCCESS.value
-                and result.message
-                and str(result.message).strip()
-            ):
-                self._notify_brain_tool_result(
-                    skill_id, primitive_name, primitive_id, result.message
-                )
 
         if local_status:
             self._publish_task_status(
