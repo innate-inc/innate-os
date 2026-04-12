@@ -53,6 +53,9 @@ _SKILLS_DIR     = _ROOT / "skills"
 _AGENT_TYPES    = _ROOT / "ros2_ws" / "src" / "brain" / "brain_client" / "brain_client" / "agent_types.py"
 _SKILL_TYPES    = _ROOT / "ros2_ws" / "src" / "brain" / "brain_client" / "brain_client" / "skill_types.py"
 _CAPABILITIES   = Path.home() / ".wildrobot" / "capabilities.json"
+# Canonical examples used as the primary style reference for code generation.
+_AGENT_EXAMPLE  = _AGENTS_DIR / "draw_triangle.py"
+_SKILL_EXAMPLE  = _SKILLS_DIR / "draw_triangle.py"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 dry_run = "--dry-run" in sys.argv
@@ -154,6 +157,8 @@ try:
         skills_dir=None if dry_run else str(_SKILLS_DIR),
         skill_types_path=str(_SKILL_TYPES) if _SKILL_TYPES.exists() else None,
         capabilities_path=str(_CAPABILITIES) if _CAPABILITIES.exists() else None,
+        agent_example_paths=[str(_AGENT_EXAMPLE)] if _AGENT_EXAMPLE.exists() else None,
+        skill_example_paths=[str(_SKILL_EXAMPLE)] if _SKILL_EXAMPLE.exists() else None,
     )
 except AgentCodegenError as exc:
     print(f"\nGeneration failed: {exc}", file=sys.stderr)

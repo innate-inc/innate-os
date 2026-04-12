@@ -386,6 +386,23 @@ def _load_examples(
     return selected
 
 
+def load_examples_from_paths(paths: list[str]) -> list[tuple[str, str]]:
+    """Load (filename, source) pairs from explicit file paths.
+
+    Silently skips paths that cannot be read.  Returns pairs in the same
+    order as *paths* so callers control priority.
+    """
+    results: list[tuple[str, str]] = []
+    for p in paths:
+        try:
+            src = Path(p).read_text(encoding="utf-8")
+            results.append((Path(p).name, src))
+            _LOG.debug("Loaded pinned example: %s", p)
+        except OSError as exc:
+            _LOG.warning("Cannot read pinned example %r: %s — skipping", p, exc)
+    return results
+
+
 def _format_existing_skills(skills: list[tuple[str, str]]) -> str:
     """Format ``(skill_name, description)`` pairs into a prompt section string.
 

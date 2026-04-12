@@ -12,6 +12,7 @@ from agent_codegen.prompt import (
     build_skill_prompt,
     load_agent_examples,
     load_agent_interface,
+    load_examples_from_paths,
     load_skill_examples,
     load_skill_interface,
 )
@@ -189,6 +190,42 @@ class TestLoadSkillExamples:
         self._make_file(tmp_path, "short_skill.py", "class Short(Skill): pass")
         result = load_skill_examples(str(tmp_path), max_examples=1)
         assert result[0][0] == "short_skill.py"
+
+
+# ---------------------------------------------------------------------------
+# load_examples_from_paths
+# ---------------------------------------------------------------------------
+
+
+class TestLoadExamplesFromPaths:
+    def test_loads_file_content(self, tmp_path):
+        f = tmp_path / "my_agent.py"
+        f.write_text("class MyAgent(Agent): pass", encoding="utf-8")
+        result = load_examples_from_paths([str(f)])
+        assert len(result) == 1
+        assert result[0] == ("my_agent.py", "class MyAgent(Agent): pass")
+
+    def test_skips_missing_files(self, tmp_path):
+        result = load_examples_from_paths([str(tmp_path / "nonexistent.py")])
+        assert result == []
+
+    def test_preserves_order(self, tmp_path):
+        a = tmp_path / "a.py"
+        b = tmp_path / "b.py"
+        a.write_text("# a", encoding="utf-8")
+        b.write_text("# b", encoding="utf-8")
+        result = load_examples_from_paths([str(a), str(b)])
+        assert [name for name, _ in result] == ["a.py", "b.py"]
+
+    def test_empty_list_returns_empty(self):
+        assert load_examples_from_paths([]) == []
+
+    def test_partial_failures_return_valid_entries(self, tmp_path):
+        good = tmp_path / "good.py"
+        good.write_text("# good", encoding="utf-8")
+        result = load_examples_from_paths([str(tmp_path / "bad.py"), str(good)])
+        assert len(result) == 1
+        assert result[0][0] == "good.py"
 
 
 # ---------------------------------------------------------------------------
