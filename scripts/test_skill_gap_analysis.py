@@ -2,8 +2,9 @@
 """
 Test script 1 — Skill gap analysis.
 
-Calls the semantic skill analyzer with a scenario the robot likely cannot
-fully handle yet, producing ~/.wildrobot/<uuid>-missing-skills.json.
+Calls the semantic skill analyzer with a scenario the robot cannot handle
+(WhatsApp call, news reading, pizza ordering), producing
+~/.wildrobot/<uuid>-missing-skills.json.
 Shows both existing agents that partially cover the request and new
 agents/skills that need to be created.
 
@@ -24,11 +25,8 @@ if _INNATE_ROOT not in sys.path:
 from semantic_skill_analyzer import analyze
 
 DEFAULT_PROMPT = (
-    "I want the robot to autonomously monitor a room for human presence, "
-    "recognise known faces and greet them by name, detect unknown visitors and "
-    "send a Telegram alert with a photo, keep a timestamped log of all entries "
-    "and exits, and play a welcome or warning sound depending on whether the "
-    "person is recognised."
+    "Call my mum on WhatsApp, read her the latest news headlines out loud, "
+    "then order a pizza on her behalf and confirm the delivery time."
 )
 
 prompt = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROMPT
