@@ -1236,7 +1236,7 @@ class BrainClientNode(Node):
         image_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
+            depth=2,
         )
         self._image_sub = self.create_subscription(
             CompressedImage, self.image_topic, self.image_callback, image_qos

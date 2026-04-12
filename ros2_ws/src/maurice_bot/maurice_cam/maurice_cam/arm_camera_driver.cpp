@@ -90,7 +90,7 @@ ArmCameraDriver::ArmCameraDriver(const rclcpp::NodeOptions & options)
 
     // Create publishers with sensor data QoS profile
     rclcpp::QoS qos = rclcpp::SensorDataQoS()
-        .keep_last(10)
+        .keep_last(2)
         .best_effort()
         .durability_volatile();
 

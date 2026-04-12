@@ -30,7 +30,7 @@ class ImageCapture(Node):
         image_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=2
         )
         
         # Subscribers for images with sensor QoS (same topics as policy.py)
