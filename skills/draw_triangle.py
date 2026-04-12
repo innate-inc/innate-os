@@ -18,14 +18,14 @@ class DrawTriangle(Skill):
     manipulation = Interface(InterfaceType.MANIPULATION)
 
     # Equilateral triangle geometry (metres).
-    # Placed so the left base vertex is 10 cm forward, centred on the robot's y=0.
+    # Placed so the left base vertex is 20 cm forward, centred on the robot's y=0.
     SIDE = 0.10
     # x offset: how far in front of the robot the near edge starts
-    X_OFFSET = 0.10
-    # z when the pen tip touches the floor (tune to your robot's floor height)
-    Z_FLOOR = -0.05
-    # z for the safe transit height above the floor
-    Z_LIFT = 0.10
+    X_OFFSET = 0.20
+    # z for the drawing plane — 10 cm above floor so the TCP doesn't touch the ground
+    Z_FLOOR = 0.05
+    # z for the safe transit height above the drawing plane
+    Z_LIFT = 0.20
 
     # Default arm orientation while drawing (pen pointing straight down)
     DRAW_ROLL = 0.0
@@ -57,9 +57,9 @@ class DrawTriangle(Skill):
         Trace the triangle on the floor, then lift the arm.
 
         Vertices (in robot base_link frame, metres):
-          V1 — (X_OFFSET,           -SIDE/2,    Z_FLOOR)   left base corner
-          V2 — (X_OFFSET,           +SIDE/2,    Z_FLOOR)   right base corner
-          V3 — (X_OFFSET + height,   0,          Z_FLOOR)   apex (forward)
+          V1 — (X_OFFSET,           -SIDE/2,    Z_FLOOR)   left base corner  (0.20, -0.05, 0.05)
+          V2 — (X_OFFSET,           +SIDE/2,    Z_FLOOR)   right base corner (0.20, +0.05, 0.05)
+          V3 — (X_OFFSET + height,   0,          Z_FLOOR)   apex (forward)    (~0.29,  0.00, 0.05)
         """
         self._cancelled = False
 
