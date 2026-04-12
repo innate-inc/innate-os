@@ -254,6 +254,9 @@ These should be in `pip-requirements.txt`:
 | pynput | pynput | keyboard.py | Keyboard input |
 | pygame | pygame | joystick.py | Game controller input |
 | dynamixel-sdk | dynamixel-sdk | dynamixel.py, servo_manager.py | Motor control |
+| fastmcp | fastmcp | `skills/check_calendar.py` | Zapier MCP (Streamable HTTP) for Google Calendar |
+
+**Robot / `check_calendar`:** `fastmcp` is in `ros2_ws/pip-requirements.txt`; the robot install path runs `pip3 install -r` that file from `scripts/update/post_update.sh`. For a one-off or a `uv`-based environment, use `pip3 install fastmcp` or `uv pip install fastmcp` (same package). The skill also needs `ZAPIER_MCP_API_KEY` or `MCP_ZAPIER_API_KEY` set in the process environment (e.g. systemd unit, profile, or secrets hook).
 
 **Python Imports:**
 ```python
