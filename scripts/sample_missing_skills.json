@@ -1,13 +1,20 @@
 {
   "existing_agents": [],
   "missing_capabilities": {
-    "confirm_delivery": {
-      "prompt": "Confirm the delivery time with the user's confirmation. This could involve checking the delivery status.",
+    "draw_triangle": {
+      "prompt": "Draw a triangle on the floor using the robot's arm, ensuring the points are accurate and the shape is properly formed.",
       "new_skills": [
         {
-          "skill_name": "head_emotion",
-          "description": "Express an emotion through head tilt movements. This skill can be used to confirm delivery time by showing satisfaction."
+          "skill_name": "draw_triangle",
+          "description": "Use the robot's arm to draw a triangle on the floor, specifying coordinates and angles as needed."
         }
+      ],
+      "existing_skills": [
+        "navigate_to_position",
+        "wave",
+        "navigate_with_vision",
+        "retrieve_telegram",
+        "send_telegram"
       ]
     }
   }
