@@ -28,89 +28,128 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator.
 from manipulation.ACT import ACTPolicy, ACTConfig
 
-# Convert old policy_config to new ACTConfig format
-def create_act_config():
-    # Define input shapes based on camera setup and state/action dimensions
+ACT_CONFIG_FILENAME = "act_config.json"
+
+_DEFAULT_ARCHITECTURE = dict(
+    vision_backbone="resnet18",
+    replace_final_stride_with_dilation=False,
+    pre_norm=False,
+    dim_model=512,
+    n_heads=8,
+    dim_feedforward=3200,
+    feedforward_activation="relu",
+    n_encoder_layers=4,
+    n_decoder_layers=4,
+    use_vae=True,
+    latent_dim=32,
+    n_vae_encoder_layers=4,
+    dropout=0.1,
+    kl_weight=10.0,
+)
+
+
+def create_act_config(action_dim=8, chunk_size=30, **architecture_overrides):
+    """Create ACT configuration for the legacy single-skill inference node.
+
+    When *architecture_overrides* are supplied (e.g. loaded from
+    ``act_config.json``), they take priority over the hardcoded defaults.
+    """
+    arch = {**_DEFAULT_ARCHITECTURE, **architecture_overrides}
+
     input_shapes = {
-        "observation.image_camera_1": [3, 480, 640],  # [C, H, W]
-        "observation.image_camera_2": [3, 480, 640],  # [C, H, W]
-        "observation.state": [6]  # state_dim
+        "observation.image_camera_1": [3, 480, 640],
+        "observation.image_camera_2": [3, 480, 640],
+        "observation.state": [6],
     }
-    
     output_shapes = {
-        "action": [8]  # action_dim
+        "action": [action_dim],
     }
-    
+
     return ACTConfig(
         n_obs_steps=1,
-        chunk_size=30,  # num_queries
-        n_action_steps=30,  # CHANGED: Match training config for efficiency
+        chunk_size=chunk_size,
+        n_action_steps=chunk_size,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
-        
-        # Architecture parameters - MATCH TRAINING
-        vision_backbone="resnet18",  # backbone
-        replace_final_stride_with_dilation=False,  # not dilation
-        
-        # Transformer parameters - MATCH TRAINING
-        pre_norm=False,
-        dim_model=512,  # hidden_dim
-        n_heads=8,  # nheads
-        dim_feedforward=3200,
-        n_encoder_layers=4,  # enc_layers
-        n_decoder_layers=4,  # CHANGED: Match train.py (was 7)
-        
-        # VAE parameters - MATCH TRAINING
-        use_vae=True,
-        
-        # Training parameters - MATCH TRAINING
-        dropout=0.1,
-        kl_weight=10.0,  # CHANGED: Match train.py (was 100)
-        
-        # Temporal ensembling (enable if desired)
-        temporal_ensemble_coeff=None,  # CHANGED: Match train.py default (was 0.3)
-        
-        # Optimizer settings - MATCH TRAINING
-        optimizer_lr=1e-5,  # CHANGED: Match train.py (was 5e-5)
-        optimizer_weight_decay=1e-4,  # weight_decay
-        optimizer_lr_backbone=1e-5,  # CHANGED: Match train.py (was 5e-5)
-    )
 
-# Global configuration
-policy_config = create_act_config()
+        vision_backbone=arch["vision_backbone"],
+        replace_final_stride_with_dilation=arch["replace_final_stride_with_dilation"],
+        pre_norm=arch["pre_norm"],
+        dim_model=arch["dim_model"],
+        n_heads=arch["n_heads"],
+        dim_feedforward=arch["dim_feedforward"],
+        feedforward_activation=arch["feedforward_activation"],
+        n_encoder_layers=arch["n_encoder_layers"],
+        n_decoder_layers=arch["n_decoder_layers"],
+        use_vae=arch["use_vae"],
+        latent_dim=arch["latent_dim"],
+        n_vae_encoder_layers=arch["n_vae_encoder_layers"],
+        dropout=arch["dropout"],
+        kl_weight=arch["kl_weight"],
+
+        temporal_ensemble_coeff=None,
+        optimizer_lr=1e-5,
+        optimizer_weight_decay=1e-4,
+        optimizer_lr_backbone=1e-5,
+    )
 
 class InferenceNode(Node):
     def __init__(self):
         super().__init__('inference_node')
-        # Enable debug logging
         self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
         self.get_logger().info("Inference node started.")
         self.bridge = CvBridge()
         self.image_size = (640, 480)
 
-        # Set device and load the policy model
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Load normalization stats first
-        # Use package-relative path for checkpoint
-        # Get the manipulation package directory (source, not installed)
         maurice_root = os.environ.get('INNATE_OS_ROOT', os.path.join(os.path.expanduser('~'), 'innate-os'))
         manipulation_pkg_dir = os.path.join(maurice_root, 'ros2_ws', 'src', 'brain', 'manipulation')
         checkpoint_path = os.path.join(manipulation_pkg_dir, 'ckpts', 'PaperCorner_Filtered_20250526_213031', 'act_policy_epoch_90000.pth')
         checkpoint_dir = os.path.dirname(checkpoint_path)
         stats_path = os.path.join(checkpoint_dir, 'dataset_stats.pt')
         
-        # Load dataset stats for normalization
         dataset_stats = None
         try:
-            # Load from .pt file instead of .pkl
             dataset_stats = torch.load(stats_path, map_location='cpu')
             self.get_logger().info("Dataset stats loaded from .pt file.")
         except Exception as e:
             self.get_logger().error(f"Failed to load dataset stats: {e}")
             dataset_stats = None
         
-        # Initialize policy with config and stats
+        # Load training config from act_config.json if available
+        config_path = os.path.join(checkpoint_dir, ACT_CONFIG_FILENAME)
+        if os.path.isfile(config_path):
+            try:
+                saved_config = ACTConfig.from_json(config_path)
+                policy_config = create_act_config(
+                    chunk_size=saved_config.chunk_size,
+                    vision_backbone=saved_config.vision_backbone,
+                    dim_model=saved_config.dim_model,
+                    n_heads=saved_config.n_heads,
+                    dim_feedforward=saved_config.dim_feedforward,
+                    feedforward_activation=saved_config.feedforward_activation,
+                    n_encoder_layers=saved_config.n_encoder_layers,
+                    n_decoder_layers=saved_config.n_decoder_layers,
+                    use_vae=saved_config.use_vae,
+                    latent_dim=saved_config.latent_dim,
+                    n_vae_encoder_layers=saved_config.n_vae_encoder_layers,
+                    pre_norm=saved_config.pre_norm,
+                    replace_final_stride_with_dilation=saved_config.replace_final_stride_with_dilation,
+                    dropout=saved_config.dropout,
+                    kl_weight=saved_config.kl_weight,
+                )
+                self.get_logger().info(
+                    f"Loaded training config: backbone={saved_config.vision_backbone}, "
+                    f"chunk_size={saved_config.chunk_size}, dim_model={saved_config.dim_model}"
+                )
+            except Exception as e:
+                self.get_logger().warn(f"Failed to load {ACT_CONFIG_FILENAME}: {e}, using defaults")
+                policy_config = create_act_config()
+        else:
+            self.get_logger().info(f"No {ACT_CONFIG_FILENAME} found, using hardcoded defaults")
+            policy_config = create_act_config()
+        
         self.policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
         
         try:

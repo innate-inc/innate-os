@@ -102,28 +102,32 @@ variables. Pass these via the `env` field when creating a run.
 | Env Variable | Default | Description |
 |---|---|---|
 | `LEARNING_RATE` | `5e-5` | Main optimizer learning rate |
-| `LEARNING_RATE_BACKBONE` | `5e-5` | Vision backbone (ResNet18) learning rate |
+| `LEARNING_RATE_BACKBONE` | `5e-5` | Vision backbone learning rate |
 | `BATCH_SIZE` | `96` | Batch size **per GPU** (effective = BATCH_SIZE x WORLD_SIZE) |
 | `MAX_STEPS` | `120000` | Total training steps |
 | `CHUNK_SIZE` | `30` | Action sequence length (prediction horizon) |
 | `NUM_WORKERS` | `4` | DataLoader workers per GPU |
 | `WORLD_SIZE` | `4` | Number of GPUs (auto-adjusts if fewer available) |
+| `VISION_BACKBONE` | `resnet18` | Vision encoder architecture (e.g. `resnet18`, `resnet34`, `resnet50`) |
+| `DIM_MODEL` | `512` | Transformer hidden dimension |
+| `N_HEADS` | `8` | Number of attention heads |
+| `N_ENCODER_LAYERS` | `4` | Transformer encoder depth |
+| `N_DECODER_LAYERS` | `4` | Transformer decoder depth |
+| `KL_WEIGHT` | `10.0` | VAE KL divergence loss weight |
+| `USE_VAE` | `True` | Whether to use the variational autoencoder |
 | `DATA_DIR` | `/training/data/data` | Path to training data on the instance |
 | `OUTPUT_DIR` | `/training/out` | Output directory for checkpoints |
 
-### Fixed architecture parameters (hardcoded in `train_dist.py`)
+The training script saves an `act_config.json` alongside each checkpoint.
+The inference side loads this file automatically so architecture changes
+propagate without manual config updates on the robot.
 
-These cannot be changed without modifying the training code.
+### Fixed architecture parameters
+
+These are not configurable via environment variables.
 
 | Parameter | Value | Description |
 |---|---|---|
-| `vision_backbone` | `resnet18` | Vision encoder architecture |
-| `DIM_MODEL` | 512 | Transformer hidden dimension |
-| `N_HEADS` | 8 | Number of attention heads |
-| `N_ENCODER_LAYERS` | 4 | Transformer encoder depth |
-| `N_DECODER_LAYERS` | 4 | Transformer decoder depth |
-| `KL_WEIGHT` | 10.0 | VAE KL divergence loss weight |
-| `USE_VAE` | True | Whether to use the variational autoencoder |
 | `WEIGHT_DECAY` | 5e-4 | Optimizer weight decay |
 | `WARMUP_STEPS` | 5% of MAX_STEPS | Linear LR warmup period |
 | `MIN_LR_RATIO` | 0.1 | Cosine decay floor (LR decays to 1/10th) |

@@ -38,16 +38,16 @@ HYPERPARAMETER_DEFAULTS: dict[str, str] = {
     "CHUNK_SIZE": "30",
     "NUM_WORKERS": "4",
     "WORLD_SIZE": "4",
+    "VISION_BACKBONE": "resnet18",
+    "DIM_MODEL": "512",
+    "N_HEADS": "8",
+    "N_ENCODER_LAYERS": "4",
+    "N_DECODER_LAYERS": "4",
+    "KL_WEIGHT": "10.0",
+    "USE_VAE": "True",
 }
 
 ARCHITECTURE_PARAMS: dict[str, Any] = {
-    "vision_backbone": "resnet18",
-    "DIM_MODEL": 512,
-    "N_HEADS": 8,
-    "N_ENCODER_LAYERS": 4,
-    "N_DECODER_LAYERS": 4,
-    "KL_WEIGHT": 10.0,
-    "USE_VAE": True,
     "WEIGHT_DECAY": "5e-4",
     "WARMUP_STEPS": "5% of MAX_STEPS",
     "MIN_LR_RATIO": 0.1,

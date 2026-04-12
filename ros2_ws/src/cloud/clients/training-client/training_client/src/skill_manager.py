@@ -454,11 +454,11 @@ class SkillManager:
         Activate a trained run by setting checkpoint and stats_file in metadata.json.
 
         Looks inside ``skill_dir/run_id/`` for the largest ``*_step_*.pth``
-        checkpoint and a ``*stats*.pt`` file, then writes them into
-        ``metadata.json``'s ``execution`` block.
+        checkpoint, a ``*stats*.pt`` file, and an optional ``act_config.json``,
+        then writes them into ``metadata.json``'s ``execution`` block.
 
-        Returns a dict with ``checkpoint`` and ``stats_file`` paths
-        (relative to *skill_dir*).
+        Returns a dict with ``checkpoint``, ``stats_file``, and optionally
+        ``config_file`` paths (relative to *skill_dir*).
 
         Raises ``FileNotFoundError`` if the run directory or required files
         are missing, or ``ValueError`` if metadata.json cannot be read.
@@ -480,9 +480,13 @@ class SkillManager:
         if not stats_file:
             raise FileNotFoundError(f"No *stats*.pt file found in {run_dir}")
 
+        config_file = _find_config_file(run_dir)
+
         # Prefix with run_id subdir so paths are relative to skill_dir
         checkpoint = f"{run_id}/{checkpoint}"
         stats_file = f"{run_id}/{stats_file}"
+        if config_file:
+            config_file = f"{run_id}/{config_file}"
 
         # Update metadata.json under lock
         with _locked_metadata(skill_path) as meta_path:
@@ -500,16 +504,25 @@ class SkillManager:
 
             meta["execution"]["checkpoint"] = checkpoint
             meta["execution"]["stats_file"] = stats_file
+            if config_file:
+                meta["execution"]["config_file"] = config_file
 
             _write_meta(meta_path, meta)
-        logger.info(
-            "Activated run %d: checkpoint=%s stats_file=%s",
-            run_id,
-            checkpoint,
-            stats_file,
-        )
 
-        return {"checkpoint": checkpoint, "stats_file": stats_file}
+        result = {"checkpoint": checkpoint, "stats_file": stats_file}
+        if config_file:
+            result["config_file"] = config_file
+            logger.info(
+                "Activated run %d: checkpoint=%s stats_file=%s config_file=%s",
+                run_id, checkpoint, stats_file, config_file,
+            )
+        else:
+            logger.info(
+                "Activated run %d: checkpoint=%s stats_file=%s (no act_config.json)",
+                run_id, checkpoint, stats_file,
+            )
+
+        return result
 
     # ── Fetch input data ────────────────────────────────────────────
 
@@ -590,4 +603,11 @@ def _find_stats_file(run_dir: Path) -> str | None:
     """Find a dataset stats file in *run_dir*."""
     for pt in run_dir.rglob("*stats*.pt"):
         return str(pt.relative_to(run_dir))
+    return None
+
+
+def _find_config_file(run_dir: Path) -> str | None:
+    """Find an ``act_config.json`` saved by the training script."""
+    for cfg in run_dir.rglob("act_config.json"):
+        return str(cfg.relative_to(run_dir))
     return None
