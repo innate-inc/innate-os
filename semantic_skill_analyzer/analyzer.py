@@ -128,6 +128,53 @@ def _strip_think_blocks(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
+def _known_skill_basenames(capabilities: Dict[str, Any]) -> set:
+    """
+    Collect all skill basenames from the capabilities index.
+
+    Skill strings may be plain basenames ("wave") or enriched
+    ("wave: Make the robot wave its arm."). Strip the description part.
+    """
+    names: set = set()
+    for agent_data in capabilities.values():
+        for skill in agent_data.get("skills", []):
+            if isinstance(skill, str):
+                names.add(skill.split(":")[0].strip())
+    return names
+
+
+def _filter_existing_from_missing(
+    missing: Dict[str, Any],
+    capabilities: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Remove from missing_capabilities any key that already exists in the catalog —
+    either as an agent ID or as a known skill basename.
+
+    Small models hallucinate in two ways:
+    1. They list an existing agent name as "missing".
+    2. They list a skill name as if it were a new agent name.
+    Both are caught here using the ground-truth capabilities index.
+    """
+    known_agents = set(capabilities.keys())
+    known_skills = _known_skill_basenames(capabilities)
+    discard = known_agents | known_skills
+    return {k: v for k, v in missing.items() if k not in discard}
+
+
+def _filter_valid_existing_agents(
+    agents: List[str],
+    capabilities: Dict[str, Any],
+) -> List[str]:
+    """
+    Keep only items in existing_agents that are actual agent IDs in the catalog.
+
+    Small models sometimes put skill description strings or arbitrary text into
+    this list instead of agent IDs. Ground-truth filtering removes them.
+    """
+    return [a for a in agents if a in capabilities]
+
+
 def _normalize_agent_list(agents: Any) -> List[str]:
     """
     Coerce the existing_agents value to a plain list of strings.
@@ -277,6 +324,18 @@ def analyze(
         result = _extract_content_result(response)
     if result is None:
         result = {"existing_agents": [], "missing_capabilities": {}}
+
+    # Keep only real agent IDs in existing_agents (model sometimes puts skill
+    # descriptions or arbitrary text there instead of agent names)
+    result["existing_agents"] = _filter_valid_existing_agents(
+        result["existing_agents"], capabilities
+    )
+    # Remove any existing agent or skill name the model mistakenly placed in
+    # missing_capabilities (model confuses agents with skills, or duplicates
+    # existing agents as "missing")
+    result["missing_capabilities"] = _filter_existing_from_missing(
+        result["missing_capabilities"], capabilities
+    )
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

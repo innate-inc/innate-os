@@ -186,6 +186,79 @@ def test_output_missing_capabilities_populated(tmp_path, caps_file):
     assert "visitor_greeter_agent" in data["missing_capabilities"]
 
 
+def test_existing_agents_filtered_to_valid_ids(tmp_path, caps_file):
+    """existing_agents containing skill descriptions or junk is stripped to real agent IDs only."""
+    tc = _make_tool_call(
+        "save_capability_analysis",
+        {
+            "existing_agents": [
+                "demo_agent",                                          # valid — keep
+                "Use when you need to navigate the robot...",          # skill description — remove
+                "Wave hello at the person standing there.",            # skill description — remove
+                "nonexistent_agent",                                   # unknown — remove
+            ],
+            "missing_capabilities": {},
+        },
+    )
+    msg = SimpleNamespace(tool_calls=[tc], content="")
+    response = SimpleNamespace(message=msg)
+    path = _run_analyze(response, tmp_path, caps_file)
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert data["existing_agents"] == ["demo_agent"]
+
+
+def test_skill_name_removed_from_missing(tmp_path, caps_file):
+    """Skill basenames listed as agent names in missing_capabilities are stripped."""
+    # "wave" and "navigate_to_position" are skills in _SAMPLE_CAPABILITIES, not agents
+    hallucinated = {
+        "wave": {"prompt": "...", "new_skills": []},
+        "navigate_to_position": {"prompt": "...", "new_skills": []},
+        "truly_new_agent": {"prompt": "A real new agent.", "new_skills": []},
+    }
+    path = _run_analyze(make_tool_response([], hallucinated), tmp_path, caps_file)
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert "wave" not in data["missing_capabilities"]
+    assert "navigate_to_position" not in data["missing_capabilities"]
+    assert "truly_new_agent" in data["missing_capabilities"]
+
+
+def test_skill_with_description_basename_removed_from_missing(tmp_path, caps_file):
+    """Skills stored as 'basename: description' — basename must still be recognised."""
+    caps_with_desc = {
+        "demo_agent": {"skills": ["wave: Make the robot wave its arm."]},
+    }
+    caps_path = tmp_path / "caps_desc.json"
+    caps_path.write_text(json.dumps(caps_with_desc), encoding="utf-8")
+    hallucinated = {"wave": {"prompt": "...", "new_skills": []}}
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_tool_response([], hallucinated)
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        path = analyze(
+            prompt="test",
+            capabilities_path=str(caps_path),
+            output_dir=str(tmp_path / "out"),
+        )
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert "wave" not in data["missing_capabilities"]
+
+
+def test_existing_agent_removed_from_missing(tmp_path, caps_file):
+    """
+    The LLM sometimes lists an existing agent in missing_capabilities.
+    It must be stripped out deterministically — the capabilities index is ground truth.
+    """
+    # chess_agent already exists in _SAMPLE_CAPABILITIES
+    hallucinated_missing = {
+        "chess_agent": {"prompt": "...", "new_skills": []},  # already exists — must be removed
+        "brand_new_agent": {"prompt": "A genuinely new agent.", "new_skills": []},
+    }
+    path = _run_analyze(make_tool_response([], hallucinated_missing), tmp_path, caps_file)
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert "chess_agent" not in data["missing_capabilities"]
+    assert "brand_new_agent" in data["missing_capabilities"]
+
+
 def test_output_fully_covered_scenario(tmp_path, caps_file):
     """When existing agents cover everything, missing_capabilities is empty."""
     path = _run_analyze(make_tool_response(["demo_agent", "chess_agent"], {}), tmp_path, caps_file)
