@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-DrawCircle — Draw a circle of specified diameter on the floor with the robot arm.
+DrawCircle — Draw a circle on the floor with the robot arm.
 
-The circle is drawn by moving the arm end-effector along the circumference,
-tracing the circle shape on the floor.
+The circle is defined by its radius and center position (x, y).
+The arm traces the circumference then lifts back to the ready pose.
 """
 
 import math
@@ -18,22 +18,21 @@ class DrawCircle(Skill):
     manipulation = Interface(InterfaceType.MANIPULATION)
 
     # Default circle geometry (metres).
-    # Center of circle positioned relative to robot base_link
-    DEFAULT_DIAMETER = 0.20  # 20 cm diameter
-    X_OFFSET = 0.25  # 25 cm in front of the robot
-    Y_OFFSET = 0.0  # centered on robot's y=0
-    Z_FLOOR = 0.05  # 5 cm above floor (so TCP doesn't touch ground)
-    Z_LIFT = 0.15  # 15 cm for safe transit height
+    # z for the drawing plane — 10 cm above floor so the TCP doesn't touch the ground
+    Z_FLOOR = 0.05
+    # z for the safe transit height above the drawing plane
+    Z_LIFT = 0.20
+    # Number of waypoints for smooth circle approximation (10 degrees per waypoint)
+    NUM_WAYPOINTS = 36
 
-    # Arm orientation (pen pointing down)
+    # Default arm orientation while drawing (end-effector pointing down)
     DRAW_ROLL = 0.0
-    DRAW_PITCH = math.pi / 2  # 90° pitch → end-effector pointing down
+    DRAW_PITCH = math.pi / 2   # 90° pitch → end-effector pointing down
     DRAW_YAW = 0.0
 
-    # Drawing parameters
-    DEFAULT_NUM_POINTS = 36  # Number of points to trace (1 per 10 degrees)
-    SEG_DURATION = 0.5  # Seconds per segment
-    LIFT_DURATION = 1.0  # Seconds for lift/lower moves
+    # Seconds per segment
+    SEG_DURATION = 0.5
+    LIFT_DURATION = 1.0
 
     def __init__(self, logger):
         super().__init__(logger)
@@ -45,94 +44,96 @@ class DrawCircle(Skill):
 
     def guidelines(self):
         return (
-            "Draw a circle on the floor using the robot arm. "
-            "The circle has a configurable diameter (default 20 cm) and position "
-            "(default 25 cm in front of the robot, centered). "
-            "Parameters: diameter (meters), x_offset (meters, forward from robot), "
-            "y_offset (meters, left/right from robot center), num_points (trace resolution). "
-            "Use when the user asks the robot to draw a circle or trace a circular shape."
+            "Draw a circle on the floor with the robot arm. "
+            "Parameters: radius (metres), center_x (metres), center_y (metres). "
+            "If radius is not provided, defaults to 0.10 m (10 cm). "
+            "If center_x is not provided, defaults to 0.20 m (20 cm in front of robot). "
+            "If center_y is not provided, defaults to 0.00 m (centered on robot). "
+            "Use when the user asks the robot to draw a circle."
         )
 
-    def execute(self, diameter=None, x_offset=None, y_offset=None, num_points=None, **kwargs):
+    def _compute_waypoints(self, center_x: float, center_y: float) -> list:
         """
-        Trace a circle on the floor with the arm.
+        Compute waypoints around the circle circumference.
 
         Args:
-            diameter: Circle diameter in meters (default: 0.20 m / 20 cm)
-            x_offset: X position of circle center relative to robot base (default: 0.25 m)
-            y_offset: Y position of circle center relative to robot base (default: 0.0 m)
-            num_points: Number of points to trace the circle (default: 36)
+            center_x: x coordinate of circle center (metres)
+            center_y: y coordinate of circle center (metres)
 
         Returns:
-            tuple: (result_message, SkillResult)
+            List of (x, y, z, roll, pitch, yaw) tuples for each waypoint
+        """
+        waypoints = []
+        for i in range(self.NUM_WAYPOINTS + 1):
+            angle = 2 * math.pi * i / self.NUM_WAYPOINTS
+            x = center_x + self.radius * math.cos(angle)
+            y = center_y + self.radius * math.sin(angle)
+            waypoints.append((x, y, self.Z_FLOOR, self.DRAW_ROLL, self.DRAW_PITCH, self.DRAW_YAW))
+        return waypoints
+
+    def execute(self, **kwargs):
+        """
+        Trace the circle on the floor, then lift the arm.
+
+        Parameters (from kwargs):
+            radius: Circle radius in metres (default: 0.10)
+            center_x: Center x position in robot base frame (default: 0.20)
+            center_y: Center y position in robot base frame (default: 0.00)
         """
         self._cancelled = False
 
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
 
-        # Use defaults if parameters not provided
-        circle_diameter = diameter if diameter is not None else self.DEFAULT_DIAMETER
-        circle_x_offset = x_offset if x_offset is not None else self.X_OFFSET
-        circle_y_offset = y_offset if y_offset is not None else self.Y_OFFSET
-        points = num_points if num_points is not None else self.DEFAULT_NUM_POINTS
+        # Get parameters with defaults
+        self.radius = kwargs.get("radius", 0.10)
+        center_x = kwargs.get("center_x", 0.20)
+        center_y = kwargs.get("center_y", 0.00)
 
-        radius = circle_diameter / 2
+        # Validate radius
+        if self.radius <= 0:
+            return "Radius must be positive", SkillResult.FAILURE
 
-        self.logger.info(
-            f"[DrawCircle] Drawing circle: diameter={circle_diameter}m, "
-            f"center=({circle_x_offset}, {circle_y_offset}), points={points}"
-        )
-        self._send_feedback(f"Starting to draw {circle_diameter * 100:.0f} cm diameter circle")
+        self.logger.info(f"[DrawCircle] Drawing circle: radius={self.radius}m, center=({center_x}, {center_y})")
 
-        # Calculate circle points
-        angle_step = 2 * math.pi / points
+        # Compute waypoints around the circle
+        waypoints = self._compute_waypoints(center_x, center_y)
+        start_point = waypoints[0]
 
-        # Start at the rightmost point of the circle (at angle = 0)
-        start_x = circle_x_offset + radius
-        start_y = circle_y_offset
-
-        # ── 1. Move to transit height above starting point ──────────────────
-        self.logger.info("[DrawCircle] Moving to starting position")
-        ok = self._move(start_x, start_y, self.Z_LIFT, duration=self.LIFT_DURATION)
+        # ── 1. Move to safe height above starting point ───────────────────
+        self.logger.info("[DrawCircle] Moving to transit height above starting point")
+        ok = self._move(start_point[0], start_point[1], self.Z_LIFT, self.LIFT_DURATION)
         if not ok:
             return "Failed to reach starting position", SkillResult.FAILURE
         if self._cancelled:
             return "Cancelled before drawing", SkillResult.CANCELLED
 
-        # ── 2. Touch down at starting point ────────────────────────────────
-        self._send_feedback("Touching down to start drawing")
-        ok = self._move(start_x, start_y, self.Z_FLOOR, duration=self.LIFT_DURATION)
+        # ── 2. Touch down at starting point on circle ──────────────────────
+        self._send_feedback("Touching down to start circle")
+        ok = self._move(*start_point[:3], duration=self.LIFT_DURATION)
         if not ok:
             return "Failed to touch down at starting point", SkillResult.FAILURE
         if self._cancelled:
-            return "Cancelled at start", SkillResult.CANCELLED
+            return "Cancelled at start point", SkillResult.CANCELLED
 
-        # ── 3. Trace the circle ────────────────────────────────────────────
-        for i in range(1, points + 1):
-            angle = i * angle_step
-            x = circle_x_offset + radius * math.cos(angle)
-            y = circle_y_offset + radius * math.sin(angle)
-
-            if i % 9 == 0:  # Send feedback every quarter of the circle
-                progress = int((i / points) * 100)
-                self._send_feedback(f"Drawing circle: {progress}% complete")
-
-            self.logger.info(f"[DrawCircle] Point {i}/{points}: ({x:.3f}, {y:.3f})")
-            ok = self._move(x, y, self.Z_FLOOR, duration=self.SEG_DURATION)
+        # ── 3. Trace the circle through all waypoints ─────────────────────
+        for i in range(1, len(waypoints)):
+            wp = waypoints[i]
+            self.logger.info(f"[DrawCircle] Moving to waypoint {i}/{len(waypoints) - 1}")
+            ok = self._move(wp[0], wp[1], wp[2], duration=self.SEG_DURATION)
             if not ok:
-                return f"Failed to draw point {i}/{points}", SkillResult.FAILURE
+                return f"Failed to trace circle at waypoint {i}", SkillResult.FAILURE
             if self._cancelled:
-                return f"Cancelled at point {i}/{points}", SkillResult.CANCELLED
+                return f"Cancelled during circle tracing at waypoint {i}", SkillResult.CANCELLED
 
         # ── 4. Lift arm ─────────────────────────────────────────────────────
         self._send_feedback("Lifting arm")
-        self._move(start_x, start_y, self.Z_LIFT, duration=self.LIFT_DURATION)
+        self._move(start_point[0], start_point[1], self.Z_LIFT, duration=self.LIFT_DURATION)
 
         self.logger.info("[DrawCircle] Circle complete")
         return (
-            f"Circle drawn: {circle_diameter * 100:.0f} cm diameter at "
-            f"({circle_x_offset * 100:.0f}, {circle_y_offset * 100:.0f}) cm from robot",
+            f"Circle drawn: {self.radius * 100:.0f} cm radius, "
+            f"center at ({center_x * 100:.0f}, {center_y * 100:.0f}) cm",
             SkillResult.SUCCESS,
         )
 
