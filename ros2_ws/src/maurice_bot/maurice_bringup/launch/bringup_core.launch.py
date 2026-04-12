@@ -19,9 +19,15 @@ def generate_launch_description():
         output='screen'
     )
     
-    # base_link -> base_footprint static TF is now published by
-    # robot_state_publisher via the URDF (base_footprint_joint).
+    # Add static transform publisher for base_link to base_footprint
+    base_to_footprint_publisher = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='base_to_footprint_publisher',
+        arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'base_footprint']
+    )
     
     return LaunchDescription([
         bringup_node,
+        base_to_footprint_publisher
     ])

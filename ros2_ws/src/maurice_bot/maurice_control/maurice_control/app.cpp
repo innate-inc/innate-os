@@ -192,7 +192,7 @@ std::string get_robot_version(const std::string& maurice_root) {
     std::string tags_output = exec_command(tags_cmd);
 
     if (tags_output.empty()) {
-        throw std::runtime_error("No git tags found - repository must have at least one tag");
+        return "0.5.0-dev";
     }
 
     // Get first tag (latest)
@@ -201,14 +201,20 @@ std::string get_robot_version(const std::string& maurice_root) {
     std::getline(iss, latest_tag);
 
     if (latest_tag.empty()) {
-        throw std::runtime_error("No git tags found - repository must have at least one tag");
+        return "0.5.0-dev";
+    }
+
+    // Strip leading 'v' prefix if present (e.g. v0.5.0 -> 0.5.0)
+    std::string version = latest_tag;
+    if (!version.empty() && version[0] == 'v') {
+        version = version.substr(1);
     }
 
     // Validate tag format (x.y.z, optionally with -rc<N> suffix)
     std::regex version_regex("^(\\d+)\\.(\\d+)\\.(\\d+)(-rc\\d+)?$");
     std::smatch match;
-    if (std::regex_match(latest_tag, match, version_regex)) {
-        return latest_tag + "-dev";
+    if (std::regex_match(version, match, version_regex)) {
+        return version + "-dev";
     } else {
         throw std::runtime_error("Invalid tag format: " + latest_tag + ". Expected format: x.y.z or x.y.z-rcN");
     }
@@ -626,10 +632,7 @@ class AppControl : public rclcpp::Node {
         double sign = (value > 0) ? 1.0 : -1.0;
         double normalized = (std::abs(value) - deadband) / (1.0 - deadband);
 
-        // Apply quadratic curve for balanced progressive response
-        double curved = normalized * normalized;
-
-        return sign * curved;
+        return sign * normalized;
     }
 
     /**
