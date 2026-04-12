@@ -21,6 +21,7 @@ install(PROGRAMS
   brain_client/ws_client_node.py
   brain_client/skills_action_server.py
   brain_client/input_manager_node.py
+  brain_client/bitvla_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
