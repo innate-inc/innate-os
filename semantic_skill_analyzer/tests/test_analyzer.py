@@ -105,13 +105,19 @@ def caps_file(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _run_analyze(response, tmp_path: Path, caps_file: Path, host: str = "http://localhost:11434") -> str:
+def _run_analyze(
+    response,
+    tmp_path: Path,
+    caps_file: Path,
+    host: str = "http://localhost:11434",
+    prompt: str = "test prompt",
+) -> str:
     mock_client = MagicMock()
     mock_client.chat.return_value = response
     with patch("ollama.Client", return_value=mock_client):
         from semantic_skill_analyzer.analyzer import analyze
         return analyze(
-            prompt="test prompt",
+            prompt=prompt,
             capabilities_path=str(caps_file),
             output_dir=str(tmp_path / "output"),
             ollama_host=host,
@@ -175,7 +181,12 @@ def test_output_contains_missing_capabilities_key(tmp_path, caps_file):
 
 
 def test_output_existing_agents_populated(tmp_path, caps_file):
-    path = _run_analyze(make_tool_response(["demo_agent"], {}), tmp_path, caps_file)
+    path = _run_analyze(
+        make_tool_response(["demo_agent"], {}),
+        tmp_path,
+        caps_file,
+        prompt="navigate to position and wave",
+    )
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert data["existing_agents"] == ["demo_agent"]
 
@@ -202,7 +213,7 @@ def test_existing_agents_filtered_to_valid_ids(tmp_path, caps_file):
     )
     msg = SimpleNamespace(tool_calls=[tc], content="")
     response = SimpleNamespace(message=msg)
-    path = _run_analyze(response, tmp_path, caps_file)
+    path = _run_analyze(response, tmp_path, caps_file, prompt="navigate to position and wave")
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert data["existing_agents"] == ["demo_agent"]
 
@@ -261,7 +272,12 @@ def test_existing_agent_removed_from_missing(tmp_path, caps_file):
 
 def test_output_fully_covered_scenario(tmp_path, caps_file):
     """When existing agents cover everything, the list is narrowed to the best match."""
-    path = _run_analyze(make_tool_response(["demo_agent", "chess_agent"], {}), tmp_path, caps_file)
+    path = _run_analyze(
+        make_tool_response(["demo_agent", "chess_agent"], {}),
+        tmp_path,
+        caps_file,
+        prompt="navigate to position and wave",
+    )
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert len(data["existing_agents"]) == 1
     assert data["missing_capabilities"] == {}
@@ -280,7 +296,7 @@ def test_extract_tool_result_agent_as_dict(tmp_path, caps_file):
     )
     msg = SimpleNamespace(tool_calls=[tc], content="")
     response = SimpleNamespace(message=msg)
-    path = _run_analyze(response, tmp_path, caps_file)
+    path = _run_analyze(response, tmp_path, caps_file, prompt="navigate to position and wave")
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert data["existing_agents"] == ["demo_agent"]
 
@@ -293,7 +309,7 @@ def test_extract_tool_result_string_args(tmp_path, caps_file):
     )
     msg = SimpleNamespace(tool_calls=[tc], content="")
     response = SimpleNamespace(message=msg)
-    path = _run_analyze(response, tmp_path, caps_file)
+    path = _run_analyze(response, tmp_path, caps_file, prompt="navigate to position and wave")
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert data["existing_agents"] == ["demo_agent"]
 
@@ -315,7 +331,7 @@ def test_extract_tool_result_no_matching_tool(tmp_path, caps_file):
 
 def test_analyze_content_fallback_full_envelope(tmp_path, caps_file):
     content = json.dumps(_FULL_RESULT)
-    path = _run_analyze(make_content_response(content), tmp_path, caps_file)
+    path = _run_analyze(make_content_response(content), tmp_path, caps_file, prompt="navigate to position and wave")
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert data["existing_agents"] == _SAMPLE_EXISTING
     assert "visitor_greeter_agent" in data["missing_capabilities"]
@@ -347,7 +363,7 @@ def test_analyze_content_fallback_strips_plain_fences(tmp_path, caps_file):
 def test_analyze_content_fallback_strips_think_blocks(tmp_path, caps_file):
     """<think>…</think> from qwen3 thinking mode must be stripped before JSON parse."""
     content = f"<think>\nLet me reason about this carefully.\n</think>\n{json.dumps(_FULL_RESULT)}"
-    path = _run_analyze(make_content_response(content), tmp_path, caps_file)
+    path = _run_analyze(make_content_response(content), tmp_path, caps_file, prompt="navigate to position and wave")
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     assert "existing_agents" in data
     assert data["existing_agents"] == _SAMPLE_EXISTING
@@ -366,32 +382,27 @@ def test_analyze_empty_on_bad_response(tmp_path, caps_file):
 
 def test_analyze_passes_correct_model(tmp_path, caps_file):
     mock_client = MagicMock()
-    mock_client.chat.return_value = make_tool_response([], {})
+    mock_client.chat.return_value = make_content_response(
+        '{"existing_agents": [], "missing_capabilities": {}}'
+    )
     with patch("ollama.Client", return_value=mock_client):
         from semantic_skill_analyzer.analyzer import analyze, MODEL
         analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
-    call_kwargs = mock_client.chat.call_args[1]
-    assert call_kwargs.get("model") == MODEL
+    for call in mock_client.chat.call_args_list:
+        assert call[1].get("model") == MODEL
 
 
-def test_analyze_passes_tool_schema(tmp_path, caps_file):
+def test_analyze_does_not_pass_tools(tmp_path, caps_file):
+    """No tool schema is passed — the model is asked for plain JSON output."""
     mock_client = MagicMock()
-    mock_client.chat.return_value = make_tool_response([], {})
-    with patch("ollama.Client", return_value=mock_client):
-        from semantic_skill_analyzer.analyzer import analyze, _TOOL
-        analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
-    tools_arg = mock_client.chat.call_args[1].get("tools")
-    assert tools_arg == [_TOOL]
-
-
-def test_analyze_disables_thinking_mode(tmp_path, caps_file):
-    """think=False must be passed to suppress qwen3 <think> blocks."""
-    mock_client = MagicMock()
-    mock_client.chat.return_value = make_tool_response([], {})
+    mock_client.chat.return_value = make_content_response(
+        '{"existing_agents": [], "missing_capabilities": {}}'
+    )
     with patch("ollama.Client", return_value=mock_client):
         from semantic_skill_analyzer.analyzer import analyze
         analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
-    assert mock_client.chat.call_args[1].get("think") is False
+    for call in mock_client.chat.call_args_list:
+        assert "tools" not in call[1] or call[1].get("tools") is None
 
 
 def test_analyze_user_message_contains_prompt(tmp_path, caps_file):
@@ -427,6 +438,108 @@ def test_analyze_custom_ollama_host(tmp_path, caps_file):
 
 
 # ---------------------------------------------------------------------------
+# Retry on blank response
+# ---------------------------------------------------------------------------
+
+
+def test_retry_not_triggered_when_result_non_empty(tmp_path, caps_file):
+    """No retry when the first call returns a non-empty result."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_content_response(
+        json.dumps({"existing_agents": [], "missing_capabilities": _SAMPLE_MISSING})
+    )
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
+    assert mock_client.chat.call_count == 1
+
+
+def test_retry_triggered_once_on_blank_response(tmp_path, caps_file):
+    """One retry when the first call returns both fields empty."""
+    blank = make_content_response("")
+    good = make_tool_response([], _SAMPLE_MISSING)
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [blank, good]
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
+    assert mock_client.chat.call_count == 2
+
+
+def test_retry_result_used_when_second_call_succeeds(tmp_path, caps_file):
+    """Result from the retry call is written to the output file."""
+    blank = make_content_response("")
+    good = make_tool_response([], _SAMPLE_MISSING)
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [blank, good]
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        out = analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
+    data = json.loads(Path(out).read_text())
+    assert "visitor_greeter_agent" in data["missing_capabilities"]
+
+
+def test_retry_includes_nudge_message(tmp_path, caps_file):
+    """Retry call appends a nudge user message so the model has context."""
+    blank = make_content_response("")
+    good = make_content_response('{"existing_agents": [], "missing_capabilities": {}}')
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [blank, good]
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze, _RETRY_PROMPT
+        analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
+    retry_messages = mock_client.chat.call_args_list[1][1]["messages"]
+    user_msgs = [m for m in retry_messages if m["role"] == "user"]
+    assert any(_RETRY_PROMPT in m["content"] for m in user_msgs)
+
+
+
+
+def test_retry_only_once_by_default(tmp_path, caps_file):
+    """Default max_retries=1 means at most 2 total LLM calls."""
+    blank = make_content_response("")
+    mock_client = MagicMock()
+    mock_client.chat.return_value = blank
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
+    assert mock_client.chat.call_count == 2
+
+
+def test_retry_respects_max_retries_zero(tmp_path, caps_file):
+    """max_retries=0 disables retry — exactly one LLM call even on blank result."""
+    blank = make_content_response("")
+    mock_client = MagicMock()
+    mock_client.chat.return_value = blank
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        analyze(
+            prompt="test",
+            capabilities_path=str(caps_file),
+            output_dir=str(tmp_path / "out"),
+            max_retries=0,
+        )
+    assert mock_client.chat.call_count == 1
+
+
+def test_retry_stops_when_non_empty_result_found(tmp_path, caps_file):
+    """With max_retries=2, stops retrying as soon as a non-empty result is returned."""
+    blank = make_content_response("")
+    good = make_tool_response([], _SAMPLE_MISSING)
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = [blank, good, MagicMock()]  # third call must not happen
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        analyze(
+            prompt="test",
+            capabilities_path=str(caps_file),
+            output_dir=str(tmp_path / "out"),
+            max_retries=2,
+        )
+    assert mock_client.chat.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # load_capabilities
 # ---------------------------------------------------------------------------
 
@@ -456,6 +569,37 @@ def test_best_matching_agent_single_candidate():
     from semantic_skill_analyzer.analyzer import _best_matching_agent
     caps = {"demo_agent": {"skills": ["navigate_to_position", "wave"]}}
     assert _best_matching_agent("wave at the person", ["demo_agent"], caps) == "demo_agent"
+
+
+def test_best_matching_agent_returns_none_on_zero_overlap():
+    from semantic_skill_analyzer.analyzer import _best_matching_agent
+    caps = {
+        "demo_agent": {"skills": ["navigate_to_position", "wave"]},
+        "chess_agent": {"skills": ["pick_up_piece_simple", "detect_opponent_move"]},
+    }
+    # No token in this prompt matches any agent's ID or skills
+    result = _best_matching_agent(
+        "call my mum on whatsapp and order a pizza", ["demo_agent", "chess_agent"], caps
+    )
+    assert result is None
+
+
+def test_analyze_discards_hallucinated_existing_agents(tmp_path, caps_file):
+    """existing_agents with zero skill overlap are discarded as model hallucinations."""
+    with patch("ollama.Client") as MockClient:
+        MockClient.return_value.chat.return_value = make_tool_response(
+            existing_agents=["chess_agent"],
+            missing_capabilities={},
+        )
+        from semantic_skill_analyzer.analyzer import analyze
+        out = analyze(
+            prompt="call my mum on whatsapp and order a pizza",
+            capabilities_path=str(caps_file),
+            output_dir=str(tmp_path / "out"),
+        )
+    data = json.loads(Path(out).read_text())
+    # chess_agent has zero overlap with the WhatsApp/pizza prompt — must be discarded
+    assert data["existing_agents"] == []
 
 
 def test_best_matching_agent_picks_highest_overlap():
@@ -513,11 +657,11 @@ def test_analyze_narrows_to_best_agent_when_nothing_missing(tmp_path, caps_file)
     assert data["existing_agents"] == ["demo_agent"]
 
 
-def test_analyze_does_not_narrow_when_missing_capabilities_present(tmp_path, caps_file):
-    """When there are missing capabilities, existing_agents list is kept as-is."""
+def test_analyze_narrows_existing_agents_even_when_missing_capabilities_present(tmp_path, caps_file):
+    """existing_agents is always narrowed to the best match, even with missing capabilities."""
     with patch("ollama.Client") as MockClient:
         MockClient.return_value.chat.return_value = make_tool_response(
-            existing_agents=["demo_agent"],
+            existing_agents=["demo_agent", "chess_agent"],
             missing_capabilities=_SAMPLE_MISSING,
         )
         from semantic_skill_analyzer.analyzer import analyze
@@ -527,6 +671,66 @@ def test_analyze_does_not_narrow_when_missing_capabilities_present(tmp_path, cap
             output_dir=str(tmp_path / "out"),
         )
     data = json.loads(Path(out).read_text())
-    # Not narrowed because there are missing capabilities
+    # Always narrowed to the best match — "navigate" overlaps demo_agent's skills
     assert data["existing_agents"] == ["demo_agent"]
     assert data["missing_capabilities"] != {}
+
+
+# ---------------------------------------------------------------------------
+# _keep_first_missing_agent
+# ---------------------------------------------------------------------------
+
+
+def test_keep_first_missing_agent_empty():
+    from semantic_skill_analyzer.analyzer import _keep_first_missing_agent
+    assert _keep_first_missing_agent({}) == {}
+
+
+def test_keep_first_missing_agent_single_entry():
+    from semantic_skill_analyzer.analyzer import _keep_first_missing_agent
+    caps = {"only_agent": {"prompt": "p", "new_skills": []}}
+    assert _keep_first_missing_agent(caps) == caps
+
+
+def test_keep_first_missing_agent_multiple_entries():
+    from semantic_skill_analyzer.analyzer import _keep_first_missing_agent
+    caps = {
+        "first_agent": {"prompt": "p1", "new_skills": []},
+        "second_agent": {"prompt": "p2", "new_skills": []},
+        "third_agent": {"prompt": "p3", "new_skills": []},
+    }
+    result = _keep_first_missing_agent(caps)
+    assert len(result) == 1
+    assert "first_agent" in result
+
+
+def test_analyze_limits_missing_capabilities_to_one(tmp_path, caps_file):
+    """analyze() keeps at most one entry in missing_capabilities."""
+    multi_missing = {
+        "new_agent_a": {"prompt": "Agent A", "new_skills": []},
+        "new_agent_b": {"prompt": "Agent B", "new_skills": []},
+    }
+    with patch("ollama.Client") as MockClient:
+        MockClient.return_value.chat.return_value = make_tool_response([], multi_missing)
+        from semantic_skill_analyzer.analyzer import analyze
+        out = analyze(
+            prompt="test",
+            capabilities_path=str(caps_file),
+            output_dir=str(tmp_path / "out"),
+        )
+    data = json.loads(Path(out).read_text())
+    assert len(data["missing_capabilities"]) == 1
+    assert "new_agent_a" in data["missing_capabilities"]
+
+
+def test_analyze_enables_thinking_mode(tmp_path, caps_file):
+    """think=True is passed to client.chat for all calls."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_content_response(
+        '{"existing_agents": [], "missing_capabilities": {}}'
+    )
+    with patch("ollama.Client", return_value=mock_client):
+        from semantic_skill_analyzer.analyzer import analyze
+        analyze(prompt="test", capabilities_path=str(caps_file), output_dir=str(tmp_path / "out"))
+    for call in mock_client.chat.call_args_list:
+        assert call[1].get("think") is True

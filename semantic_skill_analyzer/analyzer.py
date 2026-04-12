@@ -37,77 +37,30 @@ MODEL = "qwen3:0.6b"
 DEFAULT_CAPABILITIES_PATH = "~/.wildrobot/capabilities.json"
 DEFAULT_OUTPUT_DIR = "~/.wildrobot"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+MAX_RETRIES = 1
 
 _SYSTEM_PROMPT = """\
-You are a robot capability analyst. Given a user scenario and a list of existing agents \
-and skills, identify:
-1. Which existing agents can already handle the request (list them by name).
-2. What genuinely new agents and skills are needed for parts not covered by existing ones.
+You are a robot capability analyst. Output ONLY a JSON object — no explanation, no markdown.
 
-Rules:
-- Avoid creating agents that sound similar to existing ones (e.g. scout vs patrol).
-- Avoid duplicate skills — agents and skills have a many-to-many relationship.
-- Only propose new agents/skills for capabilities that truly do not exist yet.
-- Agent and skill prompts must be detailed and functional. Do not describe implementation. \
-Focus on what they do. These prompts will be fed to the next LLM for code generation.\
+Format:
+{
+  "existing_agents": [],
+  "missing_capabilities": {}
+}
+
+- "existing_agents": agent names from the catalog that already handle parts of this task
+- "missing_capabilities": AT MOST ONE new agent; keys are agent names, values have:
+    "prompt": detailed description of what the agent does
+    "new_skills": list of {"skill_name": "description"} for skills not in the catalog
+- Reuse existing skills wherever possible — only add to new_skills what truly does not exist
+- Leave missing_capabilities as {} if everything is already covered\
 """
 
-# ---------------------------------------------------------------------------
-# Tool schema
-# ---------------------------------------------------------------------------
-
-_TOOL: Dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "save_capability_analysis",
-        "description": (
-            "Save the full capability analysis: which existing agents cover the request "
-            "and what new agents/skills need to be created for the rest."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "existing_agents": {
-                    "type": "array",
-                    "description": (
-                        "Names of existing agents (from the catalog) that can already "
-                        "handle this request, fully or partially."
-                    ),
-                    "items": {"type": "string"},
-                },
-                "missing_capabilities": {
-                    "type": "object",
-                    "description": (
-                        "New agents that must be created. Keys are agent names. "
-                        "Empty object if everything is already covered."
-                    ),
-                    "additionalProperties": {
-                        "type": "object",
-                        "properties": {
-                            "prompt": {
-                                "type": "string",
-                                "description": (
-                                    "Detailed functional description of what this agent "
-                                    "does and which skills it orchestrates."
-                                ),
-                            },
-                            "new_skills": {
-                                "type": "array",
-                                "description": "New skills this agent needs that don't exist yet.",
-                                "items": {
-                                    "type": "object",
-                                    "description": "{skill_name: detailed_description}",
-                                },
-                            },
-                        },
-                        "required": ["prompt", "new_skills"],
-                    },
-                },
-            },
-            "required": ["existing_agents", "missing_capabilities"],
-        },
-    },
-}
+_RETRY_PROMPT = (
+    "Your previous response was empty. Try again. "
+    "Output ONLY the JSON object, starting with { and ending with }. "
+    "No explanation, no markdown."
+)
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -118,8 +71,9 @@ def _build_user_message(prompt: str, capabilities: Dict[str, Any]) -> str:
     """Combine user scenario and existing capabilities into a single message."""
     caps_json = json.dumps(capabilities, indent=2)
     return (
-        f"USER TASK / SCENARIO:\n{prompt}\n\n"
-        f"EXISTING CAPABILITIES:\n{caps_json}"
+        f"TASK:\n{prompt}\n\n"
+        f"EXISTING CAPABILITIES:\n{caps_json}\n\n"
+        f"JSON:"
     )
 
 
@@ -179,25 +133,41 @@ def _best_matching_agent(
     prompt: str,
     candidates: List[str],
     capabilities: Dict[str, Any],
-) -> str:
+) -> Optional[str]:
     """Return the single agent from candidates that best matches the prompt.
 
     Scoring: token overlap between prompt words and the agent's ID + skill strings.
+    Returns None if no candidate has any token overlap with the prompt — this
+    indicates the model hallucinated coverage (e.g. chess_agent for a WhatsApp task).
     """
-    if len(candidates) == 1:
-        return candidates[0]
     prompt_tokens = set(re.findall(r"[a-z0-9]+", prompt.lower()))
-    best_agent = candidates[0]
-    best_score = -1
+    best_agent: Optional[str] = None
+    best_score = 0  # require at least one overlapping token
     for agent_id in candidates:
         skills = capabilities.get(agent_id, {}).get("skills", [])
-        blob = agent_id.replace("_", " ") + " " + " ".join(skills)
+        # Use skill basenames only (strip ": description") — enriched descriptions
+        # contain generic words ("confirm", "detect", "use") that cause false matches
+        # against unrelated prompts.
+        basenames = [s.split(":")[0].strip() for s in skills if isinstance(s, str)]
+        blob = agent_id.replace("_", " ") + " " + " ".join(basenames)
         blob_tokens = set(re.findall(r"[a-z0-9]+", blob.lower()))
         score = len(prompt_tokens & blob_tokens)
         if score > best_score:
             best_score = score
             best_agent = agent_id
     return best_agent
+
+
+def _keep_first_missing_agent(missing: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only the first entry in missing_capabilities.
+
+    Small models tend to enumerate many missing agents; we enforce at most one
+    so the downstream code generator receives a single, focused target.
+    """
+    if len(missing) <= 1:
+        return missing
+    first_key = next(iter(missing))
+    return {first_key: missing[first_key]}
 
 
 def _normalize_agent_list(agents: Any) -> List[str]:
@@ -303,11 +273,22 @@ def load_capabilities(
     return json.loads(Path(path).expanduser().resolve().read_text(encoding="utf-8"))
 
 
+def _extract_result(response: Any) -> Dict[str, Any]:
+    """Extract a result dict from an ollama response, trying tool call then content."""
+    result = _extract_tool_result(response)
+    if result is None:
+        result = _extract_content_result(response)
+    if result is None:
+        result = {"existing_agents": [], "missing_capabilities": {}}
+    return result
+
+
 def analyze(
     prompt: str,
     capabilities_path: Union[str, Path] = DEFAULT_CAPABILITIES_PATH,
     output_dir: Union[str, Path] = DEFAULT_OUTPUT_DIR,
     ollama_host: str = DEFAULT_OLLAMA_HOST,
+    max_retries: int = MAX_RETRIES,
 ) -> str:
     """
     Analyze a text prompt against existing capabilities and write an analysis file.
@@ -315,6 +296,10 @@ def analyze(
     The LLM identifies:
     - ``existing_agents``: existing agents that already cover the request
     - ``missing_capabilities``: new agents/skills that need to be created
+
+    When the model returns an empty response (both fields blank), the call is
+    retried up to ``max_retries`` times with a nudge message appended to the
+    conversation so the model has context on why it is being asked again.
 
     The result is written to::
 
@@ -325,6 +310,8 @@ def analyze(
         capabilities_path: Path to capabilities.json produced by the capabilities exporter.
         output_dir: Directory where the output file is written.
         ollama_host: Ollama API base URL (default: http://localhost:11434).
+        max_retries: How many times to retry when the model returns a blank result
+            (default: 1).
 
     Returns:
         Absolute path string of the written output file.
@@ -332,23 +319,29 @@ def analyze(
     capabilities = load_capabilities(capabilities_path)
 
     client = ollama.Client(host=ollama_host)
-    messages = [
+    messages: List[Dict[str, Any]] = [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": _build_user_message(prompt, capabilities)},
     ]
 
-    response = client.chat(
-        model=MODEL,
-        messages=messages,
-        tools=[_TOOL],
-        think=False,  # disable qwen3 thinking mode for reliable tool calling
-    )
+    # No tool schema — ask the model to write JSON directly in its response.
+    # Small models (0.6b) consistently ignore tool schemas and return nothing;
+    # plain text JSON output is the only approach that works at this param count.
+    # think=True lets the model reason in <think> blocks before writing JSON;
+    # _strip_think_blocks in the content extractor removes them transparently.
+    response = client.chat(model=MODEL, messages=messages, think=True)
+    result = _extract_result(response)
 
-    result = _extract_tool_result(response)
-    if result is None:
-        result = _extract_content_result(response)
-    if result is None:
-        result = {"existing_agents": [], "missing_capabilities": {}}
+    # Retry when the model returns both fields empty.
+    for _ in range(max_retries):
+        if result["existing_agents"] or result["missing_capabilities"]:
+            break
+        retry_messages = messages + [
+            {"role": "assistant", "content": response.message.content or ""},
+            {"role": "user", "content": _RETRY_PROMPT},
+        ]
+        response = client.chat(model=MODEL, messages=retry_messages, think=True)
+        result = _extract_result(response)
 
     # Keep only real agent IDs in existing_agents (model sometimes puts skill
     # descriptions or arbitrary text there instead of agent names)
@@ -361,11 +354,17 @@ def analyze(
     result["missing_capabilities"] = _filter_existing_from_missing(
         result["missing_capabilities"], capabilities
     )
-
-    # When the request is fully covered, keep only the single best-matching agent
-    if not result["missing_capabilities"] and result["existing_agents"]:
+    # Enforce at most one missing agent — small models hallucinate multiple entries
+    result["missing_capabilities"] = _keep_first_missing_agent(
+        result["missing_capabilities"]
+    )
+    # Always narrow existing_agents to the single best-matching agent.
+    # Runs regardless of whether missing_capabilities is empty, so even partial
+    # coverage (some agents + one new agent) shows the most relevant existing agent.
+    # Returns None when no agent has any token overlap → model hallucinated coverage.
+    if result["existing_agents"]:
         best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
-        result["existing_agents"] = [best]
+        result["existing_agents"] = [best] if best is not None else []
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
