@@ -1,7 +1,8 @@
 """
 Semantic Skill Analyzer — core implementation.
 
-Takes a text prompt and a capabilities index, asks a local ollama LLM to:
+Takes a text prompt and a capabilities index, asks a local ollama LLM (``analyze``)
+or Google GenAI / Gemini (``analyze_gemma``) to:
   - identify which existing agents already cover the request
   - identify missing agents/skills not yet in the system
 
@@ -22,6 +23,7 @@ No dependency on brain_client, ROS, or innate-os internals.
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -34,9 +36,11 @@ import ollama
 # ---------------------------------------------------------------------------
 
 MODEL = "qwen3:0.6b"
+GEMINI_ANALYZER_MODEL = "gemini-3-flash-preview"
 DEFAULT_CAPABILITIES_PATH = "~/.wildrobot/capabilities.json"
 DEFAULT_OUTPUT_DIR = "~/.wildrobot"
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+# DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_OLLAMA_HOST = "http://172.17.30.138:11434"
 MAX_RETRIES = 1
 
 _SYSTEM_PROMPT = """\
@@ -283,9 +287,9 @@ def _extract_tool_result(response: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _extract_content_result(response: Any) -> Optional[Dict[str, Any]]:
+def _parse_analysis_json_from_text(content: str) -> Optional[Dict[str, Any]]:
     """
-    Fallback: attempt to parse JSON from the plain-text response content.
+    Parse the capability analysis envelope from model plain-text JSON.
 
     Handles:
     - <think>…</think> blocks (qwen3 thinking mode) — stripped before parsing
@@ -293,16 +297,14 @@ def _extract_content_result(response: Any) -> Optional[Dict[str, Any]]:
     - Bare dict:    {"existing_agents": [...], "missing_capabilities": {...}}
     - Legacy bare:  {"agent_name": {"prompt": ..., "new_skills": [...]}}
     """
-    content = (response.message.content or "").strip()
+    content = (content or "").strip()
     if not content:
         return None
 
-    # Strip qwen3 thinking blocks
     content = _strip_think_blocks(content)
     if not content:
         return None
 
-    # Strip markdown code fences
     if content.startswith("```"):
         content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
         content = re.sub(r"\s*```$", "", content.strip())
@@ -311,16 +313,19 @@ def _extract_content_result(response: Any) -> Optional[Dict[str, Any]]:
         data = json.loads(content)
         if not isinstance(data, dict):
             return None
-        # Already in the expected envelope format
         if "existing_agents" in data or "missing_capabilities" in data:
             return {
                 "existing_agents": _normalize_agent_list(data.get("existing_agents", [])),
                 "missing_capabilities": data.get("missing_capabilities", {}),
             }
-        # Legacy flat format: {agent_name: {prompt, new_skills}}
         return {"existing_agents": [], "missing_capabilities": data}
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def _extract_content_result(response: Any) -> Optional[Dict[str, Any]]:
+    """Fallback: attempt to parse JSON from the plain-text ollama response content."""
+    return _parse_analysis_json_from_text(response.message.content or "")
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +356,50 @@ def _extract_result(response: Any) -> Dict[str, Any]:
     if result is None:
         result = {"existing_agents": [], "missing_capabilities": {}}
     return result
+
+
+def _postprocess_capability_result(
+    result: Dict[str, Any],
+    prompt: str,
+    capabilities: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Apply catalog ground-truth filters, single-agent narrowing, and partial-coverage merge.
+
+    Shared by ``analyze`` (ollama) and ``analyze_gemma`` (Google GenAI).
+    """
+    result = {
+        "existing_agents": list(result.get("existing_agents", [])),
+        "missing_capabilities": dict(result.get("missing_capabilities", {})),
+    }
+    result["existing_agents"] = _filter_valid_existing_agents(
+        result["existing_agents"], capabilities
+    )
+    result["missing_capabilities"] = _filter_existing_from_missing(
+        result["missing_capabilities"], capabilities
+    )
+    result["missing_capabilities"] = _keep_first_missing_agent(
+        result["missing_capabilities"]
+    )
+    result["missing_capabilities"] = _filter_existing_from_new_skills(
+        result["missing_capabilities"], capabilities
+    )
+    if result["existing_agents"]:
+        best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
+        result["existing_agents"] = [best] if best is not None else []
+
+    return _merge_partial_coverage(result, capabilities)
+
+
+def _resolve_gemini_api_key(api_key: Optional[str]) -> str:
+    if api_key:
+        return api_key
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not key:
+        raise ValueError(
+            "analyze_gemma requires api_key=... or GEMINI_API_KEY / GOOGLE_API_KEY in the environment"
+        )
+    return key
 
 
 def analyze(
@@ -415,38 +464,80 @@ def analyze(
         response = client.chat(model=MODEL, messages=retry_messages, think=True, options=_chat_opts)
         result = _extract_result(response)
 
-    # Keep only real agent IDs in existing_agents (model sometimes puts skill
-    # descriptions or arbitrary text there instead of agent names)
-    result["existing_agents"] = _filter_valid_existing_agents(
-        result["existing_agents"], capabilities
-    )
-    # Remove any existing agent or skill name the model mistakenly placed in
-    # missing_capabilities (model confuses agents with skills, or duplicates
-    # existing agents as "missing")
-    result["missing_capabilities"] = _filter_existing_from_missing(
-        result["missing_capabilities"], capabilities
-    )
-    # Enforce at most one missing agent — small models hallucinate multiple entries
-    result["missing_capabilities"] = _keep_first_missing_agent(
-        result["missing_capabilities"]
-    )
-    # Strip any skills from new_skills that already exist in the catalog —
-    # small models sometimes list existing skills (e.g. arm_utils) as new ones
-    result["missing_capabilities"] = _filter_existing_from_new_skills(
-        result["missing_capabilities"], capabilities
-    )
-    # Always narrow existing_agents to the single best-matching agent.
-    # Runs regardless of whether missing_capabilities is empty, so even partial
-    # coverage (some agents + one new agent) shows the most relevant existing agent.
-    # Returns None when no agent has any token overlap → model hallucinated coverage.
-    if result["existing_agents"]:
-        best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
-        result["existing_agents"] = [best] if best is not None else []
+    result = _postprocess_capability_result(result, prompt, capabilities)
 
-    # When an existing agent only partially covers the request (it has some but
-    # not all required skills), fold its reusable skills into the new-agent spec
-    # as existing_skills and clear existing_agents — the task still needs codegen.
-    result = _merge_partial_coverage(result, capabilities)
+    out_dir = Path(output_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{uuid.uuid4()}-missing-skills.json"
+    out_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    return str(out_file)
+
+
+def analyze_gemma(
+    prompt: str,
+    capabilities_path: Union[str, Path] = DEFAULT_CAPABILITIES_PATH,
+    output_dir: Union[str, Path] = DEFAULT_OUTPUT_DIR,
+    api_key: Optional[str] = None,
+    model: str = GEMINI_ANALYZER_MODEL,
+    max_retries: int = MAX_RETRIES,
+) -> str:
+    """
+    Same pipeline as :func:`analyze`, but calls Google GenAI (Gemini) instead of ollama.
+
+    The system and user prompts match the ollama path; the model is asked for the
+    same JSON envelope. Responses are parsed with the same JSON extraction rules
+    as plain-text ollama output (including markdown fences when present).
+
+    Args:
+        prompt: Natural-language description of a desired scenario or feature.
+        capabilities_path: Path to capabilities.json.
+        output_dir: Directory where the output file is written.
+        api_key: Google AI API key. If omitted, uses ``GEMINI_API_KEY`` or
+            ``GOOGLE_API_KEY`` from the environment.
+        model: GenAI model id (default: ``GEMINI_ANALYZER_MODEL`` —
+            ``gemini-3-flash-preview``).
+        max_retries: Extra attempts when both ``existing_agents`` and
+            ``missing_capabilities`` parse as empty (same semantics as
+            :func:`analyze`).
+
+    Returns:
+        Absolute path string of the written output file.
+
+    Raises:
+        ValueError: If no API key is available from arguments or environment.
+    """
+    from google import genai as google_genai
+
+    capabilities = load_capabilities(capabilities_path)
+    key = _resolve_gemini_api_key(api_key)
+    client = google_genai.Client(api_key=key)
+
+    combined_prompt = f"{_SYSTEM_PROMPT}\n\n{_build_user_message(prompt, capabilities)}"
+    response_text = ""
+    result: Dict[str, Any] = {"existing_agents": [], "missing_capabilities": {}}
+    contents: str = combined_prompt
+
+    for call_idx in range(max_retries + 1):
+        response = client.models.generate_content(model=model, contents=contents)
+        response_text = (getattr(response, "text", None) or "").strip()
+        parsed = _parse_analysis_json_from_text(response_text)
+        result = (
+            parsed
+            if parsed is not None
+            else {"existing_agents": [], "missing_capabilities": {}}
+        )
+        if result["existing_agents"] or result["missing_capabilities"]:
+            break
+        if call_idx == max_retries:
+            break
+        contents = (
+            f"{combined_prompt}\n\n"
+            f"Assistant:\n{response_text or '(empty)'}\n\n"
+            f"User:\n{_RETRY_PROMPT}"
+        )
+
+    result = _postprocess_capability_result(result, prompt, capabilities)
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
