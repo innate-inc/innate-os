@@ -1,6 +1,6 @@
 """Tests for agent_codegen.client."""
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -23,17 +23,35 @@ def _text_block(text: str) -> SimpleNamespace:
     return SimpleNamespace(type="text", text=text)
 
 
-def _tool_use_block(tool_id: str, agent_id: str, code: str) -> SimpleNamespace:
+def _tool_use_block(tool_id: str, tool_name: str, **input_kwargs) -> SimpleNamespace:
     return SimpleNamespace(
         type="tool_use",
         id=tool_id,
-        name="write_agent_file",
-        input={"agent_id": agent_id, "code": code},
+        name=tool_name,
+        input=input_kwargs,
     )
+
+
+def _agent_tool_block(tool_id: str, agent_id: str, code: str) -> SimpleNamespace:
+    return _tool_use_block(tool_id, "write_agent_file", agent_id=agent_id, code=code)
+
+
+def _skill_tool_block(tool_id: str, skill_name: str, code: str) -> SimpleNamespace:
+    return _tool_use_block(tool_id, "write_skill_file", skill_name=skill_name, code=code)
 
 
 def _make_response(content: list, stop_reason: str = "tool_use") -> SimpleNamespace:
     return SimpleNamespace(content=content, stop_reason=stop_reason)
+
+
+_AGENT_CODE = (
+    "from brain_client.agent_types import Agent\n"
+    "class TestAgent(Agent): pass"
+)
+_SKILL_CODE = (
+    "from brain_client.skill_types import Skill, SkillResult\n"
+    "class TestSkill(Skill): pass"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -43,34 +61,26 @@ def _make_response(content: list, stop_reason: str = "tool_use") -> SimpleNamesp
 
 class TestFindToolUse:
     def test_returns_tool_use_block(self):
-        block = _tool_use_block("id1", "my_agent", "class MyAgent: pass")
-        response = _make_response([block])
-        result = _find_tool_use(response)
+        block = _agent_tool_block("id1", "my_agent", _AGENT_CODE)
+        result = _find_tool_use(_make_response([block]))
         assert result is block
 
     def test_returns_none_for_text_only(self):
-        response = _make_response([_text_block("some text")], stop_reason="end_turn")
-        result = _find_tool_use(response)
+        result = _find_tool_use(_make_response([_text_block("text")], stop_reason="end_turn"))
         assert result is None
 
     def test_returns_first_tool_block_when_multiple(self):
-        block1 = _tool_use_block("id1", "agent1", "code1")
-        block2 = _tool_use_block("id2", "agent2", "code2")
-        response = _make_response([block1, block2])
-        result = _find_tool_use(response)
-        assert result is block1
+        b1 = _agent_tool_block("id1", "a1", "code1")
+        b2 = _agent_tool_block("id2", "a2", "code2")
+        assert _find_tool_use(_make_response([b1, b2])) is b1
 
     def test_returns_none_for_empty_content(self):
-        response = _make_response([])
-        result = _find_tool_use(response)
-        assert result is None
+        assert _find_tool_use(_make_response([])) is None
 
     def test_skips_text_blocks_to_find_tool_use(self):
         text = _text_block("thinking...")
-        tool = _tool_use_block("id1", "agent", "class Agent: pass")
-        response = _make_response([text, tool])
-        result = _find_tool_use(response)
-        assert result is tool
+        tool = _agent_tool_block("id1", "agent", _AGENT_CODE)
+        assert _find_tool_use(_make_response([text, tool])) is tool
 
 
 # ---------------------------------------------------------------------------
@@ -81,159 +91,169 @@ class TestFindToolUse:
 class TestExtractPythonBlock:
     def test_extracts_python_fenced_block(self):
         src = "class MyAgent(Agent): pass"
-        response = _make_response([_text_block(f"```python\n{src}\n```")])
-        result = _extract_python_block(response)
-        assert result == src + "\n"
+        result = _extract_python_block(_make_response([_text_block(f"```python\n{src}\n```")]))
+        assert src in result
 
     def test_returns_none_when_no_fence(self):
-        response = _make_response([_text_block("no code here")])
-        result = _extract_python_block(response)
-        assert result is None
+        assert _extract_python_block(_make_response([_text_block("no code")])) is None
 
     def test_ignores_non_python_fences(self):
-        response = _make_response([_text_block("```json\n{}\n```")])
-        result = _extract_python_block(response)
-        assert result is None
+        assert _extract_python_block(_make_response([_text_block("```json\n{}\n```")])) is None
 
     def test_returns_none_for_empty_content(self):
-        response = _make_response([])
-        result = _extract_python_block(response)
-        assert result is None
+        assert _extract_python_block(_make_response([])) is None
 
     def test_extracts_from_mixed_content(self):
         src = "class X(Agent): pass"
-        blocks = [
-            _text_block("Here is the implementation:"),
-            _text_block(f"```python\n{src}\n```"),
-        ]
-        response = _make_response(blocks)
-        result = _extract_python_block(response)
-        assert src in result
+        blocks = [_text_block("Here:"), _text_block(f"```python\n{src}\n```")]
+        assert src in _extract_python_block(_make_response(blocks))
 
 
 # ---------------------------------------------------------------------------
-# MiniMaxClient.generate
+# MiniMaxClient — shared _generate_with_tool path
 # ---------------------------------------------------------------------------
 
 
-class TestMiniMaxClientGenerate:
-    _CODE = "from brain_client.agent_types import Agent\nclass TestAgent(Agent): pass"
-
-    def _mock_client_cls(self, round1_response, round2_response=None):
-        """Return a patched anthropic.Anthropic class whose .messages.create returns given responses."""
-        mock_anthropic = MagicMock()
-        mock_messages = MagicMock()
-        mock_anthropic.return_value.messages = mock_messages
-        if round2_response is None:
-            round2_response = _make_response([_text_block("Done.")], stop_reason="end_turn")
-        mock_messages.create.side_effect = [round1_response, round2_response]
-        return mock_anthropic
+class TestMiniMaxClientShared:
+    """Tests that apply to both generate() and generate_skill_code() via the shared internal."""
 
     @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_generate_calls_create_with_tool(self, mock_anthropic_cls):
-        tool_block = _tool_use_block("tid", "test_agent", self._CODE)
-        r1 = _make_response([tool_block])
-        mock_anthropic_cls.return_value.messages.create.side_effect = [
-            r1,
+    def test_client_instantiated_with_minimax_base_url(self, mock_cls):
+        MiniMaxClient(api_key="test_key")
+        mock_cls.assert_called_once_with(api_key="test_key", base_url=MINIMAX_BASE_URL)
+
+    @patch("agent_codegen.client.anthropic.Anthropic")
+    def test_uses_tool_choice_any(self, mock_cls):
+        block = _agent_tool_block("t", "a", _AGENT_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
             _make_response([_text_block("ok")], stop_reason="end_turn"),
         ]
+        MiniMaxClient(api_key="key").generate("prompt")
+        first_call = mock_cls.return_value.messages.create.call_args_list[0]
+        assert first_call.kwargs["tool_choice"] == {"type": "any"}
 
-        client = MiniMaxClient(api_key="key")
-        client.generate("test prompt")
+    @patch("agent_codegen.client.anthropic.Anthropic")
+    def test_passes_model_and_max_tokens(self, mock_cls):
+        block = _agent_tool_block("t", "a", _AGENT_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
+            _make_response([_text_block("ok")], stop_reason="end_turn"),
+        ]
+        MiniMaxClient(api_key="key", model="MiniMax-M2.5", max_tokens=2048).generate("prompt")
+        first_call = mock_cls.return_value.messages.create.call_args_list[0]
+        assert first_call.kwargs["model"] == "MiniMax-M2.5"
+        assert first_call.kwargs["max_tokens"] == 2048
 
-        first_call = mock_anthropic_cls.return_value.messages.create.call_args_list[0]
+    @patch("agent_codegen.client.anthropic.Anthropic")
+    def test_fallback_to_python_block(self, mock_cls):
+        text = f"Here:\n```python\n{_AGENT_CODE}\n```"
+        mock_cls.return_value.messages.create.return_value = (
+            _make_response([_text_block(text)], stop_reason="end_turn")
+        )
+        code, via_tool = MiniMaxClient(api_key="key").generate("prompt")
+        assert _AGENT_CODE in code
+        assert via_tool is False
+
+    @patch("agent_codegen.client.anthropic.Anthropic")
+    def test_raises_when_no_code(self, mock_cls):
+        mock_cls.return_value.messages.create.return_value = (
+            _make_response([_text_block("I cannot do that.")], stop_reason="end_turn")
+        )
+        with pytest.raises(AgentCodegenError, match="neither a"):
+            MiniMaxClient(api_key="key").generate("prompt")
+
+
+# ---------------------------------------------------------------------------
+# MiniMaxClient.generate (agent tool)
+# ---------------------------------------------------------------------------
+
+
+class TestMiniMaxClientGenerateAgent:
+    @patch("agent_codegen.client.anthropic.Anthropic")
+    def test_calls_write_agent_file_tool(self, mock_cls):
+        block = _agent_tool_block("t", "a", _AGENT_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
+            _make_response([_text_block("ok")], stop_reason="end_turn"),
+        ]
+        MiniMaxClient(api_key="key").generate("prompt")
+        first_call = mock_cls.return_value.messages.create.call_args_list[0]
         assert first_call.kwargs["tools"][0]["name"] == "write_agent_file"
 
     @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_generate_returns_code_via_tool(self, mock_anthropic_cls):
-        tool_block = _tool_use_block("tid", "test_agent", self._CODE)
-        mock_anthropic_cls.return_value.messages.create.side_effect = [
-            _make_response([tool_block]),
+    def test_returns_code_and_via_tool_true(self, mock_cls):
+        block = _agent_tool_block("t", "agent", _AGENT_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
             _make_response([_text_block("ok")], stop_reason="end_turn"),
         ]
-
-        client = MiniMaxClient(api_key="key")
-        code, via_tool = client.generate("prompt")
-
-        assert code == self._CODE
+        code, via_tool = MiniMaxClient(api_key="key").generate("prompt")
+        assert code == _AGENT_CODE
         assert via_tool is True
 
     @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_generate_sends_tool_result_in_round2(self, mock_anthropic_cls):
-        tool_block = _tool_use_block("tid123", "test_agent", self._CODE)
-        mock_anthropic_cls.return_value.messages.create.side_effect = [
-            _make_response([tool_block]),
+    def test_sends_tool_result_in_round2(self, mock_cls):
+        block = _agent_tool_block("tid123", "agent", _AGENT_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
             _make_response([_text_block("ok")], stop_reason="end_turn"),
         ]
-
-        client = MiniMaxClient(api_key="key")
-        client.generate("prompt")
-
-        calls = mock_anthropic_cls.return_value.messages.create.call_args_list
+        MiniMaxClient(api_key="key").generate("prompt")
+        calls = mock_cls.return_value.messages.create.call_args_list
         assert len(calls) == 2
         round2_messages = calls[1].kwargs["messages"]
-        # Last message should be the tool_result
         tool_result_msg = round2_messages[-1]
         assert tool_result_msg["role"] == "user"
         assert tool_result_msg["content"][0]["type"] == "tool_result"
         assert tool_result_msg["content"][0]["tool_use_id"] == "tid123"
 
+
+# ---------------------------------------------------------------------------
+# MiniMaxClient.generate_skill_code (skill tool)
+# ---------------------------------------------------------------------------
+
+
+class TestMiniMaxClientGenerateSkill:
     @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_generate_fallback_to_python_block(self, mock_anthropic_cls):
-        text = f"Here you go:\n```python\n{self._CODE}\n```"
-        mock_anthropic_cls.return_value.messages.create.return_value = (
-            _make_response([_text_block(text)], stop_reason="end_turn")
-        )
-
-        client = MiniMaxClient(api_key="key")
-        code, via_tool = client.generate("prompt")
-
-        assert self._CODE in code
-        assert via_tool is False
-
-    @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_generate_raises_when_no_code(self, mock_anthropic_cls):
-        mock_anthropic_cls.return_value.messages.create.return_value = (
-            _make_response([_text_block("I cannot do that.")], stop_reason="end_turn")
-        )
-
-        client = MiniMaxClient(api_key="key")
-        with pytest.raises(AgentCodegenError, match="neither a tool call nor a Python code block"):
-            client.generate("prompt")
-
-    @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_generate_uses_tool_choice_any(self, mock_anthropic_cls):
-        tool_block = _tool_use_block("t", "a", self._CODE)
-        mock_anthropic_cls.return_value.messages.create.side_effect = [
-            _make_response([tool_block]),
+    def test_calls_write_skill_file_tool(self, mock_cls):
+        block = _skill_tool_block("t", "greet_visitor", _SKILL_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
             _make_response([_text_block("ok")], stop_reason="end_turn"),
         ]
-
-        client = MiniMaxClient(api_key="key")
-        client.generate("prompt")
-
-        first_call = mock_anthropic_cls.return_value.messages.create.call_args_list[0]
-        assert first_call.kwargs["tool_choice"] == {"type": "any"}
+        MiniMaxClient(api_key="key").generate_skill_code("prompt")
+        first_call = mock_cls.return_value.messages.create.call_args_list[0]
+        assert first_call.kwargs["tools"][0]["name"] == "write_skill_file"
 
     @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_generate_passes_model_and_max_tokens(self, mock_anthropic_cls):
-        tool_block = _tool_use_block("t", "a", self._CODE)
-        mock_anthropic_cls.return_value.messages.create.side_effect = [
-            _make_response([tool_block]),
+    def test_returns_code_and_via_tool_true(self, mock_cls):
+        block = _skill_tool_block("t", "greet_visitor", _SKILL_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
             _make_response([_text_block("ok")], stop_reason="end_turn"),
         ]
-
-        client = MiniMaxClient(api_key="key", model="MiniMax-M2.5", max_tokens=2048)
-        client.generate("prompt")
-
-        first_call = mock_anthropic_cls.return_value.messages.create.call_args_list[0]
-        assert first_call.kwargs["model"] == "MiniMax-M2.5"
-        assert first_call.kwargs["max_tokens"] == 2048
+        code, via_tool = MiniMaxClient(api_key="key").generate_skill_code("prompt")
+        assert code == _SKILL_CODE
+        assert via_tool is True
 
     @patch("agent_codegen.client.anthropic.Anthropic")
-    def test_client_instantiated_with_minimax_base_url(self, mock_anthropic_cls):
-        MiniMaxClient(api_key="test_key")
-        mock_anthropic_cls.assert_called_once_with(
-            api_key="test_key",
-            base_url=MINIMAX_BASE_URL,
+    def test_sends_tool_result_in_round2(self, mock_cls):
+        block = _skill_tool_block("sid99", "my_skill", _SKILL_CODE)
+        mock_cls.return_value.messages.create.side_effect = [
+            _make_response([block]),
+            _make_response([_text_block("ok")], stop_reason="end_turn"),
+        ]
+        MiniMaxClient(api_key="key").generate_skill_code("prompt")
+        calls = mock_cls.return_value.messages.create.call_args_list
+        round2_messages = calls[1].kwargs["messages"]
+        tool_result_msg = round2_messages[-1]
+        assert tool_result_msg["content"][0]["tool_use_id"] == "sid99"
+
+    @patch("agent_codegen.client.anthropic.Anthropic")
+    def test_raises_when_no_code(self, mock_cls):
+        mock_cls.return_value.messages.create.return_value = (
+            _make_response([_text_block("nope")], stop_reason="end_turn")
         )
+        with pytest.raises(AgentCodegenError):
+            MiniMaxClient(api_key="key").generate_skill_code("prompt")

@@ -1,11 +1,9 @@
 """
 Prompt construction for agent_codegen.
 
-Dynamically loads the Agent ABC interface and existing agent examples from the
-caller's filesystem so that generated code matches the live codebase.  Both
-inputs have safe fallbacks: the embedded ``_AGENT_INTERFACE_FALLBACK`` constant
-is used when ``agent_types_path`` is unavailable, and an empty list of examples
-is used when ``agents_dir`` is unavailable.
+Dynamically loads the Agent/Skill ABC interfaces and existing examples from the
+caller's filesystem so generated code matches the live codebase.  Both inputs
+have safe fallbacks when the caller does not supply paths or the files are missing.
 """
 from __future__ import annotations
 
@@ -17,119 +15,177 @@ from typing import Optional
 _LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Embedded fallback — verbatim copy of brain_client.agent_types.Agent.
-# Used when the caller does not supply agent_types_path or the file is missing.
+# Agent interface — embedded fallback (verbatim copy of agent_types.Agent)
 # ---------------------------------------------------------------------------
 
 _AGENT_INTERFACE_FALLBACK = '''\
 #!/usr/bin/env python3
-"""
-Agent Type Definitions
-
-Base class and types for robot agents.
-"""
+"""Agent Type Definitions — Base class for robot agents."""
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
 
 class Agent(ABC):
-    """
-    Base class for all agents.
+    """Base class for all agents.
 
-    An agent provides personality and behavior guidelines for the robot,
-    along with the list of skills that should be available when this
-    agent is active.
+    Provides personality and behavior guidelines for the robot,
+    along with the list of skills active when this agent is running.
     """
 
     @property
     @abstractmethod
     def id(self) -> str:
-        """
-        The name of the directive (used as identifier).
-        Must be defined by every subclass.
-        """
+        """Snake-case identifier. Must be defined by every subclass."""
         pass
 
     @property
     @abstractmethod
     def display_name(self) -> str:
-        """
-        The human-readable display name of the directive.
-        Must be defined by every subclass.
-        """
+        """Human-readable display name. Must be defined by every subclass."""
         pass
 
     @abstractmethod
     def get_skills(self) -> List[str]:
-        """
-        Returns a list of skill names that should be available
-        when this agent is active.
-
-        Subclasses must implement this method.
-        """
+        """List of skill names available when this agent is active."""
         pass
 
     @abstractmethod
     def get_prompt(self) -> Optional[str]:
-        """
-        Returns the prompt/description for this directive.
-        This defines the robot\'s personality and behavior guidelines.
-
-        Subclasses must implement this method.
-        """
+        """System prompt defining the robot\'s personality and behavior."""
         pass
 
     @property
     def display_icon(self) -> Optional[str]:
-        """Optional path to a 32x32 pixel icon asset. Default: None."""
+        """Optional path to a 32x32 pixel icon. Default: None."""
         return None
 
     def get_inputs(self) -> List[str]:
-        """
-        Returns a list of input device names active when this directive runs.
-        Default: [] (no input devices required).
-        Example: return ["micro", "camera"]
-        """
+        """Input device names active while this agent runs. Default: []."""
         return []
 
     def uses_gaze(self) -> bool:
-        """
-        Whether this agent uses person-tracking gaze.
-        When True, the robot looks at detected people during conversation.
-        Default: False.
-        """
+        """Enable person-tracking gaze during conversation. Default: False."""
         return False
 
     def get_routing_description(self) -> Optional[str]:
-        """
-        Optional short text used by AgentOrchestrator to route tasks to this agent.
-        When None, the orchestrator derives context from display_name, id, skills,
-        and a truncated system prompt.
-        """
+        """Short text for AgentOrchestrator routing. Default: None."""
         return None
 '''
 
-# Files excluded from style examples (meta-agents or non-representative patterns).
-_SKIP_FILENAMES = {"__init__.py", "orchestrator_agent.py"}
+# ---------------------------------------------------------------------------
+# Skill interface — embedded fallback (key parts of skill_types.py)
+# ---------------------------------------------------------------------------
+
+_SKILL_INTERFACE_FALLBACK = '''\
+"""Skill Type Definitions — Base class for robot skills."""
+from abc import ABC, abstractmethod
+from enum import Enum
+from typing import Optional
+
+
+class SkillResult(Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    CANCELLED = "cancelled"
+
+
+class InterfaceType(Enum):
+    MANIPULATION = "manipulation"
+    MOBILITY = "mobility"
+    HEAD = "head"
+
+
+class RobotStateType(Enum):
+    LAST_MAIN_CAMERA_IMAGE_B64 = "last_main_camera_image_b64"
+    LAST_WRIST_CAMERA_IMAGE_B64 = "last_wrist_camera_image_b64"
+    LAST_ODOM = "last_odom"
+    LAST_MAP = "last_map"
+    LAST_HEAD_POSITION = "last_head_position"
+
+
+class Interface:
+    """Descriptor for declaring hardware interface dependencies.
+
+    Declare at class level; the runtime injects the real object before execute().
+    Always check for None before use in case the interface is unavailable.
+
+    Example:
+        class MySkill(Skill):
+            head = Interface(InterfaceType.HEAD)
+
+            def execute(self, **kwargs):
+                if self.head is None:
+                    return "Head interface not available", SkillResult.FAILURE
+                self.head.move(...)
+    """
+    def __init__(self, interface_type: InterfaceType): ...
+
+
+class RobotState:
+    """Descriptor for declaring robot state dependencies.
+
+    Example:
+        class MySkill(Skill):
+            image = RobotState(RobotStateType.LAST_MAIN_CAMERA_IMAGE_B64)
+    """
+    def __init__(self, state_type: RobotStateType): ...
+
+
+class Skill(ABC):
+    def __init__(self, logger):
+        self.logger = logger      # Use self.logger.info/warning/error
+        self.node = None          # ROS2 node — may be None; check before use
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Unique snake_case skill identifier. Must match the spec key exactly."""
+        ...
+
+    @abstractmethod
+    def execute(self, *args, **kwargs) -> tuple[str, SkillResult]:
+        """Execute the skill.
+
+        Returns:
+            (result_message: str, status: SkillResult)
+
+        Always accept **kwargs so the LLM can call with arbitrary parameters.
+        """
+        ...
+
+    @abstractmethod
+    def cancel(self) -> str:
+        """Cancel execution gracefully. Returns a cancellation message."""
+        ...
+
+    def guidelines(self) -> Optional[str]:
+        """Usage guidelines shown to the LLM. Override to provide context."""
+        return None
+
+    def guidelines_when_running(self) -> Optional[str]:
+        """Guidelines while the skill is running. Override if needed."""
+        return None
+
+    def _send_feedback(self, message: str, image_b64: str = None):
+        """Send progress feedback during long execute() calls."""
+        ...
+'''
+
+# Files excluded from style examples (meta-files, utilities, internal helpers).
+_AGENT_SKIP_FILENAMES = {"__init__.py", "orchestrator_agent.py"}
+_SKILL_SKIP_FILENAMES = {"__init__.py", "arm_utils.py"}
 
 
 # ---------------------------------------------------------------------------
-# Public helpers
+# Agent prompt helpers
 # ---------------------------------------------------------------------------
 
 
 def load_agent_interface(agent_types_path: Optional[str] = None) -> str:
     """Return the Agent ABC source to embed in the prompt.
 
-    If *agent_types_path* is given and the file is readable its full text is
-    returned — this ensures generated code matches the live codebase exactly.
+    If *agent_types_path* is given and readable its full text is returned.
     Falls back to :data:`_AGENT_INTERFACE_FALLBACK` on any error.
-
-    Args:
-        agent_types_path: Absolute path to ``agent_types.py``, or ``None``.
-
-    Returns:
-        The Agent ABC source as a string.
     """
     if agent_types_path is not None:
         try:
@@ -147,53 +203,11 @@ def load_agent_examples(
 ) -> list[tuple[str, str]]:
     """Read up to *max_examples* Python agent files from *agents_dir*.
 
-    Selects the shortest files first so the prompt stays concise and the model
-    sees clean, minimal patterns rather than long, complex agents.
-
-    Skips:
-    - ``__init__.py`` and files whose names start with ``_``
-    - ``orchestrator_agent.py`` (meta-agent — not a useful implementation example)
-
-    Args:
-        agents_dir: Path to the directory containing agent ``.py`` files, or ``None``.
-        max_examples: Maximum number of examples to include (default: 2).
-
-    Returns:
-        List of ``(filename, source)`` pairs, shortest file first.
-        Returns ``[]`` if *agents_dir* is ``None`` or cannot be read.
+    Selects the shortest files first.  Skips ``__init__.py``, ``_*`` files,
+    and ``orchestrator_agent.py``.  Returns ``[]`` when *agents_dir* is ``None``
+    or cannot be read.
     """
-    if agents_dir is None:
-        return []
-
-    try:
-        candidates = [
-            p for p in Path(agents_dir).iterdir()
-            if p.suffix == ".py"
-            and p.name not in _SKIP_FILENAMES
-            and not p.name.startswith("_")
-        ]
-    except OSError as exc:
-        _LOG.warning("Cannot read agents_dir %r: %s — using no examples", agents_dir, exc)
-        return []
-
-    results: list[tuple[str, str]] = []
-    for path in candidates:
-        try:
-            src = path.read_text(encoding="utf-8")
-            results.append((path.name, src))
-        except OSError as exc:
-            _LOG.warning("Skipping %s: %s", path.name, exc)
-
-    # Shortest source first so the model sees concise examples.
-    results.sort(key=lambda pair: len(pair[1]))
-    selected = results[:max_examples]
-    _LOG.debug(
-        "Loaded %d agent example(s) from %s: %s",
-        len(selected),
-        agents_dir,
-        [name for name, _ in selected],
-    )
-    return selected
+    return _load_examples(agents_dir, _AGENT_SKIP_FILENAMES, max_examples)
 
 
 def build_prompt(
@@ -202,33 +216,13 @@ def build_prompt(
     *,
     agent_interface: str,
     agent_examples: list[tuple[str, str]],
+    existing_skills: list[tuple[str, str]] = (),
 ) -> str:
-    """Assemble the user prompt sent to MiniMax.
-
-    Args:
-        agent_id:        Snake-case identifier for the agent to generate.
-        agent_spec:      The value dict from ``missing_capabilities[agent_id]``.
-                         Contains ``"prompt"`` and ``"new_skills"`` keys.
-        agent_interface: Source of the Agent ABC (from :func:`load_agent_interface`).
-        agent_examples:  List of ``(filename, source)`` pairs from
-                         :func:`load_agent_examples`.
-
-    Returns:
-        The complete prompt string to send to the model.
-    """
+    """Assemble the user prompt for agent generation."""
     spec_json = json.dumps(agent_spec, indent=2)
-
-    examples_section = ""
-    if agent_examples:
-        parts = []
-        for filename, src in agent_examples:
-            parts.append(f"# {filename}\n{src}")
-        examples_section = (
-            "EXISTING STYLE EXAMPLES\n"
-            "────────────────────────\n"
-            + "\n\n".join(parts)
-            + "\n\n"
-        )
+    examples_section = _format_examples(agent_examples)
+    existing_skills_section = _format_existing_skills(existing_skills)
+    class_name = "".join(w.capitalize() for w in agent_id.split("_"))
 
     return (
         "TASK\n"
@@ -245,7 +239,9 @@ def build_prompt(
         'The "prompt" field is the robot\'s LLM system prompt — expand it into complete\n'
         "behavior guidelines (persona, decision rules, how to use skills).\n"
         'The "new_skills" entries become the return value of get_skills().\n'
+        'The "existing_skills" entries are already implemented — include them in get_skills() too.\n'
         "\n"
+        f"{existing_skills_section}"
         "AGENT INTERFACE CONTRACT\n"
         "────────────────────────\n"
         f"{agent_interface}\n"
@@ -253,11 +249,174 @@ def build_prompt(
         f"{examples_section}"
         "RULES\n"
         "─────\n"
-        f"1. Class name: CamelCase of agent_id  ({agent_id} → {''.join(w.capitalize() for w in agent_id.split('_'))})\n"
+        f"1. Class name: CamelCase of agent_id  ({agent_id} → {class_name})\n"
         f'2. id property must return exactly: "{agent_id}"\n'
         '3. Prefix every skill with "innate-os/" (e.g. "innate-os/skill_name")\n'
-        "4. get_prompt() must return detailed multi-sentence behavior instructions, not None\n"
-        '5. Include get_inputs() returning ["micro"] unless the spec explicitly says otherwise\n'
-        "6. File must be importable standalone — no ROS imports, no side effects at module level\n"
-        "7. Submit via write_agent_file only — no markdown, no explanations outside the code\n"
+        "4. get_skills() must include BOTH existing_skills AND new_skills (all prefixed with innate-os/)\n"
+        "5. get_prompt() must return detailed multi-sentence behavior instructions, not None\n"
+        '6. Include get_inputs() returning ["micro"] unless the spec explicitly says otherwise\n'
+        "7. File must be importable standalone — no ROS imports, no side effects at module level\n"
+        "8. Submit via write_agent_file only — no markdown, no explanations outside the code\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Skill prompt helpers
+# ---------------------------------------------------------------------------
+
+
+def load_skill_interface(skill_types_path: Optional[str] = None) -> str:
+    """Return the Skill ABC source to embed in the prompt.
+
+    If *skill_types_path* is given and readable its full text is returned.
+    Falls back to :data:`_SKILL_INTERFACE_FALLBACK` on any error.
+    """
+    if skill_types_path is not None:
+        try:
+            text = Path(skill_types_path).read_text(encoding="utf-8")
+            _LOG.debug("Loaded skill interface from %s (%d chars)", skill_types_path, len(text))
+            return text
+        except OSError as exc:
+            _LOG.warning("Cannot read skill_types_path %r: %s — using fallback", skill_types_path, exc)
+    return _SKILL_INTERFACE_FALLBACK
+
+
+def load_skill_examples(
+    skills_dir: Optional[str],
+    max_examples: int = 2,
+) -> list[tuple[str, str]]:
+    """Read up to *max_examples* Python skill files from *skills_dir*.
+
+    Selects the shortest files first.  Skips ``__init__.py``, ``_*`` files,
+    and utility helpers like ``arm_utils.py``.  Returns ``[]`` when *skills_dir*
+    is ``None`` or cannot be read.  Only reads top-level ``.py`` files (not
+    subdirectories, which are learned/replay skills with different structure).
+    """
+    return _load_examples(skills_dir, _SKILL_SKIP_FILENAMES, max_examples)
+
+
+def build_skill_prompt(
+    skill_name: str,
+    description: str,
+    *,
+    skill_interface: str,
+    skill_examples: list[tuple[str, str]],
+) -> str:
+    """Assemble the user prompt for skill generation."""
+    examples_section = _format_examples(skill_examples)
+    class_name = "".join(w.capitalize() for w in skill_name.split("_"))
+
+    return (
+        "TASK\n"
+        "────\n"
+        "Generate a Python Skill class for a ROS2 robot AI system.\n"
+        "Call write_skill_file with your complete implementation.\n"
+        "Think through what the skill needs before writing code.\n"
+        "\n"
+        "SPECIFICATION\n"
+        "─────────────\n"
+        f"Skill name  : {skill_name}\n"
+        f"Description : {description}\n"
+        "\n"
+        "SKILL INTERFACE CONTRACT\n"
+        "────────────────────────\n"
+        f"{skill_interface}\n"
+        "\n"
+        f"{examples_section}"
+        "RULES\n"
+        "─────\n"
+        f"1. Class name: CamelCase of skill_name  ({skill_name} → {class_name})\n"
+        f'2. name property must return exactly: "{skill_name}"\n'
+        "3. execute() must return tuple[str, SkillResult] — always accept **kwargs\n"
+        "4. cancel() must return a str cancellation message\n"
+        "5. Override guidelines() with a clear description of when/how to use this skill\n"
+        "6. For hardware access use Interface descriptors; always check for None before use\n"
+        "7. Lazy-init ROS publishers/subscribers inside execute() guarded by `if self.node is None`\n"
+        "8. File must be importable standalone — no top-level ROS calls or side effects\n"
+        "9. Submit via write_skill_file only — no markdown, no explanations outside the code\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_examples(
+    directory: Optional[str],
+    skip_filenames: set[str],
+    max_examples: int,
+) -> list[tuple[str, str]]:
+    """Read up to *max_examples* ``.py`` files from *directory*.
+
+    Skips files whose names are in *skip_filenames* or start with ``_``.
+    Sorts by source length ascending (shortest = most concise example first).
+    Returns ``[]`` when *directory* is ``None`` or unreadable.
+    """
+    if directory is None:
+        return []
+
+    try:
+        candidates = [
+            p for p in Path(directory).iterdir()
+            if p.suffix == ".py"
+            and p.name not in skip_filenames
+            and not p.name.startswith("_")
+        ]
+    except OSError as exc:
+        _LOG.warning("Cannot read directory %r: %s — using no examples", directory, exc)
+        return []
+
+    results: list[tuple[str, str]] = []
+    for path in candidates:
+        try:
+            src = path.read_text(encoding="utf-8")
+            results.append((path.name, src))
+        except OSError as exc:
+            _LOG.warning("Skipping %s: %s", path.name, exc)
+
+    results.sort(key=lambda pair: len(pair[1]))
+    selected = results[:max_examples]
+    _LOG.debug(
+        "Loaded %d example(s) from %s: %s",
+        len(selected),
+        directory,
+        [name for name, _ in selected],
+    )
+    return selected
+
+
+def _format_existing_skills(skills: list[tuple[str, str]]) -> str:
+    """Format ``(skill_name, description)`` pairs into a prompt section string.
+
+    Returns an empty string when *skills* is empty.
+    """
+    if not skills:
+        return ""
+    lines = []
+    for name, desc in skills:
+        if desc:
+            lines.append(f"  - {name}: {desc}")
+        else:
+            lines.append(f"  - {name}")
+    body = "\n".join(lines)
+    return (
+        "EXISTING SKILLS AVAILABLE TO THIS AGENT\n"
+        "────────────────────────────────────────\n"
+        "These skills are already implemented and must be included in get_skills():\n"
+        f"{body}\n"
+        "\n"
+    )
+
+
+def _format_examples(examples: list[tuple[str, str]]) -> str:
+    """Format (filename, source) pairs into a prompt section string."""
+    if not examples:
+        return ""
+    parts = [f"# {filename}\n{src}" for filename, src in examples]
+    return (
+        "EXISTING STYLE EXAMPLES\n"
+        "────────────────────────\n"
+        + "\n\n".join(parts)
+        + "\n\n"
     )

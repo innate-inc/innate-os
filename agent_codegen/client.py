@@ -4,7 +4,7 @@ MiniMax client for agent_codegen.
 Wraps the Anthropic SDK pointed at the MiniMax Anthropic-compatible endpoint.
 Implements a two-round agentic tool loop:
 
-  Round 1 — model calls ``write_agent_file`` (tool_choice="any").
+  Round 1 — model calls the provided tool (tool_choice="any").
   Round 2 — library sends the tool_result so the model can acknowledge.
 
 Falls back to regex extraction of a markdown ``python`` code block when the
@@ -25,7 +25,7 @@ _LOG = logging.getLogger(__name__)
 MINIMAX_BASE_URL = "https://api.minimax.io/anthropic"
 DEFAULT_MODEL = "MiniMax-M2.7"
 
-_WRITE_TOOL: dict[str, Any] = {
+_WRITE_AGENT_TOOL: dict[str, Any] = {
     "name": "write_agent_file",
     "description": (
         "Submit the complete Python source for the new agent. "
@@ -44,6 +44,28 @@ _WRITE_TOOL: dict[str, Any] = {
             },
         },
         "required": ["agent_id", "code"],
+    },
+}
+
+_WRITE_SKILL_TOOL: dict[str, Any] = {
+    "name": "write_skill_file",
+    "description": (
+        "Submit the complete Python source for the new skill. "
+        "Call this exactly once with the full file content."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "skill_name": {
+                "type": "string",
+                "description": "Snake-case skill identifier matching the spec entry.",
+            },
+            "code": {
+                "type": "string",
+                "description": "Complete Python source file content (no markdown fences).",
+            },
+        },
+        "required": ["skill_name", "code"],
     },
 }
 
@@ -104,48 +126,68 @@ class MiniMaxClient:
         )
 
     def generate(self, prompt: str) -> tuple[str, bool]:
-        """Run the agentic tool loop and return ``(code, via_tool)``.
+        """Generate agent code. Returns ``(code, via_tool)``."""
+        return self._generate_with_tool(prompt, _WRITE_AGENT_TOOL)
+
+    def generate_skill_code(self, prompt: str) -> tuple[str, bool]:
+        """Generate skill code. Returns ``(code, via_tool)``."""
+        return self._generate_with_tool(prompt, _WRITE_SKILL_TOOL)
+
+    def _generate_with_tool(
+        self,
+        prompt: str,
+        tool: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Run the agentic tool loop with *tool* and return ``(code, via_tool)``.
 
         Args:
-            prompt: The full user prompt built by :mod:`agent_codegen.prompt`.
+            prompt: Full user prompt built by :mod:`agent_codegen.prompt`.
+            tool:   Tool definition dict (``_WRITE_AGENT_TOOL`` or ``_WRITE_SKILL_TOOL``).
 
         Returns:
-            A tuple ``(code, via_tool)`` where *code* is the complete Python
-            source and *via_tool* is ``True`` when the model used the
-            ``write_agent_file`` tool (``False`` for regex fallback).
+            ``(code, via_tool)`` where *code* is the complete Python source and
+            *via_tool* is ``True`` when the model used the tool call path.
 
         Raises:
-            AgentCodegenError: When the model produces neither a tool call nor
-                a Python code block.
+            AgentCodegenError: When neither a tool call nor a code block is found.
         """
+        tool_name = tool["name"]
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
-        _LOG.info("Sending prompt to MiniMax (%d chars, model=%s)", len(prompt), self._model)
+        _LOG.info(
+            "Sending prompt to MiniMax (%d chars, model=%s, tool=%s)",
+            len(prompt),
+            self._model,
+            tool_name,
+        )
 
-        # Round 1 — ask the model to call write_agent_file.
+        # Round 1 — ask the model to call the tool.
         response = self._client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
             messages=messages,
-            tools=[_WRITE_TOOL],
+            tools=[tool],
             tool_choice={"type": "any"},
             temperature=0.7,
         )
 
-        _LOG.debug("Round-1 stop_reason=%s, content blocks=%d", response.stop_reason, len(response.content))
+        _LOG.debug(
+            "Round-1 stop_reason=%s, content blocks=%d",
+            response.stop_reason,
+            len(response.content),
+        )
 
         tool_block = _find_tool_use(response)
         if tool_block is not None:
-            agent_id_from_model = tool_block.input.get("agent_id", "")
             code = tool_block.input.get("code", "")
             _LOG.info(
-                "Tool call received: agent_id=%r, code length=%d chars",
-                agent_id_from_model,
+                "Tool call received: tool=%s, code length=%d chars",
+                tool_block.name,
                 len(code),
             )
 
             # Round 2 — send tool_result so the model can acknowledge completion.
-            messages = messages + [
+            ack_messages = messages + [
                 {"role": "assistant", "content": response.content},
                 {
                     "role": "user",
@@ -162,8 +204,8 @@ class MiniMaxClient:
                 self._client.messages.create(
                     model=self._model,
                     max_tokens=256,
-                    messages=messages,
-                    tools=[_WRITE_TOOL],
+                    messages=ack_messages,
+                    tools=[tool],
                     temperature=0.7,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -174,7 +216,8 @@ class MiniMaxClient:
 
         # Fallback — try to extract a ```python block from plain text.
         _LOG.warning(
-            "Model did not call write_agent_file (stop_reason=%s); attempting regex fallback",
+            "Model did not call %s (stop_reason=%s); attempting regex fallback",
+            tool_name,
             response.stop_reason,
         )
         code = _extract_python_block(response)
@@ -183,7 +226,7 @@ class MiniMaxClient:
             return code, False
 
         raise AgentCodegenError(
-            "MiniMax model produced neither a tool call nor a Python code block. "
-            f"stop_reason={response.stop_reason!r}. "
+            f"MiniMax model produced neither a {tool_name!r} tool call nor a Python "
+            f"code block. stop_reason={response.stop_reason!r}. "
             "Check the prompt or try again."
         )
