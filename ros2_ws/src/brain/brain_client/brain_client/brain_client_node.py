@@ -62,10 +62,38 @@ from brain_messages.srv import ReloadSkillsAgents
 from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
-from brain_client.initializers import initialize_agents
+from brain_client.initializers import initialize_agents, export_capabilities
 from brain_client.agent_orchestrator import AgentOrchestrator, ORCHESTRATOR_AGENT_ID
 from brain_client.tts_handler import TTSHandler
 from brain_client.hot_reload_watcher import HotReloadWatcher
+
+# ---------------------------------------------------------------------------
+# Codegen pipeline — lazy loader
+# ---------------------------------------------------------------------------
+
+# Minimum prompt length to trigger codegen (avoids greetings like "hi", "ok")
+_CODEGEN_MIN_PROMPT_CHARS = 8
+
+
+def _load_codegen_pipeline():
+    """Import agent_codegen.pipeline from INNATE_OS_ROOT. Returns a namespace or None."""
+    import types as _types
+    root = os.environ.get(
+        "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
+    )
+    pkg_path = os.path.join(root, "agent_codegen", "pipeline.py")
+    if not os.path.exists(pkg_path):
+        return None
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        from agent_codegen.pipeline import run_pipeline, PipelineResult  # noqa: PLC0415
+        return _types.SimpleNamespace(
+            run_pipeline=run_pipeline, PipelineResult=PipelineResult
+        )
+    except Exception:
+        return None
+
 
 # Lazy import for gaze tracker (only loaded if agent uses gaze)
 ROSPersonTracker = None
@@ -1219,6 +1247,13 @@ class BrainClientNode(Node):
                 )
                 # Apply synchronously so primitives re-register before CHAT_IN is sent.
                 self.set_directive_callback(String(data=choice.agent_id))
+            elif len(user_text) >= _CODEGEN_MIN_PROMPT_CHARS:
+                # No specialist matched — trigger background agent generation
+                self.get_logger().info(
+                    "[orchestrator] no specialist matched for %r — starting codegen pipeline",
+                    user_text,
+                )
+                self._start_codegen_pipeline(user_text)
 
         self.chat_history.append(data)
 
@@ -1234,6 +1269,72 @@ class BrainClientNode(Node):
         if text and text.strip():
             self.get_logger().info(f"TTS request received: {text[:50]}...")
             self._speak(text)
+
+    def _start_codegen_pipeline(self, user_text: str) -> None:
+        """Spawn a background thread to run the analyze→generate pipeline.
+
+        Publishes system notifications to the chat UI before starting and
+        after completion (success or failure). Does not block the ROS executor.
+        """
+
+        def _notify(text: str) -> None:
+            entry = {
+                "sender": "system",
+                "text": text,
+                "timestamp": time.time(),
+            }
+            self.chat_out_pub.publish(String(data=json.dumps(entry)))
+
+        def _run() -> None:
+            _notify(
+                "I don't have a specialist agent for that yet. "
+                "Generating one now — this may take 30–90 seconds..."
+            )
+
+            mod = _load_codegen_pipeline()
+            if mod is None:
+                _notify(
+                    "Agent generation is unavailable "
+                    "(agent_codegen.pipeline not found in INNATE_OS_ROOT)."
+                )
+                return
+
+            try:
+                result = mod.run_pipeline(user_text)
+            except Exception as exc:
+                self.get_logger().error(f"[codegen] Pipeline raised: {exc}")
+                _notify(f"Agent generation failed: {exc}")
+                return
+
+            if not result.success:
+                self.get_logger().warn(f"[codegen] Pipeline failed: {result.error}")
+                _notify(f"I couldn't generate a new agent: {result.error}")
+                return
+
+            if not result.missing_capabilities:
+                _notify(
+                    "It looks like an existing agent already covers this. "
+                    "Try rephrasing or say 'help' for available modes."
+                )
+                return
+
+            # Files written — HotReloadWatcher picks them up within ~1 second
+            from pathlib import Path as _Path  # noqa: PLC0415
+            skill_names = [_Path(sf).stem for sf in result.skill_files]
+            parts = [f"New agent '{result.agent_id}' is ready!"]
+            if skill_names:
+                parts.append(f"Also generated skills: {', '.join(skill_names)}.")
+            parts.append("Loading it now — please try your request again in a moment.")
+            _notify(" ".join(parts))
+
+            self.get_logger().info(
+                "[codegen] Pipeline complete: agent=%r, skills=%r",
+                result.agent_id,
+                skill_names,
+            )
+
+        thread = threading.Thread(target=_run, name="codegen_pipeline", daemon=True)
+        thread.start()
 
     def custom_input_callback(self, msg: String):
         """Handle custom input data from input_manager."""
@@ -2826,7 +2927,19 @@ class BrainClientNode(Node):
             # Reload specific agents locally
             if agent_names:
                 reloaded_agents = self._reload_agents_selective(agent_names)
-            
+
+            # Keep capabilities.json current so semantic_skill_analyzer sees new agents
+            if reloaded_agents:
+                try:
+                    export_capabilities(self.directives)
+                    self.get_logger().info(
+                        "[BrainClient] capabilities.json updated after hot reload"
+                    )
+                except Exception as exc:
+                    self.get_logger().warn(
+                        f"[BrainClient] capabilities.json update failed: {exc}"
+                    )
+
             # Re-register with server if anything was reloaded
             if reloaded_skills or reloaded_agents:
                 self.register_primitives_and_directive()
