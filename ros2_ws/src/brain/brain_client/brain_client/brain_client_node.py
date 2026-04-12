@@ -1248,11 +1248,15 @@ class BrainClientNode(Node):
             return
 
         user_text = (data.get("text") or "").strip()
-        if (
+        _in_orch = (
             self.current_directive is not None
             and self.current_directive.id == ORCHESTRATOR_AGENT_ID
-            and user_text
-        ):
+        )
+        _dir_id = self.current_directive.id if self.current_directive else None
+        self.get_logger().info(
+            f"[orchestrator] chat_in: directive={_dir_id!r} in_orch={_in_orch} text={user_text[:80]!r}"
+        )
+        if _in_orch and user_text:
             orch = AgentOrchestrator(
                 self.directives,
                 default_agent_id=ORCHESTRATOR_AGENT_ID,
@@ -1271,8 +1275,7 @@ class BrainClientNode(Node):
             elif len(user_text) >= _CODEGEN_MIN_PROMPT_CHARS:
                 # No specialist matched — trigger background agent generation
                 self.get_logger().info(
-                    "[orchestrator] no specialist matched for %r — starting codegen pipeline",
-                    user_text,
+                    f"[orchestrator] no specialist matched for {user_text!r} — starting codegen pipeline"
                 )
                 self._start_codegen_pipeline(user_text)
 
