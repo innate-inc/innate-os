@@ -208,8 +208,20 @@ def run_pipeline(
         MODEL as _DEFAULT_MODEL,
     )
 
-    _ollama_host = ollama_host or DEFAULT_OLLAMA_HOST
-    _ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL") or _DEFAULT_MODEL
+    # Load ~/.wildrobot/config.json as a fallback for env vars and explicit args.
+    # Priority: explicit arg > env var > config file > hard default.
+    _wrcfg: dict = {}
+    _wrcfg_path = Path.home() / ".wildrobot" / "config.json"
+    if _wrcfg_path.exists():
+        try:
+            _wrcfg = json.loads(_wrcfg_path.read_text(encoding="utf-8"))
+            if not isinstance(_wrcfg, dict):
+                _wrcfg = {}
+        except Exception as _cfg_err:
+            _LOG.warning("~/.wildrobot/config.json unreadable: %s — ignoring", _cfg_err)
+
+    _ollama_host = ollama_host or os.environ.get("OLLAMA_HOST") or _wrcfg.get("ollama_host") or DEFAULT_OLLAMA_HOST
+    _ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL") or _wrcfg.get("ollama_model") or _DEFAULT_MODEL
     out_path: Optional[str] = None
 
     if not use_gemma:
@@ -232,12 +244,14 @@ def run_pipeline(
             )
 
     if out_path is None:
-        try:
-            _gemini_key = _resolve_api_key(
-                "gemini_api_key", gemini_api_key, "GEMINI_API_KEY", "GOOGLE_API_KEY"
+        _gemini_key = (gemini_api_key or os.environ.get("GEMINI_API_KEY")
+                       or os.environ.get("GOOGLE_API_KEY") or _wrcfg.get("gemini_api_key"))
+        if not _gemini_key:
+            return PipelineResult(
+                success=False,
+                error="gemini_api_key not provided and none of ('GEMINI_API_KEY', 'GOOGLE_API_KEY') "
+                      "found in environment or ~/.wildrobot/config.json"
             )
-        except ValueError as exc:
-            return PipelineResult(success=False, error=str(exc))
         _LOG.info("─ step 1/3  analyze (Gemini)")
         t0 = time.monotonic()
         try:
@@ -296,12 +310,13 @@ def run_pipeline(
         )
 
     # Step 5 — Resolve MiniMax key and generate
-    try:
-        _minimax_key = _resolve_api_key(
-            "minimax_api_key", minimax_api_key, "MINIMAX_API_KEY"
+    _minimax_key = minimax_api_key or os.environ.get("MINIMAX_API_KEY") or _wrcfg.get("minimax_api_key")
+    if not _minimax_key:
+        return PipelineResult(
+            success=False,
+            error="minimax_api_key not provided and MINIMAX_API_KEY not in environment "
+                  "or ~/.wildrobot/config.json"
         )
-    except ValueError as exc:
-        return PipelineResult(success=False, error=str(exc))
 
     agent_id = next(iter(missing))
     agent_output = str(_agents_dir / f"{agent_id}.py")
