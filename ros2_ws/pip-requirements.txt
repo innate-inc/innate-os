@@ -15,6 +15,10 @@ opencv-python
 # Networking/API
 pydantic
 websockets
+# Zapier MCP client for skills/check_calendar.py (Google Calendar via MCP).
+# Robot: pulled in automatically by scripts/update/post_update.sh (pip3 install -r this file).
+# Manual / uv: pip3 install fastmcp   OR   uv pip install fastmcp
+fastmcp
 
 # Data/ML
 h5py
