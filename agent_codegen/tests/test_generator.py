@@ -207,6 +207,37 @@ class TestGenerateSkill:
         generate_skill("greet_visitor", "desc", api_key="key")
         mock_client.generate_skill_code.assert_called_once()
 
+    @patch("agent_codegen.generator.build_skill_prompt")
+    @patch("agent_codegen.generator.MiniMaxClient")
+    def test_pinned_skill_example_appears_first(self, mock_cls, mock_prompt, tmp_path):
+        mock_cls.return_value = _make_mock_client(_VALID_SKILL_CODE)
+        mock_prompt.return_value = "prompt"
+        pinned = tmp_path / "pinned_skill.py"
+        pinned.write_text("class Pinned(Skill): pass", encoding="utf-8")
+        generate_skill(
+            "greet_visitor", "desc", api_key="key",
+            skill_example_paths=[str(pinned)],
+        )
+        _, kwargs = mock_prompt.call_args
+        assert kwargs["skill_examples"][0][0] == "pinned_skill.py"
+
+    @patch("agent_codegen.generator.build_skill_prompt")
+    @patch("agent_codegen.generator.MiniMaxClient")
+    def test_pinned_skill_deduped_from_dir_examples(self, mock_cls, mock_prompt, tmp_path):
+        """Pinned file should not appear twice even if also in skills_dir."""
+        mock_cls.return_value = _make_mock_client(_VALID_SKILL_CODE)
+        mock_prompt.return_value = "prompt"
+        pinned = tmp_path / "shared_skill.py"
+        pinned.write_text("class Shared(Skill): pass", encoding="utf-8")
+        generate_skill(
+            "greet_visitor", "desc", api_key="key",
+            skills_dir=str(tmp_path),
+            skill_example_paths=[str(pinned)],
+        )
+        _, kwargs = mock_prompt.call_args
+        names = [name for name, _ in kwargs["skill_examples"]]
+        assert names.count("shared_skill.py") == 1
+
 
 # ---------------------------------------------------------------------------
 # generate_agent
@@ -342,6 +373,37 @@ class TestGenerateAgentContextLoading:
         mock_cls.return_value = _make_mock_client(_VALID_AGENT_CODE)
         result = generate_agent(_MISSING_CAPABILITIES, api_key="key", skills_dir=None)
         assert result.skills == []
+
+    @patch("agent_codegen.generator.build_prompt")
+    @patch("agent_codegen.generator.MiniMaxClient")
+    def test_pinned_agent_example_appears_first(self, mock_cls, mock_prompt, tmp_path):
+        mock_cls.return_value = _make_mock_client(_VALID_AGENT_CODE)
+        mock_prompt.return_value = "prompt"
+        pinned = tmp_path / "draw_triangle.py"
+        pinned.write_text("class DrawTriangleAgent(Agent): pass", encoding="utf-8")
+        generate_agent(
+            _MISSING_CAPABILITIES, api_key="key",
+            agent_example_paths=[str(pinned)],
+        )
+        _, kwargs = mock_prompt.call_args
+        assert kwargs["agent_examples"][0][0] == "draw_triangle.py"
+
+    @patch("agent_codegen.generator.build_prompt")
+    @patch("agent_codegen.generator.MiniMaxClient")
+    def test_pinned_agent_deduped_from_dir_examples(self, mock_cls, mock_prompt, tmp_path):
+        """Pinned file should not appear twice even if also in agents_dir."""
+        mock_cls.return_value = _make_mock_client(_VALID_AGENT_CODE)
+        mock_prompt.return_value = "prompt"
+        pinned = tmp_path / "draw_triangle.py"
+        pinned.write_text("class DrawTriangleAgent(Agent): pass", encoding="utf-8")
+        generate_agent(
+            _MISSING_CAPABILITIES, api_key="key",
+            agents_dir=str(tmp_path),
+            agent_example_paths=[str(pinned)],
+        )
+        _, kwargs = mock_prompt.call_args
+        names = [name for name, _ in kwargs["agent_examples"]]
+        assert names.count("draw_triangle.py") == 1
 
 
 class TestGenerateAgentCodeValidation:

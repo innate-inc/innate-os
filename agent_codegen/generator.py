@@ -18,6 +18,7 @@ from agent_codegen.prompt import (
     build_skill_prompt,
     load_agent_examples,
     load_agent_interface,
+    load_examples_from_paths,
     load_skill_examples,
     load_skill_interface,
 )
@@ -122,6 +123,7 @@ def generate_skill(
     output_path: Optional[str] = None,
     skills_dir: Optional[str] = None,
     skill_types_path: Optional[str] = None,
+    skill_example_paths: Optional[list[str]] = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
 ) -> SkillGenerationResult:
@@ -153,7 +155,10 @@ def generate_skill(
     _LOG.info("Generating skill %r", skill_name)
 
     skill_interface = load_skill_interface(skill_types_path)
-    skill_examples = load_skill_examples(skills_dir)
+    pinned = load_examples_from_paths(skill_example_paths or [])
+    dir_examples = load_skill_examples(skills_dir)
+    # Pinned examples take priority; fill remaining slots from the directory scan.
+    skill_examples = (pinned + [ex for ex in dir_examples if ex[0] not in {p[0] for p in pinned}])[:2]
 
     prompt = build_skill_prompt(
         skill_name,
@@ -195,6 +200,8 @@ def generate_agent(
     skills_dir: Optional[str] = None,
     skill_types_path: Optional[str] = None,
     capabilities_path: Optional[str] = None,
+    agent_example_paths: Optional[list[str]] = None,
+    skill_example_paths: Optional[list[str]] = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
 ) -> GenerationResult:
@@ -254,7 +261,9 @@ def generate_agent(
 
     # --- Agent generation ---
     agent_interface = load_agent_interface(agent_types_path)
-    agent_examples = load_agent_examples(agents_dir)
+    pinned_agent = load_examples_from_paths(agent_example_paths or [])
+    dir_agent = load_agent_examples(agents_dir)
+    agent_examples = (pinned_agent + [ex for ex in dir_agent if ex[0] not in {p[0] for p in pinned_agent}])[:2]
 
     # Build existing-skill descriptions from the capabilities index.
     capabilities = _load_capabilities(capabilities_path)
@@ -307,6 +316,7 @@ def generate_agent(
                     output_path=skill_output,
                     skills_dir=skills_dir,
                     skill_types_path=skill_types_path,
+                    skill_example_paths=skill_example_paths,
                     model=model,
                     max_tokens=max_tokens,
                 )
