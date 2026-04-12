@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Greeting Friends Skill — speak a short friendly hello via the brain TTS pipeline.
+Say text — publish a phrase to /brain/tts so the robot says it out loud.
 """
 
 from std_msgs.msg import String
@@ -8,7 +8,7 @@ from std_msgs.msg import String
 from brain_client.skill_types import Skill, SkillResult
 
 
-class GreetingFriends(Skill):
+class SayText(Skill):
     """Publish a phrase to /brain/tts so the robot says it out loud."""
 
     def __init__(self, logger):
@@ -17,20 +17,21 @@ class GreetingFriends(Skill):
 
     @property
     def name(self):
-        return "greeting_friends"
+        return "say_text"
 
     def guidelines(self):
         return (
-            'Say out loud: "hello my friend!" Use when greeting someone or when the user '
-            "asks for a friendly hello."
+            'Say out loud: "hello my friend!" (default), or a custom phrase if `text` is given. '
+            "Use when the user wants the robot to speak specific words or a friendly hello."
         )
 
     def _ensure_tts_pub(self):
         if self._tts_pub is None and self.node is not None:
             self._tts_pub = self.node.create_publisher(String, "/brain/tts", 10)
 
-    def execute(self):
-        phrase = "hello my friend!"
+    def execute(self, text: str | None = None, **_kwargs):
+        raw = (text or "").strip() if text is not None else ""
+        phrase = raw if raw else "hello my friend!"
 
         if self.node is None:
             return "Skill has no ROS node; cannot speak", SkillResult.FAILURE
@@ -42,8 +43,8 @@ class GreetingFriends(Skill):
         msg = String()
         msg.data = phrase
         self._tts_pub.publish(msg)
-        self.logger.info(f"[GreetingFriends] Published TTS: {phrase!r}")
-        return f"Said: {phrase}", SkillResult.SUCCESS
+        self.logger.info(f"[SayText] Published TTS: {phrase!r}")
+        return f"Said out loud: {phrase}", SkillResult.SUCCESS
 
     def cancel(self):
-        return "Greeting finished (nothing to cancel)"
+        return "Say text finished (nothing to cancel)"

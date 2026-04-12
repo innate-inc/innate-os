@@ -10,7 +10,7 @@ main_camera_driver:
     publish_left_height: 480
     publish_stereo_width: 1280
     publish_stereo_height: 480
-    fps: 15.0
+    fps: 10.0
     frame_id: "camera_optical_frame"
     jpeg_quality: 80
     publish_compressed: true
@@ -32,7 +32,7 @@ arm_camera_driver:
     camera_symlink: "Arducam"
     width: 640
     height: 480
-    fps: 30.0
+    fps: 10.0
     pixel_format: "YUYV"
     publish_compressed: true
     compressed_frame_interval: 6
