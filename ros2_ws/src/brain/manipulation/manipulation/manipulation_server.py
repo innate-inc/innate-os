@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import gc
 import time
 import threading
 import rclpy
@@ -27,7 +28,7 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
 
-def create_act_config(action_dim=10, chunk_size=50):
+def create_act_config(action_dim=10, chunk_size=30):
     """Create ACT configuration matching the training setup."""
     input_shapes = {
         "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
@@ -42,7 +43,7 @@ def create_act_config(action_dim=10, chunk_size=50):
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=chunk_size,
-        n_action_steps=min(10, chunk_size),
+        n_action_steps=min(40, chunk_size),
         speed=1.5,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
@@ -249,9 +250,23 @@ class ManipulationServer(Node):
             self._stop_sensor_subscriptions()
             self.execution_running = False
             self.current_goal_handle = None
-            if self.current_policy:
-                del self.current_policy
-                self.current_policy = None
+            self._release_policy()
+    
+    def _release_policy(self):
+        """Free the loaded policy and reclaim GPU memory."""
+        if self.current_policy is None:
+            return
+        try:
+            del self.current_policy
+            self.current_policy = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            torch._dynamo.reset()
+            self.get_logger().info("Policy released and GPU memory freed")
+        except Exception as e:
+            self.get_logger().warn(f"Error releasing policy: {e}")
+            self.current_policy = None
     
     def _execute_learned_behavior(self, goal_handle, skill_dir, behavior_config):
         """Execute a learned behavior using ACT policy."""
@@ -654,10 +669,7 @@ class ManipulationServer(Node):
         try:
             load_start = time.time()
             
-            # Clean up previous policy
-            if self.current_policy:
-                del self.current_policy
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            self._release_policy()
             
             # Expand user path
             checkpoint_path = os.path.expanduser(checkpoint_path)
