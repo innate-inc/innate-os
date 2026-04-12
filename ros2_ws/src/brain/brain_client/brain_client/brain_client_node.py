@@ -1265,11 +1265,8 @@ class BrainClientNode(Node):
             choice = orch.select_keyword(user_text)
             if choice.agent_id != ORCHESTRATOR_AGENT_ID:
                 self.get_logger().info(
-                    "##@@ [orchestrator] routing chat to directive %r (%s conf=%.2f): %s",
-                    choice.agent_id,
-                    choice.method,
-                    choice.confidence,
-                    choice.rationale,
+                    f"##@@ [orchestrator] routing chat to directive {choice.agent_id!r}"
+                    f" ({choice.method} conf={choice.confidence:.2f}): {choice.rationale}"
                 )
                 # Apply synchronously so primitives re-register before CHAT_IN is sent.
                 self.set_directive_callback(String(data=choice.agent_id))
@@ -1323,6 +1320,20 @@ class BrainClientNode(Node):
                 force=True,
             )
 
+            def _speak_when_free(text: str, timeout: float = 8.0) -> None:
+                """Wait until TTS is not playing, then speak. Drops after timeout."""
+                deadline = _time.monotonic() + timeout
+                while _time.monotonic() < deadline:
+                    handler = self.tts_handler
+                    if handler is None:
+                        return
+                    if not handler.is_playing:
+                        self._speak(text)
+                        return
+                    _time.sleep(0.4)
+                # Timeout — try anyway, TTS handler will retry once internally
+                self._speak(text)
+
             log = self.get_logger()
             t_start = _time.monotonic()
 
@@ -1334,7 +1345,7 @@ class BrainClientNode(Node):
                 "I don't have a specialist agent for that yet. "
                 "Generating one now — this may take 30–90 seconds..."
             )
-            self._speak("I don't have an agent for that yet. Let me generate one now.")
+            _speak_when_free("I don't have an agent for that yet. Let me generate one now.")
 
             mod = _load_codegen_pipeline()
             if mod is None:
@@ -1343,7 +1354,7 @@ class BrainClientNode(Node):
                     "Agent generation is unavailable "
                     "(agent_codegen.pipeline not found in INNATE_OS_ROOT)."
                 )
-                self._speak("Agent generation is unavailable on this system.")
+                _speak_when_free("Agent generation is unavailable on this system.")
                 return
 
             _wrcfg = _load_wildrobot_config()
@@ -1369,7 +1380,7 @@ class BrainClientNode(Node):
                 elapsed = _time.monotonic() - t_start
                 log.error(f"[codegen] ✗ Pipeline raised after {elapsed:.1f}s: {exc}")
                 _notify(f"Agent generation failed: {exc}")
-                self._speak("Sorry, agent generation failed with an error.")
+                _speak_when_free("Sorry, agent generation failed with an error.")
                 return
 
             elapsed = _time.monotonic() - t_start
@@ -1377,7 +1388,7 @@ class BrainClientNode(Node):
             if not result.success:
                 log.warn(f"[codegen] ✗ Pipeline failed ({elapsed:.1f}s): {result.error}")
                 _notify(f"I couldn't generate a new agent: {result.error}")
-                self._speak("Sorry, I failed to generate a new agent.")
+                _speak_when_free("Sorry, I failed to generate a new agent.")
                 return
 
             if not result.missing_capabilities:
@@ -1386,7 +1397,7 @@ class BrainClientNode(Node):
                     "It looks like an existing agent already covers this. "
                     "Try rephrasing or say 'help' for available modes."
                 )
-                self._speak("It looks like an existing agent already covers this request.")
+                _speak_when_free("It looks like an existing agent already covers this request.")
                 return
 
             # Files written — HotReloadWatcher picks them up within ~1 second
@@ -1405,7 +1416,7 @@ class BrainClientNode(Node):
             _notify(" ".join(parts))
 
             agent_label = result.agent_id.replace("_", " ") if result.agent_id else "new agent"
-            self._speak(f"Done! I generated a new agent called {agent_label}. You can try your request again now.")
+            _speak_when_free(f"Done! I generated a new agent called {agent_label}. You can try your request again now.")
 
         thread = threading.Thread(target=_run, name="codegen_pipeline", daemon=True)
         thread.start()
