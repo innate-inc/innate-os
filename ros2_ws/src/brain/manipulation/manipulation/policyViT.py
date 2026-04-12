@@ -89,7 +89,7 @@ class InferenceNode(Node):
         image_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=2
         )
 
         # Variables to hold the latest sensor data

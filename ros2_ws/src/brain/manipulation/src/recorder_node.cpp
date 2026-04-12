@@ -70,7 +70,7 @@ RecorderNode::RecorderNode()
     topics_received_[velocity_topic_] = false;
 
     // Create QoS profile for image topics
-    rclcpp::QoS image_qos(10);
+    rclcpp::QoS image_qos(2);
     image_qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
     image_qos.history(rclcpp::HistoryPolicy::KeepLast);
 
@@ -161,7 +161,7 @@ RecorderNode::RecorderNode()
 
     // ========== REPLAY FUNCTIONALITY ==========
     // Use best_effort QoS to match WebRTC streamer's subscriber QoS
-    rclcpp::QoS replay_qos(10);
+    rclcpp::QoS replay_qos(2);
     replay_qos.best_effort();
     replay_main_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
         "/brain/recorder/replay/main_camera/left/image_raw", replay_qos);
