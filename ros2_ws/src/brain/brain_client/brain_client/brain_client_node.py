@@ -2361,9 +2361,14 @@ class BrainClientNode(Node):
         directive_name = msg.data.strip()
         self.get_logger().info(f"Received directive change request: {directive_name}")
 
+        previous_id = self.current_directive.id if self.current_directive else None
+
         if directive_name in self.directives:
             self.current_directive = self.directives[directive_name]
             self.get_logger().info(f"Activated directive: {directive_name}")
+
+            if previous_id != directive_name:
+                self._announce_directive_change(directive_name)
 
             # Clear local chat history when changing agent
             self.chat_history = []
@@ -2953,11 +2958,16 @@ class BrainClientNode(Node):
             # Save directive to file
             self.save_startup_directive(directive_name)
 
+            previous_id = self.current_directive.id if self.current_directive else None
+
             # Also immediately switch to it if brain is active
             self.current_directive = self.directives[directive_name]
             self.get_logger().info(
                 f"\033[1;92m[BrainClient] Startup directive set to: {directive_name}\033[0m"
             )
+
+            if previous_id != directive_name:
+                self._announce_directive_change(directive_name)
 
             # Re-register primitives and directive with the server to update immediately
             if self.is_brain_active and self.primitives_registered:
@@ -3032,6 +3042,14 @@ class BrainClientNode(Node):
         """Speak text if TTS is available."""
         if self.tts_handler is not None:
             self.tts_handler.speak_text_async(text)
+
+    def _announce_directive_change(self, directive_name: str):
+        """Speak which agent is now active after a successful directive switch."""
+        agent = self.directives.get(directive_name)
+        if agent is None:
+            return
+        label = agent.display_name or directive_name
+        self._speak(f"Switching to {label}.")
 
     def destroy_node(self):
         self.exit_event.set()

@@ -91,3 +91,13 @@ class Agent(ABC):
         Default: False.
         """
         return False
+
+    def get_routing_description(self) -> Optional[str]:
+        """
+        Optional short text used by AgentOrchestrator to route tasks to this agent.
+
+        When None, the orchestrator derives context from display_name, id, skills,
+        and a truncated system prompt. Override with a concise paragraph when the
+        full prompt is long or not representative of when to use this agent.
+        """
+        return None
