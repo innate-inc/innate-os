@@ -69,6 +69,16 @@ _SKILL_EXAMPLES = [
     _REPO_ROOT / "skills" / "draw_circle.py",
 ]
 
+# Hardware interface files — sent to MiniMax so it knows the exact method signatures
+_BRAIN_CLIENT_DIR = (
+    _REPO_ROOT / "ros2_ws" / "src" / "brain" / "brain_client" / "brain_client"
+)
+_HARDWARE_INTERFACE_PATHS = [
+    _BRAIN_CLIENT_DIR / "manipulation_interface.py",
+    _BRAIN_CLIENT_DIR / "mobility_interface.py",
+    _BRAIN_CLIENT_DIR / "head_interface.py",
+]
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -335,6 +345,7 @@ def run_pipeline(
             capabilities_path=str(caps_resolved) if caps_resolved.exists() else None,
             agent_example_paths=_existing_paths(_AGENT_EXAMPLES) or None,
             skill_example_paths=_existing_paths(_SKILL_EXAMPLES) or None,
+            hardware_interface_paths=_existing_paths(_HARDWARE_INTERFACE_PATHS) or None,
         )
     except Exception as exc:
         return PipelineResult(

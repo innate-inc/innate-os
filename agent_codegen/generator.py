@@ -20,6 +20,7 @@ from agent_codegen.prompt import (
     load_agent_examples,
     load_agent_interface,
     load_examples_from_paths,
+    load_hardware_interfaces,
     load_skill_examples,
     load_skill_interface,
 )
@@ -125,6 +126,7 @@ def generate_skill(
     skills_dir: Optional[str] = None,
     skill_types_path: Optional[str] = None,
     skill_example_paths: Optional[list[str]] = None,
+    hardware_interface_paths: Optional[list[str]] = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
 ) -> SkillGenerationResult:
@@ -156,6 +158,7 @@ def generate_skill(
     _LOG.info("── skill: %r  desc=%r", skill_name, description[:80])
 
     skill_interface = load_skill_interface(skill_types_path)
+    hw_api = load_hardware_interfaces(hardware_interface_paths)
     pinned = load_examples_from_paths(skill_example_paths or [])
     dir_examples = load_skill_examples(skills_dir)
     # Pinned examples take priority; fill remaining slots from the directory scan.
@@ -167,6 +170,7 @@ def generate_skill(
         description,
         skill_interface=skill_interface,
         skill_examples=skill_examples,
+        hardware_interface_api=hw_api,
     )
 
     t0 = time.monotonic()
@@ -208,6 +212,7 @@ def generate_agent(
     capabilities_path: Optional[str] = None,
     agent_example_paths: Optional[list[str]] = None,
     skill_example_paths: Optional[list[str]] = None,
+    hardware_interface_paths: Optional[list[str]] = None,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 4096,
 ) -> GenerationResult:
@@ -333,6 +338,7 @@ def generate_agent(
                     skills_dir=skills_dir,
                     skill_types_path=skill_types_path,
                     skill_example_paths=skill_example_paths,
+                    hardware_interface_paths=hardware_interface_paths,
                     model=model,
                     max_tokens=max_tokens,
                 )

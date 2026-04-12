@@ -171,6 +171,37 @@ class Skill(ABC):
         ...
 '''
 
+# ---------------------------------------------------------------------------
+# Interface API reference — compact signatures for the three hardware interfaces.
+# Used as fallback when the live interface files cannot be read.
+# ---------------------------------------------------------------------------
+
+_INTERFACE_API_FALLBACK = '''\
+# ManipulationInterface  (self.manipulation)
+#   move_to_cartesian_pose(x, y, z, roll=0.0, pitch=0.0, yaw=0.0, duration=3, blocking=False) -> bool
+#     Move end-effector to Cartesian pose (metres, radians). Returns True on success.
+#     pitch=math.pi/2 → end-effector pointing straight down.
+#   move_cartesian_trajectory(poses, segment_duration=1.0, segment_durations=None) -> bool
+#     Smooth trajectory through a list of pose dicts [{x,y,z,roll,pitch,yaw}, ...].
+#   get_current_end_effector_pose() -> dict | None
+#     Returns {"position": {x,y,z}, "orientation": {x,y,z,w}} or None.
+#   open_gripper(percent=100.0, duration=0.5, blocking=False) -> bool
+#   close_gripper(strength=0.0, duration=0.5, blocking=False) -> bool
+#   GRIPPER_OPEN = 0.85  (radians)   GRIPPER_CLOSED = 0.0  (radians)
+
+# MobilityInterface  (self.mobility)
+#   send_cmd_vel(linear_x=0.0, angular_z=0.0, duration=None) -> None
+#     Publish velocity command. If duration>0 a stop is auto-sent after that many seconds.
+#   rotate(angle_radians) -> bool
+#     Precise blocking rotation via Nav2. Positive = counter-clockwise.
+#   rotate_in_place(angular_speed, duration) -> None
+#     Non-blocking rotation for a fixed duration then auto-stops.
+
+# HeadInterface  (self.head)
+#   set_position(angle_degrees: int) -> None
+#     Tilt head. Typical range: -25 (looking down) to +15 (looking up).
+'''
+
 # Files excluded from style examples (meta-files, utilities, internal helpers).
 _AGENT_SKIP_FILENAMES = {"__init__.py", "orchestrator_agent.py"}
 _SKILL_SKIP_FILENAMES = {"__init__.py", "arm_utils.py"}
@@ -281,6 +312,50 @@ def load_skill_interface(skill_types_path: Optional[str] = None) -> str:
     return _SKILL_INTERFACE_FALLBACK
 
 
+def load_hardware_interfaces(interface_paths: Optional[list[str]] = None) -> str:
+    """Return the hardware interface API reference to embed in the skill prompt.
+
+    Tries to read the three live interface files from *interface_paths* (in order:
+    manipulation, mobility, head).  Strips heavy docstrings/implementation from each
+    file so only the method signatures and short descriptions remain.  Falls back to
+    :data:`_INTERFACE_API_FALLBACK` when files are missing or unreadable.
+    """
+    if not interface_paths:
+        return _INTERFACE_API_FALLBACK
+
+    sections: list[str] = []
+    for p in interface_paths:
+        try:
+            src = Path(p).read_text(encoding="utf-8")
+            # Keep only lines that are class/def signatures or short comments — strip
+            # implementation bodies to save tokens while preserving the API surface.
+            lines = src.splitlines()
+            kept: list[str] = []
+            in_body = False
+            for line in lines:
+                stripped = line.strip()
+                # Always keep class defs, def signatures, and short docstring lines.
+                if stripped.startswith(("class ", "def ", "    def ", "        def ")):
+                    kept.append(line)
+                    in_body = False
+                elif stripped.startswith('"""') and len(stripped) < 120:
+                    kept.append(line)
+                elif stripped.startswith("#") and len(stripped) < 120:
+                    kept.append(line)
+                elif stripped.startswith("GRIPPER_"):
+                    kept.append(line)
+            if kept:
+                fname = Path(p).name
+                sections.append(f"# {fname}\n" + "\n".join(kept))
+                _LOG.debug("Loaded hardware interface from %s (%d kept lines)", p, len(kept))
+        except OSError as exc:
+            _LOG.warning("Cannot read interface file %r: %s — skipping", p, exc)
+
+    if sections:
+        return "\n\n".join(sections)
+    return _INTERFACE_API_FALLBACK
+
+
 def load_skill_examples(
     skills_dir: Optional[str],
     max_examples: int = 2,
@@ -301,10 +376,18 @@ def build_skill_prompt(
     *,
     skill_interface: str,
     skill_examples: list[tuple[str, str]],
+    hardware_interface_api: str = "",
 ) -> str:
     """Assemble the user prompt for skill generation."""
     examples_section = _format_examples(skill_examples)
     class_name = "".join(w.capitalize() for w in skill_name.split("_"))
+    hw_section = (
+        "HARDWARE INTERFACE API\n"
+        "──────────────────────\n"
+        "Declare interfaces at class level with Interface(InterfaceType.*) descriptors.\n"
+        "The runtime injects the real object before execute(). Always check for None.\n\n"
+        f"{hardware_interface_api}\n\n"
+    ) if hardware_interface_api else ""
 
     return (
         "TASK\n"
@@ -322,6 +405,7 @@ def build_skill_prompt(
         "────────────────────────\n"
         f"{skill_interface}\n"
         "\n"
+        f"{hw_section}"
         f"{examples_section}"
         "RULES\n"
         "─────\n"
@@ -331,7 +415,7 @@ def build_skill_prompt(
         "4. cancel() must return a str cancellation message\n"
         "5. Override guidelines() with a clear description of when/how to use this skill\n"
         "6. For hardware access use Interface descriptors; always check for None before use\n"
-        "7. Lazy-init ROS publishers/subscribers inside execute() guarded by `if self.node is None`\n"
+        "7. Only call methods shown in HARDWARE INTERFACE API — do not invent method names\n"
         "8. File must be importable standalone — no top-level ROS calls or side effects\n"
         "9. Submit via write_skill_file only — no markdown, no explanations outside the code\n"
     )
