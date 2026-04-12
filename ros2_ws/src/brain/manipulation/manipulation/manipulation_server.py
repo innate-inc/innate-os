@@ -27,7 +27,7 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
 
-def create_act_config(action_dim=10, chunk_size=50):
+def create_act_config(action_dim=10, chunk_size=30):
     """Create ACT configuration matching the training setup."""
     input_shapes = {
         "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
