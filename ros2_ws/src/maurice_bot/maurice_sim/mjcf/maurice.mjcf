@@ -82,7 +82,7 @@
               <joint name="joint1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14" damping="5"/>
               <geom name="link1_geom" type="mesh" mesh="link1_mesh" material="bright_orange" euler="0 0 3.1416"/>
 
-              <body name="link2" pos="0 0 -0.04225">
+              <body name="link2" pos="0 0 -0.04225" euler="0 1.5708 0">
                 <inertial pos="0 0 0" mass="0.080" diaginertia="0.0001 0.0001 0.0001"/>
                 <joint name="joint2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14" damping="5"/>
                 <geom name="link2_geom" type="mesh" mesh="link2_mesh" material="matt_black" euler="1.5708 -1.5708 1.5708"/>
