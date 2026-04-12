@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Query Google Calendar via Zapier's MCP (Streamable HTTP) using fastmcp.
 
+The ``ZAPIER_MCP_API_KEY`` / ``MCP_ZAPIER_API_KEY`` value is your Zapier MCP bearer token:
+the same key works for Calendar and for any other Zapier MCP tools exposed on that
+connection (not a calendar-only secret).
+
 Robot / deployment:
   - Dependency: ``fastmcp`` is listed in ``ros2_ws/pip-requirements.txt``. The usual robot
     update path (``scripts/update/post_update.sh``) installs that file with ``pip3 install -r``.
   - Manual install (same package): ``pip3 install fastmcp`` or ``uv pip install fastmcp``.
-  - Secrets: set ``ZAPIER_MCP_API_KEY`` or ``MCP_ZAPIER_API_KEY`` in the environment for
-    the skills/brain process (not committed to the repo).
+  - Secrets: set ``ZAPIER_MCP_API_KEY`` or ``MCP_ZAPIER_API_KEY`` for the skills/brain process
+    (not committed to the repo).
 """
 
 import asyncio
@@ -53,10 +57,14 @@ class CheckCalendar(Skill):
     def guidelines(self):
         return (
             "Use to read the user's Google Calendar for a given time range. "
-            "Provide start_time and end_time as ISO 8601 strings (e.g. 2026-04-11T09:00:00Z). "
+            "Provide start_time and end_time as ISO 8601 in UTC with a Z suffix (e.g. 2026-04-12T14:30:00Z). "
+            "For upcoming meetings or what's next, use start_time = current time (UTC), not midnight, "
+            "and end_time = now plus several days (e.g. 7 days) so nothing is missed. "
+            "For 'today' in a specific timezone, convert that local day's start/end to UTC—do not assume "
+            "midnight–end-of-day in UTC equals the user's calendar day. "
             "Use calendar_id 'primary' unless a specific calendar is required. "
             "Set mode to 'events' to list events (default) or 'busy' for busy blocks only. "
-            "Requires ZAPIER_MCP_API_KEY (or MCP_ZAPIER_API_KEY) and the fastmcp package on the robot."
+            "Uses the shared Zapier MCP API key (same token as other Zapier MCP skills) and fastmcp on the robot."
         )
 
     def cancel(self):
@@ -91,8 +99,8 @@ class CheckCalendar(Skill):
     ):
         if not self._api_key.strip():
             return (
-                "Missing API key: set environment variable ZAPIER_MCP_API_KEY "
-                "(or MCP_ZAPIER_API_KEY) for Zapier MCP.",
+                "Missing Zapier MCP API key: set ZAPIER_MCP_API_KEY or MCP_ZAPIER_API_KEY "
+                "(one bearer token for all Zapier MCP tools on this connection).",
                 SkillResult.FAILURE,
             )
 
