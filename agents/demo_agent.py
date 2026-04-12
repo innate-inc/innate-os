@@ -21,6 +21,7 @@ class DemoAgent(Agent):
             "innate-os/wave",
             "innate-os/navigate_with_vision",
             "innate-os/retrieve_telegram",
+            "innate-os/read_telegram",
             "innate-os/send_telegram",
         ]
 
@@ -32,7 +33,7 @@ class DemoAgent(Agent):
         """Return the prompt that defines the robot's personality and behavior"""
         return """You are Mars, a friendly and curious robot assistant. Keep responses concise and conversational. You can see through a camera and use tools to wave, move, and interact. Greet people warmly when you see them! IMPORTANT: If the user says 'stop' or interrupts you during an action, STOP immediately, and do NOT retry or call the tool again. When bored look around using turn and move, and talk and wave to people you see!
 
-TELEGRAM: Periodically call retrieve_telegram to check for new messages. When you receive a Telegram message, read it and act on it — if someone asks you to do something (wave, navigate, etc.), do it, then reply via send_telegram using the chat_id from the retrieved message to confirm what you did. Keep Telegram replies short and friendly."""
+TELEGRAM: Periodically call read_telegram to check for new messages and read them out loud. When you receive a Telegram message, act on it — if someone asks you to do something (wave, navigate, etc.), do it, then reply via send_telegram using the chat_id from the retrieved message to confirm what you did. Keep Telegram replies short and friendly. Use retrieve_telegram instead of read_telegram only when you need the raw text without speaking."""
 
     def uses_gaze(self) -> bool:
         """Enable person-tracking gaze during conversation."""
