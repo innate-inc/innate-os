@@ -2,9 +2,9 @@
 """
 Test script 1 — Skill gap analysis.
 
-Calls the semantic skill analyzer with a scenario the robot cannot handle
-(WhatsApp call, news reading, pizza ordering), producing
-~/.wildrobot/<uuid>-missing-skills.json.
+Calls the semantic skill analyzer with a scenario that is partially covered
+(wave is an existing skill in demo_agent) but requires a new skill (draw_triangle),
+producing ~/.wildrobot/<uuid>-missing-skills.json.
 Shows both existing agents that partially cover the request and new
 agents/skills that need to be created.
 
@@ -25,8 +25,7 @@ if _INNATE_ROOT not in sys.path:
 from semantic_skill_analyzer import analyze
 
 DEFAULT_PROMPT = (
-    "Call my mum on WhatsApp, read her the latest news headlines out loud, "
-    "then order a pizza on her behalf and confirm the delivery time."
+    "Draw a triangle on the floor with your arm, then wave to the people watching."
 )
 
 prompt = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROMPT
@@ -60,12 +59,21 @@ else:
     for agent_name, details in missing.items():
         print(f"\n  [New agent] {agent_name}")
         print(f"  Prompt: {details.get('prompt', '')}")
+        existing_skills = details.get("existing_skills", [])
+        if existing_skills:
+            print("  Reuses existing skills:")
+            for s in existing_skills:
+                print(f"    ✓ {s}")
         new_skills = details.get("new_skills", [])
         if new_skills:
-            print("  New skills:")
+            print("  New skills to build:")
             for skill in new_skills:
-                for skill_name, description in skill.items():
-                    print(f"    • {skill_name}: {description}")
+                if isinstance(skill, dict):
+                    if "skill_name" in skill and "description" in skill:
+                        print(f"    • {skill['skill_name']}: {skill['description']}")
+                    else:
+                        for skill_name, description in skill.items():
+                            print(f"    • {skill_name}: {description}")
         else:
             print("  New skills: (none — uses existing skills only)")
 

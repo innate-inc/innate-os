@@ -158,6 +158,76 @@ def _best_matching_agent(
     return best_agent
 
 
+def _filter_existing_from_new_skills(
+    missing: Dict[str, Any],
+    capabilities: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Remove from each agent's new_skills list any skill that already exists in
+    the catalog.
+
+    Small models sometimes list an existing skill (e.g. ``arm_utils``) as if it
+    needs to be created.  Ground-truth filtering catches both name formats the
+    model emits:
+    - ``{"draw_triangle": "description"}`` — key is the skill name
+    - ``{"skill_name": "draw_triangle", "description": "..."}`` — structured dict
+    """
+    known_skills = _known_skill_basenames(capabilities)
+    result: Dict[str, Any] = {}
+    for agent_name, agent_spec in missing.items():
+        filtered: List[Any] = []
+        for skill in agent_spec.get("new_skills", []):
+            if not isinstance(skill, dict):
+                continue
+            if "skill_name" in skill:
+                name = skill["skill_name"]
+            else:
+                name = next(iter(skill), "")
+            name = name.split(":")[0].strip()
+            if name and name not in known_skills:
+                filtered.append(skill)
+        result[agent_name] = {**agent_spec, "new_skills": filtered}
+    return result
+
+
+def _merge_partial_coverage(
+    result: Dict[str, Any],
+    capabilities: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    When existing agents only partially cover the request (some skills present,
+    some still missing), collapse everything into a single new-agent spec.
+
+    The new agent spec gains an ``existing_skills`` list — skill basenames the
+    agent can reuse without codegen — alongside the usual ``new_skills`` list of
+    skills that must be created.  ``existing_agents`` is cleared so the output
+    does not falsely claim the task is already handled.
+
+    When there is no partial overlap (fully covered or fully missing) the result
+    is returned unchanged.
+    """
+    existing = result.get("existing_agents", [])
+    missing = result.get("missing_capabilities", {})
+
+    if not existing or not missing:
+        return result  # fully covered or fully missing — nothing to merge
+
+    # Collect reusable skill basenames from the partial-match agents
+    reusable: List[str] = []
+    for agent_id in existing:
+        for skill in capabilities.get(agent_id, {}).get("skills", []):
+            if isinstance(skill, str):
+                basename = skill.split(":")[0].strip()
+                if basename not in reusable:
+                    reusable.append(basename)
+
+    merged_missing: Dict[str, Any] = {
+        agent_name: {**agent_spec, "existing_skills": reusable}
+        for agent_name, agent_spec in missing.items()
+    }
+    return {"existing_agents": [], "missing_capabilities": merged_missing}
+
+
 def _keep_first_missing_agent(missing: Dict[str, Any]) -> Dict[str, Any]:
     """Keep only the first entry in missing_capabilities.
 
@@ -329,7 +399,9 @@ def analyze(
     # plain text JSON output is the only approach that works at this param count.
     # think=True lets the model reason in <think> blocks before writing JSON;
     # _strip_think_blocks in the content extractor removes them transparently.
-    response = client.chat(model=MODEL, messages=messages, think=True)
+    # temperature=0 forces greedy decoding for deterministic output across runs.
+    _chat_opts: Dict[str, Any] = {"temperature": 0}
+    response = client.chat(model=MODEL, messages=messages, think=True, options=_chat_opts)
     result = _extract_result(response)
 
     # Retry when the model returns both fields empty.
@@ -340,7 +412,7 @@ def analyze(
             {"role": "assistant", "content": response.message.content or ""},
             {"role": "user", "content": _RETRY_PROMPT},
         ]
-        response = client.chat(model=MODEL, messages=retry_messages, think=True)
+        response = client.chat(model=MODEL, messages=retry_messages, think=True, options=_chat_opts)
         result = _extract_result(response)
 
     # Keep only real agent IDs in existing_agents (model sometimes puts skill
@@ -358,6 +430,11 @@ def analyze(
     result["missing_capabilities"] = _keep_first_missing_agent(
         result["missing_capabilities"]
     )
+    # Strip any skills from new_skills that already exist in the catalog —
+    # small models sometimes list existing skills (e.g. arm_utils) as new ones
+    result["missing_capabilities"] = _filter_existing_from_new_skills(
+        result["missing_capabilities"], capabilities
+    )
     # Always narrow existing_agents to the single best-matching agent.
     # Runs regardless of whether missing_capabilities is empty, so even partial
     # coverage (some agents + one new agent) shows the most relevant existing agent.
@@ -365,6 +442,11 @@ def analyze(
     if result["existing_agents"]:
         best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
         result["existing_agents"] = [best] if best is not None else []
+
+    # When an existing agent only partially covers the request (it has some but
+    # not all required skills), fold its reusable skills into the new-agent spec
+    # as existing_skills and clear existing_agents — the task still needs codegen.
+    result = _merge_partial_coverage(result, capabilities)
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
