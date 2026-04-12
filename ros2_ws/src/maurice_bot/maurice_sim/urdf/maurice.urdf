@@ -11,22 +11,6 @@
     <color rgba="0.0 1.0 0.0 0.3"/>  <!-- Semi-transparent green -->
   </material>
 
-  <!-- base_footprint: ground-plane frame (identity with base_link) -->
-  <link name="base_footprint"/>
-  <joint name="base_footprint_joint" type="fixed">
-    <parent link="base_link"/>
-    <child link="base_footprint"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-  </joint>
-
-  <!-- base_laser: lidar sensor frame -->
-  <link name="base_laser"/>
-  <joint name="base_laser_joint" type="fixed">
-    <parent link="base_link"/>
-    <child link="base_laser"/>
-    <origin xyz="-0.0764 0.0 0.17165" rpy="0 0 0"/>
-  </joint>
-
   <!-- base_link is the root of the URDF tree -->
   <!-- The odom -> base_link transform is published by bringup.py -->
   <link name="base_link">

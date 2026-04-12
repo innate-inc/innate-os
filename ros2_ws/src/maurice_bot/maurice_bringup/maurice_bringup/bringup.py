@@ -152,10 +152,7 @@ class Bringup(Node):
         limited_angular = max(min(-msg.angular.z, self.params['motion_control']['max_angular_speed']), 
                              -self.params['motion_control']['max_angular_speed'])
         
-        if self.debug:
-            self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
-
-        self.get_logger().info(f"Limited velocities: linear={limited_linear}, angular={limited_angular}")
+        self.get_logger().debug(f'Limited velocities: linear={limited_linear}, angular={limited_angular}')
         
         # Forward the limited velocities to the I2C manager
         self.i2c_manager.set_speed_command(

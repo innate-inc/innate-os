@@ -22,8 +22,17 @@ def generate_launch_description():
         remappings=[('scan', 'scan_fast')]
     )
 
-    # base_link -> base_laser static TF is now published by
-    # robot_state_publisher via the URDF (base_laser_joint).
+    # Node to publish a static transform from base_link to laser_frame
+    static_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='lidar_tf',
+        arguments=[
+            "-0.0764", "0.0", "0.17165",  # Translation: X, Y, Z (in meters)
+            "0", "0", "0",                # Rotation: roll, pitch, yaw (in radians)
+            "base_link", "base_laser"      # Parent and child frames
+        ]
+    )
 
     # Node to throttle scan_fast into scan
     throttle_node = Node(
@@ -36,5 +45,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         lidar_node,
+        static_tf_node,
         throttle_node,
     ])
