@@ -83,8 +83,10 @@ def _load_wildrobot_config() -> dict:
     back to env vars and then hard-coded defaults, so this is always safe.
 
     Supported keys:
-        ollama_host  — Ollama base URL (e.g. "http://localhost:11434")
-        ollama_model — Ollama model name (e.g. "qwen3:1.7b")
+        ollama_host      — Ollama base URL (e.g. "http://localhost:11434")
+        ollama_model     — Ollama model name (e.g. "qwen3:1.7b")
+        minimax_api_key  — MiniMax API key for code generation
+        gemini_api_key   — Gemini API key for analysis fallback
     """
     try:
         with open(_WILDROBOT_CONFIG_PATH, encoding="utf-8") as fh:
@@ -92,7 +94,17 @@ def _load_wildrobot_config() -> dict:
         return data if isinstance(data, dict) else {}
     except FileNotFoundError:
         return {}
-    except Exception:
+    except json.JSONDecodeError as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            f"[codegen] ~/.wildrobot/config.json is invalid JSON: {exc} — all keys ignored"
+        )
+        return {}
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            f"[codegen] Failed to read ~/.wildrobot/config.json: {exc}"
+        )
         return {}
 
 
