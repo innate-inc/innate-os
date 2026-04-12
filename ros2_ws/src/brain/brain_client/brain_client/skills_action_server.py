@@ -1149,8 +1149,13 @@ def main(args=None):
             rclpy.spin_once(action_server, timeout_sec=1.0)
     except KeyboardInterrupt:
         pass
-    action_server.destroy()
-    rclpy.shutdown()
+    finally:
+        action_server.destroy()
+    try:
+        rclpy.shutdown()
+    except Exception:
+        # SIGINT / launch_testing can shut down the context before we get here.
+        pass
 
 
 if __name__ == "__main__":

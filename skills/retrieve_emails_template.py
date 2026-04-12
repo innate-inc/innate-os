@@ -12,7 +12,7 @@ class RetrieveEmails(Skill):
 
     @property
     def name(self):
-        return "retrieve_emails"
+        return "retrieve_emails_template"
 
     def guidelines(self):
         return "Use to retrieve recent emails. Provide count (default 5). Returns subjects and content."
