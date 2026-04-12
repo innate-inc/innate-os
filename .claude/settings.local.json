@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep:*)",
+      "Bash(git log:*)",
+      "Bash(find:*)",
+      "Bash(ls D:/Voyager/MJ/Projects/robohack2026/innate-os/skills/*.py)",
+      "Bash(python:*)"
+    ]
+  }
+}
