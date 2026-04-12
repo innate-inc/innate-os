@@ -76,10 +76,14 @@ class CheckCalendar(Skill):
     def guidelines(self):
         return (
             "Use to read the user's Google Calendar. "
-            "Provide start_time and end_time as ISO 8601 UTC (Z suffix): they are the inclusive *search window* "
-            "[window_start, window_end] with window_start <= window_end (e.g. now .. now+7d). "
+            "Provide start_time and end_time as ISO 8601 UTC (Z suffix): they are the inclusive logical "
+            "search window [window_start, window_end] with window_start <= window_end. "
+            "The skill maps this window to Zapier's API (Start Time Before / End Time After). "
+            "For upcoming meetings or what's next, use start_time = current time (UTC), not midnight, "
+            "and end_time = now plus several days (e.g. 7 days) so nothing is missed. "
+            "For 'today' in a specific timezone, convert that local day's start/end to UTC—do not assume "
+            "midnight–end-of-day in UTC equals the user's calendar day. "
             "For events happening *right now*, use the *same* timestamp for start_time and end_time (current UTC). "
-            "The skill maps this window to Zapier's API (Start Before / End After). "
             "Use calendar_id 'primary' unless a specific calendar is required. "
             "Set mode to 'events' to list events (default) or 'busy' for busy blocks only. "
             "Uses the shared Zapier MCP API key (same token as other Zapier MCP skills) and fastmcp on the robot."
