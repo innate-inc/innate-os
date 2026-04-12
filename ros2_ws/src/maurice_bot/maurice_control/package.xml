@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>maurice_control</name>
-  <version>0.0.1</version>
+  <version>0.4.1</version>
   <description>Control interface for Maurice robot (joystick, keyboard, leader arm)</description>
   <maintainer email="todo@todo.com">vignesh</maintainer>
   <license>TODO: License declaration</license>
