@@ -137,8 +137,10 @@ class TTSHandler:
 
             # Volume is managed system-wide by app.cpp via
             # amixer sset Master, so aplay just uses the default.
+            # Cartesia returns a WAV container; without -t wav, aplay treats stdin
+            # as raw PCM (wrong format) and playback is silent or garbage.
             player = subprocess.Popen(
-                ["aplay", "-q"],
+                ["aplay", "-q", "-t", "wav", "-"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,

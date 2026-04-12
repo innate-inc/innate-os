@@ -11,6 +11,7 @@ from rclpy.qos import (
 )
 import threading
 import json
+import re
 import time
 import cv2
 import base64
@@ -62,6 +63,7 @@ from std_srvs.srv import SetBool, Trigger
 
 from brain_client.ws_bridge import WSBridge
 from brain_client.initializers import initialize_agents
+from brain_client.agent_orchestrator import AgentOrchestrator, ORCHESTRATOR_AGENT_ID
 from brain_client.tts_handler import TTSHandler
 from brain_client.hot_reload_watcher import HotReloadWatcher
 
@@ -586,7 +588,6 @@ class BrainClientNode(Node):
         self._gaze_tracker = None
         self._update_gaze_tracker()
 
-        # Add a subscription to change directive
         self.directive_sub = self.create_subscription(
             String, "/brain/set_directive", self.set_directive_callback, 10
         )
@@ -1075,6 +1076,28 @@ class BrainClientNode(Node):
                 "\033[93m[BrainClient] Brain is not active. Skipping chat_in message.\033[0m"
             )
             return
+
+        user_text = (data.get("text") or "").strip()
+        if (
+            self.current_directive is not None
+            and self.current_directive.id == ORCHESTRATOR_AGENT_ID
+            and user_text
+        ):
+            orch = AgentOrchestrator(
+                self.directives,
+                default_agent_id=ORCHESTRATOR_AGENT_ID,
+            )
+            choice = orch.select_keyword(user_text)
+            if choice.agent_id != ORCHESTRATOR_AGENT_ID:
+                self.get_logger().info(
+                    "##@@ [orchestrator] routing chat to directive %r (%s conf=%.2f): %s",
+                    choice.agent_id,
+                    choice.method,
+                    choice.confidence,
+                    choice.rationale,
+                )
+                # Apply synchronously so primitives re-register before CHAT_IN is sent.
+                self.set_directive_callback(String(data=choice.agent_id))
 
         self.chat_history.append(data)
 
@@ -1984,13 +2007,48 @@ class BrainClientNode(Node):
                 # otherwise, the error might be silently ignored and lead to difficult debugging.
                 raise  # Re-raise the caught exception
 
+    def _coerce_primitive_inputs(self, skill_type: str, inputs):
+        """Turn cloud/LLM shapes into a dict for json.dumps → skills_action_server."""
+        if inputs is None:
+            return {}
+        if isinstance(inputs, dict):
+            return inputs
+        if isinstance(inputs, str):
+            s = inputs.strip()
+            if not s:
+                return {}
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, str) and skill_type.endswith("/head_emotion"):
+                return {"emotion": parsed.strip()}
+            # e.g. {surprised} (not valid JSON) — common LLM mistake for head_emotion
+            if skill_type.endswith("/head_emotion"):
+                m = re.fullmatch(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", s)
+                if m:
+                    return {"emotion": m.group(1).lower()}
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s):
+                    return {"emotion": s.lower()}
+            self.get_logger().warning(
+                f"Could not coerce primitive inputs for {skill_type!r}: {inputs!r}"
+            )
+            return {}
+        self.get_logger().warning(
+            f"Unexpected primitive inputs type for {skill_type!r}: {type(inputs).__name__}"
+        )
+        return {}
+
     def send_primitive_goal(self, task_type, inputs):
         goal_msg = ExecuteSkill.Goal()
         goal_msg.skill_type = task_type
 
         # Inputs are now only the direct arguments for the primitive's execute method.
         # Robot state injection is handled by the PrimitiveExecutionActionServer.
-        goal_msg.inputs = json.dumps(inputs if inputs is not None else {})
+        coerced = self._coerce_primitive_inputs(task_type, inputs)
+        goal_msg.inputs = json.dumps(coerced)
 
         self.get_logger().info(
             f"Sending goal for skill: {goal_msg.skill_type} with inputs: {goal_msg.inputs}"
@@ -2359,16 +2417,30 @@ class BrainClientNode(Node):
         Note: This only changes the current directive, NOT the startup directive.
         """
         directive_name = msg.data.strip()
-        self.get_logger().info(f"Received directive change request: {directive_name}")
+        self.get_logger().info(
+            f"##@@ [directive/switch] 1/7 received request raw={msg.data!r} -> stripped={directive_name!r}"
+        )
 
         previous_id = self.current_directive.id if self.current_directive else None
+        self.get_logger().info(
+            f"##@@ [directive/switch] 2/7 previous_directive={previous_id!r} target={directive_name!r}"
+        )
 
         if directive_name in self.directives:
             self.current_directive = self.directives[directive_name]
-            self.get_logger().info(f"Activated directive: {directive_name}")
+            self.get_logger().info(
+                f"##@@ [directive/switch] 3/7 applied current_directive.id={self.current_directive.id!r}"
+            )
 
             if previous_id != directive_name:
+                self.get_logger().info(
+                    f"##@@ [directive/switch] 4/7 announcing TTS (change from {previous_id!r})"
+                )
                 self._announce_directive_change(directive_name)
+            else:
+                self.get_logger().info(
+                    "##@@ [directive/switch] 4/7 skip TTS (same directive as already active)"
+                )
 
             # Clear local chat history when changing agent
             self.chat_history = []
@@ -2377,9 +2449,11 @@ class BrainClientNode(Node):
             reset_msg = MessageIn(
                 type=MessageInType.RESET, payload={"memory_state": "clear"}
             )
+            self.get_logger().info("##@@ [directive/switch] 5/7 sending RESET to server (clear memory)")
             self.ws_bridge.send_message(reset_msg)
 
             # Re-register primitives and directive with the server to update
+            self.get_logger().info("##@@ [directive/switch] 6/7 register_primitives_and_directive()")
             self.register_primitives_and_directive()
 
             # Activate input devices required by this directive
@@ -2397,8 +2471,14 @@ class BrainClientNode(Node):
             self.chat_history.append(chat_entry)
             out_msg = String(data=json.dumps(chat_entry))
             self.chat_out_pub.publish(out_msg)
+            self.get_logger().info(
+                f"##@@ [directive/switch] 7/7 done: published chat confirmation for {directive_name!r}"
+            )
         else:
-            self.get_logger().error(f"Unknown directive: {directive_name}")
+            self.get_logger().error(
+                f"##@@ [directive/switch] FAILED: unknown directive {directive_name!r}; "
+                f"available={list(self.directives.keys())}"
+            )
             available_directives = list(self.directives.keys())
             error_msg = {
                 "sender": "system",
@@ -2979,7 +3059,10 @@ class BrainClientNode(Node):
             # Publish confirmation
             chat_entry = {
                 "sender": "system",
-                "text": f"Startup directive set to: {directive_name}. Active now and will be used on next startup.",
+                "text": (
+                    f"{self._selected_agent_chat_text(directive_name)} "
+                    "Saved as startup directive; will load on next boot."
+                ),
                 "timestamp": time.time(),
             }
             self.chat_history.append(chat_entry)
@@ -2987,7 +3070,10 @@ class BrainClientNode(Node):
             self.chat_out_pub.publish(out_msg)
 
             response.success = True
-            response.message = f"Startup directive set to: {directive_name}. Active now and will be used on next startup."
+            response.message = (
+                f"{self._selected_agent_chat_text(directive_name)} "
+                "Saved as startup directive; will load on next boot."
+            )
 
         else:
             self.get_logger().error(
@@ -3042,6 +3128,14 @@ class BrainClientNode(Node):
         """Speak text if TTS is available."""
         if self.tts_handler is not None:
             self.tts_handler.speak_text_async(text)
+
+    def _selected_agent_chat_text(self, directive_id: str) -> str:
+        """User-visible description of which agent/directive is active."""
+        agent = self.directives.get(directive_id)
+        if agent is not None:
+            label = (agent.display_name or "").strip() or directive_id
+            return f"Selected agent: {label} ({directive_id})"
+        return f"Selected agent: {directive_id}"
 
     def _announce_directive_change(self, directive_name: str):
         """Speak which agent is now active after a successful directive switch."""

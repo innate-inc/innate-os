@@ -5,8 +5,12 @@ from brain_client.agent_types import Agent
 
 class OrchestratorAgent(Agent):
     """
-    Default entry-point directive: meta layer that represents orchestration and
-    general interaction before switching to a specialist agent.
+    Default entry-point directive: meta layer that routes to specialist agents.
+
+    All agent modules are loaded at brain startup; this directive does not invoke
+    skills/tools itself. The brain client switches the active directive (another
+    agent) when routing decides a specialist should run—only that agent's skills
+    are registered with the cloud model.
     """
 
     @property
@@ -18,22 +22,21 @@ class OrchestratorAgent(Agent):
         return "Agent Orchestrator"
 
     def get_skills(self) -> List[str]:
-        return [
-            "innate-os/navigate_to_position",
-            "innate-os/navigate_with_vision",
-        ]
+        # No primitives while orchestrator is active — specialists own skills after switch.
+        return []
 
     def get_inputs(self) -> List[str]:
         return ["micro"]
 
     def get_routing_description(self) -> Optional[str]:
         return (
-            "Default orchestrator entry point; general conversation and navigation; "
-            "routes to specialists when appropriate."
+            "Default orchestrator entry point; conversation and routing only; "
+            "does not run skills — switches to specialists who do."
         )
 
     def get_prompt(self) -> str:
         return """You are the agent orchestrator for this robot: the default persona users meet first.
-Be helpful and concise. Clarify the user's goal. When a task clearly needs a specialist
-(chess, board calibration, security patrol, demos, etc.), acknowledge that the system may
-switch to that mode. You can use general navigation skills when movement is needed."""
+Be helpful and concise. Clarify the user's goal. You do not have tool or skill actions in this mode;
+do not pretend to navigate, manipulate the robot, or call primitives. Other agents (loaded at startup)
+are activated automatically when the task fits them (security patrol, chess, calibration, demos, etc.).
+Acknowledge when a specialist mode will take over. Until then, answer conversationally only."""
