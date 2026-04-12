@@ -1300,7 +1300,11 @@ class BrainClientNode(Node):
                 return
 
             try:
-                result = mod.run_pipeline(user_text)
+                result = mod.run_pipeline(
+                    user_text,
+                    ollama_host=os.environ.get("OLLAMA_HOST"),
+                    ollama_model=os.environ.get("OLLAMA_MODEL"),
+                )
             except Exception as exc:
                 self.get_logger().error(f"[codegen] Pipeline raised: {exc}")
                 _notify(f"Agent generation failed: {exc}")

@@ -153,7 +153,7 @@ After a successful agent hot reload, `capabilities.json` is updated immediately 
 | `innate start` / cold boot | Yes (via `initialize_agents`) | Yes |
 | `innate restart` | Yes (via `initialize_agents`) | Yes |
 | Codegen writes new `.py` | Yes (via hot reload callback) | Yes (~1 s) |
-| `in8 codegen` CLI (brain not running) | No | On next boot |
+| `in8 wildrobot` CLI (brain not running) | No | On next boot |
 
 **Hot reload is the primary path.** `in8 restart` is a guaranteed fallback if hot reload does not fire (e.g. `watchdog` not installed).
 
@@ -165,13 +165,16 @@ After a successful agent hot reload, `capabilities.json` is updated immediately 
 
 ```bash
 # Full generation (requires MINIMAX_API_KEY; uses ollama by default)
-in8 codegen "make the robot patrol the room and alert on intruders"
+in8 wildrobot "make the robot patrol the room and alert on intruders"
 
 # Analyze only — no files written
-in8 codegen "make the robot take a selfie" --dry-run
+in8 wildrobot "make the robot take a selfie" --dry-run
+
+# Force a specific ollama model
+in8 wildrobot "make the robot take a selfie" --ollama-model qwen3:4b
 
 # Force Gemini analyzer (requires GEMINI_API_KEY or GOOGLE_API_KEY)
-in8 codegen "..." --use-gemma
+in8 wildrobot "..." --use-gemma
 ```
 
 ### Run the pipeline module directly
@@ -182,11 +185,17 @@ conda run -n local_llm python -m agent_codegen.pipeline \
     "pick up a tangerine" \
     --dry-run
 
-# Explicit ollama host
+# Explicit ollama host and model
 conda run -n local_llm python -m agent_codegen.pipeline \
     "take a photo and email it" \
     --dry-run \
-    --ollama-host http://localhost:11434
+    --ollama-host http://localhost:11434 \
+    --ollama-model qwen3:1.7b
+
+# Via env vars (no flags needed)
+OLLAMA_HOST=http://localhost:11434 OLLAMA_MODEL=qwen3:4b \
+    conda run -n local_llm python -m agent_codegen.pipeline \
+    "pick up a tangerine" --dry-run
 
 # Verbose output — shows raw model response, prompt preview, code preview
 conda run -n local_llm python -m agent_codegen.pipeline \
@@ -207,6 +216,10 @@ conda run -n local_llm python3 scripts/test_skill_gap_analysis.py
 
 # With explicit prompt
 conda run -n local_llm python3 scripts/test_skill_gap_analysis.py "pick up a tangerine"
+
+# With explicit prompt and model
+conda run -n local_llm python3 scripts/test_skill_gap_analysis.py \
+    "pick up a tangerine" --model qwen3:4b
 ```
 
 ---
@@ -218,6 +231,7 @@ conda run -n local_llm python3 scripts/test_skill_gap_analysis.py "pick up a tan
 | `MINIMAX_API_KEY` | Code generation | Always (for full generation) |
 | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Gemini analyzer | Fallback when ollama unavailable |
 | `OLLAMA_HOST` | Ollama endpoint | Defaults to `http://localhost:11434` |
+| `OLLAMA_MODEL` | Ollama model name | Defaults to `qwen3:1.7b` |
 | `INNATE_OS_ROOT` | Path resolution | Defaults to `~/innate-os` |
 
 For the systemd service, add to `/etc/systemd/system/ros-app.service`:
@@ -226,6 +240,7 @@ For the systemd service, add to `/etc/systemd/system/ros-app.service`:
 Environment=MINIMAX_API_KEY=...
 Environment=GEMINI_API_KEY=...
 Environment=OLLAMA_HOST=http://172.17.30.138:11434
+Environment=OLLAMA_MODEL=qwen3:1.7b
 ```
 
 ---

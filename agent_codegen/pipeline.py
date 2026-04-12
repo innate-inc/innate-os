@@ -131,6 +131,7 @@ def run_pipeline(
     *,
     minimax_api_key: Optional[str] = None,
     ollama_host: Optional[str] = None,
+    ollama_model: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
     use_gemma: bool = False,
     agents_dir: Optional[str] = None,
@@ -160,6 +161,7 @@ def run_pipeline(
         prompt:           Natural-language user request.
         minimax_api_key:  MiniMax API key for code generation.
         ollama_host:      Ollama base URL (default: from analyzer module constant).
+        ollama_model:     Ollama model name (default: OLLAMA_MODEL env var or qwen3:1.7b).
         gemini_api_key:   Gemini API key; only used if ollama fails or use_gemma=True.
         use_gemma:        Skip ollama and go straight to Gemini.
         agents_dir:       Directory to write agent .py files.
@@ -203,13 +205,15 @@ def run_pipeline(
         analyze,
         analyze_gemma,
         DEFAULT_OLLAMA_HOST,
+        MODEL as _DEFAULT_MODEL,
     )
 
     _ollama_host = ollama_host or DEFAULT_OLLAMA_HOST
+    _ollama_model = ollama_model or os.environ.get("OLLAMA_MODEL") or _DEFAULT_MODEL
     out_path: Optional[str] = None
 
     if not use_gemma:
-        _LOG.info("─ step 1/3  analyze (ollama @ %s)", _ollama_host)
+        _LOG.info("─ step 1/3  analyze (ollama @ %s  model=%s)", _ollama_host, _ollama_model)
         t0 = time.monotonic()
         try:
             out_path = analyze(
@@ -217,6 +221,7 @@ def run_pipeline(
                 capabilities_path=str(caps_resolved),
                 output_dir=str(_wildrobot),
                 ollama_host=_ollama_host,
+                model=_ollama_model,
             )
             _LOG.info("  ✓ ollama  %.1fs  → %s", time.monotonic() - t0, out_path)
         except Exception as ollama_err:
@@ -374,6 +379,11 @@ def _cli_main() -> None:
         help="Ollama base URL (default: value from analyzer, e.g. http://localhost:11434).",
     )
     parser.add_argument(
+        "--ollama-model",
+        default=None,
+        help="Ollama model name (default: OLLAMA_MODEL env var or qwen3:1.7b).",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable DEBUG-level output (full prompt text, generated code preview).",
@@ -391,6 +401,7 @@ def _cli_main() -> None:
         skills_dir=args.skills_dir,
         capabilities_path=args.capabilities_path,
         ollama_host=args.ollama_host,
+        ollama_model=args.ollama_model,
     )
 
     if not result.success:

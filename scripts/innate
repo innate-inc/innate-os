@@ -1230,7 +1230,7 @@ def restart():
     sys.exit(_service_restart())
 
 
-@cli.command("codegen")
+@cli.command("wildrobot")
 @click.argument("prompt")
 @click.option("--dry-run", is_flag=True, help="Analyze only — do not write files.")
 @click.option(
@@ -1238,7 +1238,12 @@ def restart():
     is_flag=True,
     help="Force Gemini analyzer (default: ollama/qwen3).",
 )
-def codegen(prompt, dry_run, use_gemma):
+@click.option(
+    "--ollama-model",
+    default=None,
+    help="Ollama model name (default: OLLAMA_MODEL env var or qwen3:1.7b).",
+)
+def wildrobot(prompt, dry_run, use_gemma, ollama_model):
     """Generate a new agent+skills from a natural-language PROMPT.
 
     \b
@@ -1250,9 +1255,9 @@ def codegen(prompt, dry_run, use_gemma):
 
     \b
     Examples:
-      innate codegen "make the robot wave when it sees a person"
-      innate codegen "patrol the room and alert on intruders" --dry-run
-      innate codegen "navigate to the kitchen" --use-gemma
+      innate wildrobot "make the robot wave when it sees a person"
+      innate wildrobot "patrol the room and alert on intruders" --dry-run
+      innate wildrobot "navigate to the kitchen" --use-gemma
     """
     innate_root = str(INNATE_OS_ROOT)
     if innate_root not in sys.path:
@@ -1272,7 +1277,7 @@ def codegen(prompt, dry_run, use_gemma):
     print()
 
     try:
-        result = run_pipeline(prompt, dry_run=dry_run, use_gemma=use_gemma)
+        result = run_pipeline(prompt, dry_run=dry_run, use_gemma=use_gemma, ollama_model=ollama_model)
     except Exception as exc:
         fail(f"Pipeline raised: {exc}")
         sys.exit(1)

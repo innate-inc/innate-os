@@ -36,7 +36,7 @@ import ollama
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL = "qwen3:1.7b"
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:1.7b")
 GEMINI_ANALYZER_MODEL = "gemini-3-flash-preview"
 DEFAULT_CAPABILITIES_PATH = "~/.wildrobot/capabilities.json"
 DEFAULT_OUTPUT_DIR = "~/.wildrobot"
@@ -438,6 +438,7 @@ def analyze(
     output_dir: Union[str, Path] = DEFAULT_OUTPUT_DIR,
     ollama_host: str = DEFAULT_OLLAMA_HOST,
     max_retries: int = MAX_RETRIES,
+    model: str = MODEL,
 ) -> str:
     """
     Analyze a text prompt against existing capabilities and write an analysis file.
@@ -480,7 +481,7 @@ def analyze(
     # _strip_think_blocks in the content extractor removes them transparently.
     # temperature=0 forces greedy decoding for deterministic output across runs.
     _chat_opts: Dict[str, Any] = {"temperature": 0}
-    response = client.chat(model=MODEL, messages=messages, think=True, options=_chat_opts)
+    response = client.chat(model=model, messages=messages, think=True, options=_chat_opts)
     result = _extract_result(response)
 
     # Retry when the model returns both fields empty.
@@ -491,7 +492,7 @@ def analyze(
             {"role": "assistant", "content": response.message.content or ""},
             {"role": "user", "content": _RETRY_PROMPT},
         ]
-        response = client.chat(model=MODEL, messages=retry_messages, think=True, options=_chat_opts)
+        response = client.chat(model=model, messages=retry_messages, think=True, options=_chat_opts)
         result = _extract_result(response)
 
     result = _postprocess_capability_result(result, prompt, capabilities)
