@@ -1230,6 +1230,76 @@ def restart():
     sys.exit(_service_restart())
 
 
+@cli.command("codegen")
+@click.argument("prompt")
+@click.option("--dry-run", is_flag=True, help="Analyze only — do not write files.")
+@click.option(
+    "--use-gemma",
+    is_flag=True,
+    help="Force Gemini analyzer (default: ollama/qwen3).",
+)
+def codegen(prompt, dry_run, use_gemma):
+    """Generate a new agent+skills from a natural-language PROMPT.
+
+    \b
+    Uses ollama (local, no API key) by default.
+    Falls back to Gemini when ollama is unavailable or --use-gemma is set.
+    Requires MINIMAX_API_KEY for code generation.
+    Hot reload picks up new files automatically (~1 s after write).
+    Run 'innate restart' as a guaranteed fallback if hot reload does not fire.
+
+    \b
+    Examples:
+      innate codegen "make the robot wave when it sees a person"
+      innate codegen "patrol the room and alert on intruders" --dry-run
+      innate codegen "navigate to the kitchen" --use-gemma
+    """
+    innate_root = str(INNATE_OS_ROOT)
+    if innate_root not in sys.path:
+        sys.path.insert(0, innate_root)
+
+    try:
+        from agent_codegen.pipeline import run_pipeline  # noqa: PLC0415
+    except ImportError as exc:
+        fail(f"Cannot import agent_codegen.pipeline: {exc}")
+        sys.exit(1)
+
+    print(f"  {C.CYAN}Prompt:{C.NC} {prompt}")
+    if dry_run:
+        print(f"  {C.DIM}(dry-run: analysis only){C.NC}")
+    if use_gemma:
+        print(f"  {C.DIM}(analyzer: Gemini){C.NC}")
+    print()
+
+    try:
+        result = run_pipeline(prompt, dry_run=dry_run, use_gemma=use_gemma)
+    except Exception as exc:
+        fail(f"Pipeline raised: {exc}")
+        sys.exit(1)
+
+    if not result.success:
+        fail(f"Pipeline failed: {result.error}")
+        sys.exit(1)
+
+    if not result.missing_capabilities:
+        ok("Task already covered by existing agents — nothing generated.")
+        sys.exit(0)
+
+    if dry_run:
+        agent_id = next(iter(result.missing_capabilities))
+        print(f"  {C.YELLOW}[dry-run]{C.NC} Would generate agent: {C.BOLD}{agent_id}{C.NC}")
+        sys.exit(0)
+
+    ok(f"Agent generated: {C.BOLD}{result.agent_id}{C.NC}")
+    if result.agent_file:
+        print(f"    File  : {result.agent_file}")
+    for sf in result.skill_files:
+        print(f"    Skill : {sf}")
+    print()
+    print(f"  {C.DIM}Hot reload will pick up the new agent within ~1 second.{C.NC}")
+    print(f"  {C.DIM}If it does not appear, run: {C.BOLD}innate restart{C.NC}")
+
+
 # -- build / clean / diag ----------------------------------------------------
 
 

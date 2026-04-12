@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -152,13 +153,14 @@ def generate_skill(
     if not description:
         raise AgentCodegenError("description must not be empty")
 
-    _LOG.info("Generating skill %r", skill_name)
+    _LOG.info("── skill: %r  desc=%r", skill_name, description[:80])
 
     skill_interface = load_skill_interface(skill_types_path)
     pinned = load_examples_from_paths(skill_example_paths or [])
     dir_examples = load_skill_examples(skills_dir)
     # Pinned examples take priority; fill remaining slots from the directory scan.
     skill_examples = (pinned + [ex for ex in dir_examples if ex[0] not in {p[0] for p in pinned}])[:2]
+    _LOG.debug("Skill examples: %s", [name for name, _ in skill_examples])
 
     prompt = build_skill_prompt(
         skill_name,
@@ -167,8 +169,10 @@ def generate_skill(
         skill_examples=skill_examples,
     )
 
+    t0 = time.monotonic()
     client = MiniMaxClient(api_key=api_key, model=model, max_tokens=max_tokens)
     code, via_tool = client.generate_skill_code(prompt)
+    elapsed = time.monotonic() - t0
 
     if not _validate_skill_code(code):
         raise AgentCodegenError(
@@ -180,7 +184,9 @@ def generate_skill(
     file_path: Optional[str] = None
     if output_path is not None:
         file_path = _write_file(code, output_path)
-        _LOG.info("Skill written to %s", file_path)
+        _LOG.info("   ✓ skill written  %s  (%.1fs)", file_path, elapsed)
+    else:
+        _LOG.info("   ✓ skill generated  %d chars  via_tool=%s  (%.1fs)", len(code), via_tool, elapsed)
 
     return SkillGenerationResult(
         skill_name=skill_name,
@@ -256,23 +262,31 @@ def generate_agent(
 
     agent_id = next(iter(missing_capabilities))
     agent_spec = missing_capabilities[agent_id]
+    new_skills = _parse_skill_entries(agent_spec.get("new_skills", []))
+    existing_skill_names = [s for s in agent_spec.get("existing_skills", []) if isinstance(s, str)]
 
-    _LOG.info("Generating agent %r from spec: %s", agent_id, list(agent_spec.keys()))
+    _LOG.info("━━━ agent: %r", agent_id)
+    _LOG.info(
+        "   spec: new_skills=%d  existing_skills=%d",
+        len(new_skills),
+        len(existing_skill_names),
+    )
+    if agent_spec.get("prompt"):
+        _LOG.debug("   agent prompt excerpt: %s", str(agent_spec["prompt"])[:120])
 
     # --- Agent generation ---
     agent_interface = load_agent_interface(agent_types_path)
     pinned_agent = load_examples_from_paths(agent_example_paths or [])
     dir_agent = load_agent_examples(agents_dir)
     agent_examples = (pinned_agent + [ex for ex in dir_agent if ex[0] not in {p[0] for p in pinned_agent}])[:2]
+    _LOG.debug("   agent examples: %s", [name for name, _ in agent_examples])
 
     # Build existing-skill descriptions from the capabilities index.
     capabilities = _load_capabilities(capabilities_path)
     skill_desc_map = _build_skill_desc_map(capabilities)
-    raw_existing = agent_spec.get("existing_skills", [])
     existing_skills: list[tuple[str, str]] = [
         (name, skill_desc_map.get(name, ""))
-        for name in raw_existing
-        if isinstance(name, str)
+        for name in existing_skill_names
     ]
 
     prompt = build_prompt(
@@ -283,8 +297,10 @@ def generate_agent(
         existing_skills=existing_skills,
     )
 
+    t0 = time.monotonic()
     client = MiniMaxClient(api_key=api_key, model=model, max_tokens=max_tokens)
     code, via_tool = client.generate(prompt)
+    elapsed = time.monotonic() - t0
 
     if not _validate_agent_code(code):
         raise AgentCodegenError(
@@ -296,18 +312,18 @@ def generate_agent(
     file_path: Optional[str] = None
     if output_path is not None:
         file_path = _write_file(code, output_path)
-        _LOG.info("Agent written to %s", file_path)
+        _LOG.info("✓ agent written  %s  (%.1fs)", file_path, elapsed)
+    else:
+        _LOG.info("✓ agent generated  %d chars  via_tool=%s  (%.1fs)", len(code), via_tool, elapsed)
 
     # --- Skill generation ---
     skill_results: list[SkillGenerationResult] = []
 
     if skills_dir is not None:
-        raw_skills = agent_spec.get("new_skills", [])
-        skill_entries = _parse_skill_entries(raw_skills)
-
-        for skill_name, description in skill_entries:
+        total = len(new_skills)
+        for idx, (skill_name, description) in enumerate(new_skills, start=1):
             skill_output = str(Path(skills_dir) / f"{skill_name}.py")
-            _LOG.info("Generating skill %r → %s", skill_name, skill_output)
+            _LOG.info("[%d/%d] skill: %r → %s", idx, total, skill_name, skill_output)
             try:
                 skill_result = generate_skill(
                     skill_name,
@@ -322,7 +338,7 @@ def generate_agent(
                 )
                 skill_results.append(skill_result)
             except AgentCodegenError as exc:
-                _LOG.error("Skill %r generation failed: %s", skill_name, exc)
+                _LOG.error("✗ skill %r generation failed: %s", skill_name, exc)
                 # Continue generating remaining skills rather than aborting.
                 skill_results.append(
                     SkillGenerationResult(
