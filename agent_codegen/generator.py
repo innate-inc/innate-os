@@ -89,24 +89,31 @@ def _write_file(code: str, output_path: str) -> str:
 def _parse_skill_entries(new_skills: list) -> list[tuple[str, str]]:
     """Extract ``(skill_name, description)`` pairs from a ``new_skills`` list.
 
-    Handles two formats produced by ``semantic_skill_analyzer``:
+    Handles all formats produced by ``semantic_skill_analyzer``:
 
-    - ``{"skill_name": "name", "description": "desc"}`` — two-key dict
-    - ``{"skill_name": "description"}``                  — single-key dict
+    - ``{"skill_name": "name", "description": "desc"}`` — explicit two-key dict
+    - ``{"skill_name": "name"}``                        — skill_name key only
+    - ``{"move_arm_straight": "description"}``          — bare name→description dict
     """
     entries: list[tuple[str, str]] = []
     for item in new_skills:
         if not isinstance(item, dict):
             continue
-        if "skill_name" in item and "description" in item:
-            entries.append((str(item["skill_name"]), str(item["description"])))
+        if "skill_name" in item:
+            # Explicit skill_name key — value is the actual name regardless of
+            # whether a separate "description" key exists.
+            name = str(item["skill_name"])
+            desc = str(item.get("description", ""))
+            if name:
+                entries.append((name, desc))
         elif len(item) == 1:
+            # Bare {name: description} format
             name, desc = next(iter(item.items()))
             entries.append((str(name), str(desc)))
         else:
-            # Fallback: use skill_name key; stringify remainder as description.
-            name = item.get("skill_name", "")
-            desc = str({k: v for k, v in item.items() if k != "skill_name"})
+            # Multi-key dict without "skill_name" — stringify whole dict as desc
+            name = next(iter(item), "")
+            desc = str(item)
             if name:
                 entries.append((str(name), desc))
     return entries
