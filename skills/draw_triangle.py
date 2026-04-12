@@ -1,42 +1,44 @@
 #!/usr/bin/env python3
 """
-DrawTriangle — Use the robot's arm to draw a triangle on the floor.
+DrawTriangle — Draw a small equilateral triangle on the floor with the robot arm.
+
+Triangle is fixed: 10 cm sides, first vertex 10 cm in front of the robot.
+The arm traces all three sides sequentially then lifts back to the ready pose.
 """
 
-from brain_client.skill_types import (
-    Skill,
-    SkillResult,
-    Interface,
-    InterfaceType,
-    RobotState,
-    RobotStateType,
-)
+import math
+import time
+
+from brain_client.skill_types import Interface, InterfaceType, Skill, SkillResult
 
 
 class DrawTriangle(Skill):
-    """
-    Skill to draw a triangle on the floor using the robot's arm.
+    """Trace a 10 cm equilateral triangle on the floor using the arm end-effector."""
 
-    The triangle can be specified by:
-    - Three vertices (x, y coordinates relative to robot)
-    - Three side lengths (auto-calculates equilateral if not specified)
-    - Scale factor for default size
-
-    The arm will move to each vertex position, touching the floor to draw.
-    """
-
-    # Declare required interfaces
     manipulation = Interface(InterfaceType.MANIPULATION)
-    mobility = Interface(InterfaceType.MOBILITY)
-    head = Interface(InterfaceType.HEAD)
 
-    # Declare required robot states
-    wrist_camera = RobotState(RobotStateType.LAST_WRIST_CAMERA_IMAGE_B64)
-    head_position = RobotState(RobotStateType.LAST_HEAD_POSITION)
+    # Equilateral triangle geometry (metres).
+    # Placed so the left base vertex is 10 cm forward, centred on the robot's y=0.
+    SIDE = 0.10
+    # x offset: how far in front of the robot the near edge starts
+    X_OFFSET = 0.10
+    # z when the pen tip touches the floor (tune to your robot's floor height)
+    Z_FLOOR = -0.05
+    # z for the safe transit height above the floor
+    Z_LIFT = 0.10
+
+    # Default arm orientation while drawing (pen pointing straight down)
+    DRAW_ROLL = 0.0
+    DRAW_PITCH = math.pi / 2   # 90° pitch → end-effector pointing down
+    DRAW_YAW = 0.0
+
+    # Seconds per segment; increase for slower, more accurate moves
+    SEG_DURATION = 2.0
+    LIFT_DURATION = 1.0
 
     def __init__(self, logger):
         super().__init__(logger)
-        self._goal_handle = None
+        self._cancelled = False
 
     @property
     def name(self):
@@ -44,166 +46,99 @@ class DrawTriangle(Skill):
 
     def guidelines(self):
         return (
-            "Draw a triangle on the floor using the robot's arm. "
-            "Provide vertices as (x1, y1, x2, y2, x3, y3) relative to robot position, "
-            "or side lengths (side1, side2, side3) for a triangle defined by sides. "
-            "Use scale parameter to adjust default triangle size. "
-            "Use when the user wants the robot to draw a geometric shape on the floor."
+            "Draw a fixed equilateral triangle (10 cm sides) on the floor, "
+            "starting 10 cm directly in front of the robot. "
+            "No parameters are required. "
+            "Use when the user asks the robot to draw a triangle."
         )
 
-    def guidelines_when_running(self):
-        return (
-            "Robot is currently drawing a triangle. "
-            "Monitor arm movement and camera feedback for precision. "
-            "User can request cancellation if needed."
-        )
-
-    def execute(
-        self,
-        x1: float | None = None,
-        y1: float | None = None,
-        x2: float | None = None,
-        y2: float | None = None,
-        x3: float | None = None,
-        y3: float | None = None,
-        side1: float | None = None,
-        side2: float | None = None,
-        side3: float | None = None,
-        scale: float = 0.15,
-        **kwargs
-    ):
+    def execute(self, **kwargs):
         """
-        Execute the triangle drawing skill.
+        Trace the triangle on the floor, then lift the arm.
 
-        Args:
-            x1, y1: First vertex position relative to robot
-            x2, y2: Second vertex position relative to robot
-            x3, y3: Third vertex position relative to robot
-            side1, side2, side3: Triangle side lengths (creates equilateral if all provided)
-            scale: Scale factor for default/side-based triangle (default 0.15m)
-            **kwargs: Additional arguments
-
-        Returns:
-            tuple: (result_message, SkillResult)
+        Vertices (in robot base_link frame, metres):
+          V1 — (X_OFFSET,           -SIDE/2,    Z_FLOOR)   left base corner
+          V2 — (X_OFFSET,           +SIDE/2,    Z_FLOOR)   right base corner
+          V3 — (X_OFFSET + height,   0,          Z_FLOOR)   apex (forward)
         """
-        # Validate manipulation interface
+        self._cancelled = False
+
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
 
-        self.logger.info("[DrawTriangle] Starting triangle drawing skill")
+        height = self.SIDE * math.sqrt(3) / 2
 
-        # Calculate vertices
-        vertices = self._calculate_vertices(
-            x1, y1, x2, y2, x3, y3,
-            side1, side2, side3,
-            scale
+        v1 = (self.X_OFFSET,          -self.SIDE / 2, self.Z_FLOOR)
+        v2 = (self.X_OFFSET,          +self.SIDE / 2, self.Z_FLOOR)
+        v3 = (self.X_OFFSET + height,  0.0,            self.Z_FLOOR)
+
+        # ── 1. Move to safe height above V1 ────────────────────────────────
+        self.logger.info("[DrawTriangle] Moving to transit height above V1")
+        ok = self._move(v1[0], v1[1], self.Z_LIFT, duration=self.LIFT_DURATION)
+        if not ok:
+            return "Failed to reach starting position", SkillResult.FAILURE
+        if self._cancelled:
+            return "Cancelled before drawing", SkillResult.CANCELLED
+
+        # ── 2. Touch down at V1 ─────────────────────────────────────────────
+        self._send_feedback("Touching down at vertex 1")
+        ok = self._move(*v1, duration=self.LIFT_DURATION)
+        if not ok:
+            return "Failed to touch down at V1", SkillResult.FAILURE
+        if self._cancelled:
+            return "Cancelled at V1", SkillResult.CANCELLED
+
+        # ── 3. Draw V1 → V2 ─────────────────────────────────────────────────
+        self._send_feedback("Drawing side 1 (V1 → V2)")
+        self.logger.info(f"[DrawTriangle] V1→V2: {v1} → {v2}")
+        ok = self._move(*v2, duration=self.SEG_DURATION)
+        if not ok:
+            return "Failed to draw side 1", SkillResult.FAILURE
+        if self._cancelled:
+            return "Cancelled during side 1", SkillResult.CANCELLED
+
+        # ── 4. Draw V2 → V3 ─────────────────────────────────────────────────
+        self._send_feedback("Drawing side 2 (V2 → V3)")
+        self.logger.info(f"[DrawTriangle] V2→V3: {v2} → {v3}")
+        ok = self._move(*v3, duration=self.SEG_DURATION)
+        if not ok:
+            return "Failed to draw side 2", SkillResult.FAILURE
+        if self._cancelled:
+            return "Cancelled during side 2", SkillResult.CANCELLED
+
+        # ── 5. Draw V3 → V1 (close the triangle) ───────────────────────────
+        self._send_feedback("Closing triangle (V3 → V1)")
+        self.logger.info(f"[DrawTriangle] V3→V1: {v3} → {v1}")
+        ok = self._move(*v1, duration=self.SEG_DURATION)
+        if not ok:
+            return "Failed to close triangle", SkillResult.FAILURE
+        if self._cancelled:
+            return "Cancelled while closing", SkillResult.CANCELLED
+
+        # ── 6. Lift arm ─────────────────────────────────────────────────────
+        self._send_feedback("Lifting arm")
+        self._move(v1[0], v1[1], self.Z_LIFT, duration=self.LIFT_DURATION)
+
+        self.logger.info("[DrawTriangle] Triangle complete")
+        return (
+            f"Triangle drawn: {self.SIDE * 100:.0f} cm equilateral, "
+            f"starting {self.X_OFFSET * 100:.0f} cm in front of robot",
+            SkillResult.SUCCESS,
         )
 
-        if vertices is None:
-            return "Failed to calculate valid triangle vertices", SkillResult.FAILURE
-
-        try:
-            # Prepare arm for drawing (move to ready position)
-            self._send_feedback("Preparing arm for drawing")
-            self.logger.info("[DrawTriangle] Moving arm to ready position")
-
-            # Move to first vertex
-            v1_x, v1_y = vertices[0]
-            self._send_feedback(f"Moving to vertex 1: ({v1_x:.2f}, {v1_y:.2f})")
-            self.logger.info(f"[DrawTriangle] Moving to vertex 1: ({v1_x:.2f}, {v1_y:.2f})")
-
-            # Touch down and draw first side
-            self._send_feedback("Touching down to start drawing")
-            self.logger.info("[DrawTriangle] Touching down at vertex 1")
-
-            # Draw to vertex 2
-            v2_x, v2_y = vertices[1]
-            self._send_feedback(f"Drawing to vertex 2: ({v2_x:.2f}, {v2_y:.2f})")
-            self.logger.info(f"[DrawTriangle] Drawing to vertex 2: ({v2_x:.2f}, {v2_y:.2f})")
-
-            # Draw to vertex 3
-            v3_x, v3_y = vertices[2]
-            self._send_feedback(f"Drawing to vertex 3: ({v3_x:.2f}, {v3_y:.2f})")
-            self.logger.info(f"[DrawTriangle] Drawing to vertex 3: ({v3_x:.2f}, {v3_y:.2f})")
-
-            # Close the triangle back to vertex 1
-            self._send_feedback("Closing triangle back to start")
-            self.logger.info("[DrawTriangle] Closing triangle")
-
-            # Lift arm after drawing
-            self._send_feedback("Lifting arm, triangle complete")
-            self.logger.info("[DrawTriangle] Lifting arm, triangle complete")
-
-            return "Triangle drawn successfully on the floor", SkillResult.SUCCESS
-
-        except Exception as e:
-            self.logger.error(f"[DrawTriangle] Failed to draw triangle: {e}")
-            return f"Failed to draw triangle: {str(e)}", SkillResult.FAILURE
-
-    def _calculate_vertices(
-        self,
-        x1, y1, x2, y2, x3, y3,
-        side1, side2, side3,
-        scale
-    ):
-        """
-        Calculate triangle vertices based on provided parameters.
-
-        Returns:
-            list of tuples: [(x1, y1), (x2, y2), (x3, y3)] or None if invalid
-        """
-        import math
-
-        # If explicit vertices provided, use them
-        if all(v is not None for v in [x1, y1, x2, y2, x3, y3]):
-            return [(x1, y1), (x2, y2), (x3, y3)]
-
-        # If side lengths provided, calculate equilateral-ish triangle
-        if all(s is not None for s in [side1, side2, side3]):
-            # Use Heron's formula to validate and calculate
-            s = (side1 + side2 + side3) / 2
-            area_sq = s * (s - side1) * (s - side2) * (s - side3)
-
-            if area_sq <= 0:
-                self.logger.error("[DrawTriangle] Invalid triangle sides (degenerate)")
-                return None
-
-            area = math.sqrt(area_sq)
-
-            # Place triangle with first side along x-axis
-            x1, y1 = 0.0, 0.0
-            x2, y2 = side1 * scale, 0.0
-
-            # Calculate third vertex using law of cosines
-            cos_angle3 = (side1**2 + side2**2 - side3**2) / (2 * side1 * side2)
-            angle3 = math.acos(max(-1, min(1, cos_angle3)))
-
-            x3 = side2 * scale * cos_angle3
-            y3 = side2 * scale * math.sin(angle3)
-
-            self.logger.info(
-                f"[DrawTriangle] Calculated triangle: sides={side1}, {side2}, {side3}, scale={scale}"
-            )
-            return [(x1, y1), (x2, y2), (x3, y3)]
-
-        # Default: equilateral triangle with given scale
-        height = scale * math.sqrt(3) / 2
-        x1, y1 = 0.0, 0.0
-        x2, y2 = scale, 0.0
-        x3, y3 = scale / 2, height
-
-        self.logger.info(
-            f"[DrawTriangle] Using default equilateral triangle with scale={scale}"
+    def _move(self, x: float, y: float, z: float, duration: float) -> bool:
+        """Move end-effector to (x, y, z) and wait for the motion to finish."""
+        ok = self.manipulation.move_to_cartesian_pose(
+            x=x, y=y, z=z,
+            roll=self.DRAW_ROLL,
+            pitch=self.DRAW_PITCH,
+            yaw=self.DRAW_YAW,
+            duration=duration,
         )
-        return [(x1, y1), (x2, y2), (x3, y3)]
+        if ok:
+            time.sleep(duration)
+        return bool(ok)
 
     def cancel(self):
-        """Cancel the triangle drawing operation."""
-        if self._goal_handle:
-            self.logger.info("[DrawTriangle] Cancelling triangle drawing operation")
-            self._goal_handle.cancel_goal_async()
-            self._send_feedback("Triangle drawing cancelled by user")
-            return "Triangle drawing operation cancelled"
-        else:
-            self._send_feedback("No active triangle drawing to cancel")
-            return "No active triangle drawing operation to cancel"
+        self._cancelled = True
+        return "Triangle drawing cancelled"
