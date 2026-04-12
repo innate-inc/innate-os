@@ -1110,6 +1110,75 @@ class BrainClientNode(Node):
         payload["robot_coords"] = robot_coords_payload
         return payload
 
+    def _build_chat_in_payload(self, text: str) -> dict:
+        """Build the same CHAT_IN payload as user speech (image + nav for primitives)."""
+        payload: dict = {"text": text}
+        if image_b64 := self._encode_current_image():
+            payload["image_b64"] = image_b64
+
+        if nav_payload := self._build_navigation_payload():
+            payload["depth"] = nav_payload.get("depth")
+            payload["map"] = nav_payload.get("map")
+            payload["camera_info"] = nav_payload.get("camera_info")
+            payload["robot_coords"] = nav_payload.get("robot_coords")
+            self.get_logger().debug(
+                "chat_in includes full navigation payload for immediate processing"
+            )
+        else:
+            self.get_logger().debug(
+                "chat_in without full navigation payload - navigation will be deferred"
+            )
+
+        if "image_b64" in payload:
+            self.pose_at_image_send = self._get_current_pose_xyt()
+        return payload
+
+    def _notify_brain_tool_result(
+        self,
+        skill_id: str,
+        primitive_name: str,
+        primitive_id: typing.Optional[str],
+        raw_message: str,
+    ) -> None:
+        """Send tool output to the cloud so the agent transcript includes it before the next vision turn.
+
+        Many backends only merge CHAT_IN into history; primitive_completed alone may not.
+        """
+        if not raw_message or not str(raw_message).strip():
+            return
+        raw_message = str(raw_message)
+        if skill_id == "innate-os/check_calendar":
+            summary = _calendar_json_to_speech(raw_message)
+        else:
+            summary = None
+        if not summary:
+            summary = raw_message[:1500] + ("…" if len(raw_message) > 1500 else "")
+
+        custom = {
+            "kind": "primitive_tool_result",
+            "skill_id": skill_id,
+            "primitive_name": primitive_name,
+            "primitive_id": primitive_id,
+            "result": raw_message,
+            "summary": summary,
+        }
+        self.ws_bridge.send_message(
+            MessageIn(type=MessageInType.CUSTOM_INPUT, payload=custom)
+        )
+        line = f"(Tool result · {primitive_name}) {summary}"
+        payload = self._build_chat_in_payload(line)
+        self.ws_bridge.send_message(MessageIn(type=MessageInType.CHAT_IN, payload=payload))
+        self.chat_history.append(
+            {
+                "sender": "tool_result",
+                "text": line,
+                "timestamp": time.time(),
+            }
+        )
+        self.get_logger().info(
+            f"Sent tool-result follow-up (custom_input + chat_in) for {skill_id}"
+        )
+
     def chat_in_callback(self, msg: String):
         data = json.loads(msg.data)
 
@@ -1143,30 +1212,7 @@ class BrainClientNode(Node):
 
         self.chat_history.append(data)
 
-        payload = {"text": data["text"]}
-        if image_b64 := self._encode_current_image():
-            payload["image_b64"] = image_b64
-
-        # Include navigation payload for immediate processing of navigation primitives.
-        # Without this, navigation primitives are deferred until the next image message.
-        # Exception: turn_and_move only needs robot_coords and can work with partial data.
-        if nav_payload := self._build_navigation_payload():
-            payload["depth"] = nav_payload.get("depth")
-            payload["map"] = nav_payload.get("map")
-            payload["camera_info"] = nav_payload.get("camera_info")
-            payload["robot_coords"] = nav_payload.get("robot_coords")
-            self.get_logger().debug(
-                "chat_in includes full navigation payload for immediate processing"
-            )
-        else:
-            self.get_logger().debug(
-                "chat_in without full navigation payload - navigation will be deferred"
-            )
-
-        # Store pose at message send time for local nav compensation
-        if "image_b64" in payload:
-            self.pose_at_image_send = self._get_current_pose_xyt()
-
+        payload = self._build_chat_in_payload(data["text"])
         outgoing_msg = MessageIn(type=MessageInType.CHAT_IN, payload=payload)
         self.ws_bridge.send_message(outgoing_msg)
         self.get_logger().info(f"Sent MessageIn: {outgoing_msg.payload['text']}")
@@ -2258,6 +2304,15 @@ class BrainClientNode(Node):
             self.get_logger().info(
                 f"Sent primitive status message: {outgoing_msg.type.name}"
             )
+            if (
+                result.success
+                and result.success_type == SkillResult.SUCCESS.value
+                and result.message
+                and str(result.message).strip()
+            ):
+                self._notify_brain_tool_result(
+                    skill_id, primitive_name, primitive_id, result.message
+                )
 
         if local_status:
             self._publish_task_status(
