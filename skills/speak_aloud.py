@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Say text — publish a phrase to /brain/tts so the robot says it out loud.
+Speak aloud — publish a phrase to /brain/tts so the robot says it out loud.
 """
 
 from std_msgs.msg import String
@@ -8,7 +8,7 @@ from std_msgs.msg import String
 from brain_client.skill_types import Skill, SkillResult
 
 
-class SayText(Skill):
+class SpeakAloud(Skill):
     """Publish a phrase to /brain/tts so the robot says it out loud."""
 
     def __init__(self, logger):
@@ -17,7 +17,7 @@ class SayText(Skill):
 
     @property
     def name(self):
-        return "say_text"
+        return "speak_aloud"
 
     def guidelines(self):
         return (
@@ -43,8 +43,8 @@ class SayText(Skill):
         msg = String()
         msg.data = phrase
         self._tts_pub.publish(msg)
-        self.logger.info(f"[SayText] Published TTS: {phrase!r}")
+        self.logger.info(f"[SpeakAloud] Published TTS: {phrase!r}")
         return f"Said out loud: {phrase}", SkillResult.SUCCESS
 
     def cancel(self):
-        return "Say text finished (nothing to cancel)"
+        return "Speak aloud finished (nothing to cancel)"
