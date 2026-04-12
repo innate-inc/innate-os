@@ -25,7 +25,7 @@ if _INNATE_ROOT not in sys.path:
 from semantic_skill_analyzer import analyze
 
 DEFAULT_PROMPT = (
-    "Draw a triangle on the floor with your arm, then wave to the people watching."
+    "Draw a circle on the floor with your arm 10cm radius, center of the circle 20cm in front of the robot"
 )
 
 prompt = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROMPT
