@@ -98,6 +98,7 @@ def _load_wildrobot_config() -> dict:
 
 def _load_codegen_pipeline():
     """Import agent_codegen.pipeline from INNATE_OS_ROOT. Returns a namespace or None."""
+    import sys as _sys
     import types as _types
     root = os.environ.get(
         "INNATE_OS_ROOT", os.path.join(os.path.expanduser("~"), "innate-os")
@@ -105,8 +106,8 @@ def _load_codegen_pipeline():
     pkg_path = os.path.join(root, "agent_codegen", "pipeline.py")
     if not os.path.exists(pkg_path):
         return None
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    if root not in _sys.path:
+        _sys.path.insert(0, root)
     try:
         from agent_codegen.pipeline import run_pipeline, PipelineResult  # noqa: PLC0415
         return _types.SimpleNamespace(
