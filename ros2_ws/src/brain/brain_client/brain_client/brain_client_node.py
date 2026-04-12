@@ -2173,6 +2173,9 @@ class BrainClientNode(Node):
                 payload={
                     "primitive_name": primitive_name,
                     "primitive_id": primitive_id,
+                    "skill_id": skill_id,
+                    # Tool/skill return value (e.g. check_calendar JSON) for the agent to consume
+                    "result": result.message,
                 },
             )
             local_status = "completed"
