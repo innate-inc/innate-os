@@ -32,14 +32,15 @@ from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 # Skills that MUST load in a headless Docker container (no hardware, no external APIs).
 # These have no blocking __init__ and no missing module-level imports.
 # Values are deterministic skill IDs (innate-os/<file_stem>).
+# Omit scan_for_objects: it requires google.generativeai at import time.
 REQUIRED_SKILLS = {
     "innate-os/send_email",
     "innate-os/send_picture_via_email",
     "innate-os/retrieve_emails",
+    "innate-os/retrieve_emails_template",
     "innate-os/arm_circle_motion",
     "innate-os/arm_move_to_xyz",
     "innate-os/arm_zero_position",
-    "innate-os/scan_for_objects",
 }
 
 
