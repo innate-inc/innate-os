@@ -1,0 +1,18 @@
+[project]
+name = "innate-agent-codegen"
+version = "0.1.0"
+description = "Self-contained library that generates Python Agent classes from a missing-capabilities spec using MiniMax via the Anthropic-compatible API."
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-mock"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent_codegen*"]
