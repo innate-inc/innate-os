@@ -297,18 +297,14 @@ def build_prompt(
 
 
 def load_skill_interface(skill_types_path: Optional[str] = None) -> str:
-    """Return the Skill ABC source to embed in the prompt.
+    """Return the Skill ABC contract to embed in the prompt.
 
-    If *skill_types_path* is given and readable its full text is returned.
-    Falls back to :data:`_SKILL_INTERFACE_FALLBACK` on any error.
+    Always returns the compact :data:`_SKILL_INTERFACE_FALLBACK` — it contains
+    exactly the abstract methods and descriptors that generated skills need.
+    The full ``skill_types.py`` is ~380 lines and includes ``PhysicalSkill``
+    (ROS action boilerplate never used in generated code), so loading it would
+    bloat the prompt without helping generation quality.
     """
-    if skill_types_path is not None:
-        try:
-            text = Path(skill_types_path).read_text(encoding="utf-8")
-            _LOG.debug("Loaded skill interface from %s (%d chars)", skill_types_path, len(text))
-            return text
-        except OSError as exc:
-            _LOG.warning("Cannot read skill_types_path %r: %s — using fallback", skill_types_path, exc)
     return _SKILL_INTERFACE_FALLBACK
 
 

@@ -110,14 +110,14 @@ class MiniMaxClient:
     Args:
         api_key:    MiniMax API key.
         model:      Model identifier (default: ``"MiniMax-M2.7"``).
-        max_tokens: Maximum tokens in the model response (default: 4096).
+        max_tokens: Maximum tokens in the model response (default: 8192).
     """
 
     def __init__(
         self,
         api_key: str,
         model: str = DEFAULT_MODEL,
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens

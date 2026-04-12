@@ -135,7 +135,7 @@ def generate_skill(
     skill_example_paths: Optional[list[str]] = None,
     hardware_interface_paths: Optional[list[str]] = None,
     model: str = DEFAULT_MODEL,
-    max_tokens: int = 4096,
+    max_tokens: int = 8192,
 ) -> SkillGenerationResult:
     """Generate a Python Skill class from a name and description.
 
@@ -221,7 +221,7 @@ def generate_agent(
     skill_example_paths: Optional[list[str]] = None,
     hardware_interface_paths: Optional[list[str]] = None,
     model: str = DEFAULT_MODEL,
-    max_tokens: int = 4096,
+    max_tokens: int = 8192,
 ) -> GenerationResult:
     """Generate a Python Agent class and any missing skills from a spec.
 
