@@ -1,6 +1,8 @@
+import json as _json
 import math
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Callable, Optional, Tuple, Dict, List
 from enum import Enum
 
@@ -303,12 +305,28 @@ class ACTConfig:
         return self._get_policy_features(self.output_shapes)
 
     def __post_init__(self):
-        if not self.vision_backbone.startswith("resnet"):
-            raise ValueError(f"vision_backbone must be a ResNet variant. Got {self.vision_backbone}")
         if self.temporal_ensemble_coeff is not None and self.n_action_steps > 1:
             raise ValueError("n_action_steps must be 1 when using temporal ensembling")
         if self.n_action_steps > self.chunk_size:
             raise ValueError("n_action_steps cannot be greater than chunk_size")
+
+    def to_json(self, path: str | Path) -> None:
+        """Save config to a JSON file (called by the training script)."""
+        d = asdict(self)
+        Path(path).write_text(_json.dumps(d, indent=2) + "\n")
+
+    @classmethod
+    def from_json(cls, path: str | Path, **overrides) -> "ACTConfig":
+        """Load config from a JSON file, with optional field overrides.
+
+        Unknown keys in the file (e.g. from a newer training script) are
+        silently ignored so old inference code can still load newer configs.
+        """
+        d = _json.loads(Path(path).read_text())
+        d.update(overrides)
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        d = {k: v for k, v in d.items() if k in valid_fields}
+        return cls(**d)
 
 class ACTPolicy(nn.Module):
     def __init__(self, config: ACTConfig, dataset_stats: Optional[Dict[str, Dict[str, Tensor]]] = None):

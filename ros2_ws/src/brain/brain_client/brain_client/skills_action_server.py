@@ -473,13 +473,24 @@ class SkillsActionServer(Node):
 
             os.makedirs(skill_dir, exist_ok=True)
 
+            default_rest_pose = [1.445, -1.388, 1.517, 0.446, -0.089, 0.002]
             metadata = {
                 "name": display_name,
                 "type": "learned",
                 "guidelines": "",
                 "guidelines_when_running": "",
                 "inputs": {},
-                "execution": {},
+                "execution": {
+                    "model_type": "act_policy",
+                    "checkpoint": "",
+                    "stats_file": "",
+                    "action_dim": 10,
+                    "duration": 120.0,
+                    "start_pose": default_rest_pose,
+                    "end_pose": default_rest_pose,
+                    "start_pose_time": 1,
+                    "end_pose_time": 1,
+                },
             }
             metadata_path = os.path.join(skill_dir, "metadata.json")
             with open(metadata_path, "w") as f:

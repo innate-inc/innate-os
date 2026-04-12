@@ -28,49 +28,69 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
 
-def create_act_config(action_dim=10, chunk_size=30):
-    """Create ACT configuration matching the training setup."""
+ACT_CONFIG_FILENAME = "act_config.json"
+
+# Defaults used when no act_config.json is found alongside the checkpoint
+_DEFAULT_ARCHITECTURE = dict(
+    vision_backbone="resnet18",
+    replace_final_stride_with_dilation=False,
+    pre_norm=False,
+    dim_model=512,
+    n_heads=8,
+    dim_feedforward=3200,
+    feedforward_activation="relu",
+    n_encoder_layers=4,
+    n_decoder_layers=4,
+    use_vae=True,
+    latent_dim=32,
+    n_vae_encoder_layers=4,
+    dropout=0.1,
+    kl_weight=10.0,
+)
+
+
+def create_act_config(action_dim=10, chunk_size=50, **architecture_overrides):
+    """Create ACT configuration.
+
+    Architecture params come from *architecture_overrides* (typically loaded
+    from an ``act_config.json`` saved during training).  Any key not supplied
+    falls back to ``_DEFAULT_ARCHITECTURE``.
+    """
+    arch = {**_DEFAULT_ARCHITECTURE, **architecture_overrides}
+
     input_shapes = {
-        "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
-        "observation.image_camera_2": [3, 224, 224],  # [C, H, W]
-        "observation.state": [6]  # state_dim
+        "observation.image_camera_1": [3, 224, 224],
+        "observation.image_camera_2": [3, 224, 224],
+        "observation.state": [6],
     }
-    
     output_shapes = {
-        "action": [action_dim]  # action_dim - now configurable
+        "action": [action_dim],
     }
-    
+
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=chunk_size,
-        n_action_steps=min(40, chunk_size),
+        n_action_steps=min(40, max(1, chunk_size - 5)),
         speed=1.5,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
-        
-        # Architecture parameters
-        vision_backbone="resnet18",
-        replace_final_stride_with_dilation=False,
-        
-        # Transformer parameters
-        pre_norm=False,
-        dim_model=512,
-        n_heads=8,
-        dim_feedforward=3200,
-        n_encoder_layers=4,
-        n_decoder_layers=4,
-        
-        # VAE parameters
-        use_vae=True,
-        
-        # Training parameters
-        dropout=0.1,
-        kl_weight=10.0,
-        
-        # Temporal ensembling
+
+        vision_backbone=arch["vision_backbone"],
+        replace_final_stride_with_dilation=arch["replace_final_stride_with_dilation"],
+        pre_norm=arch["pre_norm"],
+        dim_model=arch["dim_model"],
+        n_heads=arch["n_heads"],
+        dim_feedforward=arch["dim_feedforward"],
+        feedforward_activation=arch["feedforward_activation"],
+        n_encoder_layers=arch["n_encoder_layers"],
+        n_decoder_layers=arch["n_decoder_layers"],
+        use_vae=arch["use_vae"],
+        latent_dim=arch["latent_dim"],
+        n_vae_encoder_layers=arch["n_vae_encoder_layers"],
+        dropout=arch["dropout"],
+        kl_weight=arch["kl_weight"],
+
         temporal_ensemble_coeff=None,
-        
-        # Optimizer settings
         optimizer_lr=1e-5,
         optimizer_weight_decay=1e-4,
         optimizer_lr_backbone=1e-5,
@@ -665,7 +685,13 @@ class ManipulationServer(Node):
             return "FAILURE", f"Exception during replay execution: {str(e)}"
     
     def _load_policy_for_behavior(self, checkpoint_path, action_dim=8):
-        """Load ACT policy for a specific behavior."""
+        """Load ACT policy for a specific behavior.
+
+        Architecture parameters are resolved in priority order:
+        1. ``act_config.json`` next to the checkpoint (saved by training)
+        2. Weight-shape inference from the checkpoint (chunk_size)
+        3. Hardcoded defaults in ``_DEFAULT_ARCHITECTURE``
+        """
         try:
             load_start = time.time()
             
@@ -685,6 +711,25 @@ class ManipulationServer(Node):
             except Exception as e:
                 self.get_logger().warn(f"Could not load dataset stats: {e}")
             
+            # --- Try to load saved training config ---
+            config_path = os.path.join(checkpoint_dir, ACT_CONFIG_FILENAME)
+            saved_config = None
+            if os.path.isfile(config_path):
+                try:
+                    saved_config = ACTConfig.from_json(config_path)
+                    self.get_logger().info(
+                        f"Loaded training config from {ACT_CONFIG_FILENAME}: "
+                        f"backbone={saved_config.vision_backbone}, "
+                        f"chunk_size={saved_config.chunk_size}, "
+                        f"dim_model={saved_config.dim_model}, "
+                        f"n_encoder_layers={saved_config.n_encoder_layers}, "
+                        f"n_decoder_layers={saved_config.n_decoder_layers}"
+                    )
+                except Exception as e:
+                    self.get_logger().warn(f"Failed to parse {ACT_CONFIG_FILENAME}: {e}, falling back to inference")
+            else:
+                self.get_logger().info(f"No {ACT_CONFIG_FILENAME} found, inferring architecture from checkpoint weights")
+            
             # Load checkpoint first so we can infer architecture params from it
             self.get_logger().info(f"Loading checkpoint: {checkpoint_path}")
             state_dict = torch.load(checkpoint_path, map_location=self.device)
@@ -698,16 +743,13 @@ class ManipulationServer(Node):
                 self.get_logger().info("Extracted state_dict from checkpoint dict")
             
             # Strip prefixes from keys if present (from torch.compile() and/or DDP)
-            # Check for _orig_mod. prefix (from torch.compile())
             has_orig_mod = any(key.startswith('_orig_mod.') for key in state_dict.keys())
-            # Check for module. prefix (from DDP, though train_dist.py uses policy.module so shouldn't have this)
             has_module = any(key.startswith('module.') for key in state_dict.keys())
             
             if has_orig_mod or has_module:
                 self.get_logger().info(f"Stripping prefixes from checkpoint keys (orig_mod: {has_orig_mod}, module: {has_module})")
                 cleaned_state_dict = {}
                 for key, value in state_dict.items():
-                    # Remove both prefixes if present (handle nested cases like module._orig_mod.)
                     cleaned_key = key
                     if cleaned_key.startswith('module.'):
                         cleaned_key = cleaned_key.replace('module.', '', 1)
@@ -716,15 +758,54 @@ class ManipulationServer(Node):
                     cleaned_state_dict[cleaned_key] = value
                 state_dict = cleaned_state_dict
             
-            # Infer chunk_size from checkpoint weights so the model matches the checkpoint
-            chunk_size = 50  # default matching most training configs
-            pos_embed_key = 'model.decoder_pos_embed.weight'
-            if pos_embed_key in state_dict:
-                chunk_size = state_dict[pos_embed_key].shape[0]
-                self.get_logger().info(f"Inferred chunk_size={chunk_size} from checkpoint")
+            # --- Build policy config ---
+            if saved_config is not None:
+                input_shapes = {
+                    "observation.image_camera_1": [3, 224, 224],
+                    "observation.image_camera_2": [3, 224, 224],
+                    "observation.state": [6],
+                }
+                output_shapes = {"action": [action_dim]}
+                policy_config = ACTConfig(
+                    n_obs_steps=saved_config.n_obs_steps,
+                    chunk_size=saved_config.chunk_size,
+                    n_action_steps=min(40, max(1, saved_config.chunk_size - 5)),
+                    speed=1.5,
+                    input_shapes=input_shapes,
+                    output_shapes=output_shapes,
+                    vision_backbone=saved_config.vision_backbone,
+                    pretrained_backbone_weights=saved_config.pretrained_backbone_weights,
+                    replace_final_stride_with_dilation=saved_config.replace_final_stride_with_dilation,
+                    pre_norm=saved_config.pre_norm,
+                    dim_model=saved_config.dim_model,
+                    n_heads=saved_config.n_heads,
+                    dim_feedforward=saved_config.dim_feedforward,
+                    feedforward_activation=saved_config.feedforward_activation,
+                    n_encoder_layers=saved_config.n_encoder_layers,
+                    n_decoder_layers=saved_config.n_decoder_layers,
+                    use_vae=saved_config.use_vae,
+                    latent_dim=saved_config.latent_dim,
+                    n_vae_encoder_layers=saved_config.n_vae_encoder_layers,
+                    dropout=saved_config.dropout,
+                    kl_weight=saved_config.kl_weight,
+                    temporal_ensemble_coeff=None,
+                )
+                chunk_size = saved_config.chunk_size
+            else:
+                # Fallback: infer chunk_size from checkpoint weights
+                chunk_size = 50
+                pos_embed_key = 'model.decoder_pos_embed.weight'
+                if pos_embed_key in state_dict:
+                    chunk_size = state_dict[pos_embed_key].shape[0]
+                    self.get_logger().info(f"Inferred chunk_size={chunk_size} from checkpoint")
+                policy_config = create_act_config(action_dim=action_dim, chunk_size=chunk_size)
             
-            self.get_logger().info(f"Creating ACTPolicy with action_dim={action_dim}, chunk_size={chunk_size} on device={self.device}")
-            policy_config = create_act_config(action_dim=action_dim, chunk_size=chunk_size)
+            self.get_logger().info(
+                f"Creating ACTPolicy with action_dim={action_dim}, chunk_size={chunk_size}, "
+                f"backbone={policy_config.vision_backbone}, dim_model={policy_config.dim_model}, "
+                f"n_enc={policy_config.n_encoder_layers}, n_dec={policy_config.n_decoder_layers} "
+                f"on device={self.device}"
+            )
             self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
             
             # Load state dict with strict=False to handle potential mismatches gracefully
