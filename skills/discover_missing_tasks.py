@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from brain_client.skill_types import Skill, SkillResult
-from semantic_skill_analyzer import analyze, analyze_gemma
+from semantic_skill_analyzer import analyze
 
 _tspec = importlib.util.spec_from_file_location(
     "innate_skills_openai_transcription_http",
@@ -533,7 +533,17 @@ class DiscoverMissingTasks(Skill):
             return err, SkillResult.FAILURE
 
         assert text is not None
-        analyze_gemma(text, api_key="YOUR_GEMINI_API_KEY")
+
+        try:
+            analysis_path = analyze(text)
+            self.logger.info(f"[DiscoverMissingTasks] Analysis written to {analysis_path}")
+        except Exception as e:
+            self.logger.exception("[DiscoverMissingTasks] semantic_skill_analyzer.analyze failed")
+            return (
+                f"Transcript ready but capability analysis failed: {e}",
+                SkillResult.FAILURE,
+            )
+
         payload = json.dumps({"transcript": text}, ensure_ascii=False)
         self.logger.info(f"[DiscoverMissingTasks] Transcript: {text!r}")
         return payload, SkillResult.SUCCESS
