@@ -248,6 +248,12 @@ class BrainClientNode(Node):
         # --- New: Brain active state flag ---
         self.is_brain_active = False  # Brain starts active
 
+        # Codegen cooldown: maps normalized prompt → timestamp of last failure.
+        # Prevents re-triggering codegen for the same prompt that recently failed.
+        # Entries expire after _CODEGEN_COOLDOWN_SECS seconds.
+        self._codegen_cooldowns: dict = {}
+        self._CODEGEN_COOLDOWN_SECS = 300  # 5 minutes
+
         # --- New: Simulator mode parameter ---
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
@@ -1272,10 +1278,20 @@ class BrainClientNode(Node):
                 self.set_directive_callback(String(data=choice.agent_id))
             elif len(user_text) >= _CODEGEN_MIN_PROMPT_CHARS:
                 # No specialist matched — trigger background agent generation
-                self.get_logger().info(
-                    f"[orchestrator] no specialist matched for {user_text!r} — starting codegen pipeline"
-                )
-                self._start_codegen_pipeline(user_text)
+                # unless this prompt recently failed (cooldown prevents loop).
+                _prompt_key = user_text.lower().strip()
+                _now = time.time()
+                _failed_at = self._codegen_cooldowns.get(_prompt_key)
+                if _failed_at and (_now - _failed_at) < self._CODEGEN_COOLDOWN_SECS:
+                    _remaining = int(self._CODEGEN_COOLDOWN_SECS - (_now - _failed_at))
+                    self.get_logger().warn(
+                        f"[orchestrator] codegen cooldown active for {_remaining}s — skipping retry"
+                    )
+                else:
+                    self.get_logger().info(
+                        f"[orchestrator] no specialist matched for {user_text!r} — starting codegen pipeline"
+                    )
+                    self._start_codegen_pipeline(user_text)
 
         self.chat_history.append(data)
 
@@ -1298,6 +1314,7 @@ class BrainClientNode(Node):
         Publishes system notifications to the chat UI before starting and
         after completion (success or failure). Does not block the ROS executor.
         """
+        _prompt_key = user_text.lower().strip()
 
         def _notify(text: str) -> None:
             entry = {
@@ -1350,6 +1367,7 @@ class BrainClientNode(Node):
             mod = _load_codegen_pipeline()
             if mod is None:
                 log.error("[codegen] ✗ agent_codegen.pipeline not found in INNATE_OS_ROOT")
+                self._codegen_cooldowns[_prompt_key] = _time.time()
                 _notify(
                     "Agent generation is unavailable "
                     "(agent_codegen.pipeline not found in INNATE_OS_ROOT)."
@@ -1379,6 +1397,7 @@ class BrainClientNode(Node):
             except Exception as exc:
                 elapsed = _time.monotonic() - t_start
                 log.error(f"[codegen] ✗ Pipeline raised after {elapsed:.1f}s: {exc}")
+                self._codegen_cooldowns[_prompt_key] = _time.time()
                 _notify(f"Agent generation failed: {exc}")
                 _speak_when_free("Sorry, agent generation failed with an error.")
                 return
@@ -1387,6 +1406,7 @@ class BrainClientNode(Node):
 
             if not result.success:
                 log.warn(f"[codegen] ✗ Pipeline failed ({elapsed:.1f}s): {result.error}")
+                self._codegen_cooldowns[_prompt_key] = _time.time()
                 _notify(f"I couldn't generate a new agent: {result.error}")
                 _speak_when_free("Sorry, I failed to generate a new agent.")
                 return
@@ -1401,6 +1421,7 @@ class BrainClientNode(Node):
                 return
 
             # Files written — HotReloadWatcher picks them up within ~1 second
+            self._codegen_cooldowns.pop(_prompt_key, None)
             skill_names = [_Path(sf).stem for sf in result.skill_files]
             log.info(f"[codegen] ✓ Done in {elapsed:.1f}s")
             log.info(f"[codegen]   agent  : {result.agent_id}")
