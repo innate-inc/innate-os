@@ -27,7 +27,7 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
 
-def create_act_config(action_dim=10):
+def create_act_config(action_dim=10, chunk_size=50):
     """Create ACT configuration matching the training setup."""
     input_shapes = {
         "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
@@ -41,8 +41,8 @@ def create_act_config(action_dim=10):
     
     return ACTConfig(
         n_obs_steps=1,
-        chunk_size=30,
-        n_action_steps=10,
+        chunk_size=chunk_size,
+        n_action_steps=min(10, chunk_size),
         speed=1.5,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
@@ -673,11 +673,7 @@ class ManipulationServer(Node):
             except Exception as e:
                 self.get_logger().warn(f"Could not load dataset stats: {e}")
             
-            # Create and load policy with specified action dimension
-            self.get_logger().info(f"Creating ACTPolicy with action_dim={action_dim} on device={self.device}")
-            policy_config = create_act_config(action_dim=action_dim)
-            self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
-            
+            # Load checkpoint first so we can infer architecture params from it
             self.get_logger().info(f"Loading checkpoint: {checkpoint_path}")
             state_dict = torch.load(checkpoint_path, map_location=self.device)
             
@@ -707,6 +703,17 @@ class ManipulationServer(Node):
                         cleaned_key = cleaned_key.replace('_orig_mod.', '', 1)
                     cleaned_state_dict[cleaned_key] = value
                 state_dict = cleaned_state_dict
+            
+            # Infer chunk_size from checkpoint weights so the model matches the checkpoint
+            chunk_size = 50  # default matching most training configs
+            pos_embed_key = 'model.decoder_pos_embed.weight'
+            if pos_embed_key in state_dict:
+                chunk_size = state_dict[pos_embed_key].shape[0]
+                self.get_logger().info(f"Inferred chunk_size={chunk_size} from checkpoint")
+            
+            self.get_logger().info(f"Creating ACTPolicy with action_dim={action_dim}, chunk_size={chunk_size} on device={self.device}")
+            policy_config = create_act_config(action_dim=action_dim, chunk_size=chunk_size)
+            self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
             
             # Load state dict with strict=False to handle potential mismatches gracefully
             load_result = self.current_policy.load_state_dict(state_dict, strict=False)
