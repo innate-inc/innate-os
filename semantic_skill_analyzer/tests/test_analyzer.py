@@ -260,10 +260,10 @@ def test_existing_agent_removed_from_missing(tmp_path, caps_file):
 
 
 def test_output_fully_covered_scenario(tmp_path, caps_file):
-    """When existing agents cover everything, missing_capabilities is empty."""
+    """When existing agents cover everything, the list is narrowed to the best match."""
     path = _run_analyze(make_tool_response(["demo_agent", "chess_agent"], {}), tmp_path, caps_file)
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert data["existing_agents"] == ["demo_agent", "chess_agent"]
+    assert len(data["existing_agents"]) == 1
     assert data["missing_capabilities"] == {}
 
 
@@ -445,3 +445,88 @@ def test_load_capabilities_returns_correct_structure(tmp_path):
     from semantic_skill_analyzer.analyzer import load_capabilities
     result = load_capabilities(str(f))
     assert result["demo_agent"]["skills"] == ["navigate_to_position", "wave"]
+
+
+# ---------------------------------------------------------------------------
+# _best_matching_agent
+# ---------------------------------------------------------------------------
+
+
+def test_best_matching_agent_single_candidate():
+    from semantic_skill_analyzer.analyzer import _best_matching_agent
+    caps = {"demo_agent": {"skills": ["navigate_to_position", "wave"]}}
+    assert _best_matching_agent("wave at the person", ["demo_agent"], caps) == "demo_agent"
+
+
+def test_best_matching_agent_picks_highest_overlap():
+    from semantic_skill_analyzer.analyzer import _best_matching_agent
+    caps = {
+        "demo_agent": {"skills": ["navigate_to_position", "wave"]},
+        "chess_agent": {"skills": ["pick_up_piece_simple", "detect_opponent_move"]},
+    }
+    # "wave" overlaps only with demo_agent's skills
+    result = _best_matching_agent("wave hello at the visitor", ["demo_agent", "chess_agent"], caps)
+    assert result == "demo_agent"
+
+
+def test_best_matching_agent_picks_chess_agent():
+    from semantic_skill_analyzer.analyzer import _best_matching_agent
+    caps = {
+        "demo_agent": {"skills": ["navigate_to_position", "wave"]},
+        "chess_agent": {"skills": ["pick_up_piece_simple", "detect_opponent_move"]},
+    }
+    # "chess", "piece", "detect", "opponent" all overlap with chess_agent
+    result = _best_matching_agent(
+        "detect opponent chess piece and pick it up", ["demo_agent", "chess_agent"], caps
+    )
+    assert result == "chess_agent"
+
+
+def test_best_matching_agent_uses_agent_id_tokens():
+    from semantic_skill_analyzer.analyzer import _best_matching_agent
+    caps = {
+        "demo_agent": {"skills": ["skill_a"]},
+        "chess_agent": {"skills": ["skill_b"]},
+    }
+    # "chess" is in chess_agent's ID, not in demo_agent's ID or skills
+    result = _best_matching_agent("chess game", ["demo_agent", "chess_agent"], caps)
+    assert result == "chess_agent"
+
+
+def test_analyze_narrows_to_best_agent_when_nothing_missing(tmp_path, caps_file):
+    """When missing_capabilities is empty, existing_agents is narrowed to one."""
+    with patch("ollama.Client") as MockClient:
+        MockClient.return_value.chat.return_value = make_tool_response(
+            existing_agents=["demo_agent", "chess_agent"],
+            missing_capabilities={},
+        )
+        from semantic_skill_analyzer.analyzer import analyze
+        out = analyze(
+            prompt="navigate to position and wave hello",
+            capabilities_path=str(caps_file),
+            output_dir=str(tmp_path / "out"),
+        )
+    data = json.loads(Path(out).read_text())
+    # Should be narrowed to one agent
+    assert len(data["existing_agents"]) == 1
+    # "navigate" and "wave" match demo_agent's skills
+    assert data["existing_agents"] == ["demo_agent"]
+
+
+def test_analyze_does_not_narrow_when_missing_capabilities_present(tmp_path, caps_file):
+    """When there are missing capabilities, existing_agents list is kept as-is."""
+    with patch("ollama.Client") as MockClient:
+        MockClient.return_value.chat.return_value = make_tool_response(
+            existing_agents=["demo_agent"],
+            missing_capabilities=_SAMPLE_MISSING,
+        )
+        from semantic_skill_analyzer.analyzer import analyze
+        out = analyze(
+            prompt="navigate and also detect faces",
+            capabilities_path=str(caps_file),
+            output_dir=str(tmp_path / "out"),
+        )
+    data = json.loads(Path(out).read_text())
+    # Not narrowed because there are missing capabilities
+    assert data["existing_agents"] == ["demo_agent"]
+    assert data["missing_capabilities"] != {}

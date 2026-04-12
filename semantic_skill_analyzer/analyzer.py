@@ -175,6 +175,31 @@ def _filter_valid_existing_agents(
     return [a for a in agents if a in capabilities]
 
 
+def _best_matching_agent(
+    prompt: str,
+    candidates: List[str],
+    capabilities: Dict[str, Any],
+) -> str:
+    """Return the single agent from candidates that best matches the prompt.
+
+    Scoring: token overlap between prompt words and the agent's ID + skill strings.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+    prompt_tokens = set(re.findall(r"[a-z0-9]+", prompt.lower()))
+    best_agent = candidates[0]
+    best_score = -1
+    for agent_id in candidates:
+        skills = capabilities.get(agent_id, {}).get("skills", [])
+        blob = agent_id.replace("_", " ") + " " + " ".join(skills)
+        blob_tokens = set(re.findall(r"[a-z0-9]+", blob.lower()))
+        score = len(prompt_tokens & blob_tokens)
+        if score > best_score:
+            best_score = score
+            best_agent = agent_id
+    return best_agent
+
+
 def _normalize_agent_list(agents: Any) -> List[str]:
     """
     Coerce the existing_agents value to a plain list of strings.
@@ -336,6 +361,11 @@ def analyze(
     result["missing_capabilities"] = _filter_existing_from_missing(
         result["missing_capabilities"], capabilities
     )
+
+    # When the request is fully covered, keep only the single best-matching agent
+    if not result["missing_capabilities"] and result["existing_agents"]:
+        best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
+        result["existing_agents"] = [best]
 
     out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
