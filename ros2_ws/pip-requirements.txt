@@ -56,6 +56,9 @@ inspireface
 # Gemini (Google GenAI)
 google-genai
 
+# Local LLM inference (semantic skill analyzer)
+ollama
+
 # Input handling
 pygame
 pynput
