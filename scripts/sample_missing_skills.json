@@ -1,20 +1,17 @@
 {
   "existing_agents": [],
   "missing_capabilities": {
-    "draw_triangle": {
-      "prompt": "Draw a triangle on the floor using the robot's arm, ensuring the points are accurate and the shape is properly formed.",
+    "draw_circle_agent": {
+      "prompt": "A new agent capable of drawing a circle with a specified radius (10cm) and center position (20cm in front of the robot). It can be used to create a visual representation of the circle on the floor.",
       "new_skills": [
         {
-          "skill_name": "draw_triangle",
-          "description": "Use the robot's arm to draw a triangle on the floor, specifying coordinates and angles as needed."
+          "skill_name": "draw_circle",
+          "description": "Draws a circle with the specified radius and center position using the robot's arm. This skill is not present in the catalog but can be added to handle the task."
         }
       ],
       "existing_skills": [
         "navigate_to_position",
-        "wave",
-        "navigate_with_vision",
-        "retrieve_telegram",
-        "send_telegram"
+        "navigate_with_vision"
       ]
     }
   }
