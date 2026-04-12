@@ -81,6 +81,48 @@ def _get_gaze_tracker_class():
     return ROSPersonTracker
 
 
+def _calendar_json_to_speech(message: str) -> typing.Optional[str]:
+    """Build a short line for TTS from check_calendar Zapier JSON. Returns None if not calendar-shaped."""
+    try:
+        data = json.loads(message)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict) or "results" not in data:
+        return None
+    results = data.get("results")
+    if not isinstance(results, list):
+        return None
+    if len(results) == 0:
+        return "There is nothing on your calendar for that time range."
+
+    parts: list[str] = []
+    for ev in results:
+        if not isinstance(ev, dict):
+            continue
+        title = (ev.get("summary") or "").strip() or "Untitled event"
+        start = ev.get("start") if isinstance(ev.get("start"), dict) else {}
+        when = ""
+        if start.get("dateTime") or start.get("dateTime_pretty"):
+            when = (
+                start.get("dateTime_pretty")
+                or start.get("date_pretty")
+                or start.get("dateTime")
+                or ""
+            )
+        elif start.get("date"):
+            when = start.get("date_pretty") or start.get("date") or ""
+        if when:
+            parts.append(f"{title} at {when}")
+        else:
+            parts.append(title)
+
+    if not parts:
+        return "There is nothing on your calendar for that time range."
+    if len(parts) == 1:
+        return f"You have one event: {parts[0]}."
+    return "You have {} events: {}.".format(len(parts), "; ".join(parts))
+
+
 class _MockPrimitive:
     """Lightweight stand-in used by BrainClient to hold skill metadata."""
 
@@ -1643,6 +1685,7 @@ class BrainClientNode(Node):
         status: str,
         skill_id: typing.Optional[str] = None,
         reason: typing.Optional[str] = None,
+        result: typing.Optional[str] = None,
     ):
         """Publish local task status updates for controller app UI.
 
@@ -1652,6 +1695,7 @@ class BrainClientNode(Node):
             status:         One of "running", "failed", "interrupted", etc.
             skill_id:       Deterministic skill ID (e.g. "innate-os/send_email").
             reason:         Optional human-readable reason string.
+            result:         On success, the skill return payload (e.g. calendar JSON).
         """
         payload = {
             "primitive_name": primitive_name,
@@ -1663,6 +1707,8 @@ class BrainClientNode(Node):
         }
         if reason:
             payload["reason"] = reason
+        if result is not None:
+            payload["result"] = result
 
         self.task_status_pub.publish(String(data=json.dumps(payload)))
 
@@ -2176,6 +2222,7 @@ class BrainClientNode(Node):
                     "skill_id": skill_id,
                     # Tool/skill return value (e.g. check_calendar JSON) for the agent to consume
                     "result": result.message,
+                    "message": result.message,
                 },
             )
             local_status = "completed"
@@ -2219,7 +2266,22 @@ class BrainClientNode(Node):
                 status=local_status,
                 skill_id=skill_id,
                 reason=local_reason,
+                result=result.message
+                if result.success and result.success_type == SkillResult.SUCCESS.value
+                else None,
             )
+
+        # Read calendar results aloud on the robot (local TTS), including empty schedules
+        if (
+            result.success
+            and result.success_type == SkillResult.SUCCESS.value
+            and skill_id == "innate-os/check_calendar"
+        ):
+            speech = _calendar_json_to_speech(result.message)
+            if speech:
+                preview = speech[:200] + ("…" if len(speech) > 200 else "")
+                self.get_logger().info(f"\033[96m[BrainClient] Calendar TTS: {preview}\033[0m")
+                self._speak(speech)
 
         # --- THEN, check and execute pending task if previous was cancelled OR succeeded in the meantime ---
         if (
