@@ -13,6 +13,7 @@ Usage:
     conda run -n local_llm python3 scripts/test_skill_gap_analysis.py "your prompt here"
 """
 
+import argparse
 import json
 import os
 import sys
@@ -23,20 +24,40 @@ if _INNATE_ROOT not in sys.path:
     sys.path.insert(0, _INNATE_ROOT)
 
 from semantic_skill_analyzer import analyze
+from semantic_skill_analyzer.analyzer import MODEL as _ANALYZER_MODEL
 
 DEFAULT_PROMPT = (
     "Draw a circle on the floor with your arm 10cm radius, center of the circle 20cm in front of the robot"
 )
 
-prompt = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROMPT
+_parser = argparse.ArgumentParser(description="Semantic Skill Analyzer — gap analysis")
+_parser.add_argument(
+    "prompt", nargs="?", default=None,
+    help="Natural-language prompt (interactive if omitted)",
+)
+_parser.add_argument(
+    "--model", "-m", default=None,
+    help="Ollama model name (default: OLLAMA_MODEL env var or qwen3:1.7b)",
+)
+_args = _parser.parse_args()
+
+if _args.prompt:
+    prompt = _args.prompt
+else:
+    try:
+        prompt = input(f"Prompt [{DEFAULT_PROMPT}]: ").strip() or DEFAULT_PROMPT
+    except (EOFError, KeyboardInterrupt):
+        prompt = DEFAULT_PROMPT
+
+_model = _args.model or _ANALYZER_MODEL
 
 print("=" * 60)
 print("Semantic Skill Analyzer — gap analysis")
 print("=" * 60)
 print(f"\nPrompt:\n  {prompt}\n")
-print("Calling ollama (qwen3:0.6b)… this may take a few seconds.\n")
+print(f"Calling ollama ({_model})… this may take a few seconds.\n")
 
-output_path = analyze(prompt)
+output_path = analyze(prompt, model=_model)
 data = json.loads(Path(output_path).read_text(encoding="utf-8"))
 
 print(f"Output written to:\n  {output_path}\n")

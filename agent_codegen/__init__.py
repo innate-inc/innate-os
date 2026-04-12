@@ -43,4 +43,17 @@ __all__ = [
     "GenerationResult",
     "SkillGenerationResult",
     "AgentCodegenError",
+    "run_pipeline",
+    "PipelineResult",
 ]
+
+
+def __getattr__(name: str):
+    # Lazy-load pipeline symbols to avoid a RuntimeWarning when running
+    # `python -m agent_codegen.pipeline` (double-import of the submodule).
+    if name in ("run_pipeline", "PipelineResult"):
+        from agent_codegen.pipeline import run_pipeline, PipelineResult  # noqa: PLC0415
+        globals()["run_pipeline"] = run_pipeline
+        globals()["PipelineResult"] = PipelineResult
+        return globals()[name]
+    raise AttributeError(f"module 'agent_codegen' has no attribute {name!r}")

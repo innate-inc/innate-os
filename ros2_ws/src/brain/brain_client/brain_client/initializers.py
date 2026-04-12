@@ -6,10 +6,43 @@ This module contains initialization functions for skills and agents
 to keep the main brain_client_node.py clean and focused.
 """
 
+import json
 import os
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 from brain_client.agent_loader import AgentLoader
+
+_DEFAULT_CAPABILITIES_PATH = Path.home() / ".wildrobot" / "capabilities.json"
+
+
+def export_capabilities(
+    agents_dict: dict,
+    capabilities_path: Path = _DEFAULT_CAPABILITIES_PATH,
+) -> None:
+    """Write ~/.wildrobot/capabilities.json from loaded agent instances.
+
+    Format expected by semantic_skill_analyzer::
+
+        {
+            "<agent_id>": {"skills": ["innate-os/skill_name", ...]},
+            ...
+        }
+
+    Silently skips agents whose get_skills() raises so one broken agent
+    never blocks the export.
+    """
+    caps: dict = {}
+    for agent_id, agent in agents_dict.items():
+        try:
+            skills = list(agent.get_skills())
+        except Exception:
+            skills = []
+        caps[agent_id] = {"skills": skills}
+
+    out = Path(capabilities_path).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(caps, indent=2), encoding="utf-8")
 
 
 def initialize_agents(
@@ -57,6 +90,13 @@ def initialize_agents(
     )
 
     logger.info(f"Successfully loaded {len(agents)} agents")
+
+    # Export capabilities index so semantic_skill_analyzer can read it
+    try:
+        export_capabilities(agents)
+        logger.info("Exported capabilities.json")
+    except Exception as exc:
+        logger.warn(f"Failed to export capabilities.json: {exc}")
 
     # Default directive: orchestrator first, then legacy empty_directive, else first loaded.
     # Note: This doesn't mean the agent runs — is_brain_active controls that.

@@ -23,6 +23,7 @@ No dependency on brain_client, ROS, or innate-os internals.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import uuid
@@ -35,12 +36,13 @@ import ollama
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL = "qwen3:0.6b"
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:1.7b")
 GEMINI_ANALYZER_MODEL = "gemini-3-flash-preview"
 DEFAULT_CAPABILITIES_PATH = "~/.wildrobot/capabilities.json"
 DEFAULT_OUTPUT_DIR = "~/.wildrobot"
-# DEFAULT_OLLAMA_HOST = "http://localhost:11434"
-DEFAULT_OLLAMA_HOST = "http://172.17.30.138:11434"
+# Read from env so the same code works on both laptop (localhost) and the
+# remote GPU machine (set OLLAMA_HOST=http://172.17.30.138:11434 there).
+DEFAULT_OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MAX_RETRIES = 1
 
 _SYSTEM_PROMPT = """\
@@ -348,12 +350,30 @@ def load_capabilities(
     return json.loads(Path(path).expanduser().resolve().read_text(encoding="utf-8"))
 
 
+_LOG = logging.getLogger(__name__)
+
+
 def _extract_result(response: Any) -> Dict[str, Any]:
     """Extract a result dict from an ollama response, trying tool call then content."""
+    raw = (response.message.content or "").strip()
+    thinking_only = _strip_think_blocks(raw).strip() == ""
+    _LOG.debug(
+        "raw model response (%d chars)%s:\n%s",
+        len(raw),
+        " [thinking only — no JSON after </think>]" if thinking_only else "",
+        raw[:1200],
+    )
+
     result = _extract_tool_result(response)
     if result is None:
         result = _extract_content_result(response)
     if result is None:
+        _LOG.warning(
+            "Could not extract JSON from model response "
+            "(thinking_only=%s, content_len=%d) — returning empty result",
+            thinking_only,
+            len(raw),
+        )
         result = {"existing_agents": [], "missing_capabilities": {}}
     return result
 
@@ -372,12 +392,20 @@ def _postprocess_capability_result(
         "existing_agents": list(result.get("existing_agents", [])),
         "missing_capabilities": dict(result.get("missing_capabilities", {})),
     }
+    _LOG.debug("raw parsed:  existing=%s  missing_keys=%s",
+               result["existing_agents"], list(result["missing_capabilities"]))
+
     result["existing_agents"] = _filter_valid_existing_agents(
         result["existing_agents"], capabilities
     )
+    before_filter = set(result["missing_capabilities"])
     result["missing_capabilities"] = _filter_existing_from_missing(
         result["missing_capabilities"], capabilities
     )
+    dropped = before_filter - set(result["missing_capabilities"])
+    if dropped:
+        _LOG.debug("filtered out (already in catalog): %s", dropped)
+
     result["missing_capabilities"] = _keep_first_missing_agent(
         result["missing_capabilities"]
     )
@@ -388,6 +416,8 @@ def _postprocess_capability_result(
         best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
         result["existing_agents"] = [best] if best is not None else []
 
+    _LOG.debug("after postprocess: existing=%s  missing_keys=%s",
+               result["existing_agents"], list(result["missing_capabilities"]))
     return _merge_partial_coverage(result, capabilities)
 
 
@@ -408,6 +438,7 @@ def analyze(
     output_dir: Union[str, Path] = DEFAULT_OUTPUT_DIR,
     ollama_host: str = DEFAULT_OLLAMA_HOST,
     max_retries: int = MAX_RETRIES,
+    model: str = MODEL,
 ) -> str:
     """
     Analyze a text prompt against existing capabilities and write an analysis file.
@@ -450,7 +481,7 @@ def analyze(
     # _strip_think_blocks in the content extractor removes them transparently.
     # temperature=0 forces greedy decoding for deterministic output across runs.
     _chat_opts: Dict[str, Any] = {"temperature": 0}
-    response = client.chat(model=MODEL, messages=messages, think=True, options=_chat_opts)
+    response = client.chat(model=model, messages=messages, think=True, options=_chat_opts)
     result = _extract_result(response)
 
     # Retry when the model returns both fields empty.
@@ -461,7 +492,7 @@ def analyze(
             {"role": "assistant", "content": response.message.content or ""},
             {"role": "user", "content": _RETRY_PROMPT},
         ]
-        response = client.chat(model=MODEL, messages=retry_messages, think=True, options=_chat_opts)
+        response = client.chat(model=model, messages=retry_messages, think=True, options=_chat_opts)
         result = _extract_result(response)
 
     result = _postprocess_capability_result(result, prompt, capabilities)

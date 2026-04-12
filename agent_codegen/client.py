@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, Optional
 
 import anthropic
@@ -155,13 +156,15 @@ class MiniMaxClient:
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
         _LOG.info(
-            "Sending prompt to MiniMax (%d chars, model=%s, tool=%s)",
-            len(prompt),
+            "→ MiniMax API  model=%s  tool=%s  prompt=%d chars",
             self._model,
             tool_name,
+            len(prompt),
         )
+        _LOG.debug("Prompt preview:\n%s\n…", prompt[:600])
 
         # Round 1 — ask the model to call the tool.
+        t0 = time.monotonic()
         response = self._client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
@@ -170,20 +173,26 @@ class MiniMaxClient:
             tool_choice={"type": "any"},
             temperature=0.7,
         )
+        elapsed = time.monotonic() - t0
 
-        _LOG.debug(
-            "Round-1 stop_reason=%s, content blocks=%d",
+        _LOG.info(
+            "← MiniMax API  stop_reason=%s  blocks=%d  %.1fs",
             response.stop_reason,
             len(response.content),
+            elapsed,
         )
 
         tool_block = _find_tool_use(response)
         if tool_block is not None:
             code = tool_block.input.get("code", "")
             _LOG.info(
-                "Tool call received: tool=%s, code length=%d chars",
+                "✓ tool call  tool=%s  code=%d chars  via_tool=True",
                 tool_block.name,
                 len(code),
+            )
+            _LOG.debug(
+                "Generated code preview (first 20 lines):\n%s",
+                "\n".join(code.splitlines()[:20]),
             )
 
             # Round 2 — send tool_result so the model can acknowledge completion.
@@ -216,13 +225,17 @@ class MiniMaxClient:
 
         # Fallback — try to extract a ```python block from plain text.
         _LOG.warning(
-            "Model did not call %s (stop_reason=%s); attempting regex fallback",
+            "Model did not call %s (stop_reason=%s) — trying regex fallback",
             tool_name,
             response.stop_reason,
         )
         code = _extract_python_block(response)
         if code:
-            _LOG.info("Regex fallback succeeded (%d chars)", len(code))
+            _LOG.info("✓ regex fallback  code=%d chars  via_tool=False", len(code))
+            _LOG.debug(
+                "Generated code preview (first 20 lines):\n%s",
+                "\n".join(code.splitlines()[:20]),
+            )
             return code, False
 
         raise AgentCodegenError(
