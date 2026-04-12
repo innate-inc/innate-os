@@ -1,0 +1,6 @@
+{
+  "ollama_host": "http://localhost:11434",
+  "ollama_model": "qwen3:1.7b",
+  "minimax_api_key": "",
+  "gemini_api_key": ""
+}

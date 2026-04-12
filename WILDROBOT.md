@@ -224,14 +224,44 @@ conda run -n local_llm python3 scripts/test_skill_gap_analysis.py \
 
 ---
 
+## Configuration File
+
+**`~/.wildrobot/config.json`** is the easiest way to configure ollama settings and API keys —
+especially when running inside the agent_orchestrator (systemd service), where shell env vars
+are not inherited from the user session.
+
+An example file is provided in the repo at `wildrobot/config.example.json`. Copy it on first setup:
+
+```bash
+mkdir -p ~/.wildrobot
+cp wildrobot/config.example.json ~/.wildrobot/config.json
+# then edit ~/.wildrobot/config.json and fill in your API keys
+```
+
+```json
+{
+  "ollama_host": "http://localhost:11434",
+  "ollama_model": "qwen3:1.7b",
+  "minimax_api_key": "",
+  "gemini_api_key": ""
+}
+```
+
+The agent_orchestrator reads this file at call time whenever it triggers code generation.
+Edit it and the next codegen run picks it up immediately — no restart needed.
+
+**Priority (highest → lowest):** explicit arg → env var → `config.json` → hard default
+
+---
+
 ## Required Environment Variables
 
 | Variable | Required for | When |
 |---|---|---|
-| `MINIMAX_API_KEY` | Code generation | Always (for full generation) |
-| `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Gemini analyzer | Fallback when ollama unavailable |
-| `OLLAMA_HOST` | Ollama endpoint | Defaults to `http://localhost:11434` |
-| `OLLAMA_MODEL` | Ollama model name | Defaults to `qwen3:1.7b` |
+| `MINIMAX_API_KEY` | Code generation | Overrides `config.json` `minimax_api_key` |
+| `GEMINI_API_KEY` or `GOOGLE_API_KEY` | Gemini analyzer | Overrides `config.json` `gemini_api_key` |
+| `OLLAMA_HOST` | Ollama endpoint | Overrides `config.json`; defaults to `http://localhost:11434` |
+| `OLLAMA_MODEL` | Ollama model name | Overrides `config.json`; defaults to `qwen3:1.7b` |
 | `INNATE_OS_ROOT` | Path resolution | Defaults to `~/innate-os` |
 
 For the systemd service, add to `/etc/systemd/system/ros-app.service`:

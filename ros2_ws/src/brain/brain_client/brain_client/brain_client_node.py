@@ -73,6 +73,27 @@ from brain_client.hot_reload_watcher import HotReloadWatcher
 
 # Minimum prompt length to trigger codegen (avoids greetings like "hi", "ok")
 _CODEGEN_MIN_PROMPT_CHARS = 8
+_WILDROBOT_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".wildrobot", "config.json")
+
+
+def _load_wildrobot_config() -> dict:
+    """Read ~/.wildrobot/config.json and return its contents as a dict.
+
+    Returns an empty dict if the file is missing or malformed — callers fall
+    back to env vars and then hard-coded defaults, so this is always safe.
+
+    Supported keys:
+        ollama_host  — Ollama base URL (e.g. "http://localhost:11434")
+        ollama_model — Ollama model name (e.g. "qwen3:1.7b")
+    """
+    try:
+        with open(_WILDROBOT_CONFIG_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
 
 
 def _load_codegen_pipeline():
@@ -1300,10 +1321,26 @@ class BrainClientNode(Node):
                 return
 
             try:
+                _wrcfg = _load_wildrobot_config()
                 result = mod.run_pipeline(
                     user_text,
-                    ollama_host=os.environ.get("OLLAMA_HOST"),
-                    ollama_model=os.environ.get("OLLAMA_MODEL"),
+                    ollama_host=(
+                        os.environ.get("OLLAMA_HOST")
+                        or _wrcfg.get("ollama_host")
+                    ),
+                    ollama_model=(
+                        os.environ.get("OLLAMA_MODEL")
+                        or _wrcfg.get("ollama_model")
+                    ),
+                    minimax_api_key=(
+                        os.environ.get("MINIMAX_API_KEY")
+                        or _wrcfg.get("minimax_api_key")
+                    ),
+                    gemini_api_key=(
+                        os.environ.get("GEMINI_API_KEY")
+                        or os.environ.get("GOOGLE_API_KEY")
+                        or _wrcfg.get("gemini_api_key")
+                    ),
                 )
             except Exception as exc:
                 self.get_logger().error(f"[codegen] Pipeline raised: {exc}")
