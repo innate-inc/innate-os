@@ -19,6 +19,7 @@ class DemoAgent(Agent):
         return [
             "innate-os/navigate_to_position",
             "innate-os/wave",
+            "innate-os/italian_arm_wave",
             "innate-os/navigate_with_vision",
             # Telegram (disabled for now)
             # "innate-os/retrieve_telegram",
