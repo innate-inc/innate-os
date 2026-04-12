@@ -1,0 +1,374 @@
+"""
+Semantic Skill Analyzer — core implementation.
+
+Takes a text prompt and a capabilities index, asks a local ollama LLM to:
+  - identify which existing agents already cover the request
+  - identify missing agents/skills not yet in the system
+
+Output is written to ~/.wildrobot/<uuid>-missing-skills.json with the format:
+  {
+    "existing_agents": ["agent_id", ...],
+    "missing_capabilities": {
+      "new_agent_name": {
+        "prompt": "...",
+        "new_skills": [{"skill_name": "description"}, ...]
+      }
+    }
+  }
+
+No dependency on brain_client, ROS, or innate-os internals.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+import ollama
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+MODEL = "qwen3:0.6b"
+DEFAULT_CAPABILITIES_PATH = "~/.wildrobot/capabilities.json"
+DEFAULT_OUTPUT_DIR = "~/.wildrobot"
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+MAX_RETRIES = 1
+
+_SYSTEM_PROMPT = """\
+You are a robot capability analyst. Output ONLY a JSON object — no explanation, no markdown.
+
+Format:
+{
+  "existing_agents": [],
+  "missing_capabilities": {}
+}
+
+- "existing_agents": agent names from the catalog that already handle parts of this task
+- "missing_capabilities": AT MOST ONE new agent; keys are agent names, values have:
+    "prompt": detailed description of what the agent does
+    "new_skills": list of {"skill_name": "description"} for skills not in the catalog
+- Reuse existing skills wherever possible — only add to new_skills what truly does not exist
+- Leave missing_capabilities as {} if everything is already covered\
+"""
+
+_RETRY_PROMPT = (
+    "Your previous response was empty. Try again. "
+    "Output ONLY the JSON object, starting with { and ending with }. "
+    "No explanation, no markdown."
+)
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_user_message(prompt: str, capabilities: Dict[str, Any]) -> str:
+    """Combine user scenario and existing capabilities into a single message."""
+    caps_json = json.dumps(capabilities, indent=2)
+    return (
+        f"TASK:\n{prompt}\n\n"
+        f"EXISTING CAPABILITIES:\n{caps_json}\n\n"
+        f"JSON:"
+    )
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove <think>…</think> blocks emitted by qwen3 in thinking mode."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def _known_skill_basenames(capabilities: Dict[str, Any]) -> set:
+    """
+    Collect all skill basenames from the capabilities index.
+
+    Skill strings may be plain basenames ("wave") or enriched
+    ("wave: Make the robot wave its arm."). Strip the description part.
+    """
+    names: set = set()
+    for agent_data in capabilities.values():
+        for skill in agent_data.get("skills", []):
+            if isinstance(skill, str):
+                names.add(skill.split(":")[0].strip())
+    return names
+
+
+def _filter_existing_from_missing(
+    missing: Dict[str, Any],
+    capabilities: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Remove from missing_capabilities any key that already exists in the catalog —
+    either as an agent ID or as a known skill basename.
+
+    Small models hallucinate in two ways:
+    1. They list an existing agent name as "missing".
+    2. They list a skill name as if it were a new agent name.
+    Both are caught here using the ground-truth capabilities index.
+    """
+    known_agents = set(capabilities.keys())
+    known_skills = _known_skill_basenames(capabilities)
+    discard = known_agents | known_skills
+    return {k: v for k, v in missing.items() if k not in discard}
+
+
+def _filter_valid_existing_agents(
+    agents: List[str],
+    capabilities: Dict[str, Any],
+) -> List[str]:
+    """
+    Keep only items in existing_agents that are actual agent IDs in the catalog.
+
+    Small models sometimes put skill description strings or arbitrary text into
+    this list instead of agent IDs. Ground-truth filtering removes them.
+    """
+    return [a for a in agents if a in capabilities]
+
+
+def _best_matching_agent(
+    prompt: str,
+    candidates: List[str],
+    capabilities: Dict[str, Any],
+) -> Optional[str]:
+    """Return the single agent from candidates that best matches the prompt.
+
+    Scoring: token overlap between prompt words and the agent's ID + skill strings.
+    Returns None if no candidate has any token overlap with the prompt — this
+    indicates the model hallucinated coverage (e.g. chess_agent for a WhatsApp task).
+    """
+    prompt_tokens = set(re.findall(r"[a-z0-9]+", prompt.lower()))
+    best_agent: Optional[str] = None
+    best_score = 0  # require at least one overlapping token
+    for agent_id in candidates:
+        skills = capabilities.get(agent_id, {}).get("skills", [])
+        # Use skill basenames only (strip ": description") — enriched descriptions
+        # contain generic words ("confirm", "detect", "use") that cause false matches
+        # against unrelated prompts.
+        basenames = [s.split(":")[0].strip() for s in skills if isinstance(s, str)]
+        blob = agent_id.replace("_", " ") + " " + " ".join(basenames)
+        blob_tokens = set(re.findall(r"[a-z0-9]+", blob.lower()))
+        score = len(prompt_tokens & blob_tokens)
+        if score > best_score:
+            best_score = score
+            best_agent = agent_id
+    return best_agent
+
+
+def _keep_first_missing_agent(missing: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only the first entry in missing_capabilities.
+
+    Small models tend to enumerate many missing agents; we enforce at most one
+    so the downstream code generator receives a single, focused target.
+    """
+    if len(missing) <= 1:
+        return missing
+    first_key = next(iter(missing))
+    return {first_key: missing[first_key]}
+
+
+def _normalize_agent_list(agents: Any) -> List[str]:
+    """
+    Coerce the existing_agents value to a plain list of strings.
+
+    Models occasionally return items as objects (e.g. {"name": "demo_agent"})
+    instead of bare strings. Extract the first string value in that case.
+    """
+    if not isinstance(agents, list):
+        return []
+    result = []
+    for item in agents:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, dict):
+            # Accept {"name": "..."} or any single-value dict
+            for v in item.values():
+                if isinstance(v, str):
+                    result.append(v)
+                    break
+    return result
+
+
+def _extract_tool_result(response: Any) -> Optional[Dict[str, Any]]:
+    """
+    Extract the analysis dict from an ollama tool-call response.
+
+    Returns a dict with keys ``existing_agents`` and ``missing_capabilities``,
+    or None if the model did not call the expected tool.
+    """
+    if not response.message.tool_calls:
+        return None
+    for tc in response.message.tool_calls:
+        if tc.function.name == "save_capability_analysis":
+            args = tc.function.arguments
+            if isinstance(args, str):
+                args = json.loads(args)
+            return {
+                "existing_agents": _normalize_agent_list(args.get("existing_agents", [])),
+                "missing_capabilities": args.get("missing_capabilities", {}),
+            }
+    return None
+
+
+def _extract_content_result(response: Any) -> Optional[Dict[str, Any]]:
+    """
+    Fallback: attempt to parse JSON from the plain-text response content.
+
+    Handles:
+    - <think>…</think> blocks (qwen3 thinking mode) — stripped before parsing
+    - Markdown code fences
+    - Bare dict:    {"existing_agents": [...], "missing_capabilities": {...}}
+    - Legacy bare:  {"agent_name": {"prompt": ..., "new_skills": [...]}}
+    """
+    content = (response.message.content or "").strip()
+    if not content:
+        return None
+
+    # Strip qwen3 thinking blocks
+    content = _strip_think_blocks(content)
+    if not content:
+        return None
+
+    # Strip markdown code fences
+    if content.startswith("```"):
+        content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
+        content = re.sub(r"\s*```$", "", content.strip())
+
+    try:
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            return None
+        # Already in the expected envelope format
+        if "existing_agents" in data or "missing_capabilities" in data:
+            return {
+                "existing_agents": _normalize_agent_list(data.get("existing_agents", [])),
+                "missing_capabilities": data.get("missing_capabilities", {}),
+            }
+        # Legacy flat format: {agent_name: {prompt, new_skills}}
+        return {"existing_agents": [], "missing_capabilities": data}
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def load_capabilities(
+    path: Union[str, Path] = DEFAULT_CAPABILITIES_PATH,
+) -> Dict[str, Any]:
+    """
+    Load and return the capabilities index from a JSON file.
+
+    Args:
+        path: Path to capabilities.json (default: ~/.wildrobot/capabilities.json).
+
+    Returns:
+        Dict mapping agent ids to their skill lists.
+    """
+    return json.loads(Path(path).expanduser().resolve().read_text(encoding="utf-8"))
+
+
+def _extract_result(response: Any) -> Dict[str, Any]:
+    """Extract a result dict from an ollama response, trying tool call then content."""
+    result = _extract_tool_result(response)
+    if result is None:
+        result = _extract_content_result(response)
+    if result is None:
+        result = {"existing_agents": [], "missing_capabilities": {}}
+    return result
+
+
+def analyze(
+    prompt: str,
+    capabilities_path: Union[str, Path] = DEFAULT_CAPABILITIES_PATH,
+    output_dir: Union[str, Path] = DEFAULT_OUTPUT_DIR,
+    ollama_host: str = DEFAULT_OLLAMA_HOST,
+    max_retries: int = MAX_RETRIES,
+) -> str:
+    """
+    Analyze a text prompt against existing capabilities and write an analysis file.
+
+    The LLM identifies:
+    - ``existing_agents``: existing agents that already cover the request
+    - ``missing_capabilities``: new agents/skills that need to be created
+
+    When the model returns an empty response (both fields blank), the call is
+    retried up to ``max_retries`` times with a nudge message appended to the
+    conversation so the model has context on why it is being asked again.
+
+    The result is written to::
+
+        <output_dir>/<uuid4>-missing-skills.json
+
+    Args:
+        prompt: Natural-language description of a desired scenario or feature.
+        capabilities_path: Path to capabilities.json produced by the capabilities exporter.
+        output_dir: Directory where the output file is written.
+        ollama_host: Ollama API base URL (default: http://localhost:11434).
+        max_retries: How many times to retry when the model returns a blank result
+            (default: 1).
+
+    Returns:
+        Absolute path string of the written output file.
+    """
+    capabilities = load_capabilities(capabilities_path)
+
+    client = ollama.Client(host=ollama_host)
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": _build_user_message(prompt, capabilities)},
+    ]
+
+    # No tool schema — ask the model to write JSON directly in its response.
+    # Small models (0.6b) consistently ignore tool schemas and return nothing;
+    # plain text JSON output is the only approach that works at this param count.
+    # think=True lets the model reason in <think> blocks before writing JSON;
+    # _strip_think_blocks in the content extractor removes them transparently.
+    response = client.chat(model=MODEL, messages=messages, think=True)
+    result = _extract_result(response)
+
+    # Retry when the model returns both fields empty.
+    for _ in range(max_retries):
+        if result["existing_agents"] or result["missing_capabilities"]:
+            break
+        retry_messages = messages + [
+            {"role": "assistant", "content": response.message.content or ""},
+            {"role": "user", "content": _RETRY_PROMPT},
+        ]
+        response = client.chat(model=MODEL, messages=retry_messages, think=True)
+        result = _extract_result(response)
+
+    # Keep only real agent IDs in existing_agents (model sometimes puts skill
+    # descriptions or arbitrary text there instead of agent names)
+    result["existing_agents"] = _filter_valid_existing_agents(
+        result["existing_agents"], capabilities
+    )
+    # Remove any existing agent or skill name the model mistakenly placed in
+    # missing_capabilities (model confuses agents with skills, or duplicates
+    # existing agents as "missing")
+    result["missing_capabilities"] = _filter_existing_from_missing(
+        result["missing_capabilities"], capabilities
+    )
+    # Enforce at most one missing agent — small models hallucinate multiple entries
+    result["missing_capabilities"] = _keep_first_missing_agent(
+        result["missing_capabilities"]
+    )
+    # Always narrow existing_agents to the single best-matching agent.
+    # Runs regardless of whether missing_capabilities is empty, so even partial
+    # coverage (some agents + one new agent) shows the most relevant existing agent.
+    # Returns None when no agent has any token overlap → model hallucinated coverage.
+    if result["existing_agents"]:
+        best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
+        result["existing_agents"] = [best] if best is not None else []
+
+    out_dir = Path(output_dir).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{uuid.uuid4()}-missing-skills.json"
+    out_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    return str(out_file)
