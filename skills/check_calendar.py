@@ -40,6 +40,25 @@ def _pretty_json_if_possible(text: str) -> str:
         return text
 
 
+def _zapier_find_events_time_params(window_start: str, window_end: str) -> tuple[str, str]:
+    """
+    Zapier's google_calendar_find_events maps:
+
+    - ``start_time`` → "Start Time Before" (events whose start is *before* this instant)
+    - ``end_time`` → "End Time After" (events whose end is *after* this instant)
+
+    Events overlapping a logical window [A, B] (A < B) are those with
+    start < B and end > A, so we must send start_time=B and end_time=A.
+
+    For "what is happening now", pass the same timestamp for window_start and window_end;
+    both API fields become that instant (start before now, end after now).
+    """
+    a, b = window_start.strip(), window_end.strip()
+    if a > b:
+        a, b = b, a
+    return b, a
+
+
 class CheckCalendar(Skill):
     """
     Fetches events or busy periods from Google Calendar through Zapier MCP.
@@ -56,12 +75,11 @@ class CheckCalendar(Skill):
 
     def guidelines(self):
         return (
-            "Use to read the user's Google Calendar for a given time range. "
-            "Provide start_time and end_time as ISO 8601 in UTC with a Z suffix (e.g. 2026-04-12T14:30:00Z). "
-            "For upcoming meetings or what's next, use start_time = current time (UTC), not midnight, "
-            "and end_time = now plus several days (e.g. 7 days) so nothing is missed. "
-            "For 'today' in a specific timezone, convert that local day's start/end to UTC—do not assume "
-            "midnight–end-of-day in UTC equals the user's calendar day. "
+            "Use to read the user's Google Calendar. "
+            "Provide start_time and end_time as ISO 8601 UTC (Z suffix): they are the inclusive *search window* "
+            "[window_start, window_end] with window_start <= window_end (e.g. now .. now+7d). "
+            "For events happening *right now*, use the *same* timestamp for start_time and end_time (current UTC). "
+            "The skill maps this window to Zapier's API (Start Before / End After). "
             "Use calendar_id 'primary' unless a specific calendar is required. "
             "Set mode to 'events' to list events (default) or 'busy' for busy blocks only. "
             "Uses the shared Zapier MCP API key (same token as other Zapier MCP skills) and fastmcp on the robot."
@@ -115,9 +133,14 @@ class CheckCalendar(Skill):
                 SkillResult.FAILURE,
             )
 
+        zapier_start_before, zapier_end_after = _zapier_find_events_time_params(
+            start_time, end_time
+        )
         self.logger.info(
             f"\033[96m[BrainClient] check_calendar ({tool_name}) "
-            f"{start_time} .. {end_time} calendar={calendar_id}\033[0m"
+            f"window [{start_time} .. {end_time}] -> Zapier "
+            f"start_time(before)={zapier_start_before} end_time(after)={zapier_end_after} "
+            f"calendar={calendar_id}\033[0m"
         )
 
         base_args: dict[str, Any] = {
@@ -125,8 +148,8 @@ class CheckCalendar(Skill):
                 f"Execute the Google Calendar tool '{tool_name}' with the provided parameters."
             ),
             "calendarid": calendar_id,
-            "start_time": start_time,
-            "end_time": end_time,
+            "start_time": zapier_start_before,
+            "end_time": zapier_end_after,
         }
 
         try:
