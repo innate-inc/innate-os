@@ -58,10 +58,13 @@ def initialize_agents(
 
     logger.info(f"Successfully loaded {len(agents)} agents")
 
-    # Set default agent (fallback to first available if empty_directive not found)
-    # Note: This doesn't mean the agent runs - is_brain_active controls that
+    # Default directive: orchestrator first, then legacy empty_directive, else first loaded.
+    # Note: This doesn't mean the agent runs — is_brain_active controls that.
     default_agent = None
-    if "empty_directive" in agents:
+    if "orchestrator_agent" in agents:
+        default_agent = agents["orchestrator_agent"]
+        logger.debug("Using orchestrator_agent as default")
+    elif "empty_directive" in agents:
         default_agent = agents["empty_directive"]
         logger.debug("Using empty_directive as default")
     elif agents:
