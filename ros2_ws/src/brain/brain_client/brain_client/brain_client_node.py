@@ -1258,6 +1258,12 @@ class BrainClientNode(Node):
             )
             return
 
+        if self._codegen_running:
+            self.get_logger().warn(
+                "[codegen] Input ignored — agent generation in progress. Please wait."
+            )
+            return
+
         user_text = (data.get("text") or "").strip()
         _in_orch = (
             self.current_directive is not None
@@ -1492,6 +1498,12 @@ class BrainClientNode(Node):
         if not self.is_brain_active:
             self.get_logger().warn(
                 "\033[93m[BrainClient] Brain is not active. Skipping custom input.\033[0m"
+            )
+            return
+
+        if self._codegen_running:
+            self.get_logger().warn(
+                "[codegen] Custom input ignored — agent generation in progress. Please wait."
             )
             return
 
