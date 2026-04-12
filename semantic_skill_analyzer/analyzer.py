@@ -234,6 +234,62 @@ def _merge_partial_coverage(
     return {"existing_agents": [], "missing_capabilities": merged_missing}
 
 
+_RELEVANCE_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "to", "of", "in", "for",
+    "with", "is", "it", "at", "on", "by", "be", "do",
+}
+
+
+def _filter_existing_skills_by_relevance(
+    missing: Dict[str, Any],
+    prompt: str,
+) -> Dict[str, Any]:
+    """
+    Remove existing_skills entries that have no token overlap with the prompt.
+
+    Stops words (articles, prepositions) are excluded from scoring so that
+    "navigate_to_position" does not match "wave to people" just because of "to".
+    Skills with zero meaningful overlap are stripped; those with any overlap are
+    kept, ordered by overlap score descending.
+    """
+    raw_tokens = set(re.findall(r"[a-z0-9]+", prompt.lower()))
+    prompt_tokens = raw_tokens - _RELEVANCE_STOP_WORDS
+    if not prompt_tokens:
+        return missing  # nothing to filter against
+
+    result: Dict[str, Any] = {}
+    for agent_name, agent_spec in missing.items():
+        existing_skills = agent_spec.get("existing_skills", [])
+        if not existing_skills:
+            result[agent_name] = agent_spec
+            continue
+
+        scored: List[tuple] = []
+        for skill in existing_skills:
+            if not isinstance(skill, str):
+                continue
+            # Strip optional "innate-os/" namespace prefix before tokenizing
+            basename = skill.split(":")[0].strip()
+            if "/" in basename:
+                basename = basename.split("/", 1)[1]
+            skill_tokens = set(re.findall(r"[a-z0-9]+", basename.lower()))
+            score = len(prompt_tokens & skill_tokens)
+            if score > 0:
+                scored.append((score, skill))
+
+        scored.sort(key=lambda x: -x[0])
+        filtered = [skill for _, skill in scored]
+        if len(existing_skills) != len(filtered):
+            dropped = [s for s in existing_skills if s not in {x[1] for x in scored}]
+            _LOG.debug(
+                "relevance filter: kept %d/%d existing_skills for %r; dropped: %s",
+                len(filtered), len(existing_skills), agent_name, dropped,
+            )
+        result[agent_name] = {**agent_spec, "existing_skills": filtered}
+
+    return result
+
+
 def _keep_first_missing_agent(missing: Dict[str, Any]) -> Dict[str, Any]:
     """Keep only the first entry in missing_capabilities.
 
@@ -411,6 +467,9 @@ def _postprocess_capability_result(
     )
     result["missing_capabilities"] = _filter_existing_from_new_skills(
         result["missing_capabilities"], capabilities
+    )
+    result["missing_capabilities"] = _filter_existing_skills_by_relevance(
+        result["missing_capabilities"], prompt
     )
     if result["existing_agents"]:
         best = _best_matching_agent(prompt, result["existing_agents"], capabilities)
