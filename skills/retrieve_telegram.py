@@ -9,12 +9,14 @@ class RetrieveTelegram(Skill):
     """
     Skill for retrieving recent Telegram messages sent to the robot's bot.
     Uses the Telegram Bot API (getUpdates) to fetch incoming messages.
+    Tracks update offset so each call only returns new messages.
     """
 
     def __init__(self, logger):
         self.logger = logger
         self.bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self.api_base = f"https://api.telegram.org/bot{self.bot_token}"
+        self._last_update_id = None
 
     @property
     def name(self):
@@ -64,11 +66,13 @@ class RetrieveTelegram(Skill):
         )
 
         try:
-            # getUpdates returns pending updates; we request more than needed
-            # and slice to count, since not all updates are text messages
+            params = {"limit": 100, "allowed_updates": '["message"]'}
+            if self._last_update_id is not None:
+                params["offset"] = self._last_update_id + 1
+
             resp = requests.get(
                 f"{self.api_base}/getUpdates",
-                params={"limit": 100, "allowed_updates": '["message"]'},
+                params=params,
                 timeout=10,
             )
             resp.raise_for_status()
@@ -81,7 +85,11 @@ class RetrieveTelegram(Skill):
 
             updates = data.get("result", [])
 
-            # Filter to only message updates with text content
+            # Track highest update_id to acknowledge processed updates
+            if updates:
+                self._last_update_id = max(u["update_id"] for u in updates)
+
+            # Filter to only message updates with text content (newest first)
             messages = []
             for update in reversed(updates):
                 msg = update.get("message") or update.get("channel_post")
@@ -91,30 +99,30 @@ class RetrieveTelegram(Skill):
                     break
 
             if not messages:
-                return "No Telegram messages found", SkillResult.SUCCESS
+                return "No new Telegram messages", SkillResult.SUCCESS
 
-            result_lines = [f"Retrieved {len(messages)} Telegram message(s):\n"]
+            result_lines = [f"Retrieved {len(messages)} new Telegram message(s):\n"]
 
             for i, msg in enumerate(messages, 1):
                 sender = self._extract_sender_name(msg.get("from", {}))
                 text = msg.get("text", "[No text]")
+                chat_id = msg.get("chat", {}).get("id", "unknown")
                 chat_title = msg.get("chat", {}).get("title", "Direct Message")
                 timestamp = self._format_timestamp(msg.get("date", 0))
 
-                # Truncate long messages
                 if len(text) > 500:
                     text = text[:500] + "... [truncated]"
 
                 result_lines.append(f"Message {i}:")
                 result_lines.append(f"  From: {sender}")
                 result_lines.append(f"  Chat: {chat_title}")
+                result_lines.append(f"  Chat ID: {chat_id}")
                 result_lines.append(f"  Date: {timestamp}")
                 result_lines.append(f"  Text: {text}")
                 result_lines.append("")
 
             result_message = "\n".join(result_lines)
 
-            # Send feedback to brain for context
             self._send_feedback(result_message)
 
             self.logger.info(

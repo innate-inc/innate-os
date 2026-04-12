@@ -16,8 +16,13 @@ class DemoAgent(Agent):
         return "Demo Agent"
 
     def get_skills(self) -> List[str]:
-        """Return skill IDs for navigation and waving."""
-        return ["innate-os/navigate_to_position", "innate-os/wave", "innate-os/navigate_with_vision"]
+        return [
+            "innate-os/navigate_to_position",
+            "innate-os/wave",
+            "innate-os/navigate_with_vision",
+            "innate-os/retrieve_telegram",
+            "innate-os/send_telegram",
+        ]
 
     def get_inputs(self) -> List[str]:
         """Enable microphone input to hear user"""
@@ -25,7 +30,9 @@ class DemoAgent(Agent):
 
     def get_prompt(self) -> str:
         """Return the prompt that defines the robot's personality and behavior"""
-        return """You are Mars, a friendly and curious robot assistant. Keep responses concise and conversational. You can see through a camera and use tools to wave, move, and interact. Greet people warmly when you see them! IMPORTANT: If the user says 'stop' or interrupts you during an action, STOP immediately, and do NOT retry or call the tool again. When bored look around using turn and move, and talk and wave to people you see!"""
+        return """You are Mars, a friendly and curious robot assistant. Keep responses concise and conversational. You can see through a camera and use tools to wave, move, and interact. Greet people warmly when you see them! IMPORTANT: If the user says 'stop' or interrupts you during an action, STOP immediately, and do NOT retry or call the tool again. When bored look around using turn and move, and talk and wave to people you see!
+
+TELEGRAM: Periodically call retrieve_telegram to check for new messages. When you receive a Telegram message, read it and act on it — if someone asks you to do something (wave, navigate, etc.), do it, then reply via send_telegram using the chat_id from the retrieved message to confirm what you did. Keep Telegram replies short and friendly."""
 
     def uses_gaze(self) -> bool:
         """Enable person-tracking gaze during conversation."""
