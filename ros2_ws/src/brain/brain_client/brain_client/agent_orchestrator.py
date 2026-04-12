@@ -14,11 +14,24 @@ This module does not call the network by default; pass ``llm_complete`` when usi
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from brain_client.agent_types import Agent
+
+_LOG = logging.getLogger(__name__)
+
+# Orchestration is often used from contexts that never call ``logging.basicConfig``; without a
+# handler, INFO lines would be dropped by the root logger. Keep logs on stderr for this module only.
+if not _LOG.handlers:
+    _LOG.setLevel(logging.INFO)
+    _stderr = logging.StreamHandler()
+    _stderr.setLevel(logging.INFO)
+    _stderr.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
+    _LOG.addHandler(_stderr)
+    _LOG.propagate = False
 
 # Loaded from ``agents/orchestrator_agent.py`` — default directive and routing fallback.
 ORCHESTRATOR_AGENT_ID = "orchestrator_agent"
@@ -82,6 +95,19 @@ _STOP_WORDS: frozenset = frozenset(
 )
 
 _PROMPT_EXCERPT_LEN = 400
+
+_LOG_PREVIEW_LEN = 200
+
+
+def _preview(text: str, limit: int = _LOG_PREVIEW_LEN) -> str:
+    """Single-line preview for logs (no newlines)."""
+    if not text:
+        return "(empty)"
+    one = " ".join(text.strip().split())
+    if len(one) <= limit:
+        return one
+    return one[: limit - 3] + "..."
+
 
 _LLM_SYSTEM = """You are a routing assistant for a robot. Given the user task and optional context, choose exactly one agent id from the catalog. Reply with ONLY a JSON object, no markdown, in this form:
 {"agent_id":"<id>","reason":"<one short sentence>"}
@@ -240,12 +266,32 @@ def select_agent_keyword(
 
     If ``default_agent_id`` is omitted, the highest-scoring agent wins (ties: lexicographic id).
     """
+    _LOG.info(
+        "##@@ [orchestrator:keyword] start user=%r context=%r default_agent_id=%r "
+        "min_score_override=%s min_margin=%s exclude_ids=%s",
+        _preview(user_message),
+        _preview(context) if context else "(none)",
+        default_agent_id,
+        min_keyword_score_to_override_default,
+        min_margin_over_default,
+        sorted(exclude_ids) if exclude_ids else [],
+    )
+
     descriptors = build_route_descriptors(agents, exclude_ids=exclude_ids)
     if not descriptors:
         raise ValueError("No agents available for orchestration")
 
+    _LOG.info(
+        "##@@ [orchestrator:keyword] catalog: %d agent(s) in routing set: %s",
+        len(descriptors),
+        [d.agent_id for d in descriptors],
+    )
+
     scores = _keyword_scores(user_message, context, descriptors)
     scores_map = {aid: sc for aid, sc in scores}
+    ranked = sorted(scores, key=lambda x: (-x[1], x[0]))
+    for aid, sc in ranked:
+        _LOG.info("##@@ [orchestrator:keyword] score %-40s %s", aid, f"{sc:.2f}")
     best_id, best_score = max(scores, key=lambda x: x[1])
 
     default_in_catalog = any(d.agent_id == default_agent_id for d in descriptors)
@@ -254,7 +300,20 @@ def select_agent_keyword(
     )
 
     if not use_default:
+        _LOG.info(
+            "##@@ [orchestrator:keyword] no default routing: use_default=False "
+            "(default_agent_id=%r in_agents=%s in_catalog=%s)",
+            default_agent_id,
+            default_agent_id in agents if default_agent_id else False,
+            default_in_catalog,
+        )
         if best_score <= 0.0 and default_agent_id and default_agent_id in agents:
+            _LOG.info(
+                "##@@ [orchestrator:keyword] result: keep %r (no overlap, best was %r score=%s)",
+                default_agent_id,
+                best_id,
+                best_score,
+            )
             return OrchestrationResult(
                 agent_id=default_agent_id,
                 method="keyword",
@@ -264,6 +323,12 @@ def select_agent_keyword(
 
         max_possible = max((len(_tokenize(d.search_blob())) for d in descriptors), default=1)
         confidence = min(1.0, best_score / max(float(max_possible), 1.0))
+        _LOG.info(
+            "##@@ [orchestrator:keyword] result: selected %r score=%s confidence=%.3f (no default mode)",
+            best_id,
+            best_score,
+            confidence,
+        )
         return OrchestrationResult(
             agent_id=best_id,
             method="keyword",
@@ -278,6 +343,12 @@ def select_agent_keyword(
     if best_id == default_id:
         max_possible = max((len(_tokenize(d.search_blob())) for d in descriptors), default=1)
         confidence = min(1.0, best_score / max(float(max_possible), 1.0))
+        _LOG.info(
+            "##@@ [orchestrator:keyword] result: default %r wins best_score=%s confidence=%.3f",
+            default_id,
+            best_score,
+            max(confidence, 0.5),
+        )
         return OrchestrationResult(
             agent_id=default_id,
             method="keyword",
@@ -287,8 +358,27 @@ def select_agent_keyword(
 
     # Another agent scored higher than default; only switch if clearly ahead
     margin = best_score - default_score
+    _LOG.info(
+        "##@@ [orchestrator:keyword] override check: best=%r score=%s | default=%r score=%s | "
+        "margin=%s | need score>=%s AND margin>%s",
+        best_id,
+        best_score,
+        default_id,
+        default_score,
+        margin,
+        min_keyword_score_to_override_default,
+        min_margin_over_default,
+    )
     if best_score < min_keyword_score_to_override_default or margin <= min_margin_over_default:
         max_possible = max((len(_tokenize(d.search_blob())) for d in descriptors), default=1)
+        _LOG.info(
+            "##@@ [orchestrator:keyword] result: STAY on default %r "
+            "(thresholds block switch to %r: score_ok=%s margin_ok=%s)",
+            default_id,
+            best_id,
+            best_score >= min_keyword_score_to_override_default,
+            margin > min_margin_over_default,
+        )
         return OrchestrationResult(
             agent_id=default_id,
             method="keyword",
@@ -302,6 +392,13 @@ def select_agent_keyword(
 
     max_possible = max((len(_tokenize(d.search_blob())) for d in descriptors), default=1)
     confidence = min(1.0, best_score / max(float(max_possible), 1.0))
+    _LOG.info(
+        "##@@ [orchestrator:keyword] result: SWITCH default %r -> %r score=%s confidence=%.3f",
+        default_id,
+        best_id,
+        best_score,
+        confidence,
+    )
     return OrchestrationResult(
         agent_id=best_id,
         method="keyword",
@@ -343,6 +440,14 @@ def select_agent_llm(
     Validates that the chosen id exists in ``agents``; on mismatch, falls back to
     ``default_agent_id`` or the first available id.
     """
+    _LOG.info(
+        "##@@ [orchestrator:llm] start user=%r context=%r default_agent_id=%r exclude_ids=%s",
+        _preview(user_message),
+        _preview(context) if context else "(none)",
+        default_agent_id,
+        sorted(exclude_ids) if exclude_ids else [],
+    )
+
     descriptors = build_route_descriptors(agents, exclude_ids=exclude_ids)
     if not descriptors:
         raise ValueError("No agents available for orchestration")
@@ -350,13 +455,31 @@ def select_agent_llm(
     catalog = format_catalog_markdown(descriptors, default_agent_id=default_agent_id)
     user_prompt = f"USER TASK:\n{user_message}\n\nCONTEXT:\n{context or '(none)'}\n\nCATALOG:\n{catalog}"
 
+    _LOG.debug(
+        "##@@ [orchestrator:llm] prompt sizes: system=%d chars user=%d chars catalog_agents=%d",
+        len(_LLM_SYSTEM),
+        len(user_prompt),
+        len(descriptors),
+    )
+
     raw = llm_complete(_LLM_SYSTEM, user_prompt)
+    _LOG.info(
+        "##@@ [orchestrator:llm] raw model output (%d chars): %r",
+        len(raw),
+        _preview(raw, limit=500),
+    )
     try:
         agent_id, rationale = _parse_llm_json(raw)
     except (json.JSONDecodeError, ValueError) as e:
         fb = default_agent_id or descriptors[0].agent_id
+        chosen = fb if fb in agents else descriptors[0].agent_id
+        _LOG.warning(
+            "##@@ [orchestrator:llm] parse failed (%s); fallback to %r",
+            e,
+            chosen,
+        )
         return OrchestrationResult(
-            agent_id=fb if fb in agents else descriptors[0].agent_id,
+            agent_id=chosen,
             method="llm",
             confidence=0.0,
             rationale=f"LLM output parse failed ({e}); fallback.",
@@ -364,13 +487,24 @@ def select_agent_llm(
 
     if agent_id not in agents:
         fb = default_agent_id or descriptors[0].agent_id
+        chosen = fb if fb in agents else descriptors[0].agent_id
+        _LOG.warning(
+            "##@@ [orchestrator:llm] invalid agent_id %r; fallback to %r",
+            agent_id,
+            chosen,
+        )
         return OrchestrationResult(
-            agent_id=fb if fb in agents else descriptors[0].agent_id,
+            agent_id=chosen,
             method="llm",
             confidence=0.3,
             rationale=f"Invalid agent_id from LLM ({agent_id!r}); fallback.",
         )
 
+    _LOG.info(
+        "##@@ [orchestrator:llm] result: selected %r rationale=%r",
+        agent_id,
+        _preview(rationale, limit=160),
+    )
     return OrchestrationResult(
         agent_id=agent_id,
         method="llm",
@@ -426,6 +560,7 @@ class AgentOrchestrator:
         )
 
     def select_keyword(self, user_message: str, *, context: str = "") -> OrchestrationResult:
+        _LOG.info("##@@ [orchestrator] select_keyword() called")
         return select_agent_keyword(
             self._agents,
             user_message,
@@ -443,6 +578,7 @@ class AgentOrchestrator:
         context: str = "",
         llm_complete: Callable[[str, str], str],
     ) -> OrchestrationResult:
+        _LOG.info("##@@ [orchestrator] select_llm() called")
         return select_agent_llm(
             self._agents,
             user_message,

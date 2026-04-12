@@ -144,7 +144,7 @@ async def main() -> None:
 def _find_player() -> Optional[List[str]]:
     """Return a command list for the first available audio player."""
     candidates: List[List[str]] = [
-        ["aplay", "-q"],
+        ["aplay", "-q", "-t", "wav", "-"],
         ["paplay"],
         ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"],
     ]
