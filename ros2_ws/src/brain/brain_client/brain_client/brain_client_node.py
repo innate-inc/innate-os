@@ -1311,72 +1311,101 @@ class BrainClientNode(Node):
             self.chat_out_pub.publish(String(data=json.dumps(entry)))
 
         def _run() -> None:
+            import logging as _logging
+            import time as _time
+            from pathlib import Path as _Path  # noqa: PLC0415
+
+            # Route pipeline's own logging (step 1/3, 2/3, 3/3) to stdout so
+            # it appears in the tmux / innate-os debug console.
+            _logging.basicConfig(
+                level=_logging.INFO,
+                format="[codegen] %(levelname)s: %(message)s",
+                force=True,
+            )
+
+            log = self.get_logger()
+            t_start = _time.monotonic()
+
+            log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            log.info(f"[codegen] WildRobot pipeline starting")
+            log.info(f"[codegen]   prompt : {user_text!r}")
+
             _notify(
                 "I don't have a specialist agent for that yet. "
                 "Generating one now — this may take 30–90 seconds..."
             )
+            self._speak("I don't have an agent for that yet. Let me generate one now.")
 
             mod = _load_codegen_pipeline()
             if mod is None:
+                log.error("[codegen] ✗ agent_codegen.pipeline not found in INNATE_OS_ROOT")
                 _notify(
                     "Agent generation is unavailable "
                     "(agent_codegen.pipeline not found in INNATE_OS_ROOT)."
                 )
+                self._speak("Agent generation is unavailable on this system.")
                 return
+
+            _wrcfg = _load_wildrobot_config()
+            _ollama_host  = os.environ.get("OLLAMA_HOST")  or _wrcfg.get("ollama_host")  or "http://localhost:11434"
+            _ollama_model = os.environ.get("OLLAMA_MODEL") or _wrcfg.get("ollama_model") or "qwen3:1.7b"
+            _minimax_key  = os.environ.get("MINIMAX_API_KEY")  or _wrcfg.get("minimax_api_key")
+            _gemini_key   = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                             or _wrcfg.get("gemini_api_key"))
+
+            log.info(f"[codegen]   ollama : {_ollama_host}  model={_ollama_model}")
+            log.info(f"[codegen]   minimax: {'set' if _minimax_key else 'MISSING'}"
+                     f"  gemini: {'set' if _gemini_key else 'not set'}")
 
             try:
-                _wrcfg = _load_wildrobot_config()
                 result = mod.run_pipeline(
                     user_text,
-                    ollama_host=(
-                        os.environ.get("OLLAMA_HOST")
-                        or _wrcfg.get("ollama_host")
-                    ),
-                    ollama_model=(
-                        os.environ.get("OLLAMA_MODEL")
-                        or _wrcfg.get("ollama_model")
-                    ),
-                    minimax_api_key=(
-                        os.environ.get("MINIMAX_API_KEY")
-                        or _wrcfg.get("minimax_api_key")
-                    ),
-                    gemini_api_key=(
-                        os.environ.get("GEMINI_API_KEY")
-                        or os.environ.get("GOOGLE_API_KEY")
-                        or _wrcfg.get("gemini_api_key")
-                    ),
+                    ollama_host=_ollama_host,
+                    ollama_model=_ollama_model,
+                    minimax_api_key=_minimax_key,
+                    gemini_api_key=_gemini_key,
                 )
             except Exception as exc:
-                self.get_logger().error(f"[codegen] Pipeline raised: {exc}")
+                elapsed = _time.monotonic() - t_start
+                log.error(f"[codegen] ✗ Pipeline raised after {elapsed:.1f}s: {exc}")
                 _notify(f"Agent generation failed: {exc}")
+                self._speak("Sorry, agent generation failed with an error.")
                 return
 
+            elapsed = _time.monotonic() - t_start
+
             if not result.success:
-                self.get_logger().warn(f"[codegen] Pipeline failed: {result.error}")
+                log.warn(f"[codegen] ✗ Pipeline failed ({elapsed:.1f}s): {result.error}")
                 _notify(f"I couldn't generate a new agent: {result.error}")
+                self._speak("Sorry, I failed to generate a new agent.")
                 return
 
             if not result.missing_capabilities:
+                log.info(f"[codegen] ✓ Task already covered by existing agents ({elapsed:.1f}s)")
                 _notify(
                     "It looks like an existing agent already covers this. "
                     "Try rephrasing or say 'help' for available modes."
                 )
+                self._speak("It looks like an existing agent already covers this request.")
                 return
 
             # Files written — HotReloadWatcher picks them up within ~1 second
-            from pathlib import Path as _Path  # noqa: PLC0415
             skill_names = [_Path(sf).stem for sf in result.skill_files]
+            log.info(f"[codegen] ✓ Done in {elapsed:.1f}s")
+            log.info(f"[codegen]   agent  : {result.agent_id}")
+            log.info(f"[codegen]   file   : {result.agent_file}")
+            for sf in result.skill_files:
+                log.info(f"[codegen]   skill  : {sf}")
+            log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
             parts = [f"New agent '{result.agent_id}' is ready!"]
             if skill_names:
-                parts.append(f"Also generated skills: {', '.join(skill_names)}.")
+                parts.append(f"Skills: {', '.join(skill_names)}.")
             parts.append("Loading it now — please try your request again in a moment.")
             _notify(" ".join(parts))
 
-            self.get_logger().info(
-                "[codegen] Pipeline complete: agent=%r, skills=%r",
-                result.agent_id,
-                skill_names,
-            )
+            agent_label = result.agent_id.replace("_", " ") if result.agent_id else "new agent"
+            self._speak(f"Done! I generated a new agent called {agent_label}. You can try your request again now.")
 
         thread = threading.Thread(target=_run, name="codegen_pipeline", daemon=True)
         thread.start()
