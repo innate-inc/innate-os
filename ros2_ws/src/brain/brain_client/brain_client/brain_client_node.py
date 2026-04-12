@@ -254,6 +254,10 @@ class BrainClientNode(Node):
         self._codegen_cooldowns: dict = {}
         self._CODEGEN_COOLDOWN_SECS = 300  # 5 minutes
 
+        # True while a codegen pipeline is actively running — blocks new triggers.
+        self._codegen_running: bool = False
+        self._CODEGEN_TIMEOUT_SECS = 180  # 3 minutes
+
         # --- New: Simulator mode parameter ---
         self.declare_parameter("simulator_mode", False)
         self.simulator_mode = self.get_parameter("simulator_mode").value
@@ -1278,20 +1282,25 @@ class BrainClientNode(Node):
                 self.set_directive_callback(String(data=choice.agent_id))
             elif len(user_text) >= _CODEGEN_MIN_PROMPT_CHARS:
                 # No specialist matched — trigger background agent generation
-                # unless this prompt recently failed (cooldown prevents loop).
-                _prompt_key = user_text.lower().strip()
-                _now = time.time()
-                _failed_at = self._codegen_cooldowns.get(_prompt_key)
-                if _failed_at and (_now - _failed_at) < self._CODEGEN_COOLDOWN_SECS:
-                    _remaining = int(self._CODEGEN_COOLDOWN_SECS - (_now - _failed_at))
+                # unless already running or this prompt recently failed.
+                if self._codegen_running:
                     self.get_logger().warn(
-                        f"[orchestrator] codegen cooldown active for {_remaining}s — skipping retry"
+                        "[orchestrator] codegen already running — ignoring input until complete"
                     )
                 else:
-                    self.get_logger().info(
-                        f"[orchestrator] no specialist matched for {user_text!r} — starting codegen pipeline"
-                    )
-                    self._start_codegen_pipeline(user_text)
+                    _prompt_key = user_text.lower().strip()
+                    _now = time.time()
+                    _failed_at = self._codegen_cooldowns.get(_prompt_key)
+                    if _failed_at and (_now - _failed_at) < self._CODEGEN_COOLDOWN_SECS:
+                        _remaining = int(self._CODEGEN_COOLDOWN_SECS - (_now - _failed_at))
+                        self.get_logger().warn(
+                            f"[orchestrator] codegen cooldown active for {_remaining}s — skipping retry"
+                        )
+                    else:
+                        self.get_logger().info(
+                            f"[orchestrator] no specialist matched for {user_text!r} — starting codegen pipeline"
+                        )
+                        self._start_codegen_pipeline(user_text)
 
         self.chat_history.append(data)
 
@@ -1327,6 +1336,7 @@ class BrainClientNode(Node):
         def _run() -> None:
             import logging as _logging
             import time as _time
+            import threading as _threading
             from pathlib import Path as _Path  # noqa: PLC0415
 
             # Route pipeline's own logging (step 1/3, 2/3, 3/3) to stdout so
@@ -1353,91 +1363,126 @@ class BrainClientNode(Node):
 
             log = self.get_logger()
             t_start = _time.monotonic()
-
-            log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            log.info(f"[codegen] WildRobot pipeline starting")
-            log.info(f"[codegen]   prompt : {user_text!r}")
-
-            _notify(
-                "I don't have a specialist agent for that yet. "
-                "Generating one now — this may take 30–90 seconds..."
-            )
-            _speak_when_free("I don't have an agent for that yet. Let me generate one now.")
-
-            mod = _load_codegen_pipeline()
-            if mod is None:
-                log.error("[codegen] ✗ agent_codegen.pipeline not found in INNATE_OS_ROOT")
-                self._codegen_cooldowns[_prompt_key] = _time.time()
-                _notify(
-                    "Agent generation is unavailable "
-                    "(agent_codegen.pipeline not found in INNATE_OS_ROOT)."
-                )
-                _speak_when_free("Agent generation is unavailable on this system.")
-                return
-
-            _wrcfg = _load_wildrobot_config()
-            _ollama_host  = os.environ.get("OLLAMA_HOST")  or _wrcfg.get("ollama_host")  or "http://localhost:11434"
-            _ollama_model = os.environ.get("OLLAMA_MODEL") or _wrcfg.get("ollama_model") or "qwen3:1.7b"
-            _minimax_key  = os.environ.get("MINIMAX_API_KEY")  or _wrcfg.get("minimax_api_key")
-            _gemini_key   = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-                             or _wrcfg.get("gemini_api_key"))
-
-            log.info(f"[codegen]   ollama : {_ollama_host}  model={_ollama_model}")
-            log.info(f"[codegen]   minimax: {'set' if _minimax_key else 'MISSING'}"
-                     f"  gemini: {'set' if _gemini_key else 'not set'}")
+            self._codegen_running = True
 
             try:
-                result = mod.run_pipeline(
-                    user_text,
-                    ollama_host=_ollama_host,
-                    ollama_model=_ollama_model,
-                    minimax_api_key=_minimax_key,
-                    gemini_api_key=_gemini_key,
-                )
-            except Exception as exc:
-                elapsed = _time.monotonic() - t_start
-                log.error(f"[codegen] ✗ Pipeline raised after {elapsed:.1f}s: {exc}")
-                self._codegen_cooldowns[_prompt_key] = _time.time()
-                _notify(f"Agent generation failed: {exc}")
-                _speak_when_free("Sorry, agent generation failed with an error.")
-                return
+                log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                log.info(f"[codegen] WildRobot pipeline starting")
+                log.info(f"[codegen]   prompt : {user_text!r}")
+                log.info(f"[codegen]   timeout: {self._CODEGEN_TIMEOUT_SECS}s  (new input blocked until done)")
 
-            elapsed = _time.monotonic() - t_start
-
-            if not result.success:
-                log.warn(f"[codegen] ✗ Pipeline failed ({elapsed:.1f}s): {result.error}")
-                self._codegen_cooldowns[_prompt_key] = _time.time()
-                _notify(f"I couldn't generate a new agent: {result.error}")
-                _speak_when_free("Sorry, I failed to generate a new agent.")
-                return
-
-            if not result.missing_capabilities:
-                log.info(f"[codegen] ✓ Task already covered by existing agents ({elapsed:.1f}s)")
                 _notify(
-                    "It looks like an existing agent already covers this. "
-                    "Try rephrasing or say 'help' for available modes."
+                    "I don't have a specialist agent for that yet. "
+                    "Generating one now — this may take 30–90 seconds..."
                 )
-                _speak_when_free("It looks like an existing agent already covers this request.")
-                return
+                _speak_when_free("I don't have an agent for that yet. Let me generate one now.")
 
-            # Files written — HotReloadWatcher picks them up within ~1 second
-            self._codegen_cooldowns.pop(_prompt_key, None)
-            skill_names = [_Path(sf).stem for sf in result.skill_files]
-            log.info(f"[codegen] ✓ Done in {elapsed:.1f}s")
-            log.info(f"[codegen]   agent  : {result.agent_id}")
-            log.info(f"[codegen]   file   : {result.agent_file}")
-            for sf in result.skill_files:
-                log.info(f"[codegen]   skill  : {sf}")
-            log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                mod = _load_codegen_pipeline()
+                if mod is None:
+                    log.error("[codegen] ✗ agent_codegen.pipeline not found in INNATE_OS_ROOT")
+                    self._codegen_cooldowns[_prompt_key] = _time.time()
+                    _notify(
+                        "Agent generation is unavailable "
+                        "(agent_codegen.pipeline not found in INNATE_OS_ROOT)."
+                    )
+                    _speak_when_free("Agent generation is unavailable on this system.")
+                    return
 
-            parts = [f"New agent '{result.agent_id}' is ready!"]
-            if skill_names:
-                parts.append(f"Skills: {', '.join(skill_names)}.")
-            parts.append("Loading it now — please try your request again in a moment.")
-            _notify(" ".join(parts))
+                _wrcfg = _load_wildrobot_config()
+                _ollama_host  = os.environ.get("OLLAMA_HOST")  or _wrcfg.get("ollama_host")  or "http://localhost:11434"
+                _ollama_model = os.environ.get("OLLAMA_MODEL") or _wrcfg.get("ollama_model") or "qwen3:1.7b"
+                _minimax_key  = os.environ.get("MINIMAX_API_KEY")  or _wrcfg.get("minimax_api_key")
+                _gemini_key   = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                                 or _wrcfg.get("gemini_api_key"))
 
-            agent_label = result.agent_id.replace("_", " ") if result.agent_id else "new agent"
-            _speak_when_free(f"Done! I generated a new agent called {agent_label}. You can try your request again now.")
+                log.info(f"[codegen]   ollama : {_ollama_host}  model={_ollama_model}")
+                log.info(f"[codegen]   minimax: {'set' if _minimax_key else 'MISSING'}"
+                         f"  gemini: {'set' if _gemini_key else 'not set'}")
+
+                # Run the pipeline in a sub-thread so we can enforce a hard timeout.
+                _result_box: list = [None]
+                _exc_box: list = [None]
+
+                def _pipeline_call() -> None:
+                    try:
+                        _result_box[0] = mod.run_pipeline(
+                            user_text,
+                            ollama_host=_ollama_host,
+                            ollama_model=_ollama_model,
+                            minimax_api_key=_minimax_key,
+                            gemini_api_key=_gemini_key,
+                        )
+                    except Exception as _e:
+                        _exc_box[0] = _e
+
+                _pipeline_thread = _threading.Thread(target=_pipeline_call, daemon=True)
+                _pipeline_thread.start()
+                _pipeline_thread.join(timeout=self._CODEGEN_TIMEOUT_SECS)
+
+                elapsed = _time.monotonic() - t_start
+
+                if _pipeline_thread.is_alive():
+                    log.error(
+                        f"[codegen] ✗ Pipeline timed out after {self._CODEGEN_TIMEOUT_SECS}s"
+                        f" — ollama may be stuck. Check OLLAMA_HOST in ~/.wildrobot/config.json"
+                    )
+                    log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    self._codegen_cooldowns[_prompt_key] = _time.time()
+                    _notify(
+                        f"Agent generation timed out after {self._CODEGEN_TIMEOUT_SECS // 60} minutes. "
+                        "Ollama may be stuck. Check OLLAMA_HOST and OLLAMA_MODEL in ~/.wildrobot/config.json."
+                    )
+                    _speak_when_free("Agent generation timed out. Ollama may be stuck. Please check the configuration.")
+                    return
+
+                if _exc_box[0] is not None:
+                    log.error(f"[codegen] ✗ Pipeline raised after {elapsed:.1f}s: {_exc_box[0]}")
+                    self._codegen_cooldowns[_prompt_key] = _time.time()
+                    _notify(f"Agent generation failed: {_exc_box[0]}")
+                    _speak_when_free("Sorry, agent generation failed with an error.")
+                    return
+
+                result = _result_box[0]
+
+                if not result.success:
+                    log.warn(f"[codegen] ✗ Pipeline failed ({elapsed:.1f}s): {result.error}")
+                    self._codegen_cooldowns[_prompt_key] = _time.time()
+                    _notify(f"I couldn't generate a new agent: {result.error}")
+                    _speak_when_free("Sorry, I failed to generate a new agent.")
+                    return
+
+                if not result.missing_capabilities:
+                    log.info(f"[codegen] ✓ Task already covered by existing agents ({elapsed:.1f}s)")
+                    log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    _notify(
+                        "It looks like an existing agent already covers this. "
+                        "Try rephrasing or say 'help' for available modes."
+                    )
+                    _speak_when_free("It looks like an existing agent already covers this request.")
+                    return
+
+                # Files written — HotReloadWatcher picks them up within ~1 second
+                self._codegen_cooldowns.pop(_prompt_key, None)
+                skill_names = [_Path(sf).stem for sf in result.skill_files]
+                log.info(f"[codegen] ✓ Done in {elapsed:.1f}s")
+                log.info(f"[codegen]   agent  : {result.agent_id}")
+                log.info(f"[codegen]   file   : {result.agent_file}")
+                for sf in result.skill_files:
+                    log.info(f"[codegen]   skill  : {sf}")
+                log.info(f"[codegen] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+                parts = [f"New agent '{result.agent_id}' is ready!"]
+                if skill_names:
+                    parts.append(f"Skills: {', '.join(skill_names)}.")
+                parts.append("Loading it now — please try your request again in a moment.")
+                _notify(" ".join(parts))
+
+                agent_label = result.agent_id.replace("_", " ") if result.agent_id else "new agent"
+                _speak_when_free(f"Done! I generated a new agent called {agent_label}. You can try your request again now.")
+
+            finally:
+                self._codegen_running = False
+                self.get_logger().info("[codegen] pipeline lock released")
 
         thread = threading.Thread(target=_run, name="codegen_pipeline", daemon=True)
         thread.start()
