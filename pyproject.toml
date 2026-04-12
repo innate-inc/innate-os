@@ -1,3 +1,6 @@
+[tool.pytest.ini_options]
+pythonpath = ["ros2_ws/src/brain/brain_client", "."]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 120
