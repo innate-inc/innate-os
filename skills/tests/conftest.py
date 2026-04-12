@@ -4,6 +4,8 @@ import sys
 from unittest.mock import MagicMock
 
 for mod in [
+    "launch",
+    "launch.actions",
     "rclpy",
     "rclpy.node",
     "rclpy.action",
