@@ -1,25 +1,46 @@
 """
 agent_codegen
 =============
-Self-contained library that generates Python Agent classes from a
+Self-contained library that generates Python Agent and Skill classes from a
 missing-capabilities spec using MiniMax via the Anthropic-compatible API.
 
 Zero dependency on brain_client, ROS2, or innate-os internals.
 
 Public API::
 
-    from agent_codegen import generate_agent, GenerationResult, AgentCodegenError
+    from agent_codegen import generate_agent, generate_skill
+    from agent_codegen import GenerationResult, SkillGenerationResult, AgentCodegenError
 
+    # Generate agent + all its missing skills in one call:
     result = generate_agent(
         missing_capabilities=data["missing_capabilities"],
         api_key=os.environ["MINIMAX_API_KEY"],
         output_path="/path/to/agents/new_agent.py",
         agents_dir="/path/to/agents",
         agent_types_path="/path/to/brain_client/agent_types.py",
+        skills_dir="/path/to/skills",
+        skill_types_path="/path/to/brain_client/skill_types.py",
     )
-    print(result.code)
-"""
-from agent_codegen.generator import generate_agent
-from agent_codegen.models import AgentCodegenError, GenerationResult
+    for skill in result.skills:
+        print(skill.skill_name, skill.file_path)
 
-__all__ = ["generate_agent", "GenerationResult", "AgentCodegenError"]
+    # Or generate a single skill directly:
+    skill = generate_skill(
+        "greet_visitor",
+        "Wave and say hello to detected visitors.",
+        api_key=os.environ["MINIMAX_API_KEY"],
+        output_path="/path/to/skills/greet_visitor.py",
+        skills_dir="/path/to/skills",
+        skill_types_path="/path/to/brain_client/skill_types.py",
+    )
+"""
+from agent_codegen.generator import generate_agent, generate_skill
+from agent_codegen.models import AgentCodegenError, GenerationResult, SkillGenerationResult
+
+__all__ = [
+    "generate_agent",
+    "generate_skill",
+    "GenerationResult",
+    "SkillGenerationResult",
+    "AgentCodegenError",
+]
