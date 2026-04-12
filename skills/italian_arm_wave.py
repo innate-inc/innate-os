@@ -58,10 +58,15 @@ class ItalianArmWave(Skill):
             rest_pose: Joint positions to return to (default [0,0,0,0,0,0])
         """
         self._cancelled = False
-        rest = rest_pose if rest_pose is not None else list(self.DEFAULT_REST_POSE)
 
         if self.manipulation is None:
             return "Manipulation interface not available", SkillResult.FAILURE
+
+        if rest_pose is not None:
+            rest = rest_pose
+        else:
+            current = self.manipulation.get_current_joint_positions()
+            rest = current if (current and len(current) == 6) else list(self.DEFAULT_REST_POSE)
 
         intensity = max(0.0, min(1.0, intensity))
 
