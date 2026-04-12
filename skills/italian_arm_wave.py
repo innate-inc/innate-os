@@ -18,7 +18,7 @@ class ItalianArmWave(Skill):
 
     # -- Pose constants (radians) --
     # [base_yaw, shoulder_pitch, elbow_pitch, wrist_roll, wrist_pitch, ee_roll]
-    RAISE_POSE = [0.3, -1.2, 1.7, 0.0, 0.5, 0.0]
+    RAISE_POSE = [0.3, -1.2, 1.5, 0.0, 0.5, 0.0]
 
     BOUNCE_UP_DELTAS = [0.0, 0.1, 0.0, 0.0, 0.0, 0.2]
     BOUNCE_DOWN_DELTAS = [0.0, -0.1, 0.0, 0.0, -0.8, -0.2]
