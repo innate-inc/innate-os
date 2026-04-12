@@ -63,11 +63,9 @@ _DEFAULT_WILDROBOT_DIR = Path.home() / ".wildrobot"
 
 # Reference examples for code generation style guidance
 _AGENT_EXAMPLES = [
-    _REPO_ROOT / "agents" / "draw_triangle.py",
     _REPO_ROOT / "agents" / "draw_circle_agent.py",
 ]
 _SKILL_EXAMPLES = [
-    _REPO_ROOT / "skills" / "draw_triangle.py",
     _REPO_ROOT / "skills" / "draw_circle.py",
 ]
 
