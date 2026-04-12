@@ -1,0 +1,14 @@
+{
+  "existing_agents": [],
+  "missing_capabilities": {
+    "confirm_delivery": {
+      "prompt": "Confirm the delivery time with the user's confirmation. This could involve checking the delivery status.",
+      "new_skills": [
+        {
+          "skill_name": "head_emotion",
+          "description": "Express an emotion through head tilt movements. This skill can be used to confirm delivery time by showing satisfaction."
+        }
+      ]
+    }
+  }
+}
