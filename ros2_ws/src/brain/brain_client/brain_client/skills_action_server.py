@@ -46,6 +46,7 @@ from brain_client.skill_types import (
     Skill,
     SkillResult,
 )
+from maurice_bringup.env_loader import load_env_file
 
 
 class SkillsActionServer(Node):
@@ -1142,6 +1143,9 @@ class SkillsActionServer(Node):
 
 
 def main(args=None):
+    # Load ~/innate-os/.env (or $INNATE_OS_ROOT/.env) so skills (e.g. check_calendar) see
+    # ZAPIER_MCP_API_KEY even when this node is started without the launch file loader.
+    load_env_file()
     rclpy.init(args=args)
     action_server = SkillsActionServer()
     try:

@@ -15,7 +15,7 @@ opencv-python
 # Networking/API
 pydantic
 websockets
-# Zapier MCP client for skills/check_calendar.py (Google Calendar via MCP).
+# Zapier MCP client (fastmcp); same ZAPIER_MCP_API_KEY as other Zapier MCP skills, e.g. check_calendar.
 # Robot: pulled in automatically by scripts/update/post_update.sh (pip3 install -r this file).
 # Manual / uv: pip3 install fastmcp   OR   uv pip install fastmcp
 fastmcp
