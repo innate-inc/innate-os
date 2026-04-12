@@ -66,6 +66,8 @@ class RetrieveTelegram(Skill):
         )
 
         try:
+            # getUpdates returns pending updates; we request more than needed
+            # and slice to count, since not all updates are text messages
             params = {"limit": 100, "allowed_updates": '["message"]'}
             if self._last_update_id is not None:
                 params["offset"] = self._last_update_id + 1
@@ -110,6 +112,7 @@ class RetrieveTelegram(Skill):
                 chat_title = msg.get("chat", {}).get("title", "Direct Message")
                 timestamp = self._format_timestamp(msg.get("date", 0))
 
+                # Truncate long messages
                 if len(text) > 500:
                     text = text[:500] + "... [truncated]"
 
@@ -123,6 +126,7 @@ class RetrieveTelegram(Skill):
 
             result_message = "\n".join(result_lines)
 
+            # Send feedback to brain for context
             self._send_feedback(result_message)
 
             self.logger.info(
