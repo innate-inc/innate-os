@@ -112,8 +112,12 @@ class ManipulationServer(Node):
         self.execution_running = False
         self.current_goal_handle = None
         self.current_policy = None
-        self.current_action_dim = 10  # Add this to track current policy's action dimension
+        self.current_action_dim = 10
         self._cancel_requested = threading.Event()
+        
+        # Policy cache: skip reload+compile when the same checkpoint is requested
+        self._cached_checkpoint_path = None
+        self._cached_action_dim = None
         
         # Sensor data
         self.latest_image1 = None
@@ -250,7 +254,6 @@ class ManipulationServer(Node):
             self._stop_sensor_subscriptions()
             self.execution_running = False
             self.current_goal_handle = None
-            self._release_policy()
     
     def _release_policy(self):
         """Free the loaded policy and reclaim GPU memory."""
@@ -259,6 +262,8 @@ class ManipulationServer(Node):
         try:
             del self.current_policy
             self.current_policy = None
+            self._cached_checkpoint_path = None
+            self._cached_action_dim = None
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -267,6 +272,8 @@ class ManipulationServer(Node):
         except Exception as e:
             self.get_logger().warn(f"Error releasing policy: {e}")
             self.current_policy = None
+            self._cached_checkpoint_path = None
+            self._cached_action_dim = None
     
     def _execute_learned_behavior(self, goal_handle, skill_dir, behavior_config):
         """Execute a learned behavior using ACT policy."""
@@ -666,13 +673,24 @@ class ManipulationServer(Node):
     
     def _load_policy_for_behavior(self, checkpoint_path, action_dim=8):
         """Load ACT policy for a specific behavior."""
+        checkpoint_path = os.path.expanduser(checkpoint_path)
+        
+        if (self.current_policy is not None
+                and self._cached_checkpoint_path == checkpoint_path
+                and self._cached_action_dim == action_dim):
+            self.get_logger().info(
+                f"Reusing cached policy for {checkpoint_path} (skipping load + compile)"
+            )
+            if hasattr(self.current_policy, '_orig_mod'):
+                self.current_policy._orig_mod.reset()
+            elif hasattr(self.current_policy, 'reset'):
+                self.current_policy.reset()
+            return True
+        
         try:
             load_start = time.time()
             
             self._release_policy()
-            
-            # Expand user path
-            checkpoint_path = os.path.expanduser(checkpoint_path)
             
             # Load normalization stats
             checkpoint_dir = os.path.dirname(checkpoint_path)
@@ -786,6 +804,9 @@ class ManipulationServer(Node):
                     torch.cuda.synchronize()
             warmup_time = time.time() - warmup_start
             self.get_logger().info(f"Warm-up inference completed ({num_warmup} iterations) in {warmup_time:.2f}s (avg: {warmup_time/num_warmup*1000:.1f}ms per inference)")
+            
+            self._cached_checkpoint_path = checkpoint_path
+            self._cached_action_dim = action_dim
             
             return True
             
