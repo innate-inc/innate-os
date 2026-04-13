@@ -198,6 +198,31 @@ if [ -f "$ENV_FILE" ]; then
     fi
 fi
 
+# -----------------------------------------------------------------------------
+# 0b. Mirror INNATE_SERVICE_KEY to /etc/innate/.env for system-wide access
+# -----------------------------------------------------------------------------
+log "Setting up /etc/innate/.env..."
+SYSTEM_ENV_DIR="/etc/innate"
+SYSTEM_ENV_FILE="$SYSTEM_ENV_DIR/.env"
+(
+    if [ ! -f "$ENV_FILE" ]; then
+        log "  No user .env at $ENV_FILE; skipping /etc/innate/.env"
+        exit 0
+    fi
+    # shellcheck source=/dev/null
+    source "$ENV_FILE"
+    if [ -z "${INNATE_SERVICE_KEY:-}" ]; then
+        log "  INNATE_SERVICE_KEY not set in $ENV_FILE; skipping /etc/innate/.env"
+        exit 0
+    fi
+    mkdir -p "$SYSTEM_ENV_DIR"
+    chmod 700 "$SYSTEM_ENV_DIR"
+    umask 077
+    printf 'INNATE_SERVICE_KEY=%s\n' "$INNATE_SERVICE_KEY" > "$SYSTEM_ENV_FILE"
+    chmod 600 "$SYSTEM_ENV_FILE"
+    log "  INNATE_SERVICE_KEY mirrored to $SYSTEM_ENV_FILE"
+) || log "  WARNING: failed to update $SYSTEM_ENV_FILE (continuing)"
+
 # Stop running services before updating (keep app.cpp alive during build)
 log "Stopping services to begin update..."
 
