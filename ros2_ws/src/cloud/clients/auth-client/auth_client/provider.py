@@ -45,22 +45,31 @@ def _is_transient_auth_error(exc: "AuthError") -> bool:
     """Return True when ``exc`` represents a retryable condition.
 
     Treated as transient:
-      * no HTTP status (``URLError``: DNS not ready, TLS handshake,
-        connection reset, timeout before any response),
-      * 408 Request Timeout,
-      * 429 Too Many Requests,
-      * any 5xx server error.
+      * HTTP 408 Request Timeout,
+      * HTTP 429 Too Many Requests,
+      * any HTTP 5xx server error,
+      * no HTTP status *and* the AuthError was chained from a
+        ``urllib.error.URLError`` (DNS not ready, TLS handshake,
+        connection reset, timeout before any response).
 
-    Everything else — notably 400/401/403/404 — is a permanent config or
-    credential issue and should fail fast so the caller (systemd unit,
-    init script, ...) can surface it rather than spin forever.
+    Everything else — notably 400/401/403/404, and semantic errors like
+    "discovery response missing token_endpoint" or "auth response missing
+    token" which raise ``AuthError`` with no ``status_code`` *and* no
+    ``__cause__`` — is a permanent config/credential/server-contract
+    issue and should fail fast so the caller (systemd unit, init
+    script, ...) can surface it rather than spin forever.
     """
     status = exc.status_code
-    if status is None:
-        return True
-    if status in (408, 429):
-        return True
-    return 500 <= status < 600
+    if status is not None:
+        if status in (408, 429):
+            return True
+        return 500 <= status < 600
+    cause = exc.__cause__
+    while cause is not None:
+        if isinstance(cause, urllib.error.URLError):
+            return True
+        cause = cause.__cause__
+    return False
 
 
 def _decode_jwt_payload(token: str) -> dict[str, object]:

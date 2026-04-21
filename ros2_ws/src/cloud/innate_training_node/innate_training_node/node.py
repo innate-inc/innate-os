@@ -129,9 +129,15 @@ class TrainingNode(Node):
 
         # Bridge stdlib logs from training_client + auth_client → ROS logger.
         # auth_client emits its cold-boot retry progress here via wait_for_token.
+        # Python's stdlib loggers are module-global singletons, so if
+        # TrainingNode is constructed more than once in the same process
+        # (tests, composable-node containers) we must evict any handlers
+        # installed by a prior instance to avoid duplicate emission.
         _ros_handler = _RosHandler(self.get_logger())
         for _name in ("training_client", "auth_client"):
             _lib_logger = logging.getLogger(_name)
+            for _stale in [h for h in _lib_logger.handlers if isinstance(h, _RosHandler)]:
+                _lib_logger.removeHandler(_stale)
             _lib_logger.setLevel(logging.DEBUG)
             _lib_logger.addHandler(_ros_handler)
 
