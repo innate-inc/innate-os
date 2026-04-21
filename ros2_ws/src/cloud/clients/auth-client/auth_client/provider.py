@@ -24,9 +24,11 @@ import base64
 import json
 import logging
 import threading
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +116,70 @@ class AuthProvider:
             "User-Agent": "innate-robot",
             "Authorization": f"Bearer {self.token}",
         }
+
+    def wait_for_token(
+        self,
+        *,
+        timeout: float | None = None,
+        initial_delay: float = 2.0,
+        max_delay: float = 30.0,
+        on_retry: Callable[[int, "AuthError", float], None] | None = None,
+    ) -> str:
+        """Block until a JWT can be obtained, retrying transient failures.
+
+        Intended for startup on systems where networking may not be
+        immediately usable — e.g. cold boots where DNS hasn't come up
+        yet (``URLError`` / ``EAI_AGAIN``) or boards without an RTC
+        where TLS rejects the server cert as "not yet valid" until
+        ``systemd-timesyncd`` has completed its first sync.  Both
+        surface as :class:`AuthError` from
+        :meth:`_discover_token_endpoint`.
+
+        Uses exponential backoff between attempts.  Non-:class:`AuthError`
+        exceptions (e.g. malformed JWT) propagate immediately — only
+        transient conditions are retried.
+
+        Args:
+            timeout: Max seconds to wait.  ``None`` means wait forever.
+            initial_delay: First backoff delay in seconds.
+            max_delay: Cap on the backoff delay.
+            on_retry: Optional callback ``(attempt, error, next_delay_s)``
+                invoked after each failure.  Useful to route progress
+                messages to a non-stdlib logger (e.g. a ROS logger).
+                When ``None``, warnings are emitted on the module logger.
+
+        Returns:
+            A valid JWT string.
+
+        Raises:
+            AuthError: If ``timeout`` elapses without success.
+        """
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        delay = initial_delay
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self.token
+            except AuthError as exc:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    raise
+                if deadline is not None:
+                    next_delay = min(delay, max(0.0, deadline - now))
+                else:
+                    next_delay = delay
+                if on_retry is not None:
+                    on_retry(attempt, exc, next_delay)
+                else:
+                    logger.warning(
+                        "Auth not ready (attempt %d): %s — retrying in %.0fs",
+                        attempt,
+                        exc,
+                        next_delay,
+                    )
+                time.sleep(next_delay)
+                delay = min(delay * 2, max_delay)
 
     async def ws_connect(self, url: str, extra_headers: dict[str, str] | None = None, **ws_kwargs):
         """Open an async WebSocket with Bearer auth and one 401 retry.

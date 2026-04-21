@@ -49,6 +49,11 @@ class OrchestratorClient:
                 issuer_url=config.auth_issuer_url,
                 service_key=config.auth_token,
             )
+            # Cold boots can fail auth for several minutes (DNS not ready, or
+            # no RTC so the system clock hasn't caught up to the server cert's
+            # notBefore).  wait_for_token() retries these transient conditions
+            # with exponential backoff instead of crashing the caller.
+            self._auth.wait_for_token()
             self._update_auth_header()
         else:
             self._auth = None
