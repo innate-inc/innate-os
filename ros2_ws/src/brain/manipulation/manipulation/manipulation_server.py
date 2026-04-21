@@ -28,8 +28,13 @@ torch.backends.cudnn.benchmark = True
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
 
-def create_act_config(action_dim=10, chunk_size=30):
-    """Create ACT configuration matching the training setup."""
+def create_act_config(action_dim=10, chunk_size=30, n_action_steps=None):
+    """Create ACT configuration matching the training setup.
+
+    n_action_steps: optional override for the ACT replanning horizon.
+    When None, falls back to min(40, chunk_size). Values exceeding chunk_size
+    are clamped with a warning (ACTConfig would otherwise raise ValueError).
+    """
     input_shapes = {
         "observation.image_camera_1": [3, 224, 224],  # [C, H, W]
         "observation.image_camera_2": [3, 224, 224],  # [C, H, W]
@@ -39,11 +44,28 @@ def create_act_config(action_dim=10, chunk_size=30):
     output_shapes = {
         "action": [action_dim]  # action_dim - now configurable
     }
-    
+
+    if n_action_steps is None:
+        effective_n_action_steps = min(40, chunk_size)
+    else:
+        effective_n_action_steps = int(n_action_steps)
+        if effective_n_action_steps > chunk_size:
+            print(
+                f"[create_act_config] n_action_steps={effective_n_action_steps} "
+                f"exceeds chunk_size={chunk_size}; clamping to chunk_size."
+            )
+            effective_n_action_steps = chunk_size
+        if effective_n_action_steps < 1:
+            print(
+                f"[create_act_config] n_action_steps={effective_n_action_steps} "
+                f"is < 1; clamping to 1."
+            )
+            effective_n_action_steps = 1
+
     return ACTConfig(
         n_obs_steps=1,
         chunk_size=chunk_size,
-        n_action_steps=min(40, chunk_size),
+        n_action_steps=effective_n_action_steps,
         speed=1.5,
         input_shapes=input_shapes,
         output_shapes=output_shapes,
@@ -272,16 +294,26 @@ class ManipulationServer(Node):
         """Execute a learned behavior using ACT policy."""
         try:
             behavior_name = os.path.basename(skill_dir.rstrip('/'))
-            checkpoint_file = behavior_config['execution'].get('checkpoint')
+            exec_cfg = behavior_config['execution']
+
+            # For optional numeric overrides, a null / missing value means
+            # "use the server default", keeping manipulation_server as the
+            # single source of truth for defaults.
+            def _get_or(key, default):
+                val = exec_cfg.get(key)
+                return default if val is None else val
+
+            checkpoint_file = exec_cfg.get('checkpoint')
             checkpoint_path = os.path.join(skill_dir, checkpoint_file)
-            action_dim = behavior_config['execution'].get('action_dim', 10)
-            duration = behavior_config['execution'].get('duration', 120.0)
-            progress_threshold = behavior_config['execution'].get('progress_threshold', 2.0)
-            start_pose = behavior_config['execution'].get('start_pose')
-            end_pose = behavior_config['execution'].get('end_pose')
-            start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
-            end_pose_time = behavior_config['execution'].get('end_pose_time', 1)
-            
+            action_dim = _get_or('action_dim', 10)
+            duration = _get_or('duration', 120.0)
+            progress_threshold = _get_or('progress_threshold', 2.0)
+            start_pose = exec_cfg.get('start_pose')
+            end_pose = exec_cfg.get('end_pose')
+            start_pose_time = _get_or('start_pose_time', 1)
+            end_pose_time = _get_or('end_pose_time', 1)
+            n_action_steps_override = exec_cfg.get('n_action_steps')
+
             # Treat empty lists as None
             if start_pose is not None and len(start_pose) == 0:
                 start_pose = None
@@ -293,7 +325,11 @@ class ManipulationServer(Node):
                 return "FAILURE", f"Checkpoint file not found: {checkpoint_path}"
             
             # Load policy
-            if not self._load_policy_for_behavior(checkpoint_path, action_dim):
+            if not self._load_policy_for_behavior(
+                checkpoint_path,
+                action_dim,
+                n_action_steps_override=n_action_steps_override,
+            ):
                 return "FAILURE", f"Failed to load policy from {checkpoint_path}"
             
             # Check sensor availability before starting
@@ -664,8 +700,12 @@ class ManipulationServer(Node):
             self._stop_robot()
             return "FAILURE", f"Exception during replay execution: {str(e)}"
     
-    def _load_policy_for_behavior(self, checkpoint_path, action_dim=8):
-        """Load ACT policy for a specific behavior."""
+    def _load_policy_for_behavior(self, checkpoint_path, action_dim=8, n_action_steps_override=None):
+        """Load ACT policy for a specific behavior.
+
+        n_action_steps_override: optional override for the ACT replanning horizon.
+        When None, create_act_config falls back to min(40, chunk_size).
+        """
         try:
             load_start = time.time()
             
@@ -723,8 +763,18 @@ class ManipulationServer(Node):
                 chunk_size = state_dict[pos_embed_key].shape[0]
                 self.get_logger().info(f"Inferred chunk_size={chunk_size} from checkpoint")
             
-            self.get_logger().info(f"Creating ACTPolicy with action_dim={action_dim}, chunk_size={chunk_size} on device={self.device}")
-            policy_config = create_act_config(action_dim=action_dim, chunk_size=chunk_size)
+            self.get_logger().info(
+                f"Creating ACTPolicy with action_dim={action_dim}, chunk_size={chunk_size}, "
+                f"n_action_steps_override={n_action_steps_override} on device={self.device}"
+            )
+            policy_config = create_act_config(
+                action_dim=action_dim,
+                chunk_size=chunk_size,
+                n_action_steps=n_action_steps_override,
+            )
+            self.get_logger().info(
+                f"Resolved n_action_steps={policy_config.n_action_steps} (chunk_size={chunk_size})"
+            )
             self.current_policy = ACTPolicy(config=policy_config, dataset_stats=dataset_stats).to(self.device)
             
             # Load state dict with strict=False to handle potential mismatches gracefully

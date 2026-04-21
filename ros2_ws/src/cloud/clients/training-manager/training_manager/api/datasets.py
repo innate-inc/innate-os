@@ -497,7 +497,20 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
             "guidelines": "",
             "guidelines_when_running": "",
             "inputs": {},
-            "execution": {},
+            # Optional execution overrides; null = use manipulation_server default.
+            # `checkpoint` / `stats_file` are filled in by the run-activation flow.
+            #   duration            - seconds; default 120.0
+            #   progress_threshold  - early-term threshold on progress head; default 2.0
+            #   start_pose          - list of joint targets, or null to skip
+            #   end_pose            - list of joint targets, or null to skip
+            #   n_action_steps      - ACT replanning horizon; default min(40, chunk_size)
+            "execution": {
+                "duration": None,
+                "progress_threshold": None,
+                "start_pose": None,
+                "end_pose": None,
+                "n_action_steps": None,
+            },
         }
         _write_meta(dest / "metadata.json", meta)
     except Exception:
