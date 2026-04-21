@@ -45,22 +45,42 @@ def create_act_config(action_dim=10, chunk_size=30, n_action_steps=None):
         "action": [action_dim]  # action_dim - now configurable
     }
 
+    default_n_action_steps = min(40, chunk_size)
     if n_action_steps is None:
-        effective_n_action_steps = min(40, chunk_size)
+        effective_n_action_steps = default_n_action_steps
     else:
-        effective_n_action_steps = int(n_action_steps)
-        if effective_n_action_steps > chunk_size:
+        try:
+            # Reject bools (bool is an int subclass in Python) and anything
+            # that isn't a numeric type outright, so malformed metadata
+            # (e.g. a string or NaN) doesn't crash policy loading.
+            if isinstance(n_action_steps, bool) or not isinstance(
+                n_action_steps, (int, float)
+            ):
+                raise TypeError(
+                    f"expected int or float, got {type(n_action_steps).__name__}"
+                )
+            # int() on NaN -> ValueError, on inf -> OverflowError, both caught below.
+            effective_n_action_steps = int(n_action_steps)
+        except (TypeError, ValueError, OverflowError) as exc:
             print(
-                f"[create_act_config] n_action_steps={effective_n_action_steps} "
-                f"exceeds chunk_size={chunk_size}; clamping to chunk_size."
+                f"[create_act_config] Invalid n_action_steps={n_action_steps!r} "
+                f"({exc}); falling back to default "
+                f"min(40, chunk_size)={default_n_action_steps}."
             )
-            effective_n_action_steps = chunk_size
-        if effective_n_action_steps < 1:
-            print(
-                f"[create_act_config] n_action_steps={effective_n_action_steps} "
-                f"is < 1; clamping to 1."
-            )
-            effective_n_action_steps = 1
+            effective_n_action_steps = default_n_action_steps
+        else:
+            if effective_n_action_steps > chunk_size:
+                print(
+                    f"[create_act_config] n_action_steps={effective_n_action_steps} "
+                    f"exceeds chunk_size={chunk_size}; clamping to chunk_size."
+                )
+                effective_n_action_steps = chunk_size
+            if effective_n_action_steps < 1:
+                print(
+                    f"[create_act_config] n_action_steps={effective_n_action_steps} "
+                    f"is < 1; clamping to 1."
+                )
+                effective_n_action_steps = 1
 
     return ACTConfig(
         n_obs_steps=1,
@@ -304,6 +324,16 @@ class ManipulationServer(Node):
                 return default if val is None else val
 
             checkpoint_file = exec_cfg.get('checkpoint')
+            if not isinstance(checkpoint_file, str) or not checkpoint_file:
+                self.get_logger().error(
+                    f"Missing or invalid 'checkpoint' in metadata.json for "
+                    f"{behavior_name}: {checkpoint_file!r}"
+                )
+                return (
+                    "FAILURE",
+                    "metadata.json execution.checkpoint is missing or not a string. "
+                    "Activate a trained run before executing this skill.",
+                )
             checkpoint_path = os.path.join(skill_dir, checkpoint_file)
             action_dim = _get_or('action_dim', 10)
             duration = _get_or('duration', 120.0)
