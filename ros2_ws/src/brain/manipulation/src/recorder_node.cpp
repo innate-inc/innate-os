@@ -560,32 +560,47 @@ void RecorderNode::handle_save_episode(
     std::string start_ts = oss_start.str();
     std::string end_ts = oss_end.str();
 
+    // Roll the state machine back to TASK_ACTIVE on any save failure so the
+    // recorder stays usable for the next episode instead of wedging with a
+    // null current_episode_ but EPISODE_ACTIVE/STOPPED state.
+    auto abort_save_with_error = [&](const std::string& reason,
+                                     const std::string& status_tag,
+                                     const std::string& message) {
+        RCLCPP_ERROR(this->get_logger(), "%s", reason.c_str());
+        current_episode_.reset();
+        if (episode_count_ > 0) {
+            episode_count_--;
+        }
+        state_ = State::TASK_ACTIVE;
+        publish_status(status_tag, std::to_string(episode_count_));
+        response->success = false;
+        response->message = message;
+    };
+
     std::string temp_path = current_episode_->get_file_path();
     try {
         current_episode_->finalize();
     } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to finalize streaming HDF5 file: %s", e.what());
         // Try to clean up the partial file so we don't leave a broken slot.
         current_episode_->cancel();
-        current_episode_.reset();
-        publish_status("failed - finalize error", std::to_string(episode_count_));
-        response->success = false;
-        response->message = std::string("Failed to finalize episode: ") + e.what();
+        abort_save_with_error(
+            std::string("Failed to finalize streaming HDF5 file: ") + e.what(),
+            "failed - finalize error",
+            std::string("Failed to finalize episode: ") + e.what());
         return;
     }
 
     try {
         task_manager_->add_episode(temp_path, start_ts, end_ts);
     } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to register saved episode: %s", e.what());
         // The file is already finalized but couldn't be moved into the slot;
         // remove it so we don't leak a stranded file.
         std::error_code ec;
         std::filesystem::remove(temp_path, ec);
-        current_episode_.reset();
-        publish_status("failed - rename error", std::to_string(episode_count_));
-        response->success = false;
-        response->message = std::string("Failed to register episode: ") + e.what();
+        abort_save_with_error(
+            std::string("Failed to register saved episode: ") + e.what(),
+            "failed - rename error",
+            std::string("Failed to register episode: ") + e.what());
         return;
     }
 
