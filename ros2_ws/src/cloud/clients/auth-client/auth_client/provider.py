@@ -41,6 +41,28 @@ class AuthError(Exception):
         super().__init__(message)
 
 
+def _is_transient_auth_error(exc: "AuthError") -> bool:
+    """Return True when ``exc`` represents a retryable condition.
+
+    Treated as transient:
+      * no HTTP status (``URLError``: DNS not ready, TLS handshake,
+        connection reset, timeout before any response),
+      * 408 Request Timeout,
+      * 429 Too Many Requests,
+      * any 5xx server error.
+
+    Everything else — notably 400/401/403/404 — is a permanent config or
+    credential issue and should fail fast so the caller (systemd unit,
+    init script, ...) can surface it rather than spin forever.
+    """
+    status = exc.status_code
+    if status is None:
+        return True
+    if status in (408, 429):
+        return True
+    return 500 <= status < 600
+
+
 def _decode_jwt_payload(token: str) -> dict[str, object]:
     """Decode the payload of a JWT *without* signature verification.
 
@@ -135,9 +157,20 @@ class AuthProvider:
         surface as :class:`AuthError` from
         :meth:`_discover_token_endpoint`.
 
-        Uses exponential backoff between attempts.  Non-:class:`AuthError`
-        exceptions (e.g. malformed JWT) propagate immediately — only
-        transient conditions are retried.
+        Uses exponential backoff between attempts.  Only *transient*
+        :class:`AuthError` conditions are retried — permanent HTTP 4xx
+        responses (wrong service key → 401, wrong issuer URL → 404,
+        etc.) re-raise immediately so systemd can observe a clean
+        failure and restart / report the misconfiguration instead of
+        spinning forever.  Non-:class:`AuthError` exceptions also
+        propagate immediately.
+
+        Retried status codes:
+
+        * ``None`` — no HTTP response (DNS, TLS, connection reset).
+        * ``408`` Request Timeout.
+        * ``429`` Too Many Requests.
+        * ``5xx`` Server Error.
 
         Args:
             timeout: Max seconds to wait.  ``None`` means wait forever.
@@ -152,7 +185,8 @@ class AuthProvider:
             A valid JWT string.
 
         Raises:
-            AuthError: If ``timeout`` elapses without success.
+            AuthError: If a permanent failure is seen, or if ``timeout``
+                elapses without success.
         """
         deadline = time.monotonic() + timeout if timeout is not None else None
         delay = initial_delay
@@ -162,6 +196,8 @@ class AuthProvider:
             try:
                 return self.token
             except AuthError as exc:
+                if not _is_transient_auth_error(exc):
+                    raise
                 now = time.monotonic()
                 if deadline is not None and now >= deadline:
                     raise
@@ -303,6 +339,11 @@ class AuthProvider:
             )
             with urllib.request.urlopen(disco_req, timeout=10) as resp:
                 discovery: dict[str, object] = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            raise AuthError(
+                f"OIDC discovery failed at {url}: HTTP {exc.code}",
+                status_code=exc.code,
+            ) from exc
         except urllib.error.URLError as exc:
             raise AuthError(f"OIDC discovery failed at {url}: {exc}") from exc
 
