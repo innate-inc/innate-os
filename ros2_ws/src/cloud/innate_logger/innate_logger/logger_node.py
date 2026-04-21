@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from typing import Optional
 
 import psutil
@@ -16,7 +17,7 @@ from sensor_msgs.msg import BatteryState
 from diagnostic_msgs.msg import DiagnosticArray
 from std_msgs.msg import String
 
-from auth_client import AuthProvider
+from auth_client import AuthError, AuthProvider
 
 from innate_logger.client import TelemetryClient
 
@@ -67,6 +68,14 @@ class LoggerNode(Node):
 
         # ── Auth + telemetry client ─────────────────────────────────
         auth = AuthProvider(issuer_url=auth_issuer, service_key=service_key)
+        # Cold boots on this Jetson can fail to auth for several minutes:
+        #   • DNS isn't ready yet (URLError / EAI_AGAIN), or
+        #   • the carrier board has no RTC so TLS sees "certificate not
+        #     yet valid" until systemd-timesyncd completes its first sync.
+        # Both surface as AuthError from _discover_token_endpoint. Prime the
+        # JWT up-front with exponential backoff so our periodic telemetry
+        # timer doesn't spam transient errors during that window.
+        self._prime_auth_with_retry(auth)
         self._client = TelemetryClient(url=telemetry_url, auth=auth)
 
         # Git commit at startup
@@ -91,6 +100,34 @@ class LoggerNode(Node):
         self.create_timer(self.LOG_INTERVAL, self._log_vitals)
 
     # ── Helpers ─────────────────────────────────────────────────────
+
+    def _prime_auth_with_retry(self, auth: AuthProvider) -> None:
+        """Fetch the first JWT, retrying on transient OIDC failures.
+
+        OIDC discovery can fail for a few minutes after a cold boot until
+        DNS resolves and the system clock is within the server cert's
+        validity window.  Keep retrying rather than letting the periodic
+        telemetry timer paper over those errors as generic failures.
+        """
+        delay = 2.0
+        max_delay = 30.0
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                _ = auth.token
+                if attempt > 1:
+                    self.get_logger().info(
+                        f"Auth succeeded on attempt {attempt}"
+                    )
+                return
+            except AuthError as e:
+                self.get_logger().warning(
+                    f"Auth not ready yet (attempt {attempt}): {e} — "
+                    f"retrying in {delay:.0f}s"
+                )
+            time.sleep(delay)
+            delay = min(delay * 2, max_delay)
 
     @staticmethod
     def _get_git_commit() -> str:

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ from typing import Any
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+from auth_client import AuthError
 
 from innate_cloud_msgs.msg import TrainingJobList, TrainingParams, TransferProgress
 from innate_cloud_msgs.srv import CreateRun, DownloadResults, GetTrainingStatus, SubmitSkill
@@ -165,7 +168,13 @@ class TrainingNode(Node):
             auth_issuer_url=auth_issuer,
             poll_interval_seconds=poll_sec,
         )
-        self._mgr: SkillManager = SkillManager(config)
+        # Cold boots on this Jetson can fail to auth for several minutes:
+        #   • DNS isn't ready yet (URLError / EAI_AGAIN), or
+        #   • the carrier board has no RTC so TLS sees "certificate not
+        #     yet valid" until systemd-timesyncd completes its first sync.
+        # Both surface as AuthError from _discover_token_endpoint, so we
+        # retry with exponential backoff instead of crashing the node.
+        self._mgr: SkillManager = self._build_skill_manager_with_retry(config)
         self._store: JobStore = JobStore()
 
         # ── Publisher ───────────────────────────────────────────────
@@ -196,6 +205,37 @@ class TrainingNode(Node):
     def destroy_node(self) -> None:
         self._poller.stop()
         super().destroy_node()
+
+    def _build_skill_manager_with_retry(
+        self, config: ClientConfig
+    ) -> SkillManager:
+        """Construct a ``SkillManager``, retrying on transient auth failures.
+
+        ``SkillManager.__init__`` eagerly runs OIDC discovery to populate the
+        session's bearer header; on a cold boot this can fail until DNS is
+        usable and the system clock has advanced past the cert's ``notBefore``.
+        We back off and keep trying so the node comes up as soon as the
+        environment is ready, rather than crashing the whole ros-app unit.
+        """
+        delay = 2.0
+        max_delay = 30.0
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                mgr = SkillManager(config)
+                if attempt > 1:
+                    self.get_logger().info(
+                        f"Auth succeeded on attempt {attempt}"
+                    )
+                return mgr
+            except AuthError as e:
+                self.get_logger().warning(
+                    f"Auth not ready yet (attempt {attempt}): {e} — "
+                    f"retrying in {delay:.0f}s"
+                )
+            time.sleep(delay)
+            delay = min(delay * 2, max_delay)
 
     # ── Periodic publish ────────────────────────────────────────────
 
