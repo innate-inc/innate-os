@@ -37,6 +37,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 
@@ -101,6 +102,28 @@ class _BaseExecCfg(BaseModel):
     # ``extra='ignore'`` keeps existing metadata files (e.g. wave's
     # ``model_type`` / ``downloads`` keys) compatible.
     model_config = ConfigDict(extra="ignore", strict=False)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_default(cls, data: Any) -> Any:
+        """Treat JSON ``null`` the same as a missing key.
+
+        The canonical skill-creation template emits ``null`` placeholders
+        for every optional override (``duration``, ``progress_threshold``,
+        ``start_pose``, ...) so the file self-documents which knobs exist
+        without baking in default values that could drift from the ones
+        baked into ``manipulation_server``. Without this pre-hook, pydantic
+        would reject ``"duration": null`` because ``None`` isn't a
+        ``float`` - here we strip null entries so each field falls back to
+        its declared default instead.
+
+        For required fields (``checkpoint``, ``replay_file``, ``poses``),
+        an explicit null still fails validation - but with a clearer
+        ``Field required`` message instead of a type-mismatch one.
+        """
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v is not None}
+        return data
 
 
 class LearnedExecCfg(_BaseExecCfg):

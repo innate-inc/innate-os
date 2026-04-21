@@ -275,6 +275,38 @@ class TestLearnedExecCfg:
         )
         assert result.params.n_action_steps is None
 
+    def test_null_optional_numeric_falls_back_to_default(self, tmp_path):
+        """The canonical new-skill template emits null placeholders for
+        every optional override. Those must be treated as "field missing
+        -> use server default", not as type errors.
+        """
+        result = _validate(
+            {
+                "type": "learned",
+                "execution": {
+                    "checkpoint": "ckpt.pth",
+                    "duration": None,
+                    "progress_threshold": None,
+                    "start_pose": None,
+                    "end_pose": None,
+                    "start_pose_time": None,
+                    "end_pose_time": None,
+                    "action_dim": None,
+                    "n_action_steps": None,
+                },
+            },
+            tmp_path,
+        )
+        params = result.params
+        assert params.duration == 120.0
+        assert params.progress_threshold == 2.0
+        assert params.action_dim == 10
+        assert params.start_pose_time == 1.0
+        assert params.end_pose_time == 1.0
+        assert params.start_pose is None
+        assert params.end_pose is None
+        assert params.n_action_steps is None
+
     def test_extra_keys_ignored(self, tmp_path):
         # extra='ignore' keeps metadata like 'stats_file', 'downloads',
         # 'model_type' from erroring out.
