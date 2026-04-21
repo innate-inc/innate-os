@@ -422,10 +422,20 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
     data_dest = dest / "data"
     data_dest.mkdir()
 
+    # Per-checkpoint keys that get filled in at run-activation; never
+    # propagate them as null into a fresh merged skill, even if a source
+    # happens to have them.
+    _NON_INHERITABLE_EXECUTION_KEYS = frozenset({"checkpoint", "stats_file"})
+
     try:
         merged_episodes: list[dict[str, Any]] = []
         data_frequency: int | None = None
         dataset_type: str = "h5"
+        # Union of execution-block keys observed across all source skills.
+        # Whatever knobs upstream skills exposed will be exposed (as null) in
+        # the merged skill, so this code stays in sync with the canonical
+        # create-skill template without duplicating its schema.
+        inherited_exec_keys: set[str] = set()
         new_idx = 0
 
         for src in body.sources:
@@ -444,6 +454,11 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
                     f"Source {src.skill_name} has dataset_type '{src_type}'; "
                     "only h264 datasets can be merged",
                 )
+
+            src_meta = _read_meta(src_path) or {}
+            src_exec = src_meta.get("execution") or {}
+            if isinstance(src_exec, dict):
+                inherited_exec_keys.update(src_exec.keys())
 
             if data_frequency is None:
                 data_frequency = src_ds.get("data_frequency", 10)
@@ -491,26 +506,24 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
             json.dumps(new_ds_meta, indent=4) + "\n"
         )
 
+        # Inherit execution-block knob keys from the source skills (union)
+        # so the merged skill exposes the same set of optional overrides as
+        # whatever was upstream. Per-checkpoint keys are stripped because
+        # they're populated by run-activation, not by skill creation.
+        # Values are always null -> manipulation_server falls back to its
+        # built-in defaults at execution time.
+        exec_block: dict[str, Any] = {
+            k: None
+            for k in sorted(inherited_exec_keys - _NON_INHERITABLE_EXECUTION_KEYS)
+        }
+
         meta: dict[str, Any] = {
             "name": body.new_name,
             "type": "learned",
             "guidelines": "",
             "guidelines_when_running": "",
             "inputs": {},
-            # Optional execution overrides; null = use manipulation_server default.
-            # `checkpoint` / `stats_file` are filled in by the run-activation flow.
-            #   duration            - seconds; default 120.0
-            #   progress_threshold  - early-term threshold on progress head; default 2.0
-            #   start_pose          - list of joint targets, or null to skip
-            #   end_pose            - list of joint targets, or null to skip
-            #   n_action_steps      - ACT replanning horizon; default min(40, chunk_size)
-            "execution": {
-                "duration": None,
-                "progress_threshold": None,
-                "start_pose": None,
-                "end_pose": None,
-                "n_action_steps": None,
-            },
+            "execution": exec_block,
         }
         _write_meta(dest / "metadata.json", meta)
     except Exception:
