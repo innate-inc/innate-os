@@ -413,7 +413,7 @@ void RecorderNode::activate_physical_primitive(
                     state_to_string(state_).c_str());
         publish_status("cancelled", std::to_string(episode_count_));
         if (current_episode_) {
-            current_episode_->clear();
+            current_episode_->cancel();
         }
         current_episode_.reset();
     }
@@ -494,6 +494,16 @@ void RecorderNode::handle_new_episode(
     }
 
     current_episode_ = std::make_unique<EpisodeData>();
+    try {
+        current_episode_->open_file(task_manager_->get_streaming_episode_path());
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to prepare streaming HDF5 file: %s", e.what());
+        current_episode_.reset();
+        publish_status("failed - cannot open streaming file");
+        response->success = false;
+        response->message = std::string("Failed to prepare streaming file: ") + e.what();
+        return;
+    }
     episode_start_time_ = std::chrono::steady_clock::now();
     episode_start_system_time_ = std::chrono::system_clock::now();
     state_ = State::EPISODE_ACTIVE;
@@ -550,12 +560,39 @@ void RecorderNode::handle_save_episode(
     std::string start_ts = oss_start.str();
     std::string end_ts = oss_end.str();
 
-    task_manager_->add_episode(*current_episode_, start_ts, end_ts);
-    
+    std::string temp_path = current_episode_->get_file_path();
+    try {
+        current_episode_->finalize();
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to finalize streaming HDF5 file: %s", e.what());
+        // Try to clean up the partial file so we don't leave a broken slot.
+        current_episode_->cancel();
+        current_episode_.reset();
+        publish_status("failed - finalize error", std::to_string(episode_count_));
+        response->success = false;
+        response->message = std::string("Failed to finalize episode: ") + e.what();
+        return;
+    }
+
+    try {
+        task_manager_->add_episode(temp_path, start_ts, end_ts);
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to register saved episode: %s", e.what());
+        // The file is already finalized but couldn't be moved into the slot;
+        // remove it so we don't leak a stranded file.
+        std::error_code ec;
+        std::filesystem::remove(temp_path, ec);
+        current_episode_.reset();
+        publish_status("failed - rename error", std::to_string(episode_count_));
+        response->success = false;
+        response->message = std::string("Failed to register episode: ") + e.what();
+        return;
+    }
+
     RCLCPP_INFO(this->get_logger(), "=== EPISODE SAVED ===");
     RCLCPP_INFO(this->get_logger(), "Task: %s, Episode: %d", current_task_name_.c_str(), episode_count_);
     RCLCPP_INFO(this->get_logger(), "Duration: %.1fs, Timesteps: %zu", duration, timesteps);
-    
+
     publish_status("saved", std::to_string(episode_count_));
     current_episode_.reset();
     state_ = State::TASK_ACTIVE;
@@ -579,11 +616,11 @@ void RecorderNode::handle_cancel_episode(
         return;
     }
 
-    current_episode_->clear();
+    current_episode_->cancel();
     if (episode_count_ > 0) {
         episode_count_--;
     }
-    RCLCPP_INFO(this->get_logger(), "Episode canceled; buffered data discarded.");
+    RCLCPP_INFO(this->get_logger(), "Episode canceled; streaming file discarded.");
     publish_status("cancelled", std::to_string(episode_count_));
     current_episode_.reset();
     state_ = State::TASK_ACTIVE;
@@ -628,7 +665,7 @@ void RecorderNode::handle_end_task(
                     state_to_string(state_).c_str());
         publish_status("cancelled", std::to_string(episode_count_));
         if (current_episode_) {
-            current_episode_->clear();
+            current_episode_->cancel();
         }
         current_episode_.reset();
     }

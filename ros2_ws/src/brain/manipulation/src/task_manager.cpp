@@ -28,7 +28,8 @@ void TaskManager::start_new_task_at_directory(const std::string& task_name, cons
 
     // Create data directory
     fs::create_directories(data_dir);
-    
+    cleanup_stale_streaming_files();
+
     // Initialize metadata
     metadata_ = {
         {"data_frequency", data_frequency},
@@ -43,7 +44,7 @@ void TaskManager::resume_task_at_directory(const std::string& task_name, const s
     current_task_name_ = task_name;
     current_task_dir_ = task_directory;
     std::string metadata_path = current_task_dir_ + "/data/dataset_metadata.json";
-    
+
     if (!fs::exists(metadata_path)) {
         std::cerr << "No dataset_metadata.json for '" << task_name << "'. Starting fresh." << std::endl;
         metadata_ = {
@@ -53,25 +54,56 @@ void TaskManager::resume_task_at_directory(const std::string& task_name, const s
             {"episodes", nlohmann::json::array()}
         };
         save_metadata();
+        cleanup_stale_streaming_files();
         return;
     }
     load_metadata();
+    cleanup_stale_streaming_files();
 }
 
-void TaskManager::add_episode(EpisodeData& episode_data,
+std::string TaskManager::get_streaming_episode_path() const {
+    if (current_task_dir_.empty()) {
+        throw std::runtime_error("TaskManager: no active task; cannot build streaming path");
+    }
+    return current_task_dir_ + "/data/.episode_recording.h5.tmp";
+}
+
+void TaskManager::cleanup_stale_streaming_files() {
+    if (current_task_dir_.empty()) {
+        return;
+    }
+    fs::path stale = fs::path(current_task_dir_) / "data" / ".episode_recording.h5.tmp";
+    std::error_code ec;
+    if (fs::exists(stale, ec)) {
+        std::cerr << "Removing stale streaming file: " << stale.string() << std::endl;
+        fs::remove(stale, ec);
+    }
+}
+
+void TaskManager::add_episode(const std::string& temp_file_path,
                                const std::string& start_timestamp,
                                const std::string& end_timestamp) {
     std::string data_dir = current_task_dir_ + "/data";
     fs::create_directories(data_dir);
 
+    if (!fs::exists(temp_file_path)) {
+        throw std::runtime_error("TaskManager::add_episode: streaming file does not exist: " +
+                                 temp_file_path);
+    }
+
     int episode_id = metadata_["number_of_episodes"].get<int>();
     std::string file_name = "episode_" + std::to_string(episode_id) + ".h5";
     std::string file_path = data_dir + "/" + file_name;
 
-    // Save the episode
-    episode_data.save_file(file_path);
+    // Atomic-ish rename (same filesystem) of finalized streaming file into slot.
+    std::error_code ec;
+    fs::rename(temp_file_path, file_path, ec);
+    if (ec) {
+        throw std::runtime_error("TaskManager::add_episode: failed to rename '" +
+                                 temp_file_path + "' -> '" + file_path + "': " +
+                                 ec.message());
+    }
 
-    // Update metadata
     nlohmann::json episode_info = {
         {"episode_id", episode_id},
         {"file_name", file_name},

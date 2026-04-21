@@ -1,21 +1,242 @@
 #include "manipulation/episode_data.hpp"
 
-#include <stdexcept>
 #include <algorithm>
-#include <numeric>
-#include <hdf5.h>
+#include <filesystem>
+#include <stdexcept>
+#include <system_error>
 
 namespace manipulation {
 
+namespace {
+
+// Wrapper around H5Dcreate2 that creates a chunked, extendable dataset with
+// auto-created intermediate groups. Returns the dataset hid.
+hid_t create_chunked_dataset(hid_t file, const std::string& path, hid_t dtype,
+                             int rank, const hsize_t* init_dims,
+                             const hsize_t* max_dims, const hsize_t* chunk_dims) {
+    hid_t fspace = H5Screate_simple(rank, init_dims, max_dims);
+    hid_t dcpl = H5Pcreate(H5P_DATASET_CREATE);
+    H5Pset_chunk(dcpl, rank, chunk_dims);
+    hid_t lcpl = H5Pcreate(H5P_LINK_CREATE);
+    H5Pset_create_intermediate_group(lcpl, 1);
+    hid_t dset = H5Dcreate2(file, path.c_str(), dtype, fspace, lcpl, dcpl, H5P_DEFAULT);
+    H5Pclose(lcpl);
+    H5Pclose(dcpl);
+    H5Sclose(fspace);
+    if (dset < 0) {
+        throw std::runtime_error("Failed to create HDF5 dataset: " + path);
+    }
+    return dset;
+}
+
+}  // namespace
+
 EpisodeData::EpisodeData()
-    : camera_names_set_(false) {}
+    : file_path_(),
+      file_created_(false),
+      timestep_count_(0),
+      camera_names_set_(false),
+      img_h_(0),
+      img_w_(0),
+      img_c_(0),
+      action_dim_(0),
+      qpos_dim_(0),
+      qvel_dim_(0),
+      file_id_(-1),
+      action_dset_(-1),
+      qpos_dset_(-1),
+      qvel_dset_(-1),
+      arm_ts_dset_(-1) {}
 
 EpisodeData::EpisodeData(const std::vector<std::string>& camera_names)
-    : camera_names_(camera_names), camera_names_set_(true) {
-    for (const auto& cam : camera_names_) {
-        images_[cam] = std::vector<cv::Mat>();
-        image_timestamps_[cam] = std::vector<double>();
+    : EpisodeData() {
+    camera_names_ = camera_names;
+    camera_names_set_ = true;
+}
+
+EpisodeData::~EpisodeData() {
+    close_handles();
+}
+
+void EpisodeData::steal_from(EpisodeData& other) noexcept {
+    file_path_ = std::move(other.file_path_);
+    file_created_ = other.file_created_;
+    timestep_count_ = other.timestep_count_;
+    camera_names_ = std::move(other.camera_names_);
+    camera_names_set_ = other.camera_names_set_;
+    img_h_ = other.img_h_;
+    img_w_ = other.img_w_;
+    img_c_ = other.img_c_;
+    action_dim_ = other.action_dim_;
+    qpos_dim_ = other.qpos_dim_;
+    qvel_dim_ = other.qvel_dim_;
+    file_id_ = other.file_id_;
+    action_dset_ = other.action_dset_;
+    qpos_dset_ = other.qpos_dset_;
+    qvel_dset_ = other.qvel_dset_;
+    arm_ts_dset_ = other.arm_ts_dset_;
+    image_dsets_ = std::move(other.image_dsets_);
+    image_ts_dsets_ = std::move(other.image_ts_dsets_);
+
+    other.file_created_ = false;
+    other.timestep_count_ = 0;
+    other.file_id_ = -1;
+    other.action_dset_ = -1;
+    other.qpos_dset_ = -1;
+    other.qvel_dset_ = -1;
+    other.arm_ts_dset_ = -1;
+}
+
+EpisodeData::EpisodeData(EpisodeData&& other) noexcept : EpisodeData() {
+    steal_from(other);
+}
+
+EpisodeData& EpisodeData::operator=(EpisodeData&& other) noexcept {
+    if (this != &other) {
+        close_handles();
+        steal_from(other);
     }
+    return *this;
+}
+
+void EpisodeData::close_handles() {
+    auto safe_close = [](hid_t& h) {
+        if (h >= 0) {
+            H5Dclose(h);
+            h = -1;
+        }
+    };
+    safe_close(action_dset_);
+    safe_close(qpos_dset_);
+    safe_close(qvel_dset_);
+    safe_close(arm_ts_dset_);
+    for (auto& [name, h] : image_dsets_) {
+        if (h >= 0) {
+            H5Dclose(h);
+            h = -1;
+        }
+    }
+    for (auto& [name, h] : image_ts_dsets_) {
+        if (h >= 0) {
+            H5Dclose(h);
+            h = -1;
+        }
+    }
+    image_dsets_.clear();
+    image_ts_dsets_.clear();
+    if (file_id_ >= 0) {
+        H5Fclose(file_id_);
+        file_id_ = -1;
+    }
+}
+
+void EpisodeData::open_file(const std::string& path) {
+    if (file_id_ >= 0 || file_created_) {
+        throw std::runtime_error("EpisodeData::open_file: episode already open");
+    }
+    file_path_ = path;
+    file_created_ = false;
+    timestep_count_ = 0;
+}
+
+void EpisodeData::create_file_and_datasets(
+    const std::vector<double>& action,
+    const std::vector<double>& qpos,
+    const std::vector<double>& qvel,
+    const std::vector<cv::Mat>& images) {
+
+    if (file_path_.empty()) {
+        throw std::runtime_error("EpisodeData: open_file() must be called before add_timestep()");
+    }
+
+    action_dim_ = action.size();
+    qpos_dim_ = qpos.size();
+    qvel_dim_ = qvel.size();
+
+    if (!camera_names_set_) {
+        for (size_t i = 0; i < images.size(); ++i) {
+            camera_names_.push_back("camera_" + std::to_string(i + 1));
+        }
+        camera_names_set_ = true;
+    } else if (images.size() != camera_names_.size()) {
+        throw std::runtime_error(
+            "EpisodeData: expected " + std::to_string(camera_names_.size()) +
+            " images, but got " + std::to_string(images.size()));
+    }
+
+    if (!images.empty()) {
+        img_h_ = images[0].rows;
+        img_w_ = images[0].cols;
+        img_c_ = images[0].channels();
+    }
+
+    // Make sure the parent directory exists; create the file (truncate any partial leftover).
+    std::filesystem::path p(file_path_);
+    if (p.has_parent_path()) {
+        std::error_code ec;
+        std::filesystem::create_directories(p.parent_path(), ec);
+    }
+
+    file_id_ = H5Fcreate(file_path_.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+    if (file_id_ < 0) {
+        throw std::runtime_error("Failed to create HDF5 file: " + file_path_);
+    }
+
+    // /action: width = action_dim + 2 trailing termination columns. Rows are
+    // chunked at 30 (i.e. ~1s @ 30Hz) since each row is tiny.
+    {
+        const hsize_t init_dims[2] = {0, action_dim_ + 2};
+        const hsize_t max_dims[2] = {H5S_UNLIMITED, action_dim_ + 2};
+        const hsize_t chunk_dims[2] = {30, action_dim_ + 2};
+        action_dset_ = create_chunked_dataset(file_id_, "/action", H5T_NATIVE_DOUBLE,
+                                              2, init_dims, max_dims, chunk_dims);
+    }
+
+    // /timestamps/arm
+    {
+        const hsize_t init_dims[1] = {0};
+        const hsize_t max_dims[1] = {H5S_UNLIMITED};
+        const hsize_t chunk_dims[1] = {30};
+        arm_ts_dset_ = create_chunked_dataset(file_id_, "/timestamps/arm", H5T_NATIVE_DOUBLE,
+                                              1, init_dims, max_dims, chunk_dims);
+    }
+
+    if (qpos_dim_ > 0) {
+        const hsize_t init_dims[2] = {0, qpos_dim_};
+        const hsize_t max_dims[2] = {H5S_UNLIMITED, qpos_dim_};
+        const hsize_t chunk_dims[2] = {30, qpos_dim_};
+        qpos_dset_ = create_chunked_dataset(file_id_, "/observations/qpos", H5T_NATIVE_DOUBLE,
+                                            2, init_dims, max_dims, chunk_dims);
+    }
+
+    if (qvel_dim_ > 0) {
+        const hsize_t init_dims[2] = {0, qvel_dim_};
+        const hsize_t max_dims[2] = {H5S_UNLIMITED, qvel_dim_};
+        const hsize_t chunk_dims[2] = {30, qvel_dim_};
+        qvel_dset_ = create_chunked_dataset(file_id_, "/observations/qvel", H5T_NATIVE_DOUBLE,
+                                            2, init_dims, max_dims, chunk_dims);
+    }
+
+    // Per-camera image and timestamp datasets. One image per chunk keeps each
+    // chunk ~900KB which is a sensible HDF5 unit (avoids both tiny chunks and
+    // multi-MB chunks that hurt read locality).
+    for (const auto& cam : camera_names_) {
+        const std::string img_path = "/observations/images/" + cam;
+        const hsize_t img_init[4] = {0, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+        const hsize_t img_max[4] = {H5S_UNLIMITED, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+        const hsize_t img_chunk[4] = {1, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+        image_dsets_[cam] = create_chunked_dataset(file_id_, img_path, H5T_NATIVE_UINT8,
+                                                   4, img_init, img_max, img_chunk);
+
+        const std::string ts_path = "/timestamps/images/" + cam;
+        const hsize_t ts_init[1] = {0};
+        const hsize_t ts_max[1] = {H5S_UNLIMITED};
+        const hsize_t ts_chunk[1] = {30};
+        image_ts_dsets_[cam] = create_chunked_dataset(file_id_, ts_path, H5T_NATIVE_DOUBLE,
+                                                      1, ts_init, ts_max, ts_chunk);
+    }
+
+    file_created_ = true;
 }
 
 void EpisodeData::add_timestep(
@@ -25,249 +246,153 @@ void EpisodeData::add_timestep(
     const std::vector<cv::Mat>& images,
     double arm_timestamp,
     const std::vector<double>& image_timestamps) {
-    
-    if (!camera_names_set_) {
-        // Dynamically set camera names based on number of images
-        for (size_t i = 0; i < images.size(); ++i) {
-            std::string cam_name = "camera_" + std::to_string(i + 1);
-            camera_names_.push_back(cam_name);
-            images_[cam_name] = std::vector<cv::Mat>();
-            image_timestamps_[cam_name] = std::vector<double>();
-        }
-        camera_names_set_ = true;
+
+    if (!file_created_) {
+        create_file_and_datasets(action, qpos, qvel, images);
     } else if (images.size() != camera_names_.size()) {
-        throw std::runtime_error("Expected " + std::to_string(camera_names_.size()) + 
-                                 " images, but got " + std::to_string(images.size()));
+        throw std::runtime_error(
+            "EpisodeData: image count changed mid-episode (expected " +
+            std::to_string(camera_names_.size()) + ", got " +
+            std::to_string(images.size()) + ")");
     }
 
-    actions_.push_back(action);
-    qpos_.push_back(qpos);
-    qvel_.push_back(qvel);
+    const hsize_t t = static_cast<hsize_t>(timestep_count_);
+    const hsize_t new_t = t + 1;
 
-    if (arm_timestamp >= 0.0) {
-        arm_timestamps_.push_back(arm_timestamp);
+    auto write_2d_row = [&](hid_t dset, hsize_t width, const double* data) {
+        const hsize_t new_extent[2] = {new_t, width};
+        H5Dset_extent(dset, new_extent);
+
+        hid_t fspace = H5Dget_space(dset);
+        const hsize_t start[2] = {t, 0};
+        const hsize_t count[2] = {1, width};
+        H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+
+        const hsize_t mem_dims[2] = {1, width};
+        hid_t mspace = H5Screate_simple(2, mem_dims, nullptr);
+        H5Dwrite(dset, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, data);
+        H5Sclose(mspace);
+        H5Sclose(fspace);
+    };
+
+    auto write_1d_scalar = [&](hid_t dset, double value) {
+        const hsize_t new_extent[1] = {new_t};
+        H5Dset_extent(dset, new_extent);
+
+        hid_t fspace = H5Dget_space(dset);
+        const hsize_t start[1] = {t};
+        const hsize_t count[1] = {1};
+        H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+
+        const hsize_t mem_dims[1] = {1};
+        hid_t mspace = H5Screate_simple(1, mem_dims, nullptr);
+        H5Dwrite(dset, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, &value);
+        H5Sclose(mspace);
+        H5Sclose(fspace);
+    };
+
+    // /action: write the first action_dim_ columns; trailing termination
+    // columns stay 0 until finalize() rewrites them.
+    {
+        std::vector<double> row(action_dim_ + 2, 0.0);
+        const size_t copy_n = std::min(action.size(), action_dim_);
+        std::copy(action.begin(), action.begin() + copy_n, row.begin());
+        write_2d_row(action_dset_, action_dim_ + 2, row.data());
     }
 
-    for (size_t idx = 0; idx < camera_names_.size(); ++idx) {
-        const auto& cam = camera_names_[idx];
-        images_[cam].push_back(images[idx].clone());
-        
-        if (idx < image_timestamps.size()) {
-            image_timestamps_[cam].push_back(image_timestamps[idx]);
+    if (qpos_dset_ >= 0) {
+        if (qpos.size() != qpos_dim_) {
+            throw std::runtime_error("EpisodeData: qpos size changed mid-episode");
         }
+        write_2d_row(qpos_dset_, qpos_dim_, qpos.data());
     }
+
+    if (qvel_dset_ >= 0) {
+        if (qvel.size() != qvel_dim_) {
+            throw std::runtime_error("EpisodeData: qvel size changed mid-episode");
+        }
+        write_2d_row(qvel_dset_, qvel_dim_, qvel.data());
+    }
+
+    if (arm_ts_dset_ >= 0) {
+        // Always extend the arm timestamp dataset so its row count matches
+        // timestep_count_; use 0.0 as a sentinel when no timestamp was given.
+        write_1d_scalar(arm_ts_dset_, arm_timestamp >= 0.0 ? arm_timestamp : 0.0);
+    }
+
+    for (size_t c = 0; c < camera_names_.size(); ++c) {
+        const auto& cam = camera_names_[c];
+        const cv::Mat& img = images[c];
+        if (img.rows != img_h_ || img.cols != img_w_ || img.channels() != img_c_) {
+            throw std::runtime_error("EpisodeData: image shape changed mid-episode for " + cam);
+        }
+        cv::Mat continuous = img.isContinuous() ? img : img.clone();
+
+        const hsize_t new_extent[4] = {new_t, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+        H5Dset_extent(image_dsets_[cam], new_extent);
+
+        hid_t fspace = H5Dget_space(image_dsets_[cam]);
+        const hsize_t start[4] = {t, 0, 0, 0};
+        const hsize_t count[4] = {1, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+        H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+
+        const hsize_t mem_dims[4] = {1, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+        hid_t mspace = H5Screate_simple(4, mem_dims, nullptr);
+        H5Dwrite(image_dsets_[cam], H5T_NATIVE_UINT8, mspace, fspace, H5P_DEFAULT, continuous.data);
+        H5Sclose(mspace);
+        H5Sclose(fspace);
+
+        const double img_ts = (c < image_timestamps.size()) ? image_timestamps[c] : 0.0;
+        write_1d_scalar(image_ts_dsets_[cam], img_ts);
+    }
+
+    timestep_count_++;
 }
 
-void EpisodeData::add_termination_data() {
-    if (actions_.empty()) {
+void EpisodeData::finalize() {
+    if (!file_created_ || timestep_count_ == 0) {
+        // Nothing useful was written; treat as cancel.
+        cancel();
         return;
     }
 
-    size_t total_timesteps = actions_.size();
-
-    for (size_t i = 0; i < total_timesteps; ++i) {
-        // Linear progression from 0 to 1
-        double linear_value = (total_timesteps > 1) 
-            ? static_cast<double>(i) / static_cast<double>(total_timesteps - 1) 
-            : 0.0;
-        
-        // Termination: 0 for all except last 10 timesteps
-        double termination_value = 0.0;
-        if (total_timesteps >= 10) {
-            if (i >= total_timesteps - 10) {
-                termination_value = 1.0;
-            }
+    const size_t T = timestep_count_;
+    std::vector<double> term(T * 2, 0.0);
+    for (size_t i = 0; i < T; ++i) {
+        const double linear = (T > 1) ? static_cast<double>(i) / static_cast<double>(T - 1) : 0.0;
+        double termination = 0.0;
+        if (T >= 10) {
+            termination = (i >= T - 10) ? 1.0 : 0.0;
         } else {
-            termination_value = 1.0;
+            termination = 1.0;
         }
-
-        actions_[i].push_back(linear_value);
-        actions_[i].push_back(termination_value);
+        term[i * 2 + 0] = linear;
+        term[i * 2 + 1] = termination;
     }
+
+    hid_t fspace = H5Dget_space(action_dset_);
+    const hsize_t start[2] = {0, action_dim_};
+    const hsize_t count[2] = {static_cast<hsize_t>(T), 2};
+    H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+
+    const hsize_t mem_dims[2] = {static_cast<hsize_t>(T), 2};
+    hid_t mspace = H5Screate_simple(2, mem_dims, nullptr);
+    H5Dwrite(action_dset_, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, term.data());
+    H5Sclose(mspace);
+    H5Sclose(fspace);
+
+    close_handles();
 }
 
-void EpisodeData::save_file(const std::string& path) {
-    // Add termination data before saving
-    add_termination_data();
-
-    hid_t file_id = H5Fcreate(path.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
-    if (file_id < 0) {
-        throw std::runtime_error("Failed to create HDF5 file: " + path);
+void EpisodeData::cancel() {
+    close_handles();
+    if (!file_path_.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(file_path_, ec);
     }
-
-    // Save actions
-    if (!actions_.empty()) {
-        size_t num_timesteps = actions_.size();
-        size_t action_dim = actions_[0].size();
-        
-        std::vector<double> flat_actions;
-        flat_actions.reserve(num_timesteps * action_dim);
-        for (const auto& action : actions_) {
-            flat_actions.insert(flat_actions.end(), action.begin(), action.end());
-        }
-
-        hsize_t dims[2] = {num_timesteps, action_dim};
-        hid_t dataspace = H5Screate_simple(2, dims, nullptr);
-        hid_t dataset = H5Dcreate2(file_id, "/action", H5T_NATIVE_DOUBLE, dataspace,
-                                    H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-        H5Dwrite(dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, flat_actions.data());
-        H5Dclose(dataset);
-        H5Sclose(dataspace);
-    }
-
-    // Save timestamps
-    bool has_arm_ts = !arm_timestamps_.empty();
-    bool has_img_ts = false;
-    for (const auto& [cam, ts] : image_timestamps_) {
-        if (!ts.empty()) {
-            has_img_ts = true;
-            break;
-        }
-    }
-
-    if (has_arm_ts || has_img_ts) {
-        hid_t ts_group = H5Gcreate2(file_id, "/timestamps", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-        
-        if (has_arm_ts) {
-            hsize_t ts_dims[1] = {arm_timestamps_.size()};
-            hid_t ts_space = H5Screate_simple(1, ts_dims, nullptr);
-            hid_t ts_dataset = H5Dcreate2(ts_group, "arm", H5T_NATIVE_DOUBLE, ts_space,
-                                          H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-            H5Dwrite(ts_dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, arm_timestamps_.data());
-            H5Dclose(ts_dataset);
-            H5Sclose(ts_space);
-        }
-
-        if (has_img_ts) {
-            hid_t img_ts_group = H5Gcreate2(ts_group, "images", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-            for (const auto& [cam_name, ts_list] : image_timestamps_) {
-                if (!ts_list.empty()) {
-                    hsize_t img_ts_dims[1] = {ts_list.size()};
-                    hid_t img_ts_space = H5Screate_simple(1, img_ts_dims, nullptr);
-                    hid_t img_ts_dataset = H5Dcreate2(img_ts_group, cam_name.c_str(), H5T_NATIVE_DOUBLE,
-                                                       img_ts_space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                    H5Dwrite(img_ts_dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, ts_list.data());
-                    H5Dclose(img_ts_dataset);
-                    H5Sclose(img_ts_space);
-                }
-            }
-            H5Gclose(img_ts_group);
-        }
-        H5Gclose(ts_group);
-    }
-
-    // Check for observations
-    bool has_qpos = !qpos_.empty() && !qpos_[0].empty();
-    bool has_qvel = !qvel_.empty() && !qvel_[0].empty();
-    bool has_images = false;
-    for (const auto& [cam, imgs] : images_) {
-        if (!imgs.empty()) {
-            has_images = true;
-            break;
-        }
-    }
-
-    if (has_qpos || has_qvel || has_images) {
-        hid_t obs_group = H5Gcreate2(file_id, "/observations", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-        if (has_qpos) {
-            size_t num_timesteps = qpos_.size();
-            size_t qpos_dim = qpos_[0].size();
-            
-            std::vector<double> flat_qpos;
-            flat_qpos.reserve(num_timesteps * qpos_dim);
-            for (const auto& q : qpos_) {
-                flat_qpos.insert(flat_qpos.end(), q.begin(), q.end());
-            }
-
-            hsize_t qpos_dims[2] = {num_timesteps, qpos_dim};
-            hid_t qpos_space = H5Screate_simple(2, qpos_dims, nullptr);
-            hid_t qpos_dataset = H5Dcreate2(obs_group, "qpos", H5T_NATIVE_DOUBLE, qpos_space,
-                                             H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-            H5Dwrite(qpos_dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, flat_qpos.data());
-            H5Dclose(qpos_dataset);
-            H5Sclose(qpos_space);
-        }
-
-        if (has_qvel) {
-            size_t num_timesteps = qvel_.size();
-            size_t qvel_dim = qvel_[0].size();
-            
-            std::vector<double> flat_qvel;
-            flat_qvel.reserve(num_timesteps * qvel_dim);
-            for (const auto& q : qvel_) {
-                flat_qvel.insert(flat_qvel.end(), q.begin(), q.end());
-            }
-
-            hsize_t qvel_dims[2] = {num_timesteps, qvel_dim};
-            hid_t qvel_space = H5Screate_simple(2, qvel_dims, nullptr);
-            hid_t qvel_dataset = H5Dcreate2(obs_group, "qvel", H5T_NATIVE_DOUBLE, qvel_space,
-                                             H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-            H5Dwrite(qvel_dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, flat_qvel.data());
-            H5Dclose(qvel_dataset);
-            H5Sclose(qvel_space);
-        }
-
-        if (has_images) {
-            hid_t img_group = H5Gcreate2(obs_group, "images", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-            
-            for (const auto& [cam_name, img_list] : images_) {
-                if (img_list.empty()) continue;
-
-                size_t num_frames = img_list.size();
-                int height = img_list[0].rows;
-                int width = img_list[0].cols;
-                int channels = img_list[0].channels();
-
-                // Flatten all images into a single buffer
-                std::vector<uint8_t> flat_images;
-                flat_images.reserve(num_frames * height * width * channels);
-                
-                for (const auto& img : img_list) {
-                    cv::Mat continuous;
-                    if (!img.isContinuous()) {
-                        continuous = img.clone();
-                    } else {
-                        continuous = img;
-                    }
-                    flat_images.insert(flat_images.end(), 
-                                       continuous.data, 
-                                       continuous.data + (height * width * channels));
-                }
-
-                hsize_t img_dims[4] = {num_frames, static_cast<hsize_t>(height), 
-                                        static_cast<hsize_t>(width), static_cast<hsize_t>(channels)};
-                hid_t img_space = H5Screate_simple(4, img_dims, nullptr);
-                hid_t img_dataset = H5Dcreate2(img_group, cam_name.c_str(), H5T_NATIVE_UINT8,
-                                                img_space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                H5Dwrite(img_dataset, H5T_NATIVE_UINT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, flat_images.data());
-                H5Dclose(img_dataset);
-                H5Sclose(img_space);
-            }
-            H5Gclose(img_group);
-        }
-        H5Gclose(obs_group);
-    }
-
-    H5Fclose(file_id);
-}
-
-void EpisodeData::clear() {
-    actions_.clear();
-    qpos_.clear();
-    qvel_.clear();
-    arm_timestamps_.clear();
-    
-    for (auto& [cam, ts] : image_timestamps_) {
-        ts.clear();
-    }
-    for (auto& [cam, imgs] : images_) {
-        imgs.clear();
-    }
-}
-
-size_t EpisodeData::get_episode_length() const {
-    return actions_.size();
+    file_path_.clear();
+    file_created_ = false;
+    timestep_count_ = 0;
 }
 
 }  // namespace manipulation
