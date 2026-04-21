@@ -65,6 +65,9 @@ private:
         const std::vector<double>& qvel,
         const std::vector<cv::Mat>& images);
     void close_handles();
+    // Best-effort rollback: shrink every streaming dataset back to `rows`
+    // along its time axis. Used to recover from a partial failed timestep.
+    void truncate_datasets_to(size_t rows) noexcept;
     void steal_from(EpisodeData& other) noexcept;
 
     std::string file_path_;

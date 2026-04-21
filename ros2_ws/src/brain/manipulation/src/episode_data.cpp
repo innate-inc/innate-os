@@ -3,11 +3,21 @@
 #include <algorithm>
 #include <filesystem>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 namespace manipulation {
 
 namespace {
+
+// Throws std::runtime_error if `result` is a negative HDF5 status/identifier.
+// Use for any H5* call in the streaming hot path so silent data loss is
+// impossible (disk full, EIO, invalid handle, etc. all surface as exceptions).
+inline void h5_check(long long result, const std::string& what) {
+    if (result < 0) {
+        throw std::runtime_error("HDF5 error in " + what);
+    }
+}
 
 // Wrapper around H5Dcreate2 that creates a chunked, extendable dataset with
 // auto-created intermediate groups. Returns the dataset hid.
@@ -259,94 +269,151 @@ void EpisodeData::add_timestep(
     const hsize_t t = static_cast<hsize_t>(timestep_count_);
     const hsize_t new_t = t + 1;
 
-    auto write_2d_row = [&](hid_t dset, hsize_t width, const double* data) {
+    auto write_2d_row = [&](hid_t dset, hsize_t width, const double* data,
+                            const std::string& name) {
         const hsize_t new_extent[2] = {new_t, width};
-        H5Dset_extent(dset, new_extent);
+        h5_check(H5Dset_extent(dset, new_extent), "H5Dset_extent(" + name + ")");
 
         hid_t fspace = H5Dget_space(dset);
+        h5_check(fspace, "H5Dget_space(" + name + ")");
         const hsize_t start[2] = {t, 0};
         const hsize_t count[2] = {1, width};
-        H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+        h5_check(H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr),
+                 "H5Sselect_hyperslab(" + name + ")");
 
         const hsize_t mem_dims[2] = {1, width};
         hid_t mspace = H5Screate_simple(2, mem_dims, nullptr);
-        H5Dwrite(dset, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, data);
+        h5_check(mspace, "H5Screate_simple(" + name + " mem)");
+        herr_t wr = H5Dwrite(dset, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, data);
         H5Sclose(mspace);
         H5Sclose(fspace);
+        h5_check(wr, "H5Dwrite(" + name + ")");
     };
 
-    auto write_1d_scalar = [&](hid_t dset, double value) {
+    auto write_1d_scalar = [&](hid_t dset, double value, const std::string& name) {
         const hsize_t new_extent[1] = {new_t};
-        H5Dset_extent(dset, new_extent);
+        h5_check(H5Dset_extent(dset, new_extent), "H5Dset_extent(" + name + ")");
 
         hid_t fspace = H5Dget_space(dset);
+        h5_check(fspace, "H5Dget_space(" + name + ")");
         const hsize_t start[1] = {t};
         const hsize_t count[1] = {1};
-        H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+        h5_check(H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr),
+                 "H5Sselect_hyperslab(" + name + ")");
 
         const hsize_t mem_dims[1] = {1};
         hid_t mspace = H5Screate_simple(1, mem_dims, nullptr);
-        H5Dwrite(dset, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, &value);
+        h5_check(mspace, "H5Screate_simple(" + name + " mem)");
+        herr_t wr = H5Dwrite(dset, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, &value);
         H5Sclose(mspace);
         H5Sclose(fspace);
+        h5_check(wr, "H5Dwrite(" + name + ")");
     };
 
-    // /action: write the first action_dim_ columns; trailing termination
-    // columns stay 0 until finalize() rewrites them.
-    {
-        std::vector<double> row(action_dim_ + 2, 0.0);
-        const size_t copy_n = std::min(action.size(), action_dim_);
-        std::copy(action.begin(), action.begin() + copy_n, row.begin());
-        write_2d_row(action_dset_, action_dim_ + 2, row.data());
-    }
-
-    if (qpos_dset_ >= 0) {
-        if (qpos.size() != qpos_dim_) {
-            throw std::runtime_error("EpisodeData: qpos size changed mid-episode");
+    try {
+        // /action: write the first action_dim_ columns; trailing termination
+        // columns stay 0 until finalize() rewrites them.
+        {
+            std::vector<double> row(action_dim_ + 2, 0.0);
+            const size_t copy_n = std::min(action.size(), action_dim_);
+            std::copy(action.begin(), action.begin() + copy_n, row.begin());
+            write_2d_row(action_dset_, action_dim_ + 2, row.data(), "/action");
         }
-        write_2d_row(qpos_dset_, qpos_dim_, qpos.data());
-    }
 
-    if (qvel_dset_ >= 0) {
-        if (qvel.size() != qvel_dim_) {
-            throw std::runtime_error("EpisodeData: qvel size changed mid-episode");
+        if (qpos_dset_ >= 0) {
+            if (qpos.size() != qpos_dim_) {
+                throw std::runtime_error("EpisodeData: qpos size changed mid-episode");
+            }
+            write_2d_row(qpos_dset_, qpos_dim_, qpos.data(), "/observations/qpos");
         }
-        write_2d_row(qvel_dset_, qvel_dim_, qvel.data());
-    }
 
-    if (arm_ts_dset_ >= 0) {
-        // Always extend the arm timestamp dataset so its row count matches
-        // timestep_count_; use 0.0 as a sentinel when no timestamp was given.
-        write_1d_scalar(arm_ts_dset_, arm_timestamp >= 0.0 ? arm_timestamp : 0.0);
-    }
-
-    for (size_t c = 0; c < camera_names_.size(); ++c) {
-        const auto& cam = camera_names_[c];
-        const cv::Mat& img = images[c];
-        if (img.rows != img_h_ || img.cols != img_w_ || img.channels() != img_c_) {
-            throw std::runtime_error("EpisodeData: image shape changed mid-episode for " + cam);
+        if (qvel_dset_ >= 0) {
+            if (qvel.size() != qvel_dim_) {
+                throw std::runtime_error("EpisodeData: qvel size changed mid-episode");
+            }
+            write_2d_row(qvel_dset_, qvel_dim_, qvel.data(), "/observations/qvel");
         }
-        cv::Mat continuous = img.isContinuous() ? img : img.clone();
 
-        const hsize_t new_extent[4] = {new_t, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
-        H5Dset_extent(image_dsets_[cam], new_extent);
+        if (arm_ts_dset_ >= 0) {
+            // Always extend so its row count matches timestep_count_; use 0.0
+            // as a sentinel when no timestamp was given.
+            write_1d_scalar(arm_ts_dset_,
+                            arm_timestamp >= 0.0 ? arm_timestamp : 0.0,
+                            "/timestamps/arm");
+        }
 
-        hid_t fspace = H5Dget_space(image_dsets_[cam]);
-        const hsize_t start[4] = {t, 0, 0, 0};
-        const hsize_t count[4] = {1, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
-        H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+        for (size_t c = 0; c < camera_names_.size(); ++c) {
+            const auto& cam = camera_names_[c];
+            const cv::Mat& img = images[c];
+            if (img.rows != img_h_ || img.cols != img_w_ || img.channels() != img_c_) {
+                throw std::runtime_error("EpisodeData: image shape changed mid-episode for " + cam);
+            }
+            cv::Mat continuous = img.isContinuous() ? img : img.clone();
 
-        const hsize_t mem_dims[4] = {1, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
-        hid_t mspace = H5Screate_simple(4, mem_dims, nullptr);
-        H5Dwrite(image_dsets_[cam], H5T_NATIVE_UINT8, mspace, fspace, H5P_DEFAULT, continuous.data);
-        H5Sclose(mspace);
-        H5Sclose(fspace);
+            const std::string img_name = "/observations/images/" + cam;
+            const hsize_t new_extent[4] = {new_t, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+            h5_check(H5Dset_extent(image_dsets_[cam], new_extent),
+                     "H5Dset_extent(" + img_name + ")");
 
-        const double img_ts = (c < image_timestamps.size()) ? image_timestamps[c] : 0.0;
-        write_1d_scalar(image_ts_dsets_[cam], img_ts);
+            hid_t fspace = H5Dget_space(image_dsets_[cam]);
+            h5_check(fspace, "H5Dget_space(" + img_name + ")");
+            const hsize_t start[4] = {t, 0, 0, 0};
+            const hsize_t count[4] = {1, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+            h5_check(H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr),
+                     "H5Sselect_hyperslab(" + img_name + ")");
+
+            const hsize_t mem_dims[4] = {1, (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+            hid_t mspace = H5Screate_simple(4, mem_dims, nullptr);
+            if (mspace < 0) {
+                H5Sclose(fspace);
+                h5_check(mspace, "H5Screate_simple(" + img_name + " mem)");
+            }
+            herr_t wr = H5Dwrite(image_dsets_[cam], H5T_NATIVE_UINT8, mspace, fspace,
+                                 H5P_DEFAULT, continuous.data);
+            H5Sclose(mspace);
+            H5Sclose(fspace);
+            h5_check(wr, "H5Dwrite(" + img_name + ")");
+
+            const double img_ts = (c < image_timestamps.size()) ? image_timestamps[c] : 0.0;
+            write_1d_scalar(image_ts_dsets_[cam], img_ts, "/timestamps/images/" + cam);
+        }
+    } catch (...) {
+        // Partial failure: some datasets may have been extended+written while
+        // others didn't. Shrink every dataset back to the last good timestep
+        // count so row counts stay consistent and finalize() works. Rollback
+        // is best-effort — we rethrow whatever triggered this path.
+        truncate_datasets_to(timestep_count_);
+        throw;
     }
 
     timestep_count_++;
+}
+
+void EpisodeData::truncate_datasets_to(size_t rows) noexcept {
+    auto shrink_1d = [&](hid_t dset) {
+        if (dset < 0) return;
+        const hsize_t extent[1] = {static_cast<hsize_t>(rows)};
+        H5Dset_extent(dset, extent);
+    };
+    auto shrink_2d = [&](hid_t dset, hsize_t width) {
+        if (dset < 0) return;
+        const hsize_t extent[2] = {static_cast<hsize_t>(rows), width};
+        H5Dset_extent(dset, extent);
+    };
+
+    shrink_2d(action_dset_, action_dim_ + 2);
+    if (qpos_dset_ >= 0) shrink_2d(qpos_dset_, qpos_dim_);
+    if (qvel_dset_ >= 0) shrink_2d(qvel_dset_, qvel_dim_);
+    shrink_1d(arm_ts_dset_);
+    for (auto& [name, dset] : image_dsets_) {
+        if (dset < 0) continue;
+        const hsize_t extent[4] = {static_cast<hsize_t>(rows),
+                                   (hsize_t)img_h_, (hsize_t)img_w_, (hsize_t)img_c_};
+        H5Dset_extent(dset, extent);
+    }
+    for (auto& [name, dset] : image_ts_dsets_) {
+        shrink_1d(dset);
+    }
 }
 
 void EpisodeData::finalize() {
@@ -371,15 +438,23 @@ void EpisodeData::finalize() {
     }
 
     hid_t fspace = H5Dget_space(action_dset_);
+    h5_check(fspace, "H5Dget_space(/action finalize)");
     const hsize_t start[2] = {0, action_dim_};
     const hsize_t count[2] = {static_cast<hsize_t>(T), 2};
-    H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr);
+    h5_check(H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, nullptr, count, nullptr),
+             "H5Sselect_hyperslab(/action finalize)");
 
     const hsize_t mem_dims[2] = {static_cast<hsize_t>(T), 2};
     hid_t mspace = H5Screate_simple(2, mem_dims, nullptr);
-    H5Dwrite(action_dset_, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, term.data());
+    if (mspace < 0) {
+        H5Sclose(fspace);
+        h5_check(mspace, "H5Screate_simple(/action finalize mem)");
+    }
+    herr_t wr = H5Dwrite(action_dset_, H5T_NATIVE_DOUBLE, mspace, fspace,
+                         H5P_DEFAULT, term.data());
     H5Sclose(mspace);
     H5Sclose(fspace);
+    h5_check(wr, "H5Dwrite(/action finalize)");
 
     close_handles();
 }
