@@ -9,7 +9,7 @@ from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import Trigger
 from maurice_msgs.srv import GotoJS
 from brain_messages.action import ExecuteBehavior
-from rclpy.action import ActionServer, CancelResponse
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from cv_bridge import CvBridge
 import numpy as np
 import torch
@@ -27,6 +27,14 @@ torch.backends.cudnn.benchmark = True
 
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
+from manipulation.config_validation import (
+    BehaviorConfigError,
+    LearnedExecCfg,
+    PosesExecCfg,
+    ReplayExecCfg,
+    ValidatedBehavior,
+    validate_behavior_config,
+)
 
 def create_act_config(action_dim=10, chunk_size=30, n_action_steps=None):
     """Create ACT configuration matching the training setup.
@@ -183,12 +191,38 @@ class ManipulationServer(Node):
             self,
             ExecuteBehavior,
             '/behavior/execute',
+            goal_callback=self.goal_callback,
             execute_callback=self.execute_behavior_callback,
             cancel_callback=self.cancel_behavior_callback
         )
         
         self.get_logger().info("Behavior server ready - pure execution engine using absolute skill directories")
-    
+
+    def goal_callback(self, goal_request):
+        """Accept-time validation of behavior_config.
+
+        Rejects malformed goals with ``GoalResponse.REJECT`` so the action
+        client gets immediate feedback instead of the server accepting and
+        then aborting. ``execute_behavior_callback`` revalidates as a
+        belt-and-braces check against the file being deleted between accept
+        and execute.
+        """
+        skill_dir = getattr(goal_request, 'skill_dir', '')
+        payload = getattr(goal_request, 'behavior_config', '')
+        if not payload:
+            self.get_logger().error(
+                f"Rejecting behavior goal for {skill_dir}: behavior_config is empty"
+            )
+            return GoalResponse.REJECT
+        try:
+            validate_behavior_config(payload, skill_dir, check_files_exist=True)
+        except BehaviorConfigError as exc:
+            self.get_logger().error(
+                f"Rejecting behavior goal for {skill_dir}: {exc}"
+            )
+            return GoalResponse.REJECT
+        return GoalResponse.ACCEPT
+
     def cancel_behavior_callback(self, goal_handle_to_cancel):
         """Handle action cancel requests."""
         self.get_logger().info("Received cancel request...")
@@ -212,32 +246,33 @@ class ManipulationServer(Node):
             self.get_logger().warn(f"Behavior {skill_dir} requested but already running")
             goal_handle.abort()
             return result
-        
-        # Get config from goal (from primitive_execution_action_server)
-        if not hasattr(goal_handle.request, 'behavior_config') or not goal_handle.request.behavior_config:
-            result = ExecuteBehavior.Result()
-            result.success = False
-            result.message = f"No behavior_config provided for skill_dir: {skill_dir}"
-            self.get_logger().error(f"No behavior_config provided for skill_dir: {skill_dir}")
-            goal_handle.abort()
-            return result
-        
+
+        # Re-validate at execute-time. goal_callback already ran the same
+        # check at accept-time, but files can disappear between accept and
+        # execute, and defense in depth is cheap (pydantic parse is us-scale).
         try:
-            behavior_config = json.loads(goal_handle.request.behavior_config)
-            self.get_logger().info(f"Executing behavior at skill_dir: {skill_dir}")
-        except json.JSONDecodeError as e:
-            self.get_logger().error(f"Failed to parse behavior_config JSON: {e}")
+            validated = validate_behavior_config(
+                goal_handle.request.behavior_config,
+                skill_dir,
+                check_files_exist=True,
+            )
+        except BehaviorConfigError as exc:
             result = ExecuteBehavior.Result()
             result.success = False
-            result.message = f"Invalid behavior_config JSON: {e}"
+            result.message = f"Invalid behavior_config for {skill_dir}: {exc}"
+            self.get_logger().error(result.message)
             goal_handle.abort()
             return result
-        
+
+        self.get_logger().info(
+            f"Executing {validated.behavior_type} behavior at skill_dir: {skill_dir}"
+        )
+
         # Reset cancel flag
         self._cancel_requested.clear()
         
         # Execute the behavior
-        outcome, reason = self._execute_behavior(goal_handle, skill_dir, behavior_config)
+        outcome, reason = self._execute_behavior(goal_handle, skill_dir, validated)
         
         # Set result based on outcome
         result = ExecuteBehavior.Result()
@@ -265,26 +300,45 @@ class ManipulationServer(Node):
         
         return result
     
-    def _execute_behavior(self, goal_handle, skill_dir, behavior_config):
-        """Execute a behavior based on its configuration."""
+    def _execute_behavior(self, goal_handle, skill_dir, validated: ValidatedBehavior):
+        """Execute a behavior based on its validated configuration."""
         try:
             self.current_goal_handle = goal_handle
             self.execution_running = True
             self._start_sensor_subscriptions()
-            
-            behavior_type = behavior_config.get('type', 'unknown')
+
+            behavior_type = validated.behavior_type
             self.get_logger().info(f"Executing {behavior_type} behavior at: {skill_dir}")
-            
+
             if behavior_type == 'learned':
-                return self._execute_learned_behavior(goal_handle, skill_dir, behavior_config)
+                assert isinstance(validated.params, LearnedExecCfg)
+                assert validated.resolved_path is not None
+                return self._execute_learned_behavior(
+                    goal_handle,
+                    skill_dir,
+                    validated.params,
+                    checkpoint_path=validated.resolved_path,
+                )
             elif behavior_type == 'poses':
-                return self._execute_poses_behavior(goal_handle, skill_dir, behavior_config)
+                assert isinstance(validated.params, PosesExecCfg)
+                return self._execute_poses_behavior(
+                    goal_handle, skill_dir, validated.params
+                )
             elif behavior_type == 'replay':
-                return self._execute_replay_behavior(goal_handle, skill_dir, behavior_config)
+                assert isinstance(validated.params, ReplayExecCfg)
+                assert validated.resolved_path is not None
+                return self._execute_replay_behavior(
+                    goal_handle,
+                    skill_dir,
+                    validated.params,
+                    replay_path=validated.resolved_path,
+                )
             else:
+                # Unreachable: validator restricts behavior_type to the three
+                # branches above. Kept as defense in depth.
                 self.get_logger().error(f"Unknown behavior type: {behavior_type}")
                 return "FAILURE", f"Unknown behavior type: {behavior_type}"
-                
+
         except Exception as e:
             self.get_logger().error(f"Error executing behavior {skill_dir}: {e}")
             return "FAILURE", f"Exception during execution: {str(e)}"
@@ -310,50 +364,23 @@ class ManipulationServer(Node):
             self.get_logger().warn(f"Error releasing policy: {e}")
             self.current_policy = None
     
-    def _execute_learned_behavior(self, goal_handle, skill_dir, behavior_config):
-        """Execute a learned behavior using ACT policy."""
+    def _execute_learned_behavior(self, goal_handle, skill_dir, params: LearnedExecCfg, checkpoint_path: str):
+        """Execute a learned behavior using ACT policy.
+
+        Config has already been validated by ``validate_behavior_config``;
+        this method trusts types, bounds, and file existence.
+        """
         try:
             behavior_name = os.path.basename(skill_dir.rstrip('/'))
-            exec_cfg = behavior_config['execution']
+            action_dim = params.action_dim
+            duration = params.duration
+            progress_threshold = params.progress_threshold
+            start_pose = params.start_pose
+            end_pose = params.end_pose
+            start_pose_time = params.start_pose_time
+            end_pose_time = params.end_pose_time
+            n_action_steps_override = params.n_action_steps
 
-            # For optional numeric overrides, a null / missing value means
-            # "use the server default", keeping manipulation_server as the
-            # single source of truth for defaults.
-            def _get_or(key, default):
-                val = exec_cfg.get(key)
-                return default if val is None else val
-
-            checkpoint_file = exec_cfg.get('checkpoint')
-            if not isinstance(checkpoint_file, str) or not checkpoint_file:
-                self.get_logger().error(
-                    f"Missing or invalid 'checkpoint' in metadata.json for "
-                    f"{behavior_name}: {checkpoint_file!r}"
-                )
-                return (
-                    "FAILURE",
-                    "metadata.json execution.checkpoint is missing or not a string. "
-                    "Activate a trained run before executing this skill.",
-                )
-            checkpoint_path = os.path.join(skill_dir, checkpoint_file)
-            action_dim = _get_or('action_dim', 10)
-            duration = _get_or('duration', 120.0)
-            progress_threshold = _get_or('progress_threshold', 2.0)
-            start_pose = exec_cfg.get('start_pose')
-            end_pose = exec_cfg.get('end_pose')
-            start_pose_time = _get_or('start_pose_time', 1)
-            end_pose_time = _get_or('end_pose_time', 1)
-            n_action_steps_override = exec_cfg.get('n_action_steps')
-
-            # Treat empty lists as None
-            if start_pose is not None and len(start_pose) == 0:
-                start_pose = None
-            if end_pose is not None and len(end_pose) == 0:
-                end_pose = None
-            
-            if not checkpoint_path or not os.path.exists(checkpoint_path):
-                self.get_logger().error(f"Checkpoint not found: {checkpoint_path}")
-                return "FAILURE", f"Checkpoint file not found: {checkpoint_path}"
-            
             # Load policy
             if not self._load_policy_for_behavior(
                 checkpoint_path,
@@ -565,14 +592,16 @@ class ManipulationServer(Node):
             self._stop_robot()
             return "FAILURE", f"Exception during execution: {str(e)}"
     
-    def _execute_poses_behavior(self, goal_handle, skill_dir, behavior_config):
+    def _execute_poses_behavior(self, goal_handle, skill_dir, params: PosesExecCfg):
         """Execute a poses-based behavior."""
         behavior_name = os.path.basename(skill_dir.rstrip('/'))
         self.get_logger().info(f"Executing poses behavior: {behavior_name}")
-        
-        poses = behavior_config['execution'].get('poses', [])
-        steps = int(behavior_config['execution'].get('steps', len(poses)))
-        
+
+        poses = params.poses
+        # ``steps`` is the per-pose duration in seconds. Preserve legacy
+        # fallback: if omitted, use ``len(poses)``.
+        steps = params.steps if params.steps is not None else float(len(poses))
+
         try:
             for i, pose in enumerate(poses):
                 # Check for cancellation
@@ -602,37 +631,26 @@ class ManipulationServer(Node):
             self.get_logger().error(f"Error in poses behavior execution: {e}")
             return "FAILURE", f"Exception during poses execution: {str(e)}"
     
-    def _execute_replay_behavior(self, goal_handle, skill_dir, behavior_config):
+    def _execute_replay_behavior(self, goal_handle, skill_dir, params: ReplayExecCfg, replay_path: str):
         """Execute a replay-based behavior from H5 file."""
         behavior_name = os.path.basename(skill_dir.rstrip('/'))
         self.get_logger().info(f"Executing replay behavior: {behavior_name}")
-        
-        replay_file = behavior_config['execution'].get('replay_file')
-        if not replay_file:
-            self.get_logger().error("Missing replay_file in behavior execution config")
-            return "FAILURE", "Missing replay_file in behavior execution config"
-        file_path = os.path.join(skill_dir, replay_file)
-        start_pose = behavior_config['execution'].get('start_pose')
-        end_pose = behavior_config['execution'].get('end_pose')
-        start_pose_time = behavior_config['execution'].get('start_pose_time', 1)
-        end_pose_time = behavior_config['execution'].get('end_pose_time', 1)
-        
-        if not file_path or not os.path.exists(file_path):
-            self.get_logger().error(f"Replay file not found: {file_path}")
-            return "FAILURE", f"Replay file not found: {file_path}"
-        
+
+        start_pose = params.start_pose
+        end_pose = params.end_pose
+        start_pose_time = params.start_pose_time
+        end_pose_time = params.end_pose_time
+        replay_hz = params.replay_frequency
+
         try:
-            # Get replay frequency from config (default to 12.0 Hz)
-            replay_hz = behavior_config['execution'].get('replay_frequency', 12.0)
-            
             # Load H5 file and extract actions
-            with h5py.File(file_path, 'r') as h5file:
+            with h5py.File(replay_path, 'r') as h5file:
                 if 'action' not in h5file:
                     self.get_logger().error("No 'action' dataset found in H5 file")
                     return "FAILURE", "No 'action' dataset found in H5 file"
                 
                 actions = h5file['action'][:]  # Shape: (n_steps, action_dim)
-                self.get_logger().info(f"Loaded {actions.shape[0]} action steps from {file_path}")
+                self.get_logger().info(f"Loaded {actions.shape[0]} action steps from {replay_path}")
             
             if actions.shape[0] == 0:
                 self.get_logger().error("No actions found in replay file")
