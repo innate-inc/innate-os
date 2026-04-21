@@ -64,3 +64,6 @@ cupy-cuda12x
 
 # Debugging
 ros-mcp
+
+# Benchmarking / profiling (recorder_benchmark.py)
+psutil

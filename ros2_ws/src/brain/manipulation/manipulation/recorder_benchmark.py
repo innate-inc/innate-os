@@ -18,7 +18,18 @@ import threading
 import time
 from datetime import datetime
 
-import psutil
+try:
+    import psutil
+except ImportError:
+    sys.stderr.write(
+        "recorder_benchmark.py requires the 'psutil' Python package, "
+        "which is not installed.\n"
+        "Install with: pip3 install psutil\n"
+        "Or install the whole workspace's requirements: "
+        "pip3 install -r ros2_ws/pip-requirements.txt\n"
+    )
+    sys.exit(1)
+
 import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
