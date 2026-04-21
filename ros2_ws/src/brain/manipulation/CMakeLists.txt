@@ -68,19 +68,9 @@ ament_target_dependencies(recorder_node_cpp
   brain_messages
 )
 
-# HDF5 streaming benchmark (standalone, no ROS deps)
-add_executable(hdf5_benchmark
-  src/hdf5_benchmark.cpp
-)
-target_link_libraries(hdf5_benchmark
-  ${HDF5_LIBRARIES}
-  stdc++fs
-)
-
 # Install C++ executables
 install(TARGETS
   recorder_node_cpp
-  hdf5_benchmark
   DESTINATION lib/${PROJECT_NAME}
 )
 
