@@ -95,6 +95,17 @@ void TaskManager::add_episode(const std::string& temp_file_path,
     std::string file_name = "episode_" + std::to_string(episode_id) + ".h5";
     std::string file_path = data_dir + "/" + file_name;
 
+    // Refuse to clobber an existing file. std::filesystem::rename silently
+    // replaces the destination on POSIX, which would destroy existing episode
+    // data if metadata and disk ever drift out of sync (hand-edited metadata,
+    // restore-from-git, partial crash, etc.). Better to fail loudly here and
+    // let the operator reconcile than to lose an episode silently.
+    if (fs::exists(file_path)) {
+        throw std::runtime_error(
+            "TaskManager::add_episode: destination already exists; refusing to overwrite '" +
+            file_path + "' (metadata/disk out of sync?)");
+    }
+
     // Atomic-ish rename (same filesystem) of finalized streaming file into slot.
     std::error_code ec;
     fs::rename(temp_file_path, file_path, ec);
