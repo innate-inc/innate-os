@@ -10,13 +10,6 @@ After=zenoh-router.service network-online.target
 # Ensure this script is executable (chmod +x)
 # Preserve common/ROS environment variables including INNATE_OS_ROOT
 Environment="INNATE_OS_ROOT=/home/jetson1/innate-os" "XDG_RUNTIME_DIR=/run/user/1000"
-# Wait until the system clock is NTP-synchronized (up to ~4 min) so TLS
-# cert validation doesn't fail with "certificate is not yet valid" on boots
-# that start at epoch (no RTC battery on this Jetson).
-ExecStartPre=/bin/bash -c 'for i in $(seq 1 120); do if [ "$(timedatectl show -p NTPSynchronized --value)" = "yes" ]; then echo "clock synced after $((i*2))s"; exit 0; fi; sleep 2; done; echo "WARNING: clock not synced after 240s, starting anyway"; exit 0'
-# Wait until DNS can resolve the auth host (up to ~2 min) so the first
-# OIDC discovery call doesn't fail with EAI_AGAIN on early boot.
-ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do if getent hosts auth-v1.innate.bot >/dev/null 2>&1; then echo "DNS ready after $((i*2))s"; exit 0; fi; sleep 2; done; echo "WARNING: DNS still failing after 120s, starting anyway"; exit 0'
 ExecStart=/usr/bin/sudo -u jetson1 --preserve-env=PATH,ROS_DISTRO,XDG_RUNTIME_DIR,AMENT_PREFIX_PATH,PYTHONPATH,LD_LIBRARY_PATH,INNATE_OS_ROOT -- /bin/bash -c '${INNATE_OS_ROOT}/scripts/launch_ros_in_tmux.sh'
 # Stop the tmux session (kills all ROS processes in it)
 ExecStop=/usr/bin/sudo -u jetson1 -- /bin/bash -c 'tmux kill-session -t ros_nodes 2>/dev/null || true'
@@ -24,8 +17,6 @@ ExecStop=/usr/bin/sudo -u jetson1 -- /bin/bash -c 'tmux kill-session -t ros_node
 # Type=simple should work if the script exits after starting tmux detached.
 # If the script waits for tmux, Type=forking might be needed, but usually not.
 Type=simple
-# Give the ExecStartPre waits room to run (clock up to 240s + DNS up to 120s).
-TimeoutStartSec=600
 # Reduce timeout for shutdown to 15 seconds
 TimeoutStopSec=15
 # Kill main process with SIGTERM, then SIGKILL remaining children
