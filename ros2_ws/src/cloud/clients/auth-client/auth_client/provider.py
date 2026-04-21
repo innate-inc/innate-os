@@ -198,11 +198,14 @@ class AuthProvider:
             except AuthError as exc:
                 if not _is_transient_auth_error(exc):
                     raise
-                now = time.monotonic()
-                if deadline is not None and now >= deadline:
-                    raise
+                # If there's no budget left for another sleep, raise now
+                # instead of firing the callback with a meaningless
+                # "retrying in 0s" and an immediate retry.
                 if deadline is not None:
-                    next_delay = min(delay, max(0.0, deadline - now))
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    next_delay = min(delay, remaining)
                 else:
                     next_delay = delay
                 if on_retry is not None:
