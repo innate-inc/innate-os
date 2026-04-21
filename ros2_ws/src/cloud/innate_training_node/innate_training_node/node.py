@@ -94,15 +94,13 @@ def _require_absolute(skill_dir: str) -> str | None:
 
 
 class _RosHandler(logging.Handler):
-    """Forward stdlib log records to a ROS logger."""
+    """Forward stdlib log records to a ROS logger.
 
-    _LEVEL_MAP = {
-        logging.DEBUG: "debug",
-        logging.INFO: "info",
-        logging.WARNING: "warn",
-        logging.ERROR: "error",
-        logging.CRITICAL: "fatal",
-    }
+    rclpy (Humble) caches severity per call-site ``(file, line, function)``
+    and rejects changes with ``"Logger severity cannot be changed between
+    calls"``.  Dispatch each severity from its own source line so the
+    caller_id differs per level.
+    """
 
     def __init__(self, ros_logger) -> None:
         super().__init__()
@@ -110,8 +108,17 @@ class _RosHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
-        fn = self._LEVEL_MAP.get(record.levelno, "info")
-        getattr(self._ros, fn)(msg)
+        level = record.levelno
+        if level >= logging.CRITICAL:
+            self._ros.fatal(msg)
+        elif level >= logging.ERROR:
+            self._ros.error(msg)
+        elif level >= logging.WARNING:
+            self._ros.warn(msg)
+        elif level >= logging.INFO:
+            self._ros.info(msg)
+        else:
+            self._ros.debug(msg)
 
 
 class TrainingNode(Node):
