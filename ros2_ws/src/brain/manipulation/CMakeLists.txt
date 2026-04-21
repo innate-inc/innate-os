@@ -68,7 +68,7 @@ ament_target_dependencies(recorder_node_cpp
   brain_messages
 )
 
-# Install C++ executable
+# Install C++ executables
 install(TARGETS
   recorder_node_cpp
   DESTINATION lib/${PROJECT_NAME}
@@ -119,5 +119,6 @@ install(
     manipulation/trajectory.py
     manipulation/policyViT.py
     manipulation/manipulation_server.py
+    manipulation/recorder_benchmark.py
   DESTINATION lib/${PROJECT_NAME}
 )
