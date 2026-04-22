@@ -24,9 +24,11 @@ import base64
 import json
 import logging
 import threading
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,37 @@ class AuthError(Exception):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         self.status_code: int | None = status_code
         super().__init__(message)
+
+
+def _is_transient_auth_error(exc: "AuthError") -> bool:
+    """Return True when ``exc`` represents a retryable condition.
+
+    Treated as transient:
+      * HTTP 408 Request Timeout,
+      * HTTP 429 Too Many Requests,
+      * any HTTP 5xx server error,
+      * no HTTP status *and* the AuthError was chained from a
+        ``urllib.error.URLError`` (DNS not ready, TLS handshake,
+        connection reset, timeout before any response).
+
+    Everything else — notably 400/401/403/404, and semantic errors like
+    "discovery response missing token_endpoint" or "auth response missing
+    token" which raise ``AuthError`` with no ``status_code`` *and* no
+    ``__cause__`` — is a permanent config/credential/server-contract
+    issue and should fail fast so the caller (systemd unit, init
+    script, ...) can surface it rather than spin forever.
+    """
+    status = exc.status_code
+    if status is not None:
+        if status in (408, 429):
+            return True
+        return 500 <= status < 600
+    cause = exc.__cause__
+    while cause is not None:
+        if isinstance(cause, urllib.error.URLError):
+            return True
+        cause = cause.__cause__
+    return False
 
 
 def _decode_jwt_payload(token: str) -> dict[str, object]:
@@ -114,6 +147,87 @@ class AuthProvider:
             "User-Agent": "innate-robot",
             "Authorization": f"Bearer {self.token}",
         }
+
+    def wait_for_token(
+        self,
+        *,
+        timeout: float | None = None,
+        initial_delay: float = 2.0,
+        max_delay: float = 30.0,
+        on_retry: Callable[[int, "AuthError", float], None] | None = None,
+    ) -> str:
+        """Block until a JWT can be obtained, retrying transient failures.
+
+        Intended for startup on systems where networking may not be
+        immediately usable — e.g. cold boots where DNS hasn't come up
+        yet (``URLError`` / ``EAI_AGAIN``) or boards without an RTC
+        where TLS rejects the server cert as "not yet valid" until
+        ``systemd-timesyncd`` has completed its first sync.  Both
+        surface as :class:`AuthError` from
+        :meth:`_discover_token_endpoint`.
+
+        Uses exponential backoff between attempts.  Only *transient*
+        :class:`AuthError` conditions are retried — permanent HTTP 4xx
+        responses (wrong service key → 401, wrong issuer URL → 404,
+        etc.) re-raise immediately so systemd can observe a clean
+        failure and restart / report the misconfiguration instead of
+        spinning forever.  Non-:class:`AuthError` exceptions also
+        propagate immediately.
+
+        Retried status codes:
+
+        * ``None`` — no HTTP response (DNS, TLS, connection reset).
+        * ``408`` Request Timeout.
+        * ``429`` Too Many Requests.
+        * ``5xx`` Server Error.
+
+        Args:
+            timeout: Max seconds to wait.  ``None`` means wait forever.
+            initial_delay: First backoff delay in seconds.
+            max_delay: Cap on the backoff delay.
+            on_retry: Optional callback ``(attempt, error, next_delay_s)``
+                invoked after each failure.  Useful to route progress
+                messages to a non-stdlib logger (e.g. a ROS logger).
+                When ``None``, warnings are emitted on the module logger.
+
+        Returns:
+            A valid JWT string.
+
+        Raises:
+            AuthError: If a permanent failure is seen, or if ``timeout``
+                elapses without success.
+        """
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        delay = initial_delay
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self.token
+            except AuthError as exc:
+                if not _is_transient_auth_error(exc):
+                    raise
+                # If there's no budget left for another sleep, raise now
+                # instead of firing the callback with a meaningless
+                # "retrying in 0s" and an immediate retry.
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    next_delay = min(delay, remaining)
+                else:
+                    next_delay = delay
+                if on_retry is not None:
+                    on_retry(attempt, exc, next_delay)
+                else:
+                    logger.warning(
+                        "Auth not ready (attempt %d): %s — retrying in %.0fs",
+                        attempt,
+                        exc,
+                        next_delay,
+                    )
+                time.sleep(next_delay)
+                delay = min(delay * 2, max_delay)
 
     async def ws_connect(self, url: str, extra_headers: dict[str, str] | None = None, **ws_kwargs):
         """Open an async WebSocket with Bearer auth and one 401 retry.
@@ -237,6 +351,11 @@ class AuthProvider:
             )
             with urllib.request.urlopen(disco_req, timeout=10) as resp:
                 discovery: dict[str, object] = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            raise AuthError(
+                f"OIDC discovery failed at {url}: HTTP {exc.code}",
+                status_code=exc.code,
+            ) from exc
         except urllib.error.URLError as exc:
             raise AuthError(f"OIDC discovery failed at {url}: {exc}") from exc
 

@@ -94,15 +94,13 @@ def _require_absolute(skill_dir: str) -> str | None:
 
 
 class _RosHandler(logging.Handler):
-    """Forward stdlib log records to a ROS logger."""
+    """Forward stdlib log records to a ROS logger.
 
-    _LEVEL_MAP = {
-        logging.DEBUG: "debug",
-        logging.INFO: "info",
-        logging.WARNING: "warn",
-        logging.ERROR: "error",
-        logging.CRITICAL: "fatal",
-    }
+    rclpy (Humble) caches severity per call-site ``(file, line, function)``
+    and rejects changes with ``"Logger severity cannot be changed between
+    calls"``.  Dispatch each severity from its own source line so the
+    caller_id differs per level.
+    """
 
     def __init__(self, ros_logger) -> None:
         super().__init__()
@@ -110,8 +108,17 @@ class _RosHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
-        fn = self._LEVEL_MAP.get(record.levelno, "info")
-        getattr(self._ros, fn)(msg)
+        level = record.levelno
+        if level >= logging.CRITICAL:
+            self._ros.fatal(msg)
+        elif level >= logging.ERROR:
+            self._ros.error(msg)
+        elif level >= logging.WARNING:
+            self._ros.warn(msg)
+        elif level >= logging.INFO:
+            self._ros.info(msg)
+        else:
+            self._ros.debug(msg)
 
 
 class TrainingNode(Node):
@@ -120,10 +127,19 @@ class TrainingNode(Node):
     def __init__(self) -> None:
         super().__init__("innate_training")
 
-        # Bridge stdlib logs from training_client → ROS logger
-        _lib_logger = logging.getLogger("training_client")
-        _lib_logger.setLevel(logging.DEBUG)
-        _lib_logger.addHandler(_RosHandler(self.get_logger()))
+        # Bridge stdlib logs from training_client + auth_client → ROS logger.
+        # auth_client emits its cold-boot retry progress here via wait_for_token.
+        # Python's stdlib loggers are module-global singletons, so if
+        # TrainingNode is constructed more than once in the same process
+        # (tests, composable-node containers) we must evict any handlers
+        # installed by a prior instance to avoid duplicate emission.
+        _ros_handler = _RosHandler(self.get_logger())
+        for _name in ("training_client", "auth_client"):
+            _lib_logger = logging.getLogger(_name)
+            for _stale in [h for h in _lib_logger.handlers if isinstance(h, _RosHandler)]:
+                _lib_logger.removeHandler(_stale)
+            _lib_logger.setLevel(logging.DEBUG)
+            _lib_logger.addHandler(_ros_handler)
 
         env_path = find_dotenv(usecwd=True)
         if env_path:
@@ -165,6 +181,9 @@ class TrainingNode(Node):
             auth_issuer_url=auth_issuer,
             poll_interval_seconds=poll_sec,
         )
+        # OrchestratorClient uses AuthProvider.wait_for_token() internally
+        # so cold-boot auth failures (DNS not ready, no RTC → TLS notBefore)
+        # are retried with exponential backoff instead of crashing init.
         self._mgr: SkillManager = SkillManager(config)
         self._store: JobStore = JobStore()
 

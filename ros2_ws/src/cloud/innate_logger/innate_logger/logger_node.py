@@ -16,7 +16,7 @@ from sensor_msgs.msg import BatteryState
 from diagnostic_msgs.msg import DiagnosticArray
 from std_msgs.msg import String
 
-from auth_client import AuthProvider
+from auth_client import AuthError, AuthProvider
 
 from innate_logger.client import TelemetryClient
 
@@ -67,6 +67,11 @@ class LoggerNode(Node):
 
         # ── Auth + telemetry client ─────────────────────────────────
         auth = AuthProvider(issuer_url=auth_issuer, service_key=service_key)
+        # Cold boots can fail auth for several minutes (DNS not ready, or no
+        # RTC so TLS sees the server cert as "not yet valid").  Prime the JWT
+        # up-front with AuthProvider's retry helper so the periodic telemetry
+        # timer doesn't silently paper over those errors.
+        auth.wait_for_token(on_retry=self._log_auth_retry)
         self._client = TelemetryClient(url=telemetry_url, auth=auth)
 
         # Git commit at startup
@@ -91,6 +96,14 @@ class LoggerNode(Node):
         self.create_timer(self.LOG_INTERVAL, self._log_vitals)
 
     # ── Helpers ─────────────────────────────────────────────────────
+
+    def _log_auth_retry(
+        self, attempt: int, error: AuthError, next_delay: float
+    ) -> None:
+        self.get_logger().warning(
+            f"Auth not ready yet (attempt {attempt}): {error} — "
+            f"retrying in {next_delay:.0f}s"
+        )
 
     @staticmethod
     def _get_git_commit() -> str:
