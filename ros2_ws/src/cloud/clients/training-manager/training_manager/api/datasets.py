@@ -455,7 +455,8 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
                     "only h264 datasets can be merged",
                 )
 
-            src_meta = _read_meta(src_path) or {}
+            with _locked_metadata(src_path) as src_meta_path:
+                src_meta = _read_meta(src_meta_path) or {}
             src_exec = src_meta.get("execution") or {}
             if isinstance(src_exec, dict):
                 inherited_exec_keys.update(src_exec.keys())
