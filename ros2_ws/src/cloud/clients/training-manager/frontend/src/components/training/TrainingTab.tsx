@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Download, Plus } from "lucide-react";
 import { api } from "../../api";
 import RunDetail from "./RunDetail";
 import NewRunForm from "./NewRunForm";
+import { useRunDownload } from "./useRunDownload";
 
 interface RunSummary {
   skill_dir_name: string;
@@ -135,6 +136,9 @@ export default function TrainingTab() {
               <th className="text-left p-2 text-xs text-innate-muted font-semibold uppercase tracking-wide">
                 Duration
               </th>
+              <th className="text-right p-2 text-xs text-innate-muted font-semibold uppercase tracking-wide">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -168,6 +172,9 @@ export default function TrainingTab() {
                   <td className="p-2 text-xs text-gray-600">
                     {duration(r.started_at, r.finished_at)}
                   </td>
+                  <td className="p-2 text-right">
+                    <DownloadCell run={r} onComplete={refresh} />
+                  </td>
                 </tr>
                 {r.error_message && (
                   <tr
@@ -180,7 +187,7 @@ export default function TrainingTab() {
                     className="bg-red-50 hover:bg-red-100 cursor-pointer"
                   >
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       className="px-2 pb-2 text-xs text-red-600"
                     >
                       {r.error_message}
@@ -205,6 +212,47 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: "bg-black text-white",
   downloaded: "bg-innate-border text-gray-600",
 };
+
+function DownloadCell({
+  run,
+  onComplete,
+}: {
+  run: RunSummary;
+  onComplete: () => void;
+}) {
+  const download = useRunDownload(run.skill_dir_name, run.run_id, onComplete);
+  const canDownload = run.status === "done" || run.status === "downloaded";
+
+  if (!canDownload && !download.active) {
+    return <span className="text-innate-muted text-xs">—</span>;
+  }
+
+  if (download.active) {
+    const pct = Math.round(
+      Math.max(0, Math.min(1, download.status.progress)) * 100,
+    );
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[0.68rem] font-semibold text-innate-muted uppercase">
+        <span className="inline-block w-2 h-2 rounded-full bg-innate-purple animate-pulse" />
+        {download.status.stage.replace(/_/g, " ")} {pct}%
+      </span>
+    );
+  }
+
+  const label = run.status === "downloaded" ? "Re-download" : "Download";
+
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        download.start();
+      }}
+      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[0.68rem] font-semibold bg-innate-purple text-white hover:bg-innate-purple-hover transition-colors"
+    >
+      <Download size={12} /> {label}
+    </button>
+  );
+}
 
 function RunStatusBadge({
   status,
