@@ -70,6 +70,10 @@ class LogCapture(logging.Handler):
         self._waiters.append(waiter)
         try:
             while True:
+                # Clear before reading the counter so any emit that fires
+                # between here and the next wait() will re-set the event
+                # rather than being erased.
+                event.clear()
                 total = self._total_emitted
                 if total > seen:
                     entries = list(self.buffer)
@@ -77,7 +81,6 @@ class LogCapture(logging.Handler):
                     for entry in entries[-new_count:]:
                         yield entry
                     seen = total
-                event.clear()
                 await event.wait()
         finally:
             self._waiters.remove(waiter)

@@ -338,6 +338,9 @@ async def download_run(
         if existing and not existing.get("done"):
             raise HTTPException(409, "Download already in progress")
 
+        # Drop any stale terminal-state job so a re-download starts fresh.
+        _download_jobs.pop(key, None)
+
         job: dict[str, Any] = {
             "stage": "starting",
             "message": "Starting...",
@@ -364,18 +367,21 @@ async def download_status(
     """Poll the download progress for a run."""
     with _download_lock:
         job = _download_jobs.get((skill_name, run_id))
-    if job is None:
+        if job is None:
+            return {
+                "stage": "idle",
+                "message": "",
+                "done": True,
+                "error": None,
+                "progress": 0.0,
+            }
+        # Snapshot the job fields under the lock so concurrent writes by the
+        # worker thread can't produce an internally inconsistent reply (e.g.
+        # done=True observed before progress=1.0 is written).
         return {
-            "stage": "idle",
-            "message": "",
-            "done": True,
-            "error": None,
-            "progress": 0.0,
+            "stage": job["stage"],
+            "message": job["message"],
+            "done": job["done"],
+            "error": job.get("error"),
+            "progress": job.get("progress", 0.0),
         }
-    return {
-        "stage": job["stage"],
-        "message": job["message"],
-        "done": job["done"],
-        "error": job.get("error"),
-        "progress": job.get("progress", 0.0),
-    }

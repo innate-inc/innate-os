@@ -26,6 +26,7 @@ export function useRunDownload(
 ) {
   const [status, setStatus] = useState<DownloadStatus>(IDLE);
   const [active, setActive] = useState(false);
+  const submittingRef = useRef(false);
   const onCompleteRef = useRef(onComplete);
 
   useEffect(() => {
@@ -69,6 +70,11 @@ export function useRunDownload(
   }, [active, skillName, runId]);
 
   const start = useCallback(async () => {
+    // Synchronous guard against double-clicks: the `active` state is only
+    // set after the POST resolves, so relying on it alone leaves a window
+    // where a second click fires another POST (which gets a 409).
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setStatus({
       stage: "starting",
       message: "Starting...",
@@ -90,6 +96,8 @@ export function useRunDownload(
         error: (e as Error).message,
         progress: 0,
       });
+    } finally {
+      submittingRef.current = false;
     }
   }, [skillName, runId]);
 
