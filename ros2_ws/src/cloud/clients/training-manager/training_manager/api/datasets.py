@@ -422,10 +422,20 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
     data_dest = dest / "data"
     data_dest.mkdir()
 
+    # Per-checkpoint keys that get filled in at run-activation; never
+    # propagate them as null into a fresh merged skill, even if a source
+    # happens to have them.
+    _NON_INHERITABLE_EXECUTION_KEYS = frozenset({"checkpoint", "stats_file"})
+
     try:
         merged_episodes: list[dict[str, Any]] = []
         data_frequency: int | None = None
         dataset_type: str = "h5"
+        # Union of execution-block keys observed across all source skills.
+        # Whatever knobs upstream skills exposed will be exposed (as null) in
+        # the merged skill, so this code stays in sync with the canonical
+        # create-skill template without duplicating its schema.
+        inherited_exec_keys: set[str] = set()
         new_idx = 0
 
         for src in body.sources:
@@ -444,6 +454,12 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
                     f"Source {src.skill_name} has dataset_type '{src_type}'; "
                     "only h264 datasets can be merged",
                 )
+
+            with _locked_metadata(src_path) as src_meta_path:
+                src_meta = _read_meta(src_meta_path) or {}
+            src_exec = src_meta.get("execution") or {}
+            if isinstance(src_exec, dict):
+                inherited_exec_keys.update(src_exec.keys())
 
             if data_frequency is None:
                 data_frequency = src_ds.get("data_frequency", 10)
@@ -491,13 +507,24 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
             json.dumps(new_ds_meta, indent=4) + "\n"
         )
 
+        # Inherit execution-block knob keys from the source skills (union)
+        # so the merged skill exposes the same set of optional overrides as
+        # whatever was upstream. Per-checkpoint keys are stripped because
+        # they're populated by run-activation, not by skill creation.
+        # Values are always null -> manipulation_server falls back to its
+        # built-in defaults at execution time.
+        exec_block: dict[str, Any] = {
+            k: None
+            for k in sorted(inherited_exec_keys - _NON_INHERITABLE_EXECUTION_KEYS)
+        }
+
         meta: dict[str, Any] = {
             "name": body.new_name,
             "type": "learned",
             "guidelines": "",
             "guidelines_when_running": "",
             "inputs": {},
-            "execution": {},
+            "execution": exec_block,
         }
         _write_meta(dest / "metadata.json", meta)
     except Exception:
