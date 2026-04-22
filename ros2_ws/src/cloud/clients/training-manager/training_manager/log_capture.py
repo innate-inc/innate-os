@@ -39,6 +39,7 @@ class LogCapture(logging.Handler):
     def __init__(self, capacity: int = 500) -> None:
         super().__init__()
         self.buffer: deque[LogEntry] = deque(maxlen=capacity)
+        self._total_emitted: int = 0
         self._waiters: list[_Waiter] = []
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -48,6 +49,7 @@ class LogCapture(logging.Handler):
             message=self.format(record),
         )
         self.buffer.append(entry)
+        self._total_emitted += 1
         for waiter in list(self._waiters):
             try:
                 waiter.loop.call_soon_threadsafe(waiter.event.set)
@@ -55,18 +57,26 @@ class LogCapture(logging.Handler):
                 pass
 
     async def subscribe(self) -> Any:
-        """Async generator that yields new LogEntry objects as they arrive."""
-        seen = len(self.buffer)
+        """Async generator that yields new LogEntry objects as they arrive.
+
+        Tracks position by a monotonic emit counter rather than buffer length,
+        so subscribers continue to receive entries after the ring buffer
+        reaches its capacity (otherwise len(buffer) plateaus at maxlen and
+        the slice would always be empty).
+        """
+        seen = self._total_emitted
         event = asyncio.Event()
         waiter = _Waiter(event, asyncio.get_running_loop())
         self._waiters.append(waiter)
         try:
             while True:
-                entries = list(self.buffer)
-                new_entries = entries[seen:]
-                seen = len(entries)
-                for entry in new_entries:
-                    yield entry
+                total = self._total_emitted
+                if total > seen:
+                    entries = list(self.buffer)
+                    new_count = min(total - seen, len(entries))
+                    for entry in entries[-new_count:]:
+                        yield entry
+                    seen = total
                 event.clear()
                 await event.wait()
         finally:
