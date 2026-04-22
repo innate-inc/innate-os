@@ -39,6 +39,14 @@ RUN if [ "$MODE" = "hardware" ]; then \
     fi && \
     rm /tmp/apt-dependencies.hardware.txt
 
+# 4b. Install simulation-specific dependencies if in simulation mode
+COPY ros2_ws/apt-dependencies.simulation.txt /tmp/apt-dependencies.simulation.txt
+RUN if [ "$MODE" = "simulation" ]; then \
+        apt-get update && \
+        grep -v '^#' /tmp/apt-dependencies.simulation.txt | grep -v '^$' | xargs apt-get install -y; \
+    fi && \
+    rm /tmp/apt-dependencies.simulation.txt
+
 # 5. Install pip packages
 RUN pip install --upgrade \
     websockets \
@@ -78,8 +86,22 @@ COPY scripts /root/innate-os/scripts
 # For version tracking, git needs to be present
 COPY .git /root/innate-os/.git
 
-# 9. Build your ROS 2 workspace.
-#    We have to source the system setup.zsh for colcon to find ROS packages.
+# 9a. Build and install the Stage simulator library from source (simulation only)
+RUN if [ "$MODE" = "simulation" ]; then \
+        git clone https://github.com/tuw-robotics/Stage.git /tmp/Stage && \
+        mkdir -p /tmp/Stage/build && cd /tmp/Stage/build && \
+        cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && \
+        make -j$(nproc) && make install && ldconfig && \
+        rm -rf /tmp/Stage; \
+    fi
+
+# 9b. Remove COLCON_IGNORE for stage_ros2 in simulation mode so it gets built
+RUN if [ "$MODE" = "simulation" ]; then \
+        rm -f /root/innate-os/ros2_ws/src/maurice_bot/stage_ros2/COLCON_IGNORE; \
+    fi
+
+# 9c. Build your ROS 2 workspace.
+#     We have to source the system setup.zsh for colcon to find ROS packages.
 WORKDIR /root/innate-os/ros2_ws
 RUN source /opt/ros/humble/setup.zsh && colcon build
 
