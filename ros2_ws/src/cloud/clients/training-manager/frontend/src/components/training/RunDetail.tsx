@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Download } from "lucide-react";
 import { api } from "../../api";
+import { useRunDownload } from "./useRunDownload";
 
 interface RunData {
   skill_dir_name: string;
@@ -50,12 +51,18 @@ export default function RunDetail({ skillName, runId, onBack }: Props) {
     return () => clearInterval(interval);
   }, [run?.status]);
 
+  const download = useRunDownload(skillName, runId, fetchRun);
+
   if (loading)
     return <p className="text-innate-muted text-sm">Loading...</p>;
   if (error || !run)
     return <p className="text-innate-orange text-sm">Error: {error}</p>;
 
   const isActive = ACTIVE.includes(run.status);
+  const canDownload = run.status === "done" || run.status === "downloaded";
+  const downloadLabel =
+    run.status === "downloaded" ? "Re-download" : "Download Results";
+  const pct = Math.max(0, Math.min(1, download.status.progress));
 
   return (
     <div>
@@ -66,7 +73,7 @@ export default function RunDetail({ skillName, runId, onBack }: Props) {
         <ArrowLeft size={16} /> Back to runs
       </button>
 
-      <div className="flex items-center gap-3 mb-5">
+      <div className="flex items-center gap-3 mb-2">
         <h2 className="text-lg font-bold">
           Run #{run.run_id}
         </h2>
@@ -74,7 +81,44 @@ export default function RunDetail({ skillName, runId, onBack }: Props) {
         {isActive && (
           <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
         )}
+        {canDownload && (
+          <button
+            onClick={download.start}
+            disabled={download.active}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-innate-purple text-white hover:bg-innate-purple-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <Download size={14} />
+            {download.active ? "Downloading..." : downloadLabel}
+          </button>
+        )}
       </div>
+
+      {(download.active || download.status.error) && (
+        <div className="mb-5 border border-innate-border rounded-md p-3 bg-innate-panel">
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span className="text-innate-muted uppercase tracking-wide">
+              {download.status.stage.replace(/_/g, " ")}
+            </span>
+            <span className="font-mono text-gray-700">
+              {Math.round(pct * 100)}%
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-innate-border overflow-hidden">
+            <div
+              className={`h-full ${download.status.error ? "bg-innate-orange" : "bg-innate-purple"} transition-all`}
+              style={{ width: `${pct * 100}%` }}
+            />
+          </div>
+          <p
+            className={`mt-2 text-xs break-all ${download.status.error ? "text-innate-orange" : "text-gray-700"}`}
+          >
+            {download.status.error || download.status.message || "\u00a0"}
+          </p>
+        </div>
+      )}
+      {!download.active && !download.status.error && (
+        <div className="mb-5" />
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <section>

@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -24,11 +25,14 @@ from training_client.src.skill_manager import (
     _read_meta,
     read_skill_id,
 )
-from training_client.src.types import ClientConfig, RunInfo
+from training_client.src.types import ClientConfig, ProgressUpdate, RunInfo
 
 logger = logging.getLogger("training_manager.api.training")
 
 router = APIRouter(tags=["training"])
+
+_download_jobs: dict[tuple[str, int], dict[str, Any]] = {}
+_download_lock = threading.Lock()
 
 HYPERPARAMETER_DEFAULTS: dict[str, str] = {
     "LEARNING_RATE": "5e-5",
@@ -259,3 +263,119 @@ async def create_run(
         "Created run %s/%s for skill %s", skill_id, result.get("run_id"), skill_name
     )
     return result
+
+
+# ── Download results ────────────────────────────────────────────────
+
+
+def _apply_download_progress(
+    job: dict[str, Any], update: ProgressUpdate, skill_name: str, run_id: int
+) -> None:
+    """Apply a ProgressUpdate from SkillManager.download to the job dict."""
+    job["stage"] = update.stage.value
+    job["message"] = update.message
+    fp = update.file_progress
+    if fp and fp.total > 0:
+        if fp.bytes_total and fp.bytes_total > 0:
+            per_file = (fp.bytes_done or 0) / fp.bytes_total
+        else:
+            per_file = 1.0 if fp.done else 0.0
+        job["progress"] = ((fp.index - 1) + per_file) / fp.total
+    if update.error:
+        job["error"] = update.error
+    logger.info(
+        "[%s/%d] %s: %s", skill_name, run_id, update.stage.value, update.message
+    )
+
+
+def _run_download(
+    skill_id: str,
+    skill_name: str,
+    run_id: int,
+    dest_dir: str,
+    job: dict[str, Any],
+) -> None:
+    """Background thread: download run results via SkillManager."""
+    try:
+        manager = _make_manager()
+        job["stage"] = "downloading"
+        job["message"] = f"Downloading run {skill_id}/{run_id}..."
+        logger.info("[%s/%d] Starting download...", skill_name, run_id)
+
+        for update in manager.download(skill_id, run_id, dest_dir=dest_dir):
+            _apply_download_progress(job, update, skill_name, run_id)
+
+        job["stage"] = "done"
+        job["message"] = "Download complete"
+        job["done"] = True
+        job["progress"] = 1.0
+        logger.info("[%s/%d] Download complete", skill_name, run_id)
+    except Exception as e:
+        job["stage"] = "error"
+        job["message"] = str(e)
+        job["error"] = str(e)
+        job["done"] = True
+        logger.error("[%s/%d] Download failed: %s", skill_name, run_id, e)
+
+
+@router.post("/runs/{skill_name}/{run_id}/download")
+async def download_run(
+    request: Request, skill_name: str, run_id: int
+) -> dict[str, str]:
+    """Start a background download of a run's result files.
+
+    Uses SkillManager.download() which writes into the run's
+    ``source_dir/{run_id}/`` and marks the run ``downloaded`` on success.
+    """
+    skill_path = _skills_dir(request) / skill_name
+    skill_id = read_skill_id(skill_path)
+    if not skill_id:
+        raise HTTPException(404, f"No training_skill_id for {skill_name}")
+
+    key = (skill_name, run_id)
+    with _download_lock:
+        existing = _download_jobs.get(key)
+        if existing and not existing.get("done"):
+            raise HTTPException(409, "Download already in progress")
+
+        job: dict[str, Any] = {
+            "stage": "starting",
+            "message": "Starting...",
+            "done": False,
+            "error": None,
+            "progress": 0.0,
+        }
+        _download_jobs[key] = job
+
+    thread = threading.Thread(
+        target=_run_download,
+        args=(skill_id, skill_name, run_id, str(skill_path.resolve()), job),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "started"}
+
+
+@router.get("/runs/{skill_name}/{run_id}/download-status")
+async def download_status(
+    skill_name: str, run_id: int
+) -> dict[str, Any]:
+    """Poll the download progress for a run."""
+    with _download_lock:
+        job = _download_jobs.get((skill_name, run_id))
+    if job is None:
+        return {
+            "stage": "idle",
+            "message": "",
+            "done": True,
+            "error": None,
+            "progress": 0.0,
+        }
+    return {
+        "stage": job["stage"],
+        "message": job["message"],
+        "done": job["done"],
+        "error": job.get("error"),
+        "progress": job.get("progress", 0.0),
+    }
