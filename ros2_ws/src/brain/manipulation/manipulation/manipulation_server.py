@@ -389,10 +389,14 @@ class ManipulationServer(Node):
             ):
                 return "FAILURE", f"Failed to load policy from {checkpoint_path}"
             
-            # Check sensor availability before starting
-            if not self._check_sensor_availability():
-                self.get_logger().error("Required sensors not available. Cannot execute learned behavior.")
-                return "FAILURE", "Required sensors not available (cameras or joint state)"
+            # Wait for sensor data to arrive after subscription creation
+            sensor_wait_deadline = time.time() + 5.0
+            while not self._check_sensor_availability():
+                if time.time() > sensor_wait_deadline:
+                    self.get_logger().error("Required sensors not available after 5s. Cannot execute learned behavior.")
+                    return "FAILURE", "Required sensors not available (cameras or joint state)"
+                time.sleep(0.1)
+            self.get_logger().info("All sensors available")
             
             # Set head to AI position for optimal camera angle
             self.get_logger().info("Setting head to AI position for optimal camera angle")
