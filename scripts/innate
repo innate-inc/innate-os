@@ -190,6 +190,7 @@ def _show_status():
     print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
     print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
     print(f"  {C.BOLD}innate volume{C.NC}       Get/set speaker volume")
+    print(f"  {C.BOLD}innate agent{C.NC}        List/switch agents")
     print(f"  {C.BOLD}innate --help{C.NC}       All commands")
     print()
     return 0
@@ -393,6 +394,222 @@ def _build_cycle(packages, release=False):
         fail("Skipping restart due to build failure")
         sys.exit(rc)
     sys.exit(_service_start())
+
+
+# ---------------------------------------------------------------------------
+# Agent management helpers
+# ---------------------------------------------------------------------------
+
+
+def _ros2_source_chain():
+    """Return a bash source chain for ROS2 + workspace setup."""
+    ros_setup = "/opt/ros/humble/setup.bash"
+    ws_setup = ROS_WS / "install" / "setup.bash"
+    chain = f"source {ros_setup}"
+    if ws_setup.exists():
+        chain += f" && source {ws_setup}"
+    return chain
+
+
+def _ros2_call(cmd_suffix, timeout=15):
+    """Run a ROS2 command with the workspace sourced. Returns (returncode, stdout, stderr)."""
+    full_cmd = f"{_ros2_source_chain()} && {cmd_suffix}"
+    try:
+        r = subprocess.run(
+            ["bash", "-c", full_cmd], capture_output=True, text=True, timeout=timeout
+        )
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return 1, "", "Timed out waiting for ROS2 service (is the brain node running?)"
+
+
+def _agent_list():
+    rc, stdout, stderr = _ros2_call(
+        "ros2 service call /brain/get_available_directives "
+        "brain_messages/srv/GetAvailableDirectives {}"
+    )
+    if rc != 0:
+        fail("Could not reach /brain/get_available_directives")
+        if stderr.strip():
+            print(f"  {C.DIM}{stderr.strip()}{C.NC}")
+        return 1
+
+    import json as _json
+
+    # Response is Python repr format:
+    # GetAvailableDirectives_Response(directives=['[{...}]'], current_directive='x', startup_directive='y')
+    current = ""
+    startup = ""
+    directives = []
+
+    m = re.search(r"current_directive='([^']*)'", stdout)
+    if m:
+        current = m.group(1)
+
+    m = re.search(r"startup_directive='([^']*)'", stdout)
+    if m:
+        startup = m.group(1)
+
+    # directives is a string[] where element 0 is a JSON array of directive objects.
+    # The output is Python repr format, e.g.: directives=['[{...}]']
+    # Use a state machine to find the Python list bounds, then ast.literal_eval to
+    # properly unescape the Python string before passing to json.loads.
+    import ast as _ast
+    marker = "directives=["
+    idx = stdout.find(marker)
+    if idx != -1:
+        pos = idx + len(marker) - 1  # points at the '[' of the Python list
+        in_str = False
+        escape_next = False
+        str_char = None
+        depth = 0
+        list_end = -1
+        for i in range(pos, len(stdout)):
+            c = stdout[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if in_str:
+                if c == "\\":
+                    escape_next = True
+                elif c == str_char:
+                    in_str = False
+            else:
+                if c in ("'", '"'):
+                    in_str = True
+                    str_char = c
+                elif c == "[":
+                    depth += 1
+                elif c == "]":
+                    depth -= 1
+                    if depth == 0:
+                        list_end = i + 1
+                        break
+        if list_end != -1:
+            try:
+                lst = _ast.literal_eval(stdout[pos:list_end])
+                directives = _json.loads(lst[0])
+            except (ValueError, SyntaxError, _json.JSONDecodeError):
+                pass
+
+    print()
+    print(f"  {C.BOLD}Agents{C.NC}")
+    print()
+
+    if directives:
+        for d in directives:
+            name = d.get("id", "?")
+            display = d.get("display_name", name)
+            tags = []
+            if name == current:
+                tags.append(f"{C.GREEN}active{C.NC}")
+            if name == startup:
+                tags.append(f"{C.CYAN}startup{C.NC}")
+            suffix = f"  ({', '.join(tags)})" if tags else ""
+            print(f"  {C.BOLD}{name}{C.NC}  {C.DIM}{display}{C.NC}{suffix}")
+    else:
+        warn("Could not parse directive details from response")
+        if current:
+            print(f"  {C.BOLD}Active:{C.NC}  {current}")
+        if startup:
+            print(f"  {C.BOLD}Startup:{C.NC} {startup}")
+
+    print()
+    return 0
+
+
+def _agent_set(name):
+    rc, stdout, stderr = _ros2_call(
+        f'ros2 topic pub --once /brain/set_directive std_msgs/msg/String "data: \'{name}\'"'
+    )
+    if rc != 0:
+        fail(f"Failed to publish to /brain/set_directive")
+        if stderr.strip():
+            print(f"  {C.DIM}{stderr.strip()}{C.NC}")
+        return 1
+
+    ok(f"Switched to agent: {name}")
+    return 0
+
+
+def _agent_startup(name):
+    if name:
+        rc, stdout, stderr = _ros2_call(
+            "ros2 service call /brain/set_directive_on_startup "
+            f'brain_messages/srv/SetDirectiveOnStartup "{{directive_name: \'{name}\'}}"'
+        )
+        if rc != 0 or "success=False" in stdout:
+            fail(f"Failed to set startup agent")
+            if stderr.strip():
+                print(f"  {C.DIM}{stderr.strip()}{C.NC}")
+            return 1
+        ok(f"Startup agent set to: {name}")
+    else:
+        # Clear startup directive
+        rc, stdout, stderr = _ros2_call(
+            "ros2 service call /brain/set_directive_on_startup "
+            'brain_messages/srv/SetDirectiveOnStartup "{directive_name: \'\'}"'
+        )
+        if rc != 0:
+            fail("Failed to clear startup agent")
+            return 1
+        ok("Startup agent cleared (will use default)")
+    return 0
+
+
+def _discover_agent_names():
+    """Return all agent stem names found on disk across the known agent directories."""
+    innate_agents = INNATE_OS_ROOT / "agents"
+    home_agents = Path.home() / "agents"
+    names = []
+    for d in (innate_agents, home_agents):
+        if d.is_dir():
+            for f in d.glob("*.py"):
+                if f.name not in ("__init__.py", "types.py") and not f.name.startswith("_"):
+                    names.append(f.stem)
+    return names
+
+
+def _brain_set_active(active: bool):
+    """Call /brain/set_brain_active. Returns True on success."""
+    val = "true" if active else "false"
+    rc, stdout, stderr = _ros2_call(
+        f"ros2 service call /brain/set_brain_active std_srvs/srv/SetBool "
+        f'"{{data: {val}}}"',
+        timeout=10,
+    )
+    return rc == 0 and "success=True" in stdout
+
+
+def _agent_reload():
+    agent_names = _discover_agent_names()
+    if not agent_names:
+        warn("No agent files found on disk")
+        return 1
+
+    # Format as a YAML sequence for the ROS2 service call
+    agents_yaml = "[" + ", ".join(f"'{n}'" for n in agent_names) + "]"
+    rc, stdout, stderr = _ros2_call(
+        f"ros2 service call /brain/reload_skills_agents "
+        f'brain_messages/srv/ReloadSkillsAgents "{{skills: [], agents: {agents_yaml}}}"'
+    )
+    if rc != 0:
+        fail("Failed to call /brain/reload_skills_agents")
+        if stderr.strip():
+            print(f"  {C.DIM}{stderr.strip()}{C.NC}")
+        return 1
+
+    # Parse reloaded count from response
+    m = re.search(r"message='([^']*)'", stdout)
+    msg = m.group(1) if m else "done"
+    ok(f"Agents reloaded: {msg}")
+
+    # The reload deactivates the brain as a side effect — re-activate it
+    if _brain_set_active(True):
+        ok("Brain re-activated")
+    else:
+        warn("Could not re-activate brain — open the app or run: innate agent activate")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1391,6 +1608,77 @@ def reinstall(ctx):
 def quick_check():
     """Silent check for shell/app integration."""
     sys.exit(_make_update_manager().quick_check())
+
+
+# -- agent group --------------------------------------------------------------
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def agent(ctx):
+    """Manage agents — Python files that define the robot's active behavior.
+
+    Each agent is a .py file in ~/agents/ or the innate-os/agents/ directory.
+    The active agent controls how the robot responds and what skills it uses.
+
+    \b
+    Examples:
+      innate agent              List all agents
+      innate agent list         List all agents
+      innate agent set <name>   Switch the active agent
+      innate agent startup <n>  Set the agent loaded on boot
+      innate agent reload       Hot-reload agents from disk
+    """
+    if ctx.invoked_subcommand is None:
+        sys.exit(_agent_list())
+
+
+@agent.command("list")
+def agent_list():
+    """List available agents with current and startup markers."""
+    sys.exit(_agent_list())
+
+
+@agent.command("set")
+@click.argument("name")
+def agent_set(name):
+    """Switch the active agent.
+
+    \b
+    Example:
+      innate agent set demo_agent
+    """
+    sys.exit(_agent_set(name))
+
+
+@agent.command("startup")
+@click.argument("name", required=False, default=None)
+def agent_startup(name):
+    """Set (or clear) the agent loaded on startup.
+
+    \b
+    Examples:
+      innate agent startup demo_agent   Set startup agent
+      innate agent startup              Clear startup agent
+    """
+    sys.exit(_agent_startup(name))
+
+
+@agent.command("reload")
+def agent_reload():
+    """Hot-reload agents and skills from disk."""
+    sys.exit(_agent_reload())
+
+
+@agent.command("activate")
+def agent_activate():
+    """Re-activate the brain (if it was deactivated by a reload)."""
+    if _brain_set_active(True):
+        ok("Brain activated")
+        sys.exit(0)
+    else:
+        fail("Could not activate brain — is the brain node running?")
+        sys.exit(1)
 
 
 # -- completions (auto-generated) ---------------------------------------------
