@@ -13,6 +13,7 @@ import json
 import math  # For yaw calculation
 import os
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from brain_client.skill_types import (
     Skill,
     SkillResult,
 )
+from brain_client.claude_mem_observer import ClaudeMemObserver
 
 
 class SkillsActionServer(Node):
@@ -191,6 +193,9 @@ class SkillsActionServer(Node):
             debounce_seconds=1.0,
         )
         self._hot_reload_watcher.start()
+
+        # Claude-Mem: observe skill executions for persistent memory
+        self._claude_mem = ClaudeMemObserver(self.get_logger())
 
     def _on_skills_file_changed(self, skill_names: list, _agent_names: list):
         """Called by HotReloadWatcher when skill files change.
@@ -740,6 +745,10 @@ class SkillsActionServer(Node):
 
         skill_type = goal_handle.request.skill_type
 
+        # Claude-Mem: record skill start
+        self._claude_mem.on_skill_start(skill_type, inputs)
+        _skill_start_time = time.monotonic()
+
         # Snapshot the skill entry under lock so check-then-access is atomic.
         with self._skills_lock:
             code_entry = self._code_skills.get(skill_type)
@@ -747,11 +756,10 @@ class SkillsActionServer(Node):
 
         # Check if it's a code skill
         if code_entry is not None:
-            return self._execute_code_skill(goal_handle, skill_type, inputs)
-
+            result = self._execute_code_skill(goal_handle, skill_type, inputs)
         # Check if it's a physical skill
         elif physical_entry is not None:
-            return self._execute_physical_skill(goal_handle, skill_type, inputs)
+            result = self._execute_physical_skill(goal_handle, skill_type, inputs)
 
         # Skill not found
         else:
@@ -760,12 +768,23 @@ class SkillsActionServer(Node):
             self.get_logger().error(f"Skill '{skill_type}' not available")
             self.get_logger().error(f"Available skills: {all_skills}")
             goal_handle.abort()
-            return ExecuteSkill.Result(
+            result = ExecuteSkill.Result(
                 success=False,
                 message="Skill not available",
                 skill_type=skill_type,
                 success_type=SkillResult.FAILURE.value,
             )
+
+        # Claude-Mem: record skill result
+        _skill_duration = time.monotonic() - _skill_start_time
+        self._claude_mem.on_skill_result(
+            skill_type=skill_type,
+            inputs=inputs,
+            result_message=result.message,
+            result_status=result.success_type,
+            duration_seconds=_skill_duration,
+        )
+        return result
 
     def _update_skill_robot_state(self, skill):
         """Helper to update a skill's robot state from current sensor data."""
