@@ -8,12 +8,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-
 from training_client.src.skill_manager import (
     _locked_metadata,
     _read_meta,
     _write_meta,
-    read_skill_id,
 )
 
 logger = logging.getLogger("training_manager.api.skills")
@@ -67,7 +65,12 @@ async def list_skills(request: Request) -> list[dict[str, Any]]:
 
     skills: list[dict[str, Any]] = []
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
+        if (
+            not child.is_dir()
+            or child.name.startswith(".")
+            or child.name == "__pycache__"
+            or not (child / "metadata.json").is_file()
+        ):
             continue
         summary = _skill_summary(child)
         if summary is not None:

@@ -11,14 +11,12 @@ import json
 import logging
 import os
 import threading
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
-
 from training_client.src.skill_manager import (
     SkillManager,
     _locked_metadata,
@@ -127,7 +125,12 @@ async def list_all_runs(request: Request) -> list[dict[str, Any]]:
     all_runs: list[dict[str, Any]] = []
 
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
+        if (
+            not child.is_dir()
+            or child.name.startswith(".")
+            or child.name == "__pycache__"
+            or not (child / "metadata.json").is_file()
+        ):
             continue
 
         skill_id = read_skill_id(child)
@@ -167,7 +170,7 @@ async def get_run(request: Request, skill_name: str, run_id: int) -> dict[str, A
     try:
         r = manager.run_status(skill_id, run_id)
     except Exception as e:
-        raise HTTPException(502, f"Failed to get run status: {e}")
+        raise HTTPException(502, f"Failed to get run status: {e}") from e
 
     return _run_to_dict(r, skill_name, skill_display_name)
 
@@ -257,7 +260,7 @@ async def create_run(
     try:
         result = manager.client.create_run(skill_id, training_params=params)
     except Exception as e:
-        raise HTTPException(502, f"Failed to create run: {e}")
+        raise HTTPException(502, f"Failed to create run: {e}") from e
 
     logger.info(
         "Created run %s/%s for skill %s", skill_id, result.get("run_id"), skill_name

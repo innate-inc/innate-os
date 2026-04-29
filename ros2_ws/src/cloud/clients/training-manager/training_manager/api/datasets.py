@@ -17,7 +17,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-
 from training_client.src.skill_manager import (
     SkillManager,
     _locked_metadata,
@@ -82,7 +81,12 @@ async def list_datasets(request: Request) -> list[dict[str, Any]]:
 
     datasets: list[dict[str, Any]] = []
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
+        if (
+            not child.is_dir()
+            or child.name.startswith(".")
+            or child.name == "__pycache__"
+            or not (child / "metadata.json").is_file()
+        ):
             continue
 
         with _locked_metadata(child) as meta_path:
@@ -235,10 +239,8 @@ def _run_submit(
         job["message"] = "Submitting skill..."
         logger.info("[%s] Submitting skill...", skill_name)
 
-        skill_info = None
         for update in manager.submit(skill_dir):
             _apply_progress(job, update, skill_name)
-            skill_info = update
 
         skill_id = read_skill_id(skill_dir)
         if not skill_id:
