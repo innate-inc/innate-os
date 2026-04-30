@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import threading
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -24,6 +23,8 @@ from training_client.src.skill_manager import (
     read_skill_id,
 )
 from training_client.src.types import ClientConfig, ProgressUpdate, RunInfo
+
+from training_manager.api.skill_paths import iter_skill_dirs, skills_dir
 
 logger = logging.getLogger("training_manager.api.training")
 
@@ -65,10 +66,6 @@ INFRASTRUCTURE_DEFAULTS: dict[str, Any] = {
     "hours": 5,
     "budget": 200,
 }
-
-
-def _skills_dir(request: Request) -> Path:
-    return Path(request.app.state.skills_dir)
 
 
 def _make_manager() -> SkillManager:
@@ -117,22 +114,10 @@ async def list_all_runs(request: Request) -> list[dict[str, Any]]:
     Uses SkillManager.list_runs() for each skill that has a
     training_skill_id.
     """
-    root = _skills_dir(request)
-    if not root.is_dir():
-        return []
-
     manager = _make_manager()
     all_runs: list[dict[str, Any]] = []
 
-    for child in sorted(root.iterdir()):
-        if (
-            not child.is_dir()
-            or child.name.startswith(".")
-            or child.name == "__pycache__"
-            or not (child / "metadata.json").is_file()
-        ):
-            continue
-
+    for child in iter_skill_dirs(skills_dir(request)):
         skill_id = read_skill_id(child)
         if not skill_id:
             continue
@@ -157,7 +142,7 @@ async def list_all_runs(request: Request) -> list[dict[str, Any]]:
 @router.get("/runs/{skill_name}/{run_id}")
 async def get_run(request: Request, skill_name: str, run_id: int) -> dict[str, Any]:
     """Get details for a specific training run via SkillManager.run_status()."""
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     skill_id = read_skill_id(skill_path)
     if not skill_id:
         raise HTTPException(404, f"No training_skill_id for {skill_name}")
@@ -180,7 +165,7 @@ async def watch_run(
     request: Request, skill_name: str, run_id: int
 ) -> StreamingResponse:
     """SSE endpoint that polls run status using SkillManager.run_status()."""
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     skill_id = read_skill_id(skill_path)
     if not skill_id:
         raise HTTPException(404, f"No training_skill_id for {skill_name}")
@@ -230,7 +215,7 @@ async def create_run(
     Builds the training_params dict in the same format as the training
     CLI's `run` command, including source_dir for result download.
     """
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     skill_id = read_skill_id(skill_path)
     if not skill_id:
         raise HTTPException(404, f"No training_skill_id for {skill_name}")
@@ -330,7 +315,7 @@ async def download_run(
     Uses SkillManager.download() which writes into the run's
     ``source_dir/{run_id}/`` and marks the run ``downloaded`` on success.
     """
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     skill_id = read_skill_id(skill_path)
     if not skill_id:
         raise HTTPException(404, f"No training_skill_id for {skill_name}")

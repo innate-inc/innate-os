@@ -14,13 +14,11 @@ from training_client.src.skill_manager import (
     _write_meta,
 )
 
+from training_manager.api.skill_paths import iter_skill_dirs, skills_dir
+
 logger = logging.getLogger("training_manager.api.skills")
 
 router = APIRouter(tags=["skills"])
-
-
-def _skills_dir(request: Request) -> Path:
-    return Path(request.app.state.skills_dir)
 
 
 def _read_dataset_metadata(skill_path: Path) -> dict[str, Any] | None:
@@ -59,19 +57,8 @@ def _skill_summary(skill_path: Path) -> dict[str, Any] | None:
 @router.get("")
 async def list_skills(request: Request) -> list[dict[str, Any]]:
     """List all skills found in the skills directory."""
-    root = _skills_dir(request)
-    if not root.is_dir():
-        return []
-
     skills: list[dict[str, Any]] = []
-    for child in sorted(root.iterdir()):
-        if (
-            not child.is_dir()
-            or child.name.startswith(".")
-            or child.name == "__pycache__"
-            or not (child / "metadata.json").is_file()
-        ):
-            continue
+    for child in iter_skill_dirs(skills_dir(request)):
         summary = _skill_summary(child)
         if summary is not None:
             skills.append(summary)
@@ -82,7 +69,7 @@ async def list_skills(request: Request) -> list[dict[str, Any]]:
 @router.get("/{skill_name}")
 async def get_skill(request: Request, skill_name: str) -> dict[str, Any]:
     """Return the full metadata.json for a skill."""
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     if not skill_path.is_dir():
         raise HTTPException(404, f"Skill directory not found: {skill_name}")
 
@@ -117,7 +104,7 @@ async def update_skill(
     Uses the training client's locked metadata pattern for safe
     concurrent access.
     """
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     if not skill_path.is_dir():
         raise HTTPException(404, f"Skill directory not found: {skill_name}")
 
