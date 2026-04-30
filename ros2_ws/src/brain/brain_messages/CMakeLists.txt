@@ -25,7 +25,6 @@ set(srv_files
   "srv/SaveMap.srv"
   "srv/DeleteMap.srv"
   "srv/GetDatasetInfo.srv"
-  "srv/SetDirectiveOnStartup.srv"
   "srv/LoadEpisode.srv"
   "srv/ReloadSkillsAgents.srv"
   "srv/CreatePhysicalSkill.srv"
