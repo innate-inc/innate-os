@@ -634,6 +634,17 @@ def _resolve_skill_ref(skill_ref: str, skills):
     )
 
 
+def _resolve_skill_id_for_run(skill_ref: str, modules, node, resolve_timeout: float):
+    if "/" in skill_ref:
+        return skill_ref
+
+    if resolve_timeout <= 0:
+        return skill_ref
+
+    skills = _wait_for_available_skills(modules, node, resolve_timeout)
+    return _resolve_skill_ref(skill_ref, skills) if skills else skill_ref
+
+
 def _skill_list(timeout: float):
     if not _ensure_skill_ros_nodes_running():
         return 1
@@ -663,8 +674,7 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
     node = _create_skill_node(modules)
 
     try:
-        skills = _wait_for_available_skills(modules, node, resolve_timeout) if resolve_timeout > 0 else []
-        skill_id = _resolve_skill_ref(skill_ref, skills) if skills else skill_ref
+        skill_id = _resolve_skill_id_for_run(skill_ref, modules, node, resolve_timeout)
 
         action_client = ActionClient(node, ExecuteSkill, "execute_skill")
         try:
@@ -1657,7 +1667,7 @@ def skill_list(timeout):
     type=float,
     default=2.0,
     show_default=True,
-    help="Seconds to wait for skill list when resolving display names.",
+    help="Seconds to wait for skill list when resolving display names or shorthands. Full skill IDs skip this.",
 )
 def skill_run(skill_ref, inputs, timeout, server_timeout, resolve_timeout):
     """Run a skill by ID, unique display name, or unique basename.
