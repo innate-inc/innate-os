@@ -28,6 +28,10 @@ innate service start    # Start ROS services
 innate service stop     # Stop ROS services
 innate restart          # Restart ROS services
 innate view             # Attach to tmux session
+
+# List and trigger robot skills
+innate skill list
+innate skill run innate-os/wave
 ```
 
 ---
@@ -52,6 +56,18 @@ innate service stop           # Stop ROS services
 innate restart                # Restart ROS services
 innate view                   # Attach to tmux session (Ctrl+b d to detach)
 ```
+
+### Skill Commands
+
+```bash
+innate skill list                                      # List available robot skills
+innate skill run innate-os/wave                       # Trigger a skill by ID
+innate skill run local/my-skill --inputs '{"x": 1}'   # Pass JSON inputs
+```
+
+`innate skill run` calls the high-level `/execute_skill` action and defaults
+inputs to `{}`. Use skill IDs such as `innate-os/wave`; unique display names or
+unique ID basenames also resolve when `/brain/available_skills` is available.
 
 ### Daemon Mode (internal)
 
