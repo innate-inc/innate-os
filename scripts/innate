@@ -681,7 +681,7 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
                 if text:
                     print(f"{C.DIM}{text}{C.NC}")
 
-            print(f"Running skill {C.BOLD}{skill_ref}{C.NC}...")
+            print(f"Running skill {C.BOLD}{skill_ref}{C.NC}...", flush=True)
             send_goal_future = action_client.send_goal_async(goal, feedback_callback=feedback_callback)
             if not _spin_until_future(rclpy, node, send_goal_future, server_timeout):
                 fail("Timed out waiting for skill goal acceptance")
