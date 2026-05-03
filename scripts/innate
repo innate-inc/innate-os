@@ -404,10 +404,41 @@ def _build_cycle(packages, release=False):
 
 def _ros_setup_scripts():
     setup_scripts = [Path("/opt/ros/humble/setup.bash")]
+    dds_setup = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
+    if dds_setup.exists():
+        setup_scripts.append(dds_setup)
     ws_setup = ROS_WS / "install" / "setup.bash"
     if ws_setup.exists():
         setup_scripts.append(ws_setup)
     return [p for p in setup_scripts if p.exists()]
+
+
+def _env_path_contains_descendant(env_name: str, root: Path):
+    root = root.resolve()
+    for raw_path in os.environ.get(env_name, "").split(os.pathsep):
+        if not raw_path:
+            continue
+        try:
+            if Path(raw_path).resolve().is_relative_to(root):
+                return True
+        except (OSError, RuntimeError):
+            continue
+    return False
+
+
+def _ros_environment_ready():
+    if not os.environ.get("ROS_DISTRO"):
+        return False
+
+    ws_setup = ROS_WS / "install" / "setup.bash"
+    if ws_setup.exists() and not _env_path_contains_descendant("AMENT_PREFIX_PATH", ROS_WS / "install"):
+        return False
+
+    dds_setup = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
+    if dds_setup.exists() and not os.environ.get("RMW_IMPLEMENTATION"):
+        return False
+
+    return True
 
 
 def _safe_tmux_session_exists(session):
@@ -459,12 +490,7 @@ def _needs_ros_reexec():
         return False
     if not _ros_setup_scripts():
         return False
-    if not os.environ.get("ROS_DISTRO"):
-        return True
-
-    ws_prefix = str(ROS_WS / "install")
-    prefixes = os.environ.get("AMENT_PREFIX_PATH", "").split(os.pathsep)
-    return (ROS_WS / "install" / "setup.bash").exists() and ws_prefix not in prefixes
+    return not _ros_environment_ready()
 
 
 def _reexec_with_ros_environment_if_needed():
@@ -481,6 +507,9 @@ def _reexec_with_ros_environment_if_needed():
 
 def _source_ros_environment():
     """Source ROS setup files into this Python process when possible."""
+    if _ros_environment_ready():
+        return
+
     setup_scripts = _ros_setup_scripts()
     if not setup_scripts:
         return
