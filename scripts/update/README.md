@@ -66,8 +66,8 @@ innate skill run local/my-skill --inputs '{"x": 1}'   # Pass JSON inputs
 ```
 
 `innate skill run` calls the high-level `/execute_skill` action and defaults
-inputs to `{}`. Use skill IDs such as `innate-os/wave`; unique display names or
-unique ID basenames also resolve when `/brain/available_skills` is available.
+inputs to `{}`. Pass the skill ID exactly as published by the robot, such as
+`innate-os/wave`.
 
 ### Daemon Mode (internal)
 

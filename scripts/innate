@@ -607,44 +607,6 @@ def _print_skill_table(skills):
             print(line)
 
 
-def _resolve_skill_ref(skill_ref: str, skills):
-    exact_id = [s for s in skills if s.id == skill_ref]
-    if exact_id:
-        return exact_id[0].id
-
-    exact_name = [s for s in skills if s.name == skill_ref]
-    if len(exact_name) == 1:
-        return exact_name[0].id
-    if len(exact_name) > 1:
-        matches = ", ".join(s.id for s in exact_name)
-        raise click.ClickException(f"Skill name '{skill_ref}' is ambiguous: {matches}. Use the skill ID.")
-
-    exact_basename = [s for s in skills if s.id.rsplit("/", 1)[-1] == skill_ref]
-    if len(exact_basename) == 1:
-        return exact_basename[0].id
-    if len(exact_basename) > 1:
-        matches = ", ".join(s.id for s in exact_basename)
-        raise click.ClickException(f"Skill shorthand '{skill_ref}' is ambiguous: {matches}. Use the skill ID.")
-
-    if "/" in skill_ref:
-        return skill_ref
-
-    raise click.ClickException(
-        f"Skill '{skill_ref}' was not found. Run `innate skill list` or pass a full ID like `innate-os/wave`."
-    )
-
-
-def _resolve_skill_id_for_run(skill_ref: str, modules, node, resolve_timeout: float):
-    if "/" in skill_ref:
-        return skill_ref
-
-    if resolve_timeout <= 0:
-        return skill_ref
-
-    skills = _wait_for_available_skills(modules, node, resolve_timeout)
-    return _resolve_skill_ref(skill_ref, skills) if skills else skill_ref
-
-
 def _skill_list(timeout: float):
     if not _ensure_skill_ros_nodes_running():
         return 1
@@ -662,7 +624,7 @@ def _skill_list(timeout: float):
         _shutdown_skill_node(modules, node)
 
 
-def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeout: float, resolve_timeout: float):
+def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeout: float):
     inputs_json = _validate_inputs_json(inputs)
     if not _ensure_skill_ros_nodes_running():
         return 1
@@ -674,8 +636,6 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
     node = _create_skill_node(modules)
 
     try:
-        skill_id = _resolve_skill_id_for_run(skill_ref, modules, node, resolve_timeout)
-
         action_client = ActionClient(node, ExecuteSkill, "execute_skill")
         try:
             if not action_client.wait_for_server(timeout_sec=server_timeout):
@@ -683,7 +643,7 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
                 return 1
 
             goal = ExecuteSkill.Goal()
-            goal.skill_type = skill_id
+            goal.skill_type = skill_ref
             goal.inputs = inputs_json
 
             def feedback_callback(feedback_msg):
@@ -692,7 +652,7 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
                 if text:
                     print(f"{C.DIM}{text}{C.NC}")
 
-            print(f"Running skill {C.BOLD}{skill_id}{C.NC}...")
+            print(f"Running skill {C.BOLD}{skill_ref}{C.NC}...")
             send_goal_future = action_client.send_goal_async(goal, feedback_callback=feedback_callback)
             if not _spin_until_future(rclpy, node, send_goal_future, server_timeout):
                 fail("Timed out waiting for skill goal acceptance")
@@ -711,10 +671,10 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
 
             result = result_future.result().result
             if result.success:
-                ok(result.message or f"Skill {skill_id} completed")
+                ok(result.message or f"Skill {skill_ref} completed")
                 return 0
 
-            fail(result.message or f"Skill {skill_id} failed")
+            fail(result.message or f"Skill {skill_ref} failed")
             return 1
         finally:
             action_client.destroy()
@@ -1662,23 +1622,15 @@ def skill_list(timeout):
     show_default=True,
     help="Seconds to wait for the ExecuteSkill action server.",
 )
-@click.option(
-    "--resolve-timeout",
-    type=float,
-    default=2.0,
-    show_default=True,
-    help="Seconds to wait for skill list when resolving display names or shorthands. Full skill IDs skip this.",
-)
-def skill_run(skill_ref, inputs, timeout, server_timeout, resolve_timeout):
-    """Run a skill by ID, unique display name, or unique basename.
+def skill_run(skill_ref, inputs, timeout, server_timeout):
+    """Run a skill by ID.
 
     \b
     Examples:
       innate skill run innate-os/wave
-      innate skill run wave
       innate skill run local/my-skill --inputs '{"foo":"bar"}'
     """
-    sys.exit(_skill_run(skill_ref, inputs, timeout, server_timeout, resolve_timeout))
+    sys.exit(_skill_run(skill_ref, inputs, timeout, server_timeout))
 
 
 # -- update -------------------------------------------------------------------
