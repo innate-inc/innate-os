@@ -232,6 +232,116 @@ class SkillsActionServer(Node):
         msg.directory = directory or ""
         return msg
 
+    def _inspect_skill_inputs(self, skill_id: str, skill_instance) -> dict:
+        """Best-effort introspection of a code skill's execute() signature.
+
+        Returns ``{param_name: type_str}``. Any failure (no execute method,
+        unsupported signature, weird annotations) is logged and an empty
+        dict is returned so the skill can still be published.
+        """
+        if not hasattr(skill_instance, "execute"):
+            return {}
+
+        try:
+            signature = inspect.signature(skill_instance.execute)
+        except (TypeError, ValueError) as e:
+            self.get_logger().warn(
+                f"Could not inspect execute() signature for '{skill_id}': {e}"
+            )
+            return {}
+
+        inputs: dict = {}
+        for param_name, param in signature.parameters.items():
+            if param_name == "self":
+                continue
+            param_type = "any"
+            try:
+                if param.annotation != inspect.Parameter.empty:
+                    if (
+                        isinstance(param.annotation, (types.UnionType, types.GenericAlias))
+                        or hasattr(param.annotation, "_name")
+                        and param.annotation._name in ["List", "Optional", "Dict", "Tuple", "Union"]
+                    ):
+                        param_type = str(param.annotation)
+                    elif hasattr(param.annotation, "__name__"):
+                        param_type = param.annotation.__name__
+                    else:
+                        param_type = str(param.annotation)
+                    param_type = param_type.replace("typing.", "")
+            except Exception as e:
+                self.get_logger().warn(
+                    f"Could not stringify annotation for '{skill_id}.{param_name}': {e}"
+                )
+                param_type = "any"
+            inputs[param_name] = param_type
+        return inputs
+
+    def _safe_skill_string(self, skill_id: str, skill_instance, attr: str) -> str:
+        """Call ``skill_instance.<attr>()`` with full error isolation.
+
+        Returns the result coerced to ``str``, or ``""`` if the attribute
+        is missing or the call raises. Used for ``guidelines`` /
+        ``guidelines_when_running`` so a buggy skill can't poison the
+        whole available_skills broadcast.
+        """
+        if not hasattr(skill_instance, attr):
+            return ""
+        try:
+            value = getattr(skill_instance, attr)()
+        except Exception as e:
+            self.get_logger().warn(
+                f"Skill '{skill_id}'.{attr}() raised: {e}; defaulting to empty string"
+            )
+            return ""
+        return str(value) if value is not None else ""
+
+    def _build_physical_skill_info(
+        self, skill_id: str, physical_data: dict, *, in_training: bool
+    ) -> SkillInfo | None:
+        """Build a SkillInfo for a physical / in-training skill.
+
+        Returns ``None`` if the entry is malformed enough that it can't
+        be safely included; the caller logs and continues. Each
+        substep is independently guarded so partial damage (e.g. bad
+        ``inputs`` payload) still yields a usable broadcast entry.
+        """
+        metadata = physical_data.get("metadata")
+        if not isinstance(metadata, dict):
+            self.get_logger().error(
+                f"Physical skill '{skill_id}' has malformed metadata "
+                f"(type={type(metadata).__name__}); skipping"
+            )
+            return None
+
+        directory = physical_data.get("directory", "") or ""
+        try:
+            episode_count = self.skill_loader._get_episode_count(directory)
+        except Exception as e:
+            self.get_logger().warn(
+                f"Could not read episode count for '{skill_id}': {e}; defaulting to 0"
+            )
+            episode_count = 0
+
+        try:
+            inputs_json = json.dumps(metadata.get("inputs", {}))
+        except (TypeError, ValueError) as e:
+            self.get_logger().error(
+                f"Could not serialize inputs for physical skill '{skill_id}': {e}; using empty inputs"
+            )
+            inputs_json = "{}"
+
+        return self._build_skill_info(
+            skill_id=skill_id,
+            name=metadata.get("name", skill_id),
+            skill_type=metadata.get("type", "physical"),
+            guidelines=metadata.get("guidelines", ""),
+            guidelines_when_running=metadata.get("guidelines_when_running", ""),
+            inputs_json=inputs_json,
+            in_training=in_training,
+            episode_count=episode_count,
+            directory=directory,
+        )
+
     def _publish_skills_list(self):
         """Build and publish the full AvailableSkills message on the latched topic."""
         msg = AvailableSkills()
@@ -243,73 +353,69 @@ class SkillsActionServer(Node):
             physical_skills_snapshot = dict(self._physical_skills)
             in_training_skills_snapshot = dict(self._in_training_skills)
 
-        # Add code skills (dict is {id: (display_name, instance)})
+        # Add code skills (dict is {id: (display_name, instance)}).
+        # Each skill is isolated so that a single throwing skill (bad
+        # signature, raising guidelines(), non-serializable annotations)
+        # cannot prevent the rest from being published.
         for skill_id, (display_name, skill_instance) in code_skills_snapshot.items():
-            inputs = {}
-            if hasattr(skill_instance, "execute"):
-                signature = inspect.signature(skill_instance.execute)
-                for param_name, param in signature.parameters.items():
-                    if param_name == "self":
-                        continue
-                    param_type = "any"
-                    if param.annotation != inspect.Parameter.empty:
-                        if (
-                            isinstance(param.annotation, (types.UnionType, types.GenericAlias))
-                            or hasattr(param.annotation, "_name")
-                            and param.annotation._name in ["List", "Optional", "Dict", "Tuple", "Union"]
-                        ):
-                            param_type = str(param.annotation)
-                        elif hasattr(param.annotation, "__name__"):
-                            param_type = param.annotation.__name__
-                        else:
-                            param_type = str(param.annotation)
-                        param_type = param_type.replace("typing.", "")
-                    inputs[param_name] = param_type
+            try:
+                inputs = self._inspect_skill_inputs(skill_id, skill_instance)
+                guidelines = self._safe_skill_string(
+                    skill_id, skill_instance, "guidelines"
+                )
+                guidelines_when_running = self._safe_skill_string(
+                    skill_id, skill_instance, "guidelines_when_running"
+                )
 
-            skills.append(self._build_skill_info(
-                skill_id=skill_id,
-                name=display_name,
-                skill_type="code",
-                guidelines=(skill_instance.guidelines() if hasattr(skill_instance, "guidelines") else ""),
-                guidelines_when_running=(
-                    skill_instance.guidelines_when_running()
-                    if hasattr(skill_instance, "guidelines_when_running")
-                    else ""
-                ),
-                inputs_json=json.dumps(inputs),
-            ))
+                try:
+                    inputs_json = json.dumps(inputs)
+                except (TypeError, ValueError) as e:
+                    self.get_logger().error(
+                        f"Could not serialize inputs for code skill '{skill_id}': {e}; using empty inputs"
+                    )
+                    inputs_json = "{}"
+
+                skills.append(self._build_skill_info(
+                    skill_id=skill_id,
+                    name=display_name,
+                    skill_type="code",
+                    guidelines=guidelines,
+                    guidelines_when_running=guidelines_when_running,
+                    inputs_json=inputs_json,
+                ))
+            except Exception as e:
+                self.get_logger().error(
+                    f"Skipping code skill '{skill_id}' in available_skills: {e}"
+                )
+                continue
 
         # Add physical skills (ready) — dict is {id: skill_data}
         for skill_id, physical_data in physical_skills_snapshot.items():
-            metadata = physical_data["metadata"]
-            episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
-            skills.append(self._build_skill_info(
-                skill_id=skill_id,
-                name=metadata.get("name", skill_id),
-                skill_type=metadata.get("type", "physical"),
-                guidelines=metadata.get("guidelines", ""),
-                guidelines_when_running=metadata.get("guidelines_when_running", ""),
-                inputs_json=json.dumps(metadata.get("inputs", {})),
-                in_training=False,
-                episode_count=episode_count,
-                directory=physical_data["directory"],
-            ))
+            try:
+                skill_info = self._build_physical_skill_info(
+                    skill_id, physical_data, in_training=False
+                )
+                if skill_info is not None:
+                    skills.append(skill_info)
+            except Exception as e:
+                self.get_logger().error(
+                    f"Skipping physical skill '{skill_id}' in available_skills: {e}"
+                )
+                continue
 
         # Add in-training skills — dict is {id: skill_data}
         for skill_id, physical_data in in_training_skills_snapshot.items():
-            metadata = physical_data["metadata"]
-            episode_count = self.skill_loader._get_episode_count(physical_data["directory"])
-            skills.append(self._build_skill_info(
-                skill_id=skill_id,
-                name=metadata.get("name", skill_id),
-                skill_type=metadata.get("type", "physical"),
-                guidelines=metadata.get("guidelines", ""),
-                guidelines_when_running=metadata.get("guidelines_when_running", ""),
-                inputs_json=json.dumps(metadata.get("inputs", {})),
-                in_training=True,
-                episode_count=episode_count,
-                directory=physical_data["directory"],
-            ))
+            try:
+                skill_info = self._build_physical_skill_info(
+                    skill_id, physical_data, in_training=True
+                )
+                if skill_info is not None:
+                    skills.append(skill_info)
+            except Exception as e:
+                self.get_logger().error(
+                    f"Skipping in-training skill '{skill_id}' in available_skills: {e}"
+                )
+                continue
 
         # Enforce unique display names (LLM can't disambiguate duplicates)
         filtered_skills = []
@@ -325,8 +431,15 @@ class SkillsActionServer(Node):
             filtered_skills.append(s)
 
         msg.skills = filtered_skills
-        self._skills_publisher.publish(msg)
-        self.get_logger().info(f"Published {len(skills)} skills on /brain/available_skills")
+        try:
+            self._skills_publisher.publish(msg)
+            self.get_logger().info(
+                f"Published {len(filtered_skills)} skills on /brain/available_skills"
+            )
+        except Exception as e:
+            self.get_logger().error(
+                f"Failed to publish AvailableSkills (had {len(filtered_skills)} entries): {e}"
+            )
 
     def _reload_skills(self):
         """Reload all skills from disk."""
@@ -495,8 +608,26 @@ class SkillsActionServer(Node):
                 },
             }
             metadata_path = os.path.join(skill_dir, "metadata.json")
-            with open(metadata_path, "w") as f:
-                json.dump(metadata, f, indent=4)
+            # Atomic write: hot-reload watcher / concurrent reload could
+            # otherwise read a 0-byte file in the window between
+            # ``open(..., "w")`` truncating and ``json.dump`` flushing.
+            tmp_path = metadata_path + ".tmp"
+            try:
+                with open(tmp_path, "w") as f:
+                    json.dump(metadata, f, indent=4)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, metadata_path)
+            except Exception:
+                # Best-effort cleanup of the tmp file before re-raising
+                # into the outer try/except that builds the response.
+                try:
+                    os.remove(tmp_path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+                raise
 
             self.get_logger().info(f"Created physical skill '{display_name}' at {skill_dir}")
 
@@ -648,38 +779,66 @@ class SkillsActionServer(Node):
                 item_path = os.path.join(skills_directory, item)
 
                 # Check if it's a directory with metadata.json
-                if os.path.isdir(item_path):
-                    metadata_path = os.path.join(item_path, "metadata.json")
-                    if os.path.exists(metadata_path):
-                        with open(metadata_path) as f:
-                            metadata = json.load(f)
-                            skill_id = self._compute_skill_id(Path(item_path))
+                if not os.path.isdir(item_path):
+                    continue
+                metadata_path = os.path.join(item_path, "metadata.json")
+                if not os.path.exists(metadata_path):
+                    continue
 
-                            # Validate skill before loading
-                            is_valid, is_in_training, episode_count = self.skill_loader.validate_physical_skill(
-                                item_path, metadata
-                            )
+                # Per-directory try/except: a single bad metadata.json must
+                # not abort startup or hot-reload. Each known failure mode
+                # gets a tailored log message; the catch-all keeps anything
+                # else from killing the SAS process.
+                try:
+                    with open(metadata_path) as f:
+                        metadata = json.load(f)
 
-                            if is_valid:
-                                skill_data = {
-                                    "metadata": metadata,
-                                    "directory": item_path,
-                                    "in_training": is_in_training,
-                                    "episode_count": episode_count,
-                                }
+                    if not isinstance(metadata, dict):
+                        self.get_logger().warn(
+                            f"Skipped {metadata_path}: top-level JSON is "
+                            f"{type(metadata).__name__}, expected object"
+                        )
+                        continue
 
-                                if is_in_training:
-                                    in_training_skills[skill_id] = skill_data
-                                    self.get_logger().info(
-                                        f"Loaded in-training skill: {skill_id} (type: {metadata.get('type', 'unknown')})"
-                                    )
-                                else:
-                                    physical_skills[skill_id] = skill_data
-                                    self.get_logger().info(
-                                        f"Loaded physical skill: {skill_id} (type: {metadata.get('type', 'unknown')})"
-                                    )
-                            else:
-                                self.get_logger().warn(f"Skipped invalid physical skill: {skill_id}")
+                    skill_id = self._compute_skill_id(Path(item_path))
+
+                    is_valid, is_in_training, episode_count = self.skill_loader.validate_physical_skill(
+                        item_path, metadata
+                    )
+
+                    if not is_valid:
+                        self.get_logger().warn(f"Skipped invalid physical skill: {skill_id}")
+                        continue
+
+                    skill_data = {
+                        "metadata": metadata,
+                        "directory": item_path,
+                        "in_training": is_in_training,
+                        "episode_count": episode_count,
+                    }
+
+                    if is_in_training:
+                        in_training_skills[skill_id] = skill_data
+                        self.get_logger().info(
+                            f"Loaded in-training skill: {skill_id} (type: {metadata.get('type', 'unknown')})"
+                        )
+                    else:
+                        physical_skills[skill_id] = skill_data
+                        self.get_logger().info(
+                            f"Loaded physical skill: {skill_id} (type: {metadata.get('type', 'unknown')})"
+                        )
+                except json.JSONDecodeError as e:
+                    self.get_logger().error(
+                        f"Skipped {metadata_path}: invalid JSON ({e})"
+                    )
+                except OSError as e:
+                    self.get_logger().error(
+                        f"Skipped {metadata_path}: read failed ({e})"
+                    )
+                except Exception as e:
+                    self.get_logger().error(
+                        f"Skipped physical skill at {item_path}: {e}"
+                    )
 
         return physical_skills, in_training_skills
 
@@ -1100,6 +1259,26 @@ class SkillsActionServer(Node):
                         skill_type=skill_type,
                         success_type=SkillResult.FAILURE.value,
                     )
+        except Exception as e:
+            # Catch-all so unexpected errors (json.dumps on weird metadata,
+            # behavior server disconnection, executor exceptions) abort the
+            # goal cleanly instead of bubbling into the action executor and
+            # leaving the goal in an undefined state.
+            self.get_logger().error(
+                f"Unexpected error executing physical skill '{skill_type}': {e}"
+            )
+            try:
+                goal_handle.abort()
+            except Exception as abort_err:
+                self.get_logger().error(
+                    f"Also failed to abort goal for '{skill_type}': {abort_err}"
+                )
+            return ExecuteSkill.Result(
+                success=False,
+                message=f"Unexpected error executing physical skill: {e}",
+                skill_type=skill_type,
+                success_type=SkillResult.FAILURE.value,
+            )
         finally:
             self._stop_state_subscriptions()
 
