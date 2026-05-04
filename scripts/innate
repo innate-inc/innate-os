@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -403,14 +404,29 @@ def _build_cycle(packages, release=False):
 
 
 def _ros_setup_scripts():
+    plan = _ros_setup_plan()
+    return plan[1] if plan else []
+
+
+def _ros_setup_plan():
+    dds_setup = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
+    zsh = shutil.which("zsh")
+    ros_zsh = Path("/opt/ros/humble/setup.zsh")
+    if zsh and dds_setup.exists() and ros_zsh.exists():
+        setup_scripts = [ros_zsh, dds_setup]
+        ws_zsh = ROS_WS / "install" / "setup.zsh"
+        if ws_zsh.exists():
+            setup_scripts.append(ws_zsh)
+        return zsh, setup_scripts
+
+    bash = shutil.which("bash") or "bash"
     setup_scripts = [Path("/opt/ros/humble/setup.bash")]
     dds_setup = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
-    if dds_setup.exists():
-        setup_scripts.append(dds_setup)
     ws_setup = ROS_WS / "install" / "setup.bash"
     if ws_setup.exists():
         setup_scripts.append(ws_setup)
-    return [p for p in setup_scripts if p.exists()]
+    setup_scripts = [p for p in setup_scripts if p.exists()]
+    return (bash, setup_scripts) if setup_scripts else None
 
 
 def _env_path_contains_descendant(env_name: str, root: Path):
@@ -498,11 +514,15 @@ def _reexec_with_ros_environment_if_needed():
     if not _needs_ros_reexec():
         return
 
-    source_cmd = " && ".join(f"source {shlex.quote(str(p))}" for p in _ros_setup_scripts())
+    setup_plan = _ros_setup_plan()
+    if not setup_plan:
+        return
+    shell, setup_scripts = setup_plan
+    source_cmd = " && ".join(f"source {shlex.quote(str(p))}" for p in setup_scripts)
     script = shlex.quote(str(Path(__file__).resolve()))
     python = shlex.quote(sys.executable)
     cmd = f"{source_cmd} && export INNATE_CLI_ROS_ENV_READY=1 && exec {python} {script} \"$@\""
-    os.execvpe("bash", ["bash", "-lc", cmd, "bash", *sys.argv[1:]], os.environ)
+    os.execvpe(shell, [shell, "-c", cmd, shell, *sys.argv[1:]], os.environ)
 
 
 def _source_ros_environment():
@@ -510,13 +530,14 @@ def _source_ros_environment():
     if _ros_environment_ready():
         return
 
-    setup_scripts = _ros_setup_scripts()
-    if not setup_scripts:
+    setup_plan = _ros_setup_plan()
+    if not setup_plan:
         return
 
+    shell, setup_scripts = setup_plan
     source_cmd = " && ".join(f"source {shlex.quote(str(p))}" for p in setup_scripts)
     result = subprocess.run(
-        ["bash", "-lc", f"{source_cmd} && env -0"],
+        [shell, "-c", f"{source_cmd} && env -0"],
         capture_output=True,
         check=False,
     )
