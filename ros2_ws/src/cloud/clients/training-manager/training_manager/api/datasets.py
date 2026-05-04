@@ -17,7 +17,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-
 from training_client.src.skill_manager import (
     SkillManager,
     _locked_metadata,
@@ -27,16 +26,14 @@ from training_client.src.skill_manager import (
 )
 from training_client.src.types import ClientConfig, ProgressUpdate
 
+from training_manager.api.skill_paths import iter_skill_dirs, skills_dir
+
 logger = logging.getLogger("training_manager.api.datasets")
 
 router = APIRouter(tags=["datasets"])
 
 _submit_jobs: dict[str, dict[str, Any]] = {}
 _submit_lock = threading.Lock()
-
-
-def _skills_dir(request: Request) -> Path:
-    return Path(request.app.state.skills_dir)
 
 
 def _replace_stem(video_filename: str, old_stem: str, new_stem: str) -> str:
@@ -76,15 +73,8 @@ def _dataset_status(skill_path: Path) -> str:
 @router.get("")
 async def list_datasets(request: Request) -> list[dict[str, Any]]:
     """List all skills with their dataset info."""
-    root = _skills_dir(request)
-    if not root.is_dir():
-        return []
-
     datasets: list[dict[str, Any]] = []
-    for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
-            continue
-
+    for child in iter_skill_dirs(skills_dir(request)):
         with _locked_metadata(child) as meta_path:
             meta = _read_meta(meta_path)
         if not meta:
@@ -110,7 +100,7 @@ async def list_datasets(request: Request) -> list[dict[str, Any]]:
 @router.get("/{skill_name}")
 async def get_dataset(request: Request, skill_name: str) -> dict[str, Any]:
     """Full dataset details including per-episode info."""
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     if not skill_path.is_dir():
         raise HTTPException(404, f"Skill not found: {skill_name}")
 
@@ -142,7 +132,7 @@ async def get_episode_video(
     request: Request, skill_name: str, episode_id: int, camera: int = 0
 ) -> FileResponse:
     """Stream an episode MP4 file."""
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     ds_meta = _read_dataset_metadata(skill_path)
     if ds_meta is None:
         raise HTTPException(404, "No dataset metadata")
@@ -179,7 +169,7 @@ async def submit_skill(
     training client, which handles H.264 conversion, signed-URL uploads,
     verification, and metadata updates.
     """
-    skill_path = _skills_dir(request) / skill_name
+    skill_path = skills_dir(request) / skill_name
     if not skill_path.is_dir():
         raise HTTPException(404, f"Skill not found: {skill_name}")
 
@@ -235,10 +225,8 @@ def _run_submit(
         job["message"] = "Submitting skill..."
         logger.info("[%s] Submitting skill...", skill_name)
 
-        skill_info = None
         for update in manager.submit(skill_dir):
             _apply_progress(job, update, skill_name)
-            skill_info = update
 
         skill_id = read_skill_id(skill_dir)
         if not skill_id:
@@ -311,7 +299,7 @@ async def copy_dataset(
     Clears training_skill_id, checkpoint, stats_file, and removes run
     directories from the copy.
     """
-    root = _skills_dir(request)
+    root = skills_dir(request)
     source = root / skill_name
     if not source.is_dir():
         raise HTTPException(404, f"Skill not found: {skill_name}")
@@ -410,7 +398,7 @@ async def merge_datasets(request: Request, body: MergeRequest) -> dict[str, str]
     Uses the training client's locked metadata for safe reads from source
     skills.  The new skill gets a fresh metadata.json with empty execution.
     """
-    root = _skills_dir(request)
+    root = skills_dir(request)
     dest_dir_name = body.new_name.replace(" ", "-").lower()
     dest = root / dest_dir_name
     if dest.exists():
