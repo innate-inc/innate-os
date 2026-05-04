@@ -679,6 +679,17 @@ def _parse_skill_inputs(skill_info):
     return inputs
 
 
+def _skill_type_contract(skill_info):
+    return {
+        "id": skill_info.id,
+        "name": skill_info.name,
+        "type": skill_info.type,
+        "inputs": _parse_skill_inputs(skill_info),
+        "guidelines": getattr(skill_info, "guidelines", "") or "",
+        "guidelines_when_running": getattr(skill_info, "guidelines_when_running", "") or "",
+    }
+
+
 def _skill_list(timeout: float):
     if not _ensure_skill_ros_nodes_running():
         return 1
@@ -713,7 +724,7 @@ def _skill_type(skill_ref: str, timeout: float):
             fail(f"Skill not found: {skill_ref}")
             return 1
 
-        print(json.dumps(_parse_skill_inputs(skill_info), indent=2, sort_keys=True))
+        print(json.dumps(_skill_type_contract(skill_info), indent=2))
         return 0
     finally:
         _shutdown_skill_node(modules, node)
@@ -1707,7 +1718,7 @@ def skill_list(timeout):
     help="Seconds to wait for /brain/available_skills.",
 )
 def skill_type(skill_ref, timeout):
-    """Print the JSON input type schema for a skill by ID.
+    """Print the JSON input contract for a skill by ID.
 
     \b
     Examples:
