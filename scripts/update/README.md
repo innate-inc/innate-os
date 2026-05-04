@@ -61,13 +61,15 @@ innate view                   # Attach to tmux session (Ctrl+b d to detach)
 
 ```bash
 innate skill list                                      # List available robot skills
+innate skill type innate-os/wave                      # Print expected JSON inputs
 innate skill run innate-os/wave                       # Trigger a skill by ID
 innate skill run local/my-skill --inputs '{"x": 1}'   # Pass JSON inputs
 ```
 
 `innate skill run` calls the high-level `/execute_skill` action and defaults
 inputs to `{}`. Pass the skill ID exactly as published by the robot, such as
-`innate-os/wave`.
+`innate-os/wave`. Use `innate skill type SKILL` to inspect the JSON input type
+schema advertised on `/brain/available_skills` before calling `run`.
 
 ### Daemon Mode (internal)
 

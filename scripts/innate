@@ -661,6 +661,24 @@ def _print_skill_table(skills):
             print(line)
 
 
+def _find_skill_by_id(skills, skill_id: str):
+    for skill_info in skills:
+        if skill_info.id == skill_id:
+            return skill_info
+    return None
+
+
+def _parse_skill_inputs(skill_info):
+    inputs_json = getattr(skill_info, "inputs_json", "") or "{}"
+    try:
+        inputs = json.loads(inputs_json)
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Skill {skill_info.id} has invalid inputs_json: {exc}") from exc
+    if not isinstance(inputs, dict):
+        raise click.ClickException(f"Skill {skill_info.id} inputs_json must decode to a JSON object")
+    return inputs
+
+
 def _skill_list(timeout: float):
     if not _ensure_skill_ros_nodes_running():
         return 1
@@ -673,6 +691,29 @@ def _skill_list(timeout: float):
             fail("No skills received from /brain/available_skills")
             return 1
         _print_skill_table(skills)
+        return 0
+    finally:
+        _shutdown_skill_node(modules, node)
+
+
+def _skill_type(skill_ref: str, timeout: float):
+    if not _ensure_skill_ros_nodes_running():
+        return 1
+
+    modules = _load_skill_ros_modules()
+    node = _create_skill_node(modules)
+    try:
+        skills = _wait_for_available_skills(modules, node, timeout)
+        if not skills:
+            fail("No skills received from /brain/available_skills")
+            return 1
+
+        skill_info = _find_skill_by_id(skills, skill_ref)
+        if skill_info is None:
+            fail(f"Skill not found: {skill_ref}")
+            return 1
+
+        print(json.dumps(_parse_skill_inputs(skill_info), indent=2, sort_keys=True))
         return 0
     finally:
         _shutdown_skill_node(modules, node)
@@ -1654,6 +1695,26 @@ def skill_cli(ctx):
 def skill_list(timeout):
     """List skills currently published by the robot."""
     sys.exit(_skill_list(timeout))
+
+
+@skill_cli.command("type")
+@click.argument("skill_ref", metavar="SKILL")
+@click.option(
+    "--timeout",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Seconds to wait for /brain/available_skills.",
+)
+def skill_type(skill_ref, timeout):
+    """Print the JSON input type schema for a skill by ID.
+
+    \b
+    Examples:
+      innate skill type innate-os/wave
+      innate skill type local/my-skill
+    """
+    sys.exit(_skill_type(skill_ref, timeout))
 
 
 @skill_cli.command("run")
