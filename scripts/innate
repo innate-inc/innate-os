@@ -719,7 +719,8 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
 
             result_future = goal_handle.get_result_async()
             if not _spin_until_future(rclpy, node, result_future, timeout):
-                goal_handle.cancel_goal_async()
+                cancel_future = goal_handle.cancel_goal_async()
+                _spin_until_future(rclpy, node, cancel_future, 2.0)
                 fail("Timed out waiting for skill result")
                 return 1
 
