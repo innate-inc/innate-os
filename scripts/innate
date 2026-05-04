@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import time
 from datetime import datetime
 from pathlib import Path
@@ -690,6 +691,44 @@ def _skill_type_contract(skill_info):
     }
 
 
+def _format_skill_contract(contract: dict) -> str:
+    lines = [
+        f"Skill: {contract['name']}",
+        f"ID: {contract['id']}",
+        f"Type: {contract['type']}",
+        "",
+        "Inputs:",
+    ]
+
+    inputs = contract["inputs"]
+    if inputs:
+        for name, type_name in inputs.items():
+            lines.append(f"  {name}: {type_name}")
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "Expected --inputs shape:"])
+    example_inputs = {name: f"<{type_name}>" for name, type_name in inputs.items()}
+    lines.extend(textwrap.indent(json.dumps(example_inputs, indent=2), "  ").splitlines())
+
+    lines.extend(["", "Guidelines:"])
+    guidelines = contract["guidelines"].strip()
+    if guidelines:
+        lines.append(textwrap.fill(guidelines, width=88, initial_indent="  ", subsequent_indent="  "))
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "Guidelines while running:"])
+    running_guidelines = contract["guidelines_when_running"].strip()
+    lines.append(
+        textwrap.fill(running_guidelines, width=88, initial_indent="  ", subsequent_indent="  ")
+        if running_guidelines
+        else "  none"
+    )
+
+    return "\n".join(lines)
+
+
 def _skill_list(timeout: float):
     if not _ensure_skill_ros_nodes_running():
         return 1
@@ -707,7 +746,7 @@ def _skill_list(timeout: float):
         _shutdown_skill_node(modules, node)
 
 
-def _skill_type(skill_ref: str, timeout: float):
+def _skill_type(skill_ref: str, timeout: float, json_output: bool):
     if not _ensure_skill_ros_nodes_running():
         return 1
 
@@ -724,7 +763,11 @@ def _skill_type(skill_ref: str, timeout: float):
             fail(f"Skill not found: {skill_ref}")
             return 1
 
-        print(json.dumps(_skill_type_contract(skill_info), indent=2))
+        contract = _skill_type_contract(skill_info)
+        if json_output:
+            print(json.dumps(contract, indent=2))
+        else:
+            print(_format_skill_contract(contract))
         return 0
     finally:
         _shutdown_skill_node(modules, node)
@@ -1717,15 +1760,16 @@ def skill_list(timeout):
     show_default=True,
     help="Seconds to wait for /brain/available_skills.",
 )
-def skill_type(skill_ref, timeout):
-    """Print the JSON input contract for a skill by ID.
+@click.option("--json", "json_output", is_flag=True, help="Print the raw contract as JSON.")
+def skill_type(skill_ref, timeout, json_output):
+    """Print the input contract for a skill by ID.
 
     \b
     Examples:
       innate skill type innate-os/wave
       innate skill type local/my-skill
     """
-    sys.exit(_skill_type(skill_ref, timeout))
+    sys.exit(_skill_type(skill_ref, timeout, json_output))
 
 
 @skill_cli.command("run")
