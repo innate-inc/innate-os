@@ -525,6 +525,10 @@ def _reexec_with_ros_environment_if_needed():
     os.execvpe(shell, [shell, "-c", cmd, shell, *sys.argv[1:]], os.environ)
 
 
+def _decode_env_bytes(value: bytes):
+    return value.decode(sys.getfilesystemencoding(), errors="surrogateescape")
+
+
 def _source_ros_environment():
     """Source ROS setup files into this Python process when possible."""
     if _ros_environment_ready():
@@ -548,7 +552,7 @@ def _source_ros_environment():
         if not raw_entry or b"=" not in raw_entry:
             continue
         key, value = raw_entry.split(b"=", 1)
-        os.environ[key.decode()] = value.decode()
+        os.environ[_decode_env_bytes(key)] = _decode_env_bytes(value)
 
     for path in reversed(os.environ.get("PYTHONPATH", "").split(os.pathsep)):
         if path and path not in sys.path:
