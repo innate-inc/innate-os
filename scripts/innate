@@ -746,6 +746,21 @@ def _skill_list(timeout: float):
         _shutdown_skill_node(modules, node)
 
 
+def _skill_ids(timeout: float):
+    if not _ensure_skill_ros_nodes_running():
+        return 1
+
+    modules = _load_skill_ros_modules()
+    node = _create_skill_node(modules)
+    try:
+        skills = _wait_for_available_skills(modules, node, timeout)
+        for skill_info in skills:
+            print(skill_info.id)
+        return 0 if skills else 1
+    finally:
+        _shutdown_skill_node(modules, node)
+
+
 def _skill_type(skill_ref: str, timeout: float, json_output: bool):
     if not _ensure_skill_ros_nodes_running():
         return 1
@@ -1751,6 +1766,13 @@ def skill_list(timeout):
     sys.exit(_skill_list(timeout))
 
 
+@skill_cli.command("_ids", hidden=True)
+@click.option("--timeout", type=float, default=1.0)
+def skill_ids(timeout):
+    """Print skill IDs for shell completion."""
+    sys.exit(_skill_ids(timeout))
+
+
 @skill_cli.command("type")
 @click.argument("skill_ref", metavar="SKILL")
 @click.option(
@@ -1952,6 +1974,13 @@ def _zsh_completions():
     w("  fi")
     w("}")
     w("")
+    w("_innate_skill_ids() {")
+    w("  local -a skills")
+    w('  local cmd="${commands[innate]:-${INNATE_OS_ROOT:-$HOME/innate-os}/scripts/innate}"')
+    w('  skills=( ${(f)"$("$cmd" skill _ids --timeout 1 2>/dev/null)"} )')
+    w("  _describe 'skill id' skills")
+    w("}")
+    w("")
     w("_innate() {")
     w("  local -a commands=(")
     for e in fmt_commands(cli):
@@ -2001,9 +2030,12 @@ def _zsh_completions():
                 w("              case $words[1] in")
                 for sub_name, opts in sorted(subs_with_opts.items()):
                     w(f"                {sub_name})")
+                    skill_arg = name == "skill" and sub_name in {"run", "type"}
+                    arg_specs = ["'1:skill id:_innate_skill_ids'"] if skill_arg else []
                     w("                  _arguments \\")
-                    for i, opt_s in enumerate(opts):
-                        trail = " \\" if i < len(opts) - 1 else ""
+                    specs = opts + arg_specs
+                    for i, opt_s in enumerate(specs):
+                        trail = " \\" if i < len(specs) - 1 else ""
                         w(f"                    {opt_s}{trail}")
                     w("                  ;;")
                 w("              esac")

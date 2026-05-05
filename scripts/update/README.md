@@ -71,7 +71,8 @@ innate skill run local/my-skill --inputs '{"x": 1}'   # Pass JSON inputs
 inputs to `{}`. Pass the skill ID exactly as published by the robot, such as
 `innate-os/wave`. Use `innate skill type SKILL` to inspect a readable input
 contract with the input type schema and guidelines advertised on
-`/brain/available_skills` before calling `run`.
+`/brain/available_skills` before calling `run`. The zsh completion script
+suggests published skill IDs for `innate skill type` and `innate skill run`.
 
 ### Daemon Mode (internal)
 
