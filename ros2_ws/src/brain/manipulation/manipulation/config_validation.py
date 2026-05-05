@@ -129,7 +129,9 @@ class _BaseExecCfg(BaseModel):
 class LearnedExecCfg(_BaseExecCfg):
     """``execution`` block for ``type: learned`` skills."""
 
-    checkpoint: str = Field(..., min_length=1)
+    runtime: str = Field("torch")
+    checkpoint: Optional[str] = Field(None, min_length=1)
+    package_dir: Optional[str] = Field(None, min_length=1)
     action_dim: int = Field(10, ge=1, le=64)
     duration: float = Field(120.0, gt=0)
     progress_threshold: float = Field(2.0, ge=0)
@@ -140,6 +142,28 @@ class LearnedExecCfg(_BaseExecCfg):
     # chunk_size-aware clamping happens inside create_act_config once the
     # checkpoint is loaded; the schema only enforces ``>= 1``.
     n_action_steps: Optional[int] = Field(None, ge=1)
+
+    @model_validator(mode="after")
+    def _validate_runtime_assets(self) -> "LearnedExecCfg":
+        if self.runtime not in {"torch", "opt32"}:
+            raise ValueError(
+                f"runtime must be 'torch' or 'opt32', got {self.runtime!r}"
+            )
+        if self.runtime == "opt32":
+            if not self.package_dir:
+                raise ValueError("package_dir is required when runtime='opt32'")
+        elif not self.checkpoint:
+            raise ValueError("checkpoint is required when runtime='torch'")
+        return self
+
+    @field_validator("runtime", mode="before")
+    @classmethod
+    def _coerce_runtime(cls, value: Any) -> Any:
+        if value is None:
+            return "torch"
+        if not isinstance(value, str):
+            raise ValueError(f"expected a string, got {type(value).__name__}")
+        return value.strip().lower()
 
     @field_validator("start_pose", "end_pose", mode="before")
     @classmethod
@@ -330,12 +354,31 @@ def validate_behavior_config(
     resolved_path: Optional[str] = None
     if behavior_type == "learned":
         assert isinstance(params, LearnedExecCfg)  # for type checkers
-        resolved_path = os.path.join(skill_dir, params.checkpoint)
-        if check_files_exist and not os.path.isfile(resolved_path):
-            raise BehaviorConfigError(
-                f"execution.checkpoint: file does not exist at "
-                f"{resolved_path!r}"
+        if params.runtime == "opt32":
+            assert params.package_dir is not None
+            resolved_path = (
+                params.package_dir
+                if os.path.isabs(params.package_dir)
+                else os.path.join(skill_dir, params.package_dir)
             )
+            manifest_path = os.path.join(resolved_path, ".opt32_client_package.bin")
+            if check_files_exist and not os.path.isfile(manifest_path):
+                raise BehaviorConfigError(
+                    f"execution.package_dir: Opt32 package manifest does not exist at "
+                    f"{manifest_path!r}"
+                )
+        else:
+            assert params.checkpoint is not None
+            resolved_path = (
+                params.checkpoint
+                if os.path.isabs(params.checkpoint)
+                else os.path.join(skill_dir, params.checkpoint)
+            )
+            if check_files_exist and not os.path.isfile(resolved_path):
+                raise BehaviorConfigError(
+                    f"execution.checkpoint: file does not exist at "
+                    f"{resolved_path!r}"
+                )
     elif behavior_type == "replay":
         assert isinstance(params, ReplayExecCfg)
         resolved_path = os.path.join(skill_dir, params.replay_file)

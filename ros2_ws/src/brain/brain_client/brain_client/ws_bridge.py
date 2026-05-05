@@ -56,6 +56,9 @@ class WSBridge:
         if msg_type_str is None:
             self.node.get_logger().error("WSBridge: Message missing 'type' field")
             return
+        if isinstance(msg_type_str, str) and "/" in msg_type_str:
+            data = dict(data)
+            data["type"] = msg_type_str.rsplit("/", 1)[-1]
 
         try:
             ws_msg = MessageOut.model_validate(data)
