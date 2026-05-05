@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import re
+import shlex
 
 import click
 
@@ -188,7 +189,8 @@ def _show_status():
     print(f"  {C.BOLD}innate build{C.NC}        Build & restart")
     print(f"  {C.BOLD}innate build release{C.NC} Build release & restart")
     print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
-    print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
+    print(f"  {C.BOLD}innate diag software{C.NC} Check nodes/services")
+    print(f"  {C.BOLD}innate diag hardware{C.NC} Check hardware")
     print(f"  {C.BOLD}innate volume{C.NC}       Get/set speaker volume")
     print(f"  {C.BOLD}innate --help{C.NC}       All commands")
     print()
@@ -393,6 +395,307 @@ def _build_cycle(packages, release=False):
         fail("Skipping restart due to build failure")
         sys.exit(rc)
     sys.exit(_service_start())
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics implementation
+# ---------------------------------------------------------------------------
+
+
+def _diag_hardware():
+    if not DIAGNOSTICS.exists():
+        fail(f"Diagnostics script not found: {DIAGNOSTICS}")
+        return 1
+    try:
+        os.execvp("python3", ["python3", str(DIAGNOSTICS)])
+    except OSError as e:
+        fail(f"Failed to launch diagnostics: {e}")
+        return 1
+
+
+def _capture(cmd, timeout=5, shell=False):
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=shell,
+            check=False,
+        )
+    except FileNotFoundError as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout if isinstance(e.stdout, str) else ""
+        stderr = e.stderr if isinstance(e.stderr, str) else ""
+        return subprocess.CompletedProcess(cmd, 124, stdout, stderr or f"Timed out after {timeout}s")
+
+
+def _ros_setup_scripts():
+    setup_scripts = [Path("/opt/ros/humble/setup.bash")]
+    ws_setup = ROS_WS / "install" / "setup.bash"
+    if ws_setup.exists():
+        setup_scripts.append(ws_setup)
+    return [p for p in setup_scripts if p.exists()]
+
+
+def _capture_ros(command, timeout=5):
+    setup_scripts = _ros_setup_scripts()
+    if setup_scripts:
+        source_cmd = " && ".join(f"source {shlex.quote(str(p))}" for p in setup_scripts)
+        command = f"{source_cmd} && {command}"
+    return _capture(["bash", "-lc", command], timeout=timeout)
+
+
+def _lines(text):
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _print_section(title):
+    print()
+    print(f"{C.BOLD}{title}{C.NC}")
+
+
+def _diag_ok(label, detail=""):
+    ok(f"{label}{': ' + detail if detail else ''}")
+
+
+def _diag_warn(label, detail=""):
+    warn(f"{label}{': ' + detail if detail else ''}")
+
+
+def _diag_fail(label, detail=""):
+    fail(f"{label}{': ' + detail if detail else ''}")
+
+
+def _git_short_status():
+    result = _capture(["git", "-C", str(INNATE_OS_ROOT), "status", "--short"], timeout=3)
+    return _lines(result.stdout) if result.returncode == 0 else []
+
+
+def _tmux_windows(session):
+    result = _capture(["tmux", "list-windows", "-t", session, "-F", "#{window_index}:#{window_name}:#{window_panes}"], timeout=3)
+    return _lines(result.stdout) if result.returncode == 0 else []
+
+
+def _print_tmux_summary(session):
+    result = _capture(["tmux", "has-session", "-t", session], timeout=3)
+    if result.returncode == 127:
+        _diag_fail("tmux", "not installed or not on PATH")
+        return False
+    if result.returncode != 0:
+        _diag_fail("tmux session", f"'{session}' not found")
+        return False
+
+    windows = _tmux_windows(session)
+    if windows:
+        _diag_ok("tmux session", f"'{session}' with {len(windows)} windows")
+        for line in windows:
+            index, name, panes = (line.split(":", 2) + ["", ""])[:3]
+            print(f"    {index}: {name} ({panes} panes)")
+    else:
+        _diag_ok("tmux session", f"'{session}' running")
+    return True
+
+
+def _expected_software_nodes():
+    if is_sim_mode():
+        return [
+            "/ros_websocket_server",
+            "/maurice_app",
+            "/brain_client_node",
+            "/skills_action_server",
+            "/manipulation_server",
+            "/planner_server",
+            "/controller_server",
+        ]
+    return [
+        "/ros_websocket_server",
+        "/maurice_app",
+        "/bringup",
+        "/maurice_arm",
+        "/recorder_node",
+        "/brain_client_node",
+        "/skills_action_server",
+        "/mode_manager",
+        "/manipulation_server",
+        "/input_manager_node",
+        "/camera_container",
+        "/main_camera_driver",
+        "/arm_camera_driver",
+        "/webrtc_streamer",
+        "/kdl_ik_from_file",
+        "/innate_training",
+        "/logger_node",
+        "/uninavid_node",
+    ]
+
+
+def _expected_software_services():
+    return [
+        "/brain/create_physical_skill",
+        "/brain/recorder/activate_physical_primitive",
+        "/brain/reload",
+        "/brain/reload_skills",
+        "/brain/reset_brain",
+        "/brain/set_brain_active",
+        "/brain/get_available_directives",
+        "/mars/arm/reboot",
+        "/mars/arm/torque_on",
+        "/mars/arm/torque_off",
+        "/set_volume",
+        "/trigger_update",
+        "/nav/change_mode",
+    ]
+
+
+def _expected_software_topics():
+    return [
+        "/robot/info",
+        "/brain/available_skills",
+        "/brain/recorder/status",
+        "/mars/arm/state",
+        "/battery_state",
+    ]
+
+
+def _check_ros_names(kind, command, expected_names, timeout, verbose=False):
+    result = _capture_ros(command, timeout=timeout)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"{command} failed"
+        _diag_fail(f"ROS {kind}", detail)
+        return False, [], []
+
+    names = _lines(result.stdout)
+    _diag_ok(f"ROS {kind}", f"{len(names)} discovered")
+
+    missing = []
+    for name in expected_names:
+        if name in names:
+            _diag_ok(name)
+        else:
+            _diag_fail(name, "missing")
+            missing.append(name)
+
+    if verbose:
+        print()
+        print(f"  All ROS {kind}:")
+        for name in names:
+            print(f"    {name}")
+
+    return not missing, missing, names
+
+
+def _print_software_hints(missing_nodes, missing_services, node_names):
+    has_mapfree_skill_helper = "/mapfree/skills_action_server" in node_names
+    missing_root_skill_server = "/skills_action_server" in missing_nodes
+
+    if not missing_services and not (has_mapfree_skill_helper and missing_root_skill_server):
+        return
+
+    _print_section("Hints")
+    if has_mapfree_skill_helper and missing_root_skill_server:
+        print("  /mapfree/skills_action_server is a mapfree Nav2 helper node, not the root")
+        print("  skills server expected by the app. The app needs /skills_action_server and")
+        print("  /brain/create_physical_skill.")
+    if "/brain/create_physical_skill" in missing_services:
+        print("  Missing /brain/create_physical_skill usually means skills_action_server is stale,")
+        print("  crashed, or running from old build artifacts.")
+    if missing_services:
+        print(f"  Try: {C.BOLD}innate restart{C.NC}")
+        print(f"  If still missing: {C.BOLD}innate build brain_messages brain_client && innate restart{C.NC}")
+        print(f"  Then re-run: {C.BOLD}innate diag software{C.NC}")
+
+
+def _diag_software(timeout=5.0, verbose=False):
+    failures = 0
+
+    print(f"\n{C.BOLD}{C.CYAN}Innate Software Diagnostics{C.NC}")
+
+    _print_section("Repository")
+    version = get_version()
+    branch = _capture(["git", "-C", str(INNATE_OS_ROOT), "branch", "--show-current"], timeout=3)
+    branch_name = branch.stdout.strip() if branch.returncode == 0 and branch.stdout.strip() else "unknown"
+    _diag_ok("version", version)
+    _diag_ok("branch", branch_name)
+
+    dirty = _git_short_status()
+    if dirty:
+        _diag_warn("worktree", f"{len(dirty)} local change(s)")
+    else:
+        _diag_ok("worktree", "clean")
+
+    _print_section("Runtime")
+    _diag_ok("mode", get_mode_label())
+    _diag_ok("ROS_DISTRO", os.environ.get("ROS_DISTRO", "not set"))
+    _diag_ok("RMW_IMPLEMENTATION", os.environ.get("RMW_IMPLEMENTATION", "not set"))
+    _diag_ok("ROS_DOMAIN_ID", os.environ.get("ROS_DOMAIN_ID", "not set"))
+
+    setup_scripts = _ros_setup_scripts()
+    if setup_scripts:
+        _diag_ok("ROS setup", ", ".join(str(p) for p in setup_scripts))
+    else:
+        _diag_fail("ROS setup", "no setup.bash files found")
+        failures += 1
+
+    _print_section("Process Supervisor")
+    if is_sim_mode():
+        if not _print_tmux_summary(TMUX_SESSION_SIM):
+            failures += 1
+    else:
+        if systemd_active(SYSTEMD_SERVICE_HW):
+            _diag_ok(SYSTEMD_SERVICE_HW, "active")
+        else:
+            _diag_fail(SYSTEMD_SERVICE_HW, "inactive")
+            failures += 1
+
+        if zenoh_active():
+            _diag_ok("zenoh-router.service", "active")
+        else:
+            _diag_fail("zenoh-router.service", "inactive")
+            failures += 1
+
+        if not _print_tmux_summary(TMUX_SESSION_HW):
+            failures += 1
+
+    _print_section("ROS Graph")
+    nodes_ok, missing_nodes, node_names = _check_ros_names(
+        "nodes",
+        "ros2 node list",
+        _expected_software_nodes(),
+        timeout,
+        verbose=verbose,
+    )
+    services_ok, missing_services, _service_names = _check_ros_names(
+        "services",
+        "ros2 service list",
+        _expected_software_services(),
+        timeout,
+        verbose=verbose,
+    )
+    topics_ok, missing_topics, _topic_names = _check_ros_names(
+        "topics",
+        "ros2 topic list",
+        _expected_software_topics(),
+        timeout,
+        verbose=verbose,
+    )
+
+    if not nodes_ok:
+        failures += len(missing_nodes) or 1
+    if not services_ok:
+        failures += len(missing_services) or 1
+    if not topics_ok:
+        failures += len(missing_topics) or 1
+
+    _print_software_hints(missing_nodes, missing_services, node_names)
+
+    _print_section("Summary")
+    if failures:
+        _diag_fail("software diagnostics", f"{failures} issue(s) found")
+        return 1
+    _diag_ok("software diagnostics", "all expected nodes, services, and topics found")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1262,17 +1565,32 @@ def clean():
     sys.exit(_clean())
 
 
-@cli.command()
-def diag():
+@cli.group("diag", invoke_without_command=True)
+@click.pass_context
+def diag_cli(ctx):
+    """Run hardware or software diagnostics."""
+    if ctx.invoked_subcommand is None:
+        ctx.exit(_diag_hardware())
+
+
+@diag_cli.command("hardware")
+def diag_hardware():
     """Run hardware diagnostics."""
-    if not DIAGNOSTICS.exists():
-        fail(f"Diagnostics script not found: {DIAGNOSTICS}")
-        sys.exit(1)
-    try:
-        os.execvp("python3", ["python3", str(DIAGNOSTICS)])
-    except OSError as e:
-        fail(f"Failed to launch diagnostics: {e}")
-        sys.exit(1)
+    sys.exit(_diag_hardware())
+
+
+@diag_cli.command("software")
+@click.option(
+    "--timeout",
+    default=5.0,
+    show_default=True,
+    type=float,
+    help="Seconds to wait for each ROS graph query.",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Print full ROS node/service/topic lists.")
+def diag_software(timeout, verbose):
+    """Check software runtime, ROS nodes, services, and topics."""
+    sys.exit(_diag_software(timeout=timeout, verbose=verbose))
 
 
 @cli.command()
