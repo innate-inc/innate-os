@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import textwrap
@@ -13,6 +14,321 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+
+def _fast_skill_cache_path() -> Path:
+    return Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contracts.json"))
+
+
+def _fast_skill_socket_path() -> Path:
+    return Path(os.environ.get("INNATE_SKILL_SOCKET", "/tmp/innate_skill_cli.sock"))
+
+
+def _fast_fail(message: str) -> None:
+    print(f"  ✗ {message}", file=sys.stderr)
+
+
+def _fast_ok(message: str) -> None:
+    print(f"  ✓ {message}")
+
+
+def _fast_read_skill_cache():
+    try:
+        data = json.loads(_fast_skill_cache_path().read_text())
+    except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+        return None
+
+    return data if isinstance(data.get("skills"), list) else None
+
+
+def _fast_cached_skill_contracts():
+    cache = _fast_read_skill_cache()
+    if not cache:
+        return []
+
+    contracts = []
+    for raw in cache.get("skills", []):
+        if not isinstance(raw, dict):
+            continue
+        skill_id = raw.get("id")
+        if not skill_id:
+            continue
+        inputs = raw.get("inputs", {})
+        contracts.append({
+            "id": skill_id,
+            "name": raw.get("name") or skill_id,
+            "type": raw.get("type") or "",
+            "inputs": inputs if isinstance(inputs, dict) else {},
+            "guidelines": raw.get("guidelines") or "",
+            "guidelines_when_running": raw.get("guidelines_when_running") or "",
+        })
+    return contracts
+
+
+def _fast_find_skill_contract(contracts, skill_id: str):
+    for contract in contracts:
+        if contract.get("id") == skill_id:
+            return contract
+    return None
+
+
+def _fast_format_skill_contract(contract: dict) -> str:
+    lines = [
+        f"Skill: {contract['name']}",
+        f"ID: {contract['id']}",
+        f"Type: {contract['type']}",
+        "",
+        "Inputs:",
+    ]
+
+    inputs = contract["inputs"]
+    if inputs:
+        for name, type_name in inputs.items():
+            lines.append(f"  {name}: {type_name}")
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "Expected --inputs shape:"])
+    example_inputs = {name: f"<{type_name}>" for name, type_name in inputs.items()}
+    lines.extend(textwrap.indent(json.dumps(example_inputs, indent=2), "  ").splitlines())
+
+    lines.extend(["", "Guidelines:"])
+    guidelines = contract["guidelines"].strip()
+    lines.append(
+        textwrap.fill(guidelines, width=88, initial_indent="  ", subsequent_indent="  ")
+        if guidelines
+        else "  none"
+    )
+
+    lines.extend(["", "Guidelines while running:"])
+    running_guidelines = contract["guidelines_when_running"].strip()
+    lines.append(
+        textwrap.fill(running_guidelines, width=88, initial_indent="  ", subsequent_indent="  ")
+        if running_guidelines
+        else "  none"
+    )
+
+    return "\n".join(lines)
+
+
+def _fast_parse_skill_type_args(args):
+    json_output = False
+    skill_ref = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--help":
+            return None
+        if arg == "--json":
+            json_output = True
+        elif arg == "--timeout":
+            i += 1
+            if i >= len(args):
+                return None
+        elif arg.startswith("--timeout="):
+            pass
+        elif arg.startswith("-"):
+            return None
+        elif skill_ref is None:
+            skill_ref = arg
+        else:
+            return None
+        i += 1
+
+    return (skill_ref, json_output) if skill_ref else None
+
+
+def _fast_parse_skill_run_args(args):
+    inputs = "{}"
+    timeout = None
+    server_timeout = 5.0
+    skill_ref = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--help":
+            return None
+        if arg in {"--inputs", "--timeout", "--server-timeout"}:
+            i += 1
+            if i >= len(args):
+                return None
+            value = args[i]
+            if arg == "--inputs":
+                inputs = value
+            elif arg == "--timeout":
+                timeout = value
+            else:
+                server_timeout = value
+        elif arg.startswith("--inputs="):
+            inputs = arg.split("=", 1)[1]
+        elif arg.startswith("--timeout="):
+            timeout = arg.split("=", 1)[1]
+        elif arg.startswith("--server-timeout="):
+            server_timeout = arg.split("=", 1)[1]
+        elif arg.startswith("-"):
+            return None
+        elif skill_ref is None:
+            skill_ref = arg
+        else:
+            return None
+        i += 1
+
+    if not skill_ref:
+        return None
+
+    try:
+        parsed_inputs = json.loads(inputs)
+    except json.JSONDecodeError as exc:
+        _fast_fail(f"Invalid JSON for --inputs: {exc}")
+        return 1
+    if not isinstance(parsed_inputs, dict):
+        _fast_fail("--inputs must decode to a JSON object")
+        return 1
+
+    try:
+        parsed_timeout = float(timeout) if timeout is not None else None
+        parsed_server_timeout = float(server_timeout)
+    except ValueError as exc:
+        _fast_fail(str(exc))
+        return 1
+
+    return (
+        skill_ref,
+        json.dumps(parsed_inputs, separators=(",", ":")),
+        parsed_timeout,
+        parsed_server_timeout,
+    )
+
+
+def _fast_read_skill_socket_events(sock: socket.socket, skill_ref: str, timeout: float | None):
+    buffer = b""
+    deadline = time.monotonic() + timeout + 3.0 if timeout is not None else None
+
+    while True:
+        if deadline is None:
+            sock.settimeout(None)
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _fast_fail("Timed out waiting for skill CLI bridge")
+                return 1
+            sock.settimeout(max(0.05, remaining))
+
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            _fast_fail("Timed out waiting for skill CLI bridge")
+            return 1
+        except OSError as exc:
+            _fast_fail(f"Skill CLI bridge connection failed: {exc}")
+            return 1
+
+        if not chunk:
+            _fast_fail("Skill CLI bridge closed the connection")
+            return 1
+
+        buffer += chunk
+        while b"\n" in buffer:
+            raw_line, buffer = buffer.split(b"\n", 1)
+            if not raw_line:
+                continue
+            try:
+                event = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                _fast_fail("Skill CLI bridge returned invalid JSON")
+                return 1
+
+            event_type = event.get("event")
+            if event_type == "feedback":
+                text = event.get("text") or ""
+                if text:
+                    print(text)
+            elif event_type == "result":
+                message = event.get("message") or f"Skill {skill_ref} completed"
+                if event.get("success"):
+                    _fast_ok(message)
+                    return 0
+                _fast_fail(message)
+                return 1
+            elif event_type == "error":
+                _fast_fail(event.get("message") or "Skill CLI bridge failed")
+                return 1
+
+
+def _fast_skill_run_via_socket(skill_ref: str, inputs_json: str, timeout: float | None,
+                               server_timeout: float):
+    socket_path = _fast_skill_socket_path()
+    if not socket_path.exists():
+        return None
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(0.05)
+        sock.connect(str(socket_path))
+    except OSError:
+        sock.close()
+        return None
+
+    with sock:
+        print(f"Running skill {skill_ref}...", flush=True)
+        request = {
+            "action": "run",
+            "skill_type": skill_ref,
+            "inputs": inputs_json,
+            "timeout": timeout,
+            "server_timeout": server_timeout,
+        }
+        try:
+            sock.sendall((json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8"))
+        except OSError:
+            return None
+
+        return _fast_read_skill_socket_events(sock, skill_ref, timeout)
+
+
+def _try_fast_skill_cli():
+    args = sys.argv[1:]
+    if len(args) < 2 or args[0] != "skill":
+        return None
+
+    command = args[1]
+    command_args = args[2:]
+
+    if command == "_ids":
+        for contract in _fast_cached_skill_contracts():
+            print(contract["id"])
+        return 0
+
+    if command == "type":
+        parsed = _fast_parse_skill_type_args(command_args)
+        if parsed is None:
+            return None
+        skill_ref, json_output = parsed
+        cache = _fast_read_skill_cache()
+        if cache is None:
+            return None
+        contract = _fast_find_skill_contract(_fast_cached_skill_contracts(), skill_ref)
+        if contract is None:
+            _fast_fail(f"Skill not found: {skill_ref}")
+            return 1
+        print(json.dumps(contract, indent=2) if json_output else _fast_format_skill_contract(contract))
+        return 0
+
+    if command == "run":
+        parsed = _fast_parse_skill_run_args(command_args)
+        if parsed is None:
+            return None
+        if parsed == 1:
+            return 1
+        skill_ref, inputs_json, timeout, server_timeout = parsed
+        return _fast_skill_run_via_socket(skill_ref, inputs_json, timeout, server_timeout)
+
+    return None
+
+
+_FAST_SKILL_RC = _try_fast_skill_cli()
+if _FAST_SKILL_RC is not None:
+    sys.exit(_FAST_SKILL_RC)
 
 import click
 
@@ -26,6 +342,8 @@ ROS_WS = INNATE_OS_ROOT / "ros2_ws"
 LAUNCH_HW = INNATE_OS_ROOT / "scripts" / "launch_ros_in_tmux.sh"
 LAUNCH_SIM = INNATE_OS_ROOT / "scripts" / "launch_sim_in_tmux.zsh"
 DIAGNOSTICS = INNATE_OS_ROOT / "scripts" / "diagnostics.py"
+SKILL_CACHE_PATH = Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contracts.json"))
+SKILL_SOCKET_PATH = Path(os.environ.get("INNATE_SKILL_SOCKET", "/tmp/innate_skill_cli.sock"))
 
 TMUX_SESSION_HW = "ros_nodes"
 TMUX_SESSION_SIM = "mars"
@@ -664,6 +982,44 @@ def _wait_for_available_skills(modules, node, timeout_sec: float):
         node.destroy_subscription(sub)
 
 
+def _read_skill_cache():
+    try:
+        data = json.loads(SKILL_CACHE_PATH.read_text())
+    except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+        return None
+
+    skills = data.get("skills")
+    if not isinstance(skills, list):
+        return None
+    return data
+
+
+def _cached_skill_contracts():
+    cache = _read_skill_cache()
+    if not cache:
+        return []
+
+    contracts = []
+    for raw in cache.get("skills", []):
+        if not isinstance(raw, dict):
+            continue
+        skill_id = raw.get("id")
+        if not skill_id:
+            continue
+        inputs = raw.get("inputs", {})
+        if not isinstance(inputs, dict):
+            inputs = {}
+        contracts.append({
+            "id": skill_id,
+            "name": raw.get("name") or skill_id,
+            "type": raw.get("type") or "",
+            "inputs": inputs,
+            "guidelines": raw.get("guidelines") or "",
+            "guidelines_when_running": raw.get("guidelines_when_running") or "",
+        })
+    return contracts
+
+
 def _skill_status(skill_info):
     return "training" if getattr(skill_info, "in_training", False) else "ready"
 
@@ -710,6 +1066,13 @@ def _skill_type_contract(skill_info):
         "guidelines": getattr(skill_info, "guidelines", "") or "",
         "guidelines_when_running": getattr(skill_info, "guidelines_when_running", "") or "",
     }
+
+
+def _find_skill_contract_by_id(contracts, skill_id: str):
+    for contract in contracts:
+        if contract.get("id") == skill_id:
+            return contract
+    return None
 
 
 def _format_skill_contract(contract: dict) -> str:
@@ -768,24 +1131,21 @@ def _skill_list(timeout: float):
 
 
 def _skill_ids(timeout: float):
-    if not _ensure_skill_ros_nodes_running():
-        return 1
-
-    modules = _load_skill_ros_modules()
-    with _suppress_process_output():
-        node = _create_skill_node(modules)
-        try:
-            skills = _wait_for_available_skills(modules, node, timeout)
-            skill_ids = [skill_info.id for skill_info in skills]
-        finally:
-            _shutdown_skill_node(modules, node)
-
+    skill_ids = [contract["id"] for contract in _cached_skill_contracts()]
     for skill_id in skill_ids:
         print(skill_id)
     return 0 if skill_ids else 1
 
 
 def _skill_type(skill_ref: str, timeout: float, json_output: bool):
+    cached_contract = _find_skill_contract_by_id(_cached_skill_contracts(), skill_ref)
+    if cached_contract is not None:
+        if json_output:
+            print(json.dumps(cached_contract, indent=2))
+        else:
+            print(_format_skill_contract(cached_contract))
+        return 0
+
     if not _ensure_skill_ros_nodes_running():
         return 1
 
@@ -812,10 +1172,100 @@ def _skill_type(skill_ref: str, timeout: float, json_output: bool):
         _shutdown_skill_node(modules, node)
 
 
+def _skill_run_via_socket(skill_ref: str, inputs_json: str, timeout: float | None,
+                          server_timeout: float):
+    if not SKILL_SOCKET_PATH.exists():
+        return None
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(0.05)
+        sock.connect(str(SKILL_SOCKET_PATH))
+    except OSError:
+        sock.close()
+        return None
+
+    with sock:
+        request = {
+            "action": "run",
+            "skill_type": skill_ref,
+            "inputs": inputs_json,
+            "timeout": timeout,
+            "server_timeout": server_timeout,
+        }
+        try:
+            sock.sendall((json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8"))
+        except OSError:
+            return None
+
+        return _read_skill_socket_events(sock, skill_ref, timeout)
+
+
+def _read_skill_socket_events(sock: socket.socket, skill_ref: str, timeout: float | None):
+    buffer = b""
+    deadline = time.monotonic() + timeout + 3.0 if timeout is not None else None
+
+    while True:
+        if deadline is None:
+            sock.settimeout(None)
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                fail("Timed out waiting for skill CLI bridge")
+                return 1
+            sock.settimeout(max(0.05, remaining))
+
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            fail("Timed out waiting for skill CLI bridge")
+            return 1
+        except OSError as exc:
+            fail(f"Skill CLI bridge connection failed: {exc}")
+            return 1
+
+        if not chunk:
+            fail("Skill CLI bridge closed the connection")
+            return 1
+
+        buffer += chunk
+        while b"\n" in buffer:
+            raw_line, buffer = buffer.split(b"\n", 1)
+            if not raw_line:
+                continue
+            try:
+                event = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                fail("Skill CLI bridge returned invalid JSON")
+                return 1
+
+            event_type = event.get("event")
+            if event_type == "feedback":
+                text = event.get("text") or ""
+                if text:
+                    print(f"{C.DIM}{text}{C.NC}")
+            elif event_type == "result":
+                message = event.get("message") or f"Skill {skill_ref} completed"
+                if event.get("success"):
+                    ok(message)
+                    return 0
+                fail(message)
+                return 1
+            elif event_type == "error":
+                fail(event.get("message") or "Skill CLI bridge failed")
+                return 1
+
+
 def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeout: float):
     inputs_json = _validate_inputs_json(inputs)
     if not _ensure_skill_ros_nodes_running():
         return 1
+
+    print(f"Running skill {C.BOLD}{skill_ref}{C.NC}...", flush=True)
+
+    socket_result = _skill_run_via_socket(skill_ref, inputs_json, timeout, server_timeout)
+    if socket_result is not None:
+        return socket_result
 
     modules = _load_skill_ros_modules()
     rclpy = modules["rclpy"]
@@ -840,7 +1290,6 @@ def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeou
                 if text:
                     print(f"{C.DIM}{text}{C.NC}")
 
-            print(f"Running skill {C.BOLD}{skill_ref}{C.NC}...", flush=True)
             send_goal_future = action_client.send_goal_async(goal, feedback_callback=feedback_callback)
             if not _spin_until_future(rclpy, node, send_goal_future, server_timeout):
                 fail("Timed out waiting for skill goal acceptance")
