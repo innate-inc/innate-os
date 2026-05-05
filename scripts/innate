@@ -771,8 +771,8 @@ def _skill_ids(timeout: float):
     if not _ensure_skill_ros_nodes_running():
         return 1
 
+    modules = _load_skill_ros_modules()
     with _suppress_process_output():
-        modules = _load_skill_ros_modules()
         node = _create_skill_node(modules)
         try:
             skills = _wait_for_available_skills(modules, node, timeout)
