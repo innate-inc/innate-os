@@ -13,6 +13,7 @@ import json
 import math  # For yaw calculation
 import os
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -232,6 +233,45 @@ class SkillsActionServer(Node):
         msg.directory = directory or ""
         return msg
 
+    def _skill_cache_path(self) -> Path:
+        return Path(os.environ.get("INNATE_SKILL_CACHE", "/tmp/innate_skill_contracts.json"))
+
+    def _skill_info_to_cache_dict(self, skill: SkillInfo) -> dict:
+        try:
+            inputs = json.loads(skill.inputs_json or "{}")
+        except json.JSONDecodeError:
+            inputs = {}
+        if not isinstance(inputs, dict):
+            inputs = {}
+
+        return {
+            "id": skill.id,
+            "name": skill.name,
+            "type": skill.type,
+            "inputs": inputs,
+            "guidelines": skill.guidelines,
+            "guidelines_when_running": skill.guidelines_when_running,
+            "in_training": skill.in_training,
+            "episode_count": skill.episode_count,
+            "directory": skill.directory,
+        }
+
+    def _write_skill_cache(self, skills: list[SkillInfo]) -> None:
+        cache_path = self._skill_cache_path()
+        payload = {
+            "version": 1,
+            "updated_at": time.time(),
+            "skills": [self._skill_info_to_cache_dict(skill) for skill in skills],
+        }
+
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
+            tmp_path.write_text(json.dumps(payload, indent=2) + "\n")
+            tmp_path.replace(cache_path)
+        except OSError as exc:
+            self.get_logger().warning(f"Failed to write skill cache {cache_path}: {exc}")
+
     def _publish_skills_list(self):
         """Build and publish the full AvailableSkills message on the latched topic."""
         msg = AvailableSkills()
@@ -326,6 +366,7 @@ class SkillsActionServer(Node):
 
         msg.skills = filtered_skills
         self._skills_publisher.publish(msg)
+        self._write_skill_cache(filtered_skills)
         self.get_logger().info(f"Published {len(skills)} skills on /brain/available_skills")
 
     def _reload_skills(self):
