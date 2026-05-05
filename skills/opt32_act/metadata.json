@@ -1,0 +1,20 @@
+{
+    "name": "Opt32 ACT",
+    "type": "learned",
+    "guidelines": "",
+    "guidelines_when_running": "Run only when the robot workspace is clear and the task setup matches the Opt32 ACT training setup.",
+    "inputs": {},
+    "execution": {
+        "runtime": "opt32",
+        "package_dir": "package",
+        "checkpoint": "dummy_checkpoint.pth",
+        "action_dim": 10,
+        "duration": 120.0,
+        "progress_threshold": 2.0,
+        "start_pose": null,
+        "end_pose": null,
+        "start_pose_time": 1.0,
+        "end_pose_time": 1.0,
+        "n_action_steps": 30
+    }
+}

@@ -27,6 +27,10 @@ torch.backends.cudnn.benchmark = True
 
 # Import your policy class and trajectory generator
 from manipulation.ACT import ACTPolicy, ACTConfig
+try:
+    from manipulation.ACT import load_policy as load_opt32_policy
+except ImportError:
+    load_opt32_policy = None
 from manipulation.config_validation import (
     BehaviorConfigError,
     LearnedExecCfg,
@@ -125,6 +129,22 @@ def create_act_config(action_dim=10, chunk_size=30, n_action_steps=None):
         optimizer_weight_decay=1e-4,
         optimizer_lr_backbone=1e-5,
     )
+
+
+def _env_flag_enabled(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _infer_action_dim_from_policy_config(config, fallback: int) -> int:
+    output_shapes = getattr(config, "output_shapes", {}) or {}
+    shape = output_shapes.get("action") if isinstance(output_shapes, dict) else None
+    if isinstance(shape, (list, tuple)) and shape:
+        try:
+            return int(shape[-1])
+        except (TypeError, ValueError):
+            return fallback
+    return fallback
+
 
 class ManipulationServer(Node):
     def __init__(self):
@@ -353,6 +373,9 @@ class ManipulationServer(Node):
         if self.current_policy is None:
             return
         try:
+            close = getattr(self.current_policy, "close", None)
+            if callable(close):
+                close()
             del self.current_policy
             self.current_policy = None
             gc.collect()
@@ -363,6 +386,60 @@ class ManipulationServer(Node):
         except Exception as e:
             self.get_logger().warn(f"Error releasing policy: {e}")
             self.current_policy = None
+
+    def _load_opt32_policy_for_behavior(self, package_dir, action_dim=8, n_action_steps_override=None):
+        """Load the Opt32 packaged ACT runtime."""
+        if load_opt32_policy is None:
+            return False
+        if not os.path.isdir(package_dir):
+            self.get_logger().warn(f"Opt32 ACT package not found at {package_dir}; falling back to torch ACT")
+            return False
+
+        load_start = time.time()
+        n_action_steps = 30
+        if n_action_steps_override is not None:
+            try:
+                n_action_steps = max(1, min(30, int(n_action_steps_override)))
+            except (TypeError, ValueError):
+                n_action_steps = 30
+
+        self.get_logger().info(
+            f"Loading Opt32 ACT runtime from {package_dir} "
+            f"with n_action_steps={n_action_steps} on device={self.device}"
+        )
+        self.current_policy = load_opt32_policy(
+            package_dir=package_dir,
+            n_action_steps=n_action_steps,
+            use_cuda_graphs=True,
+        ).to(str(self.device))
+        self.current_policy.eval()
+        self.current_policy.reset()
+        self.current_action_dim = _infer_action_dim_from_policy_config(
+            self.current_policy.config,
+            action_dim,
+        )
+
+        self.get_logger().info("Running Opt32 warm-up inference...")
+        warmup_start = time.time()
+        dummy_batch = {
+            "observation.image_camera_1": torch.zeros(1, 3, 224, 224, device=self.device),
+            "observation.image_camera_2": torch.zeros(1, 3, 224, 224, device=self.device),
+            "observation.state": torch.zeros(1, 6, device=self.device),
+        }
+        for _ in range(5):
+            with torch.no_grad():
+                _ = self.current_policy.select_action(dummy_batch)
+            if self.device.type == 'cuda':
+                torch.cuda.synchronize()
+        self.current_policy.reset()
+
+        warmup_time = time.time() - warmup_start
+        load_time = time.time() - load_start
+        self.get_logger().info(
+            f"Opt32 ACT runtime loaded in {load_time:.2f}s "
+            f"(warm-up {warmup_time:.2f}s, action_dim={self.current_action_dim})"
+        )
+        return True
     
     def _execute_learned_behavior(self, goal_handle, skill_dir, params: LearnedExecCfg, checkpoint_path: str):
         """Execute a learned behavior using ACT policy.
@@ -382,11 +459,20 @@ class ManipulationServer(Node):
             n_action_steps_override = params.n_action_steps
 
             # Load policy
-            if not self._load_policy_for_behavior(
-                checkpoint_path,
-                action_dim,
-                n_action_steps_override=n_action_steps_override,
-            ):
+            if params.runtime == "opt32":
+                self._release_policy()
+                loaded_policy = self._load_opt32_policy_for_behavior(
+                    checkpoint_path,
+                    action_dim=action_dim,
+                    n_action_steps_override=n_action_steps_override,
+                )
+            else:
+                loaded_policy = self._load_policy_for_behavior(
+                    checkpoint_path,
+                    action_dim,
+                    n_action_steps_override=n_action_steps_override,
+                )
+            if not loaded_policy:
                 return "FAILURE", f"Failed to load policy from {checkpoint_path}"
             
             # Check sensor availability before starting
@@ -761,6 +847,16 @@ class ManipulationServer(Node):
             
             # Expand user path
             checkpoint_path = os.path.expanduser(checkpoint_path)
+            opt32_package_dir = os.environ.get(
+                'OPT32_ACT_PACKAGE_DIR',
+                os.path.join(os.path.dirname(__file__), 'package'),
+            )
+            if _env_flag_enabled('INNATE_USE_OPT32_ACT') and self._load_opt32_policy_for_behavior(
+                opt32_package_dir,
+                action_dim=action_dim,
+                n_action_steps_override=n_action_steps_override,
+            ):
+                return True
             
             # Load normalization stats
             checkpoint_dir = os.path.dirname(checkpoint_path)
