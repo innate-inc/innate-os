@@ -10,6 +10,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -114,6 +115,26 @@ def run(cmd, **kwargs):
     """Run a command, inheriting stdio by default."""
     kwargs.setdefault("check", False)
     return subprocess.run(cmd, **kwargs)
+
+
+@contextmanager
+def _suppress_process_output():
+    sys.stdout.flush()
+    sys.stderr.flush()
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    try:
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), 1)
+            os.dup2(devnull.fileno(), 2)
+            yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(stdout_fd)
+        os.close(stderr_fd)
 
 
 def get_version():
@@ -750,15 +771,18 @@ def _skill_ids(timeout: float):
     if not _ensure_skill_ros_nodes_running():
         return 1
 
-    modules = _load_skill_ros_modules()
-    node = _create_skill_node(modules)
-    try:
-        skills = _wait_for_available_skills(modules, node, timeout)
-        for skill_info in skills:
-            print(skill_info.id)
-        return 0 if skills else 1
-    finally:
-        _shutdown_skill_node(modules, node)
+    with _suppress_process_output():
+        modules = _load_skill_ros_modules()
+        node = _create_skill_node(modules)
+        try:
+            skills = _wait_for_available_skills(modules, node, timeout)
+            skill_ids = [skill_info.id for skill_info in skills]
+        finally:
+            _shutdown_skill_node(modules, node)
+
+    for skill_id in skill_ids:
+        print(skill_id)
+    return 0 if skill_ids else 1
 
 
 def _skill_type(skill_ref: str, timeout: float, json_output: bool):
