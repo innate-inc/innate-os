@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Innate OS developer CLI.  Run ``innate --help`` for usage."""
 
+import json
 import os
+import re
+import shlex
+import shutil
 import subprocess
 import sys
+import textwrap
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-
-import re
 
 import click
 
@@ -113,6 +117,26 @@ def run(cmd, **kwargs):
     return subprocess.run(cmd, **kwargs)
 
 
+@contextmanager
+def _suppress_process_output():
+    sys.stdout.flush()
+    sys.stderr.flush()
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    try:
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), 1)
+            os.dup2(devnull.fileno(), 2)
+            yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(stdout_fd)
+        os.close(stderr_fd)
+
+
 def get_version():
     r = subprocess.run(
         ["git", "-C", str(INNATE_OS_ROOT), "describe", "--tags", "--always", "--dirty"],
@@ -187,6 +211,7 @@ def _show_status():
     print(f"  {C.BOLD}innate restart{C.NC}      Restart nodes")
     print(f"  {C.BOLD}innate build{C.NC}        Build & restart")
     print(f"  {C.BOLD}innate build release{C.NC} Build release & restart")
+    print(f"  {C.BOLD}innate skill list{C.NC}   List robot skills")
     print(f"  {C.BOLD}innate update{C.NC}       Check/apply updates")
     print(f"  {C.BOLD}innate diag{C.NC}         Check hardware")
     print(f"  {C.BOLD}innate volume{C.NC}       Get/set speaker volume")
@@ -393,6 +418,457 @@ def _build_cycle(packages, release=False):
         fail("Skipping restart due to build failure")
         sys.exit(rc)
     sys.exit(_service_start())
+
+
+# ---------------------------------------------------------------------------
+# Skill CLI implementation
+# ---------------------------------------------------------------------------
+
+
+def _ros_setup_scripts():
+    plan = _ros_setup_plan()
+    return plan[1] if plan else []
+
+
+def _ros_setup_plan():
+    dds_setup = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
+    zsh = shutil.which("zsh")
+    ros_zsh = Path("/opt/ros/humble/setup.zsh")
+    if zsh and dds_setup.exists() and ros_zsh.exists():
+        setup_scripts = [ros_zsh, dds_setup]
+        ws_zsh = ROS_WS / "install" / "setup.zsh"
+        if ws_zsh.exists():
+            setup_scripts.append(ws_zsh)
+        return zsh, setup_scripts
+
+    bash = shutil.which("bash") or "bash"
+    setup_scripts = [Path("/opt/ros/humble/setup.bash")]
+    dds_setup = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
+    ws_setup = ROS_WS / "install" / "setup.bash"
+    if ws_setup.exists():
+        setup_scripts.append(ws_setup)
+    setup_scripts = [p for p in setup_scripts if p.exists()]
+    return (bash, setup_scripts) if setup_scripts else None
+
+
+def _env_path_contains_descendant(env_name: str, root: Path):
+    root = root.resolve()
+    for raw_path in os.environ.get(env_name, "").split(os.pathsep):
+        if not raw_path:
+            continue
+        try:
+            if Path(raw_path).resolve().is_relative_to(root):
+                return True
+        except (OSError, RuntimeError):
+            continue
+    return False
+
+
+def _ros_environment_ready():
+    if not os.environ.get("ROS_DISTRO"):
+        return False
+
+    ws_setup = ROS_WS / "install" / "setup.bash"
+    if ws_setup.exists() and not _env_path_contains_descendant("AMENT_PREFIX_PATH", ROS_WS / "install"):
+        return False
+
+    dds_setup = INNATE_OS_ROOT / "dds" / "setup_dds.zsh"
+    if dds_setup.exists() and not os.environ.get("RMW_IMPLEMENTATION"):
+        return False
+
+    return True
+
+
+def _safe_tmux_session_exists(session):
+    try:
+        return tmux_session_exists(session)
+    except FileNotFoundError:
+        return False
+
+
+def _safe_systemd_active(service):
+    try:
+        return systemd_active(service)
+    except FileNotFoundError:
+        return False
+
+
+def _skill_ros_nodes_status():
+    if is_sim_mode():
+        session = TMUX_SESSION_SIM
+        if _safe_tmux_session_exists(session):
+            return True, ""
+        return False, (
+            f"ROS nodes are not running (tmux session '{session}' not found). "
+            "Start them with `innate service start` before using `innate skill`."
+        )
+
+    if _safe_systemd_active(SYSTEMD_SERVICE_HW):
+        return True, ""
+
+    if _safe_tmux_session_exists(TMUX_SESSION_HW):
+        return True, ""
+
+    return False, (
+        f"ROS nodes are not running ({SYSTEMD_SERVICE_HW} is inactive). "
+        "Start them with `innate service start` before using `innate skill`."
+    )
+
+
+def _ensure_skill_ros_nodes_running():
+    running, message = _skill_ros_nodes_status()
+    if running:
+        return True
+    fail(message)
+    return False
+
+
+def _needs_ros_reexec():
+    if os.environ.get("INNATE_CLI_ROS_ENV_READY") == "1":
+        return False
+    if not _ros_setup_scripts():
+        return False
+    return not _ros_environment_ready()
+
+
+def _reexec_with_ros_environment_if_needed():
+    """Restart this CLI under sourced ROS setup so native libraries resolve."""
+    if not _needs_ros_reexec():
+        return
+
+    setup_plan = _ros_setup_plan()
+    if not setup_plan:
+        return
+    shell, setup_scripts = setup_plan
+    source_cmd = " && ".join(f"source {shlex.quote(str(p))}" for p in setup_scripts)
+    script = shlex.quote(str(Path(__file__).resolve()))
+    python = shlex.quote(sys.executable)
+    cmd = f"{source_cmd} && export INNATE_CLI_ROS_ENV_READY=1 && exec {python} {script} \"$@\""
+    os.execvpe(shell, [shell, "-c", cmd, shell, *sys.argv[1:]], os.environ)
+
+
+def _decode_env_bytes(value: bytes):
+    return value.decode(sys.getfilesystemencoding(), errors="surrogateescape")
+
+
+def _source_ros_environment():
+    """Source ROS setup files into this Python process when possible."""
+    if _ros_environment_ready():
+        return
+
+    setup_plan = _ros_setup_plan()
+    if not setup_plan:
+        return
+
+    shell, setup_scripts = setup_plan
+    source_cmd = " && ".join(f"source {shlex.quote(str(p))}" for p in setup_scripts)
+    result = subprocess.run(
+        [shell, "-c", f"{source_cmd} && env -0"],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return
+
+    for raw_entry in result.stdout.split(b"\0"):
+        if not raw_entry or b"=" not in raw_entry:
+            continue
+        key, value = raw_entry.split(b"=", 1)
+        os.environ[_decode_env_bytes(key)] = _decode_env_bytes(value)
+
+    for path in reversed(os.environ.get("PYTHONPATH", "").split(os.pathsep)):
+        if path and path not in sys.path:
+            sys.path.insert(0, path)
+
+
+def _load_skill_ros_modules():
+    """Import ROS modules for skill commands, with a helpful CLI error."""
+    _reexec_with_ros_environment_if_needed()
+    _source_ros_environment()
+    try:
+        import rclpy
+        from brain_messages.action import ExecuteSkill
+        from brain_messages.msg import AvailableSkills
+        from rclpy.action import ActionClient
+        from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+    except ImportError as exc:
+        raise click.ClickException(
+            "ROS2 Python packages are not available. Run this on the robot, or source "
+            f"/opt/ros/humble/setup.bash and the innate-os workspace install/setup.bash. Missing import: {exc}"
+        ) from exc
+
+    return {
+        "rclpy": rclpy,
+        "ExecuteSkill": ExecuteSkill,
+        "AvailableSkills": AvailableSkills,
+        "ActionClient": ActionClient,
+        "QoSDurabilityPolicy": QoSDurabilityPolicy,
+        "QoSProfile": QoSProfile,
+        "QoSReliabilityPolicy": QoSReliabilityPolicy,
+    }
+
+
+def _validate_inputs_json(inputs: str) -> str:
+    try:
+        parsed = json.loads(inputs)
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Invalid JSON for --inputs: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise click.ClickException("--inputs must decode to a JSON object")
+    return json.dumps(parsed, separators=(",", ":"))
+
+
+def _spin_until_future(rclpy, node, future, timeout_sec: float | None):
+    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout_sec)
+    return future.done()
+
+
+def _create_skill_node(modules, name="innate_skill_cli"):
+    rclpy = modules["rclpy"]
+    if not rclpy.ok():
+        rclpy.init(args=[])
+    return rclpy.create_node(name)
+
+
+def _shutdown_skill_node(modules, node):
+    rclpy = modules["rclpy"]
+    try:
+        node.destroy_node()
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def _wait_for_available_skills(modules, node, timeout_sec: float):
+    rclpy = modules["rclpy"]
+    qos = modules["QoSProfile"](
+        depth=1,
+        durability=modules["QoSDurabilityPolicy"].TRANSIENT_LOCAL,
+        reliability=modules["QoSReliabilityPolicy"].RELIABLE,
+    )
+    received = []
+
+    def callback(msg):
+        received.append(msg)
+
+    sub = node.create_subscription(modules["AvailableSkills"], "/brain/available_skills", callback, qos)
+    try:
+        deadline = time.monotonic() + timeout_sec
+        while not received and rclpy.ok():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            rclpy.spin_once(node, timeout_sec=min(0.2, remaining))
+        return list(received[0].skills) if received else []
+    finally:
+        node.destroy_subscription(sub)
+
+
+def _skill_status(skill_info):
+    return "training" if getattr(skill_info, "in_training", False) else "ready"
+
+
+def _print_skill_table(skills):
+    rows = [("ID", "NAME", "TYPE", "STATUS")]
+    for s in skills:
+        rows.append((s.id, s.name, s.type, _skill_status(s)))
+
+    widths = [max(len(str(row[i])) for row in rows) for i in range(len(rows[0]))]
+    for idx, row in enumerate(rows):
+        line = "  ".join(str(value).ljust(widths[i]) for i, value in enumerate(row))
+        if idx == 0:
+            print(f"{C.BOLD}{line}{C.NC}")
+            print("  ".join("-" * width for width in widths))
+        else:
+            print(line)
+
+
+def _find_skill_by_id(skills, skill_id: str):
+    for skill_info in skills:
+        if skill_info.id == skill_id:
+            return skill_info
+    return None
+
+
+def _parse_skill_inputs(skill_info):
+    inputs_json = getattr(skill_info, "inputs_json", "") or "{}"
+    try:
+        inputs = json.loads(inputs_json)
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Skill {skill_info.id} has invalid inputs_json: {exc}") from exc
+    if not isinstance(inputs, dict):
+        raise click.ClickException(f"Skill {skill_info.id} inputs_json must decode to a JSON object")
+    return inputs
+
+
+def _skill_type_contract(skill_info):
+    return {
+        "id": skill_info.id,
+        "name": skill_info.name,
+        "type": skill_info.type,
+        "inputs": _parse_skill_inputs(skill_info),
+        "guidelines": getattr(skill_info, "guidelines", "") or "",
+        "guidelines_when_running": getattr(skill_info, "guidelines_when_running", "") or "",
+    }
+
+
+def _format_skill_contract(contract: dict) -> str:
+    lines = [
+        f"Skill: {contract['name']}",
+        f"ID: {contract['id']}",
+        f"Type: {contract['type']}",
+        "",
+        "Inputs:",
+    ]
+
+    inputs = contract["inputs"]
+    if inputs:
+        for name, type_name in inputs.items():
+            lines.append(f"  {name}: {type_name}")
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "Expected --inputs shape:"])
+    example_inputs = {name: f"<{type_name}>" for name, type_name in inputs.items()}
+    lines.extend(textwrap.indent(json.dumps(example_inputs, indent=2), "  ").splitlines())
+
+    lines.extend(["", "Guidelines:"])
+    guidelines = contract["guidelines"].strip()
+    if guidelines:
+        lines.append(textwrap.fill(guidelines, width=88, initial_indent="  ", subsequent_indent="  "))
+    else:
+        lines.append("  none")
+
+    lines.extend(["", "Guidelines while running:"])
+    running_guidelines = contract["guidelines_when_running"].strip()
+    lines.append(
+        textwrap.fill(running_guidelines, width=88, initial_indent="  ", subsequent_indent="  ")
+        if running_guidelines
+        else "  none"
+    )
+
+    return "\n".join(lines)
+
+
+def _skill_list(timeout: float):
+    if not _ensure_skill_ros_nodes_running():
+        return 1
+
+    modules = _load_skill_ros_modules()
+    node = _create_skill_node(modules)
+    try:
+        skills = _wait_for_available_skills(modules, node, timeout)
+        if not skills:
+            fail("No skills received from /brain/available_skills")
+            return 1
+        _print_skill_table(skills)
+        return 0
+    finally:
+        _shutdown_skill_node(modules, node)
+
+
+def _skill_ids(timeout: float):
+    if not _ensure_skill_ros_nodes_running():
+        return 1
+
+    modules = _load_skill_ros_modules()
+    with _suppress_process_output():
+        node = _create_skill_node(modules)
+        try:
+            skills = _wait_for_available_skills(modules, node, timeout)
+            skill_ids = [skill_info.id for skill_info in skills]
+        finally:
+            _shutdown_skill_node(modules, node)
+
+    for skill_id in skill_ids:
+        print(skill_id)
+    return 0 if skill_ids else 1
+
+
+def _skill_type(skill_ref: str, timeout: float, json_output: bool):
+    if not _ensure_skill_ros_nodes_running():
+        return 1
+
+    modules = _load_skill_ros_modules()
+    node = _create_skill_node(modules)
+    try:
+        skills = _wait_for_available_skills(modules, node, timeout)
+        if not skills:
+            fail("No skills received from /brain/available_skills")
+            return 1
+
+        skill_info = _find_skill_by_id(skills, skill_ref)
+        if skill_info is None:
+            fail(f"Skill not found: {skill_ref}")
+            return 1
+
+        contract = _skill_type_contract(skill_info)
+        if json_output:
+            print(json.dumps(contract, indent=2))
+        else:
+            print(_format_skill_contract(contract))
+        return 0
+    finally:
+        _shutdown_skill_node(modules, node)
+
+
+def _skill_run(skill_ref: str, inputs: str, timeout: float | None, server_timeout: float):
+    inputs_json = _validate_inputs_json(inputs)
+    if not _ensure_skill_ros_nodes_running():
+        return 1
+
+    modules = _load_skill_ros_modules()
+    rclpy = modules["rclpy"]
+    ExecuteSkill = modules["ExecuteSkill"]
+    ActionClient = modules["ActionClient"]
+    node = _create_skill_node(modules)
+
+    try:
+        action_client = ActionClient(node, ExecuteSkill, "execute_skill")
+        try:
+            if not action_client.wait_for_server(timeout_sec=server_timeout):
+                fail("ExecuteSkill action server not available")
+                return 1
+
+            goal = ExecuteSkill.Goal()
+            goal.skill_type = skill_ref
+            goal.inputs = inputs_json
+
+            def feedback_callback(feedback_msg):
+                feedback = feedback_msg.feedback
+                text = getattr(feedback, "feedback", "")
+                if text:
+                    print(f"{C.DIM}{text}{C.NC}")
+
+            print(f"Running skill {C.BOLD}{skill_ref}{C.NC}...", flush=True)
+            send_goal_future = action_client.send_goal_async(goal, feedback_callback=feedback_callback)
+            if not _spin_until_future(rclpy, node, send_goal_future, server_timeout):
+                fail("Timed out waiting for skill goal acceptance")
+                return 1
+
+            goal_handle = send_goal_future.result()
+            if not goal_handle.accepted:
+                fail("Skill goal was rejected")
+                return 1
+
+            result_future = goal_handle.get_result_async()
+            if not _spin_until_future(rclpy, node, result_future, timeout):
+                cancel_future = goal_handle.cancel_goal_async()
+                _spin_until_future(rclpy, node, cancel_future, 2.0)
+                fail("Timed out waiting for skill result")
+                return 1
+
+            result = result_future.result().result
+            if result.success:
+                ok(result.message or f"Skill {skill_ref} completed")
+                return 0
+
+            fail(result.message or f"Skill {skill_ref} failed")
+            return 1
+        finally:
+            action_client.destroy()
+    finally:
+        _shutdown_skill_node(modules, node)
 
 
 # ---------------------------------------------------------------------------
@@ -1289,6 +1765,91 @@ def volume(level):
     sys.exit(_volume(level))
 
 
+# -- skill --------------------------------------------------------------------
+
+
+@cli.group("skill", invoke_without_command=True)
+@click.pass_context
+def skill_cli(ctx):
+    """List and trigger robot skills."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        ctx.exit(1)
+
+
+@skill_cli.command("list")
+@click.option(
+    "--timeout",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Seconds to wait for /brain/available_skills.",
+)
+def skill_list(timeout):
+    """List skills currently published by the robot."""
+    sys.exit(_skill_list(timeout))
+
+
+@skill_cli.command("_ids", hidden=True)
+@click.option("--timeout", type=float, default=1.0)
+def skill_ids(timeout):
+    """Print skill IDs for shell completion."""
+    sys.exit(_skill_ids(timeout))
+
+
+@skill_cli.command("type")
+@click.argument("skill_ref", metavar="SKILL")
+@click.option(
+    "--timeout",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Seconds to wait for /brain/available_skills.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Print the raw contract as JSON.")
+def skill_type(skill_ref, timeout, json_output):
+    """Print the input contract for a skill by ID.
+
+    \b
+    Examples:
+      innate skill type innate-os/wave
+      innate skill type local/my-skill
+    """
+    sys.exit(_skill_type(skill_ref, timeout, json_output))
+
+
+@skill_cli.command("run")
+@click.argument("skill_ref", metavar="SKILL")
+@click.option(
+    "--inputs",
+    default="{}",
+    show_default=True,
+    help="JSON object passed to the skill.",
+)
+@click.option(
+    "--timeout",
+    type=float,
+    default=None,
+    help="Seconds to wait for the skill result. Default waits indefinitely.",
+)
+@click.option(
+    "--server-timeout",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Seconds to wait for the ExecuteSkill action server.",
+)
+def skill_run(skill_ref, inputs, timeout, server_timeout):
+    """Run a skill by ID.
+
+    \b
+    Examples:
+      innate skill run innate-os/wave
+      innate skill run local/my-skill --inputs '{"foo":"bar"}'
+    """
+    sys.exit(_skill_run(skill_ref, inputs, timeout, server_timeout))
+
+
 # -- update -------------------------------------------------------------------
 
 
@@ -1437,6 +1998,13 @@ def _zsh_completions():
     w("  fi")
     w("}")
     w("")
+    w("_innate_skill_ids() {")
+    w("  local -a skills")
+    w('  local cmd="${commands[innate]:-${INNATE_OS_ROOT:-$HOME/innate-os}/scripts/innate}"')
+    w('  skills=( ${(f)"$("$cmd" skill _ids --timeout 1 2>/dev/null)"} )')
+    w("  _describe 'skill id' skills")
+    w("}")
+    w("")
     w("_innate() {")
     w("  local -a commands=(")
     for e in fmt_commands(cli):
@@ -1486,9 +2054,12 @@ def _zsh_completions():
                 w("              case $words[1] in")
                 for sub_name, opts in sorted(subs_with_opts.items()):
                     w(f"                {sub_name})")
+                    skill_arg = name == "skill" and sub_name in {"run", "type"}
+                    arg_specs = ["'1:skill id:_innate_skill_ids'"] if skill_arg else []
                     w("                  _arguments \\")
-                    for i, opt_s in enumerate(opts):
-                        trail = " \\" if i < len(opts) - 1 else ""
+                    specs = opts + arg_specs
+                    for i, opt_s in enumerate(specs):
+                        trail = " \\" if i < len(specs) - 1 else ""
                         w(f"                    {opt_s}{trail}")
                     w("                  ;;")
                 w("              esac")

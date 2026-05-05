@@ -28,6 +28,10 @@ innate service start    # Start ROS services
 innate service stop     # Stop ROS services
 innate restart          # Restart ROS services
 innate view             # Attach to tmux session
+
+# List and trigger robot skills
+innate skill list
+innate skill run innate-os/wave
 ```
 
 ---
@@ -52,6 +56,23 @@ innate service stop           # Stop ROS services
 innate restart                # Restart ROS services
 innate view                   # Attach to tmux session (Ctrl+b d to detach)
 ```
+
+### Skill Commands
+
+```bash
+innate skill list                                      # List available robot skills
+innate skill type innate-os/wave                      # Print inputs and guidelines
+innate skill type innate-os/wave --json               # Print the raw contract as JSON
+innate skill run innate-os/wave                       # Trigger a skill by ID
+innate skill run local/my-skill --inputs '{"x": 1}'   # Pass JSON inputs
+```
+
+`innate skill run` calls the high-level `/execute_skill` action and defaults
+inputs to `{}`. Pass the skill ID exactly as published by the robot, such as
+`innate-os/wave`. Use `innate skill type SKILL` to inspect a readable input
+contract with the input type schema and guidelines advertised on
+`/brain/available_skills` before calling `run`. The zsh completion script
+suggests published skill IDs for `innate skill type` and `innate skill run`.
 
 ### Daemon Mode (internal)
 
