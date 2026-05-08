@@ -29,11 +29,12 @@
 
   <!-- base_link is the root of the URDF tree -->
   <!-- The odom -> base_link transform is published by bringup.py -->
+  <!-- Includes: plastic parts (991g), lidar (170g), jetson (174g), usb hub (100g) -->
   <link name="base_link">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.89"/>
-      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+      <origin xyz="-0.0179 -0.0011 0.0970" rpy="0 0 0"/>
+      <mass value="1.435"/>
+      <inertia ixx="0.0054" ixy="0.0002" ixz="-0.0001" iyy="0.0078" iyz="0.0001" izz="0.0109"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -52,6 +53,130 @@
     </collision>
   </link>
 
+  <!-- ========== WHEELS SECTION ========== -->
+
+  <!-- Left Wheel (hub motor) -->
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 0.0882 0.03725" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="0.25" velocity="10.3"/>
+    <dynamics damping="0.1" friction="0.0"/>
+  </joint>
+  <link name="left_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.26"/>
+      <inertia ixx="9.9e-5" ixy="0" ixz="0" iyy="1.80e-4" iyz="0" izz="9.9e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/left_wheel.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.03725" length="0.02"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Right Wheel (hub motor) -->
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 -0.0882 0.03725" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="0.25" velocity="10.3"/>
+    <dynamics damping="0.1" friction="0.0"/>
+  </joint>
+  <link name="right_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.26"/>
+      <inertia ixx="9.9e-5" ixy="0" ixz="0" iyy="1.80e-4" iyz="0" izz="9.9e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/right_wheel.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.03725" length="0.02"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Caster Frame (swivel mount) -->
+  <joint name="caster_frame_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="caster_frame"/>
+    <origin xyz="-0.1229 0 0.037775" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="0.0" velocity="100.0"/>
+    <dynamics damping="0.01" friction="0.1"/>
+  </joint>
+  <link name="caster_frame">
+    <inertial>
+      <origin xyz="0.00341 0 -0.01521" rpy="0 0 0"/>
+      <mass value="0.0147"/>
+      <inertia ixx="2.64e-6" ixy="0" ixz="5.09e-8" iyy="1.85e-6" iyz="0" izz="3.55e-6"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/caster_frame.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/caster_frame.STL" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Caster Wheel -->
+  <joint name="caster_wheel_joint" type="continuous">
+    <parent link="caster_frame"/>
+    <child link="caster_wheel"/>
+    <origin xyz="-0.0085 0 -0.025425" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="0.0" velocity="100.0"/>
+    <dynamics damping="0.01" friction="0.1"/>
+  </joint>
+  <link name="caster_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.0106"/>
+      <inertia ixx="8.06e-7" ixy="0" ixz="0" iyy="8.11e-7" iyz="0" izz="8.06e-7"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/caster_wheel.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="bright_orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.01235"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ========== ARM SECTION ========== -->
+
   <!-- joint1 → link1 -->
   <joint name="joint1" type="revolute">
     <parent link="base_link"/>
@@ -63,9 +188,9 @@
   </joint>
   <link name="link1">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.065"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      <origin xyz="0.00128 0 0.01677" rpy="0 0 0"/>
+      <mass value="0.0288"/>
+      <inertia ixx="1.157e-5" ixy="0" ixz="5.19e-6" iyy="2.098e-5" iyz="0" izz="1.535e-5"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -74,13 +199,39 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 67mm x 40mm x 82mm -->
     <collision>
       <origin xyz="-0.005 0 0.018" rpy="0 0 0"/>
       <geometry>
         <box size="0.067 0.040 0.082"/>
       </geometry>
       <material name="collision_material"/>
+    </collision>
+  </link>
+
+  <!-- M2: Joint2 Motor (XC430-W240) - rigidly attached to link1 -->
+  <joint name="m2_joint" type="fixed">
+    <parent link="link1"/>
+    <child link="m2"/>
+    <origin xyz="0 -0.019 0.04425" rpy="1.5708 1.5708 0"/>
+  </joint>
+  <link name="m2">
+    <inertial>
+      <origin xyz="2.28e-4 -1.47e-2 -1.68e-2" rpy="0 0 0"/>
+      <mass value="0.065"/>
+      <inertia ixx="1.868e-5" ixy="0" ixz="-4.54e-8" iyy="9.59e-6" iyz="-8.45e-7" izz="1.735e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m2.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m2.STL" scale="1 1 1"/>
+      </geometry>
     </collision>
   </link>
 
@@ -95,9 +246,9 @@
   </joint>
   <link name="link2">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.080"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      <origin xyz="-0.00034 0 0.0501" rpy="0 0 0"/>
+      <mass value="0.039"/>
+      <inertia ixx="7.845e-5" ixy="0" ixz="1.64e-6" iyy="6.529e-5" iyz="0" izz="1.849e-5"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -106,13 +257,39 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 37mm x 54mm x 156mm -->
     <collision>
       <origin xyz="0 0 0.061" rpy="0 0 0"/>
       <geometry>
         <box size="0.037 0.054 0.156"/>
       </geometry>
       <material name="collision_material"/>
+    </collision>
+  </link>
+
+  <!-- M3: Joint3 Motor (XL430-W250) - rigidly attached to link2 -->
+  <joint name="m3_joint" type="fixed">
+    <parent link="link2"/>
+    <child link="m3"/>
+    <origin xyz="0.02825 -0.019 0.12125" rpy="1.5708 1.5708 0"/>
+  </joint>
+  <link name="m3">
+    <inertial>
+      <origin xyz="4.20e-4 -1.54e-2 -1.75e-2" rpy="0 0 0"/>
+      <mass value="0.057"/>
+      <inertia ixx="1.549e-5" ixy="-1.75e-7" ixz="-4.81e-8" iyy="8.25e-6" iyz="-8.49e-7" izz="1.374e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m3.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m3.STL" scale="1 1 1"/>
+      </geometry>
     </collision>
   </link>
 
@@ -127,9 +304,9 @@
   </joint>
   <link name="link3">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.055"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      <origin xyz="0.0490 0 0.00184" rpy="0 0 0"/>
+      <mass value="0.0366"/>
+      <inertia ixx="1.637e-5" ixy="0" ixz="-2.17e-6" iyy="5.383e-5" iyz="0" izz="6.162e-5"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -138,13 +315,39 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 134mm x 54mm x 35mm -->
     <collision>
       <origin xyz="0.050 0 0" rpy="0 0 0"/>
       <geometry>
         <box size="0.134 0.054 0.035"/>
       </geometry>
       <material name="collision_material"/>
+    </collision>
+  </link>
+
+  <!-- M4: Joint4 Motor (XC330-M288) - rigidly attached to link3 -->
+  <joint name="m4_joint" type="fixed">
+    <parent link="link3"/>
+    <child link="m4"/>
+    <origin xyz="0.1375 -0.0145 0.0045" rpy="1.5708 1.5708 0"/>
+  </joint>
+  <link name="m4">
+    <inertial>
+      <origin xyz="-2.31e-4 -7.55e-3 -1.12e-2" rpy="0 0 0"/>
+      <mass value="0.023"/>
+      <inertia ixx="3.529e-6" ixy="-2.33e-8" ixz="-2.52e-8" iyy="1.802e-6" iyz="-4.57e-7" izz="2.977e-6"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m4.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m4.STL" scale="1 1 1"/>
+      </geometry>
     </collision>
   </link>
 
@@ -159,9 +362,9 @@
   </joint>
   <link name="link4">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.022"/>
-      <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00005"/>
+      <origin xyz="0.00981 0 0" rpy="0 0 0"/>
+      <mass value="0.00841"/>
+      <inertia ixx="2.04e-6" ixy="0" ixz="0" iyy="9.87e-7" iyz="0" izz="2.42e-6"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -170,7 +373,6 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 32mm x 39mm x 20mm -->
     <collision>
       <origin xyz="0.006 0 0" rpy="0 0 0"/>
       <geometry>
@@ -191,9 +393,9 @@
   </joint>
   <link name="link5">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.050"/>
-      <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00005"/>
+      <origin xyz="0.0273 -0.00023 0.0279" rpy="0 0 0"/>
+      <mass value="0.0383"/>
+      <inertia ixx="2.982e-5" ixy="1.56e-7" ixz="-1.58e-6" iyy="2.723e-5" iyz="-2.08e-7" izz="1.267e-5"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -202,13 +404,66 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 54mm x 44mm x 93mm -->
     <collision>
       <origin xyz="0.027 0 0.031" rpy="0 0 0"/>
       <geometry>
         <box size="0.054 0.044 0.093"/>
       </geometry>
       <material name="collision_material"/>
+    </collision>
+  </link>
+
+  <!-- M5: Joint5 Motor (XC330-M288) - rigidly attached to link5 -->
+  <joint name="m5_joint" type="fixed">
+    <parent link="link5"/>
+    <child link="m5"/>
+    <origin xyz="0 0 0" rpy="-1.5708 0 1.5708"/>
+  </joint>
+  <link name="m5">
+    <inertial>
+      <origin xyz="-2.31e-4 -7.55e-3 -1.12e-2" rpy="0 0 0"/>
+      <mass value="0.023"/>
+      <inertia ixx="3.529e-6" ixy="-2.33e-8" ixz="-2.52e-8" iyy="1.802e-6" iyz="-4.57e-7" izz="2.977e-6"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m5.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m5.STL" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- M6: Joint6 Motor (XC330-M288) - rigidly attached to link5 -->
+  <joint name="m6_joint" type="fixed">
+    <parent link="link5"/>
+    <child link="m6"/>
+    <origin xyz="0.044 0.0091 -0.0145" rpy="3.1416 0 -3.1416"/>
+  </joint>
+  <link name="m6">
+    <inertial>
+      <origin xyz="-2.31e-4 -7.55e-3 -1.12e-2" rpy="0 0 0"/>
+      <mass value="0.023"/>
+      <inertia ixx="3.529e-6" ixy="-2.33e-8" ixz="-2.52e-8" iyy="1.802e-6" iyz="-4.57e-7" izz="2.977e-6"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m6.STL" scale="1 1 1"/>
+      </geometry>
+      <material name="matt_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://maurice_sim/meshes/m6.STL" scale="1 1 1"/>
+      </geometry>
     </collision>
   </link>
 
@@ -219,13 +474,13 @@
     <origin xyz="0.044 -0.0092 0" rpy="0 0 0"/>
     <axis  xyz="0 0 -1"/>
     <dynamics damping="5"/>
-    <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
+    <limit lower="0" upper="0.9076" effort="2.0" velocity="2.0"/>
   </joint>
   <link name="link61">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.012"/>
-      <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
+      <origin xyz="0.0200 0.00126 0" rpy="0 0 0"/>
+      <mass value="0.00731"/>
+      <inertia ixx="1.91e-6" ixy="-3.08e-7" ixz="0" iyy="4.10e-6" iyz="0" izz="2.50e-6"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -234,7 +489,6 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 48mm x 16mm x 38.9mm -->
     <collision>
       <origin xyz="0.024 0 0" rpy="0 0 0"/>
       <geometry>
@@ -251,14 +505,14 @@
     <origin xyz="0.044 0.0091 0" rpy="0 0 0"/>
     <axis  xyz="0 0 -1"/>
     <dynamics damping="5"/>
-    <limit lower="-0.8727" upper="0.3491" effort="2.0" velocity="2.0"/>
+    <limit lower="-0.9076" upper="0" effort="2.0" velocity="2.0"/>
     <mimic joint="joint6" multiplier="-1" offset="0"/>
   </joint>
   <link name="link62">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.012"/>
-      <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
+      <origin xyz="0.0204 -0.00126 0" rpy="0 0 0"/>
+      <mass value="0.00730"/>
+      <inertia ixx="1.89e-6" ixy="3.07e-7" ixz="0" iyy="4.04e-6" iyz="0" izz="2.46e-6"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -267,7 +521,6 @@
       </geometry>
       <material name="matt_black"/>
     </visual>
-    <!-- Simplified collision: Box 48mm x 16mm x 38.9mm -->
     <collision>
       <origin xyz="0.024 0 0" rpy="0 0 0"/>
       <geometry>
@@ -277,7 +530,7 @@
     </collision>
   </link>
 
-  <!-- End Effector Link -->
+  <!-- End Effector Link (reference frame only) -->
   <joint name="ee_joint" type="fixed">
     <parent link="link5"/>
     <child  link="ee_link"/>
@@ -287,7 +540,7 @@
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="0.001"/>
-      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+      <inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -298,7 +551,7 @@
     </visual>
   </link>
 
-  <!-- fixed camera link -->
+  <!-- Arm camera link -->
   <joint name="fixed_arm_camera_link" type="fixed">
     <parent link="link5"/>
     <child  link="arm_camera_link"/>
@@ -306,12 +559,13 @@
   </joint>
   <link name="arm_camera_link">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.01"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      <origin xyz="0.000715 0.000517 0.000189" rpy="0 0 0"/>
+      <mass value="0.00649"/>
+      <inertia ixx="7.63e-7" ixy="0" ixz="0" iyy="4.42e-7" iyz="0" izz="4.43e-7"/>
     </inertial>
-    <!-- for simulation you can attach a Gazebo camera plugin here -->
   </link>
+
+  <!-- ========== END ARM SECTION ========== -->
 
   <!-- Head Link -->
   <joint name="joint_head" type="revolute">
@@ -324,9 +578,9 @@
   </joint>
   <link name="head">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.148"/>
-      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0002"/>
+      <origin xyz="0.0205 0 0.001" rpy="0 0 0"/>
+      <mass value="0.1338"/>
+      <inertia ixx="1.52e-4" ixy="0" ixz="5.7e-6" iyy="1.25e-4" iyz="0" izz="2.43e-4"/>
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
