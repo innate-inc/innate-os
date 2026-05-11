@@ -693,6 +693,8 @@ def get_config() -> dict[str, object]:
     elif (WORKSPACE_ROOT / "innate-cloud-agent").exists():
         cloud_repo = (WORKSPACE_ROOT / "innate-cloud-agent").resolve()
 
+    os_always_build = get_nested_bool(sim_config, "os", "always_build")
+
     return {
         "raw_env": merged_env,
         "user_env": user_env,
@@ -711,7 +713,7 @@ def get_config() -> dict[str, object]:
         else False,
         "sim_log_mode": "quiet",
         "sim_args": "--log-everything",
-        "os_always_build": True,
+        "os_always_build": os_always_build if os_always_build is not None else False,
         "skip_local_cloud_auth": True,
     }
 
@@ -875,14 +877,20 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
             ),
         )
 
+    colcon_build_cmd = (
+        "colcon build --symlink-install "
+        "--cmake-args "
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache "
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+    )
     build_cmd = "source /opt/ros/humble/setup.zsh && cd ~/innate-os/ros2_ws && "
     if config["os_always_build"]:
-        build_cmd += "colcon build"
+        build_cmd += colcon_build_cmd
     else:
         build_cmd += (
             "if [ ! -f install/setup.zsh ] || "
             "find src -type f -newer install/setup.zsh -print -quit | grep -q .; then "
-            "colcon build; "
+            f"{colcon_build_cmd}; "
             "else "
             "echo 'ROS workspace install is current; skipping rebuild.'; "
             "fi"

@@ -1,0 +1,9 @@
+# Keep the local Docker build context tiny and stable. Runtime source is
+# bind-mounted by docker-compose.dev.yml; the image only needs dependency
+# manifests during build.
+**
+
+!Dockerfile
+!ros2_ws/
+!ros2_ws/apt-dependencies.common.txt
+!ros2_ws/apt-dependencies.hardware.txt
