@@ -12,6 +12,7 @@ services:
       - x11
 
   innate:
+    image: ${INNATE_OS_IMAGE:-innate-os-sim-clean-innate:latest}
     build:
       context: .
       dockerfile: Dockerfile

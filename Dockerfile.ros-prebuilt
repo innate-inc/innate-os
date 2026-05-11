@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.7
+#
+# Optional ROS-prebuilt image.
+#
+# Build this on top of the dependency-only dev image to bake a matching
+# ros2_ws/install into the image. The launcher can seed its persistent install
+# volume from /opt/innate-os-prebuilt when the mounted local source matches.
+
+ARG BASE_IMAGE=innate-os-sim-clean-innate:latest
+FROM ${BASE_IMAGE} AS ros-prebuilt
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ENV INNATE_OS_PREBUILT_ROS_ROOT=/opt/innate-os-prebuilt/ros2_ws
+
+RUN mkdir -p "${INNATE_OS_PREBUILT_ROS_ROOT}"
+
+COPY ros2_ws/src "${INNATE_OS_PREBUILT_ROS_ROOT}/src"
+
+WORKDIR ${INNATE_OS_PREBUILT_ROS_ROOT}
+
+RUN --mount=type=cache,target=/root/.cache/ccache,sharing=locked \
+    source /opt/ros/humble/setup.bash && \
+    export CCACHE_DIR=/root/.cache/ccache && \
+    colcon build --symlink-install \
+        --cmake-args \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache && \
+    find src -type f \
+        ! -path '*/__pycache__/*' \
+        ! -name '*.pyc' \
+        -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}' > source.sha256
+
+WORKDIR /root/innate-os
+CMD ["zsh", "-l"]
