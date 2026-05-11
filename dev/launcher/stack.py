@@ -694,6 +694,7 @@ def get_config() -> dict[str, object]:
         cloud_repo = (WORKSPACE_ROOT / "innate-cloud-agent").resolve()
 
     os_always_build = get_nested_bool(sim_config, "os", "always_build")
+    os_pull_image = get_nested_bool(sim_config, "os", "pull_image")
 
     return {
         "raw_env": merged_env,
@@ -713,6 +714,9 @@ def get_config() -> dict[str, object]:
         else False,
         "sim_log_mode": "quiet",
         "sim_args": "--log-everything",
+        "os_image": get_nested_str(sim_config, "os", "image")
+        or os.environ.get("INNATE_OS_IMAGE", ""),
+        "os_pull_image": os_pull_image if os_pull_image is not None else True,
         "os_always_build": os_always_build if os_always_build is not None else False,
         "skip_local_cloud_auth": True,
     }
@@ -857,16 +861,50 @@ def docker_compose_env(base_env: dict[str, str] | None = None) -> dict[str, str]
     return env
 
 
+def ensure_os_image_available(
+    image: str, *, cwd: Path, env: dict[str, str], pull_if_missing: bool
+) -> None:
+    if command_succeeds(["docker", "image", "inspect", image], cwd=cwd, env=env):
+        return
+    if not pull_if_missing:
+        raise StackError(
+            f"Innate OS image is not available locally: {image}\n"
+            "Pull or build it, or unset sim/config.toml os.image to use the local Docker build."
+        )
+    log(f"Pulling Innate OS image {image}...")
+    run_logged_with_heartbeat(
+        ["docker", "pull", image],
+        cwd=cwd,
+        env=env,
+        log_path=COMPOSE_LOG_PATH,
+        failure_message=f"Failed to pull Innate OS image: {image}",
+        progress_message="Docker is still pulling the Innate OS image.",
+    )
+
+
 def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
     os_repo: Path = config["os_repo"]  # type: ignore[assignment]
-    compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(os_env_file)})
+    os_image = str(config["os_image"]).strip()
+    compose_values = {"INNATE_OS_ENV_FILE": str(os_env_file)}
+    if os_image:
+        compose_values["INNATE_OS_IMAGE"] = os_image
+    compose_env = docker_compose_env(compose_values)
 
     if container_running("innate-dev"):
         log("Innate OS dev container already running.")
     else:
+        up_cmd = ["docker", "compose", "-f", "docker-compose.dev.yml", "up", "-d"]
+        if os_image:
+            ensure_os_image_available(
+                os_image,
+                cwd=os_repo,
+                env=compose_env,
+                pull_if_missing=bool(config["os_pull_image"]),
+            )
+            up_cmd.append("--no-build")
         log("Starting Innate OS dev container...")
         run_logged_with_heartbeat(
-            ["docker", "compose", "-f", "docker-compose.dev.yml", "up", "-d"],
+            up_cmd,
             cwd=os_repo,
             env=compose_env,
             log_path=COMPOSE_LOG_PATH,
@@ -883,12 +921,48 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         "-DCMAKE_C_COMPILER_LAUNCHER=ccache "
         "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
     )
-    build_cmd = "source /opt/ros/humble/setup.zsh && cd ~/innate-os/ros2_ws && "
+    prebuilt_seed_cmd = (
+        "current_source_hash() { "
+        "find src -type f "
+        "! -path '*/__pycache__/*' "
+        "! -name '*.pyc' "
+        "-print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}'; "
+        "}; "
+        "seed_prebuilt_install() { "
+        "prebuilt_root=${INNATE_OS_PREBUILT_ROS_ROOT:-/opt/innate-os-prebuilt/ros2_ws}; "
+        "[ -f \"$prebuilt_root/install/setup.zsh\" ] || return 1; "
+        "[ -f \"$prebuilt_root/source.sha256\" ] || return 1; "
+        "prebuilt_hash=$(cat \"$prebuilt_root/source.sha256\"); "
+        "current_hash=$(current_source_hash); "
+        "if [ \"$current_hash\" != \"$prebuilt_hash\" ]; then "
+        "echo 'Local ROS source differs from the prebuilt image; running colcon build.'; "
+        "return 1; "
+        "fi; "
+        "if [ ! -f install/setup.zsh ] || "
+        "[ \"$(cat install/.innate-prebuilt-source.sha256 2>/dev/null)\" != \"$prebuilt_hash\" ]; then "
+        "echo 'Using prebuilt ROS workspace install from image.'; "
+        "mkdir -p install; "
+        "find install -mindepth 1 -maxdepth 1 -exec rm -rf {} +; "
+        "cp -a \"$prebuilt_root/install/.\" install/; "
+        "echo \"$prebuilt_hash\" > install/.innate-prebuilt-source.sha256; "
+        "else "
+        "echo 'Prebuilt ROS workspace install is current.'; "
+        "fi; "
+        "echo 'ROS workspace install is current; skipping rebuild.'; "
+        "return 0; "
+        "}; "
+    )
+    build_cmd = (
+        "source /opt/ros/humble/setup.zsh && cd ~/innate-os/ros2_ws && "
+        f"{prebuilt_seed_cmd}"
+    )
     if config["os_always_build"]:
         build_cmd += colcon_build_cmd
     else:
         build_cmd += (
-            "if [ ! -f install/setup.zsh ] || "
+            "if seed_prebuilt_install; then "
+            ":; "
+            "elif [ ! -f install/setup.zsh ] || "
             "find src -type f -newer install/setup.zsh -print -quit | grep -q .; then "
             f"{colcon_build_cmd}; "
             "else "
