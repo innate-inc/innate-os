@@ -239,56 +239,6 @@ export function Chat() {
       setIsScrolledToBottom(scrollHeight - scrollTop - clientHeight < 10);
     }
   };
-
-  // Effect to store user info when authenticated
-  useEffect(() => {
-    if (useDirectRobotWs) {
-      if (!userInfoStored) {
-        setUserInfoStored(true);
-      }
-      return;
-    }
-
-    if (isAuthenticated && user && !userInfoStored) {
-      const fetchUserInfo = async () => {
-        try {
-          const accessToken = await getAccessTokenSilently();
-          const data = await fetchAndStoreUserInfo(user, accessToken);
-
-          if (data) {
-            // Check if the user is authorized
-            if (data.is_authorized || data.email) {
-              setUserInfoStored(true);
-            } else {
-              // If we don't have an email, try again after a delay
-              setTimeout(() => {
-                setUserInfoStored(false); // Reset to trigger another attempt
-              }, 2000);
-            }
-          } else {
-            // If we couldn't store the user info, try again after a delay
-            setTimeout(() => {
-              setUserInfoStored(false); // Reset to trigger another attempt
-            }, 2000);
-          }
-        } catch {
-          // If there was an error, try again after a delay
-          setTimeout(() => {
-            setUserInfoStored(false); // Reset to trigger another attempt
-          }, 2000);
-        }
-      };
-
-      fetchUserInfo();
-    }
-  }, [
-    isAuthenticated,
-    user,
-    userInfoStored,
-    getAccessTokenSilently,
-    useDirectRobotWs,
-  ]);
-
   useEffect(() => {
     // If there's a socket and it's not fully closed, skip making a new one.
     if (
@@ -301,39 +251,42 @@ export function Chat() {
 
     // Use anonymous user ID
     const userId = "anonymous";
-
-        if (hasUnauthorizedMessage) {
-          return prev;
-        }
-
-        return [
-          ...prev,
-          {
-            sender: "system",
-            text: "You are not authorized to use the chat. Please subscribe or contact axel@innate.bot for access.",
-            timestamp: Date.now() / 1000,
-            isError: true,
-          },
-        ];
-      });
-      return;
-    }
-
-    // Make sure user info is stored before connecting to WebSocket
-    if (!useDirectRobotWs && isAuthenticated && user && !userInfoStored) {
-      return;
-    }
-
-    // Get user ID and email from Auth0 if authenticated
-    const userId = isAuthenticated && user && user.sub ? user.sub : "anonymous";
-    const userEmail = isAuthenticated && user && user.email ? user.email : "";
-
-    // Add user ID and email as query parameters
-    const wsUrl = useDirectRobotWs
+    // Add user ID as query parameter
+    const wsUrl = useDirectRobot
       ? robotWsUrl
-      : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(
-          userId
-        )}&email=${encodeURIComponent(userEmail)}`;
+      : `${backendWsBaseUrl}/ws/chat?user_id=${encodeURIComponent(userId)}`;
+    let reconnectTimeout: number | null = null;
+    let reconnectAttempts = 0;
+    let shouldReconnect = true;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    const BASE_RECONNECT_DELAY_MS = 2000;
+    const MAX_RECONNECT_DELAY_MS = 15000;
+
+    const clearReconnectTimeout = () => {
+      if (reconnectTimeout !== null) {
+        window.clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (!shouldReconnect || reconnectTimeout !== null) {
+        return;
+      }
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        return;
+      }
+
+      reconnectAttempts += 1;
+      const delayMs = Math.min(
+        BASE_RECONNECT_DELAY_MS * reconnectAttempts,
+        MAX_RECONNECT_DELAY_MS,
+      );
+      reconnectTimeout = window.setTimeout(() => {
+        reconnectTimeout = null;
+        connectWebSocket();
+      }, delayMs);
+    };
 
     // Create a function to establish the WebSocket connection
     const connectWebSocket = () => {
@@ -442,14 +395,7 @@ export function Chat() {
         socket.close();
       }
     };
-  }, [
-    isAuthenticated,
-    user,
-    userInfoStored,
-    useDirectRobotWs,
-    robotWsUrl,
-    backendWsBaseUrl,
-  ]);
+  }, [useDirectRobot, robotWsUrl, backendWsBaseUrl]);
 
   useEffect(() => {
     if (isScrolledToBottom) {
@@ -466,7 +412,32 @@ export function Chat() {
         wsRef.current &&
         wsRef.current.readyState === WebSocket.OPEN
       ) {
-        wsRef.current.send(text);
+        if (useDirectRobot) {
+          const timestamp = Math.floor(Date.now() / 1000);
+          const outgoingMessage = {
+            text,
+            sender: "user",
+            timestamp,
+          } as const;
+
+          wsRef.current.send(
+            JSON.stringify({
+              op: "publish",
+              topic: CHAT_IN_TOPIC,
+              msg: { data: JSON.stringify(outgoingMessage) },
+            }),
+          );
+
+          setMessages((prev) =>
+            appendUniqueMessage(prev, {
+              sender: outgoingMessage.sender,
+              text: outgoingMessage.text,
+              timestamp: outgoingMessage.timestamp,
+            }),
+          );
+        } else {
+          wsRef.current.send(text);
+        }
         console.log("Sent voice transcription to chat:", text);
       }
     };
@@ -481,7 +452,7 @@ export function Chat() {
         handleVoiceTranscription as EventListener,
       );
     };
-  }, []);
+  }, [useDirectRobot]);
 
   const handleSend = async () => {
     const cleanDraft = draft.trim();

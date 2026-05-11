@@ -62,6 +62,7 @@ sim/config.toml
 ENV/
 deploy-keys/
 dev/launcher/.state/
+.githooks/
 
 # PyTorch model weights and checkpoints
 *.pt
