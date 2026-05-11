@@ -7,3 +7,4 @@
 !ros2_ws/
 !ros2_ws/apt-dependencies.common.txt
 !ros2_ws/apt-dependencies.hardware.txt
+!ros2_ws/apt-dependencies.simulation.txt

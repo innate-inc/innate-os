@@ -1,0 +1,106 @@
+# Simulation-focused system dependencies for the Innate OS container.
+#
+# This intentionally avoids hardware/debug/meta packages from
+# apt-dependencies.common.txt so the published simulation image stays smaller.
+# Hardware builds still use apt-dependencies.common.txt plus
+# apt-dependencies.hardware.txt.
+
+# Build/runtime tools used by the local sim launcher
+ccache
+openssh-client
+zsh
+tmux
+jq
+zstd
+pkg-config
+
+# C++ libraries used by workspace packages
+libeigen3-dev
+libfcl-dev
+libhdf5-dev
+libopenmpi-dev
+libopencv-dev
+libturbojpeg0-dev
+libyaml-cpp-dev
+nlohmann-json3-dev
+
+# WebRTC streaming runtime/build dependencies
+gstreamer1.0-tools
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-good
+gstreamer1.0-plugins-bad
+gstreamer1.0-libav
+gstreamer1.0-nice
+libgstreamer1.0-dev
+libgstreamer-plugins-base1.0-dev
+libgstreamer-plugins-bad1.0-dev
+
+# ROS 2 build/runtime basics
+ros-humble-ament-cmake
+ros-humble-ament-cmake-python
+ros-humble-ament-index-python
+ros-humble-launch-xml
+ros-humble-rclcpp
+ros-humble-rclcpp-components
+ros-humble-rclcpp-lifecycle
+ros-humble-rclpy
+ros-humble-rmw-zenoh-cpp
+
+# ROS 2 messages and transforms used by the sim stack
+ros-humble-action-msgs
+ros-humble-diagnostic-msgs
+ros-humble-geometry-msgs
+ros-humble-lifecycle-msgs
+ros-humble-nav-msgs
+ros-humble-rcl-interfaces
+ros-humble-rosgraph-msgs
+ros-humble-sensor-msgs
+ros-humble-std-msgs
+ros-humble-std-srvs
+ros-humble-stereo-msgs
+ros-humble-tf2
+ros-humble-tf2-geometry-msgs
+ros-humble-tf2-msgs
+ros-humble-tf2-ros
+ros-humble-tf-transformations
+ros-humble-trajectory-msgs
+ros-humble-unique-identifier-msgs
+ros-humble-visualization-msgs
+
+# Default simulation navigation path
+ros-humble-behaviortree-cpp-v3
+ros-humble-dwb-core
+ros-humble-dwb-critics
+ros-humble-dwb-plugins
+ros-humble-nav2-behavior-tree
+ros-humble-nav2-behaviors
+ros-humble-nav2-bt-navigator
+ros-humble-nav2-controller
+ros-humble-nav2-core
+ros-humble-nav2-costmap-2d
+ros-humble-nav2-dwb-controller
+ros-humble-nav2-lifecycle-manager
+ros-humble-nav2-msgs
+ros-humble-nav2-navfn-planner
+ros-humble-nav2-planner
+ros-humble-nav2-simple-commander
+ros-humble-nav2-util
+ros-humble-nav2-voxel-grid
+
+# Camera, image, and bridge packages required by built packages
+ros-humble-camera-info-manager
+ros-humble-compressed-image-transport
+ros-humble-cv-bridge
+ros-humble-image-transport
+ros-humble-message-filters
+
+# Arm, behavior, and support packages used by loaded skills and nodes
+ros-humble-dynamixel-sdk
+ros-humble-innate-rws
+ros-humble-moveit-msgs
+ros-humble-robot-state-publisher
+ros-humble-rosidl-default-generators
+ros-humble-rosidl-default-runtime
+ros-humble-shape-msgs
+ros-humble-topic-tools
+ros-humble-xacro
