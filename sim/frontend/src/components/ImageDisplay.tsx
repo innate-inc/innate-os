@@ -1,6 +1,4 @@
 import styled from "styled-components";
-import { isMobile } from "react-device-detect";
-import { MdRefresh, MdSend } from "react-icons/md";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { PreviewContainer, MainImage, MainVideo } from "../styles/StyledImages";
 import { useRobotWebRTC } from "../hooks/useRobotWebRTC";
@@ -481,76 +479,57 @@ export function ImageDisplay({
 
   return (
     <PreviewContainer>
-      {useDirectWebRTC ? (
-        <>
-          <MainVideo
-            ref={mainVideoRef}
-            $viewMode={viewMode}
-            muted
-            autoPlay
-            playsInline
-          />
-          <SecondaryVideo
-            ref={secondaryVideoRef}
-            $viewMode={viewMode}
-            muted
-            autoPlay
-            playsInline
-          />
-        </>
-      ) : (
-        <>
-          {/* Main feed */}
-          <MainImage $viewMode={viewMode} src={mainSrc} alt="Main Camera" />
+      {/* View Mode Toolbar */}
+      <FeedToolbar>
+        {modes.map((mode) => (
+          <ViewBtn
+            key={mode}
+            $isActive={viewMode === mode}
+            onClick={() => handleViewModeChange(mode)}
+          >
+            {labels[mode]}
+          </ViewBtn>
+        ))}
+      </FeedToolbar>
 
-          {/* Secondary feed */}
-          <SecondaryImage
-            $viewMode={viewMode}
-            src={subSrc}
-            alt="Secondary Camera"
-          />
-        </>
-      )}
+      {/* Camera Viewport */}
+      <CameraViewport>
+        {/* Background Grid */}
+        {!isMapView && <SimGrid />}
 
-      {/* Loading indicator */}
-      {showLoading && (
-        <LoadingContainer>
-          {connectionFailed ? (
-            <>
-              <ErrorText>{errorMessage}</ErrorText>
-              <LoadingText>
-                {useDirectWebRTC
-                  ? "Please check robot WebRTC availability and try again."
-                  : "Please check if the simulation is running and try again."}
-              </LoadingText>
-              <RetryButton
-                onClick={useDirectWebRTC ? reconnectWebRTC : checkSimulationReady}
-                disabled={useDirectWebRTC ? false : isCheckingBackend}
-              >
-                {useDirectWebRTC
-                  ? isWebRTCConnecting
-                    ? "Reconnecting..."
-                    : "Retry Connection"
-                  : isCheckingBackend
-                    ? "Checking..."
-                    : "Retry Connection"}
-              </RetryButton>
-            </>
+        {/* Camera layer — always mounted, swaps between main and mini */}
+        <ViewLayer
+          $isMini={isMapView}
+          onClick={
+            isMapView ? () => handleViewModeChange("frontFocus") : undefined
+          }
+        >
+          {isMapView && <MiniLabel>{labels.frontFocus}</MiniLabel>}
+          {useDirectRobot ? (
+            <MainVideo
+              ref={mainVideoRef}
+              $viewMode={"frontFocus"}
+              muted
+              autoPlay
+              playsInline
+            />
           ) : (
-            <>
-              <Spinner />
-              <LoadingText>Loading camera feed...</LoadingText>
-            </>
+            <MainImage
+              $viewMode={"frontFocus"}
+              src={mainSrc}
+              alt="Main Camera"
+            />
           )}
-        </LoadingContainer>
-      )}
+        </ViewLayer>
 
-        {/* Secondary feed */}
-        <SecondaryImage
-          $viewMode={viewMode}
-          src={subSrc}
-          alt="Secondary Camera"
-        />
+        {/* Map layer — always mounted, swaps between main and mini */}
+        <ViewLayer
+          $isMini={!isMapView}
+          onClick={!isMapView ? () => handleViewModeChange("map") : undefined}
+        >
+          {!isMapView && <MiniLabel>map</MiniLabel>}
+          <Costmap2DView wsUrl={robotWsUrl} isMini={!isMapView} />
+        </ViewLayer>
 
         {/* Loading indicator */}
         {!isMapView && showLoading && (
@@ -559,13 +538,23 @@ export function ImageDisplay({
               <>
                 <ErrorText>{errorMessage}</ErrorText>
                 <LoadingText>
-                  Please check if the simulation is running and try again.
+                  {useDirectRobot
+                    ? "Please check robot WebRTC availability and try again."
+                    : "Please check if the simulation is running and try again."}
                 </LoadingText>
                 <RetryButton
-                  onClick={checkSimulationReady}
-                  disabled={isChecking}
+                  onClick={
+                    useDirectRobot ? reconnectWebRTC : checkSimulationReady
+                  }
+                  disabled={useDirectRobot ? false : isCheckingBackend}
                 >
-                  {isChecking ? "Checking..." : "Retry Connection"}
+                  {useDirectRobot
+                    ? isWebRTCConnecting
+                      ? "Reconnecting..."
+                      : "Retry Connection"
+                    : isCheckingBackend
+                      ? "Checking..."
+                      : "Retry Connection"}
                 </RetryButton>
               </>
             ) : (
