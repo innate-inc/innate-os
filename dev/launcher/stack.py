@@ -57,6 +57,10 @@ OS_BUILD_LOG_PATH = LOG_DIR / "os-build.log"
 OS_SESSION_LOG_PATH = LOG_DIR / "os-session.log"
 DOWN_LOG_PATH = LOG_DIR / "down.log"
 SIM_PID_PATH = STATE_DIR / "simulator.pid"
+SIM_STARTUP_CHECK_DELAY_SECONDS = 0.25
+SIM_HTTP_POLL_SECONDS = 0.25
+SIM_HTTP_REQUEST_TIMEOUT_SECONDS = 0.5
+OS_SESSION_READY_POLL_SECONDS = 0.25
 GENERATED_OS_ENV_PATH = STATE_DIR / "innate-os.env"
 GENERATED_CLOUD_ENV_PATH = STATE_DIR / "cloud-agent.env"
 HOSTED_MODE = "hosted"
@@ -932,6 +936,10 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
         "prebuilt_root=${INNATE_OS_PREBUILT_ROS_ROOT:-/opt/innate-os-prebuilt/ros2_ws}; "
         "[ -f \"$prebuilt_root/install/setup.zsh\" ] || return 1; "
         "[ -f \"$prebuilt_root/source.sha256\" ] || return 1; "
+        "if find \"$prebuilt_root/install\" -xtype l -print -quit | grep -q .; then "
+        "echo 'Prebuilt ROS workspace install has dangling symlinks; running colcon build.'; "
+        "return 1; "
+        "fi; "
         "prebuilt_hash=$(cat \"$prebuilt_root/source.sha256\"); "
         "current_hash=$(current_source_hash); "
         "if [ \"$current_hash\" != \"$prebuilt_hash\" ]; then "
@@ -963,7 +971,12 @@ def ensure_os_container(config: dict[str, object], os_env_file: Path) -> None:
             "if seed_prebuilt_install; then "
             ":; "
             "elif [ ! -f install/setup.zsh ] || "
+            "find install -xtype l -print -quit | grep -q . || "
             "find src -type f -newer install/setup.zsh -print -quit | grep -q .; then "
+            "if [ -d install ] && find install -xtype l -print -quit | grep -q .; then "
+            "echo 'Removing unusable ROS install before rebuild.'; "
+            "rm -rf build install log; "
+            "fi; "
             f"{colcon_build_cmd}; "
             "else "
             "echo 'ROS workspace install is current; skipping rebuild.'; "
@@ -1214,15 +1227,15 @@ def start_simulator(config: dict[str, object], sim_python: Path) -> None:
             start_new_session=True,
         )
 
-    time.sleep(2)
+    SIM_PID_PATH.write_text(f"{proc.pid}\n")
+    time.sleep(SIM_STARTUP_CHECK_DELAY_SECONDS)
     if proc.poll() is not None:
+        SIM_PID_PATH.unlink(missing_ok=True)
         tail = tail_file(SIM_LOG_PATH)
         raise StackError(
             "Simulator backend exited immediately.\n"
             f"Recent log output:\n{tail}"
         )
-
-    SIM_PID_PATH.write_text(f"{proc.pid}\n")
 
 
 def tail_file(path: Path, limit: int = 40) -> str:
@@ -1311,18 +1324,38 @@ def os_process_running(config: dict[str, object], pattern: str) -> bool:
     )
 
 
+def os_session_ready(config: dict[str, object]) -> bool:
+    if not container_running("innate-dev"):
+        return False
+    os_repo: Path = config["os_repo"]  # type: ignore[assignment]
+    compose_env = docker_compose_env({"INNATE_OS_ENV_FILE": str(GENERATED_OS_ENV_PATH)})
+    ready_cmd = (
+        f"tmux has-session -t {shlex.quote(TMUX_SESSION_NAME)} && "
+        "pgrep -f rws_server >/dev/null && "
+        "pgrep -f brain_client_node.py >/dev/null"
+    )
+    return command_succeeds(
+        docker_compose_cmd(
+            "exec",
+            "-T",
+            OS_CONTAINER_SERVICE,
+            "zsh",
+            "-lc",
+            ready_cmd,
+        ),
+        cwd=os_repo,
+        env=compose_env,
+    )
+
+
 def wait_for_os_session_ready(
     config: dict[str, object], *, timeout_seconds: float = 20.0
 ) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        if (
-            os_tmux_session_running(config)
-            and os_process_running(config, "rws_server")
-            and os_process_running(config, "brain_client_node.py")
-        ):
+        if os_session_ready(config):
             return True
-        time.sleep(1.0)
+        time.sleep(OS_SESSION_READY_POLL_SECONDS)
     return False
 
 
@@ -2143,17 +2176,17 @@ def wait_for_simulator_http(port: str, timeout_seconds: float = 90.0) -> None:
                 f"Recent log output:\n{tail}{hint}"
             )
         try:
-            with urlopen(url, timeout=2) as response:
+            with urlopen(url, timeout=SIM_HTTP_REQUEST_TIMEOUT_SECONDS) as response:
                 if response.status != 200:
-                    time.sleep(2)
+                    time.sleep(SIM_HTTP_POLL_SECONDS)
                     continue
                 payload = json.loads(response.read().decode("utf-8"))
                 if payload.get("ready"):
                     return
         except URLError:
-            time.sleep(2)
+            time.sleep(SIM_HTTP_POLL_SECONDS)
         except (TimeoutError, json.JSONDecodeError):
-            time.sleep(2)
+            time.sleep(SIM_HTTP_POLL_SECONDS)
     tail = tail_file(SIM_LOG_PATH, limit=80)
     raise StackError(
         "Timed out waiting for the simulator HTTP endpoint.\n"
